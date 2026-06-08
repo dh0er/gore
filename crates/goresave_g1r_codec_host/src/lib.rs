@@ -1,0 +1,5059 @@
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::{Value, json};
+use sha1::Sha1;
+use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
+use std::env;
+use std::ffi::CString;
+use std::ffi::c_void;
+use std::fmt;
+use std::fs;
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+const IMAGE_SCN_MEM_EXECUTE: u32 = 0x2000_0000;
+const IMAGE_DIRECTORY_ENTRY_IMPORT: usize = 1;
+const IMAGE_DIRECTORY_ENTRY_BASERELOC: usize = 5;
+const IMAGE_ORDINAL_FLAG64: u64 = 0x8000_0000_0000_0000;
+const IMAGE_REL_BASED_ABSOLUTE: u8 = 0;
+const IMAGE_REL_BASED_DIR64: u8 = 10;
+const IMAGE_SCN_MEM_DISCARDABLE: u32 = 0x0200_0000;
+const IMAGE_SCN_MEM_READ: u32 = 0x4000_0000;
+const IMAGE_SCN_MEM_WRITE: u32 = 0x8000_0000;
+const GSAV_PACKAGE_FILE_TAG: u32 = 0x9E2A_83C1;
+const GSAV_COMPRESSED_HEADER_V2: u32 = 0x2222_2222;
+const MAX_CODEC_UNCOMPRESSED_SIZE: usize = 0x20000;
+const MAX_CODEC_COMPRESSED_OUTPUT_SIZE: usize = MAX_CODEC_UNCOMPRESSED_SIZE + 0x10000;
+const MAX_RUNTIME_REPEAT_COUNT: usize = 100;
+const OODLE_COMPRESSOR_KRAKEN: i32 = 8;
+const RUNTIME_SELFTEST_WORKER_TIMEOUT: Duration = Duration::from_secs(5);
+#[cfg(windows)]
+const RUNTIME_WORKER_JOB_MEMORY_LIMIT_BYTES: usize = 1024 * 1024 * 1024;
+#[cfg(windows)]
+const JOB_OBJECT_LIMIT_PROCESS_MEMORY: u32 = 0x0000_0100;
+#[cfg(windows)]
+const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: u32 = 0x0000_2000;
+#[cfg(windows)]
+const JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS: i32 = 9;
+#[cfg(windows)]
+const LOAD_WITH_ALTERED_SEARCH_PATH: u32 = 0x0000_0008;
+#[cfg(windows)]
+const MEM_COMMIT: u32 = 0x0000_1000;
+#[cfg(windows)]
+const MEM_RESERVE: u32 = 0x0000_2000;
+#[cfg(windows)]
+const MEM_RELEASE: u32 = 0x0000_8000;
+#[cfg(windows)]
+const PAGE_NOACCESS: u32 = 0x01;
+#[cfg(windows)]
+const PAGE_READONLY: u32 = 0x02;
+#[cfg(windows)]
+const PAGE_READWRITE: u32 = 0x04;
+#[cfg(windows)]
+const PAGE_EXECUTE: u32 = 0x10;
+#[cfg(windows)]
+const PAGE_EXECUTE_READ: u32 = 0x20;
+#[cfg(windows)]
+const PAGE_EXECUTE_READWRITE: u32 = 0x40;
+
+const G1R_543_PROFILE_JSON: &str = r#"{
+  "name": "g1r-23A85CE7",
+  "exeSha256": "740abfa9fbaae95beb5378c472ef4454df66205c140c3574eb5ba3695be53c55",
+  "fileSize": 171437056,
+  "peTimestamp": "0x23A85CE7",
+  "imageBase": "0x140000000",
+  "rvAs": {
+    "oodleLzCompress": "0x6F42240",
+    "oodleLzDecompress": "0x6F42B20",
+    "compressorDispatch": "0x6F41080"
+  },
+  "fingerprints": {
+    "compressPrologueSha256": "ec13eda98688cec5ec5f3553cdc84f982dfde961681e844cef03f86702950647",
+    "decompressPrologueSha256": "68323ed5a35c45f81c27c34b6bfaea192741c3c1d521aa435037f7ac7a0791e4",
+    "dispatchPrologueSha256": "c6bdbfaf82f4c72078e689c0ce175411ba3508e19d04aa264c92b10ab182501d"
+  },
+  "patterns": {
+    "compressAnchors": [
+      {
+        "name": "oodle_lz_compress_wrapper_shape",
+        "nearStrings": ["oo2::OodleLZ_Compress", "Reduced profile only supports Kraken"],
+        "requiredCalls": ["compressor_dispatch"],
+        "minMatchedBytes": 48
+      }
+    ],
+    "decompressAnchors": [
+      {
+        "name": "oodle_lz_decompress_wrapper_shape",
+        "nearStrings": ["oo2::OodleLZ_Decompress"],
+        "minMatchedBytes": 48
+      }
+    ]
+  }
+}"#;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorCode {
+    InvalidProfile,
+    InvalidPe,
+    MissingExe,
+    InvalidCommand,
+    InvalidRequest,
+    UnsupportedExe,
+    Io,
+}
+
+impl ErrorCode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ErrorCode::InvalidProfile => "invalid_profile",
+            ErrorCode::InvalidPe => "invalid_pe",
+            ErrorCode::MissingExe => "missing_exe",
+            ErrorCode::InvalidCommand => "invalid_command",
+            ErrorCode::InvalidRequest => "invalid_request",
+            ErrorCode::UnsupportedExe => "unsupported_exe",
+            ErrorCode::Io => "io",
+        }
+    }
+}
+
+impl Serialize for ErrorCode {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct HostError {
+    code: ErrorCode,
+    message: String,
+    details: Option<Value>,
+}
+
+impl HostError {
+    pub fn new(code: ErrorCode, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+            details: None,
+        }
+    }
+
+    pub fn with_details(
+        code: ErrorCode,
+        message: impl Into<String>,
+        details: impl Into<Value>,
+    ) -> Self {
+        Self {
+            code,
+            message: message.into(),
+            details: Some(details.into()),
+        }
+    }
+
+    pub fn code(&self) -> ErrorCode {
+        self.code
+    }
+
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
+    pub fn details(&self) -> Option<&Value> {
+        self.details.as_ref()
+    }
+}
+
+impl fmt::Display for HostError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for HostError {}
+
+impl From<std::io::Error> for HostError {
+    fn from(value: std::io::Error) -> Self {
+        HostError::new(ErrorCode::Io, value.to_string())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VersionProfile {
+    pub name: String,
+    pub exe_sha256: String,
+    pub file_size: u64,
+    #[serde(deserialize_with = "deserialize_hex_u32")]
+    pub pe_timestamp: u32,
+    #[serde(deserialize_with = "deserialize_hex_u64")]
+    pub image_base: u64,
+    pub rv_as: RvaSet,
+    #[serde(default)]
+    pub fingerprints: Value,
+    #[serde(default)]
+    pub patterns: Value,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RvaSet {
+    #[serde(deserialize_with = "deserialize_hex_u32")]
+    pub oodle_lz_compress: u32,
+    #[serde(deserialize_with = "deserialize_hex_u32")]
+    pub oodle_lz_decompress: u32,
+    #[serde(deserialize_with = "deserialize_hex_u32")]
+    pub compressor_dispatch: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProbeRequest {
+    pub exe_path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProbeResponse {
+    pub supported: bool,
+    pub profile: Option<String>,
+    pub resolution_mode: Option<ResolutionMode>,
+    pub resolved_rvas: Option<RuntimeCodecRvas>,
+    pub can_compress: bool,
+    pub can_decompress: bool,
+    pub exe_sha256: String,
+    pub file_size: u64,
+    pub pe_timestamp: u32,
+    pub image_base: u64,
+    pub resolver_attempts: Vec<&'static str>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResolutionMode {
+    KnownProfile,
+    DerivedProfileCache,
+    PatternProfile,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ResolvedCodecProfile {
+    name: String,
+    resolution_mode: ResolutionMode,
+    codec_rvas: RuntimeCodecRvas,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelfTestRequest {
+    pub exe_path: PathBuf,
+    pub relocation_base: Option<u64>,
+    pub resolve_imports: bool,
+    pub map_image: bool,
+    pub run_runtime_selftests: bool,
+    pub runtime_selftest_run_decompress: bool,
+    pub runtime_selftest_run_compress: bool,
+    pub runtime_selftest_decompress_repeat_count: usize,
+    pub runtime_selftest_compress_repeat_count: usize,
+    pub runtime_selftest_sample: Option<RuntimeSelftestOracleSample>,
+    pub runtime_selftest_compress_sample: Option<RuntimeCompressSample>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DecompressRequest {
+    exe_path: PathBuf,
+    input: Vec<u8>,
+    expected_size: usize,
+    derived_profile_cache_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DecompressChunkRequest {
+    input: Vec<u8>,
+    expected_size: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DecompressManyRequest {
+    exe_path: PathBuf,
+    chunks: Vec<DecompressChunkRequest>,
+    derived_profile_cache_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CompressRequest {
+    exe_path: PathBuf,
+    input: Vec<u8>,
+    level: u8,
+    derived_profile_cache_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CompressChunkRequest {
+    input: Vec<u8>,
+    level: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CompressManyRequest {
+    exe_path: PathBuf,
+    chunks: Vec<CompressChunkRequest>,
+    derived_profile_cache_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeSelftestWorkerRequest {
+    pub exe_path: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codec_rvas: Option<RuntimeCodecRvas>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub run_decompress_call: bool,
+    #[serde(default = "default_one", skip_serializing_if = "is_one")]
+    pub decompress_repeat_count: usize,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub return_decompressed_output: bool,
+    #[serde(default = "default_true")]
+    pub verify_decompressed_output: bool,
+    pub decompress_sample: RuntimeSelftestOracleSample,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub decompress_samples: Vec<RuntimeSelftestOracleSample>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub run_compress_call: bool,
+    #[serde(default = "default_one", skip_serializing_if = "is_one")]
+    pub compress_repeat_count: usize,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub return_compressed_output: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compress_sample: Option<RuntimeCompressSample>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub compress_samples: Vec<RuntimeCompressSample>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeCodecRvas {
+    pub oodle_lz_compress: u32,
+    pub oodle_lz_decompress: u32,
+    pub compressor_dispatch: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeSelftestOracleSample {
+    pub compressed_base64: String,
+    pub expected_size: usize,
+    pub expected_decompressed_sha1: String,
+    pub expected_decompressed_head_hex: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeCompressSample {
+    pub input_base64: String,
+    pub level: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeSelftestSaveChunkRequest {
+    pub save_path: PathBuf,
+    pub chunk_index: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_compressed_sha1: Option<String>,
+    pub expected_decompressed_sha1: String,
+    pub expected_decompressed_head_hex: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SelfTestResponse {
+    pub profile: Option<String>,
+    pub resolution_mode: Option<ResolutionMode>,
+    pub private_mapping: PrivateMappingReport,
+    pub runtime_selftests: RuntimeSelftestReport,
+    pub can_compress: bool,
+    pub can_decompress: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrivateMappingReport {
+    pub pe_parsed: bool,
+    pub image_base: u64,
+    pub size_of_image: u32,
+    pub copied_section_count: usize,
+    pub import_dll_count: usize,
+    pub import_symbol_count: usize,
+    pub import_resolution_status: &'static str,
+    pub fixed_import_thunk_count: usize,
+    pub base_relocation_count: usize,
+    pub applied_relocation_count: usize,
+    pub section_protection_count: usize,
+    pub memory_mapped: bool,
+    pub memory_mapped_base: Option<u64>,
+    pub memory_mapped_size: u32,
+    pub memory_protection_applied_count: usize,
+    pub entry_point_rva: u32,
+    pub entry_point_run: bool,
+    pub resolved_rvas: Vec<ResolvedRvaReport>,
+    pub section_protections: Vec<SectionProtection>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeSelftestReport {
+    pub requested: bool,
+    pub worker_status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worker_pid: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worker_exit_code: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exe_path: Option<String>,
+    pub decompress_sample_status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decompress_sample_expected_size: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decompress_sample_compressed_size: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decompress_sample_expected_sha1: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decompress_sample_expected_head_hex: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runtime_preflight: Option<RuntimePreflightReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decompress_call_return: Option<isize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decompress_call_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decompress_output_size: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decompress_output_sha1: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decompress_output_head_hex: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decompress_output_base64: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decompress_outputs_base64: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compress_call_return: Option<isize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compress_call_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compress_output_size: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compress_output_sha1: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compress_output_base64: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compress_outputs_base64: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compress_roundtrip_sha1: Option<String>,
+    pub decompress: String,
+    pub compress: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimePreflightReport {
+    pub status: String,
+    pub import_resolution_status: String,
+    pub fixed_import_thunk_count: usize,
+    pub memory_mapped: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory_mapped_base: Option<u64>,
+    pub memory_mapped_size: u32,
+    pub memory_protection_applied_count: usize,
+    pub entry_point_run: bool,
+    pub resolved_rvas: Vec<RuntimeResolvedRvaReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeResolvedRvaReport {
+    pub name: String,
+    pub rva: u32,
+    pub executable: bool,
+    pub mapped_va: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DerivedProfileCacheEntry {
+    pub name: String,
+    pub source_profile: Option<String>,
+    pub exe_sha256: String,
+    pub file_size: u64,
+    pub pe_timestamp: String,
+    pub image_base: String,
+    pub resolution_mode: ResolutionMode,
+    pub resolved_rvas: RuntimeCodecRvas,
+    pub can_decompress: bool,
+    pub can_compress: bool,
+    pub runtime_selftest_decompress: String,
+    pub runtime_selftest_compress: String,
+    pub confidence: String,
+    pub matched_anchors: Vec<String>,
+    pub cached_at_unix_seconds: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DerivedProfileCacheWriteReport {
+    pub path: String,
+    pub sha256: Option<String>,
+    pub written: bool,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DerivedProfileExport {
+    pub cache_path: String,
+    pub entry: DerivedProfileCacheEntry,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DerivedProfileCacheFile {
+    version: u32,
+    entries: BTreeMap<String, DerivedProfileCacheEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolvedRvaReport {
+    pub name: &'static str,
+    pub rva: u32,
+    pub executable: bool,
+    pub preferred_va: u64,
+    pub mapped_va: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SectionProtection {
+    pub name: String,
+    pub rva: u32,
+    pub size: u32,
+    pub read: bool,
+    pub write: bool,
+    pub execute: bool,
+    pub discardable: bool,
+    pub memory_protection: &'static str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PeImage {
+    timestamp: u32,
+    entry_point_rva: u32,
+    image_base: u64,
+    size_of_image: u32,
+    size_of_headers: u32,
+    data_directories: Vec<PeDataDirectory>,
+    sections: Vec<PeSection>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PeDataDirectory {
+    virtual_address: u32,
+    size: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PeSection {
+    name: String,
+    virtual_address: u32,
+    virtual_size: u32,
+    raw_size: u32,
+    raw_pointer: u32,
+    characteristics: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PeImportDll {
+    pub dll_name: String,
+    pub symbols: Vec<PeImportSymbol>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PeImportSymbol {
+    pub name: Option<String>,
+    pub hint: Option<u16>,
+    pub ordinal: Option<u16>,
+}
+
+pub trait ImportResolver {
+    fn resolve_import(&mut self, dll_name: &str, symbol: &PeImportSymbol)
+    -> Result<u64, HostError>;
+}
+
+#[derive(Debug, Default)]
+pub struct WindowsImportResolver {
+    search_dirs: Vec<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportResolutionReport {
+    pub dll_count: usize,
+    pub symbol_count: usize,
+    pub fixed_thunk_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BaseRelocationBlock {
+    pub page_rva: u32,
+    pub entries: Vec<BaseRelocationEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BaseRelocationEntry {
+    pub kind: u8,
+    pub offset: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrivateImage {
+    bytes: Vec<u8>,
+    image_base: u64,
+    entry_point_rva: u32,
+    entry_point_run: bool,
+    copied_section_count: usize,
+}
+
+#[derive(Debug)]
+pub struct MemoryMappedImage {
+    base: *mut u8,
+    size: usize,
+    entry_point_rva: u32,
+    entry_point_run: bool,
+    applied_relocation_count: usize,
+    protected_section_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MappedRva {
+    pub name: String,
+    pub rva: u32,
+    pub mapped_va: u64,
+    pub executable: bool,
+}
+
+impl PeImage {
+    pub fn parse(bytes: &[u8]) -> Result<Self, HostError> {
+        if bytes.len() < 0x40 || &bytes[0..2] != b"MZ" {
+            return Err(HostError::new(
+                ErrorCode::InvalidPe,
+                "file does not start with an MZ header",
+            ));
+        }
+
+        let pe_offset = read_u32(bytes, 0x3c)? as usize;
+        let coff_offset = checked_add(pe_offset, 4)?;
+        let optional_offset = checked_add(coff_offset, 20)?;
+        if checked_add(optional_offset, 2)? > bytes.len()
+            || range(bytes, pe_offset, 4)? != b"PE\0\0"
+        {
+            return Err(HostError::new(
+                ErrorCode::InvalidPe,
+                "file does not contain a PE signature",
+            ));
+        }
+
+        let section_count = read_u16(bytes, coff_offset + 2)? as usize;
+        let timestamp = read_u32(bytes, coff_offset + 4)?;
+        let optional_size = read_u16(bytes, coff_offset + 16)? as usize;
+        let magic = read_u16(bytes, optional_offset)?;
+        if magic != 0x020b {
+            return Err(HostError::new(
+                ErrorCode::InvalidPe,
+                "only PE32+ executables are supported",
+            ));
+        }
+
+        let minimum_optional_size = 112usize;
+        if optional_size < minimum_optional_size {
+            return Err(HostError::new(
+                ErrorCode::InvalidPe,
+                "PE32+ optional header is truncated",
+            ));
+        }
+
+        let entry_point_rva = read_u32(bytes, optional_offset + 16)?;
+        let image_base = read_u64(bytes, optional_offset + 24)?;
+        let size_of_image = read_u32(bytes, optional_offset + 56)?;
+        let size_of_headers = read_u32(bytes, optional_offset + 60)?;
+        let data_directory_count = read_u32(bytes, optional_offset + 108)? as usize;
+        let data_directory_count = data_directory_count.min((optional_size - 112) / 8);
+        let mut data_directories = Vec::with_capacity(data_directory_count);
+        for index in 0..data_directory_count {
+            let offset = optional_offset + 112 + index * 8;
+            data_directories.push(PeDataDirectory {
+                virtual_address: read_u32(bytes, offset)?,
+                size: read_u32(bytes, offset + 4)?,
+            });
+        }
+
+        let section_table = checked_add(optional_offset, optional_size)?;
+        let section_table_end = checked_add(section_table, section_count.saturating_mul(40))?;
+        if section_table_end > bytes.len() {
+            return Err(HostError::new(
+                ErrorCode::InvalidPe,
+                "section table extends past EOF",
+            ));
+        }
+
+        let mut sections = Vec::with_capacity(section_count);
+        for index in 0..section_count {
+            let offset = section_table + index * 40;
+            let name = parse_section_name(range(bytes, offset, 8)?);
+            let virtual_size = read_u32(bytes, offset + 8)?;
+            let virtual_address = read_u32(bytes, offset + 12)?;
+            let raw_size = read_u32(bytes, offset + 16)?;
+            let raw_pointer = read_u32(bytes, offset + 20)?;
+            let characteristics = read_u32(bytes, offset + 36)?;
+            sections.push(PeSection {
+                name,
+                virtual_address,
+                virtual_size,
+                raw_size,
+                raw_pointer,
+                characteristics,
+            });
+        }
+
+        Ok(Self {
+            timestamp,
+            entry_point_rva,
+            image_base,
+            size_of_image,
+            size_of_headers,
+            data_directories,
+            sections,
+        })
+    }
+
+    pub fn image_base(&self) -> u64 {
+        self.image_base
+    }
+
+    pub fn timestamp(&self) -> u32 {
+        self.timestamp
+    }
+
+    pub fn size_of_image(&self) -> u32 {
+        self.size_of_image
+    }
+
+    pub fn entry_point_rva(&self) -> u32 {
+        self.entry_point_rva
+    }
+
+    pub fn is_executable_rva(&self, rva: u32) -> bool {
+        self.sections.iter().any(|section| {
+            if section.characteristics & IMAGE_SCN_MEM_EXECUTE == 0 {
+                return false;
+            }
+            let start = section.virtual_address as u64;
+            let span = section.virtual_size.max(section.raw_size) as u64;
+            let end = start.saturating_add(span);
+            let rva = rva as u64;
+            rva >= start && rva < end
+        })
+    }
+
+    pub fn section_protections(&self) -> Vec<SectionProtection> {
+        self.sections
+            .iter()
+            .map(|section| {
+                let read = section.characteristics & IMAGE_SCN_MEM_READ != 0;
+                let write = section.characteristics & IMAGE_SCN_MEM_WRITE != 0;
+                let execute = section.characteristics & IMAGE_SCN_MEM_EXECUTE != 0;
+                let discardable = section.characteristics & IMAGE_SCN_MEM_DISCARDABLE != 0;
+                SectionProtection {
+                    name: section.name.clone(),
+                    rva: section.virtual_address,
+                    size: section.virtual_size.max(section.raw_size),
+                    read,
+                    write,
+                    execute,
+                    discardable,
+                    memory_protection: memory_protection_name(read, write, execute),
+                }
+            })
+            .collect()
+    }
+
+    pub fn imports(&self, bytes: &[u8]) -> Result<Vec<PeImportDll>, HostError> {
+        let Some(directory) = self.data_directory(IMAGE_DIRECTORY_ENTRY_IMPORT) else {
+            return Ok(Vec::new());
+        };
+        if directory.virtual_address == 0 || directory.size == 0 {
+            return Ok(Vec::new());
+        }
+
+        let mut imports = Vec::new();
+        let mut descriptor_rva = directory.virtual_address;
+        let directory_end = directory
+            .virtual_address
+            .checked_add(directory.size)
+            .ok_or_else(|| HostError::new(ErrorCode::InvalidPe, "import directory overflow"))?;
+
+        while descriptor_rva
+            .checked_add(20)
+            .is_some_and(|end| end <= directory_end)
+        {
+            let descriptor_offset = self.rva_to_file_offset(descriptor_rva).ok_or_else(|| {
+                HostError::new(
+                    ErrorCode::InvalidPe,
+                    format!("import descriptor RVA 0x{descriptor_rva:X} is not file-backed"),
+                )
+            })?;
+            let original_first_thunk = read_u32(bytes, descriptor_offset)?;
+            let time_date_stamp = read_u32(bytes, descriptor_offset + 4)?;
+            let forwarder_chain = read_u32(bytes, descriptor_offset + 8)?;
+            let name_rva = read_u32(bytes, descriptor_offset + 12)?;
+            let first_thunk = read_u32(bytes, descriptor_offset + 16)?;
+
+            if original_first_thunk == 0
+                && time_date_stamp == 0
+                && forwarder_chain == 0
+                && name_rva == 0
+                && first_thunk == 0
+            {
+                break;
+            }
+
+            let thunk_rva = if original_first_thunk != 0 {
+                original_first_thunk
+            } else {
+                first_thunk
+            };
+            let dll_name = self.read_c_string_at_rva(bytes, name_rva)?;
+            let symbols = self.read_import_symbols(bytes, thunk_rva)?;
+            imports.push(PeImportDll { dll_name, symbols });
+            descriptor_rva = descriptor_rva.checked_add(20).ok_or_else(|| {
+                HostError::new(ErrorCode::InvalidPe, "import descriptor cursor overflow")
+            })?;
+        }
+
+        Ok(imports)
+    }
+
+    pub fn base_relocations(&self, bytes: &[u8]) -> Result<Vec<BaseRelocationBlock>, HostError> {
+        let Some(directory) = self.data_directory(IMAGE_DIRECTORY_ENTRY_BASERELOC) else {
+            return Ok(Vec::new());
+        };
+        if directory.virtual_address == 0 || directory.size == 0 {
+            return Ok(Vec::new());
+        }
+
+        let mut blocks = Vec::new();
+        let mut cursor_rva = directory.virtual_address;
+        let directory_end = directory
+            .virtual_address
+            .checked_add(directory.size)
+            .ok_or_else(|| HostError::new(ErrorCode::InvalidPe, "relocation directory overflow"))?;
+
+        while cursor_rva
+            .checked_add(8)
+            .is_some_and(|end| end <= directory_end)
+        {
+            let block_offset = self.rva_to_file_offset(cursor_rva).ok_or_else(|| {
+                HostError::new(
+                    ErrorCode::InvalidPe,
+                    format!("relocation block RVA 0x{cursor_rva:X} is not file-backed"),
+                )
+            })?;
+            let page_rva = read_u32(bytes, block_offset)?;
+            let block_size = read_u32(bytes, block_offset + 4)?;
+            if page_rva == 0 && block_size == 0 {
+                break;
+            }
+            if block_size < 8 || block_size % 2 != 0 {
+                return Err(HostError::new(
+                    ErrorCode::InvalidPe,
+                    format!("invalid relocation block size {block_size}"),
+                ));
+            }
+            let next_rva = cursor_rva.checked_add(block_size).ok_or_else(|| {
+                HostError::new(ErrorCode::InvalidPe, "relocation cursor overflow")
+            })?;
+            if next_rva > directory_end {
+                return Err(HostError::new(
+                    ErrorCode::InvalidPe,
+                    "relocation block extends past relocation directory",
+                ));
+            }
+
+            let entry_count = ((block_size - 8) / 2) as usize;
+            let mut entries = Vec::with_capacity(entry_count);
+            for index in 0..entry_count {
+                let raw = read_u16(bytes, block_offset + 8 + index * 2)?;
+                entries.push(BaseRelocationEntry {
+                    kind: (raw >> 12) as u8,
+                    offset: raw & 0x0fff,
+                });
+            }
+            blocks.push(BaseRelocationBlock { page_rva, entries });
+            cursor_rva = next_rva;
+        }
+
+        Ok(blocks)
+    }
+
+    pub fn copy_image(&self, bytes: &[u8]) -> Result<PrivateImage, HostError> {
+        let mut image = vec![0u8; self.size_of_image as usize];
+        let header_len = (self.size_of_headers as usize)
+            .min(bytes.len())
+            .min(image.len());
+        image[..header_len].copy_from_slice(&bytes[..header_len]);
+
+        let mut copied_section_count = 0usize;
+        for section in &self.sections {
+            if section.raw_size == 0 {
+                continue;
+            }
+            let src_start = section.raw_pointer as usize;
+            let src_len = section.raw_size as usize;
+            let dst_start = section.virtual_address as usize;
+            let dst_len = src_len.min(section.virtual_size.max(section.raw_size) as usize);
+            let src = range(bytes, src_start, dst_len)?;
+            let dst_end = checked_add(dst_start, dst_len)?;
+            if dst_end > image.len() {
+                return Err(HostError::new(
+                    ErrorCode::InvalidPe,
+                    format!("section {} maps past SizeOfImage", section.name),
+                ));
+            }
+            image[dst_start..dst_end].copy_from_slice(src);
+            copied_section_count += 1;
+        }
+
+        Ok(PrivateImage {
+            bytes: image,
+            image_base: self.image_base,
+            entry_point_rva: self.entry_point_rva,
+            entry_point_run: false,
+            copied_section_count,
+        })
+    }
+
+    pub fn map_private_image(&self, bytes: &[u8]) -> Result<MemoryMappedImage, HostError> {
+        let mut image = self.copy_image(bytes)?;
+        image.map_to_memory(self, bytes)
+    }
+
+    fn data_directory(&self, index: usize) -> Option<PeDataDirectory> {
+        self.data_directories.get(index).copied()
+    }
+
+    fn rva_to_file_offset(&self, rva: u32) -> Option<usize> {
+        if rva < self.size_of_headers {
+            return Some(rva as usize);
+        }
+        self.sections.iter().find_map(|section| {
+            let start = section.virtual_address as u64;
+            let span = section.virtual_size.max(section.raw_size) as u64;
+            let end = start.saturating_add(span);
+            let rva64 = rva as u64;
+            if rva64 < start || rva64 >= end {
+                return None;
+            }
+            let offset_in_section = rva64 - start;
+            if offset_in_section >= section.raw_size as u64 {
+                return None;
+            }
+            Some((section.raw_pointer as u64 + offset_in_section) as usize)
+        })
+    }
+
+    fn read_c_string_at_rva(&self, bytes: &[u8], rva: u32) -> Result<String, HostError> {
+        let offset = self.rva_to_file_offset(rva).ok_or_else(|| {
+            HostError::new(
+                ErrorCode::InvalidPe,
+                format!("string RVA 0x{rva:X} is not file-backed"),
+            )
+        })?;
+        read_c_string_at_offset(bytes, offset)
+    }
+
+    fn read_import_symbols(
+        &self,
+        bytes: &[u8],
+        thunk_rva: u32,
+    ) -> Result<Vec<PeImportSymbol>, HostError> {
+        let mut symbols = Vec::new();
+        for index in 0..4096u32 {
+            let entry_rva = thunk_rva.checked_add(index * 8).ok_or_else(|| {
+                HostError::new(ErrorCode::InvalidPe, "import thunk cursor overflow")
+            })?;
+            let entry_offset = self.rva_to_file_offset(entry_rva).ok_or_else(|| {
+                HostError::new(
+                    ErrorCode::InvalidPe,
+                    format!("import thunk RVA 0x{entry_rva:X} is not file-backed"),
+                )
+            })?;
+            let thunk = read_u64(bytes, entry_offset)?;
+            if thunk == 0 {
+                break;
+            }
+            symbols.push(self.import_symbol_from_thunk(bytes, thunk)?);
+        }
+        Ok(symbols)
+    }
+
+    fn import_symbol_from_thunk(
+        &self,
+        bytes: &[u8],
+        thunk: u64,
+    ) -> Result<PeImportSymbol, HostError> {
+        if thunk & IMAGE_ORDINAL_FLAG64 != 0 {
+            return Ok(PeImportSymbol {
+                name: None,
+                hint: None,
+                ordinal: Some((thunk & 0xffff) as u16),
+            });
+        }
+
+        let hint_name_rva = u32::try_from(thunk).map_err(|_| {
+            HostError::new(
+                ErrorCode::InvalidPe,
+                format!("import by-name RVA 0x{thunk:X} exceeds u32"),
+            )
+        })?;
+        let hint_name_offset = self.rva_to_file_offset(hint_name_rva).ok_or_else(|| {
+            HostError::new(
+                ErrorCode::InvalidPe,
+                format!("import name RVA 0x{hint_name_rva:X} is not file-backed"),
+            )
+        })?;
+        let hint = read_u16(bytes, hint_name_offset)?;
+        let name = read_c_string_at_offset(bytes, hint_name_offset + 2)?;
+        Ok(PeImportSymbol {
+            name: Some(name),
+            hint: Some(hint),
+            ordinal: None,
+        })
+    }
+}
+
+impl PrivateImage {
+    pub fn entry_point_rva(&self) -> u32 {
+        self.entry_point_rva
+    }
+
+    pub fn entry_point_was_run(&self) -> bool {
+        self.entry_point_run
+    }
+
+    pub fn copied_section_count(&self) -> usize {
+        self.copied_section_count
+    }
+
+    pub fn read_u64(&self, rva: u32) -> Result<u64, HostError> {
+        let offset = rva as usize;
+        let mut out = [0u8; 8];
+        out.copy_from_slice(image_range(&self.bytes, offset, 8)?);
+        Ok(u64::from_le_bytes(out))
+    }
+
+    pub fn resolve_imports(
+        &mut self,
+        pe: &PeImage,
+        original_bytes: &[u8],
+        resolver: &mut dyn ImportResolver,
+    ) -> Result<ImportResolutionReport, HostError> {
+        let Some(directory) = pe.data_directory(IMAGE_DIRECTORY_ENTRY_IMPORT) else {
+            return Ok(ImportResolutionReport {
+                dll_count: 0,
+                symbol_count: 0,
+                fixed_thunk_count: 0,
+            });
+        };
+        if directory.virtual_address == 0 || directory.size == 0 {
+            return Ok(ImportResolutionReport {
+                dll_count: 0,
+                symbol_count: 0,
+                fixed_thunk_count: 0,
+            });
+        }
+
+        let mut dll_count = 0usize;
+        let mut symbol_count = 0usize;
+        let mut fixed_thunk_count = 0usize;
+        let mut descriptor_rva = directory.virtual_address;
+        let directory_end = directory
+            .virtual_address
+            .checked_add(directory.size)
+            .ok_or_else(|| HostError::new(ErrorCode::InvalidPe, "import directory overflow"))?;
+
+        while descriptor_rva
+            .checked_add(20)
+            .is_some_and(|end| end <= directory_end)
+        {
+            let descriptor_offset = pe.rva_to_file_offset(descriptor_rva).ok_or_else(|| {
+                HostError::new(
+                    ErrorCode::InvalidPe,
+                    format!("import descriptor RVA 0x{descriptor_rva:X} is not file-backed"),
+                )
+            })?;
+            let original_first_thunk = read_u32(original_bytes, descriptor_offset)?;
+            let time_date_stamp = read_u32(original_bytes, descriptor_offset + 4)?;
+            let forwarder_chain = read_u32(original_bytes, descriptor_offset + 8)?;
+            let name_rva = read_u32(original_bytes, descriptor_offset + 12)?;
+            let first_thunk = read_u32(original_bytes, descriptor_offset + 16)?;
+
+            if original_first_thunk == 0
+                && time_date_stamp == 0
+                && forwarder_chain == 0
+                && name_rva == 0
+                && first_thunk == 0
+            {
+                break;
+            }
+
+            let lookup_thunk_rva = if original_first_thunk != 0 {
+                original_first_thunk
+            } else {
+                first_thunk
+            };
+            let dll_name = pe.read_c_string_at_rva(original_bytes, name_rva)?;
+            dll_count += 1;
+
+            for index in 0..4096u32 {
+                let lookup_rva = lookup_thunk_rva.checked_add(index * 8).ok_or_else(|| {
+                    HostError::new(ErrorCode::InvalidPe, "import lookup thunk cursor overflow")
+                })?;
+                let lookup_offset = pe.rva_to_file_offset(lookup_rva).ok_or_else(|| {
+                    HostError::new(
+                        ErrorCode::InvalidPe,
+                        format!("import lookup thunk RVA 0x{lookup_rva:X} is not file-backed"),
+                    )
+                })?;
+                let thunk = read_u64(original_bytes, lookup_offset)?;
+                if thunk == 0 {
+                    break;
+                }
+
+                let symbol = pe.import_symbol_from_thunk(original_bytes, thunk)?;
+                let address = resolver.resolve_import(&dll_name, &symbol)?;
+                let iat_rva = first_thunk.checked_add(index * 8).ok_or_else(|| {
+                    HostError::new(ErrorCode::InvalidPe, "IAT thunk cursor overflow")
+                })?;
+                self.write_u64(iat_rva, address)?;
+                symbol_count += 1;
+                fixed_thunk_count += 1;
+            }
+
+            descriptor_rva = descriptor_rva.checked_add(20).ok_or_else(|| {
+                HostError::new(ErrorCode::InvalidPe, "import descriptor cursor overflow")
+            })?;
+        }
+
+        Ok(ImportResolutionReport {
+            dll_count,
+            symbol_count,
+            fixed_thunk_count,
+        })
+    }
+
+    pub fn resolve_executable_rva(
+        &self,
+        pe: &PeImage,
+        name: impl Into<String>,
+        rva: u32,
+    ) -> Result<MappedRva, HostError> {
+        if !pe.is_executable_rva(rva) {
+            return Err(HostError::new(
+                ErrorCode::UnsupportedExe,
+                format!("RVA 0x{rva:X} is outside executable sections"),
+            ));
+        }
+
+        Ok(MappedRva {
+            name: name.into(),
+            rva,
+            mapped_va: self.image_base.saturating_add(rva as u64),
+            executable: true,
+        })
+    }
+
+    pub fn apply_base_relocations(
+        &mut self,
+        pe: &PeImage,
+        original_bytes: &[u8],
+        new_base: u64,
+    ) -> Result<usize, HostError> {
+        let delta = new_base as i128 - self.image_base as i128;
+        if delta == 0 {
+            return Ok(0);
+        }
+
+        let mut applied = 0usize;
+        for block in pe.base_relocations(original_bytes)? {
+            for entry in block.entries {
+                match entry.kind {
+                    IMAGE_REL_BASED_ABSOLUTE => {}
+                    IMAGE_REL_BASED_DIR64 => {
+                        let target_rva = block
+                            .page_rva
+                            .checked_add(entry.offset as u32)
+                            .ok_or_else(|| {
+                                HostError::new(ErrorCode::InvalidPe, "relocation target overflow")
+                            })?;
+                        let current = self.read_u64(target_rva)?;
+                        let relocated = (current as i128).checked_add(delta).ok_or_else(|| {
+                            HostError::new(ErrorCode::InvalidPe, "relocation value overflow")
+                        })?;
+                        let relocated = u64::try_from(relocated).map_err(|_| {
+                            HostError::new(ErrorCode::InvalidPe, "relocation value underflow")
+                        })?;
+                        self.write_u64(target_rva, relocated)?;
+                        applied += 1;
+                    }
+                    kind => {
+                        return Err(HostError::new(
+                            ErrorCode::InvalidPe,
+                            format!("unsupported base relocation kind {kind}"),
+                        ));
+                    }
+                }
+            }
+        }
+
+        self.image_base = new_base;
+        Ok(applied)
+    }
+
+    pub fn map_to_memory(
+        &mut self,
+        pe: &PeImage,
+        original_bytes: &[u8],
+    ) -> Result<MemoryMappedImage, HostError> {
+        map_private_image_to_memory(pe, original_bytes, self)
+    }
+
+    fn write_u64(&mut self, rva: u32, value: u64) -> Result<(), HostError> {
+        let offset = rva as usize;
+        let end = checked_add(offset, 8)?;
+        if end > self.bytes.len() {
+            return Err(HostError::new(
+                ErrorCode::InvalidPe,
+                format!("image write out of bounds at RVA 0x{rva:X}"),
+            ));
+        }
+        self.bytes[offset..end].copy_from_slice(&value.to_le_bytes());
+        Ok(())
+    }
+}
+
+impl MemoryMappedImage {
+    pub fn base(&self) -> u64 {
+        self.base as usize as u64
+    }
+
+    pub fn size(&self) -> usize {
+        self.size
+    }
+
+    pub fn entry_point_rva(&self) -> u32 {
+        self.entry_point_rva
+    }
+
+    pub fn entry_point_was_run(&self) -> bool {
+        self.entry_point_run
+    }
+
+    pub fn applied_relocation_count(&self) -> usize {
+        self.applied_relocation_count
+    }
+
+    pub fn protected_section_count(&self) -> usize {
+        self.protected_section_count
+    }
+
+    pub fn read_u64(&self, rva: u32) -> Result<u64, HostError> {
+        let offset = rva as usize;
+        let end = checked_add(offset, 8)?;
+        if end > self.size {
+            return Err(HostError::new(
+                ErrorCode::InvalidPe,
+                format!("mapped image read out of bounds at RVA 0x{rva:X}"),
+            ));
+        }
+
+        let mut out = [0u8; 8];
+        unsafe {
+            std::ptr::copy_nonoverlapping(self.base.add(offset), out.as_mut_ptr(), out.len());
+        }
+        Ok(u64::from_le_bytes(out))
+    }
+}
+
+impl Drop for MemoryMappedImage {
+    fn drop(&mut self) {
+        #[cfg(windows)]
+        if !self.base.is_null() {
+            unsafe {
+                let _ = VirtualFree(self.base.cast(), 0, MEM_RELEASE);
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+fn map_private_image_to_memory(
+    pe: &PeImage,
+    original_bytes: &[u8],
+    image: &mut PrivateImage,
+) -> Result<MemoryMappedImage, HostError> {
+    let size = pe.size_of_image() as usize;
+    let base = unsafe {
+        VirtualAlloc(
+            std::ptr::null_mut(),
+            size,
+            MEM_COMMIT | MEM_RESERVE,
+            PAGE_READWRITE,
+        )
+    }
+    .cast::<u8>();
+    if base.is_null() {
+        return Err(HostError::new(
+            ErrorCode::Io,
+            format!("VirtualAlloc failed with error {}", unsafe {
+                GetLastError()
+            }),
+        ));
+    }
+
+    let mut mapped = MemoryMappedImage {
+        base,
+        size,
+        entry_point_rva: pe.entry_point_rva(),
+        entry_point_run: false,
+        applied_relocation_count: 0,
+        protected_section_count: 0,
+    };
+    mapped.applied_relocation_count =
+        image.apply_base_relocations(pe, original_bytes, mapped.base())?;
+
+    unsafe {
+        std::ptr::copy_nonoverlapping(image.bytes.as_ptr(), mapped.base, image.bytes.len());
+    }
+    mapped.protected_section_count = protect_mapped_sections(mapped.base, mapped.size, pe)?;
+    Ok(mapped)
+}
+
+#[cfg(not(windows))]
+fn map_private_image_to_memory(
+    _pe: &PeImage,
+    _original_bytes: &[u8],
+    _image: &mut PrivateImage,
+) -> Result<MemoryMappedImage, HostError> {
+    Err(HostError::new(
+        ErrorCode::UnsupportedExe,
+        "private executable memory mapping is only available on Windows",
+    ))
+}
+
+#[cfg(windows)]
+fn protect_mapped_sections(
+    base: *mut u8,
+    image_size: usize,
+    pe: &PeImage,
+) -> Result<usize, HostError> {
+    let mut protected = 0usize;
+    for section in &pe.sections {
+        let size = section.virtual_size.max(section.raw_size) as usize;
+        if size == 0 {
+            continue;
+        }
+        let offset = section.virtual_address as usize;
+        let end = checked_add(offset, size)?;
+        if end > image_size {
+            return Err(HostError::new(
+                ErrorCode::InvalidPe,
+                format!("section {} maps past SizeOfImage", section.name),
+            ));
+        }
+
+        let read = section.characteristics & IMAGE_SCN_MEM_READ != 0;
+        let write = section.characteristics & IMAGE_SCN_MEM_WRITE != 0;
+        let execute = section.characteristics & IMAGE_SCN_MEM_EXECUTE != 0;
+        let mut old_protection = 0u32;
+        let ok = unsafe {
+            VirtualProtect(
+                base.add(offset).cast(),
+                size,
+                memory_protection_flags(read, write, execute),
+                &mut old_protection,
+            )
+        };
+        if ok == 0 {
+            return Err(HostError::new(
+                ErrorCode::Io,
+                format!(
+                    "VirtualProtect failed for section {} with error {}",
+                    section.name,
+                    unsafe { GetLastError() }
+                ),
+            ));
+        }
+        protected += 1;
+    }
+    Ok(protected)
+}
+
+impl WindowsImportResolver {
+    pub fn with_search_dirs(search_dirs: Vec<PathBuf>) -> Self {
+        Self { search_dirs }
+    }
+
+    pub fn candidate_dll_path(&self, dll_name: &str) -> Option<PathBuf> {
+        let dll_path = Path::new(dll_name);
+        if dll_path.is_absolute() && dll_path.is_file() {
+            return Some(dll_path.to_path_buf());
+        }
+        self.search_dirs
+            .iter()
+            .map(|dir| dir.join(dll_name))
+            .find(|candidate| candidate.is_file())
+    }
+}
+
+#[cfg(windows)]
+impl ImportResolver for WindowsImportResolver {
+    fn resolve_import(
+        &mut self,
+        dll_name: &str,
+        symbol: &PeImportSymbol,
+    ) -> Result<u64, HostError> {
+        use std::os::windows::ffi::OsStrExt;
+
+        let candidate = self.candidate_dll_path(dll_name);
+        let load_target = candidate
+            .as_deref()
+            .unwrap_or_else(|| std::path::Path::new(dll_name));
+        let wide_dll = load_target
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>();
+        let module = if candidate.is_some() {
+            unsafe { LoadLibraryExW(wide_dll.as_ptr(), 0, LOAD_WITH_ALTERED_SEARCH_PATH) }
+        } else {
+            unsafe { LoadLibraryW(wide_dll.as_ptr()) }
+        };
+        if module == 0 {
+            return Err(HostError::new(
+                ErrorCode::Io,
+                format!(
+                    "LoadLibrary failed for {} with error {}",
+                    load_target.display(),
+                    unsafe { GetLastError() }
+                ),
+            ));
+        }
+
+        let proc = if let Some(name) = symbol.name.as_deref() {
+            let c_name = CString::new(name).map_err(|err| {
+                HostError::new(
+                    ErrorCode::InvalidPe,
+                    format!("import symbol name contains NUL: {err}"),
+                )
+            })?;
+            unsafe { GetProcAddress(module, c_name.as_ptr()) }
+        } else if let Some(ordinal) = symbol.ordinal {
+            unsafe { GetProcAddress(module, ordinal as usize as *const i8) }
+        } else {
+            return Err(HostError::new(
+                ErrorCode::InvalidPe,
+                "import symbol has neither name nor ordinal",
+            ));
+        };
+
+        if proc.is_null() {
+            let display = symbol
+                .name
+                .clone()
+                .unwrap_or_else(|| format!("#{}", symbol.ordinal.unwrap_or_default()));
+            return Err(HostError::new(
+                ErrorCode::Io,
+                format!(
+                    "GetProcAddress failed for {dll_name}!{display} with error {}",
+                    unsafe { GetLastError() }
+                ),
+            ));
+        }
+
+        Ok(proc as usize as u64)
+    }
+}
+
+#[cfg(not(windows))]
+impl ImportResolver for WindowsImportResolver {
+    fn resolve_import(
+        &mut self,
+        _dll_name: &str,
+        _symbol: &PeImportSymbol,
+    ) -> Result<u64, HostError> {
+        Err(HostError::new(
+            ErrorCode::UnsupportedExe,
+            "Windows import resolution is only available on Windows",
+        ))
+    }
+}
+
+#[cfg(windows)]
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+struct IoCounters {
+    read_operation_count: u64,
+    write_operation_count: u64,
+    other_operation_count: u64,
+    read_transfer_count: u64,
+    write_transfer_count: u64,
+    other_transfer_count: u64,
+}
+
+#[cfg(windows)]
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+struct JobObjectBasicLimitInformation {
+    per_process_user_time_limit: i64,
+    per_job_user_time_limit: i64,
+    limit_flags: u32,
+    minimum_working_set_size: usize,
+    maximum_working_set_size: usize,
+    active_process_limit: u32,
+    affinity: usize,
+    priority_class: u32,
+    scheduling_class: u32,
+}
+
+#[cfg(windows)]
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+struct JobObjectExtendedLimitInformation {
+    basic_limit_information: JobObjectBasicLimitInformation,
+    io_info: IoCounters,
+    process_memory_limit: usize,
+    job_memory_limit: usize,
+    peak_process_memory_used: usize,
+    peak_job_memory_used: usize,
+}
+
+#[cfg(windows)]
+struct RuntimeWorkerJobObject {
+    handle: isize,
+}
+
+#[cfg(windows)]
+impl Drop for RuntimeWorkerJobObject {
+    fn drop(&mut self) {
+        if self.handle != 0 {
+            unsafe {
+                CloseHandle(self.handle);
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn LoadLibraryW(lp_lib_file_name: *const u16) -> isize;
+    fn LoadLibraryExW(lp_lib_file_name: *const u16, h_file: isize, dw_flags: u32) -> isize;
+    fn GetProcAddress(h_module: isize, lp_proc_name: *const i8) -> *mut std::ffi::c_void;
+    fn GetLastError() -> u32;
+    fn VirtualAlloc(
+        lp_address: *mut std::ffi::c_void,
+        dw_size: usize,
+        fl_allocation_type: u32,
+        fl_protect: u32,
+    ) -> *mut std::ffi::c_void;
+    fn VirtualFree(lp_address: *mut std::ffi::c_void, dw_size: usize, dw_free_type: u32) -> i32;
+    fn VirtualProtect(
+        lp_address: *mut std::ffi::c_void,
+        dw_size: usize,
+        fl_new_protect: u32,
+        lpfl_old_protect: *mut u32,
+    ) -> i32;
+    fn CreateJobObjectW(lp_job_attributes: *mut c_void, lp_name: *const u16) -> isize;
+    fn SetInformationJobObject(
+        h_job: isize,
+        job_object_information_class: i32,
+        lp_job_object_information: *mut c_void,
+        cb_job_object_information_length: u32,
+    ) -> i32;
+    fn AssignProcessToJobObject(h_job: isize, h_process: isize) -> i32;
+    fn CloseHandle(h_object: isize) -> i32;
+}
+
+pub fn parse_profile_json(input: &str) -> Result<VersionProfile, HostError> {
+    let profile: VersionProfile = serde_json::from_str(input).map_err(|err| {
+        HostError::new(
+            ErrorCode::InvalidProfile,
+            format!("version profile is invalid: {err}"),
+        )
+    })?;
+
+    if profile.name.trim().is_empty() {
+        return Err(HostError::new(
+            ErrorCode::InvalidProfile,
+            "version profile name is required",
+        ));
+    }
+    if profile.exe_sha256.trim().is_empty()
+        || !profile
+            .exe_sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err(HostError::new(
+            ErrorCode::InvalidProfile,
+            "version profile exeSha256 must be hexadecimal",
+        ));
+    }
+
+    Ok(profile)
+}
+
+pub fn builtin_profiles() -> Vec<VersionProfile> {
+    vec![parse_profile_json(G1R_543_PROFILE_JSON).expect("built-in G1R profile must be valid")]
+}
+
+pub fn probe_exe(
+    request: &ProbeRequest,
+    profiles: &[VersionProfile],
+) -> Result<ProbeResponse, HostError> {
+    probe_exe_inner(request, profiles, None)
+}
+
+pub fn probe_exe_with_derived_cache(
+    request: &ProbeRequest,
+    profiles: &[VersionProfile],
+    cache_path: Option<&Path>,
+) -> Result<ProbeResponse, HostError> {
+    probe_exe_inner(request, profiles, cache_path)
+}
+
+fn probe_exe_inner(
+    request: &ProbeRequest,
+    profiles: &[VersionProfile],
+    cache_path: Option<&Path>,
+) -> Result<ProbeResponse, HostError> {
+    if !request.exe_path.is_file() {
+        return Err(HostError::new(
+            ErrorCode::MissingExe,
+            format!("G1R executable not found: {}", request.exe_path.display()),
+        ));
+    }
+
+    let bytes = fs::read(&request.exe_path)?;
+    let exe_sha256 = sha256_hex(&bytes);
+    let file_size = bytes.len() as u64;
+    let pe = PeImage::parse(&bytes)?;
+
+    if let Some(profile) = profiles
+        .iter()
+        .find(|profile| profile.exe_sha256.eq_ignore_ascii_case(&exe_sha256))
+    {
+        validate_known_profile(profile, &pe, file_size)?;
+        let codec_rvas = runtime_codec_rvas_from_profile(profile);
+        return Ok(ProbeResponse {
+            supported: true,
+            profile: Some(profile.name.clone()),
+            resolution_mode: Some(ResolutionMode::KnownProfile),
+            resolved_rvas: Some(codec_rvas),
+            can_compress: false,
+            can_decompress: false,
+            exe_sha256,
+            file_size,
+            pe_timestamp: pe.timestamp(),
+            image_base: pe.image_base(),
+            resolver_attempts: vec!["known_profile"],
+        });
+    }
+
+    if let Some(cache_path) = cache_path {
+        if let Some(entry) = read_derived_profile_cache(cache_path)?
+            .entries
+            .get(&exe_sha256)
+            .cloned()
+        {
+            validate_cached_derived_profile(&entry, &pe, file_size)?;
+            return Ok(ProbeResponse {
+                supported: true,
+                profile: Some(entry.name),
+                resolution_mode: Some(ResolutionMode::DerivedProfileCache),
+                resolved_rvas: Some(entry.resolved_rvas),
+                can_compress: entry.can_compress,
+                can_decompress: entry.can_decompress,
+                exe_sha256,
+                file_size,
+                pe_timestamp: pe.timestamp(),
+                image_base: pe.image_base(),
+                resolver_attempts: vec!["known_profile", "derived_profile_cache"],
+            });
+        }
+    }
+
+    if let Some(resolved) = profiles
+        .iter()
+        .find_map(|profile| resolve_pattern_profile_candidate(profile, &pe, &bytes).ok())
+    {
+        return Ok(ProbeResponse {
+            supported: false,
+            profile: Some(resolved.name),
+            resolution_mode: Some(resolved.resolution_mode),
+            resolved_rvas: Some(resolved.codec_rvas),
+            can_compress: false,
+            can_decompress: false,
+            exe_sha256,
+            file_size,
+            pe_timestamp: pe.timestamp(),
+            image_base: pe.image_base(),
+            resolver_attempts: if cache_path.is_some() {
+                vec!["known_profile", "derived_profile_cache", "pattern_profile"]
+            } else {
+                vec!["known_profile", "pattern_profile"]
+            },
+        });
+    }
+
+    Err(HostError::with_details(
+        ErrorCode::UnsupportedExe,
+        "G1R executable could not be resolved to verified codec functions",
+        json!({
+            "sha256": exe_sha256,
+            "fileSize": file_size,
+            "peTimestamp": format!("0x{:08X}", pe.timestamp()),
+            "resolverAttempts": if cache_path.is_some() {
+                json!(["known_profile", "derived_profile_cache", "pattern_profile"])
+            } else {
+                json!(["known_profile", "pattern_profile"])
+            },
+            "failure": "no known profile hash or compatible pattern candidate matched"
+        }),
+    ))
+}
+
+pub fn self_test_exe(
+    request: &SelfTestRequest,
+    profiles: &[VersionProfile],
+) -> Result<SelfTestResponse, HostError> {
+    let search_dirs = request
+        .exe_path
+        .parent()
+        .map(|parent| vec![parent.to_path_buf()])
+        .unwrap_or_default();
+    let mut resolver = WindowsImportResolver::with_search_dirs(search_dirs);
+    self_test_exe_with_optional_import_resolver(request, profiles, Some(&mut resolver), None, None)
+}
+
+pub fn self_test_exe_with_import_resolver(
+    request: &SelfTestRequest,
+    profiles: &[VersionProfile],
+    resolver: &mut dyn ImportResolver,
+) -> Result<SelfTestResponse, HostError> {
+    self_test_exe_with_optional_import_resolver(request, profiles, Some(resolver), None, None)
+}
+
+pub fn self_test_exe_with_runtime_worker(
+    request: &SelfTestRequest,
+    profiles: &[VersionProfile],
+    runtime_worker_path: &Path,
+) -> Result<SelfTestResponse, HostError> {
+    let search_dirs = request
+        .exe_path
+        .parent()
+        .map(|parent| vec![parent.to_path_buf()])
+        .unwrap_or_default();
+    let mut resolver = WindowsImportResolver::with_search_dirs(search_dirs);
+    self_test_exe_with_optional_import_resolver(
+        request,
+        profiles,
+        Some(&mut resolver),
+        Some(runtime_worker_path),
+        None,
+    )
+}
+
+fn self_test_exe_with_optional_import_resolver(
+    request: &SelfTestRequest,
+    profiles: &[VersionProfile],
+    mut resolver: Option<&mut dyn ImportResolver>,
+    runtime_worker_path: Option<&Path>,
+    derived_profile_cache_path: Option<&Path>,
+) -> Result<SelfTestResponse, HostError> {
+    let probe = probe_exe_with_derived_cache(
+        &ProbeRequest {
+            exe_path: request.exe_path.clone(),
+        },
+        profiles,
+        derived_profile_cache_path,
+    )?;
+    let bytes = fs::read(&request.exe_path)?;
+    let pe = PeImage::parse(&bytes)?;
+    let imports = pe.imports(&bytes)?;
+    let relocations = pe.base_relocations(&bytes)?;
+    let mut image = pe.copy_image(&bytes)?;
+    let mut applied_relocation_count = if let Some(relocation_base) = request.relocation_base {
+        image.apply_base_relocations(&pe, &bytes, relocation_base)?
+    } else {
+        0
+    };
+    let import_resolution = if request.resolve_imports {
+        let resolver = resolver.as_deref_mut().ok_or_else(|| {
+            HostError::new(
+                ErrorCode::InvalidRequest,
+                "resolve_imports requested without an import resolver",
+            )
+        })?;
+        Some(image.resolve_imports(&pe, &bytes, resolver)?)
+    } else {
+        None
+    };
+    let memory_mapping = if request.map_image {
+        let mapped = image.map_to_memory(&pe, &bytes)?;
+        applied_relocation_count += mapped.applied_relocation_count();
+        Some(mapped)
+    } else {
+        None
+    };
+
+    let codec_rvas = probe.resolved_rvas;
+    let section_protections = pe.section_protections();
+    let resolved_rvas = codec_rvas
+        .as_ref()
+        .map(|codec_rvas| {
+            runtime_codec_rva_entries(codec_rvas)
+                .into_iter()
+                .map(|(name, rva)| ResolvedRvaReport {
+                    name,
+                    rva,
+                    executable: pe.is_executable_rva(rva),
+                    preferred_va: pe.image_base().saturating_add(rva as u64),
+                    mapped_va: image.image_base.saturating_add(rva as u64),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let runtime_selftests = runtime_selftest_report(
+        request.run_runtime_selftests,
+        request.runtime_selftest_run_decompress,
+        request.runtime_selftest_run_compress,
+        request.runtime_selftest_decompress_repeat_count,
+        request.runtime_selftest_compress_repeat_count,
+        runtime_worker_path,
+        &request.exe_path,
+        request.runtime_selftest_sample.as_ref(),
+        request.runtime_selftest_compress_sample.as_ref(),
+        codec_rvas,
+    );
+    let can_decompress = runtime_selftests.decompress == "passed";
+    let can_compress = can_decompress && runtime_selftests.compress == "passed";
+
+    Ok(SelfTestResponse {
+        profile: probe.profile,
+        resolution_mode: probe.resolution_mode,
+        private_mapping: PrivateMappingReport {
+            pe_parsed: true,
+            image_base: pe.image_base(),
+            size_of_image: pe.size_of_image(),
+            copied_section_count: image.copied_section_count(),
+            import_dll_count: imports.len(),
+            import_symbol_count: imports.iter().map(|dll| dll.symbols.len()).sum(),
+            import_resolution_status: if import_resolution.is_some() {
+                "resolved"
+            } else {
+                "not_run"
+            },
+            fixed_import_thunk_count: import_resolution
+                .as_ref()
+                .map(|report| report.fixed_thunk_count)
+                .unwrap_or(0),
+            base_relocation_count: relocations.len(),
+            applied_relocation_count,
+            section_protection_count: section_protections.len(),
+            memory_mapped: memory_mapping.is_some(),
+            memory_mapped_base: memory_mapping.as_ref().map(MemoryMappedImage::base),
+            memory_mapped_size: memory_mapping
+                .as_ref()
+                .map(|mapped| mapped.size() as u32)
+                .unwrap_or(0),
+            memory_protection_applied_count: memory_mapping
+                .as_ref()
+                .map(MemoryMappedImage::protected_section_count)
+                .unwrap_or(0),
+            entry_point_rva: image.entry_point_rva(),
+            entry_point_run: image.entry_point_was_run(),
+            resolved_rvas,
+            section_protections,
+        },
+        runtime_selftests,
+        can_compress,
+        can_decompress,
+    })
+}
+
+fn runtime_selftest_report(
+    requested: bool,
+    run_decompress_call: bool,
+    run_compress_call: bool,
+    decompress_repeat_count: usize,
+    compress_repeat_count: usize,
+    runtime_worker_path: Option<&Path>,
+    exe_path: &Path,
+    sample: Option<&RuntimeSelftestOracleSample>,
+    compress_sample: Option<&RuntimeCompressSample>,
+    codec_rvas: Option<RuntimeCodecRvas>,
+) -> RuntimeSelftestReport {
+    if requested {
+        if let Some(runtime_worker_path) = runtime_worker_path {
+            if sample.is_some() || compress_sample.is_some() {
+                let decompress_sample = sample
+                    .cloned()
+                    .unwrap_or_else(default_runtime_decompress_sample);
+                let request = RuntimeSelftestWorkerRequest {
+                    exe_path: exe_path.to_path_buf(),
+                    codec_rvas,
+                    run_decompress_call,
+                    decompress_repeat_count,
+                    return_decompressed_output: false,
+                    verify_decompressed_output: true,
+                    decompress_sample,
+                    decompress_samples: Vec::new(),
+                    run_compress_call,
+                    compress_repeat_count,
+                    return_compressed_output: false,
+                    compress_sample: compress_sample.cloned(),
+                    compress_samples: Vec::new(),
+                };
+                return run_runtime_selftest_worker_with_request(
+                    runtime_worker_path,
+                    RUNTIME_SELFTEST_WORKER_TIMEOUT,
+                    &[],
+                    &request,
+                );
+            }
+
+            return run_runtime_selftest_worker(
+                runtime_worker_path,
+                RUNTIME_SELFTEST_WORKER_TIMEOUT,
+                &[],
+            );
+        }
+
+        return runtime_selftest_not_configured_report();
+    }
+
+    RuntimeSelftestReport {
+        requested: false,
+        worker_status: "not_run".to_string(),
+        worker_pid: None,
+        worker_exit_code: None,
+        exe_path: None,
+        decompress_sample_status: "not_run".to_string(),
+        decompress_sample_expected_size: None,
+        decompress_sample_compressed_size: None,
+        decompress_sample_expected_sha1: None,
+        decompress_sample_expected_head_hex: None,
+        runtime_preflight: None,
+        decompress_call_return: None,
+        decompress_call_count: None,
+        decompress_output_size: None,
+        decompress_output_sha1: None,
+        decompress_output_head_hex: None,
+        decompress_output_base64: None,
+        decompress_outputs_base64: None,
+        compress_call_return: None,
+        compress_call_count: None,
+        compress_output_size: None,
+        compress_output_sha1: None,
+        compress_output_base64: None,
+        compress_outputs_base64: None,
+        compress_roundtrip_sha1: None,
+        decompress: "not_run".to_string(),
+        compress: "not_run".to_string(),
+        reason: None,
+    }
+}
+
+fn decompress_with_runtime_worker(
+    request: &DecompressRequest,
+    profiles: &[VersionProfile],
+    runtime_worker_path: &Path,
+) -> Result<Value, HostError> {
+    let probe = probe_exe_with_derived_cache(
+        &ProbeRequest {
+            exe_path: request.exe_path.clone(),
+        },
+        profiles,
+        request.derived_profile_cache_path.as_deref(),
+    )?;
+    let codec_rvas = probe
+        .resolved_rvas
+        .ok_or_else(|| codec_disabled_error("decompress"))?;
+    if probe.resolution_mode == Some(ResolutionMode::PatternProfile) {
+        return Err(pattern_profile_requires_selftest_error("decompress"));
+    }
+    let worker_request = RuntimeSelftestWorkerRequest {
+        exe_path: request.exe_path.clone(),
+        codec_rvas: Some(codec_rvas),
+        run_decompress_call: true,
+        decompress_repeat_count: 1,
+        return_decompressed_output: true,
+        verify_decompressed_output: false,
+        decompress_sample: RuntimeSelftestOracleSample {
+            compressed_base64: BASE64_STANDARD.encode(&request.input),
+            expected_size: request.expected_size,
+            expected_decompressed_sha1: "0".repeat(40),
+            expected_decompressed_head_hex: String::new(),
+        },
+        decompress_samples: Vec::new(),
+        run_compress_call: false,
+        compress_repeat_count: 1,
+        return_compressed_output: false,
+        compress_sample: None,
+        compress_samples: Vec::new(),
+    };
+    let mut report = run_runtime_selftest_worker_with_request(
+        runtime_worker_path,
+        RUNTIME_SELFTEST_WORKER_TIMEOUT,
+        &[],
+        &worker_request,
+    );
+    let output_base64 = report.decompress_output_base64.take().ok_or_else(|| {
+        runtime_worker_failed_error("decompress worker did not return outputBase64", &report)
+    })?;
+    if report.worker_status != "completed"
+        || report.worker_exit_code != Some(0)
+        || report.decompress != "passed"
+        || report.decompress_output_size != Some(request.expected_size)
+    {
+        return Err(runtime_worker_failed_error(
+            "decompress worker failed runtime verification",
+            &report,
+        ));
+    }
+
+    Ok(json!({
+        "outputBase64": output_base64,
+        "profile": probe.profile,
+        "resolutionMode": probe.resolution_mode,
+    }))
+}
+
+fn decompress_many_with_runtime_worker(
+    request: &DecompressManyRequest,
+    profiles: &[VersionProfile],
+    runtime_worker_path: &Path,
+) -> Result<Value, HostError> {
+    let probe = probe_exe_with_derived_cache(
+        &ProbeRequest {
+            exe_path: request.exe_path.clone(),
+        },
+        profiles,
+        request.derived_profile_cache_path.as_deref(),
+    )?;
+    let codec_rvas = probe
+        .resolved_rvas
+        .ok_or_else(|| codec_disabled_error("decompress_many"))?;
+    if probe.resolution_mode == Some(ResolutionMode::PatternProfile) {
+        return Err(pattern_profile_requires_selftest_error("decompress_many"));
+    }
+    let samples = request
+        .chunks
+        .iter()
+        .map(|chunk| RuntimeSelftestOracleSample {
+            compressed_base64: BASE64_STANDARD.encode(&chunk.input),
+            expected_size: chunk.expected_size,
+            expected_decompressed_sha1: "0".repeat(40),
+            expected_decompressed_head_hex: String::new(),
+        })
+        .collect::<Vec<_>>();
+    let Some(first_sample) = samples.first().cloned() else {
+        return Err(HostError::new(
+            ErrorCode::InvalidRequest,
+            "decompress_many request chunks must not be empty",
+        ));
+    };
+    let worker_request = RuntimeSelftestWorkerRequest {
+        exe_path: request.exe_path.clone(),
+        codec_rvas: Some(codec_rvas),
+        run_decompress_call: true,
+        decompress_repeat_count: 1,
+        return_decompressed_output: true,
+        verify_decompressed_output: false,
+        decompress_sample: first_sample,
+        decompress_samples: samples,
+        run_compress_call: false,
+        compress_repeat_count: 1,
+        return_compressed_output: false,
+        compress_sample: None,
+        compress_samples: Vec::new(),
+    };
+    let mut report = run_runtime_selftest_worker_with_request(
+        runtime_worker_path,
+        RUNTIME_SELFTEST_WORKER_TIMEOUT,
+        &[],
+        &worker_request,
+    );
+    let outputs_base64 = report
+        .decompress_outputs_base64
+        .take()
+        .or_else(|| {
+            report
+                .decompress_output_base64
+                .take()
+                .map(|output| vec![output])
+        })
+        .ok_or_else(|| {
+            runtime_worker_failed_error(
+                "decompress_many worker did not return outputsBase64",
+                &report,
+            )
+        })?;
+    if report.worker_status != "completed"
+        || report.worker_exit_code != Some(0)
+        || report.decompress != "passed"
+        || outputs_base64.len() != request.chunks.len()
+    {
+        return Err(runtime_worker_failed_error(
+            "decompress_many worker failed runtime verification",
+            &report,
+        ));
+    }
+    for (index, (output_base64, chunk)) in outputs_base64.iter().zip(&request.chunks).enumerate() {
+        let output = BASE64_STANDARD.decode(output_base64).map_err(|err| {
+            HostError::new(
+                ErrorCode::InvalidRequest,
+                format!("decompress_many worker output {index} is not valid base64: {err}"),
+            )
+        })?;
+        if output.len() != chunk.expected_size {
+            return Err(runtime_worker_failed_error(
+                &format!(
+                    "decompress_many worker output {index} has {} bytes, expected {}",
+                    output.len(),
+                    chunk.expected_size
+                ),
+                &report,
+            ));
+        }
+    }
+
+    Ok(json!({
+        "outputsBase64": outputs_base64,
+        "profile": probe.profile,
+        "resolutionMode": probe.resolution_mode,
+    }))
+}
+
+fn compress_with_runtime_worker(
+    request: &CompressRequest,
+    profiles: &[VersionProfile],
+    runtime_worker_path: &Path,
+) -> Result<Value, HostError> {
+    let probe = probe_exe_with_derived_cache(
+        &ProbeRequest {
+            exe_path: request.exe_path.clone(),
+        },
+        profiles,
+        request.derived_profile_cache_path.as_deref(),
+    )?;
+    let codec_rvas = probe
+        .resolved_rvas
+        .ok_or_else(|| codec_disabled_error("compress"))?;
+    if probe.resolution_mode == Some(ResolutionMode::PatternProfile) {
+        return Err(pattern_profile_requires_selftest_error("compress"));
+    }
+    let worker_request = RuntimeSelftestWorkerRequest {
+        exe_path: request.exe_path.clone(),
+        codec_rvas: Some(codec_rvas),
+        run_decompress_call: false,
+        decompress_repeat_count: 1,
+        return_decompressed_output: false,
+        verify_decompressed_output: true,
+        decompress_sample: RuntimeSelftestOracleSample {
+            compressed_base64: "AQID".to_string(),
+            expected_size: 3,
+            expected_decompressed_sha1: "0".repeat(40),
+            expected_decompressed_head_hex: String::new(),
+        },
+        decompress_samples: Vec::new(),
+        run_compress_call: true,
+        compress_repeat_count: 1,
+        return_compressed_output: true,
+        compress_sample: Some(RuntimeCompressSample {
+            input_base64: BASE64_STANDARD.encode(&request.input),
+            level: request.level,
+        }),
+        compress_samples: Vec::new(),
+    };
+    let mut report = run_runtime_selftest_worker_with_request(
+        runtime_worker_path,
+        RUNTIME_SELFTEST_WORKER_TIMEOUT,
+        &[],
+        &worker_request,
+    );
+    let output_base64 = report.compress_output_base64.take().ok_or_else(|| {
+        runtime_worker_failed_error("compress worker did not return outputBase64", &report)
+    })?;
+    if report.worker_status != "completed"
+        || report.worker_exit_code != Some(0)
+        || report.compress != "passed"
+        || report.compress_output_size.is_none()
+    {
+        return Err(runtime_worker_failed_error(
+            "compress worker failed runtime verification",
+            &report,
+        ));
+    }
+
+    Ok(json!({
+        "outputBase64": output_base64,
+        "profile": probe.profile,
+        "resolutionMode": probe.resolution_mode,
+    }))
+}
+
+fn compress_many_with_runtime_worker(
+    request: &CompressManyRequest,
+    profiles: &[VersionProfile],
+    runtime_worker_path: &Path,
+) -> Result<Value, HostError> {
+    let probe = probe_exe_with_derived_cache(
+        &ProbeRequest {
+            exe_path: request.exe_path.clone(),
+        },
+        profiles,
+        request.derived_profile_cache_path.as_deref(),
+    )?;
+    let codec_rvas = probe
+        .resolved_rvas
+        .ok_or_else(|| codec_disabled_error("compress_many"))?;
+    if probe.resolution_mode == Some(ResolutionMode::PatternProfile) {
+        return Err(pattern_profile_requires_selftest_error("compress_many"));
+    }
+    let samples = request
+        .chunks
+        .iter()
+        .map(|chunk| RuntimeCompressSample {
+            input_base64: BASE64_STANDARD.encode(&chunk.input),
+            level: chunk.level,
+        })
+        .collect::<Vec<_>>();
+    let Some(first_sample) = samples.first().cloned() else {
+        return Err(HostError::new(
+            ErrorCode::InvalidRequest,
+            "compress_many request chunks must not be empty",
+        ));
+    };
+    let worker_request = RuntimeSelftestWorkerRequest {
+        exe_path: request.exe_path.clone(),
+        codec_rvas: Some(codec_rvas),
+        run_decompress_call: false,
+        decompress_repeat_count: 1,
+        return_decompressed_output: false,
+        verify_decompressed_output: true,
+        decompress_sample: RuntimeSelftestOracleSample {
+            compressed_base64: "AQID".to_string(),
+            expected_size: 3,
+            expected_decompressed_sha1: "0".repeat(40),
+            expected_decompressed_head_hex: String::new(),
+        },
+        decompress_samples: Vec::new(),
+        run_compress_call: true,
+        compress_repeat_count: 1,
+        return_compressed_output: true,
+        compress_sample: Some(first_sample),
+        compress_samples: samples,
+    };
+    let mut report = run_runtime_selftest_worker_with_request(
+        runtime_worker_path,
+        RUNTIME_SELFTEST_WORKER_TIMEOUT,
+        &[],
+        &worker_request,
+    );
+    let outputs_base64 = report
+        .compress_outputs_base64
+        .take()
+        .or_else(|| {
+            report
+                .compress_output_base64
+                .take()
+                .map(|output| vec![output])
+        })
+        .ok_or_else(|| {
+            runtime_worker_failed_error(
+                "compress_many worker did not return outputsBase64",
+                &report,
+            )
+        })?;
+    if report.worker_status != "completed"
+        || report.worker_exit_code != Some(0)
+        || report.compress != "passed"
+        || outputs_base64.len() != request.chunks.len()
+    {
+        return Err(runtime_worker_failed_error(
+            "compress_many worker failed runtime verification",
+            &report,
+        ));
+    }
+
+    Ok(json!({
+        "outputsBase64": outputs_base64,
+        "profile": probe.profile,
+        "resolutionMode": probe.resolution_mode,
+    }))
+}
+
+fn runtime_worker_failed_error(message: &str, report: &RuntimeSelftestReport) -> HostError {
+    HostError::with_details(
+        ErrorCode::UnsupportedExe,
+        message,
+        json!({ "runtimeSelftests": report }),
+    )
+}
+
+fn runtime_selftest_not_configured_report() -> RuntimeSelftestReport {
+    RuntimeSelftestReport {
+        requested: true,
+        worker_status: "not_configured".to_string(),
+        worker_pid: None,
+        worker_exit_code: None,
+        exe_path: None,
+        decompress_sample_status: "not_run".to_string(),
+        decompress_sample_expected_size: None,
+        decompress_sample_compressed_size: None,
+        decompress_sample_expected_sha1: None,
+        decompress_sample_expected_head_hex: None,
+        runtime_preflight: None,
+        decompress_call_return: None,
+        decompress_call_count: None,
+        decompress_output_size: None,
+        decompress_output_sha1: None,
+        decompress_output_head_hex: None,
+        decompress_output_base64: None,
+        decompress_outputs_base64: None,
+        compress_call_return: None,
+        compress_call_count: None,
+        compress_output_size: None,
+        compress_output_sha1: None,
+        compress_output_base64: None,
+        compress_outputs_base64: None,
+        compress_roundtrip_sha1: None,
+        decompress: "not_run".to_string(),
+        compress: "not_run".to_string(),
+        reason: Some("runtime worker path was not configured".to_string()),
+    }
+}
+
+pub fn runtime_selftest_worker_report(
+    request: Option<RuntimeSelftestWorkerRequest>,
+) -> Result<RuntimeSelftestReport, HostError> {
+    let mut report = RuntimeSelftestReport {
+        requested: true,
+        worker_status: "worker".to_string(),
+        worker_pid: Some(std::process::id()),
+        worker_exit_code: None,
+        exe_path: None,
+        decompress_sample_status: "not_provided".to_string(),
+        decompress_sample_expected_size: None,
+        decompress_sample_compressed_size: None,
+        decompress_sample_expected_sha1: None,
+        decompress_sample_expected_head_hex: None,
+        runtime_preflight: None,
+        decompress_call_return: None,
+        decompress_call_count: None,
+        decompress_output_size: None,
+        decompress_output_sha1: None,
+        decompress_output_head_hex: None,
+        decompress_output_base64: None,
+        decompress_outputs_base64: None,
+        compress_call_return: None,
+        compress_call_count: None,
+        compress_output_size: None,
+        compress_output_sha1: None,
+        compress_output_base64: None,
+        compress_outputs_base64: None,
+        compress_roundtrip_sha1: None,
+        decompress: "not_run".to_string(),
+        compress: "not_run".to_string(),
+        reason: Some("runtime codec call was not requested".to_string()),
+    };
+
+    let Some(request) = request else {
+        return Ok(report);
+    };
+
+    report.exe_path = Some(request.exe_path.to_string_lossy().to_string());
+    let decompress_samples = if request.decompress_samples.is_empty() {
+        vec![request.decompress_sample.clone()]
+    } else {
+        request.decompress_samples.clone()
+    };
+    match validate_runtime_selftest_samples(&decompress_samples) {
+        Ok(compressed_sizes) => {
+            let first_sample = &decompress_samples[0];
+            report.decompress_sample_status = "accepted".to_string();
+            report.decompress_sample_expected_size = Some(first_sample.expected_size);
+            report.decompress_sample_compressed_size = compressed_sizes.first().copied();
+            report.decompress_sample_expected_sha1 =
+                Some(first_sample.expected_decompressed_sha1.clone());
+            report.decompress_sample_expected_head_hex =
+                Some(first_sample.expected_decompressed_head_hex.clone());
+            if let Some(codec_rvas) = request.codec_rvas {
+                match runtime_selftest_worker_preflight(&request.exe_path, &codec_rvas) {
+                    Ok(preflight) => {
+                        report.runtime_preflight = Some(preflight.report.clone());
+                        if request.run_decompress_call {
+                            match validate_runtime_repeat_count(
+                                "runtime decompress repeat count",
+                                request.decompress_repeat_count,
+                            ) {
+                                Ok(repeat_count) => {
+                                    let total_call_count =
+                                        repeat_count.saturating_mul(decompress_samples.len());
+                                    let mut outputs_base64 = Vec::new();
+                                    'decompress_calls: for repeat_index in 0..repeat_count {
+                                        for (sample_index, sample) in
+                                            decompress_samples.iter().enumerate()
+                                        {
+                                            let completed_count = repeat_index
+                                                * decompress_samples.len()
+                                                + sample_index
+                                                + 1;
+                                            match runtime_selftest_worker_decompress_call(
+                                                &preflight.mapped,
+                                                &codec_rvas,
+                                                sample,
+                                                request.return_decompressed_output,
+                                            ) {
+                                                Ok(call) => {
+                                                    report.decompress_call_return =
+                                                        Some(call.return_value);
+                                                    report.decompress_call_count =
+                                                        Some(completed_count);
+                                                    report.decompress_output_size =
+                                                        Some(call.output_size);
+                                                    report.decompress_output_sha1 =
+                                                        Some(call.output_sha1.clone());
+                                                    report.decompress_output_head_hex =
+                                                        Some(call.output_head_hex.clone());
+                                                    if let Some(output_base64) =
+                                                        call.output_base64.clone()
+                                                    {
+                                                        outputs_base64.push(output_base64);
+                                                    }
+                                                    let failure_reason =
+                                                        if request.verify_decompressed_output {
+                                                            verify_runtime_decompress_call(
+                                                                &call, sample,
+                                                            )
+                                                        } else {
+                                                            verify_runtime_decompress_size(
+                                                                &call, sample,
+                                                            )
+                                                        };
+                                                    if let Some(reason) = failure_reason {
+                                                        report.decompress = "failed".to_string();
+                                                        report.compress = "failed".to_string();
+                                                        report.reason = Some(format!(
+                                                            "decompress call {completed_count}/{total_call_count} failed: {reason}"
+                                                        ));
+                                                        break 'decompress_calls;
+                                                    }
+                                                    report.decompress = "passed".to_string();
+                                                    report.reason = Some(format!(
+                                                        "Oodle decompress call passed {completed_count}/{total_call_count} times in crash-isolated worker"
+                                                    ));
+                                                }
+                                                Err(err) => {
+                                                    report.decompress = "failed".to_string();
+                                                    report.compress = "failed".to_string();
+                                                    report.reason = Some(format!(
+                                                        "decompress call {completed_count}/{total_call_count} failed: {err}"
+                                                    ));
+                                                    break 'decompress_calls;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    if request.return_decompressed_output
+                                        && !outputs_base64.is_empty()
+                                    {
+                                        report.decompress_output_base64 =
+                                            outputs_base64.last().cloned();
+                                        if outputs_base64.len() > 1 {
+                                            report.decompress_outputs_base64 = Some(outputs_base64);
+                                        }
+                                    }
+                                }
+                                Err(err) => {
+                                    report.decompress = "failed".to_string();
+                                    report.compress = "failed".to_string();
+                                    report.reason = Some(err.to_string());
+                                }
+                            }
+                        } else {
+                            report.reason =
+                                Some("runtime decompress call was not requested".to_string());
+                        }
+                        if request.run_compress_call {
+                            let compress_samples = if request.compress_samples.is_empty() {
+                                request.compress_sample.iter().cloned().collect::<Vec<_>>()
+                            } else {
+                                request.compress_samples.clone()
+                            };
+                            if compress_samples.is_empty() {
+                                report.compress = "failed".to_string();
+                                report.reason =
+                                    Some("runtime compress sample was not provided".to_string());
+                            } else {
+                                match validate_runtime_repeat_count(
+                                    "runtime compress repeat count",
+                                    request.compress_repeat_count,
+                                ) {
+                                    Ok(repeat_count) => {
+                                        let total_call_count =
+                                            repeat_count.saturating_mul(compress_samples.len());
+                                        let mut outputs_base64 = Vec::new();
+                                        'compress_calls: for repeat_index in 0..repeat_count {
+                                            for (sample_index, sample) in
+                                                compress_samples.iter().enumerate()
+                                            {
+                                                let completed_count = repeat_index
+                                                    * compress_samples.len()
+                                                    + sample_index
+                                                    + 1;
+                                                match runtime_selftest_worker_compress_call(
+                                                    &preflight.mapped,
+                                                    &codec_rvas,
+                                                    sample,
+                                                    request.return_compressed_output,
+                                                ) {
+                                                    Ok(call) => {
+                                                        report.compress_call_return =
+                                                            Some(call.return_value);
+                                                        report.compress_call_count =
+                                                            Some(completed_count);
+                                                        report.compress_output_size =
+                                                            Some(call.output_size);
+                                                        report.compress_output_sha1 =
+                                                            Some(call.output_sha1);
+                                                        if let Some(output_base64) =
+                                                            call.output_base64.clone()
+                                                        {
+                                                            outputs_base64.push(output_base64);
+                                                        }
+                                                        report.compress_roundtrip_sha1 =
+                                                            Some(call.roundtrip_sha1);
+                                                        report.compress = "passed".to_string();
+                                                        report.reason = Some(format!(
+                                                            "Oodle compress roundtrip passed {completed_count}/{total_call_count} times in crash-isolated worker"
+                                                        ));
+                                                    }
+                                                    Err(err) => {
+                                                        report.compress = "failed".to_string();
+                                                        report.reason = Some(format!(
+                                                            "compress call {completed_count}/{total_call_count} failed: {err}"
+                                                        ));
+                                                        break 'compress_calls;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        if request.return_compressed_output
+                                            && !outputs_base64.is_empty()
+                                        {
+                                            report.compress_output_base64 =
+                                                outputs_base64.last().cloned();
+                                            if outputs_base64.len() > 1 {
+                                                report.compress_outputs_base64 =
+                                                    Some(outputs_base64);
+                                            }
+                                        }
+                                    }
+                                    Err(err) => {
+                                        report.compress = "failed".to_string();
+                                        report.reason = Some(err.to_string());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        report.runtime_preflight =
+                            Some(RuntimePreflightReport::failed(err.to_string()));
+                        report.decompress = "failed".to_string();
+                        report.compress = "failed".to_string();
+                        report.reason = Some(err.to_string());
+                    }
+                }
+            }
+        }
+        Err(err) => {
+            report.decompress_sample_status = "invalid_request".to_string();
+            report.decompress = "failed".to_string();
+            report.compress = "failed".to_string();
+            report.reason = Some(err.to_string());
+        }
+    }
+
+    Ok(report)
+}
+
+struct RuntimeMappedPreflight {
+    report: RuntimePreflightReport,
+    mapped: MemoryMappedImage,
+}
+
+struct RuntimeDecompressCallResult {
+    return_value: isize,
+    output_size: usize,
+    output_sha1: String,
+    output_head_hex: String,
+    output_base64: Option<String>,
+}
+
+struct RuntimeCompressCallResult {
+    return_value: isize,
+    output_size: usize,
+    output_sha1: String,
+    output_base64: Option<String>,
+    roundtrip_sha1: String,
+}
+
+fn runtime_codec_rvas_from_profile(profile: &VersionProfile) -> RuntimeCodecRvas {
+    RuntimeCodecRvas {
+        oodle_lz_compress: profile.rv_as.oodle_lz_compress,
+        oodle_lz_decompress: profile.rv_as.oodle_lz_decompress,
+        compressor_dispatch: profile.rv_as.compressor_dispatch,
+    }
+}
+
+pub fn default_derived_profile_cache_path() -> PathBuf {
+    if let Some(local_app_data) = env::var_os("LOCALAPPDATA") {
+        return PathBuf::from(local_app_data)
+            .join("goresave")
+            .join("g1r_codec_host_derived_profiles.json");
+    }
+    if let Some(home) = env::var_os("USERPROFILE").or_else(|| env::var_os("HOME")) {
+        return PathBuf::from(home)
+            .join(".goresave")
+            .join("g1r_codec_host_derived_profiles.json");
+    }
+    env::temp_dir()
+        .join("goresave")
+        .join("g1r_codec_host_derived_profiles.json")
+}
+
+pub fn write_derived_profile_cache_entry(
+    cache_path: &Path,
+    entry: DerivedProfileCacheEntry,
+) -> Result<(), HostError> {
+    if let Some(parent) = cache_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut cache = read_derived_profile_cache(cache_path)?;
+    cache.entries.insert(entry.exe_sha256.clone(), entry);
+    let serialized = serde_json::to_vec_pretty(&cache).map_err(|err| {
+        HostError::new(
+            ErrorCode::InvalidRequest,
+            format!("derived profile cache serialization failed: {err}"),
+        )
+    })?;
+    fs::write(cache_path, serialized)?;
+    Ok(())
+}
+
+pub fn export_derived_profile_from_cache(
+    cache_path: &Path,
+    exe_sha256: &str,
+) -> Result<DerivedProfileExport, HostError> {
+    let cache = read_derived_profile_cache(cache_path)?;
+    let entry = cache
+        .entries
+        .get(&exe_sha256.to_ascii_lowercase())
+        .or_else(|| cache.entries.get(exe_sha256))
+        .cloned()
+        .ok_or_else(|| {
+            HostError::new(
+                ErrorCode::MissingExe,
+                format!("derived profile cache has no entry for SHA-256 {exe_sha256}"),
+            )
+        })?;
+    Ok(DerivedProfileExport {
+        cache_path: cache_path.display().to_string(),
+        entry,
+    })
+}
+
+fn validate_cached_derived_profile(
+    entry: &DerivedProfileCacheEntry,
+    pe: &PeImage,
+    file_size: u64,
+) -> Result<(), HostError> {
+    if entry.file_size != file_size {
+        return Err(HostError::new(
+            ErrorCode::UnsupportedExe,
+            format!(
+                "derived profile cache entry {} rejected: file size {} did not match expected {}",
+                entry.name, file_size, entry.file_size
+            ),
+        ));
+    }
+    if entry.pe_timestamp != format!("0x{:08X}", pe.timestamp()) {
+        return Err(HostError::new(
+            ErrorCode::UnsupportedExe,
+            format!(
+                "derived profile cache entry {} rejected: PE timestamp 0x{:08X} did not match expected {}",
+                entry.name,
+                pe.timestamp(),
+                entry.pe_timestamp
+            ),
+        ));
+    }
+    if entry.image_base != format!("0x{:X}", pe.image_base()) {
+        return Err(HostError::new(
+            ErrorCode::UnsupportedExe,
+            format!(
+                "derived profile cache entry {} rejected: image base 0x{:X} did not match expected {}",
+                entry.name,
+                pe.image_base(),
+                entry.image_base
+            ),
+        ));
+    }
+    for (name, rva) in runtime_codec_rva_entries(&entry.resolved_rvas) {
+        if !pe.is_executable_rva(rva) {
+            return Err(HostError::new(
+                ErrorCode::UnsupportedExe,
+                format!(
+                    "derived profile cache entry {} rejected: {name} RVA 0x{rva:X} is outside executable sections",
+                    entry.name
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+pub fn derived_profile_entry_from_verified_self_test(
+    exe_path: &Path,
+    response: &SelfTestResponse,
+) -> Result<Option<DerivedProfileCacheEntry>, HostError> {
+    if response.resolution_mode != Some(ResolutionMode::PatternProfile) {
+        return Ok(None);
+    }
+    if !response.can_decompress {
+        return Ok(None);
+    }
+
+    let resolved_rvas =
+        runtime_codec_rvas_from_resolved_reports(&response.private_mapping.resolved_rvas)
+            .ok_or_else(|| {
+                HostError::new(
+                    ErrorCode::UnsupportedExe,
+                    "pattern self_test did not report all required resolved RVAs",
+                )
+            })?;
+    let bytes = fs::read(exe_path)?;
+    let pe = PeImage::parse(&bytes)?;
+    let exe_sha256 = sha256_hex(&bytes);
+    let sha_prefix = exe_sha256.get(..8).unwrap_or(&exe_sha256);
+
+    Ok(Some(DerivedProfileCacheEntry {
+        name: format!("g1r-derived-{sha_prefix}"),
+        source_profile: response.profile.clone(),
+        exe_sha256,
+        file_size: bytes.len() as u64,
+        pe_timestamp: format!("0x{:08X}", pe.timestamp()),
+        image_base: format!("0x{:X}", pe.image_base()),
+        resolution_mode: ResolutionMode::PatternProfile,
+        resolved_rvas,
+        can_decompress: response.can_decompress,
+        can_compress: response.can_compress,
+        runtime_selftest_decompress: response.runtime_selftests.decompress.clone(),
+        runtime_selftest_compress: response.runtime_selftests.compress.clone(),
+        confidence: if response.can_compress {
+            "pattern_resolved_compress_roundtrip_passed".to_string()
+        } else {
+            "pattern_resolved_decompress_selftest_passed".to_string()
+        },
+        matched_anchors: vec![
+            G1R_COMPRESS_PROLOGUE_PATTERN.name.to_string(),
+            G1R_DECOMPRESS_PROLOGUE_PATTERN.name.to_string(),
+            G1R_DISPATCH_PROLOGUE_PATTERN.name.to_string(),
+        ],
+        cached_at_unix_seconds: unix_timestamp_now(),
+    }))
+}
+
+pub fn record_derived_profile_cache_after_self_test(
+    exe_path: &Path,
+    response: &SelfTestResponse,
+    cache_path: Option<&Path>,
+) -> Result<DerivedProfileCacheWriteReport, HostError> {
+    let path = cache_path
+        .map(Path::to_path_buf)
+        .unwrap_or_else(default_derived_profile_cache_path);
+    let Some(entry) = derived_profile_entry_from_verified_self_test(exe_path, response)? else {
+        return Ok(DerivedProfileCacheWriteReport {
+            path: path.display().to_string(),
+            sha256: None,
+            written: false,
+            reason: Some(
+                if response.resolution_mode == Some(ResolutionMode::PatternProfile) {
+                    "runtime selftests did not enable decompression".to_string()
+                } else {
+                    "resolution mode is not pattern_profile".to_string()
+                },
+            ),
+        });
+    };
+    let sha256 = entry.exe_sha256.clone();
+    write_derived_profile_cache_entry(&path, entry)?;
+    Ok(DerivedProfileCacheWriteReport {
+        path: path.display().to_string(),
+        sha256: Some(sha256),
+        written: true,
+        reason: None,
+    })
+}
+
+fn read_derived_profile_cache(cache_path: &Path) -> Result<DerivedProfileCacheFile, HostError> {
+    if !cache_path.exists() {
+        return Ok(DerivedProfileCacheFile {
+            version: 1,
+            entries: BTreeMap::new(),
+        });
+    }
+    let bytes = fs::read(cache_path)?;
+    serde_json::from_slice(&bytes).map_err(|err| {
+        HostError::new(
+            ErrorCode::InvalidRequest,
+            format!("derived profile cache is invalid JSON: {err}"),
+        )
+    })
+}
+
+fn runtime_codec_rvas_from_resolved_reports(
+    reports: &[ResolvedRvaReport],
+) -> Option<RuntimeCodecRvas> {
+    Some(RuntimeCodecRvas {
+        oodle_lz_compress: reports
+            .iter()
+            .find(|report| report.name == "oodleLzCompress")?
+            .rva,
+        oodle_lz_decompress: reports
+            .iter()
+            .find(|report| report.name == "oodleLzDecompress")?
+            .rva,
+        compressor_dispatch: reports
+            .iter()
+            .find(|report| report.name == "compressorDispatch")?
+            .rva,
+    })
+}
+
+fn unix_timestamp_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+impl RuntimePreflightReport {
+    fn failed(reason: impl Into<String>) -> Self {
+        Self {
+            status: "failed".to_string(),
+            import_resolution_status: "not_run".to_string(),
+            fixed_import_thunk_count: 0,
+            memory_mapped: false,
+            memory_mapped_base: None,
+            memory_mapped_size: 0,
+            memory_protection_applied_count: 0,
+            entry_point_run: false,
+            resolved_rvas: Vec::new(),
+            reason: Some(reason.into()),
+        }
+    }
+}
+
+fn runtime_selftest_worker_preflight(
+    exe_path: &Path,
+    codec_rvas: &RuntimeCodecRvas,
+) -> Result<RuntimeMappedPreflight, HostError> {
+    let bytes = fs::read(exe_path)?;
+    let pe = PeImage::parse(&bytes)?;
+
+    for (name, rva) in runtime_codec_rva_entries(codec_rvas) {
+        if !pe.is_executable_rva(rva) {
+            return Err(HostError::new(
+                ErrorCode::UnsupportedExe,
+                format!("{name} RVA 0x{rva:X} is outside executable sections"),
+            ));
+        }
+    }
+
+    let search_dirs = exe_path
+        .parent()
+        .map(|parent| vec![parent.to_path_buf()])
+        .unwrap_or_default();
+    let mut resolver = WindowsImportResolver::with_search_dirs(search_dirs);
+    let mut image = pe.copy_image(&bytes)?;
+    let import_resolution = image.resolve_imports(&pe, &bytes, &mut resolver)?;
+    let mapped = image.map_to_memory(&pe, &bytes)?;
+    let mapped_base = mapped.base();
+    let resolved_rvas = runtime_codec_rva_entries(codec_rvas)
+        .into_iter()
+        .map(|(name, rva)| RuntimeResolvedRvaReport {
+            name: name.to_string(),
+            rva,
+            executable: true,
+            mapped_va: mapped_base.saturating_add(rva as u64),
+        })
+        .collect();
+
+    Ok(RuntimeMappedPreflight {
+        report: RuntimePreflightReport {
+            status: "ready_to_call".to_string(),
+            import_resolution_status: "resolved".to_string(),
+            fixed_import_thunk_count: import_resolution.fixed_thunk_count,
+            memory_mapped: true,
+            memory_mapped_base: Some(mapped_base),
+            memory_mapped_size: mapped.size() as u32,
+            memory_protection_applied_count: mapped.protected_section_count(),
+            entry_point_run: mapped.entry_point_was_run(),
+            resolved_rvas,
+            reason: None,
+        },
+        mapped,
+    })
+}
+
+fn runtime_codec_rva_entries(codec_rvas: &RuntimeCodecRvas) -> [(&'static str, u32); 3] {
+    [
+        ("oodleLzCompress", codec_rvas.oodle_lz_compress),
+        ("oodleLzDecompress", codec_rvas.oodle_lz_decompress),
+        ("compressorDispatch", codec_rvas.compressor_dispatch),
+    ]
+}
+
+type OodleLzDecompressFn = unsafe extern "system" fn(
+    *const u8,
+    isize,
+    *mut u8,
+    isize,
+    i32,
+    i32,
+    i32,
+    *mut c_void,
+    isize,
+    *mut c_void,
+    *mut c_void,
+    *mut c_void,
+    isize,
+    i32,
+) -> isize;
+
+type OodleLzCompressFn = unsafe extern "system" fn(
+    i32,
+    *const u8,
+    isize,
+    *mut u8,
+    i32,
+    *mut c_void,
+    *const u8,
+    *mut c_void,
+    *mut c_void,
+    isize,
+) -> isize;
+
+fn runtime_selftest_worker_decompress_call(
+    mapped: &MemoryMappedImage,
+    codec_rvas: &RuntimeCodecRvas,
+    sample: &RuntimeSelftestOracleSample,
+    return_output: bool,
+) -> Result<RuntimeDecompressCallResult, HostError> {
+    let compressed = BASE64_STANDARD
+        .decode(&sample.compressed_base64)
+        .map_err(|err| {
+            HostError::new(
+                ErrorCode::InvalidRequest,
+                format!("runtime selftest compressedBase64 is not valid base64: {err}"),
+            )
+        })?;
+    let expected_size = isize::try_from(sample.expected_size).map_err(|_| {
+        HostError::new(
+            ErrorCode::InvalidRequest,
+            "runtime selftest expectedSize does not fit isize",
+        )
+    })?;
+    let compressed_size = isize::try_from(compressed.len()).map_err(|_| {
+        HostError::new(
+            ErrorCode::InvalidRequest,
+            "runtime selftest compressed size does not fit isize",
+        )
+    })?;
+    let mut output = vec![0u8; sample.expected_size];
+    let function_va = mapped
+        .base()
+        .saturating_add(codec_rvas.oodle_lz_decompress as u64);
+    let decompress: OodleLzDecompressFn = unsafe { std::mem::transmute(function_va as usize) };
+    let return_value = unsafe {
+        decompress(
+            compressed.as_ptr(),
+            compressed_size,
+            output.as_mut_ptr(),
+            expected_size,
+            0,
+            0,
+            0,
+            std::ptr::null_mut(),
+            0,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            0,
+            0,
+        )
+    };
+    let output_size = if return_value >= 0 {
+        usize::try_from(return_value).unwrap_or(0).min(output.len())
+    } else {
+        0
+    };
+    let output = &output[..output_size];
+
+    Ok(RuntimeDecompressCallResult {
+        return_value,
+        output_size,
+        output_sha1: sha1_hex(output),
+        output_head_hex: hex::encode(&output[..output.len().min(64)]),
+        output_base64: return_output.then(|| BASE64_STANDARD.encode(output)),
+    })
+}
+
+fn runtime_selftest_worker_compress_call(
+    mapped: &MemoryMappedImage,
+    codec_rvas: &RuntimeCodecRvas,
+    sample: &RuntimeCompressSample,
+    return_output: bool,
+) -> Result<RuntimeCompressCallResult, HostError> {
+    let input = BASE64_STANDARD
+        .decode(&sample.input_base64)
+        .map_err(|err| {
+            HostError::new(
+                ErrorCode::InvalidRequest,
+                format!("runtime compress inputBase64 is not valid base64: {err}"),
+            )
+        })?;
+    ensure_uncompressed_size("runtime compress input", input.len())?;
+    let raw_len = isize::try_from(input.len()).map_err(|_| {
+        HostError::new(
+            ErrorCode::InvalidRequest,
+            "runtime compress input size does not fit isize",
+        )
+    })?;
+    let mut output = vec![0u8; compressed_output_capacity(input.len())?];
+    let function_va = mapped
+        .base()
+        .saturating_add(codec_rvas.oodle_lz_compress as u64);
+    let compress: OodleLzCompressFn = unsafe { std::mem::transmute(function_va as usize) };
+    let return_value = unsafe {
+        compress(
+            OODLE_COMPRESSOR_KRAKEN,
+            input.as_ptr(),
+            raw_len,
+            output.as_mut_ptr(),
+            i32::from(sample.level),
+            std::ptr::null_mut(),
+            std::ptr::null(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if return_value <= 0 {
+        return Err(HostError::new(
+            ErrorCode::UnsupportedExe,
+            format!("Oodle compress returned non-positive result {return_value}"),
+        ));
+    }
+    let output_size = usize::try_from(return_value).map_err(|_| {
+        HostError::new(
+            ErrorCode::UnsupportedExe,
+            "Oodle compress result does not fit usize",
+        )
+    })?;
+    if output_size > output.len() {
+        return Err(HostError::new(
+            ErrorCode::UnsupportedExe,
+            format!(
+                "Oodle compress returned {output_size} bytes but output capacity is {}",
+                output.len()
+            ),
+        ));
+    }
+    output.truncate(output_size);
+
+    let roundtrip_sample = RuntimeSelftestOracleSample {
+        compressed_base64: BASE64_STANDARD.encode(&output),
+        expected_size: input.len(),
+        expected_decompressed_sha1: sha1_hex(&input),
+        expected_decompressed_head_hex: hex::encode(&input[..input.len().min(64)]),
+    };
+    let roundtrip =
+        runtime_selftest_worker_decompress_call(mapped, codec_rvas, &roundtrip_sample, false)?;
+    if let Some(reason) = verify_runtime_decompress_call(&roundtrip, &roundtrip_sample) {
+        return Err(HostError::new(
+            ErrorCode::UnsupportedExe,
+            format!("Oodle compress roundtrip failed: {reason}"),
+        ));
+    }
+
+    Ok(RuntimeCompressCallResult {
+        return_value,
+        output_size,
+        output_sha1: sha1_hex(&output),
+        output_base64: return_output.then(|| BASE64_STANDARD.encode(&output)),
+        roundtrip_sha1: roundtrip.output_sha1,
+    })
+}
+
+fn compressed_output_capacity(input_size: usize) -> Result<usize, HostError> {
+    let capacity = input_size.checked_add(0x10000).ok_or_else(|| {
+        HostError::new(
+            ErrorCode::InvalidRequest,
+            "runtime compress output capacity overflow",
+        )
+    })?;
+    Ok(capacity.min(MAX_CODEC_COMPRESSED_OUTPUT_SIZE))
+}
+
+fn verify_runtime_decompress_call(
+    call: &RuntimeDecompressCallResult,
+    sample: &RuntimeSelftestOracleSample,
+) -> Option<String> {
+    if let Some(reason) = verify_runtime_decompress_size(call, sample) {
+        return Some(reason);
+    }
+    if !call
+        .output_sha1
+        .eq_ignore_ascii_case(&sample.expected_decompressed_sha1)
+    {
+        return Some(format!(
+            "Oodle decompress SHA-1 mismatch: expected {}, got {}",
+            sample.expected_decompressed_sha1, call.output_sha1
+        ));
+    }
+    if !call
+        .output_head_hex
+        .get(..sample.expected_decompressed_head_hex.len())
+        .is_some_and(|head| head.eq_ignore_ascii_case(&sample.expected_decompressed_head_hex))
+    {
+        return Some("Oodle decompress head hex mismatch".to_string());
+    }
+
+    None
+}
+
+fn verify_runtime_decompress_size(
+    call: &RuntimeDecompressCallResult,
+    sample: &RuntimeSelftestOracleSample,
+) -> Option<String> {
+    if call.return_value < 0 {
+        return Some(format!(
+            "Oodle decompress returned negative result {}",
+            call.return_value
+        ));
+    }
+    if call.output_size != sample.expected_size {
+        return Some(format!(
+            "Oodle decompress output size mismatch: expected {}, got {}",
+            sample.expected_size, call.output_size
+        ));
+    }
+
+    None
+}
+
+fn validate_runtime_repeat_count(label: &str, count: usize) -> Result<usize, HostError> {
+    if (1..=MAX_RUNTIME_REPEAT_COUNT).contains(&count) {
+        return Ok(count);
+    }
+
+    Err(HostError::with_details(
+        ErrorCode::InvalidRequest,
+        format!("{label} must be between 1 and {MAX_RUNTIME_REPEAT_COUNT}"),
+        json!({
+            "actualRepeatCount": count,
+            "maxRepeatCount": MAX_RUNTIME_REPEAT_COUNT
+        }),
+    ))
+}
+
+fn default_runtime_decompress_sample() -> RuntimeSelftestOracleSample {
+    RuntimeSelftestOracleSample {
+        compressed_base64: "AQID".to_string(),
+        expected_size: 3,
+        expected_decompressed_sha1: "0".repeat(40),
+        expected_decompressed_head_hex: String::new(),
+    }
+}
+
+pub fn runtime_selftest_sample_from_save_chunk(
+    request: &RuntimeSelftestSaveChunkRequest,
+) -> Result<RuntimeSelftestOracleSample, HostError> {
+    let save = fs::read(&request.save_path)?;
+    let chunk = read_runtime_selftest_save_chunk(&save, request.chunk_index)?;
+    if let Some(expected_sha1) = &request.expected_compressed_sha1 {
+        validate_sha1_hex(
+            "runtime selftest save chunk expectedCompressedSha1",
+            expected_sha1,
+        )?;
+        let actual_sha1 = sha1_hex(&chunk.compressed);
+        if !actual_sha1.eq_ignore_ascii_case(expected_sha1) {
+            return Err(HostError::new(
+                ErrorCode::InvalidRequest,
+                format!(
+                    "runtime selftest save chunk compressed SHA-1 mismatch: expected {}, got {}",
+                    expected_sha1, actual_sha1
+                ),
+            ));
+        }
+    }
+
+    let sample = RuntimeSelftestOracleSample {
+        compressed_base64: BASE64_STANDARD.encode(&chunk.compressed),
+        expected_size: chunk.uncompressed_size,
+        expected_decompressed_sha1: request.expected_decompressed_sha1.clone(),
+        expected_decompressed_head_hex: request.expected_decompressed_head_hex.clone(),
+    };
+    validate_runtime_selftest_sample(&sample)?;
+    Ok(sample)
+}
+
+struct RuntimeSelftestSaveChunk {
+    compressed: Vec<u8>,
+    uncompressed_size: usize,
+}
+
+fn read_runtime_selftest_save_chunk(
+    save: &[u8],
+    chunk_index: usize,
+) -> Result<RuntimeSelftestSaveChunk, HostError> {
+    if save.len() < 13 || save.get(0..4) != Some(b"GSAV".as_slice()) {
+        return Err(HostError::new(
+            ErrorCode::InvalidRequest,
+            "runtime selftest save chunk source is not a GSAV file",
+        ));
+    }
+
+    let public_payload_size = read_save_u32(save, 9)? as usize;
+    let stream_offset = checked_save_add(13, public_payload_size)?;
+    if stream_offset > save.len() {
+        return Err(HostError::new(
+            ErrorCode::InvalidRequest,
+            "runtime selftest save chunk public payload extends past EOF",
+        ));
+    }
+
+    let mut reader = SaveReader::new(&save[stream_offset..], stream_offset);
+    let uncompressed_size_prefix = reader.u64()?;
+    let method = reader.fstring()?;
+    if method != "Oodle" {
+        return Err(HostError::new(
+            ErrorCode::InvalidRequest,
+            format!("runtime selftest save chunk stream method is {method}, expected Oodle"),
+        ));
+    }
+    let package_tag = reader.u32()?;
+    if package_tag != GSAV_PACKAGE_FILE_TAG {
+        return Err(HostError::new(
+            ErrorCode::InvalidRequest,
+            format!(
+                "runtime selftest save chunk package tag 0x{package_tag:08X} is not a compressed stream"
+            ),
+        ));
+    }
+    let header_version = reader.u32()?;
+    if header_version != GSAV_COMPRESSED_HEADER_V2 {
+        return Err(HostError::new(
+            ErrorCode::InvalidRequest,
+            format!(
+                "runtime selftest save chunk header version 0x{header_version:08X} is unsupported"
+            ),
+        ));
+    }
+    let max_chunk_size = reader.u64()?;
+    let _algorithm_id = reader.u8()?;
+    let summary_compressed_size = reader.u64()?;
+    let summary_uncompressed_size = reader.u64()?;
+    if summary_uncompressed_size != uncompressed_size_prefix {
+        return Err(HostError::new(
+            ErrorCode::InvalidRequest,
+            format!(
+                "runtime selftest save chunk size mismatch: prefix={uncompressed_size_prefix}, summary={summary_uncompressed_size}"
+            ),
+        ));
+    }
+    if max_chunk_size == 0 {
+        return Err(HostError::new(
+            ErrorCode::InvalidRequest,
+            "runtime selftest save chunk max chunk size is zero",
+        ));
+    }
+
+    let chunk_count = if summary_uncompressed_size == 0 {
+        0
+    } else {
+        summary_uncompressed_size.div_ceil(max_chunk_size) as usize
+    };
+    if chunk_index >= chunk_count {
+        return Err(HostError::new(
+            ErrorCode::InvalidRequest,
+            format!(
+                "runtime selftest save chunk index {chunk_index} is outside chunk count {chunk_count}"
+            ),
+        ));
+    }
+
+    let mut chunks = Vec::with_capacity(chunk_count);
+    for index in 0..chunk_count {
+        let compressed_size = reader.u64()?;
+        let uncompressed_size = reader.u64()?;
+        if uncompressed_size > max_chunk_size {
+            return Err(HostError::new(
+                ErrorCode::InvalidRequest,
+                format!(
+                    "runtime selftest save chunk {index} uncompressed size {uncompressed_size} exceeds max chunk size {max_chunk_size}"
+                ),
+            ));
+        }
+        chunks.push((compressed_size, uncompressed_size));
+    }
+
+    let payload_offset = reader.abs_pos();
+    let compressed_sum = chunks
+        .iter()
+        .map(|(compressed_size, _)| *compressed_size)
+        .sum::<u64>();
+    let uncompressed_sum = chunks
+        .iter()
+        .map(|(_, uncompressed_size)| *uncompressed_size)
+        .sum::<u64>();
+    if compressed_sum != summary_compressed_size {
+        return Err(HostError::new(
+            ErrorCode::InvalidRequest,
+            format!(
+                "runtime selftest save chunk compressed size mismatch: table sum={compressed_sum}, summary={summary_compressed_size}"
+            ),
+        ));
+    }
+    if uncompressed_sum != summary_uncompressed_size {
+        return Err(HostError::new(
+            ErrorCode::InvalidRequest,
+            format!(
+                "runtime selftest save chunk uncompressed size mismatch: table sum={uncompressed_sum}, summary={summary_uncompressed_size}"
+            ),
+        ));
+    }
+
+    let mut cursor = payload_offset;
+    for (index, (compressed_size, uncompressed_size)) in chunks.into_iter().enumerate() {
+        let compressed_size = usize::try_from(compressed_size).map_err(|_| {
+            HostError::new(
+                ErrorCode::InvalidRequest,
+                format!("runtime selftest save chunk {index} compressed size does not fit usize"),
+            )
+        })?;
+        let uncompressed_size = usize::try_from(uncompressed_size).map_err(|_| {
+            HostError::new(
+                ErrorCode::InvalidRequest,
+                format!("runtime selftest save chunk {index} uncompressed size does not fit usize"),
+            )
+        })?;
+        let next_cursor = checked_save_add(cursor, compressed_size)?;
+        if index == chunk_index {
+            ensure_uncompressed_size(
+                "runtime selftest save chunk uncompressedSize",
+                uncompressed_size,
+            )?;
+            return Ok(RuntimeSelftestSaveChunk {
+                compressed: range_save(save, cursor, compressed_size)?.to_vec(),
+                uncompressed_size,
+            });
+        }
+        cursor = next_cursor;
+    }
+
+    Err(HostError::new(
+        ErrorCode::InvalidRequest,
+        "runtime selftest save chunk was not found",
+    ))
+}
+
+struct SaveReader<'a> {
+    data: &'a [u8],
+    pos: usize,
+    base_offset: usize,
+}
+
+impl<'a> SaveReader<'a> {
+    fn new(data: &'a [u8], base_offset: usize) -> Self {
+        Self {
+            data,
+            pos: 0,
+            base_offset,
+        }
+    }
+
+    fn abs_pos(&self) -> usize {
+        self.base_offset + self.pos
+    }
+
+    fn read(&mut self, len: usize) -> Result<&'a [u8], HostError> {
+        let out = range_save(self.data, self.pos, len)?;
+        self.pos = checked_save_add(self.pos, len)?;
+        Ok(out)
+    }
+
+    fn u8(&mut self) -> Result<u8, HostError> {
+        Ok(self.read(1)?[0])
+    }
+
+    fn u32(&mut self) -> Result<u32, HostError> {
+        let mut out = [0u8; 4];
+        out.copy_from_slice(self.read(4)?);
+        Ok(u32::from_le_bytes(out))
+    }
+
+    fn i32(&mut self) -> Result<i32, HostError> {
+        let mut out = [0u8; 4];
+        out.copy_from_slice(self.read(4)?);
+        Ok(i32::from_le_bytes(out))
+    }
+
+    fn u64(&mut self) -> Result<u64, HostError> {
+        let mut out = [0u8; 8];
+        out.copy_from_slice(self.read(8)?);
+        Ok(u64::from_le_bytes(out))
+    }
+
+    fn fstring(&mut self) -> Result<String, HostError> {
+        let len = self.i32()?;
+        if len == 0 {
+            return Ok(String::new());
+        }
+        if len > 0 {
+            let raw = self.read(len as usize)?;
+            let body = raw.strip_suffix(&[0]).unwrap_or(raw);
+            return String::from_utf8(body.to_vec()).map_err(|err| {
+                HostError::new(
+                    ErrorCode::InvalidRequest,
+                    format!("runtime selftest save chunk string is not UTF-8: {err}"),
+                )
+            });
+        }
+
+        let chars = usize::try_from(-len).map_err(|_| {
+            HostError::new(
+                ErrorCode::InvalidRequest,
+                "runtime selftest save chunk string length is invalid",
+            )
+        })?;
+        let raw = self.read(chars.checked_mul(2).ok_or_else(|| {
+            HostError::new(
+                ErrorCode::InvalidRequest,
+                "runtime selftest save chunk UTF-16 string length overflow",
+            )
+        })?)?;
+        let units = raw
+            .chunks_exact(2)
+            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+            .take_while(|unit| *unit != 0)
+            .collect::<Vec<_>>();
+        String::from_utf16(&units).map_err(|err| {
+            HostError::new(
+                ErrorCode::InvalidRequest,
+                format!("runtime selftest save chunk UTF-16 string is invalid: {err}"),
+            )
+        })
+    }
+}
+
+fn validate_sha1_hex(label: &str, value: &str) -> Result<(), HostError> {
+    if value.len() == 40 && value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Ok(());
+    }
+
+    Err(HostError::new(
+        ErrorCode::InvalidRequest,
+        format!("{label} must be a 40-character SHA-1 hex string"),
+    ))
+}
+
+fn validate_sha256_hex(label: &str, value: &str) -> Result<(), HostError> {
+    if value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Ok(());
+    }
+
+    Err(HostError::new(
+        ErrorCode::InvalidRequest,
+        format!("{label} must be a 64-character SHA-256 hex string"),
+    ))
+}
+
+fn validate_runtime_selftest_sample(
+    sample: &RuntimeSelftestOracleSample,
+) -> Result<usize, HostError> {
+    ensure_uncompressed_size("runtime selftest expectedSize", sample.expected_size)?;
+    if sample.expected_decompressed_sha1.len() != 40
+        || !sample
+            .expected_decompressed_sha1
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err(HostError::new(
+            ErrorCode::InvalidRequest,
+            "runtime selftest expectedDecompressedSha1 must be a 40-character SHA-1 hex string",
+        ));
+    }
+    if sample.expected_decompressed_head_hex.len() % 2 != 0
+        || !sample
+            .expected_decompressed_head_hex
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err(HostError::new(
+            ErrorCode::InvalidRequest,
+            "runtime selftest expectedDecompressedHeadHex must be even-length hexadecimal",
+        ));
+    }
+
+    BASE64_STANDARD
+        .decode(&sample.compressed_base64)
+        .map(|bytes| bytes.len())
+        .map_err(|err| {
+            HostError::new(
+                ErrorCode::InvalidRequest,
+                format!("runtime selftest compressedBase64 is not valid base64: {err}"),
+            )
+        })
+}
+
+fn validate_runtime_selftest_samples(
+    samples: &[RuntimeSelftestOracleSample],
+) -> Result<Vec<usize>, HostError> {
+    if samples.is_empty() {
+        return Err(HostError::new(
+            ErrorCode::InvalidRequest,
+            "runtime selftest requires at least one decompress sample",
+        ));
+    }
+    samples
+        .iter()
+        .map(validate_runtime_selftest_sample)
+        .collect()
+}
+
+pub fn run_runtime_selftest_worker(
+    runtime_worker_path: &Path,
+    timeout: Duration,
+    extra_args: &[&str],
+) -> RuntimeSelftestReport {
+    run_runtime_selftest_worker_inner(runtime_worker_path, timeout, extra_args, None)
+}
+
+pub fn run_runtime_selftest_worker_with_request(
+    runtime_worker_path: &Path,
+    timeout: Duration,
+    extra_args: &[&str],
+    request: &RuntimeSelftestWorkerRequest,
+) -> RuntimeSelftestReport {
+    run_runtime_selftest_worker_inner(runtime_worker_path, timeout, extra_args, Some(request))
+}
+
+fn spawn_pipe_reader<R>(mut pipe: R) -> JoinHandle<std::io::Result<Vec<u8>>>
+where
+    R: Read + Send + 'static,
+{
+    std::thread::spawn(move || {
+        let mut output = Vec::new();
+        pipe.read_to_end(&mut output)?;
+        Ok(output)
+    })
+}
+
+fn join_pipe_reader(
+    reader: Option<JoinHandle<std::io::Result<Vec<u8>>>>,
+    name: &str,
+) -> Result<Vec<u8>, String> {
+    let Some(reader) = reader else {
+        return Ok(Vec::new());
+    };
+    match reader.join() {
+        Ok(Ok(output)) => Ok(output),
+        Ok(Err(err)) => Err(format!("runtime selftest worker {name} read failed: {err}")),
+        Err(_) => Err(format!("runtime selftest worker {name} reader panicked")),
+    }
+}
+
+#[cfg(windows)]
+fn runtime_worker_job_limit_info() -> JobObjectExtendedLimitInformation {
+    JobObjectExtendedLimitInformation {
+        basic_limit_information: JobObjectBasicLimitInformation {
+            limit_flags: JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_PROCESS_MEMORY,
+            ..JobObjectBasicLimitInformation::default()
+        },
+        process_memory_limit: RUNTIME_WORKER_JOB_MEMORY_LIMIT_BYTES,
+        ..JobObjectExtendedLimitInformation::default()
+    }
+}
+
+#[cfg(windows)]
+fn attach_runtime_worker_job_object(child: &Child) -> Result<RuntimeWorkerJobObject, String> {
+    use std::os::windows::io::AsRawHandle;
+
+    let job = unsafe { CreateJobObjectW(std::ptr::null_mut(), std::ptr::null()) };
+    if job == 0 {
+        return Err(format!("CreateJobObjectW failed with error {}", unsafe {
+            GetLastError()
+        }));
+    }
+
+    let mut info = runtime_worker_job_limit_info();
+    let info_size = u32::try_from(std::mem::size_of::<JobObjectExtendedLimitInformation>())
+        .expect("job object limit info size fits u32");
+    let configured = unsafe {
+        SetInformationJobObject(
+            job,
+            JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS,
+            (&mut info as *mut JobObjectExtendedLimitInformation).cast::<c_void>(),
+            info_size,
+        )
+    };
+    if configured == 0 {
+        let error = unsafe { GetLastError() };
+        unsafe {
+            CloseHandle(job);
+        }
+        return Err(format!("SetInformationJobObject failed with error {error}"));
+    }
+
+    let assigned = unsafe { AssignProcessToJobObject(job, child.as_raw_handle() as isize) };
+    if assigned == 0 {
+        let error = unsafe { GetLastError() };
+        unsafe {
+            CloseHandle(job);
+        }
+        return Err(format!(
+            "AssignProcessToJobObject failed with error {error}"
+        ));
+    }
+
+    Ok(RuntimeWorkerJobObject { handle: job })
+}
+
+#[cfg(all(test, windows))]
+mod runtime_worker_job_tests {
+    use super::*;
+
+    #[test]
+    fn runtime_worker_job_limits_kill_on_close_and_process_memory() {
+        let info = runtime_worker_job_limit_info();
+
+        assert!(info.basic_limit_information.limit_flags & JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE != 0);
+        assert!(info.basic_limit_information.limit_flags & JOB_OBJECT_LIMIT_PROCESS_MEMORY != 0);
+        assert_eq!(
+            info.process_memory_limit,
+            RUNTIME_WORKER_JOB_MEMORY_LIMIT_BYTES
+        );
+    }
+}
+
+fn run_runtime_selftest_worker_inner(
+    runtime_worker_path: &Path,
+    timeout: Duration,
+    extra_args: &[&str],
+    request: Option<&RuntimeSelftestWorkerRequest>,
+) -> RuntimeSelftestReport {
+    let serialized_request = match request {
+        Some(request) => match serde_json::to_vec(request) {
+            Ok(serialized) => Some(serialized),
+            Err(err) => {
+                return runtime_selftest_worker_failed_report(
+                    None,
+                    None,
+                    format!("runtime selftest worker request serialization failed: {err}"),
+                );
+            }
+        },
+        None => None,
+    };
+    let mut command = Command::new(runtime_worker_path);
+    command
+        .arg("--runtime-selftest-worker")
+        .args(extra_args)
+        .stdin(if serialized_request.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(err) => {
+            return runtime_selftest_worker_failed_report(
+                None,
+                None,
+                format!("runtime selftest worker failed to start: {err}"),
+            );
+        }
+    };
+    let worker_pid = Some(child.id());
+    #[cfg(windows)]
+    let _worker_job = attach_runtime_worker_job_object(&child).ok();
+    let mut stdout_reader = child.stdout.take().map(spawn_pipe_reader);
+    let mut stderr_reader = child.stderr.take().map(spawn_pipe_reader);
+    if let Some(serialized) = serialized_request {
+        let Some(mut stdin) = child.stdin.take() else {
+            let _ = child.kill();
+            let _ = child.wait();
+            return runtime_selftest_worker_failed_report(
+                worker_pid,
+                None,
+                "runtime selftest worker stdin was not available".to_string(),
+            );
+        };
+        if let Err(err) = stdin.write_all(&serialized) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return runtime_selftest_worker_failed_report(
+                worker_pid,
+                None,
+                format!("runtime selftest worker request write failed: {err}"),
+            );
+        }
+    }
+    let start = Instant::now();
+
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let exit_code = status.code();
+                let stdout = match join_pipe_reader(stdout_reader.take(), "stdout") {
+                    Ok(output) => output,
+                    Err(reason) => {
+                        return runtime_selftest_worker_failed_report(
+                            worker_pid, exit_code, reason,
+                        );
+                    }
+                };
+                let stderr = match join_pipe_reader(stderr_reader.take(), "stderr") {
+                    Ok(output) => output,
+                    Err(reason) => {
+                        return runtime_selftest_worker_failed_report(
+                            worker_pid, exit_code, reason,
+                        );
+                    }
+                };
+                if !status.success() {
+                    let stderr = String::from_utf8_lossy(&stderr);
+                    let stderr = stderr.trim();
+                    let reason = if stderr.is_empty() {
+                        format!(
+                            "runtime selftest worker exited unsuccessfully with code {:?}",
+                            exit_code
+                        )
+                    } else {
+                        format!("runtime selftest worker exited unsuccessfully: {stderr}")
+                    };
+                    return runtime_selftest_worker_failed_report(worker_pid, exit_code, reason);
+                }
+
+                let mut report: RuntimeSelftestReport = match serde_json::from_slice(&stdout) {
+                    Ok(report) => report,
+                    Err(err) => {
+                        return runtime_selftest_worker_failed_report(
+                            worker_pid,
+                            exit_code,
+                            format!("runtime selftest worker JSON was invalid: {err}"),
+                        );
+                    }
+                };
+                report.worker_status = "completed".to_string();
+                report.worker_pid = worker_pid;
+                report.worker_exit_code = exit_code;
+                return report;
+            }
+            Ok(None) => {
+                if start.elapsed() >= timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let _ = join_pipe_reader(stdout_reader.take(), "stdout");
+                    let _ = join_pipe_reader(stderr_reader.take(), "stderr");
+                    return RuntimeSelftestReport {
+                        requested: true,
+                        worker_status: "timeout".to_string(),
+                        worker_pid,
+                        worker_exit_code: None,
+                        exe_path: None,
+                        decompress_sample_status: "unknown".to_string(),
+                        decompress_sample_expected_size: None,
+                        decompress_sample_compressed_size: None,
+                        decompress_sample_expected_sha1: None,
+                        decompress_sample_expected_head_hex: None,
+                        runtime_preflight: None,
+                        decompress_call_return: None,
+                        decompress_call_count: None,
+                        decompress_output_size: None,
+                        decompress_output_sha1: None,
+                        decompress_output_head_hex: None,
+                        decompress_output_base64: None,
+                        decompress_outputs_base64: None,
+                        compress_call_return: None,
+                        compress_call_count: None,
+                        compress_output_size: None,
+                        compress_output_sha1: None,
+                        compress_output_base64: None,
+                        compress_outputs_base64: None,
+                        compress_roundtrip_sha1: None,
+                        decompress: "failed".to_string(),
+                        compress: "failed".to_string(),
+                        reason: Some(format!(
+                            "runtime selftest worker timed out after {} ms",
+                            timeout.as_millis()
+                        )),
+                    };
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Err(err) => {
+                return runtime_selftest_worker_failed_report(
+                    worker_pid,
+                    None,
+                    format!("runtime selftest worker wait failed: {err}"),
+                );
+            }
+        }
+    }
+}
+
+fn runtime_selftest_worker_failed_report(
+    worker_pid: Option<u32>,
+    worker_exit_code: Option<i32>,
+    reason: String,
+) -> RuntimeSelftestReport {
+    RuntimeSelftestReport {
+        requested: true,
+        worker_status: "failed".to_string(),
+        worker_pid,
+        worker_exit_code,
+        exe_path: None,
+        decompress_sample_status: "unknown".to_string(),
+        decompress_sample_expected_size: None,
+        decompress_sample_compressed_size: None,
+        decompress_sample_expected_sha1: None,
+        decompress_sample_expected_head_hex: None,
+        runtime_preflight: None,
+        decompress_call_return: None,
+        decompress_call_count: None,
+        decompress_output_size: None,
+        decompress_output_sha1: None,
+        decompress_output_head_hex: None,
+        decompress_output_base64: None,
+        decompress_outputs_base64: None,
+        compress_call_return: None,
+        compress_call_count: None,
+        compress_output_size: None,
+        compress_output_sha1: None,
+        compress_output_base64: None,
+        compress_outputs_base64: None,
+        compress_roundtrip_sha1: None,
+        decompress: "failed".to_string(),
+        compress: "failed".to_string(),
+        reason: Some(reason),
+    }
+}
+
+pub fn handle_ipc_line(line: &str, profiles: &[VersionProfile]) -> String {
+    let response = handle_ipc_line_inner(line, profiles, None);
+    serialize_ipc_response(response)
+}
+
+pub fn handle_ipc_line_with_runtime_worker(
+    line: &str,
+    profiles: &[VersionProfile],
+    runtime_worker_path: &Path,
+) -> String {
+    let response = handle_ipc_line_inner(line, profiles, Some(runtime_worker_path));
+    serialize_ipc_response(response)
+}
+
+fn handle_ipc_line_inner(
+    line: &str,
+    profiles: &[VersionProfile],
+    runtime_worker_path: Option<&Path>,
+) -> (Option<String>, Result<Value, HostError>) {
+    let line = line.strip_prefix('\u{feff}').unwrap_or(line);
+    let value: Value = match serde_json::from_str(line) {
+        Ok(value) => value,
+        Err(err) => {
+            return (
+                None,
+                Err(HostError::new(
+                    ErrorCode::InvalidRequest,
+                    format!("request JSON is invalid: {err}"),
+                )),
+            );
+        }
+    };
+
+    let id = value
+        .get("id")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+
+    let command = match value.get("command").and_then(Value::as_str) {
+        Some(command) => command,
+        None => {
+            return (
+                id,
+                Err(HostError::new(
+                    ErrorCode::InvalidRequest,
+                    "request command is required",
+                )),
+            );
+        }
+    };
+
+    match command {
+        "probe" => {
+            let Some(exe_path) = value.get("exePath").and_then(Value::as_str) else {
+                return (
+                    id,
+                    Err(HostError::new(
+                        ErrorCode::InvalidRequest,
+                        "probe request exePath is required",
+                    )),
+                );
+            };
+            let derived_profile_cache_path = Some(parse_derived_profile_cache_path(&value));
+            let response = probe_exe_with_derived_cache(
+                &ProbeRequest {
+                    exe_path: PathBuf::from(exe_path),
+                },
+                profiles,
+                derived_profile_cache_path.as_deref(),
+            )
+            .and_then(|response| {
+                serde_json::to_value(response).map_err(|err| {
+                    HostError::new(
+                        ErrorCode::InvalidRequest,
+                        format!("probe response serialization failed: {err}"),
+                    )
+                })
+            });
+            (id, response)
+        }
+        "self_test" => {
+            let Some(exe_path) = value.get("exePath").and_then(Value::as_str) else {
+                return (
+                    id,
+                    Err(HostError::new(
+                        ErrorCode::InvalidRequest,
+                        "self_test request exePath is required",
+                    )),
+                );
+            };
+            let relocation_base = match value.get("relocationBase") {
+                Some(Value::String(value)) => parse_hex_u64(value).map(Some).ok_or_else(|| {
+                    HostError::new(
+                        ErrorCode::InvalidRequest,
+                        "self_test relocationBase must be a hex string or integer",
+                    )
+                }),
+                Some(Value::Number(value)) => value.as_u64().map(Some).ok_or_else(|| {
+                    HostError::new(
+                        ErrorCode::InvalidRequest,
+                        "self_test relocationBase must fit in u64",
+                    )
+                }),
+                Some(_) => Err(HostError::new(
+                    ErrorCode::InvalidRequest,
+                    "self_test relocationBase must be a hex string or integer",
+                )),
+                None => Ok(None),
+            };
+            let response = relocation_base.and_then(|relocation_base| {
+                let runtime_selftest_sample = parse_runtime_selftest_sample(&value)?;
+                let runtime_selftest_compress_sample =
+                    parse_runtime_selftest_compress_sample(&value)?;
+                let derived_profile_cache_path = Some(parse_derived_profile_cache_path(&value));
+                let request = SelfTestRequest {
+                    exe_path: PathBuf::from(exe_path),
+                    relocation_base,
+                    resolve_imports: value
+                        .get("resolveImports")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
+                    map_image: value
+                        .get("mapImage")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
+                    run_runtime_selftests: value
+                        .get("runRuntimeSelftests")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
+                    runtime_selftest_run_decompress: value
+                        .get("runtimeSelftestRunDecompress")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
+                    runtime_selftest_run_compress: value
+                        .get("runtimeSelftestRunCompress")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
+                    runtime_selftest_decompress_repeat_count: parse_optional_repeat_count(
+                        &value,
+                        "self_test",
+                        "runtimeSelftestDecompressRepeatCount",
+                    )?,
+                    runtime_selftest_compress_repeat_count: parse_optional_repeat_count(
+                        &value,
+                        "self_test",
+                        "runtimeSelftestCompressRepeatCount",
+                    )?,
+                    runtime_selftest_sample,
+                    runtime_selftest_compress_sample,
+                };
+                let response = {
+                    let search_dirs = request
+                        .exe_path
+                        .parent()
+                        .map(|parent| vec![parent.to_path_buf()])
+                        .unwrap_or_default();
+                    let mut resolver = WindowsImportResolver::with_search_dirs(search_dirs);
+                    self_test_exe_with_optional_import_resolver(
+                        &request,
+                        profiles,
+                        Some(&mut resolver),
+                        runtime_worker_path,
+                        derived_profile_cache_path.as_deref(),
+                    )
+                };
+                response.and_then(|response| {
+                    let mut value = serde_json::to_value(&response).map_err(|err| {
+                        HostError::new(
+                            ErrorCode::InvalidRequest,
+                            format!("self_test response serialization failed: {err}"),
+                        )
+                    })?;
+                    let cache_report = record_derived_profile_cache_after_self_test(
+                        &request.exe_path,
+                        &response,
+                        derived_profile_cache_path.as_deref(),
+                    )?;
+                    value["derivedProfileCache"] =
+                        serde_json::to_value(cache_report).map_err(|err| {
+                            HostError::new(
+                                ErrorCode::InvalidRequest,
+                                format!("derived profile cache report serialization failed: {err}"),
+                            )
+                        })?;
+                    Ok(value)
+                })
+            });
+            (id, response)
+        }
+        "export_derived_profile" => {
+            let response = parse_export_derived_profile_request(&value)
+                .and_then(|(cache_path, exe_sha256)| {
+                    export_derived_profile_from_cache(&cache_path, &exe_sha256)
+                })
+                .and_then(|export| {
+                    serde_json::to_value(export).map_err(|err| {
+                        HostError::new(
+                            ErrorCode::InvalidRequest,
+                            format!("derived profile export serialization failed: {err}"),
+                        )
+                    })
+                });
+            (id, response)
+        }
+        "decompress" => {
+            let response =
+                parse_decompress_request(&value).and_then(|request| match runtime_worker_path {
+                    Some(runtime_worker_path) => {
+                        decompress_with_runtime_worker(&request, profiles, runtime_worker_path)
+                    }
+                    None => Err(codec_disabled_error("decompress")),
+                });
+            (id, response)
+        }
+        "decompress_many" => {
+            let response =
+                parse_decompress_many_request(&value).and_then(
+                    |request| match runtime_worker_path {
+                        Some(runtime_worker_path) => decompress_many_with_runtime_worker(
+                            &request,
+                            profiles,
+                            runtime_worker_path,
+                        ),
+                        None => Err(codec_disabled_error("decompress_many")),
+                    },
+                );
+            (id, response)
+        }
+        "compress" => {
+            let response =
+                parse_compress_request(&value).and_then(|request| match runtime_worker_path {
+                    Some(runtime_worker_path) => {
+                        compress_with_runtime_worker(&request, profiles, runtime_worker_path)
+                    }
+                    None => Err(codec_disabled_error("compress")),
+                });
+            (id, response)
+        }
+        "compress_many" => {
+            let response =
+                parse_compress_many_request(&value).and_then(|request| match runtime_worker_path {
+                    Some(runtime_worker_path) => {
+                        compress_many_with_runtime_worker(&request, profiles, runtime_worker_path)
+                    }
+                    None => Err(codec_disabled_error("compress_many")),
+                });
+            (id, response)
+        }
+        _ => (
+            id,
+            Err(HostError::new(
+                ErrorCode::InvalidCommand,
+                format!("unknown codec host command: {command}"),
+            )),
+        ),
+    }
+}
+
+fn parse_runtime_selftest_sample(
+    value: &Value,
+) -> Result<Option<RuntimeSelftestOracleSample>, HostError> {
+    match (
+        value.get("runtimeSelftestSample"),
+        value.get("runtimeSelftestSaveChunk"),
+    ) {
+        (Some(_), Some(_)) => Err(HostError::new(
+            ErrorCode::InvalidRequest,
+            "self_test accepts either runtimeSelftestSample or runtimeSelftestSaveChunk, not both",
+        )),
+        (Some(sample), None) => serde_json::from_value(sample.clone())
+            .map(Some)
+            .map_err(|err| {
+                HostError::new(
+                    ErrorCode::InvalidRequest,
+                    format!("self_test runtimeSelftestSample is invalid: {err}"),
+                )
+            }),
+        (None, Some(save_chunk)) => {
+            let request =
+                serde_json::from_value::<RuntimeSelftestSaveChunkRequest>(save_chunk.clone())
+                    .map_err(|err| {
+                        HostError::new(
+                            ErrorCode::InvalidRequest,
+                            format!("self_test runtimeSelftestSaveChunk is invalid: {err}"),
+                        )
+                    })?;
+            runtime_selftest_sample_from_save_chunk(&request).map(Some)
+        }
+        (None, None) => Ok(None),
+    }
+}
+
+fn parse_runtime_selftest_compress_sample(
+    value: &Value,
+) -> Result<Option<RuntimeCompressSample>, HostError> {
+    let Some(sample) = value.get("runtimeSelftestCompressSample") else {
+        return Ok(None);
+    };
+    serde_json::from_value(sample.clone())
+        .map(Some)
+        .map_err(|err| {
+            HostError::new(
+                ErrorCode::InvalidRequest,
+                format!("self_test runtimeSelftestCompressSample is invalid: {err}"),
+            )
+        })
+}
+
+fn parse_optional_repeat_count(
+    value: &Value,
+    command: &str,
+    field: &str,
+) -> Result<usize, HostError> {
+    match value.get(field) {
+        Some(_) => parse_usize_field(value, command, field)
+            .and_then(|count| validate_runtime_repeat_count(field, count)),
+        None => Ok(1),
+    }
+}
+
+fn parse_decompress_request(value: &Value) -> Result<DecompressRequest, HostError> {
+    let exe_path = required_path(value, "decompress")?;
+    let chunk = parse_decompress_chunk(value, "decompress")?;
+    let derived_profile_cache_path = Some(parse_derived_profile_cache_path(value));
+
+    Ok(DecompressRequest {
+        exe_path,
+        input: chunk.input,
+        expected_size: chunk.expected_size,
+        derived_profile_cache_path,
+    })
+}
+
+fn parse_decompress_many_request(value: &Value) -> Result<DecompressManyRequest, HostError> {
+    let exe_path = required_path(value, "decompress_many")?;
+    let chunks_value = value
+        .get("chunks")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            HostError::new(
+                ErrorCode::InvalidRequest,
+                "decompress_many request chunks must be an array",
+            )
+        })?;
+    if chunks_value.is_empty() {
+        return Err(HostError::new(
+            ErrorCode::InvalidRequest,
+            "decompress_many request chunks must not be empty",
+        ));
+    }
+    let chunks = chunks_value
+        .iter()
+        .enumerate()
+        .map(|(index, chunk)| {
+            parse_decompress_chunk(chunk, &format!("decompress_many chunk {index}"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let derived_profile_cache_path = Some(parse_derived_profile_cache_path(value));
+
+    Ok(DecompressManyRequest {
+        exe_path,
+        chunks,
+        derived_profile_cache_path,
+    })
+}
+
+fn parse_decompress_chunk(
+    value: &Value,
+    command: &str,
+) -> Result<DecompressChunkRequest, HostError> {
+    let input = parse_input_base64(value, command)?;
+    ensure_uncompressed_size(&format!("{command} decoded input"), input.len())?;
+    let expected_size = parse_usize_field(value, command, "expectedSize")?;
+    ensure_uncompressed_size(&format!("{command} expectedSize"), expected_size)?;
+    Ok(DecompressChunkRequest {
+        input,
+        expected_size,
+    })
+}
+
+fn parse_compress_request(value: &Value) -> Result<CompressRequest, HostError> {
+    let exe_path = required_path(value, "compress")?;
+    let chunk = parse_compress_chunk(value, "compress")?;
+    let derived_profile_cache_path = Some(parse_derived_profile_cache_path(value));
+
+    Ok(CompressRequest {
+        exe_path,
+        input: chunk.input,
+        level: chunk.level,
+        derived_profile_cache_path,
+    })
+}
+
+fn parse_compress_many_request(value: &Value) -> Result<CompressManyRequest, HostError> {
+    let exe_path = required_path(value, "compress_many")?;
+    let chunks_value = value
+        .get("chunks")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            HostError::new(
+                ErrorCode::InvalidRequest,
+                "compress_many request chunks must be an array",
+            )
+        })?;
+    if chunks_value.is_empty() {
+        return Err(HostError::new(
+            ErrorCode::InvalidRequest,
+            "compress_many request chunks must not be empty",
+        ));
+    }
+    let chunks = chunks_value
+        .iter()
+        .enumerate()
+        .map(|(index, chunk)| parse_compress_chunk(chunk, &format!("compress_many chunk {index}")))
+        .collect::<Result<Vec<_>, _>>()?;
+    let derived_profile_cache_path = Some(parse_derived_profile_cache_path(value));
+
+    Ok(CompressManyRequest {
+        exe_path,
+        chunks,
+        derived_profile_cache_path,
+    })
+}
+
+fn parse_compress_chunk(value: &Value, command: &str) -> Result<CompressChunkRequest, HostError> {
+    let input = parse_input_base64(value, command)?;
+    ensure_uncompressed_size(&format!("{command} input"), input.len())?;
+    let level = parse_level_for_command(value, command)?;
+    Ok(CompressChunkRequest { input, level })
+}
+
+fn parse_derived_profile_cache_path(value: &Value) -> PathBuf {
+    value
+        .get("derivedProfileCachePath")
+        .and_then(Value::as_str)
+        .map(PathBuf::from)
+        .unwrap_or_else(default_derived_profile_cache_path)
+}
+
+fn parse_export_derived_profile_request(value: &Value) -> Result<(PathBuf, String), HostError> {
+    let cache_path = value
+        .get("cachePath")
+        .and_then(Value::as_str)
+        .map(PathBuf::from)
+        .unwrap_or_else(default_derived_profile_cache_path);
+
+    if let Some(exe_sha256) = value.get("exeSha256").and_then(Value::as_str) {
+        validate_sha256_hex("export_derived_profile exeSha256", exe_sha256)?;
+        return Ok((cache_path, exe_sha256.to_ascii_lowercase()));
+    }
+
+    if let Some(exe_path) = value.get("exePath").and_then(Value::as_str) {
+        let bytes = fs::read(exe_path)?;
+        return Ok((cache_path, sha256_hex(&bytes)));
+    }
+
+    Err(HostError::new(
+        ErrorCode::InvalidRequest,
+        "export_derived_profile request requires exeSha256 or exePath",
+    ))
+}
+
+fn required_path(value: &Value, command: &str) -> Result<PathBuf, HostError> {
+    required_string(value, command, "exePath").map(PathBuf::from)
+}
+
+fn required_string<'a>(value: &'a Value, command: &str, field: &str) -> Result<&'a str, HostError> {
+    value.get(field).and_then(Value::as_str).ok_or_else(|| {
+        HostError::new(
+            ErrorCode::InvalidRequest,
+            format!("{command} request {field} is required"),
+        )
+    })
+}
+
+fn parse_input_base64(value: &Value, command: &str) -> Result<Vec<u8>, HostError> {
+    let encoded = required_string(value, command, "inputBase64")?;
+    BASE64_STANDARD.decode(encoded).map_err(|err| {
+        HostError::new(
+            ErrorCode::InvalidRequest,
+            format!("{command} request inputBase64 is not valid base64: {err}"),
+        )
+    })
+}
+
+fn parse_usize_field(value: &Value, command: &str, field: &str) -> Result<usize, HostError> {
+    let raw = value.get(field).and_then(Value::as_u64).ok_or_else(|| {
+        HostError::new(
+            ErrorCode::InvalidRequest,
+            format!("{command} request {field} must be an unsigned integer"),
+        )
+    })?;
+    usize::try_from(raw).map_err(|_| {
+        HostError::new(
+            ErrorCode::InvalidRequest,
+            format!("{command} request {field} does not fit in usize"),
+        )
+    })
+}
+
+fn parse_level_for_command(value: &Value, command: &str) -> Result<u8, HostError> {
+    let raw = value.get("level").and_then(Value::as_u64).ok_or_else(|| {
+        HostError::new(
+            ErrorCode::InvalidRequest,
+            format!("{command} request level must be an unsigned integer"),
+        )
+    })?;
+    u8::try_from(raw).map_err(|_| {
+        HostError::new(
+            ErrorCode::InvalidRequest,
+            format!("{command} request level must fit in u8"),
+        )
+    })
+}
+
+fn ensure_uncompressed_size(label: &str, size: usize) -> Result<(), HostError> {
+    if size <= MAX_CODEC_UNCOMPRESSED_SIZE {
+        return Ok(());
+    }
+
+    Err(HostError::with_details(
+        ErrorCode::InvalidRequest,
+        format!("{label} {size} exceeds maximum {MAX_CODEC_UNCOMPRESSED_SIZE}"),
+        json!({
+            "actualUncompressedSize": size,
+            "maxUncompressedSize": MAX_CODEC_UNCOMPRESSED_SIZE
+        }),
+    ))
+}
+
+fn codec_disabled_error(command: &str) -> HostError {
+    HostError::new(
+        ErrorCode::UnsupportedExe,
+        format!("{command} is disabled until private mapping and runtime selftests pass"),
+    )
+}
+
+fn pattern_profile_requires_selftest_error(command: &str) -> HostError {
+    HostError::new(
+        ErrorCode::UnsupportedExe,
+        format!(
+            "{command} requires self_test to pass and cache a derived profile before pattern-resolved RVAs can be used"
+        ),
+    )
+}
+
+struct MaskedBytePattern {
+    name: &'static str,
+    bytes: &'static [u8],
+    wildcard_offsets: &'static [usize],
+}
+
+const G1R_COMPRESS_PROLOGUE_PATTERN: MaskedBytePattern = MaskedBytePattern {
+    name: "oodle_lz_compress_wrapper_prologue",
+    bytes: &[
+        0x40, 0x55, 0x53, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8d,
+        0x6c, 0x24, 0xc8, 0x48, 0x81, 0xec, 0x38, 0x01, 0x00, 0x00, 0x48, 0xc7, 0x45, 0xb0, 0xfe,
+        0xff, 0xff, 0xff, 0x48, 0x8b, 0x05, 0x00, 0x4e, 0xab, 0x02, 0x48, 0x33, 0xc4, 0x48, 0x89,
+        0x45, 0x20, 0x4d, 0x8b, 0xe9, 0x4c, 0x89, 0x4c, 0x24, 0x60, 0x49, 0x8b, 0xf0, 0x48, 0x8b,
+        0xfa, 0x4c, 0x63, 0xf1,
+    ],
+    wildcard_offsets: &[36, 37, 38, 39],
+};
+
+const G1R_DECOMPRESS_PROLOGUE_PATTERN: MaskedBytePattern = MaskedBytePattern {
+    name: "oodle_lz_decompress_wrapper_prologue",
+    bytes: &[
+        0x40, 0x55, 0x53, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x81,
+        0xec, 0xf8, 0x00, 0x00, 0x00, 0x48, 0x8d, 0x6c, 0x24, 0x60, 0x48, 0xc7, 0x45, 0x48, 0xfe,
+        0xff, 0xff, 0xff, 0x48, 0x8b, 0x05, 0x20, 0x45, 0xab, 0x02, 0x48, 0x33, 0xc5, 0x48, 0x89,
+        0x85, 0x88, 0x00, 0x00, 0x00, 0x4c, 0x89, 0x4d, 0x18, 0x4d, 0x8b, 0xe8, 0x4c, 0x89, 0x45,
+        0x38, 0x4c, 0x8b, 0xf2,
+    ],
+    wildcard_offsets: &[36, 37, 38, 39],
+};
+
+const G1R_DISPATCH_PROLOGUE_PATTERN: MaskedBytePattern = MaskedBytePattern {
+    name: "compressor_dispatch_prologue",
+    bytes: &[
+        0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x57, 0x48, 0x83, 0xec, 0x50,
+        0x4d, 0x8b, 0xd1, 0x48, 0x63, 0xf9, 0x48, 0x8b, 0xda, 0xb8, 0x01, 0x00, 0x00, 0x00, 0x8b,
+        0x94, 0x24, 0x80, 0x00, 0x00, 0x00, 0x4d, 0x8b, 0xd8, 0x85, 0xd2, 0x44, 0x8b, 0xca, 0x44,
+        0x0f, 0x48, 0xc8, 0x83, 0xff, 0x0d, 0x0f, 0x87, 0xc1, 0x01, 0x00, 0x00, 0x48, 0x8d, 0x0d,
+    ],
+    wildcard_offsets: &[53, 54, 55, 56],
+};
+
+fn validate_known_profile(
+    profile: &VersionProfile,
+    pe: &PeImage,
+    file_size: u64,
+) -> Result<(), HostError> {
+    if profile.file_size != file_size {
+        return Err(HostError::new(
+            ErrorCode::UnsupportedExe,
+            format!(
+                "known profile {} rejected: file size {} did not match expected {}",
+                profile.name, file_size, profile.file_size
+            ),
+        ));
+    }
+    if profile.image_base != pe.image_base() {
+        return Err(HostError::new(
+            ErrorCode::UnsupportedExe,
+            format!(
+                "known profile {} rejected: image base 0x{:X} did not match expected 0x{:X}",
+                profile.name,
+                pe.image_base(),
+                profile.image_base
+            ),
+        ));
+    }
+    if profile.pe_timestamp != pe.timestamp() {
+        return Err(HostError::new(
+            ErrorCode::UnsupportedExe,
+            format!(
+                "known profile {} rejected: PE timestamp 0x{:08X} did not match expected 0x{:08X}",
+                profile.name,
+                pe.timestamp(),
+                profile.pe_timestamp
+            ),
+        ));
+    }
+
+    for (name, rva) in [
+        ("oodleLzCompress", profile.rv_as.oodle_lz_compress),
+        ("oodleLzDecompress", profile.rv_as.oodle_lz_decompress),
+        ("compressorDispatch", profile.rv_as.compressor_dispatch),
+    ] {
+        if !pe.is_executable_rva(rva) {
+            return Err(HostError::new(
+                ErrorCode::UnsupportedExe,
+                format!(
+                    "known profile {} rejected: {name} RVA 0x{rva:X} is outside executable sections",
+                    profile.name
+                ),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn resolve_pattern_profile_candidate(
+    profile: &VersionProfile,
+    pe: &PeImage,
+    bytes: &[u8],
+) -> Result<ResolvedCodecProfile, HostError> {
+    validate_profile_pattern_metadata(profile, bytes)?;
+    let codec_rvas = RuntimeCodecRvas {
+        oodle_lz_compress: find_unique_masked_pattern_rva(
+            profile,
+            pe,
+            bytes,
+            &G1R_COMPRESS_PROLOGUE_PATTERN,
+        )?,
+        oodle_lz_decompress: find_unique_masked_pattern_rva(
+            profile,
+            pe,
+            bytes,
+            &G1R_DECOMPRESS_PROLOGUE_PATTERN,
+        )?,
+        compressor_dispatch: find_unique_masked_pattern_rva(
+            profile,
+            pe,
+            bytes,
+            &G1R_DISPATCH_PROLOGUE_PATTERN,
+        )?,
+    };
+    validate_pattern_resolved_call_shape(profile, pe, bytes, &codec_rvas)?;
+
+    Ok(ResolvedCodecProfile {
+        name: profile.name.clone(),
+        resolution_mode: ResolutionMode::PatternProfile,
+        codec_rvas,
+    })
+}
+
+fn validate_pattern_resolved_call_shape(
+    profile: &VersionProfile,
+    pe: &PeImage,
+    bytes: &[u8],
+    codec_rvas: &RuntimeCodecRvas,
+) -> Result<(), HostError> {
+    let compress = executable_function_window(
+        pe,
+        bytes,
+        codec_rvas.oodle_lz_compress,
+        bounded_function_window_len(
+            codec_rvas.oodle_lz_compress,
+            &[
+                codec_rvas.oodle_lz_decompress,
+                codec_rvas.compressor_dispatch,
+            ],
+            0x800,
+        ),
+    )?;
+    let decompress = executable_function_window(
+        pe,
+        bytes,
+        codec_rvas.oodle_lz_decompress,
+        bounded_function_window_len(
+            codec_rvas.oodle_lz_decompress,
+            &[codec_rvas.oodle_lz_compress, codec_rvas.compressor_dispatch],
+            0x800,
+        ),
+    )?;
+    let dispatch = executable_function_window(pe, bytes, codec_rvas.compressor_dispatch, 0x100)?;
+
+    let compress_calls = rel32_targets(codec_rvas.oodle_lz_compress, compress, 0xE8);
+    if !compress_calls.contains(&codec_rvas.compressor_dispatch) {
+        return Err(HostError::new(
+            ErrorCode::UnsupportedExe,
+            format!(
+                "pattern profile {} rejected: compress wrapper does not call compressorDispatch RVA 0x{:X}",
+                profile.name, codec_rvas.compressor_dispatch
+            ),
+        ));
+    }
+    if !has_branch_instruction(compress) {
+        return Err(HostError::new(
+            ErrorCode::UnsupportedExe,
+            format!(
+                "pattern profile {} rejected: compress wrapper has no branch-shaped basic blocks",
+                profile.name
+            ),
+        ));
+    }
+
+    let local_decompress_calls = rel32_targets(codec_rvas.oodle_lz_decompress, decompress, 0xE8)
+        .into_iter()
+        .filter(|target| pe.is_executable_rva(*target))
+        .count();
+    if local_decompress_calls == 0 || !has_branch_instruction(decompress) {
+        return Err(HostError::new(
+            ErrorCode::UnsupportedExe,
+            format!(
+                "pattern profile {} rejected: decompress wrapper lacks expected local call/branch shape",
+                profile.name
+            ),
+        ));
+    }
+
+    if !contains_bytes(dispatch, &[0xB8, 0x01, 0x00, 0x00, 0x00])
+        || !contains_bytes(dispatch, &[0x83, 0xFF, 0x0D])
+    {
+        return Err(HostError::new(
+            ErrorCode::UnsupportedExe,
+            format!(
+                "pattern profile {} rejected: compressorDispatch constants do not match expected Oodle/Kraken dispatch shape",
+                profile.name
+            ),
+        ));
+    }
+
+    Ok(())
+}
+
+fn bounded_function_window_len(function_rva: u32, other_rvas: &[u32], max_len: usize) -> usize {
+    other_rvas
+        .iter()
+        .filter_map(|other| other.checked_sub(function_rva))
+        .filter(|delta| *delta > 0)
+        .map(|delta| delta as usize)
+        .min()
+        .unwrap_or(max_len)
+        .min(max_len)
+}
+
+fn validate_profile_pattern_metadata(
+    profile: &VersionProfile,
+    bytes: &[u8],
+) -> Result<(), HostError> {
+    for group_name in ["compressAnchors", "decompressAnchors"] {
+        let Some(anchors) = profile.patterns.get(group_name).and_then(Value::as_array) else {
+            continue;
+        };
+        for anchor in anchors {
+            let anchor_name = anchor
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or(group_name);
+            let near_strings = anchor
+                .get("nearStrings")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>();
+            if near_strings.is_empty() {
+                continue;
+            }
+            if !near_strings
+                .iter()
+                .any(|needle| find_bytes(bytes, needle.as_bytes()).is_some())
+            {
+                return Err(HostError::new(
+                    ErrorCode::UnsupportedExe,
+                    format!(
+                        "pattern profile {} rejected: anchor {anchor_name} did not find any declared nearStrings",
+                        profile.name
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn find_unique_masked_pattern_rva(
+    profile: &VersionProfile,
+    pe: &PeImage,
+    bytes: &[u8],
+    pattern: &MaskedBytePattern,
+) -> Result<u32, HostError> {
+    let mut found = None;
+    for section in &pe.sections {
+        if section.characteristics & IMAGE_SCN_MEM_EXECUTE == 0 {
+            continue;
+        }
+        let raw_start = section.raw_pointer as usize;
+        let raw_size = section.raw_size as usize;
+        let Some(raw_end) = raw_start.checked_add(raw_size) else {
+            continue;
+        };
+        let raw_end = raw_end.min(bytes.len());
+        if raw_start >= raw_end || raw_end - raw_start < pattern.bytes.len() {
+            continue;
+        }
+        let haystack = &bytes[raw_start..raw_end];
+        for offset in 0..=haystack.len() - pattern.bytes.len() {
+            if !masked_pattern_matches(&haystack[offset..offset + pattern.bytes.len()], pattern) {
+                continue;
+            }
+            let rva = section
+                .virtual_address
+                .checked_add(offset as u32)
+                .ok_or_else(|| HostError::new(ErrorCode::InvalidPe, "pattern RVA overflow"))?;
+            if let Some(previous) = found {
+                return Err(HostError::new(
+                    ErrorCode::UnsupportedExe,
+                    format!(
+                        "pattern profile {} rejected: {} matched multiple executable RVAs 0x{previous:X} and 0x{rva:X}",
+                        profile.name, pattern.name
+                    ),
+                ));
+            }
+            found = Some(rva);
+        }
+    }
+
+    found.ok_or_else(|| {
+        HostError::new(
+            ErrorCode::UnsupportedExe,
+            format!(
+                "pattern profile {} rejected: {} was not found in executable sections",
+                profile.name, pattern.name
+            ),
+        )
+    })
+}
+
+fn executable_function_window<'a>(
+    pe: &PeImage,
+    bytes: &'a [u8],
+    rva: u32,
+    max_len: usize,
+) -> Result<&'a [u8], HostError> {
+    let section = pe
+        .sections
+        .iter()
+        .find(|section| {
+            section.characteristics & IMAGE_SCN_MEM_EXECUTE != 0
+                && rva >= section.virtual_address
+                && (rva as u64)
+                    < (section.virtual_address as u64)
+                        .saturating_add(section.virtual_size.max(section.raw_size) as u64)
+        })
+        .ok_or_else(|| {
+            HostError::new(
+                ErrorCode::UnsupportedExe,
+                format!("pattern candidate RVA 0x{rva:X} is outside executable sections"),
+            )
+        })?;
+    let section_delta = usize::try_from(rva - section.virtual_address).map_err(|_| {
+        HostError::new(
+            ErrorCode::InvalidPe,
+            "executable function section delta overflow",
+        )
+    })?;
+    let raw_start = (section.raw_pointer as usize)
+        .checked_add(section_delta)
+        .ok_or_else(|| HostError::new(ErrorCode::InvalidPe, "function raw offset overflow"))?;
+    let raw_section_end = (section.raw_pointer as usize)
+        .checked_add(section.raw_size as usize)
+        .ok_or_else(|| HostError::new(ErrorCode::InvalidPe, "section raw end overflow"))?
+        .min(bytes.len());
+    if raw_start >= raw_section_end {
+        return Err(HostError::new(
+            ErrorCode::InvalidPe,
+            format!("pattern candidate RVA 0x{rva:X} is not file-backed"),
+        ));
+    }
+    let raw_end = raw_start
+        .checked_add(max_len)
+        .unwrap_or(usize::MAX)
+        .min(raw_section_end);
+    Ok(&bytes[raw_start..raw_end])
+}
+
+fn rel32_targets(function_rva: u32, code: &[u8], opcode: u8) -> Vec<u32> {
+    let mut targets = Vec::new();
+    for offset in 0..code.len().saturating_sub(4) {
+        if code[offset] != opcode {
+            continue;
+        }
+        let rel = i32::from_le_bytes([
+            code[offset + 1],
+            code[offset + 2],
+            code[offset + 3],
+            code[offset + 4],
+        ]) as i64;
+        let target = function_rva as i64 + offset as i64 + 5 + rel;
+        if (0..=u32::MAX as i64).contains(&target) {
+            targets.push(target as u32);
+        }
+    }
+    targets
+}
+
+fn has_branch_instruction(code: &[u8]) -> bool {
+    code.iter().enumerate().any(|(offset, opcode)| {
+        matches!(*opcode, 0x70..=0x7F | 0xE9 | 0xEB)
+            || (*opcode == 0x0F
+                && code
+                    .get(offset + 1)
+                    .is_some_and(|next| matches!(*next, 0x80..=0x8F)))
+    })
+}
+
+fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || needle.len() > haystack.len() {
+        return None;
+    }
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
+fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+    find_bytes(haystack, needle).is_some()
+}
+
+fn masked_pattern_matches(candidate: &[u8], pattern: &MaskedBytePattern) -> bool {
+    candidate
+        .iter()
+        .zip(pattern.bytes.iter())
+        .enumerate()
+        .all(|(offset, (actual, expected))| {
+            pattern.wildcard_offsets.contains(&offset) || actual == expected
+        })
+}
+
+fn serialize_ipc_response((id, result): (Option<String>, Result<Value, HostError>)) -> String {
+    match result {
+        Ok(data) => json!({
+            "id": id,
+            "ok": true,
+            "data": data
+        })
+        .to_string(),
+        Err(err) => {
+            let mut error = json!({
+                "code": err.code().as_str(),
+                "message": err.message(),
+            });
+            if let Some(details) = err.details() {
+                error["details"] = details.clone();
+            }
+            json!({
+                "id": id,
+                "ok": false,
+                "error": error
+            })
+            .to_string()
+        }
+    }
+}
+
+fn deserialize_hex_u32<'de, D>(deserializer: D) -> Result<u32, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)?;
+    parse_hex_u64(&value)
+        .and_then(|value| u32::try_from(value).ok())
+        .ok_or_else(|| serde::de::Error::custom(format!("invalid u32 hex value: {value}")))
+}
+
+fn deserialize_hex_u64<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)?;
+    parse_hex_u64(&value)
+        .ok_or_else(|| serde::de::Error::custom(format!("invalid u64 hex value: {value}")))
+}
+
+fn parse_hex_u64(input: &str) -> Option<u64> {
+    let trimmed = input.trim();
+    let without_prefix = trimmed
+        .strip_prefix("0x")
+        .or_else(|| trimmed.strip_prefix("0X"))
+        .unwrap_or(trimmed);
+    u64::from_str_radix(without_prefix, 16).ok()
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    hex::encode(Sha256::digest(bytes))
+}
+
+fn sha1_hex(bytes: &[u8]) -> String {
+    hex::encode(Sha1::digest(bytes))
+}
+
+fn parse_section_name(raw: &[u8]) -> String {
+    let end = raw.iter().position(|byte| *byte == 0).unwrap_or(raw.len());
+    String::from_utf8_lossy(&raw[..end]).to_string()
+}
+
+fn read_c_string_at_offset(bytes: &[u8], offset: usize) -> Result<String, HostError> {
+    let tail = bytes.get(offset..).ok_or_else(|| {
+        HostError::new(
+            ErrorCode::InvalidPe,
+            format!("string offset 0x{offset:X} is past EOF"),
+        )
+    })?;
+    let end = tail.iter().position(|byte| *byte == 0).ok_or_else(|| {
+        HostError::new(
+            ErrorCode::InvalidPe,
+            format!("unterminated string at file offset 0x{offset:X}"),
+        )
+    })?;
+    String::from_utf8(tail[..end].to_vec()).map_err(|err| {
+        HostError::new(
+            ErrorCode::InvalidPe,
+            format!("PE string at file offset 0x{offset:X} is not UTF-8: {err}"),
+        )
+    })
+}
+
+fn memory_protection_name(read: bool, write: bool, execute: bool) -> &'static str {
+    match (read, write, execute) {
+        (false, false, false) => "no_access",
+        (true, false, false) => "read_only",
+        (true, true, false) => "read_write",
+        (false, true, false) => "write_only",
+        (false, false, true) => "execute",
+        (true, false, true) => "execute_read",
+        (true, true, true) => "execute_read_write",
+        (false, true, true) => "execute_write",
+    }
+}
+
+#[cfg(windows)]
+fn memory_protection_flags(read: bool, write: bool, execute: bool) -> u32 {
+    match (read, write, execute) {
+        (false, false, false) => PAGE_NOACCESS,
+        (true, false, false) => PAGE_READONLY,
+        (true, true, false) | (false, true, false) => PAGE_READWRITE,
+        (false, false, true) => PAGE_EXECUTE,
+        (true, false, true) => PAGE_EXECUTE_READ,
+        (true, true, true) | (false, true, true) => PAGE_EXECUTE_READWRITE,
+    }
+}
+
+fn read_u16(bytes: &[u8], offset: usize) -> Result<u16, HostError> {
+    let mut out = [0u8; 2];
+    out.copy_from_slice(range(bytes, offset, 2)?);
+    Ok(u16::from_le_bytes(out))
+}
+
+fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, HostError> {
+    let mut out = [0u8; 4];
+    out.copy_from_slice(range(bytes, offset, 4)?);
+    Ok(u32::from_le_bytes(out))
+}
+
+fn read_u64(bytes: &[u8], offset: usize) -> Result<u64, HostError> {
+    let mut out = [0u8; 8];
+    out.copy_from_slice(range(bytes, offset, 8)?);
+    Ok(u64::from_le_bytes(out))
+}
+
+fn read_save_u32(bytes: &[u8], offset: usize) -> Result<u32, HostError> {
+    let mut out = [0u8; 4];
+    out.copy_from_slice(range_save(bytes, offset, 4)?);
+    Ok(u32::from_le_bytes(out))
+}
+
+fn range(bytes: &[u8], offset: usize, len: usize) -> Result<&[u8], HostError> {
+    let end = checked_add(offset, len)?;
+    bytes.get(offset..end).ok_or_else(|| {
+        HostError::new(
+            ErrorCode::InvalidPe,
+            format!("PE read out of bounds at 0x{offset:X} for {len} bytes"),
+        )
+    })
+}
+
+fn range_save(bytes: &[u8], offset: usize, len: usize) -> Result<&[u8], HostError> {
+    let end = checked_save_add(offset, len)?;
+    bytes.get(offset..end).ok_or_else(|| {
+        HostError::new(
+            ErrorCode::InvalidRequest,
+            format!("save read out of bounds at 0x{offset:X} for {len} bytes"),
+        )
+    })
+}
+
+fn image_range(bytes: &[u8], offset: usize, len: usize) -> Result<&[u8], HostError> {
+    let end = checked_add(offset, len)?;
+    bytes.get(offset..end).ok_or_else(|| {
+        HostError::new(
+            ErrorCode::InvalidPe,
+            format!("image read out of bounds at RVA 0x{offset:X} for {len} bytes"),
+        )
+    })
+}
+
+fn checked_add(lhs: usize, rhs: usize) -> Result<usize, HostError> {
+    lhs.checked_add(rhs)
+        .ok_or_else(|| HostError::new(ErrorCode::InvalidPe, "PE offset overflow"))
+}
+
+fn checked_save_add(lhs: usize, rhs: usize) -> Result<usize, HostError> {
+    lhs.checked_add(rhs)
+        .ok_or_else(|| HostError::new(ErrorCode::InvalidRequest, "save offset overflow"))
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+fn is_one(value: &usize) -> bool {
+    *value == 1
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_one() -> usize {
+    1
+}
+
+#[allow(dead_code)]
+fn _assert_send_sync() {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<HostError>();
+}

@@ -1,0 +1,42 @@
+# Build output
+build/
+target/
+outputs/
+*.tmp
+*.tmp-goresave
+
+# Flutter / Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+apps/goresave/.dart_tool/
+apps/goresave/build/
+apps/goresave/windows/flutter/ephemeral/
+
+# FVM
+.fvm/flutter_sdk
+
+# Local environment
+.env
+.env.*
+!.env.example
+*.log
+__pycache__/
+*.py[cod]
+
+# Editor / OS noise
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Local research / reverse-engineering scratch
+work/
+
+# Savegame safety
+*.sav
+*.sav.bak.*
+!fixtures/**/*.sav

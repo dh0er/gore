@@ -1,0 +1,3 @@
+[workspace]
+members = ["crates/goresave_core", "crates/goresave_g1r_codec_host"]
+resolver = "2"
