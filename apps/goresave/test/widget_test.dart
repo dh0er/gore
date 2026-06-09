@@ -613,12 +613,12 @@ class _FakeCoreService implements GoresaveCoreService {
         return {
           'ok': true,
           'data': {
-            'available': false,
-            'canDecompress': false,
-            'canCompress': false,
-            'status': 'native_encoder_in_progress',
+            'available': true,
+            'canDecompress': true,
+            'canCompress': true,
+            'status': 'ready',
             'adapter': 'pure_rust_kraken',
-            'message': 'Native encoder support is not available yet.',
+            'message': 'Codec host is ready.',
           },
         };
       case 'write_save':

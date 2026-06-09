@@ -498,13 +498,21 @@ class _EditorWorkspace extends StatelessWidget {
                     title: 'Player',
                     inspection: inspection,
                     notifier: notifier,
-                    editable: inspection.privateEditable,
+                    // Private writes recompress the payload, so also require the
+                    // codec host to be compress-capable, not just decode-ready.
+                    editable:
+                        inspection.privateEditable &&
+                        (state.codecStatus?.canCompress ?? false),
                     decodedBody:
                         'Private player data is decoded through the G1R codec host.',
                     lockedBody:
                         'Private player edits need a verified G1R codec host.',
                   ),
-                  _InventoryPanel(inspection: inspection, notifier: notifier),
+                  _InventoryPanel(
+                    inspection: inspection,
+                    notifier: notifier,
+                    canCompress: state.codecStatus?.canCompress ?? false,
+                  ),
                   _ProgressionPanel(inspection: inspection, notifier: notifier),
                   _AdvancedPanel(inspection: inspection),
                   _BackupsPanel(state: state, notifier: notifier),
@@ -943,7 +951,8 @@ class _PrivatePanel extends StatelessWidget {
               player: inspection.privatePlayer,
               notifier: notifier,
               savePath: inspection.path,
-              editable: inspection.privateEditable,
+              // Reuse the panel's already compress-gated flag.
+              editable: editable,
             ),
             const SizedBox(height: 16),
           ],
@@ -1017,10 +1026,15 @@ class _CollapsibleCardHeader extends StatelessWidget {
 enum _InventorySection { items, diagnostics }
 
 class _InventoryPanel extends StatefulWidget {
-  const _InventoryPanel({required this.inspection, required this.notifier});
+  const _InventoryPanel({
+    required this.inspection,
+    required this.notifier,
+    this.canCompress = false,
+  });
 
   final SaveInspection inspection;
   final EditorNotifier notifier;
+  final bool canCompress;
 
   @override
   State<_InventoryPanel> createState() => _InventoryPanelState();
@@ -1059,7 +1073,9 @@ class _InventoryPanelState extends State<_InventoryPanel> {
               child: _PrivateInventorySummaryCard(
                 inventory: inspection.privateInventory,
                 notifier: widget.notifier,
-                editable: inspection.privateEditable,
+                // Inventory writes recompress the payload too, so require a
+                // compress-capable codec host in addition to a full decode.
+                editable: inspection.privateEditable && widget.canCompress,
                 expanded: itemsOpen,
                 onToggle: () => _toggle(_InventorySection.items),
               ),
@@ -1580,7 +1596,7 @@ String _inventoryItemKey(PrivateInventoryItem item) {
   // Combine id and path so rows that share a definition path
   // but differ by id — repeated item types — get distinct pending-change
   // entries instead of collapsing onto one key.
-  return '${item.id} ${item.path}';
+  return '${item.id}\u0000${item.path}';
 }
 
 String _inventoryScopeLabel(String scope) {
