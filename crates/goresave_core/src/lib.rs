@@ -472,7 +472,10 @@ fn scan_save_dir_summary_with_codec_backend(
     codec_backend: Option<&dyn codec_backend::CodecBackend>,
 ) -> Result<SaveDirSummary, CoreError> {
     if !path.exists() {
-        return Ok(SaveDirSummary::default());
+        return Err(CoreError::Io(format!(
+            "save directory does not exist: {}",
+            path.display()
+        )));
     }
     let persistent = persistent_data_list_summary_for_dir(path).unwrap_or_default();
     let persistent_slots = &persistent.slots;
@@ -4122,12 +4125,23 @@ fn apply_private_inventory_item_count_edit_to_payload(
 }
 
 fn inventory_edit_matches_item(edit: &PrivateInventoryItemCountEdit, path: &str) -> bool {
+    // Require every selector the edit provides to match. Matching on path alone
+    // collapsed multiple stacks that share a definition path; honouring the id
+    // too lets the edit target the stack the UI selected.
+    let mut matched_any = false;
     if let Some(expected_path) = &edit.path {
-        return expected_path == path;
+        if expected_path != path {
+            return false;
+        }
+        matched_any = true;
     }
-    edit.id
-        .as_deref()
-        .is_some_and(|expected_id| expected_id == item_id_from_path(path))
+    if let Some(expected_id) = edit.id.as_deref() {
+        if expected_id != item_id_from_path(path) {
+            return false;
+        }
+        matched_any = true;
+    }
+    matched_any
 }
 
 fn find_item_count_value_offset(

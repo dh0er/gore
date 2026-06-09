@@ -112,7 +112,17 @@ class _SaveSidebar extends StatelessWidget {
           const Divider(height: 1),
           _ProfileHeader(
             profile: state.activeProfile,
-            saveCount: state.saves.length,
+            // Count only this profile's saves so the total matches the
+            // profile-scoped Quick/Auto counts in a multi-profile folder.
+            saveCount: state.activeProfile == null
+                ? state.saves.length
+                : state.saves
+                      .where(
+                        (s) =>
+                            s.persistentProfileId ==
+                            state.activeProfile!.profileId,
+                      )
+                      .length,
           ),
           Expanded(
             child: state.saves.isEmpty
