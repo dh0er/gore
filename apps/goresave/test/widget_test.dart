@@ -441,6 +441,7 @@ class _FakeCoreService implements GoresaveCoreService {
                 'fileSize': 914367,
                 'sha1': 'abc',
                 'status': 'ok',
+                'persistentProfileId': 0,
                 'playerSaveName': 'Die Welt der Verurteilten',
                 'persistentPlayerSaveName':
                     'Die Welt der Verurteilten, Tag 1, 13:07',

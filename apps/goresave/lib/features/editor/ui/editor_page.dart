@@ -83,6 +83,14 @@ class _SaveSidebar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Scope the list to the active profile so the list, the header total, and
+    // the profile-scoped Quick/Auto counts all agree in a multi-profile folder.
+    final activeProfileId = state.activeProfile?.profileId;
+    final saves = activeProfileId == null
+        ? state.saves
+        : state.saves
+              .where((s) => s.persistentProfileId == activeProfileId)
+              .toList();
     return DecoratedBox(
       decoration: const BoxDecoration(color: Color(0xFFF8FAFC)),
       child: Column(
@@ -110,22 +118,9 @@ class _SaveSidebar extends StatelessWidget {
             ),
           ),
           const Divider(height: 1),
-          _ProfileHeader(
-            profile: state.activeProfile,
-            // Count only this profile's saves so the total matches the
-            // profile-scoped Quick/Auto counts in a multi-profile folder.
-            saveCount: state.activeProfile == null
-                ? state.saves.length
-                : state.saves
-                      .where(
-                        (s) =>
-                            s.persistentProfileId ==
-                            state.activeProfile!.profileId,
-                      )
-                      .length,
-          ),
+          _ProfileHeader(profile: state.activeProfile, saveCount: saves.length),
           Expanded(
-            child: state.saves.isEmpty
+            child: saves.isEmpty
                 ? const Center(
                     child: Padding(
                       padding: EdgeInsets.all(24),
@@ -137,10 +132,10 @@ class _SaveSidebar extends StatelessWidget {
                   )
                 : ListView.separated(
                     padding: const EdgeInsets.symmetric(vertical: 8),
-                    itemCount: state.saves.length,
+                    itemCount: saves.length,
                     separatorBuilder: (_, _) => const SizedBox(height: 4),
                     itemBuilder: (context, index) {
-                      final save = state.saves[index];
+                      final save = saves[index];
                       final selected = save.path == state.selectedPath;
                       return Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 8),
