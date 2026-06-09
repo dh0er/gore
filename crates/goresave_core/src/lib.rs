@@ -1361,6 +1361,14 @@ fn restore_backup(path: &Path, backup_path: &Path) -> Result<Value, CoreError> {
             .as_ref()
             .map(|p| p.display().to_string()),
         "persistentBytesChanged": companion_plan.is_some(),
+        // Whether a PersistentDataList.sav sits next to the save. When this is
+        // true but persistentRestoredFrom is null, no paired companion backup
+        // matched the slot backup, so the list was left unchanged and the caller
+        // can warn that slot/list metadata may now diverge.
+        "persistentCompanionPresent": path
+            .parent()
+            .map(|parent| parent.join("PersistentDataList.sav").exists())
+            .unwrap_or(false),
     }))
 }
 
@@ -5460,6 +5468,33 @@ mod tests {
             persistent_second.to_string_lossy()
         );
         assert_eq!(fs::read(&persistent).unwrap(), b"GVAS-second");
+    }
+
+    #[test]
+    fn restore_backup_flags_present_companion_left_unrestored() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-001.sav");
+        let slot_backup = dir.path().join("G1R-001.sav.bak.200");
+        let persistent = dir.path().join("PersistentDataList.sav");
+        // PersistentDataList exists but there is no .bak.200 companion for it.
+        fs::write(&path, minimal_gsav("Live")).unwrap();
+        fs::write(&slot_backup, minimal_gsav("Backup")).unwrap();
+        fs::write(&persistent, b"GVAS-current").unwrap();
+
+        let response = execute_json(
+            &json!({
+                "command": "restore_backup",
+                "payload": {"path": path, "backupPath": slot_backup}
+            })
+            .to_string(),
+        );
+        let value: Value = serde_json::from_str(&response).unwrap();
+
+        assert_eq!(value["ok"], true);
+        assert_eq!(value["data"]["persistentCompanionPresent"], true);
+        assert!(value["data"]["persistentRestoredFrom"].is_null());
+        // Companion left untouched.
+        assert_eq!(fs::read(&persistent).unwrap(), b"GVAS-current");
     }
 
     #[test]

@@ -86,6 +86,7 @@ class EditorState {
     bool clearBackups = false,
     bool clearError = false,
     bool clearCodecError = false,
+    bool clearCodecStatus = false,
     bool clearWriteMessage = false,
   }) {
     return EditorState(
@@ -106,7 +107,7 @@ class EditorState {
           ? this.selectedPath
           : selectedPath as String?,
       inspection: clearInspection ? null : inspection ?? this.inspection,
-      codecStatus: codecStatus ?? this.codecStatus,
+      codecStatus: clearCodecStatus ? null : codecStatus ?? this.codecStatus,
       error: clearError ? null : error ?? this.error,
       codecError: clearCodecError ? null : codecError ?? this.codecError,
       lastWriteMessage: clearWriteMessage
@@ -436,7 +437,14 @@ class EditorNotifier extends StateNotifier<EditorState> {
         state = state.copyWith(error: _errorMessage(response));
         return;
       }
-      state = state.copyWith(lastWriteMessage: 'Restored backup: $backupPath');
+      final data = (response['data'] as Map?)?.cast<String, Object?>();
+      final companionPresent = data?['persistentCompanionPresent'] == true;
+      final companionRestored = data?['persistentRestoredFrom'] != null;
+      final restoreMessage = companionPresent && !companionRestored
+          ? 'Restored backup: $backupPath (PersistentDataList.sav left unchanged '
+                '— no matching companion backup; slot metadata may differ)'
+          : 'Restored backup: $backupPath';
+      state = state.copyWith(lastWriteMessage: restoreMessage);
       // Rescan so the sidebar/profile summary reflect the rolled-back public
       // name and PersistentDataList metadata, not just the detail pane.
       await refresh();
@@ -453,24 +461,37 @@ class EditorNotifier extends StateNotifier<EditorState> {
   }
 
   Future<void> checkCodec() async {
-    final response = await _execute(
-      'check_codec',
-      payload: _codecPayload(),
-    );
-    if (response['ok'] != true) {
-      // Use the dedicated codec error channel so a concurrent/later refresh
-      // does not wipe this message.
-      state = state.copyWith(codecError: _errorMessage(response));
-      return;
-    }
-    final data = (response['data'] as Map).cast<String, Object?>();
-    final status = CodecStatus.fromJson(data);
-    state = state.copyWith(codecStatus: status, clearCodecError: true);
-    // Re-decode the selected save now the codec is available — but only if no
-    // load is already running. An in-flight inspect is already the latest load
-    // and will populate; spawning another here would just race it.
-    if (status.available && state.selectedPath != null && _activeLoads == 0) {
-      await inspect(state.selectedPath!);
+    try {
+      final response = await _execute(
+        'check_codec',
+        payload: _codecPayload(),
+      );
+      if (response['ok'] != true) {
+        // Use the dedicated codec error channel so a concurrent/later refresh
+        // does not wipe this message, and drop the now-stale codec status so
+        // the UI doesn't keep showing an earlier "ready" state.
+        state = state.copyWith(
+          codecError: _errorMessage(response),
+          clearCodecStatus: true,
+        );
+        return;
+      }
+      final data = (response['data'] as Map).cast<String, Object?>();
+      final status = CodecStatus.fromJson(data);
+      state = state.copyWith(codecStatus: status, clearCodecError: true);
+      // Re-decode the selected save now the codec is available — but only if no
+      // load is already running. An in-flight inspect is already the latest load
+      // and will populate; spawning another here would just race it.
+      if (status.available && state.selectedPath != null && _activeLoads == 0) {
+        await inspect(state.selectedPath!);
+      }
+    } catch (error) {
+      // checkCodec is fire-and-forget from the constructor; a thrown core call
+      // must surface in UI state, not as an unhandled async error.
+      state = state.copyWith(
+        codecError: 'Codec check failed: $error',
+        clearCodecStatus: true,
+      );
     }
   }
 
