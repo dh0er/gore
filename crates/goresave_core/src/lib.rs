@@ -1,5 +1,6 @@
 pub mod codec_backend;
 mod kraken;
+pub mod properties;
 
 use base64::{Engine as _, engine::general_purpose};
 use serde::{Deserialize, Serialize};
@@ -211,14 +212,14 @@ struct FStringRef {
     utf16: bool,
 }
 
-struct Reader<'a> {
+pub(crate) struct Reader<'a> {
     data: &'a [u8],
     pos: usize,
     base_offset: usize,
 }
 
 impl<'a> Reader<'a> {
-    fn new(data: &'a [u8], base_offset: usize) -> Self {
+    pub(crate) fn new(data: &'a [u8], base_offset: usize) -> Self {
         Self {
             data,
             pos: 0,
@@ -226,15 +227,15 @@ impl<'a> Reader<'a> {
         }
     }
 
-    fn abs_pos(&self) -> usize {
+    pub(crate) fn abs_pos(&self) -> usize {
         self.base_offset + self.pos
     }
 
-    fn remaining(&self) -> usize {
+    pub(crate) fn remaining(&self) -> usize {
         self.data.len().saturating_sub(self.pos)
     }
 
-    fn read(&mut self, n: usize) -> Result<&'a [u8], CoreError> {
+    pub(crate) fn read(&mut self, n: usize) -> Result<&'a [u8], CoreError> {
         if self.pos + n > self.data.len() {
             return Err(CoreError::Parse(format!(
                 "read out of bounds at 0x{:x}: need {}, remaining {}",
@@ -248,29 +249,47 @@ impl<'a> Reader<'a> {
         Ok(out)
     }
 
-    fn u8(&mut self) -> Result<u8, CoreError> {
+    pub(crate) fn u8(&mut self) -> Result<u8, CoreError> {
         Ok(self.read(1)?[0])
     }
 
-    fn u32(&mut self) -> Result<u32, CoreError> {
+    pub(crate) fn u32(&mut self) -> Result<u32, CoreError> {
         let mut b = [0u8; 4];
         b.copy_from_slice(self.read(4)?);
         Ok(u32::from_le_bytes(b))
     }
 
-    fn i32(&mut self) -> Result<i32, CoreError> {
+    pub(crate) fn i32(&mut self) -> Result<i32, CoreError> {
         let mut b = [0u8; 4];
         b.copy_from_slice(self.read(4)?);
         Ok(i32::from_le_bytes(b))
     }
 
-    fn u64(&mut self) -> Result<u64, CoreError> {
+    pub(crate) fn u64(&mut self) -> Result<u64, CoreError> {
         let mut b = [0u8; 8];
         b.copy_from_slice(self.read(8)?);
         Ok(u64::from_le_bytes(b))
     }
 
-    fn fstring(&mut self) -> Result<String, CoreError> {
+    pub(crate) fn i64(&mut self) -> Result<i64, CoreError> {
+        let mut b = [0u8; 8];
+        b.copy_from_slice(self.read(8)?);
+        Ok(i64::from_le_bytes(b))
+    }
+
+    pub(crate) fn f32(&mut self) -> Result<f32, CoreError> {
+        let mut b = [0u8; 4];
+        b.copy_from_slice(self.read(4)?);
+        Ok(f32::from_le_bytes(b))
+    }
+
+    pub(crate) fn f64(&mut self) -> Result<f64, CoreError> {
+        let mut b = [0u8; 8];
+        b.copy_from_slice(self.read(8)?);
+        Ok(f64::from_le_bytes(b))
+    }
+
+    pub(crate) fn fstring(&mut self) -> Result<String, CoreError> {
         let n = self.i32()?;
         if n == 0 {
             return Ok(String::new());
@@ -2080,6 +2099,7 @@ fn inspect_private_payload(
             let inventory = summarize_private_inventory_payload(&payload, &refs);
             let progression = summarize_private_progression_payload(&refs);
             let preview = decoded_chunk_count < stream.chunk_count;
+            let typed_parse = summarize_typed_parse(&payload, preview);
             Ok(json!({
                 "status": if preview { "decoded_preview" } else { "decoded" },
                 "message": if preview {
@@ -2101,6 +2121,7 @@ fn inspect_private_payload(
                 "player": player,
                 "inventory": inventory,
                 "progression": progression,
+                "typedParse": typed_parse,
                 "writable": ["private.replaceFString"],
             }))
         }
@@ -2235,6 +2256,38 @@ fn summarize_private_inventory_payload(payload: &[u8], refs: &[FStringRef]) -> V
         "properties": properties,
         "writable": writable,
     })
+}
+
+/// Attempt a strict typed parse of the full decompressed payload and report a
+/// compact status. This is the foundation for typed (layout-verified) private
+/// edits; for now it surfaces whether the proven UE property grammar fully
+/// accounts for this save's bytes. Skipped for previews (truncated payloads
+/// cannot parse to completion).
+fn summarize_typed_parse(payload: &[u8], preview: bool) -> Value {
+    if preview {
+        return json!({
+            "status": "skipped_preview",
+            "message": "Typed parse needs the full decoded payload.",
+        });
+    }
+    match properties::parse_private_root(payload) {
+        Ok(root) => {
+            let counts = properties::count_properties(&root.properties);
+            json!({
+                "status": "ok",
+                "rootClass": root.class,
+                "topLevelProperties": root.properties.len(),
+                "propertyCount": counts.total,
+                "maxDepth": counts.max_depth,
+                "consumed": root.consumed,
+                "payloadSize": payload.len(),
+            })
+        }
+        Err(err) => json!({
+            "status": "failed",
+            "message": err.to_string(),
+        }),
+    }
 }
 
 fn summarize_private_progression_payload(refs: &[FStringRef]) -> Value {
@@ -4375,6 +4428,33 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
     use tempfile::tempdir;
+
+    #[test]
+    fn summarize_typed_parse_reports_status() {
+        // skipped for previews
+        let skipped = summarize_typed_parse(&[], true);
+        assert_eq!(skipped["status"], "skipped_preview");
+
+        // ok for a valid minimal root object
+        let mut payload = fstring("/Script/Test.Save");
+        payload.push(0); // object flag
+        payload.extend_from_slice(&fstring("m_X"));
+        payload.extend_from_slice(&fstring("IntProperty"));
+        payload.extend_from_slice(&0u32.to_le_bytes()); // array_index
+        payload.extend_from_slice(&4u32.to_le_bytes()); // size
+        payload.push(0); // tag_flags
+        payload.extend_from_slice(&7i32.to_le_bytes());
+        payload.extend_from_slice(&fstring("None"));
+        payload.extend_from_slice(&0u32.to_le_bytes()); // footer
+        let ok = summarize_typed_parse(&payload, false);
+        assert_eq!(ok["status"], "ok");
+        assert_eq!(ok["propertyCount"], 1);
+        assert_eq!(ok["consumed"], payload.len());
+
+        // failed for garbage
+        let bad = summarize_typed_parse(&[1, 2, 3, 4, 5, 6], false);
+        assert_eq!(bad["status"], "failed");
+    }
 
     fn fstring(value: &str) -> Vec<u8> {
         let mut out = Vec::new();
