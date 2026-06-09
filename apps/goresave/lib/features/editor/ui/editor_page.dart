@@ -1437,6 +1437,7 @@ class _InventoryItemCountEditor extends StatefulWidget {
 class _InventoryItemCountEditorState extends State<_InventoryItemCountEditor> {
   late final TextEditingController _controller;
   String? _path;
+  String? _id;
   int? _pendingCount;
   String? _error;
 
@@ -1460,11 +1461,16 @@ class _InventoryItemCountEditorState extends State<_InventoryItemCountEditor> {
   }
 
   void _sync() {
-    if (_path == widget.item.path && _pendingCount == widget.pendingCount) {
+    // Rows are identified by path-or-id, so include the id: two stacks with an
+    // empty path but different ids must not be treated as the same row.
+    if (_path == widget.item.path &&
+        _id == widget.item.id &&
+        _pendingCount == widget.pendingCount) {
       return;
     }
-    final isSameItem = _path == widget.item.path;
+    final isSameItem = _path == widget.item.path && _id == widget.item.id;
     _path = widget.item.path;
+    _id = widget.item.id;
     _pendingCount = widget.pendingCount;
     final text = (widget.pendingCount ?? widget.item.count)?.toString() ?? '';
     if (_controller.text != text) {

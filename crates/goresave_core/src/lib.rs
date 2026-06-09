@@ -600,9 +600,19 @@ fn screenshot_summaries_for_dir(
         if !path.exists() {
             continue;
         }
-        let data = fs::read(path)?;
-        for (slot, screenshot) in parse_screenshot_save(&data, codec_backend)? {
-            screenshots.insert(slot, screenshot);
+        // Screenshots are optional. A missing/failed codec or an unreadable
+        // sidecar must not drop other profiles' thumbnails or abort the scan;
+        // skip just this profile and leave its thumbnails unavailable.
+        let Ok(data) = fs::read(&path) else {
+            continue;
+        };
+        match parse_screenshot_save(&data, codec_backend) {
+            Ok(parsed) => {
+                for (slot, screenshot) in parsed {
+                    screenshots.insert(slot, screenshot);
+                }
+            }
+            Err(_) => continue,
         }
     }
     Ok(screenshots)
