@@ -1325,10 +1325,12 @@ struct CompanionRestorePlan {
 
 /// Locate and validate the paired `PersistentDataList.sav` backup that
 /// `syncPersistentDataList` created in the same write as `slot_backup_path`.
-/// Backups are paired by their shared epoch suffix. This performs no
-/// mutations: it only reads and validates so the caller can abort the restore
-/// before touching any file. Returns `None` when there is no companion to roll
-/// back (no PersistentDataList.sav, no matching backup, or already identical).
+/// Backups are paired by the full suffix after each file's `.bak.` prefix (e.g.
+/// `123` or `123.1`), so two edits within the same second still match the right
+/// companion. This performs no mutations: it only reads and validates so the
+/// caller can abort the restore before touching any file. Returns `None` when
+/// there is no companion to roll back (no PersistentDataList.sav, no matching
+/// backup, or already identical).
 fn prepare_paired_persistent_data_list_restore(
     save_path: &Path,
     slot_backup_path: &Path,
@@ -1345,7 +1347,10 @@ fn prepare_paired_persistent_data_list_restore(
         .file_name()
         .and_then(|value| value.to_str())
         .ok_or_else(|| CoreError::InvalidRequest("backup path has no file name".to_string()))?;
-    let Some(epoch) = parse_backup_epoch(slot_backup_name, &slot_prefix) else {
+    // Full suffix after the slot prefix, e.g. "123" or "123.1". Matching the
+    // whole suffix (not just the epoch) keeps same-second paired backups from
+    // rolling the slot and companion back to different edits.
+    let Some(slot_suffix) = slot_backup_name.strip_prefix(&slot_prefix) else {
         return Ok(None);
     };
 
@@ -1357,10 +1362,7 @@ fn prepare_paired_persistent_data_list_restore(
         let Some(name) = candidate.file_name().and_then(|value| value.to_str()) else {
             continue;
         };
-        if !name.starts_with(&companion_prefix) {
-            continue;
-        }
-        if parse_backup_epoch(name, &companion_prefix) == Some(epoch) {
+        if name.strip_prefix(&companion_prefix) == Some(slot_suffix) {
             companion_backup_path = Some(candidate);
             break;
         }
@@ -1968,12 +1970,12 @@ fn summarize_private_player_payload(payload: &[u8], refs: &[FStringRef]) -> Valu
     let player_name = private_player_name_value_refs(refs)
         .into_iter()
         .next()
-        .map(|reference| reference.value)
+        .map(|reference| reference.value.value)
         .filter(|value| value != "None");
     let profile_name = private_profile_name_value_refs(refs)
         .into_iter()
         .next()
-        .map(|reference| reference.value)
+        .map(|reference| reference.value.value)
         .filter(|value| value != "None");
     let attributes = private_player_attribute_refs(payload, refs)
         .into_iter()
@@ -2799,7 +2801,13 @@ fn prepare_persistent_data_list_sync(
     let original = fs::read(&path)?;
     let mut edited = original.clone();
     if !replace_persistent_slot_player_save_name(&mut edited, slot, player_save_name)? {
-        return Ok(None);
+        // The companion list exists and a sync was requested, but it has no
+        // entry for this slot. Abort instead of silently writing the slot file
+        // and leaving PersistentDataList.sav showing the old player save name.
+        return Err(CoreError::Validation(format!(
+            "PersistentDataList.sav has no entry for slot {slot}; cannot sync the \
+             player save name without leaving the slot file and companion list out of sync"
+        )));
     }
     validate_persistent_data_list_bytes(slot, player_save_name, &edited)?;
     Ok(Some(PersistentDataListSyncPlan {
@@ -3397,16 +3405,12 @@ fn apply_private_player_name_edit_to_payload(
             ));
         }
     };
-    if target.utf16 {
+    if target.value.utf16 {
         return Err(CoreError::UnsupportedEdit(
             "UTF-16 private player name replacement is not implemented yet".to_string(),
         ));
     }
-    let replacement = encode_fstring(&edit.name);
-    let start = target.len_offset;
-    let end = target.len_offset + target.total_len;
-    payload.splice(start..end, replacement);
-    Ok(())
+    write_str_property_value(payload, target.size_offset, &target.value, &edit.name)
 }
 
 fn apply_private_profile_name_edit_to_payload(
@@ -3428,7 +3432,12 @@ fn apply_private_profile_name_edit_to_payload(
             ));
         }
     };
-    replace_private_fstring_value(payload, target, &edit.name, "profile name")
+    if target.value.utf16 {
+        return Err(CoreError::UnsupportedEdit(
+            "UTF-16 private profile name replacement is not implemented yet".to_string(),
+        ));
+    }
+    write_str_property_value(payload, target.size_offset, &target.value, &edit.name)
 }
 
 fn apply_private_player_attribute_edit_to_payload(
@@ -3508,18 +3517,27 @@ fn apply_private_player_transform_edit_to_payload(
     Ok(())
 }
 
-fn private_player_name_value_refs(refs: &[FStringRef]) -> Vec<FStringRef> {
+/// A located StrProperty whose value can be edited. Carries both the value
+/// FString and the offset of the StrProperty's 4-byte payload-size field, which
+/// must be rewritten alongside the value whenever the value length changes.
+#[derive(Clone)]
+struct StrPropertyValueRef {
+    value: FStringRef,
+    size_offset: usize,
+}
+
+fn private_player_name_value_refs(refs: &[FStringRef]) -> Vec<StrPropertyValueRef> {
     private_str_property_value_refs(refs, &["m_PlayerName", "m_CharacterName", "m_UserName"])
 }
 
-fn private_profile_name_value_refs(refs: &[FStringRef]) -> Vec<FStringRef> {
+fn private_profile_name_value_refs(refs: &[FStringRef]) -> Vec<StrPropertyValueRef> {
     private_str_property_value_refs(refs, &["m_ProfileName"])
 }
 
 fn private_str_property_value_refs(
     refs: &[FStringRef],
     property_names: &[&str],
-) -> Vec<FStringRef> {
+) -> Vec<StrPropertyValueRef> {
     refs.iter()
         .enumerate()
         .filter_map(|(idx, reference)| {
@@ -3530,7 +3548,12 @@ fn private_str_property_value_refs(
             if type_ref.value != "StrProperty" {
                 return None;
             }
-            refs.get(idx + 2).cloned()
+            let value = refs.get(idx + 2)?.clone();
+            // Layout: StrProperty name, "StrProperty", u32 (unused), u32 size,
+            // u8 guid, value FString. The size word sits 4 bytes after the type
+            // FString, matching the public StrProperty editor.
+            let size_offset = type_ref.len_offset + type_ref.total_len + 4;
+            Some(StrPropertyValueRef { value, size_offset })
         })
         .collect()
 }
@@ -3818,20 +3841,26 @@ fn read_payload_fstring_at(payload: &[u8], offset: usize) -> Option<(String, usi
     Some((String::from_utf8_lossy(body).to_string(), 4 + len))
 }
 
-fn replace_private_fstring_value(
+/// Rewrite a StrProperty's value FString, keeping the property's 4-byte
+/// payload-size field in sync with the new value length. Used by both the
+/// public and private name editors so a length-changing rename never leaves a
+/// stale size word that misparses on the next load.
+fn write_str_property_value(
     payload: &mut Vec<u8>,
-    target: &FStringRef,
-    value: &str,
-    field_label: &str,
+    size_offset: usize,
+    value_ref: &FStringRef,
+    new_value: &str,
 ) -> Result<(), CoreError> {
-    if target.utf16 {
-        return Err(CoreError::UnsupportedEdit(format!(
-            "UTF-16 private {field_label} replacement is not implemented yet"
-        )));
+    if size_offset + 4 > payload.len() {
+        return Err(CoreError::Parse(
+            "StrProperty size field points outside payload".to_string(),
+        ));
     }
-    let replacement = encode_fstring(value);
-    let start = target.len_offset;
-    let end = target.len_offset + target.total_len;
+    let replacement = encode_fstring(new_value);
+    payload[size_offset..size_offset + 4]
+        .copy_from_slice(&(replacement.len() as u32).to_le_bytes());
+    let start = value_ref.len_offset;
+    let end = value_ref.len_offset + value_ref.total_len;
     payload.splice(start..end, replacement);
     Ok(())
 }
@@ -4100,18 +4129,7 @@ fn replace_str_property_fstring_in_range(
         ));
     }
     let size_offset = type_ref.len_offset + type_ref.total_len + 4;
-    if size_offset + 4 > payload.len() {
-        return Err(CoreError::Parse(format!(
-            "property size for {property_name} points outside payload"
-        )));
-    }
-    let replacement = encode_fstring(new_value);
-    payload[size_offset..size_offset + 4]
-        .copy_from_slice(&(replacement.len() as u32).to_le_bytes());
-    let start = value_ref.len_offset;
-    let end = value_ref.len_offset + value_ref.total_len;
-    payload.splice(start..end, replacement);
-    Ok(())
+    write_str_property_value(payload, size_offset, value_ref, new_value)
 }
 
 fn sha1_hex(data: &[u8]) -> String {
@@ -4984,6 +5002,45 @@ mod tests {
     }
 
     #[test]
+    fn write_save_sync_errors_when_persistent_list_missing_slot_entry() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-001.sav");
+        let persistent_path = dir.path().join("PersistentDataList.sav");
+        fs::write(&path, minimal_gsav("Public name")).unwrap();
+        // Companion list exists but has no entry for G1R-001.
+        fs::write(
+            &persistent_path,
+            persistent_data_list(&[("G1R-002", "Other slot", 2, "OldCamp", 7200.0, true, false)]),
+        )
+        .unwrap();
+
+        let response = execute_json(
+            &json!({
+                "command": "write_save",
+                "payload": {
+                    "path": path,
+                    "backup": true,
+                    "syncPersistentDataList": true,
+                    "edits": [
+                        {"path": "public.m_PlayerSaveName", "value": "Synced Slot Name"}
+                    ]
+                }
+            })
+            .to_string(),
+        );
+        let value: Value = serde_json::from_str(&response).unwrap();
+
+        // Sync was requested but the slot is absent: surface an error instead of
+        // silently leaving the slot file and companion list out of sync.
+        assert_eq!(value["ok"], false);
+        // Slot file must be untouched.
+        assert_eq!(
+            inspect_save(&path, false).unwrap()["public"]["playerSaveName"],
+            "Public name"
+        );
+    }
+
+    #[test]
     fn list_backups_returns_matching_save_backups_newest_first() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("G1R-001.sav");
@@ -5147,6 +5204,43 @@ mod tests {
     }
 
     #[test]
+    fn restore_backup_pairs_companion_by_full_suffix_within_same_second() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-001.sav");
+        // Two paired backups created in the same second: ".200" and ".200.1".
+        let slot_backup_first = dir.path().join("G1R-001.sav.bak.200");
+        let slot_backup_second = dir.path().join("G1R-001.sav.bak.200.1");
+        let persistent = dir.path().join("PersistentDataList.sav");
+        let persistent_first = dir.path().join("PersistentDataList.sav.bak.200");
+        let persistent_second = dir.path().join("PersistentDataList.sav.bak.200.1");
+
+        fs::write(&path, minimal_gsav("Live")).unwrap();
+        fs::write(&slot_backup_first, minimal_gsav("First")).unwrap();
+        fs::write(&slot_backup_second, minimal_gsav("Second")).unwrap();
+        fs::write(&persistent, b"GVAS-current").unwrap();
+        fs::write(&persistent_first, b"GVAS-first").unwrap();
+        fs::write(&persistent_second, b"GVAS-second").unwrap();
+
+        // Restoring the ".200.1" slot backup must roll back the ".200.1"
+        // companion, not the first ".200" entry encountered.
+        let response = execute_json(
+            &json!({
+                "command": "restore_backup",
+                "payload": {"path": path, "backupPath": slot_backup_second}
+            })
+            .to_string(),
+        );
+        let value: Value = serde_json::from_str(&response).unwrap();
+
+        assert_eq!(value["ok"], true);
+        assert_eq!(
+            value["data"]["persistentRestoredFrom"].as_str().unwrap(),
+            persistent_second.to_string_lossy()
+        );
+        assert_eq!(fs::read(&persistent).unwrap(), b"GVAS-second");
+    }
+
+    #[test]
     fn restore_backup_aborts_without_touching_slot_when_companion_invalid() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("G1R-001.sav");
@@ -5240,6 +5334,48 @@ mod tests {
         assert_eq!(private_strings, vec!["Mage"]);
         assert_eq!(stream.summary_uncompressed_size, decoded.len() as u64);
         assert_eq!(stream.summary_compressed_size, (decoded.len() + 4) as u64);
+    }
+
+    #[test]
+    fn private_name_edit_updates_str_property_size_word_on_length_change() {
+        // m_PlayerName "Hero" -> "Nameless" changes the value length, so the
+        // StrProperty's 4-byte size word must be rewritten to match. (inspect
+        // scans FStrings by length prefix and would miss a stale size word, so
+        // assert the raw size bytes directly.)
+        let mut payload = [
+            fstring("Hero"),
+            str_property("m_PlayerName", "Hero"),
+            fstring("None"),
+        ]
+        .concat();
+
+        apply_private_player_name_edit_to_payload(
+            &mut payload,
+            &PrivatePlayerNameEdit {
+                name: "Nameless".to_string(),
+            },
+        )
+        .unwrap();
+
+        let refs = scan_fstrings(&payload, 0);
+        let name_idx = refs
+            .iter()
+            .position(|r| r.value == "m_PlayerName")
+            .unwrap();
+        let type_ref = &refs[name_idx + 1];
+        assert_eq!(type_ref.value, "StrProperty");
+        let value_ref = &refs[name_idx + 2];
+        assert_eq!(value_ref.value, "Nameless");
+
+        // Size word lives 4 bytes after the type FString and must equal the new
+        // encoded value length (4-byte len prefix + bytes + NUL).
+        let size_offset = type_ref.len_offset + type_ref.total_len + 4;
+        let size = u32::from_le_bytes(
+            payload[size_offset..size_offset + 4].try_into().unwrap(),
+        );
+        assert_eq!(size as usize, encode_fstring("Nameless").len());
+        // Trailing "None" terminator survived the splice.
+        assert!(refs.iter().any(|r| r.value == "None"));
     }
 
     #[test]

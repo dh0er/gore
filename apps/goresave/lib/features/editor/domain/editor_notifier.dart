@@ -126,6 +126,11 @@ class EditorNotifier extends StateNotifier<EditorState> {
   final GoresaveCoreService _core;
   final EditorSettingsStore _settingsStore;
 
+  /// Monotonic token identifying the latest in-flight load. Only the op holding
+  /// the current token may write loading/result state; superseded ops bail
+  /// without touching it, so the most recent op always clears `isLoading`.
+  int _loadSeq = 0;
+
   bool get coreAvailable => _core.isAvailable;
   String get coreDescription => _core.description;
 
@@ -185,11 +190,13 @@ class EditorNotifier extends StateNotifier<EditorState> {
   }
 
   Future<void> refresh() async {
+    final seq = ++_loadSeq;
     state = state.copyWith(isLoading: true, clearError: true);
     final response = await _core.execute(
       'scan_save_dir',
       payload: {'path': state.saveDir, ..._codecPayload()},
     );
+    if (seq != _loadSeq) return;
     if (response['ok'] != true) {
       state = state.copyWith(isLoading: false, error: _errorMessage(response));
       return;
@@ -210,7 +217,8 @@ class EditorNotifier extends StateNotifier<EditorState> {
         ? state.selectedPath
         : (saves.isNotEmpty ? saves.first.path : null);
     state = state.copyWith(
-      isLoading: false,
+      // Keep loading while we hand off to _inspect; it owns the terminal state.
+      isLoading: selectedPath != null,
       saves: saves,
       profiles: profiles,
       activeProfileId: activeProfileId,
@@ -228,6 +236,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
   }
 
   Future<void> _inspect(String path, {bool clearWriteMessage = false}) async {
+    final seq = ++_loadSeq;
     state = state.copyWith(
       selectedPath: path,
       isLoading: true,
@@ -240,7 +249,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
       ..._codecPayload(),
     };
     final response = await _core.execute('inspect_save', payload: payload);
-    if (state.selectedPath != path) return;
+    if (seq != _loadSeq) return;
     if (response['ok'] != true) {
       state = state.copyWith(
         isLoading: false,
@@ -251,9 +260,8 @@ class EditorNotifier extends StateNotifier<EditorState> {
       return;
     }
     final data = (response['data'] as Map).cast<String, Object?>();
-    final backupSnapshot = await _loadBackups(path);
+    final backupSnapshot = await _loadBackups(path, seq);
     if (backupSnapshot == null) return;
-    if (state.selectedPath != path) return;
     state = state.copyWith(
       isLoading: false,
       inspection: SaveInspection.fromJson(data),
@@ -265,8 +273,9 @@ class EditorNotifier extends StateNotifier<EditorState> {
   Future<void> refreshBackups() async {
     final path = state.selectedPath;
     if (path == null) return;
+    final seq = ++_loadSeq;
     state = state.copyWith(isLoading: true, clearError: true);
-    final backupSnapshot = await _loadBackups(path);
+    final backupSnapshot = await _loadBackups(path, seq);
     if (backupSnapshot == null) return;
     state = state.copyWith(
       isLoading: false,
@@ -617,14 +626,14 @@ class EditorNotifier extends StateNotifier<EditorState> {
     return '$prefix: $backupPath; PersistentDataList backup: $persistentBackupPath';
   }
 
-  Future<_BackupSnapshot?> _loadBackups(String path) async {
+  Future<_BackupSnapshot?> _loadBackups(String path, int seq) async {
     final response = await _core.execute(
       'list_backups',
       payload: {'path': path},
     );
-    // Selection moved on while this listing ran; let the newer operation own
-    // the loading/error state instead of clobbering it for a different slot.
-    if (state.selectedPath != path) return null;
+    // A newer load superseded this one; let it own loading/error state instead
+    // of clobbering it (which could also leave the overlay spinning).
+    if (seq != _loadSeq) return null;
     if (response['ok'] != true) {
       state = state.copyWith(isLoading: false, error: _errorMessage(response));
       return null;
