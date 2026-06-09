@@ -242,7 +242,12 @@ class SaveInspection {
       privateStrings:
           (private?['strings'] as List?)?.whereType<String>().toList() ??
           const [],
-      privatePreview: private?['preview'] as bool? ?? false,
+      // A decoded_preview status is a partial decode even when the explicit
+      // `preview` flag is absent, so treat the status as authoritative; private
+      // edits must stay disabled for previews.
+      privatePreview:
+          privateStatus == 'decoded_preview' ||
+          (private?['preview'] as bool? ?? false),
       privateDecodedChunkCount: (private?['decodedChunkCount'] as num?)
           ?.toInt(),
       privateTotalChunkCount: (private?['totalChunkCount'] as num?)?.toInt(),

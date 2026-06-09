@@ -328,6 +328,21 @@ void main() {
     expect(inspection.privateTotalChunkCount, 541);
   });
 
+  test('SaveInspection treats decoded_preview status as preview without flag', () {
+    final inspection = SaveInspection.fromJson({
+      'format': 'GSAV',
+      'path': r'C:\saves\G1R-001.sav',
+      'size': 1024,
+      'sha1': 'abc',
+      // status says preview but the explicit preview flag is absent.
+      'private': {'status': 'decoded_preview', 'strings': ['Hero']},
+    });
+
+    expect(inspection.privateDecoded, isTrue);
+    expect(inspection.privatePreview, isTrue);
+    expect(inspection.privateEditable, isFalse);
+  });
+
   test('CodecStatus exposes native adapter without DLL path fields', () {
     final codec = CodecStatus.fromJson({
       'available': false,
