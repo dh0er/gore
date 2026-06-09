@@ -89,7 +89,14 @@ class _SaveSidebar extends StatelessWidget {
     final saves = activeProfileId == null
         ? state.saves
         : state.saves
-              .where((s) => s.persistentProfileId == activeProfileId)
+              .where(
+                (s) =>
+                    // Keep this profile's saves, plus saves with unknown profile
+                    // metadata, and never hide the currently selected save.
+                    s.persistentProfileId == activeProfileId ||
+                    s.persistentProfileId == null ||
+                    s.path == state.selectedPath,
+              )
               .toList();
     return DecoratedBox(
       decoration: const BoxDecoration(color: Color(0xFFF8FAFC)),
