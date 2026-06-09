@@ -66,7 +66,7 @@ class EditorState {
     Object? activeProfileId = _unchanged,
     List<BackupEntry>? backups,
     List<BackupEntry>? companionBackups,
-    String? selectedPath,
+    Object? selectedPath = _unchanged,
     SaveInspection? inspection,
     CodecStatus? codecStatus,
     String? error,
@@ -90,7 +90,9 @@ class EditorState {
       companionBackups: clearBackups
           ? const []
           : companionBackups ?? this.companionBackups,
-      selectedPath: selectedPath ?? this.selectedPath,
+      selectedPath: identical(selectedPath, _unchanged)
+          ? this.selectedPath
+          : selectedPath as String?,
       inspection: clearInspection ? null : inspection ?? this.inspection,
       codecStatus: codecStatus ?? this.codecStatus,
       error: clearError ? null : error ?? this.error,
@@ -238,13 +240,20 @@ class EditorNotifier extends StateNotifier<EditorState> {
       ..._codecPayload(),
     };
     final response = await _core.execute('inspect_save', payload: payload);
+    if (state.selectedPath != path) return;
     if (response['ok'] != true) {
-      state = state.copyWith(isLoading: false, error: _errorMessage(response));
+      state = state.copyWith(
+        isLoading: false,
+        error: _errorMessage(response),
+        clearInspection: true,
+        clearBackups: true,
+      );
       return;
     }
     final data = (response['data'] as Map).cast<String, Object?>();
     final backupSnapshot = await _loadBackups(path);
     if (backupSnapshot == null) return;
+    if (state.selectedPath != path) return;
     state = state.copyWith(
       isLoading: false,
       inspection: SaveInspection.fromJson(data),

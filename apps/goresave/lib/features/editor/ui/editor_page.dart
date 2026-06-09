@@ -425,18 +425,18 @@ class _EditorWorkspace extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     Widget content;
-    if (state.error != null) {
-      content = _MessagePane(
-        icon: Icons.error_outline,
-        title: 'Error',
-        body: state.error!,
-      );
-    } else if (state.inspection == null) {
-      content = const _MessagePane(
-        icon: Icons.search,
-        title: 'Select a save',
-        body: 'The save details will appear here.',
-      );
+    if (state.inspection == null) {
+      content = state.error != null
+          ? _MessagePane(
+              icon: Icons.error_outline,
+              title: 'Error',
+              body: state.error!,
+            )
+          : const _MessagePane(
+              icon: Icons.search,
+              title: 'Select a save',
+              body: 'The save details will appear here.',
+            );
     } else {
       final inspection = state.inspection!;
       content = DefaultTabController(
@@ -461,6 +461,15 @@ class _EditorWorkspace extends StatelessWidget {
                 ],
               ),
             ),
+            if (state.error != null)
+              MaterialBanner(
+                backgroundColor: const Color(0xFFFDECEA),
+                leading: const Icon(Icons.error_outline, color: Colors.red),
+                content: Text(state.error!),
+                actions: [
+                  TextButton(onPressed: () {}, child: const Text('OK')),
+                ],
+              ),
             if (state.lastWriteMessage != null)
               MaterialBanner(
                 leading: const Icon(Icons.check_circle_outline),

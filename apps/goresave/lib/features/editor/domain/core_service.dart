@@ -56,8 +56,8 @@ class NativeGoresaveCoreService implements GoresaveCoreService {
       () => _executeNativeRequest(description, request),
     );
     final decoded = jsonDecode(response);
-    if (decoded is Map<String, Object?>) {
-      return decoded;
+    if (decoded is Map) {
+      return decoded.cast<String, Object?>();
     }
     throw const FormatException('Native core response was not an object');
   }

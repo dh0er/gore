@@ -7,10 +7,14 @@ const _gameExe = 'G1R-Win64-Shipping.exe';
 
 String defaultSaveRoot() {
   final localAppData = Platform.environment['LOCALAPPDATA'];
-  if (localAppData == null || localAppData.isEmpty) {
-    return r'C:\Users\Daniel\AppData\Local\G1R\Saved\SaveGames';
+  if (localAppData != null && localAppData.isNotEmpty) {
+    return '$localAppData\\G1R\\Saved\\SaveGames';
   }
-  return '$localAppData\\G1R\\Saved\\SaveGames';
+  final userProfile = Platform.environment['USERPROFILE'];
+  if (userProfile != null && userProfile.isNotEmpty) {
+    return '$userProfile\\AppData\\Local\\G1R\\Saved\\SaveGames';
+  }
+  return p.join('G1R', 'Saved', 'SaveGames');
 }
 
 String defaultCodecHostPath() {

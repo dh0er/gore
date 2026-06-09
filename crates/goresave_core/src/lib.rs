@@ -3210,15 +3210,26 @@ fn apply_private_fstring_edit_to_payload(
     edit: &PrivateFStringEdit,
 ) -> Result<(), CoreError> {
     let refs = scan_fstrings(payload, 0);
-    let target = refs
+    let matches: Vec<_> = refs
         .iter()
-        .find(|reference| reference.value == edit.old_value)
-        .ok_or_else(|| {
-            CoreError::Parse(format!(
+        .filter(|reference| reference.value == edit.old_value)
+        .collect();
+    let target = match matches.as_slice() {
+        [] => {
+            return Err(CoreError::Parse(format!(
                 "private FString {:?} was not found",
                 edit.old_value
-            ))
-        })?;
+            )));
+        }
+        [target] => *target,
+        _ => {
+            return Err(CoreError::UnsupportedEdit(format!(
+                "private FString {:?} is ambiguous: {} matches found",
+                edit.old_value,
+                matches.len()
+            )));
+        }
+    };
     if target.utf16 {
         return Err(CoreError::UnsupportedEdit(
             "UTF-16 private FString replacement is not implemented yet".to_string(),
