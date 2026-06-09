@@ -49,11 +49,12 @@ class EditorState {
   }
 
   ProfileSummary? get activeProfile {
-    if (profiles.isEmpty) return null;
     for (final profile in profiles) {
       if (profile.profileId == activeProfileId) return profile;
     }
-    return profiles.first;
+    // No profile matches the active id: report none rather than guessing
+    // `profiles.first`, which would show another profile's name and counts.
+    return null;
   }
 
   EditorState copyWith({
@@ -131,8 +132,27 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// without touching it, so the most recent op always clears `isLoading`.
   int _loadSeq = 0;
 
+  /// Serializes all core calls. The native layer runs each command in its own
+  /// isolate with no serialization, so overlapping write_save/restore_backup
+  /// requests on the same file could interleave temp files and renames. Chaining
+  /// through this queue guarantees one core command finishes before the next
+  /// starts.
+  Future<void> _coreQueue = Future<void>.value();
+
   bool get coreAvailable => _core.isAvailable;
   String get coreDescription => _core.description;
+
+  Future<Map<String, Object?>> _execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) {
+    final pending = _coreQueue.then(
+      (_) => _core.execute(command, payload: payload),
+    );
+    // Keep the queue alive regardless of this command's success/failure.
+    _coreQueue = pending.then((_) {}, onError: (_) {});
+    return pending;
+  }
 
   Future<void> chooseSaveDir() async {
     final selected = await getDirectoryPath(
@@ -192,7 +212,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
   Future<void> refresh() async {
     final seq = ++_loadSeq;
     state = state.copyWith(isLoading: true, clearError: true);
-    final response = await _core.execute(
+    final response = await _execute(
       'scan_save_dir',
       payload: {'path': state.saveDir, ..._codecPayload()},
     );
@@ -248,7 +268,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
       'includePrivate': true,
       ..._codecPayload(),
     };
-    final response = await _core.execute('inspect_save', payload: payload);
+    final response = await _execute('inspect_save', payload: payload);
     if (seq != _loadSeq) return;
     if (response['ok'] != true) {
       state = state.copyWith(
@@ -288,7 +308,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
     final path = state.selectedPath;
     if (path == null) return;
     state = state.copyWith(isLoading: true, clearError: true);
-    final response = await _core.execute(
+    final response = await _execute(
       'restore_backup',
       payload: {'path': path, 'backupPath': backupPath},
     );
@@ -297,11 +317,22 @@ class EditorNotifier extends StateNotifier<EditorState> {
       return;
     }
     state = state.copyWith(lastWriteMessage: 'Restored backup: $backupPath');
-    await _inspect(path);
+    // Rescan so the sidebar/profile summary reflect the rolled-back public name
+    // and PersistentDataList metadata, not just the detail pane.
+    await refresh();
+    // The restore itself succeeded on disk; if the follow-up rescan/inspection
+    // failed, make clear the restore worked so the error is not misread as a
+    // failed restore.
+    if (state.error != null) {
+      state = state.copyWith(
+        error:
+            'Restored backup: $backupPath, but reloading the save failed: ${state.error}',
+      );
+    }
   }
 
   Future<void> checkCodec() async {
-    final response = await _core.execute(
+    final response = await _execute(
       'check_codec',
       payload: _codecPayload(),
     );
@@ -321,7 +352,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
     final path = state.selectedPath;
     if (path == null) return;
     state = state.copyWith(isLoading: true, clearError: true);
-    final response = await _core.execute(
+    final response = await _execute(
       'validate_roundtrip',
       payload: {'path': path},
     );
@@ -342,7 +373,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
     final path = state.selectedPath;
     if (path == null) return;
     state = state.copyWith(isLoading: true, clearError: true);
-    final response = await _core.execute(
+    final response = await _execute(
       'validate_codec_roundtrip',
       payload: {'path': path, ..._codecPayload()},
     );
@@ -362,7 +393,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
     final path = state.selectedPath;
     if (path == null) return;
     state = state.copyWith(isLoading: true, clearError: true);
-    final response = await _core.execute(
+    final response = await _execute(
       'write_save',
       payload: {
         'path': path,
@@ -392,7 +423,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
     final path = state.selectedPath;
     if (path == null) return;
     state = state.copyWith(isLoading: true, clearError: true);
-    final response = await _core.execute(
+    final response = await _execute(
       'write_save',
       payload: {
         'path': path,
@@ -425,7 +456,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
     final path = state.selectedPath;
     if (path == null) return;
     state = state.copyWith(isLoading: true, clearError: true);
-    final response = await _core.execute(
+    final response = await _execute(
       'write_save',
       payload: {
         'path': path,
@@ -455,7 +486,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
     final path = state.selectedPath;
     if (path == null) return;
     state = state.copyWith(isLoading: true, clearError: true);
-    final response = await _core.execute(
+    final response = await _execute(
       'write_save',
       payload: {
         'path': path,
@@ -489,7 +520,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
     final path = state.selectedPath;
     if (path == null) return;
     state = state.copyWith(isLoading: true, clearError: true);
-    final response = await _core.execute(
+    final response = await _execute(
       'write_save',
       payload: {
         'path': path,
@@ -533,7 +564,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
     final path = state.selectedPath;
     if (path == null) return;
     state = state.copyWith(isLoading: true, clearError: true);
-    final response = await _core.execute(
+    final response = await _execute(
       'write_save',
       payload: {
         'path': path,
@@ -586,7 +617,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
     final savePath = state.selectedPath;
     if (savePath == null) return;
     state = state.copyWith(isLoading: true, clearError: true);
-    final response = await _core.execute(
+    final response = await _execute(
       'write_save',
       payload: {
         'path': savePath,
@@ -627,7 +658,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
   }
 
   Future<_BackupSnapshot?> _loadBackups(String path, int seq) async {
-    final response = await _core.execute(
+    final response = await _execute(
       'list_backups',
       payload: {'path': path},
     );
