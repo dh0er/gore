@@ -23,6 +23,7 @@ class EditorState {
     this.inspection,
     this.codecStatus,
     this.error,
+    this.codecError,
     this.lastWriteMessage,
   });
 
@@ -39,6 +40,10 @@ class EditorState {
   final SaveInspection? inspection;
   final CodecStatus? codecStatus;
   final String? error;
+
+  /// Error from the most recent codec check. Kept separate from [error] so a
+  /// save-directory refresh does not wipe a standing codec configuration error.
+  final String? codecError;
   final String? lastWriteMessage;
 
   SaveSlot? get selectedSave {
@@ -71,10 +76,12 @@ class EditorState {
     SaveInspection? inspection,
     CodecStatus? codecStatus,
     String? error,
+    String? codecError,
     String? lastWriteMessage,
     bool clearInspection = false,
     bool clearBackups = false,
     bool clearError = false,
+    bool clearCodecError = false,
     bool clearWriteMessage = false,
   }) {
     return EditorState(
@@ -97,6 +104,7 @@ class EditorState {
       inspection: clearInspection ? null : inspection ?? this.inspection,
       codecStatus: codecStatus ?? this.codecStatus,
       error: clearError ? null : error ?? this.error,
+      codecError: clearCodecError ? null : codecError ?? this.codecError,
       lastWriteMessage: clearWriteMessage
           ? null
           : lastWriteMessage ?? this.lastWriteMessage,
@@ -297,11 +305,15 @@ class EditorNotifier extends StateNotifier<EditorState> {
       return;
     }
     final data = (response['data'] as Map).cast<String, Object?>();
+    // Apply the parsed inspection immediately so a later list_backups failure
+    // does not drop the save metadata/private views that already loaded.
+    state = state.copyWith(inspection: SaveInspection.fromJson(data));
     final backupSnapshot = await _loadBackups(path, seq);
+    // null = superseded (newer load owns state) or a backup-list error that
+    // _loadBackups already surfaced; either way keep the inspection just applied.
     if (backupSnapshot == null) return;
     state = state.copyWith(
       isLoading: false,
-      inspection: SaveInspection.fromJson(data),
       backups: backupSnapshot.backups,
       companionBackups: backupSnapshot.companionBackups,
     );
@@ -354,12 +366,14 @@ class EditorNotifier extends StateNotifier<EditorState> {
       payload: _codecPayload(),
     );
     if (response['ok'] != true) {
-      state = state.copyWith(error: _errorMessage(response));
+      // Use the dedicated codec error channel so a concurrent/later refresh
+      // does not wipe this message.
+      state = state.copyWith(codecError: _errorMessage(response));
       return;
     }
     final data = (response['data'] as Map).cast<String, Object?>();
     final status = CodecStatus.fromJson(data);
-    state = state.copyWith(codecStatus: status);
+    state = state.copyWith(codecStatus: status, clearCodecError: true);
     if (status.available && state.selectedPath != null) {
       await inspect(state.selectedPath!);
     }

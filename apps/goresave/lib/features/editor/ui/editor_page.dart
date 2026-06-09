@@ -2885,6 +2885,25 @@ class _SettingsPanel extends StatelessWidget {
                   onBrowse: notifier.chooseGameExe,
                 ),
                 const SizedBox(height: 12),
+                if (state.codecError != null)
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Icon(
+                        Icons.error_outline,
+                        color: Colors.red,
+                        size: 18,
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          state.codecError!,
+                          style: const TextStyle(color: Colors.red),
+                        ),
+                      ),
+                    ],
+                  ),
+                if (state.codecError != null) const SizedBox(height: 8),
                 Text(codec?.message ?? 'No codec status'),
                 if (codec != null) ...[
                   const SizedBox(height: 8),

@@ -1290,11 +1290,23 @@ fn restore_backup(path: &Path, backup_path: &Path) -> Result<Value, CoreError> {
         None => None,
     };
 
-    // Commit: both files have been validated and staged, so the replaces at the
-    // end keep the slot file and PersistentDataList.sav consistent.
-    commit_replace(path, &slot_tmp)?;
+    // Commit: both files are validated and staged. Replace the slot first, then
+    // the companion; if the companion replace fails, roll the slot back so they
+    // never end up restored to different edits.
+    let slot_pending = begin_replace(path, &slot_tmp)?;
     if let (Some(plan), Some(tmp)) = (&companion_plan, &companion_tmp) {
-        commit_replace(&plan.persistent_path, tmp)?;
+        match begin_replace(&plan.persistent_path, tmp) {
+            Ok(companion_pending) => {
+                companion_pending.commit();
+                slot_pending.commit();
+            }
+            Err(err) => {
+                slot_pending.rollback();
+                return Err(err);
+            }
+        }
+    } else {
+        slot_pending.commit();
     }
 
     Ok(json!({
@@ -1408,24 +1420,61 @@ fn ensure_backup_belongs_to_save(path: &Path, backup_path: &Path) -> Result<(), 
     Ok(())
 }
 
+/// An applied-but-not-finalized file replacement. Hold one per file so a
+/// multi-file commit can be rolled back if a later file fails, keeping the slot
+/// file and PersistentDataList.sav consistent.
+struct PendingReplace {
+    target: PathBuf,
+    /// The moved-aside previous file, kept until [`PendingReplace::commit`]. If
+    /// `None`, the target was newly created and rollback just removes it.
+    aside: Option<PathBuf>,
+}
+
+impl PendingReplace {
+    /// Finalize the replacement by discarding the moved-aside original.
+    fn commit(self) {
+        if let Some(aside) = self.aside {
+            let _ = fs::remove_file(aside);
+        }
+    }
+
+    /// Undo the replacement, restoring the original file (or removing a
+    /// newly-created target) so the path returns to its pre-commit contents.
+    fn rollback(self) {
+        match self.aside {
+            Some(aside) => {
+                let _ = fs::remove_file(&self.target);
+                let _ = fs::rename(&aside, &self.target);
+            }
+            None => {
+                let _ = fs::remove_file(&self.target);
+            }
+        }
+    }
+}
+
 /// Replace `target` with the staged file at `staged` without ever leaving
 /// `target` missing on failure. Windows `rename` cannot overwrite, so the
 /// current file is moved aside first; if renaming the staged file in fails, the
-/// aside copy is moved back so the slot is never lost.
-fn commit_replace(target: &Path, staged: &Path) -> Result<(), CoreError> {
+/// aside copy is moved back so the slot is never lost. The returned
+/// [`PendingReplace`] must be either committed or rolled back.
+fn begin_replace(target: &Path, staged: &Path) -> Result<PendingReplace, CoreError> {
     if !target.exists() {
         fs::rename(staged, target)?;
-        return Ok(());
+        return Ok(PendingReplace {
+            target: target.to_path_buf(),
+            aside: None,
+        });
     }
     let aside = target.with_extension("sav.replaced-goresave");
     // Clear any leftover aside from a previously interrupted write.
     let _ = fs::remove_file(&aside);
     fs::rename(target, &aside)?;
     match fs::rename(staged, target) {
-        Ok(()) => {
-            let _ = fs::remove_file(&aside);
-            Ok(())
-        }
+        Ok(()) => Ok(PendingReplace {
+            target: target.to_path_buf(),
+            aside: Some(aside),
+        }),
         Err(err) => {
             // Roll back so the target path is never left absent.
             let _ = fs::rename(&aside, target);
@@ -2773,11 +2822,26 @@ fn write_save_internal(
     } else {
         None
     };
-    commit_replace(target, &tmp_path)?;
-    if let Some(plan) = &persistent_sync {
-        if let Some(tmp_path) = &persistent_tmp_path {
-            commit_replace(&plan.path, tmp_path)?;
+    // Replace the slot first, then the synced PersistentDataList; if the
+    // companion replace fails, roll the slot write back so the two files never
+    // diverge.
+    let slot_pending = begin_replace(target, &tmp_path)?;
+    if let Some(tmp_path) = &persistent_tmp_path {
+        let plan = persistent_sync
+            .as_ref()
+            .expect("persistent_tmp_path implies a sync plan");
+        match begin_replace(&plan.path, tmp_path) {
+            Ok(companion_pending) => {
+                companion_pending.commit();
+                slot_pending.commit();
+            }
+            Err(err) => {
+                slot_pending.rollback();
+                return Err(err);
+            }
         }
+    } else {
+        slot_pending.commit();
     }
 
     Ok(json!({
