@@ -671,6 +671,35 @@ class EditorNotifier extends StateNotifier<EditorState> {
     );
   }
 
+  /// Layout-verified typed edit: set a fixed-size scalar (int/float/bool) at
+  /// a typed property path. Only offered by the core when the strict typed
+  /// parse of the save succeeded (`private.typed.setValue` in writable).
+  ///
+  /// Path segments: property name, `{mapKey}` for map entries, `[i]` for
+  /// container/object-array indices.
+  Future<void> writeTypedValue({
+    required List<String> propertyPath,
+    required Object value,
+  }) async {
+    final savePath = state.selectedPath;
+    if (savePath == null) return;
+    await _runWrite(
+      payload: {
+        'path': savePath,
+        'backup': true,
+        'edits': [
+          {
+            'path': 'private.typed.setValue',
+            'value': {'path': propertyPath, 'value': value},
+          },
+        ],
+        ..._codecPayload(),
+      },
+      message: (data) =>
+          _backupMessage('Typed value saved with backup', data),
+    );
+  }
+
   Future<void> writeInventoryItemCount({
     required String id,
     required String path,
