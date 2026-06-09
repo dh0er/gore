@@ -58,7 +58,7 @@ class EditorPage extends ConsumerWidget {
             child: Row(
               children: [
                 SizedBox(
-                  width: 340,
+                  width: 380,
                   child: _SaveSidebar(state: state, notifier: notifier),
                 ),
                 const VerticalDivider(width: 1),
@@ -280,7 +280,7 @@ class _SaveSlotCard extends StatelessWidget {
                     const SizedBox(height: 4),
                     Text(
                       _saveSlotSubtitle(save),
-                      maxLines: 1,
+                      maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
                         color: const Color(0xFF64748B),
@@ -924,7 +924,9 @@ class _MetricGrid extends StatelessWidget {
                       style: const TextStyle(color: Color(0xFF64748B)),
                     ),
                   ),
-                  Expanded(child: SelectableText(entry.value, maxLines: 3)),
+                  // No maxLines: a multiline cap makes SelectableText reserve
+                  // that many lines of height even for one-line values.
+                  Expanded(child: SelectableText(entry.value)),
                 ],
               ),
             ),
