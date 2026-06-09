@@ -269,11 +269,16 @@ class EditorNotifier extends StateNotifier<EditorState> {
 
   Future<void> _inspect(String path, {bool clearWriteMessage = false}) async {
     final seq = ++_loadSeq;
+    // Switching slots: drop the previous slot's inspection/backups so the panes
+    // don't keep showing stale data while the new load runs.
+    final switchingSlot = state.selectedPath != path;
     state = state.copyWith(
       selectedPath: path,
       isLoading: true,
       clearError: true,
       clearWriteMessage: clearWriteMessage,
+      clearInspection: switchingSlot,
+      clearBackups: switchingSlot,
     );
     final payload = <String, Object?>{
       'path': path,
