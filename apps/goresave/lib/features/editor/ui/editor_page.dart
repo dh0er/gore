@@ -54,7 +54,6 @@ class EditorPage extends ConsumerWidget {
       ),
       body: Column(
         children: [
-          _StatusStrip(state: state, notifier: notifier),
           Expanded(
             child: Row(
               children: [
@@ -75,48 +74,6 @@ class EditorPage extends ConsumerWidget {
   }
 }
 
-class _StatusStrip extends StatelessWidget {
-  const _StatusStrip({required this.state, required this.notifier});
-
-  final EditorState state;
-  final EditorNotifier notifier;
-
-  @override
-  Widget build(BuildContext context) {
-    final coreStatus = notifier.coreAvailable
-        ? 'Core: ${notifier.coreDescription}'
-        : 'Core unavailable';
-    final codec = state.codecStatus;
-    final codecText = codec == null
-        ? 'Codec: unchecked'
-        : 'Codec: ${codec.status}${codec.available ? ' ready' : ''}';
-    return Container(
-      height: 42,
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        border: Border(bottom: BorderSide(color: Color(0xFFE2E8F0))),
-      ),
-      child: Row(
-        children: [
-          Icon(
-            notifier.coreAvailable ? Icons.memory : Icons.error_outline,
-            size: 18,
-            color: notifier.coreAvailable
-                ? const Color(0xFF0F766E)
-                : Colors.red.shade700,
-          ),
-          const SizedBox(width: 8),
-          Flexible(child: Text(coreStatus, overflow: TextOverflow.ellipsis)),
-          const SizedBox(width: 24),
-          const Icon(Icons.compress_outlined, size: 18),
-          const SizedBox(width: 8),
-          Text(codecText),
-        ],
-      ),
-    );
-  }
-}
 
 class _SaveSidebar extends StatelessWidget {
   const _SaveSidebar({required this.state, required this.notifier});
@@ -282,8 +239,8 @@ class _SaveSlotCard extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               SizedBox(
-                width: 112,
-                height: 63,
+                width: 124,
+                height: 72,
                 child: _ScreenshotPreview(
                   screenshot: save.screenshot,
                   slot: save.slot,
@@ -292,48 +249,50 @@ class _SaveSlotCard extends StatelessWidget {
               ),
               const SizedBox(width: 10),
               Expanded(
-                child: SizedBox(
-                  height: 63,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Icon(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.only(top: 2),
+                          child: Icon(
                             save.format == 'GSAV'
                                 ? Icons.save_alt_outlined
                                 : Icons.description_outlined,
                             size: 17,
                             color: selected ? const Color(0xFF0F766E) : null,
                           ),
-                          const SizedBox(width: 6),
-                          Expanded(
-                            child: Text(
-                              save.displayName,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: Theme.of(context).textTheme.titleSmall,
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        _saveSlotSubtitle(save),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: const Color(0xFF64748B),
                         ),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            save.displayName,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.titleSmall,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      _saveSlotSubtitle(save),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: const Color(0xFF64748B),
                       ),
-                      const Spacer(),
-                      _SaveKindIcon(
-                        quickSave: save.quickSave,
-                        autoSave: save.autoSave,
-                        selected: selected,
-                      ),
-                    ],
-                  ),
+                    ),
+                    const SizedBox(height: 6),
+                    _SaveKindIcon(
+                      quickSave: save.quickSave,
+                      autoSave: save.autoSave,
+                      selected: selected,
+                    ),
+                  ],
                 ),
               ),
             ],
@@ -491,7 +450,6 @@ class _EditorWorkspace extends StatelessWidget {
                     inspection: inspection,
                     notifier: notifier,
                     selectedSave: state.selectedSave,
-                    profile: state.activeProfile,
                   ),
                   _PrivatePanel(
                     icon: Icons.person_outline,
@@ -554,88 +512,123 @@ class _OverviewPanel extends StatelessWidget {
     required this.inspection,
     required this.notifier,
     required this.selectedSave,
-    required this.profile,
   });
 
   final SaveInspection inspection;
   final EditorNotifier notifier;
   final SaveSlot? selectedSave;
-  final ProfileSummary? profile;
 
   @override
   Widget build(BuildContext context) {
     return ListView(
       padding: const EdgeInsets.all(20),
       children: [
-        _HeaderCard(
-          inspection: inspection,
-          save: selectedSave,
-          profile: profile,
-        ),
+        _HeaderCard(inspection: inspection, save: selectedSave),
         const SizedBox(height: 16),
         _MetadataEditor(inspection: inspection, notifier: notifier),
         const SizedBox(height: 16),
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(
-              child: _MetricGrid(
-                metrics: {
-                  'Format': inspection.format,
-                  'Slot': inspection.slot ?? '-',
-                  if (inspection.chapterId != null)
-                    'Chapter': inspection.chapterId.toString(),
-                  if (inspection.mapName != null) 'Map': inspection.mapName!,
-                  if (inspection.timePlayedSeconds != null)
-                    'Time played': _formatDurationSeconds(
-                      inspection.timePlayedSeconds,
-                    ),
-                  if (inspection.quickSave != null ||
-                      inspection.autoSave != null)
-                    'Save kind': _formatSaveKind(
-                      quickSave: inspection.quickSave,
-                      autoSave: inspection.autoSave,
-                    ),
-                  'File size': '${_bytes.format(inspection.size)} bytes',
-                  'Compression': inspection.compressionMethod ?? '-',
-                  'Chunks': inspection.chunkCount?.toString() ?? '-',
-                  'Uncompressed': inspection.uncompressedSize == null
-                      ? '-'
-                      : '${_bytes.format(inspection.uncompressedSize)} bytes',
-                  'Private': inspection.privateStatus ?? '-',
-                },
-              ),
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: _MetricGrid(
-                metrics: {
-                  'Slot name': inspection.slotName ?? '-',
-                  'Trailer': inspection.trailerSize == null
-                      ? '-'
-                      : '${inspection.trailerSize} bytes',
-                  'Decoded private': inspection.privateDecompressedSize == null
-                      ? '-'
-                      : '${_bytes.format(inspection.privateDecompressedSize)} bytes',
-                  'Private strings':
-                      inspection.privateStringCount?.toString() ?? '-',
-                  'SHA-1': inspection.sha1,
-                },
-              ),
-            ),
-          ],
-        ),
+        _OverviewDiagnostics(inspection: inspection),
       ],
     );
   }
 }
 
+class _OverviewDiagnostics extends StatefulWidget {
+  const _OverviewDiagnostics({required this.inspection});
+
+  final SaveInspection inspection;
+
+  @override
+  State<_OverviewDiagnostics> createState() => _OverviewDiagnosticsState();
+}
+
+class _OverviewDiagnosticsState extends State<_OverviewDiagnostics> {
+  bool _expanded = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final inspection = widget.inspection;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _CollapsibleCardHeader(
+              icon: Icons.science_outlined,
+              title: 'Diagnostics & details',
+              subtitle: 'Read-only format inspection',
+              expanded: _expanded,
+              onToggle: () => setState(() => _expanded = !_expanded),
+            ),
+            if (_expanded) ...[
+              const SizedBox(height: 8),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: _MetricGrid(
+                      metrics: {
+                        'Format': inspection.format,
+                        'Slot': inspection.slot ?? '-',
+                        if (inspection.chapterId != null)
+                          'Chapter': inspection.chapterId.toString(),
+                        if (inspection.mapName != null)
+                          'Map': inspection.mapName!,
+                        if (inspection.timePlayedSeconds != null)
+                          'Time played': _formatDurationSeconds(
+                            inspection.timePlayedSeconds,
+                          ),
+                        if (inspection.quickSave != null ||
+                            inspection.autoSave != null)
+                          'Save kind': _formatSaveKind(
+                            quickSave: inspection.quickSave,
+                            autoSave: inspection.autoSave,
+                          ),
+                        'File size':
+                            '${_bytes.format(inspection.size)} bytes',
+                        'Compression': inspection.compressionMethod ?? '-',
+                        'Chunks': inspection.chunkCount?.toString() ?? '-',
+                        'Uncompressed': inspection.uncompressedSize == null
+                            ? '-'
+                            : '${_bytes.format(inspection.uncompressedSize)} bytes',
+                        'Private': inspection.privateStatus ?? '-',
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: _MetricGrid(
+                      metrics: {
+                        'Slot name': inspection.slotName ?? '-',
+                        'Trailer': inspection.trailerSize == null
+                            ? '-'
+                            : '${inspection.trailerSize} bytes',
+                        'Decoded private':
+                            inspection.privateDecompressedSize == null
+                            ? '-'
+                            : '${_bytes.format(inspection.privateDecompressedSize)} bytes',
+                        'Private strings':
+                            inspection.privateStringCount?.toString() ?? '-',
+                        'SHA-1': inspection.sha1,
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _HeaderCard extends StatelessWidget {
-  const _HeaderCard({required this.inspection, this.save, this.profile});
+  const _HeaderCard({required this.inspection, this.save});
 
   final SaveInspection inspection;
   final SaveSlot? save;
-  final ProfileSummary? profile;
 
   @override
   Widget build(BuildContext context) {
@@ -696,23 +689,34 @@ class _HeaderCard extends StatelessWidget {
                         overflow: TextOverflow.ellipsis,
                         style: Theme.of(context).textTheme.bodySmall,
                       ),
-                      if (profile != null) ...[
-                        const SizedBox(height: 9),
-                        Wrap(
-                          spacing: 8,
-                          runSpacing: 8,
-                          children: [
-                            _InfoPill(
-                              icon: Icons.flash_on_outlined,
-                              label: '${profile!.quickSaveSlots.length} quick',
-                            ),
-                            _InfoPill(
-                              icon: Icons.timer_outlined,
-                              label: '${profile!.autoSaveSlots.length} auto',
-                            ),
-                          ],
-                        ),
-                      ],
+                      Builder(
+                        builder: (context) {
+                          final pills = <Widget>[
+                            if (inspection.chapterId != null)
+                              _InfoPill(
+                                icon: Icons.flag_outlined,
+                                label: 'Chapter ${inspection.chapterId}',
+                              ),
+                            if (inspection.timePlayedSeconds != null)
+                              _InfoPill(
+                                icon: Icons.timer_outlined,
+                                label: _formatDurationSeconds(
+                                  inspection.timePlayedSeconds,
+                                ),
+                              ),
+                            if (inspection.mapName != null)
+                              _InfoPill(
+                                icon: Icons.map_outlined,
+                                label: inspection.mapName!,
+                              ),
+                          ];
+                          if (pills.isEmpty) return const SizedBox.shrink();
+                          return Padding(
+                            padding: const EdgeInsets.only(top: 9),
+                            child: Wrap(spacing: 8, runSpacing: 8, children: pills),
+                          );
+                        },
+                      ),
                     ],
                   ),
                 ),
@@ -890,33 +894,30 @@ class _MetricGrid extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: metrics.entries
-              .map(
-                (entry) => Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 7),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      SizedBox(
-                        width: 130,
-                        child: Text(
-                          entry.key,
-                          style: const TextStyle(color: Color(0xFF64748B)),
-                        ),
-                      ),
-                      Expanded(child: SelectableText(entry.value, maxLines: 3)),
-                    ],
+    // No Card here: callers place this inside their own card, so an extra card
+    // layer just doubles the padding.
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: metrics.entries
+          .map(
+            (entry) => Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(
+                    width: 130,
+                    child: Text(
+                      entry.key,
+                      style: const TextStyle(color: Color(0xFF64748B)),
+                    ),
                   ),
-                ),
-              )
-              .toList(),
-        ),
-      ),
+                  Expanded(child: SelectableText(entry.value, maxLines: 3)),
+                ],
+              ),
+            ),
+          )
+          .toList(),
     );
   }
 }

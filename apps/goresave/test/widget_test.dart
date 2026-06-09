@@ -34,12 +34,19 @@ void main() {
     expect(find.text('Die Welt der Verurteilten'), findsAtLeastNWidgets(1));
     expect(find.text('Overview'), findsOneWidget);
     expect(find.text('Public save name'), findsOneWidget);
-    expect(find.text('Chapter'), findsOneWidget);
-    expect(find.text('MainMap'), findsOneWidget);
-    expect(find.text('Time played'), findsOneWidget);
+    // Header pills summarise chapter, time played and map for the save.
+    expect(find.text('Chapter 1'), findsOneWidget);
     expect(find.text('1h 56m'), findsOneWidget);
-    expect(find.text('Auto save'), findsOneWidget);
+    expect(find.text('MainMap'), findsAtLeastNWidgets(1));
     expect(find.text('Profile 0'), findsOneWidget);
+
+    // Format/save-kind details live in the collapsed diagnostics card.
+    expect(find.text('Format'), findsNothing);
+    await tester.tap(find.text('Diagnostics & details'));
+    await tester.pumpAndSettle();
+    expect(find.text('Format'), findsOneWidget);
+    expect(find.text('Time played'), findsOneWidget);
+    expect(find.text('Auto save'), findsOneWidget);
     expect(find.bySemanticsLabel('Screenshot for G1R-001'), findsWidgets);
 
     await tester.enterText(
