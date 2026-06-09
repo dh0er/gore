@@ -3717,6 +3717,16 @@ fn run_runtime_selftest_worker_inner(
         },
         None => None,
     };
+    #[cfg(windows)]
+    fn hide_console_window(command: &mut Command) {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    #[cfg(not(windows))]
+    fn hide_console_window(_command: &mut Command) {}
+
     let mut command = Command::new(runtime_worker_path);
     command
         .arg("--runtime-selftest-worker")
@@ -3728,6 +3738,7 @@ fn run_runtime_selftest_worker_inner(
         })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    hide_console_window(&mut command);
 
     let mut child = match command.spawn() {
         Ok(child) => child,

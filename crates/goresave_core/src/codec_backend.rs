@@ -307,15 +307,29 @@ impl CodecHostInvoker for ProcessCodecHostInvoker {
     }
 }
 
+/// Suppress the console window Windows would otherwise flash for each codec
+/// host invocation (e.g. on every save inspect). No-op on other platforms.
+#[cfg(windows)]
+fn hide_console_window(command: &mut Command) {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    command.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(windows))]
+fn hide_console_window(_command: &mut Command) {}
+
 fn invoke_codec_host_stdio(helper_path: &Path, request: Value) -> Result<Value, CoreError> {
     let request_line =
         serde_json::to_vec(&request).map_err(|err| CoreError::Codec(err.to_string()))?;
-    let mut child = Command::new(helper_path)
+    let mut command = Command::new(helper_path);
+    command
         .arg("--stdio")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
+        .stderr(Stdio::piped());
+    hide_console_window(&mut command);
+    let mut child = command.spawn()?;
 
     let mut stdin = child
         .stdin
