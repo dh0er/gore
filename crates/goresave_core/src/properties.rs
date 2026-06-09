@@ -142,6 +142,226 @@ pub struct InstancedStruct {
     pub properties: Vec<Property>,
 }
 
+/// One step of a typed-property path.
+///
+/// String form (used by the `private.typed.setValue` edit):
+/// - `name`      — property by name in the current property list
+/// - `{key}`     — map entry by stringified key (Str/Name/Enum keys)
+/// - `[3]`       — array/set element or instanced-object index
+///
+/// Struct property lists and InstancedStruct wrappers are descended through
+/// the property segment itself; map values that are InstancedStructs are
+/// unwrapped transparently after a `{key}` segment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PathSeg {
+    Name(String),
+    MapKey(String),
+    Index(usize),
+}
+
+pub fn parse_path(segments: &[String]) -> Result<Vec<PathSeg>, CoreError> {
+    segments
+        .iter()
+        .map(|raw| {
+            if let Some(key) = raw.strip_prefix('{').and_then(|s| s.strip_suffix('}')) {
+                Ok(PathSeg::MapKey(key.to_string()))
+            } else if let Some(idx) = raw.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+                idx.parse::<usize>()
+                    .map(PathSeg::Index)
+                    .map_err(|_| CoreError::InvalidRequest(format!("invalid index segment {raw:?}")))
+            } else if raw.is_empty() {
+                Err(CoreError::InvalidRequest("empty path segment".to_string()))
+            } else {
+                Ok(PathSeg::Name(raw.clone()))
+            }
+        })
+        .collect()
+}
+
+fn map_key_to_string(key: &PropertyValue) -> Option<String> {
+    match key {
+        PropertyValue::Str(s) | PropertyValue::Name(s) | PropertyValue::Enum(s) => Some(s.clone()),
+        PropertyValue::Int(i) => Some(i.to_string()),
+        _ => None,
+    }
+}
+
+/// Resolve a path to a tagged property within a parsed tree. The target must
+/// be a `Property` (it carries the absolute value offset needed for patching).
+pub fn resolve<'a>(
+    properties: &'a [Property],
+    path: &[PathSeg],
+) -> Result<&'a Property, CoreError> {
+    let Some((first, rest)) = path.split_first() else {
+        return Err(CoreError::InvalidRequest("empty typed path".to_string()));
+    };
+    let PathSeg::Name(name) = first else {
+        return Err(CoreError::InvalidRequest(format!(
+            "path must start with a property name, got {first:?}"
+        )));
+    };
+    let property = properties
+        .iter()
+        .find(|p| &p.name == name)
+        .ok_or_else(|| CoreError::Parse(format!("property {name:?} not found")))?;
+    if rest.is_empty() {
+        return Ok(property);
+    }
+    resolve_in_value(&property.value, rest)
+}
+
+fn resolve_in_value<'a>(
+    value: &'a PropertyValue,
+    path: &[PathSeg],
+) -> Result<&'a Property, CoreError> {
+    let (seg, rest) = path.split_first().expect("path checked non-empty");
+    match (value, seg) {
+        (PropertyValue::Struct(StructValue::Properties(inner)), PathSeg::Name(_)) => {
+            resolve(inner, path)
+        }
+        (PropertyValue::Struct(StructValue::Instanced(Some(instanced))), PathSeg::Name(_)) => {
+            resolve(&instanced.properties, path)
+        }
+        (PropertyValue::Map { entries, .. }, PathSeg::MapKey(wanted)) => {
+            let entry = entries
+                .iter()
+                .find(|(k, _)| map_key_to_string(k).as_deref() == Some(wanted.as_str()))
+                .ok_or_else(|| CoreError::Parse(format!("map key {wanted:?} not found")))?;
+            if rest.is_empty() {
+                return Err(CoreError::InvalidRequest(
+                    "path may not end on a map entry; address a property inside it".to_string(),
+                ));
+            }
+            resolve_in_value(&entry.1, rest)
+        }
+        (PropertyValue::Array { elements }, PathSeg::Index(i))
+        | (PropertyValue::Set { elements, .. }, PathSeg::Index(i)) => {
+            let element = elements
+                .get(*i)
+                .ok_or_else(|| CoreError::Parse(format!("index {i} out of bounds")))?;
+            if rest.is_empty() {
+                return Err(CoreError::InvalidRequest(
+                    "path may not end on a container element; address a property inside it"
+                        .to_string(),
+                ));
+            }
+            resolve_in_value(element, rest)
+        }
+        (PropertyValue::ObjectInstances(instances), PathSeg::Index(i)) => {
+            let instance = instances
+                .get(*i)
+                .ok_or_else(|| CoreError::Parse(format!("object index {i} out of bounds")))?;
+            if rest.is_empty() {
+                return Err(CoreError::InvalidRequest(
+                    "path may not end on an object instance; address a property inside it"
+                        .to_string(),
+                ));
+            }
+            resolve(&instance.properties, rest)
+        }
+        (other, seg) => Err(CoreError::InvalidRequest(format!(
+            "segment {seg:?} cannot descend into {}",
+            value_kind(other)
+        ))),
+    }
+}
+
+fn value_kind(value: &PropertyValue) -> &'static str {
+    match value {
+        PropertyValue::Int(_) => "Int",
+        PropertyValue::UInt32(_) => "UInt32",
+        PropertyValue::Int64(_) => "Int64",
+        PropertyValue::Float(_) => "Float",
+        PropertyValue::Double(_) => "Double",
+        PropertyValue::Bool(_) => "Bool",
+        PropertyValue::Byte(_) => "Byte",
+        PropertyValue::Str(_) => "Str",
+        PropertyValue::Name(_) => "Name",
+        PropertyValue::Object(_) => "Object",
+        PropertyValue::Enum(_) => "Enum",
+        PropertyValue::SoftObject(_) => "SoftObject",
+        PropertyValue::Struct(StructValue::Properties(_)) => "Struct",
+        PropertyValue::Struct(StructValue::Instanced(_)) => "InstancedStruct",
+        PropertyValue::Struct(_) => "NativeStruct",
+        PropertyValue::Array { .. } => "Array",
+        PropertyValue::ObjectInstances(_) => "ObjectInstances",
+        PropertyValue::Set { .. } => "Set",
+        PropertyValue::Map { .. } => "Map",
+        PropertyValue::Opaque(_) => "Opaque",
+    }
+}
+
+/// Fixed-size scalar replacement value for in-place typed patching.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ScalarValue {
+    Int(i32),
+    UInt32(u32),
+    Int64(i64),
+    Float(f32),
+    Double(f64),
+    Bool(bool),
+}
+
+/// Patch a resolved property's value in place. Only fixed-size scalars are
+/// supported — the payload length never changes, so all recorded offsets in
+/// the parsed tree stay valid across consecutive patches.
+pub fn patch_scalar(
+    payload: &mut [u8],
+    property: &Property,
+    value: ScalarValue,
+) -> Result<(), CoreError> {
+    fn write(payload: &mut [u8], offset: usize, size: usize, bytes: &[u8]) -> Result<(), CoreError> {
+        if size != bytes.len() || offset + size > payload.len() {
+            return Err(CoreError::Parse(format!(
+                "patch target out of bounds: offset {offset}, size {size}"
+            )));
+        }
+        payload[offset..offset + size].copy_from_slice(bytes);
+        Ok(())
+    }
+    let mismatch = || {
+        CoreError::InvalidRequest(format!(
+            "value {value:?} does not match property type {}",
+            property.type_name
+        ))
+    };
+    match (property.type_name.as_str(), value) {
+        ("IntProperty", ScalarValue::Int(v)) => {
+            write(payload, property.value_offset, property.value_size, &v.to_le_bytes())
+        }
+        ("UInt32Property", ScalarValue::UInt32(v)) => {
+            write(payload, property.value_offset, property.value_size, &v.to_le_bytes())
+        }
+        ("Int64Property", ScalarValue::Int64(v)) => {
+            write(payload, property.value_offset, property.value_size, &v.to_le_bytes())
+        }
+        ("FloatProperty", ScalarValue::Float(v)) => {
+            write(payload, property.value_offset, property.value_size, &v.to_le_bytes())
+        }
+        ("DoubleProperty", ScalarValue::Double(v)) => {
+            write(payload, property.value_offset, property.value_size, &v.to_le_bytes())
+        }
+        ("BoolProperty", ScalarValue::Bool(v)) => {
+            // No payload; the value is tag_flags bit 0x10, one byte before the
+            // recorded value offset.
+            let flag_offset = property
+                .value_offset
+                .checked_sub(1)
+                .ok_or_else(|| CoreError::Parse("bool tag offset underflow".to_string()))?;
+            if flag_offset >= payload.len() {
+                return Err(CoreError::Parse("bool tag offset out of bounds".to_string()));
+            }
+            if v {
+                payload[flag_offset] |= TAG_FLAG_BOOL_TRUE;
+            } else {
+                payload[flag_offset] &= !TAG_FLAG_BOOL_TRUE;
+            }
+            Ok(())
+        }
+        _ => Err(mismatch()),
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct PropertyCounts {
     pub total: usize,
@@ -546,11 +766,12 @@ fn read_struct_value(
         "InstancedStruct" => {
             let actual_type = r.fstring()?;
             let data_size = r.u32()? as usize;
+            let body_base = r.abs_pos();
             let body = r.read(data_size)?;
             if data_size == 0 {
                 return Ok(StructValue::Instanced(None));
             }
-            let mut sub = Reader::new(body, 0);
+            let mut sub = Reader::new(body, body_base);
             let properties = read_property_list(&mut sub, depth + 1)?;
             if sub.remaining() != 0 {
                 return Err(CoreError::Parse(format!(
@@ -577,8 +798,9 @@ fn read_array_value(
     inner: &InnerDescriptor,
     depth: usize,
 ) -> Result<PropertyValue, CoreError> {
+    let body_base = r.abs_pos();
     let body = r.read(r.remaining())?;
-    let mut plain = Reader::new(body, 0);
+    let mut plain = Reader::new(body, body_base);
     let plain_result = (|| -> Result<Vec<PropertyValue>, CoreError> {
         let count = plain.u32()? as usize;
         let mut elements = Vec::with_capacity(count.min(1 << 16));
@@ -599,7 +821,7 @@ fn read_array_value(
             if inner.type_name != "ObjectProperty" {
                 return Err(plain_err);
             }
-            let mut inst = Reader::new(body, 0);
+            let mut inst = Reader::new(body, body_base);
             let count = inst.u32()? as usize;
             let mut instances = Vec::with_capacity(count.min(1 << 16));
             for _ in 0..count {
@@ -1019,5 +1241,147 @@ mod tests {
         assert_eq!(p.value_size, 4);
         let raw = &payload[p.value_offset..p.value_offset + 4];
         assert_eq!(i32::from_le_bytes(raw.try_into().unwrap()), 9);
+    }
+
+    /// Payload shaped like the real save: root → MapProperty<Str, InstancedStruct>
+    /// → property list with an int and a bool.
+    fn map_of_instanced_payload() -> Vec<u8> {
+        let nested = {
+            let mut n = int_property("m_ItemCount", 5);
+            n.extend_from_slice(&tag("bLooted", "BoolProperty"));
+            n.extend_from_slice(&header(0, 0)); // bool false
+            n.extend_from_slice(&fstring("None"));
+            n
+        };
+        let mut instanced = fstring("/Script/G1R.ChestData");
+        instanced.extend_from_slice(&(nested.len() as u32).to_le_bytes());
+        instanced.extend_from_slice(&nested);
+
+        let mut map_body = 0u32.to_le_bytes().to_vec(); // num_to_remove
+        map_body.extend_from_slice(&1u32.to_le_bytes()); // count
+        map_body.extend_from_slice(&fstring("ChestStates")); // key
+        map_body.extend_from_slice(&instanced); // value: InstancedStruct inline
+
+        let mut props = tag("m_GenericData", "MapProperty");
+        props.extend_from_slice(&2u32.to_le_bytes());
+        props.extend_from_slice(&fstring("StrProperty"));
+        props.extend_from_slice(&0u32.to_le_bytes()); // key_flags
+        props.extend_from_slice(&fstring("StructProperty"));
+        props.extend_from_slice(&1u32.to_le_bytes());
+        props.extend_from_slice(&fstring("InstancedStruct"));
+        props.extend_from_slice(&1u32.to_le_bytes());
+        props.extend_from_slice(&fstring("/Script/StructUtils"));
+        props.extend_from_slice(&header(map_body.len() as u32, TAG_FLAG_NATIVE_SERIALIZE));
+        props.extend_from_slice(&map_body);
+        root("/Script/Test.Save", &props)
+    }
+
+    #[test]
+    fn resolves_path_through_map_and_instanced_struct() {
+        let payload = map_of_instanced_payload();
+        let parsed = parse_private_root(&payload).unwrap();
+        let path = parse_path(&[
+            "m_GenericData".into(),
+            "{ChestStates}".into(),
+            "m_ItemCount".into(),
+        ])
+        .unwrap();
+        let target = resolve(&parsed.properties, &path).unwrap();
+        assert_eq!(target.value, PropertyValue::Int(5));
+    }
+
+    #[test]
+    fn patch_scalar_updates_int_in_place() {
+        let mut payload = map_of_instanced_payload();
+        let original_len = payload.len();
+        let parsed = parse_private_root(&payload).unwrap();
+        let path = parse_path(&[
+            "m_GenericData".into(),
+            "{ChestStates}".into(),
+            "m_ItemCount".into(),
+        ])
+        .unwrap();
+        let target = resolve(&parsed.properties, &path).unwrap().clone();
+        patch_scalar(&mut payload, &target, ScalarValue::Int(99)).unwrap();
+
+        assert_eq!(payload.len(), original_len);
+        let reparsed = parse_private_root(&payload).unwrap();
+        let after = resolve(&reparsed.properties, &path).unwrap();
+        assert_eq!(after.value, PropertyValue::Int(99));
+    }
+
+    #[test]
+    fn patch_scalar_flips_bool_via_tag_flags() {
+        let mut payload = map_of_instanced_payload();
+        let parsed = parse_private_root(&payload).unwrap();
+        let path = parse_path(&[
+            "m_GenericData".into(),
+            "{ChestStates}".into(),
+            "bLooted".into(),
+        ])
+        .unwrap();
+        let target = resolve(&parsed.properties, &path).unwrap().clone();
+        assert_eq!(target.value, PropertyValue::Bool(false));
+        patch_scalar(&mut payload, &target, ScalarValue::Bool(true)).unwrap();
+
+        let reparsed = parse_private_root(&payload).unwrap();
+        let after = resolve(&reparsed.properties, &path).unwrap();
+        assert_eq!(after.value, PropertyValue::Bool(true));
+    }
+
+    #[test]
+    fn patch_scalar_rejects_type_mismatch() {
+        let mut payload = map_of_instanced_payload();
+        let parsed = parse_private_root(&payload).unwrap();
+        let path = parse_path(&[
+            "m_GenericData".into(),
+            "{ChestStates}".into(),
+            "m_ItemCount".into(),
+        ])
+        .unwrap();
+        let target = resolve(&parsed.properties, &path).unwrap().clone();
+        assert!(patch_scalar(&mut payload, &target, ScalarValue::Float(1.0)).is_err());
+    }
+
+    #[test]
+    fn resolve_rejects_unknown_key_and_truncated_paths() {
+        let payload = map_of_instanced_payload();
+        let parsed = parse_private_root(&payload).unwrap();
+        let missing = parse_path(&["m_GenericData".into(), "{Nope}".into(), "x".into()]).unwrap();
+        assert!(resolve(&parsed.properties, &missing).is_err());
+        let dangling = parse_path(&["m_GenericData".into(), "{ChestStates}".into()]).unwrap();
+        assert!(resolve(&parsed.properties, &dangling).is_err());
+    }
+
+    #[test]
+    fn nested_offsets_are_absolute_through_instanced_struct() {
+        let nested = {
+            let mut n = int_property("m_ItemCount", 5);
+            n.extend_from_slice(&fstring("None"));
+            n
+        };
+        let mut body = fstring("/Script/G1R.ItemData");
+        body.extend_from_slice(&(nested.len() as u32).to_le_bytes());
+        body.extend_from_slice(&nested);
+
+        let mut props = tag("m_Profile", "StructProperty");
+        props.extend_from_slice(&1u32.to_le_bytes());
+        props.extend_from_slice(&fstring("InstancedStruct"));
+        props.extend_from_slice(&1u32.to_le_bytes());
+        props.extend_from_slice(&fstring("/Script/StructUtils"));
+        props.extend_from_slice(&header(body.len() as u32, TAG_FLAG_NATIVE_SERIALIZE));
+        props.extend_from_slice(&body);
+        let payload = root("/Script/Test.Save", &props);
+
+        let parsed = parse_private_root(&payload).unwrap();
+        let PropertyValue::Struct(StructValue::Instanced(Some(instanced))) =
+            &parsed.properties[0].value
+        else {
+            panic!("expected instanced struct");
+        };
+        let inner = &instanced.properties[0];
+        // The recorded offset must index the WHOLE payload, not the inner body.
+        let raw = &payload[inner.value_offset..inner.value_offset + inner.value_size];
+        assert_eq!(i32::from_le_bytes(raw.try_into().unwrap()), 5);
     }
 }

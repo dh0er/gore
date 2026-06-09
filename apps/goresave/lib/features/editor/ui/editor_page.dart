@@ -2438,16 +2438,36 @@ class _InventoryDiagnostics extends StatelessWidget {
                 child: ListView(
                   padding: const EdgeInsets.only(top: 12),
                   children: [
-                    const Text(
-            'Inventory candidates are discovered from decoded private '
-            'payload strings. Typed edits remain disabled until item '
-            'layout is verified.',
+                    Text(
+            inspection.privateTypedVerified
+                ? 'Save layout verified: the typed property parse covers '
+                      'every byte of the decoded payload. '
+                      'Typed edits are available.'
+                : inspection.privateTypedParseStatus == 'failed'
+                ? 'Inventory candidates are discovered from decoded private '
+                      'payload strings. Typed edits stay disabled: the typed '
+                      'parse failed for this save.'
+                : 'Inventory candidates are discovered from decoded private '
+                      'payload strings. Typed edits remain disabled until the '
+                      'save layout is verified.',
           ),
           const SizedBox(height: 12),
           Wrap(
             spacing: 8,
             runSpacing: 8,
             children: [
+              if (inspection.privateTypedParseStatus != null)
+                _SummaryMetric(
+                  label: 'Typed parse',
+                  value: inspection.privateTypedVerified
+                      ? 'Verified'
+                      : inspection.privateTypedParseStatus!,
+                ),
+              if (inspection.privateTypedPropertyCount != null)
+                _SummaryMetric(
+                  label: 'Typed properties',
+                  value: _bytes.format(inspection.privateTypedPropertyCount),
+                ),
               _SummaryMetric(
                 label: 'Candidates',
                 value: inventory.candidateCount.toString(),

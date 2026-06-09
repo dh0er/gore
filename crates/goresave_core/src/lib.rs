@@ -2100,6 +2100,10 @@ fn inspect_private_payload(
             let progression = summarize_private_progression_payload(&refs);
             let preview = decoded_chunk_count < stream.chunk_count;
             let typed_parse = summarize_typed_parse(&payload, preview);
+            let mut writable = vec!["private.replaceFString"];
+            if typed_parse["status"] == "ok" {
+                writable.push("private.typed.setValue");
+            }
             Ok(json!({
                 "status": if preview { "decoded_preview" } else { "decoded" },
                 "message": if preview {
@@ -2122,7 +2126,7 @@ fn inspect_private_payload(
                 "inventory": inventory,
                 "progression": progression,
                 "typedParse": typed_parse,
-                "writable": ["private.replaceFString"],
+                "writable": writable,
             }))
         }
         Err(err) => Ok(json!({
@@ -3167,6 +3171,9 @@ fn apply_private_edits(
             "private.inventory.setItemCount" => {
                 parse_private_inventory_item_count_edit(edit).map(PrivateEdit::InventoryItemCount)
             }
+            "private.typed.setValue" => {
+                parse_private_typed_set_value_edit(edit).map(PrivateEdit::TypedSetValue)
+            }
             other => Err(CoreError::UnsupportedEdit(format!(
                 "{other} is not writable in this build"
             ))),
@@ -3243,6 +3250,104 @@ enum PrivateEdit {
     PlayerAttribute(PrivatePlayerAttributeEdit),
     PlayerTransform(PrivatePlayerTransformEdit),
     InventoryItemCount(PrivateInventoryItemCountEdit),
+    TypedSetValue(PrivateTypedSetValueEdit),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct PrivateTypedSetValueEdit {
+    path: Vec<properties::PathSeg>,
+    value: Value,
+}
+
+fn parse_private_typed_set_value_edit(edit: &Edit) -> Result<PrivateTypedSetValueEdit, CoreError> {
+    let value = edit.value.as_object().ok_or_else(|| {
+        CoreError::InvalidRequest("private.typed.setValue value must be an object".to_string())
+    })?;
+    let segments = value
+        .get("path")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            CoreError::InvalidRequest(
+                "private.typed.setValue requires value.path as an array of segments".to_string(),
+            )
+        })?
+        .iter()
+        .map(|segment| {
+            segment.as_str().map(str::to_string).ok_or_else(|| {
+                CoreError::InvalidRequest(
+                    "private.typed.setValue path segments must be strings".to_string(),
+                )
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if segments.is_empty() {
+        return Err(CoreError::InvalidRequest(
+            "private.typed.setValue requires a non-empty value.path".to_string(),
+        ));
+    }
+    let new_value = value.get("value").cloned().ok_or_else(|| {
+        CoreError::InvalidRequest("private.typed.setValue requires value.value".to_string())
+    })?;
+    Ok(PrivateTypedSetValueEdit {
+        path: properties::parse_path(&segments)?,
+        value: new_value,
+    })
+}
+
+fn coerce_typed_scalar(
+    property: &properties::Property,
+    value: &Value,
+) -> Result<properties::ScalarValue, CoreError> {
+    use properties::ScalarValue;
+    let type_name = property.type_name.as_str();
+    let err = |expected: &str| {
+        CoreError::InvalidRequest(format!(
+            "private.typed.setValue: property is {type_name}, value must be {expected}"
+        ))
+    };
+    match type_name {
+        "IntProperty" => value
+            .as_i64()
+            .and_then(|v| i32::try_from(v).ok())
+            .map(ScalarValue::Int)
+            .ok_or_else(|| err("an i32 integer")),
+        "UInt32Property" => value
+            .as_u64()
+            .and_then(|v| u32::try_from(v).ok())
+            .map(ScalarValue::UInt32)
+            .ok_or_else(|| err("a u32 integer")),
+        "Int64Property" => value
+            .as_i64()
+            .map(ScalarValue::Int64)
+            .ok_or_else(|| err("an i64 integer")),
+        "FloatProperty" => value
+            .as_f64()
+            .filter(|v| v.is_finite() && (*v as f32).is_finite())
+            .map(|v| ScalarValue::Float(v as f32))
+            .ok_or_else(|| err("a finite number")),
+        "DoubleProperty" => value
+            .as_f64()
+            .filter(|v| v.is_finite())
+            .map(ScalarValue::Double)
+            .ok_or_else(|| err("a finite number")),
+        "BoolProperty" => value
+            .as_bool()
+            .map(ScalarValue::Bool)
+            .ok_or_else(|| err("a boolean")),
+        other => Err(CoreError::UnsupportedEdit(format!(
+            "private.typed.setValue does not support {other} targets (fixed-size scalars only)"
+        ))),
+    }
+}
+
+fn apply_private_typed_set_value_edit_to_payload(
+    payload: &mut Vec<u8>,
+    edit: &PrivateTypedSetValueEdit,
+) -> Result<(), CoreError> {
+    let root = properties::parse_private_root(payload)?;
+    let target = properties::resolve(&root.properties, &edit.path)?.clone();
+    let scalar = coerce_typed_scalar(&target, &edit.value)?;
+    properties::patch_scalar(payload, &target, scalar)
 }
 
 fn parse_private_fstring_edit(edit: &Edit) -> Result<PrivateFStringEdit, CoreError> {
@@ -3591,6 +3696,9 @@ fn apply_private_edit_to_payload(
         }
         PrivateEdit::InventoryItemCount(edit) => {
             apply_private_inventory_item_count_edit_to_payload(payload, edit)
+        }
+        PrivateEdit::TypedSetValue(edit) => {
+            apply_private_typed_set_value_edit_to_payload(payload, edit)
         }
     }
 }
@@ -6047,6 +6155,95 @@ mod tests {
                 }
             ])
         );
+    }
+
+    #[test]
+    fn write_save_applies_typed_set_value_edit() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-001.sav");
+        let output_path = dir.path().join("G1R-001-typed.sav");
+        // Valid typed root: class + flag + {m_SaveVersionNumber:17, m_MaxQuick:3} + None + footer
+        let private_payload = {
+            let mut p = fstring("/Script/Angelscript.GothicFinalDataGame");
+            p.push(0);
+            p.extend_from_slice(&int_property("m_SaveVersionNumber", 17));
+            p.extend_from_slice(&int_property("m_MaxQuick", 3));
+            p.extend_from_slice(&fstring("None"));
+            p.extend_from_slice(&0u32.to_le_bytes());
+            p
+        };
+        let seed_compressed = b"seed-compressed".to_vec();
+        let stream = compressed_stream_with_one_chunk(&seed_compressed, private_payload.len());
+        fs::write(
+            &path,
+            build_gsav(2, &public_payload("Slot A"), &stream, &[0, 0, 0, 0]),
+        )
+        .unwrap();
+        let backend = PrefixCodecBackend {
+            seed_compressed,
+            seed_uncompressed: private_payload,
+        };
+
+        // typed parse must gate the writable entry
+        let inspected = inspect_save_with_codec_backend(&path, true, Some(&backend), None).unwrap();
+        assert_eq!(inspected["private"]["typedParse"]["status"], "ok");
+        assert!(
+            inspected["private"]["writable"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("private.typed.setValue"))
+        );
+
+        let response = write_save_with_codec_backend(
+            &path,
+            &[json!({
+                "path": "private.typed.setValue",
+                "value": { "path": ["m_MaxQuick"], "value": 9 }
+            })],
+            false,
+            Some(&output_path),
+            Some(&backend),
+        )
+        .unwrap();
+        assert_eq!(response["editsApplied"], 1);
+
+        let value =
+            inspect_save_with_codec_backend(&output_path, true, Some(&backend), None).unwrap();
+        assert_eq!(value["private"]["typedParse"]["status"], "ok");
+        // patched payload re-parses and carries the new value
+        let strings = value["private"]["strings"].as_array().unwrap();
+        assert!(strings.iter().any(|s| s == "m_MaxQuick"));
+    }
+
+    #[test]
+    fn typed_set_value_rejects_wrong_type_and_unknown_path() {
+        let mut payload = fstring("/Script/Test.Save");
+        payload.push(0);
+        payload.extend_from_slice(&int_property("m_X", 1));
+        payload.extend_from_slice(&fstring("None"));
+        payload.extend_from_slice(&0u32.to_le_bytes());
+
+        let mut copy = payload.clone();
+        let bad_type = PrivateTypedSetValueEdit {
+            path: properties::parse_path(&["m_X".to_string()]).unwrap(),
+            value: json!(true),
+        };
+        assert!(apply_private_typed_set_value_edit_to_payload(&mut copy, &bad_type).is_err());
+
+        let unknown = PrivateTypedSetValueEdit {
+            path: properties::parse_path(&["m_Y".to_string()]).unwrap(),
+            value: json!(2),
+        };
+        assert!(apply_private_typed_set_value_edit_to_payload(&mut copy, &unknown).is_err());
+        assert_eq!(copy, payload, "failed edits must not mutate the payload");
+
+        let ok = PrivateTypedSetValueEdit {
+            path: properties::parse_path(&["m_X".to_string()]).unwrap(),
+            value: json!(42),
+        };
+        apply_private_typed_set_value_edit_to_payload(&mut copy, &ok).unwrap();
+        let root = properties::parse_private_root(&copy).unwrap();
+        assert_eq!(root.properties[0].value, properties::PropertyValue::Int(42));
     }
 
     #[test]

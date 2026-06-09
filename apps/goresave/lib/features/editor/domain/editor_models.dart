@@ -200,6 +200,9 @@ class SaveInspection {
     this.privatePlayer = const PrivatePlayerSummary(),
     this.privateInventory = const PrivateInventorySummary(),
     this.privateProgression = const PrivateProgressionSummary(),
+    this.privateTypedParseStatus,
+    this.privateTypedPropertyCount,
+    this.privateTypedMaxDepth,
   });
 
   factory SaveInspection.fromJson(Map<String, Object?> json) {
@@ -213,6 +216,7 @@ class SaveInspection {
     final privateProgression = (private?['progression'] as Map?)
         ?.cast<String, Object?>();
     final privateStatus = private?['status'] as String?;
+    final typedParse = (private?['typedParse'] as Map?)?.cast<String, Object?>();
     return SaveInspection(
       format: json['format'] as String? ?? 'UNKNOWN',
       path: json['path'] as String?,
@@ -256,6 +260,10 @@ class SaveInspection {
       privateProgression: PrivateProgressionSummary.fromJson(
         privateProgression,
       ),
+      privateTypedParseStatus: typedParse?['status'] as String?,
+      privateTypedPropertyCount: (typedParse?['propertyCount'] as num?)
+          ?.toInt(),
+      privateTypedMaxDepth: (typedParse?['maxDepth'] as num?)?.toInt(),
       raw: json,
     );
   }
@@ -296,6 +304,17 @@ class SaveInspection {
   final PrivatePlayerSummary privatePlayer;
   final PrivateInventorySummary privateInventory;
   final PrivateProgressionSummary privateProgression;
+
+  /// Status of the strict typed property parse of the decoded private payload
+  /// ('ok', 'failed', 'skipped_preview'); null when no private decode ran.
+  final String? privateTypedParseStatus;
+  final int? privateTypedPropertyCount;
+  final int? privateTypedMaxDepth;
+
+  /// The byte-exact typed parse succeeded — the save's full property layout is
+  /// verified and typed (layout-aware) edits are safe.
+  bool get privateTypedVerified => privateTypedParseStatus == 'ok';
+
   final Map<String, Object?> raw;
 
   String prettyJson() {
