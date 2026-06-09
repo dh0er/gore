@@ -270,7 +270,7 @@ class _SaveSlotCard extends StatelessWidget {
                         Expanded(
                           child: Text(
                             save.displayName,
-                            maxLines: 2,
+                            maxLines: 3,
                             overflow: TextOverflow.ellipsis,
                             style: Theme.of(context).textTheme.titleSmall,
                           ),
@@ -645,7 +645,7 @@ class _HeaderCard extends StatelessWidget {
         child: LayoutBuilder(
           builder: (context, constraints) {
             final compact = constraints.maxWidth < 560;
-            final previewWidth = compact ? 132.0 : 240.0;
+            final previewWidth = compact ? 170.0 : 320.0;
             final previewHeight = previewWidth * 9 / 16;
             return Row(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -901,7 +901,7 @@ class _MetricGrid extends StatelessWidget {
       children: metrics.entries
           .map(
             (entry) => Padding(
-              padding: const EdgeInsets.symmetric(vertical: 4),
+              padding: const EdgeInsets.symmetric(vertical: 3),
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
