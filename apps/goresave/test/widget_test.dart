@@ -198,12 +198,31 @@ void main() {
     expect(find.text('ItFo_Cheese'), findsOneWidget);
     expect(find.text('42'), findsAtLeastNWidgets(1));
 
-    await tester.enterText(
-      find.widgetWithText(TextField, 'Count for ItMi_Orenugget'),
-      '44',
+    final oreCountField = find.descendant(
+      of: find.ancestor(
+        of: find.text('ItMi_Orenugget'),
+        matching: find.byType(ListTile),
+      ),
+      matching: find.widgetWithText(TextField, 'Count'),
     );
+    await tester.enterText(oreCountField, '44');
+    await tester.pump();
+    final oreEditable = tester.widget<EditableText>(
+      find.descendant(of: oreCountField, matching: find.byType(EditableText)),
+    );
+    expect(
+      oreEditable.controller.selection,
+      const TextSelection.collapsed(offset: 2),
+    );
+
     await tester.enterText(
-      find.widgetWithText(TextField, 'Count for ItFo_Cheese'),
+      find.descendant(
+        of: find.ancestor(
+          of: find.text('ItFo_Cheese'),
+          matching: find.byType(ListTile),
+        ),
+        matching: find.widgetWithText(TextField, 'Count'),
+      ),
       '7',
     );
     await tester.pumpAndSettle();
@@ -244,7 +263,13 @@ void main() {
     expect(find.text('ItMi_Orenugget'), findsNothing);
 
     await tester.enterText(
-      find.widgetWithText(TextField, 'Count for ItFo_Cheese'),
+      find.descendant(
+        of: find.ancestor(
+          of: find.text('ItFo_Cheese'),
+          matching: find.byType(ListTile),
+        ),
+        matching: find.widgetWithText(TextField, 'Count'),
+      ),
       '7',
     );
     await tester.scrollUntilVisible(

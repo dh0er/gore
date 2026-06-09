@@ -1127,10 +1127,20 @@ class _InventoryItemCountEditorState extends State<_InventoryItemCountEditor> {
     if (_path == widget.item.path && _pendingCount == widget.pendingCount) {
       return;
     }
+    final isSameItem = _path == widget.item.path;
     _path = widget.item.path;
     _pendingCount = widget.pendingCount;
-    _controller.text =
-        (widget.pendingCount ?? widget.item.count)?.toString() ?? '';
+    final text = (widget.pendingCount ?? widget.item.count)?.toString() ?? '';
+    if (_controller.text != text) {
+      final currentOffset = _controller.selection.baseOffset;
+      final nextOffset = isSameItem
+          ? currentOffset.clamp(0, text.length)
+          : text.length;
+      _controller.value = TextEditingValue(
+        text: text,
+        selection: TextSelection.collapsed(offset: nextOffset),
+      );
+    }
     _error = null;
   }
 
@@ -1147,7 +1157,7 @@ class _InventoryItemCountEditorState extends State<_InventoryItemCountEditor> {
               keyboardType: TextInputType.number,
               onChanged: _onCountTextChanged,
               decoration: InputDecoration(
-                labelText: 'Count for $id',
+                labelText: 'Count',
                 errorText: _error,
               ),
             ),
