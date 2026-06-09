@@ -258,12 +258,10 @@ class _SaveSlotCard extends StatelessWidget {
                       children: [
                         Padding(
                           padding: const EdgeInsets.only(top: 2),
-                          child: Icon(
-                            save.format == 'GSAV'
-                                ? Icons.save_alt_outlined
-                                : Icons.description_outlined,
-                            size: 17,
-                            color: selected ? const Color(0xFF0F766E) : null,
+                          child: _SaveKindIcon(
+                            quickSave: save.quickSave,
+                            autoSave: save.autoSave,
+                            selected: selected,
                           ),
                         ),
                         const SizedBox(width: 6),
@@ -285,12 +283,6 @@ class _SaveSlotCard extends StatelessWidget {
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
                         color: const Color(0xFF64748B),
                       ),
-                    ),
-                    const SizedBox(height: 6),
-                    _SaveKindIcon(
-                      quickSave: save.quickSave,
-                      autoSave: save.autoSave,
-                      selected: selected,
                     ),
                   ],
                 ),
@@ -338,19 +330,18 @@ class _SaveKindIcon extends StatelessWidget {
 }
 
 String _saveSlotSubtitle(SaveSlot save) {
-  final parts = <String>[save.slot, save.format];
+  final parts = <String>[];
   if (save.chapterId != null) {
     parts.add('Chapter ${save.chapterId}');
-  }
-  final mapName = save.mapName;
-  if (mapName != null && mapName.isNotEmpty) {
-    parts.add(mapName);
   }
   final timePlayed = _formatDurationSeconds(save.timePlayedSeconds);
   if (timePlayed != '-') {
     parts.add(timePlayed);
   }
-  parts.add('${_bytes.format(save.fileSize)} bytes');
+  final mapName = save.mapName;
+  if (mapName != null && mapName.isNotEmpty) {
+    parts.add(mapName);
+  }
   return parts.join(' | ');
 }
 
