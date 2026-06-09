@@ -1290,6 +1290,16 @@ fn restore_backup(path: &Path, backup_path: &Path) -> Result<Value, CoreError> {
     let original = fs::read(path)?;
     inspect_bytes(&original, Some(path), false)?;
 
+    // inspect_bytes accepts both GSAV and GVAS containers, so require the backup
+    // to share the slot's container format. Otherwise a misnamed GVAS sidecar
+    // backup could pass validation and replace the GSAV slot with an unusable
+    // file.
+    if save_container_magic(&backup_data) != save_container_magic(&original) {
+        return Err(CoreError::Validation(
+            "backup container format does not match the selected save".to_string(),
+        ));
+    }
+
     // Discover and validate the paired companion rollback *before* mutating the
     // slot file, so a companion failure aborts the whole restore instead of
     // leaving the slot restored while PersistentDataList.sav stays out of sync.
@@ -1424,6 +1434,12 @@ fn prepare_paired_persistent_data_list_restore(
         companion_backup_path,
         companion_data,
     }))
+}
+
+/// Leading container magic ("GSAV" / "GVAS") used to ensure a backup matches
+/// the slot's format before a restore replaces it.
+fn save_container_magic(data: &[u8]) -> &[u8] {
+    &data[..data.len().min(4)]
 }
 
 fn ensure_backup_belongs_to_save(path: &Path, backup_path: &Path) -> Result<(), CoreError> {
@@ -5444,6 +5460,24 @@ mod tests {
             persistent_second.to_string_lossy()
         );
         assert_eq!(fs::read(&persistent).unwrap(), b"GVAS-second");
+    }
+
+    #[test]
+    fn restore_backup_rejects_mismatched_container_format() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-001.sav");
+        let backup = dir.path().join("G1R-001.sav.bak.200");
+        fs::write(&path, minimal_gsav("Live")).unwrap();
+        // A GVAS sidecar misnamed as a slot backup must not replace the GSAV slot.
+        fs::write(&backup, persistent_data_list(&[("G1R-001", "X", 1, "M", 1.0, false, false)]))
+            .unwrap();
+
+        let result = restore_backup(&path, &backup);
+        assert!(result.is_err());
+        assert_eq!(
+            inspect_save(&path, false).unwrap()["public"]["playerSaveName"],
+            "Live"
+        );
     }
 
     #[test]
