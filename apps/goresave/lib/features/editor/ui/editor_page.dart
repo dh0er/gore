@@ -943,6 +943,7 @@ class _PrivatePanel extends StatelessWidget {
               player: inspection.privatePlayer,
               notifier: notifier,
               savePath: inspection.path,
+              editable: inspection.privateEditable,
             ),
             const SizedBox(height: 16),
           ],
@@ -1513,11 +1514,13 @@ class _PrivatePlayerSummaryCard extends StatelessWidget {
     required this.player,
     required this.notifier,
     this.savePath,
+    this.editable = true,
   });
 
   final PrivatePlayerSummary player;
   final EditorNotifier notifier;
   final String? savePath;
+  final bool editable;
 
   @override
   Widget build(BuildContext context) {
@@ -1565,7 +1568,8 @@ class _PrivatePlayerSummaryCard extends StatelessWidget {
                 ),
               ],
             ),
-            if (player.writable.contains('private.player.setPlayerName') &&
+            if (editable &&
+                player.writable.contains('private.player.setPlayerName') &&
                 player.playerName != null) ...[
               const SizedBox(height: 14),
               _PrivatePlayerNameEditor(
@@ -1578,7 +1582,8 @@ class _PrivatePlayerSummaryCard extends StatelessWidget {
                 notifier: notifier,
               ),
             ],
-            if (player.writable.contains('private.profile.setProfileName') &&
+            if (editable &&
+                player.writable.contains('private.profile.setProfileName') &&
                 player.profileName != null) ...[
               const SizedBox(height: 14),
               _PrivateProfileNameEditor(
@@ -1594,6 +1599,7 @@ class _PrivatePlayerSummaryCard extends StatelessWidget {
               _PrivatePlayerAttributesEditor(
                 player: player,
                 notifier: notifier,
+                editable: editable,
               ),
             ],
             if (player.transform != null) ...[
@@ -1602,9 +1608,9 @@ class _PrivatePlayerSummaryCard extends StatelessWidget {
               const SizedBox(height: 12),
               _PrivatePlayerTransformEditor(
                 transform: player.transform!,
-                editable: player.writable.contains(
-                  'private.player.setTransform',
-                ),
+                editable:
+                    editable &&
+                    player.writable.contains('private.player.setTransform'),
                 notifier: notifier,
               ),
             ],
@@ -2047,14 +2053,18 @@ class _PrivatePlayerAttributesEditor extends StatelessWidget {
   const _PrivatePlayerAttributesEditor({
     required this.player,
     required this.notifier,
+    this.editable = true,
   });
 
   final PrivatePlayerSummary player;
   final EditorNotifier notifier;
+  final bool editable;
 
   @override
   Widget build(BuildContext context) {
-    final editable = player.writable.contains('private.player.setAttribute');
+    final editable =
+        this.editable &&
+        player.writable.contains('private.player.setAttribute');
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
