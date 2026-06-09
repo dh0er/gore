@@ -1738,6 +1738,17 @@ fn parse_compressed_stream(data: &[u8], offset: usize) -> Result<CompressedStrea
     } else {
         summary_uncompressed_size.div_ceil(max_chunk_size) as usize
     };
+    // Each chunk-table entry is two u64s (16 bytes). A corrupt header with a
+    // huge summary size and small max chunk size yields an enormous chunk_count;
+    // reject any count that cannot fit in the remaining bytes before allocating,
+    // so one malformed save can't OOM/panic across the FFI boundary.
+    let remaining = data.len().saturating_sub(r.abs_pos());
+    let max_possible_chunks = remaining / 16;
+    if chunk_count > max_possible_chunks {
+        return Err(CoreError::Parse(format!(
+            "compressed chunk table declares {chunk_count} chunks but only {max_possible_chunks} fit in the remaining {remaining} bytes"
+        )));
+    }
     let mut chunks = Vec::with_capacity(chunk_count);
     for index in 0..chunk_count {
         let compressed_size = r.u64()?;
@@ -5338,6 +5349,25 @@ mod tests {
         // A safety backup of the pre-restore PersistentDataList was created.
         let safety = PathBuf::from(value["data"]["persistentBackupPath"].as_str().unwrap());
         assert_eq!(fs::read(&safety).unwrap(), b"GVAS-new-name");
+    }
+
+    #[test]
+    fn parse_compressed_stream_rejects_chunk_count_beyond_file() {
+        // Corrupt header: huge summary size + max chunk size 1 => ~4B chunks,
+        // but no chunk table follows. Must return a parse error instead of
+        // attempting a multi-gigabyte allocation.
+        let huge = u32::MAX as u64;
+        let mut data = Vec::new();
+        data.extend_from_slice(&huge.to_le_bytes()); // uncompressed_size_prefix
+        data.extend_from_slice(&fstring("Oodle")); // method
+        data.extend_from_slice(&PACKAGE_FILE_TAG.to_le_bytes()); // tag
+        data.extend_from_slice(&0u32.to_le_bytes()); // header_version 0
+        data.extend_from_slice(&1u32.to_le_bytes()); // max_chunk_size
+        data.extend_from_slice(&0u32.to_le_bytes()); // summary_compressed_size
+        data.extend_from_slice(&(u32::MAX).to_le_bytes()); // summary_uncompressed_size
+
+        let err = parse_compressed_stream(&data, 0).unwrap_err();
+        assert!(matches!(err, CoreError::Parse(_)));
     }
 
     #[test]

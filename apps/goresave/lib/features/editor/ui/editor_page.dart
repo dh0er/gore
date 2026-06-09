@@ -1557,8 +1557,10 @@ class _InventoryItemCountEditorState extends State<_InventoryItemCountEditor> {
 }
 
 String _inventoryItemKey(PrivateInventoryItem item) {
-  if (item.path.isNotEmpty) return item.path;
-  return item.id;
+  // Combine id and path so rows that share a definition path
+  // but differ by id — repeated item types — get distinct pending-change
+  // entries instead of collapsing onto one key.
+  return '${item.id} ${item.path}';
 }
 
 String _inventoryScopeLabel(String scope) {
