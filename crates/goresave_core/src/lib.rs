@@ -652,11 +652,22 @@ fn decode_private_payload_best_effort(
 }
 
 fn stored_private_payload(data: &[u8], stream: &CompressedStream) -> Option<Vec<u8>> {
-    let mut out = Vec::with_capacity(stream.summary_uncompressed_size as usize);
+    // Only valid when every chunk is stored uncompressed. Accumulate the real
+    // stored length from the chunk table and bound it by the file size before
+    // reserving, so a corrupt header declaring a huge summary_uncompressed_size
+    // can't force a multi-gigabyte allocation here.
+    let mut total: usize = 0;
     for chunk in &stream.chunks {
         if chunk.compressed_size != chunk.uncompressed_size {
             return None;
         }
+        total = total.checked_add(chunk.compressed_size as usize)?;
+    }
+    if total > data.len() {
+        return None;
+    }
+    let mut out = Vec::with_capacity(total);
+    for chunk in &stream.chunks {
         let start = chunk.compressed_offset;
         let end = start.checked_add(chunk.compressed_size as usize)?;
         out.extend_from_slice(data.get(start..end)?);

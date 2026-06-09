@@ -140,6 +140,23 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// without touching it, so the most recent op always clears `isLoading`.
   int _loadSeq = 0;
 
+  /// Number of in-flight loads (inspect / backup refresh). The overlay shows
+  /// while this is > 0; it is cleared only when the last load finishes, so an
+  /// older load completing after a newer one can neither clear the spinner
+  /// early nor turn it back on.
+  int _activeLoads = 0;
+
+  void _loadStarted() {
+    _activeLoads++;
+  }
+
+  void _loadFinished() {
+    if (_activeLoads > 0) _activeLoads--;
+    if (_activeLoads == 0) {
+      state = state.copyWith(isLoading: false);
+    }
+  }
+
   /// Serializes all core calls. The native layer runs each command in its own
   /// isolate with no serialization, so overlapping write_save/restore_backup
   /// requests on the same file could interleave temp files and renames. Chaining
@@ -280,6 +297,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
     // Switching slots: drop the previous slot's inspection/backups so the panes
     // don't keep showing stale data while the new load runs.
     final switchingSlot = state.selectedPath != path;
+    _loadStarted();
     state = state.copyWith(
       selectedPath: path,
       isLoading: true,
@@ -288,56 +306,56 @@ class EditorNotifier extends StateNotifier<EditorState> {
       clearInspection: switchingSlot,
       clearBackups: switchingSlot,
     );
-    final payload = <String, Object?>{
-      'path': path,
-      'includePrivate': true,
-      ..._codecPayload(),
-    };
-    final response = await _execute('inspect_save', payload: payload);
-    // Bail only if a newer load superseded us AND the selection moved to a
-    // different slot. A same-path re-inspect (e.g. checkCodec re-running after
-    // selection) is idempotent and may still apply/clear loading.
-    if (seq != _loadSeq && state.selectedPath != path) return;
-    if (response['ok'] != true) {
+    try {
+      final payload = <String, Object?>{
+        'path': path,
+        'includePrivate': true,
+        ..._codecPayload(),
+      };
+      final response = await _execute('inspect_save', payload: payload);
+      // Only the latest load applies results. Core calls are serialized, so a
+      // superseded load always finishes before the newer one; bailing here
+      // prevents it from applying stale data over the fresher load.
+      if (seq != _loadSeq) return;
+      if (response['ok'] != true) {
+        state = state.copyWith(
+          error: _errorMessage(response),
+          clearInspection: true,
+          clearBackups: true,
+        );
+        return;
+      }
+      final data = (response['data'] as Map).cast<String, Object?>();
+      // Apply the parsed inspection immediately so a later list_backups failure
+      // does not drop the save metadata/private views that already loaded.
+      state = state.copyWith(inspection: SaveInspection.fromJson(data));
+      final backupSnapshot = await _loadBackups(path, seq);
+      if (backupSnapshot == null) return;
       state = state.copyWith(
-        isLoading: false,
-        error: _errorMessage(response),
-        clearInspection: true,
-        clearBackups: true,
+        backups: backupSnapshot.backups,
+        companionBackups: backupSnapshot.companionBackups,
       );
-      return;
+    } finally {
+      _loadFinished();
     }
-    final data = (response['data'] as Map).cast<String, Object?>();
-    // Apply the parsed inspection immediately so a later list_backups failure
-    // does not drop the save metadata/private views that already loaded.
-    state = state.copyWith(inspection: SaveInspection.fromJson(data));
-    final backupSnapshot = await _loadBackups(path, seq);
-    // null = superseded (newer load owns state) or a backup-list error that
-    // _loadBackups already surfaced; either way keep the inspection just applied.
-    if (backupSnapshot == null) return;
-    state = state.copyWith(
-      // Keep loading if a newer load is still running for this slot; only the
-      // latest load clears the overlay.
-      isLoading: seq != _loadSeq,
-      backups: backupSnapshot.backups,
-      companionBackups: backupSnapshot.companionBackups,
-    );
   }
 
   Future<void> refreshBackups() async {
     final path = state.selectedPath;
     if (path == null) return;
     final seq = ++_loadSeq;
+    _loadStarted();
     state = state.copyWith(isLoading: true, clearError: true);
-    final backupSnapshot = await _loadBackups(path, seq);
-    if (backupSnapshot == null) return;
-    state = state.copyWith(
-      // Don't clear loading while a newer load (e.g. an in-flight inspect for
-      // the same slot) is still running.
-      isLoading: seq != _loadSeq,
-      backups: backupSnapshot.backups,
-      companionBackups: backupSnapshot.companionBackups,
-    );
+    try {
+      final backupSnapshot = await _loadBackups(path, seq);
+      if (backupSnapshot == null) return;
+      state = state.copyWith(
+        backups: backupSnapshot.backups,
+        companionBackups: backupSnapshot.companionBackups,
+      );
+    } finally {
+      _loadFinished();
+    }
   }
 
   Future<void> restoreBackup(String backupPath) async {
@@ -381,7 +399,10 @@ class EditorNotifier extends StateNotifier<EditorState> {
     final data = (response['data'] as Map).cast<String, Object?>();
     final status = CodecStatus.fromJson(data);
     state = state.copyWith(codecStatus: status, clearCodecError: true);
-    if (status.available && state.selectedPath != null) {
+    // Re-decode the selected save now the codec is available — but only if no
+    // load is already running. An in-flight inspect is already the latest load
+    // and will populate; spawning another here would just race it.
+    if (status.available && state.selectedPath != null && _activeLoads == 0) {
       await inspect(state.selectedPath!);
     }
   }
@@ -700,12 +721,12 @@ class EditorNotifier extends StateNotifier<EditorState> {
       'list_backups',
       payload: {'path': path},
     );
-    // A newer load for a different slot superseded this one; let it own
-    // loading/error state instead of clobbering it. A same-path supersede is
-    // idempotent, so still apply.
-    if (seq != _loadSeq && state.selectedPath != path) return null;
+    // Only the latest load applies; a superseded load must not replace the
+    // fresher list with its outdated result.
+    if (seq != _loadSeq) return null;
     if (response['ok'] != true) {
-      state = state.copyWith(isLoading: false, error: _errorMessage(response));
+      // Leave isLoading to the caller's load-counter bookkeeping.
+      state = state.copyWith(error: _errorMessage(response));
       return null;
     }
     final data = (response['data'] as Map?)?.cast<String, Object?>();
