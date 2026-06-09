@@ -967,14 +967,76 @@ class _PrivatePanel extends StatelessWidget {
   }
 }
 
-class _InventoryPanel extends StatelessWidget {
+class _CollapsibleCardHeader extends StatelessWidget {
+  const _CollapsibleCardHeader({
+    required this.icon,
+    required this.title,
+    required this.expanded,
+    this.subtitle,
+    this.onToggle,
+  });
+
+  final IconData icon;
+  final String title;
+  final String? subtitle;
+  final bool expanded;
+  final VoidCallback? onToggle;
+
+  @override
+  Widget build(BuildContext context) {
+    final header = Row(
+      children: [
+        Icon(icon),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(title, style: Theme.of(context).textTheme.titleMedium),
+              if (subtitle != null)
+                Text(subtitle!, style: Theme.of(context).textTheme.bodySmall),
+            ],
+          ),
+        ),
+        Icon(expanded ? Icons.expand_less : Icons.expand_more),
+      ],
+    );
+    if (onToggle == null) return header;
+    return InkWell(
+      onTap: onToggle,
+      borderRadius: BorderRadius.circular(8),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: header,
+      ),
+    );
+  }
+}
+
+enum _InventorySection { items, diagnostics }
+
+class _InventoryPanel extends StatefulWidget {
   const _InventoryPanel({required this.inspection, required this.notifier});
 
   final SaveInspection inspection;
   final EditorNotifier notifier;
 
   @override
+  State<_InventoryPanel> createState() => _InventoryPanelState();
+}
+
+class _InventoryPanelState extends State<_InventoryPanel> {
+  // Accordion: at most one section open at a time; the open one fills height.
+  _InventorySection? _open = _InventorySection.items;
+
+  void _toggle(_InventorySection section) {
+    setState(() => _open = _open == section ? null : section);
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final inspection = widget.inspection;
     if (!inspection.privateDecoded) {
       return const _MessagePane(
         icon: Icons.inventory_2_outlined,
@@ -983,23 +1045,45 @@ class _InventoryPanel extends StatelessWidget {
             'Inventory editing needs decoded private payload data from the G1R codec host.',
       );
     }
-    return ListView(
+    final hasItems = inspection.privateInventory.hasData;
+    final itemsOpen = hasItems && _open == _InventorySection.items;
+    final diagnosticsOpen = _open == _InventorySection.diagnostics;
+    return Padding(
       padding: const EdgeInsets.all(20),
-      children: [
-        if (inspection.privateInventory.hasData) ...[
-          _PrivateInventorySummaryCard(
-            inventory: inspection.privateInventory,
-            notifier: notifier,
-            editable: inspection.privateEditable,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (hasItems) ...[
+            _expandable(
+              open: itemsOpen,
+              child: _PrivateInventorySummaryCard(
+                inventory: inspection.privateInventory,
+                notifier: widget.notifier,
+                editable: inspection.privateEditable,
+                expanded: itemsOpen,
+                onToggle: () => _toggle(_InventorySection.items),
+              ),
+            ),
+            const SizedBox(height: 16),
+          ],
+          _expandable(
+            open: diagnosticsOpen,
+            child: _InventoryDiagnostics(
+              inventory: inspection.privateInventory,
+              inspection: inspection,
+              expanded: diagnosticsOpen,
+              onToggle: () => _toggle(_InventorySection.diagnostics),
+            ),
           ),
-          const SizedBox(height: 16),
         ],
-        _InventoryDiagnostics(
-          inventory: inspection.privateInventory,
-          inspection: inspection,
-        ),
-      ],
+      ),
     );
+  }
+
+  // The open section fills the remaining vertical space; collapsed sections
+  // size to their header only.
+  Widget _expandable({required bool open, required Widget child}) {
+    return open ? Expanded(child: child) : child;
   }
 }
 
@@ -1203,11 +1287,15 @@ class _PrivateInventorySummaryCard extends StatefulWidget {
     required this.inventory,
     required this.notifier,
     this.editable = true,
+    this.expanded = true,
+    this.onToggle,
   });
 
   final PrivateInventorySummary inventory;
   final EditorNotifier notifier;
   final bool editable;
+  final bool expanded;
+  final VoidCallback? onToggle;
 
   @override
   State<_PrivateInventorySummaryCard> createState() =>
@@ -1244,20 +1332,15 @@ class _PrivateInventorySummaryCardState
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: widget.expanded ? MainAxisSize.max : MainAxisSize.min,
           children: [
-            Row(
-              children: [
-                const Icon(Icons.inventory_2_outlined),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    'Inventory',
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
-                ),
-              ],
+            _CollapsibleCardHeader(
+              icon: Icons.inventory_2_outlined,
+              title: 'Inventory',
+              expanded: widget.expanded,
+              onToggle: widget.onToggle,
             ),
-            if (items.isNotEmpty) ...[
+            if (widget.expanded && items.isNotEmpty) ...[
               const SizedBox(height: 16),
               Text(
                 'Observed item stacks',
@@ -1297,8 +1380,7 @@ class _PrivateInventorySummaryCardState
                 onChanged: (value) => setState(() => _query = value),
               ),
               const SizedBox(height: 8),
-              SizedBox(
-                height: 220,
+              Expanded(
                 child: ListView.separated(
                   itemCount: items.length,
                   separatorBuilder: (_, _) => const Divider(height: 1),
@@ -2282,28 +2364,39 @@ class _InventoryDiagnostics extends StatelessWidget {
   const _InventoryDiagnostics({
     required this.inventory,
     required this.inspection,
+    this.expanded = false,
+    this.onToggle,
   });
 
   final PrivateInventorySummary inventory;
   final SaveInspection inspection;
+  final bool expanded;
+  final VoidCallback? onToggle;
 
   @override
   Widget build(BuildContext context) {
     final candidates = inventory.candidates.take(60).toList();
     final decoded = inspection.privateStrings.take(40).toList();
     return Card(
-      clipBehavior: Clip.antiAlias,
-      child: ExpansionTile(
-        leading: const Icon(Icons.science_outlined),
-        title: Text(
-          'Diagnostics & details',
-          style: Theme.of(context).textTheme.titleMedium,
-        ),
-        subtitle: const Text('Read-only format inspection'),
-        childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-        expandedCrossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: expanded ? MainAxisSize.max : MainAxisSize.min,
+          children: [
+            _CollapsibleCardHeader(
+              icon: Icons.science_outlined,
+              title: 'Diagnostics & details',
+              subtitle: 'Read-only format inspection',
+              expanded: expanded,
+              onToggle: onToggle,
+            ),
+            if (expanded)
+              Expanded(
+                child: ListView(
+                  padding: const EdgeInsets.only(top: 12),
+                  children: [
+                    const Text(
             'Inventory candidates are discovered from decoded private '
             'payload strings. Typed edits remain disabled until item '
             'layout is verified.',
@@ -2405,7 +2498,11 @@ class _InventoryDiagnostics extends StatelessWidget {
                   .toList(),
             ),
           ],
-        ],
+                  ],
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }

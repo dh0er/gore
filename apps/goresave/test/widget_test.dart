@@ -10,6 +10,10 @@ import 'package:goresave/providers/data_providers.dart';
 
 void main() {
   testWidgets('renders editor shell with fake save data', (tester) async {
+    // Desktop window size so the inventory/diagnostics accordion (which fills
+    // the available height) has room to lay out.
+    await tester.binding.setSurfaceSize(const Size(1400, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
     final core = _FakeCoreService();
     await tester.pumpWidget(
       ProviderScope(
