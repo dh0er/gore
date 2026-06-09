@@ -22,6 +22,16 @@ void main() {
         candidates,
         contains(r'C:\sbx\goresave\target\release\goresave_g1r_codec_host.exe'),
       );
+      // The bare current-directory candidate is omitted so an untrusted binary
+      // in the working directory can't be executed as the codec host.
+      expect(
+        candidates,
+        isNot(
+          contains(
+            r'C:\sbx\goresave\apps\goresave\goresave_g1r_codec_host.exe',
+          ),
+        ),
+      );
     },
   );
 

@@ -33,8 +33,11 @@ List<String> codecHostPathCandidates({
   final cwd = currentDirectory ?? Directory.current.path;
   final executableDir = p.dirname(exePath);
   return _uniquePaths([
+    // Trusted shipped location first. The bare current-directory candidate is
+    // intentionally omitted: this helper is executed for private decode/compress,
+    // so a same-named binary dropped in the working directory must not be picked
+    // up (mirrors the goresave_core.dll search order).
     p.join(executableDir, _codecHostExe),
-    p.join(cwd, _codecHostExe),
     p.normalize(p.join(cwd, 'target', 'release', _codecHostExe)),
     p.normalize(p.join(cwd, 'target', 'debug', _codecHostExe)),
     p.normalize(p.join(cwd, '..', '..', 'target', 'release', _codecHostExe)),
