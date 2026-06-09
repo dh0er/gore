@@ -54,11 +54,15 @@ class EditorState {
   }
 
   ProfileSummary? get activeProfile {
+    // Prefer the selected save's own profile so a mixed-profile folder shows the
+    // profile that the selected slot belongs to, falling back to the scan's
+    // active profile id.
+    final targetProfileId = selectedSave?.persistentProfileId ?? activeProfileId;
     for (final profile in profiles) {
-      if (profile.profileId == activeProfileId) return profile;
+      if (profile.profileId == targetProfileId) return profile;
     }
-    // No profile matches the active id: report none rather than guessing
-    // `profiles.first`, which would show another profile's name and counts.
+    // No profile matches: report none rather than guessing `profiles.first`,
+    // which would show another profile's name and counts.
     return null;
   }
 
