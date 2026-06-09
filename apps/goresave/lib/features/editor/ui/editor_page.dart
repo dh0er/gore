@@ -2609,11 +2609,23 @@ class _PrivateFStringEditorState extends State<_PrivateFStringEditor> {
     super.dispose();
   }
 
-  List<String> get _options => widget.strings
-      .where((value) => value.trim().isNotEmpty)
-      .toSet()
-      .take(200)
-      .toList();
+  // Only offer values that occur exactly once. The core rejects a replace whose
+  // oldValue matches more than one FString, so a duplicated value would save
+  // into a permanent ambiguous-match error; exclude those instead of collapsing
+  // them with toSet().
+  List<String> get _options {
+    final counts = <String, int>{};
+    for (final value in widget.strings) {
+      final trimmed = value.trim();
+      if (trimmed.isEmpty) continue;
+      counts[trimmed] = (counts[trimmed] ?? 0) + 1;
+    }
+    return counts.entries
+        .where((entry) => entry.value == 1)
+        .map((entry) => entry.key)
+        .take(200)
+        .toList();
+  }
 
   void _syncSelection() {
     final options = _options;

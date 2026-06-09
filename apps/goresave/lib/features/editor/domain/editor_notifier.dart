@@ -254,43 +254,46 @@ class EditorNotifier extends StateNotifier<EditorState> {
 
   Future<void> refresh() async {
     final seq = ++_loadSeq;
+    _loadStarted();
     state = state.copyWith(isLoading: true, clearError: true);
-    final response = await _execute(
-      'scan_save_dir',
-      payload: {'path': state.saveDir, ..._codecPayload()},
-    );
-    if (seq != _loadSeq) return;
-    if (response['ok'] != true) {
-      state = state.copyWith(isLoading: false, error: _errorMessage(response));
-      return;
-    }
-    final data = (response['data'] as Map?)?.cast<String, Object?>();
-    final rawSaves = (data?['saves'] as List?) ?? const [];
-    final saves = rawSaves
-        .whereType<Map>()
-        .map((m) => SaveSlot.fromJson(m.cast<String, Object?>()))
-        .toList();
-    final rawProfiles = (data?['profiles'] as List?) ?? const [];
-    final profiles = rawProfiles
-        .whereType<Map>()
-        .map((m) => ProfileSummary.fromJson(m.cast<String, Object?>()))
-        .toList();
-    final activeProfileId = (data?['activeProfileId'] as num?)?.toInt();
-    final selectedPath = saves.any((save) => save.path == state.selectedPath)
-        ? state.selectedPath
-        : (saves.isNotEmpty ? saves.first.path : null);
-    state = state.copyWith(
-      // Keep loading while we hand off to _inspect; it owns the terminal state.
-      isLoading: selectedPath != null,
-      saves: saves,
-      profiles: profiles,
-      activeProfileId: activeProfileId,
-      selectedPath: selectedPath,
-      clearInspection: selectedPath == null,
-      clearBackups: selectedPath == null,
-    );
-    if (selectedPath != null) {
-      await _inspect(selectedPath);
+    try {
+      final response = await _execute(
+        'scan_save_dir',
+        payload: {'path': state.saveDir, ..._codecPayload()},
+      );
+      if (seq != _loadSeq) return;
+      if (response['ok'] != true) {
+        state = state.copyWith(error: _errorMessage(response));
+        return;
+      }
+      final data = (response['data'] as Map?)?.cast<String, Object?>();
+      final rawSaves = (data?['saves'] as List?) ?? const [];
+      final saves = rawSaves
+          .whereType<Map>()
+          .map((m) => SaveSlot.fromJson(m.cast<String, Object?>()))
+          .toList();
+      final rawProfiles = (data?['profiles'] as List?) ?? const [];
+      final profiles = rawProfiles
+          .whereType<Map>()
+          .map((m) => ProfileSummary.fromJson(m.cast<String, Object?>()))
+          .toList();
+      final activeProfileId = (data?['activeProfileId'] as num?)?.toInt();
+      final selectedPath = saves.any((save) => save.path == state.selectedPath)
+          ? state.selectedPath
+          : (saves.isNotEmpty ? saves.first.path : null);
+      state = state.copyWith(
+        saves: saves,
+        profiles: profiles,
+        activeProfileId: activeProfileId,
+        selectedPath: selectedPath,
+        clearInspection: selectedPath == null,
+        clearBackups: selectedPath == null,
+      );
+      if (selectedPath != null) {
+        await _inspect(selectedPath);
+      }
+    } finally {
+      _loadFinished();
     }
   }
 
