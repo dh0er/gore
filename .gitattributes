@@ -1,0 +1,5 @@
+# Keep edited source files LF in the working tree so edits don't create mixed
+# line endings that Git would otherwise store verbatim (ballooning diffs).
+*.dart text eol=lf
+*.rs   text eol=lf
+*.py   text eol=lf
