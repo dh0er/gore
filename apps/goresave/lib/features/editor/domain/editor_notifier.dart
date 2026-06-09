@@ -227,6 +227,12 @@ class EditorNotifier extends StateNotifier<EditorState> {
   Future<void> setSaveDir(String value) async {
     state = state.copyWith(
       saveDir: value,
+      // Drop the previous folder's slots/selection up front so a failed scan
+      // can't leave the sidebar showing the old folder under the new path.
+      saves: const [],
+      profiles: const [],
+      selectedPath: null,
+      activeProfileId: null,
       clearInspection: true,
       clearBackups: true,
     );

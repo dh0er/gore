@@ -993,11 +993,8 @@ class _InventoryPanel extends StatelessWidget {
           ),
           const SizedBox(height: 16),
         ],
-        _PrivateSummaryCard(
-          icon: Icons.inventory_2_outlined,
-          title: 'Inventory',
-          body:
-              'Inventory candidates are discovered from decoded private payload strings. Typed edits remain disabled until item layout is verified.',
+        _InventoryDiagnostics(
+          inventory: inspection.privateInventory,
           inspection: inspection,
         ),
       ],
@@ -1232,7 +1229,6 @@ class _PrivateInventorySummaryCardState
   @override
   Widget build(BuildContext context) {
     final inventory = widget.inventory;
-    final candidates = inventory.candidates.take(60).toList();
     final query = _query.trim().toLowerCase();
     final items = inventory.items
         .where((item) {
@@ -1254,37 +1250,9 @@ class _PrivateInventorySummaryCardState
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    'Inventory summary',
+                    'Inventory',
                     style: Theme.of(context).textTheme.titleMedium,
                   ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                _SummaryMetric(
-                  label: 'Candidates',
-                  value: inventory.candidateCount.toString(),
-                ),
-                _SummaryMetric(
-                  label: 'Item stacks',
-                  value: inventory.itemStackCount.toString(),
-                ),
-                if (inventory.itemScope != null)
-                  _SummaryMetric(
-                    label: 'Scope',
-                    value: _inventoryScopeLabel(inventory.itemScope!),
-                  ),
-                _SummaryMetric(
-                  label: 'Properties',
-                  value: inventory.properties.length.toString(),
-                ),
-                _SummaryMetric(
-                  label: 'Scripts',
-                  value: inventory.scriptPaths.length.toString(),
                 ),
               ],
             ),
@@ -1362,45 +1330,6 @@ class _PrivateInventorySummaryCardState
                     );
                   },
                 ),
-              ),
-            ],
-            if (candidates.isNotEmpty) ...[
-              const SizedBox(height: 16),
-              Text(
-                'Candidate strings',
-                style: Theme.of(context).textTheme.labelLarge,
-              ),
-              const SizedBox(height: 8),
-              SizedBox(
-                height: 180,
-                child: ListView.separated(
-                  itemCount: candidates.length,
-                  separatorBuilder: (_, _) => const Divider(height: 1),
-                  itemBuilder: (context, index) {
-                    final value = candidates[index];
-                    return ListTile(
-                      dense: true,
-                      leading: const Icon(Icons.inventory_outlined),
-                      title: SelectableText(value, maxLines: 1),
-                    );
-                  },
-                ),
-              ),
-            ],
-            if (inventory.scriptPaths.isNotEmpty) ...[
-              const SizedBox(height: 16),
-              Text(
-                'Inventory scripts',
-                style: Theme.of(context).textTheme.labelLarge,
-              ),
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: inventory.scriptPaths
-                    .take(8)
-                    .map((value) => Chip(label: Text(value, maxLines: 1)))
-                    .toList(),
               ),
             ],
           ],
@@ -2333,6 +2262,139 @@ class _SummaryMetric extends StatelessWidget {
             overflow: TextOverflow.ellipsis,
             style: Theme.of(context).textTheme.bodyMedium,
           ),
+        ],
+      ),
+    );
+  }
+}
+
+class _InventoryDiagnostics extends StatelessWidget {
+  const _InventoryDiagnostics({
+    required this.inventory,
+    required this.inspection,
+  });
+
+  final PrivateInventorySummary inventory;
+  final SaveInspection inspection;
+
+  @override
+  Widget build(BuildContext context) {
+    final candidates = inventory.candidates.take(60).toList();
+    final decoded = inspection.privateStrings.take(40).toList();
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      child: ExpansionTile(
+        leading: const Icon(Icons.science_outlined),
+        title: Text(
+          'Diagnostics & details',
+          style: Theme.of(context).textTheme.titleMedium,
+        ),
+        subtitle: const Text('Read-only format inspection'),
+        childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+        expandedCrossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Inventory candidates are discovered from decoded private '
+            'payload strings. Typed edits remain disabled until item '
+            'layout is verified.',
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _SummaryMetric(
+                label: 'Candidates',
+                value: inventory.candidateCount.toString(),
+              ),
+              _SummaryMetric(
+                label: 'Item stacks',
+                value: inventory.itemStackCount.toString(),
+              ),
+              if (inventory.itemScope != null)
+                _SummaryMetric(
+                  label: 'Scope',
+                  value: _inventoryScopeLabel(inventory.itemScope!),
+                ),
+              _SummaryMetric(
+                label: 'Properties',
+                value: inventory.properties.length.toString(),
+              ),
+              _SummaryMetric(
+                label: 'Scripts',
+                value: inventory.scriptPaths.length.toString(),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _InfoChip(
+                label:
+                    '${_bytes.format(inspection.privateDecompressedSize ?? 0)} bytes',
+              ),
+              _InfoChip(
+                label:
+                    '${_bytes.format(inspection.privateStringCount ?? decoded.length)} strings',
+              ),
+            ],
+          ),
+          if (candidates.isNotEmpty) ...[
+            const SizedBox(height: 16),
+            Text(
+              'Candidate strings',
+              style: Theme.of(context).textTheme.labelLarge,
+            ),
+            const SizedBox(height: 8),
+            SizedBox(
+              height: 180,
+              child: ListView.separated(
+                itemCount: candidates.length,
+                separatorBuilder: (_, _) => const Divider(height: 1),
+                itemBuilder: (context, index) {
+                  final value = candidates[index];
+                  return ListTile(
+                    dense: true,
+                    leading: const Icon(Icons.inventory_outlined),
+                    title: SelectableText(value, maxLines: 1),
+                  );
+                },
+              ),
+            ),
+          ],
+          if (inventory.scriptPaths.isNotEmpty) ...[
+            const SizedBox(height: 16),
+            Text(
+              'Inventory scripts',
+              style: Theme.of(context).textTheme.labelLarge,
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: inventory.scriptPaths
+                  .take(8)
+                  .map((value) => Chip(label: Text(value, maxLines: 1)))
+                  .toList(),
+            ),
+          ],
+          if (decoded.isNotEmpty) ...[
+            const SizedBox(height: 16),
+            Text(
+              'Decoded strings',
+              style: Theme.of(context).textTheme.labelLarge,
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: decoded
+                  .map((value) => Chip(label: Text(value, maxLines: 1)))
+                  .toList(),
+            ),
+          ],
         ],
       ),
     );

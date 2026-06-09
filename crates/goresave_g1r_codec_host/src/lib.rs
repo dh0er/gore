@@ -4276,7 +4276,10 @@ fn parse_decompress_chunk(
     command: &str,
 ) -> Result<DecompressChunkRequest, HostError> {
     let input = parse_input_base64(value, command)?;
-    ensure_uncompressed_size(&format!("{command} decoded input"), input.len())?;
+    // The decode input is the *compressed* chunk, which can legitimately exceed
+    // the uncompressed limit (an incompressible chunk is stored larger). Bound
+    // it by the compressed-output limit; expectedSize keeps the uncompressed one.
+    ensure_compressed_size(&format!("{command} decoded input"), input.len())?;
     let expected_size = parse_usize_field(value, command, "expectedSize")?;
     ensure_uncompressed_size(&format!("{command} expectedSize"), expected_size)?;
     Ok(DecompressChunkRequest {
@@ -4431,6 +4434,21 @@ fn ensure_uncompressed_size(label: &str, size: usize) -> Result<(), HostError> {
         json!({
             "actualUncompressedSize": size,
             "maxUncompressedSize": MAX_CODEC_UNCOMPRESSED_SIZE
+        }),
+    ))
+}
+
+fn ensure_compressed_size(label: &str, size: usize) -> Result<(), HostError> {
+    if size <= MAX_CODEC_COMPRESSED_OUTPUT_SIZE {
+        return Ok(());
+    }
+
+    Err(HostError::with_details(
+        ErrorCode::InvalidRequest,
+        format!("{label} {size} exceeds maximum {MAX_CODEC_COMPRESSED_OUTPUT_SIZE}"),
+        json!({
+            "actualCompressedSize": size,
+            "maxCompressedSize": MAX_CODEC_COMPRESSED_OUTPUT_SIZE
         }),
     ))
 }
