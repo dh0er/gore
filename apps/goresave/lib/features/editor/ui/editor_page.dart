@@ -822,6 +822,7 @@ class _MetadataEditorState extends State<_MetadataEditor> {
   late final TextEditingController _controller;
   String? _path;
   String? _name;
+  String? _error;
 
   @override
   void initState() {
@@ -864,9 +865,10 @@ class _MetadataEditorState extends State<_MetadataEditor> {
             Expanded(
               child: TextField(
                 controller: _controller,
-                decoration: const InputDecoration(
+                decoration: InputDecoration(
                   labelText: 'Public save name',
-                  prefixIcon: Icon(Icons.edit_outlined),
+                  prefixIcon: const Icon(Icons.edit_outlined),
+                  errorText: _error,
                 ),
               ),
             ),
@@ -876,8 +878,18 @@ class _MetadataEditorState extends State<_MetadataEditor> {
               child: FilledButton.icon(
                 icon: const Icon(Icons.save_outlined),
                 label: const Text('Save'),
-                onPressed: () =>
-                    widget.notifier.writePlayerSaveName(_controller.text),
+                onPressed: () {
+                  // Reject blank/whitespace names, matching the private editors,
+                  // so an empty public.m_PlayerSaveName isn't synced into the
+                  // save and PersistentDataList.
+                  final value = _controller.text.trim();
+                  if (value.isEmpty) {
+                    setState(() => _error = 'Required');
+                    return;
+                  }
+                  setState(() => _error = null);
+                  widget.notifier.writePlayerSaveName(value);
+                },
               ),
             ),
           ],
