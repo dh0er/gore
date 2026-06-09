@@ -622,6 +622,9 @@ class EditorNotifier extends StateNotifier<EditorState> {
       'list_backups',
       payload: {'path': path},
     );
+    // Selection moved on while this listing ran; let the newer operation own
+    // the loading/error state instead of clobbering it for a different slot.
+    if (state.selectedPath != path) return null;
     if (response['ok'] != true) {
       state = state.copyWith(isLoading: false, error: _errorMessage(response));
       return null;

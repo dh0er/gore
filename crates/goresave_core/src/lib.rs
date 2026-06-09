@@ -13,7 +13,6 @@ use std::ptr;
 use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
-const SAVE_ROOT: &str = r"C:\Users\Daniel\AppData\Local\G1R\Saved\SaveGames";
 const PACKAGE_FILE_TAG: u32 = 0x9E2A83C1;
 const COMPRESSED_HEADER_V2: u32 = 0x22222222;
 
@@ -331,7 +330,7 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
                 .get("path")
                 .and_then(Value::as_str)
                 .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from(SAVE_ROOT));
+                .unwrap_or_else(default_save_root);
             let codec_backend = payload
                 .get("binaryHost")
                 .map(binary_host_backend_from_config)
@@ -1263,15 +1262,42 @@ fn restore_backup(path: &Path, backup_path: &Path) -> Result<Value, CoreError> {
 
     let original = fs::read(path)?;
     inspect_bytes(&original, Some(path), false)?;
+
+    // Discover and validate the paired companion rollback *before* mutating the
+    // slot file, so a companion failure aborts the whole restore instead of
+    // leaving the slot restored while PersistentDataList.sav stays out of sync.
+    let companion_plan = prepare_paired_persistent_data_list_restore(path, backup_path)?;
+
+    // Take safety backups of both files up front.
     let current_backup_path = create_backup_copy(path)?;
+    let companion_safety_backup = match &companion_plan {
+        Some(plan) => Some(create_backup_copy(&plan.persistent_path)?),
+        None => None,
+    };
 
-    let tmp_path = path.with_extension("sav.tmp-goresave-restore");
-    fs::write(&tmp_path, &backup_data)?;
-    inspect_save(&tmp_path, false)?;
+    // Stage both writes to temp files and validate before committing either.
+    let slot_tmp = path.with_extension("sav.tmp-goresave-restore");
+    fs::write(&slot_tmp, &backup_data)?;
+    inspect_save(&slot_tmp, false)?;
+    let companion_tmp = match &companion_plan {
+        Some(plan) => {
+            let tmp = plan
+                .persistent_path
+                .with_extension("sav.tmp-goresave-restore");
+            fs::write(&tmp, &plan.companion_data)?;
+            Some(tmp)
+        }
+        None => None,
+    };
+
+    // Commit: both files have been validated and staged, so the renames at the
+    // end keep the slot file and PersistentDataList.sav consistent.
     fs::remove_file(path)?;
-    fs::rename(&tmp_path, path)?;
-
-    let companion = restore_paired_persistent_data_list_backup(path, backup_path)?;
+    fs::rename(&slot_tmp, path)?;
+    if let (Some(plan), Some(tmp)) = (&companion_plan, &companion_tmp) {
+        fs::remove_file(&plan.persistent_path)?;
+        fs::rename(tmp, &plan.persistent_path)?;
+    }
 
     Ok(json!({
         "path": path,
@@ -1280,29 +1306,33 @@ fn restore_backup(path: &Path, backup_path: &Path) -> Result<Value, CoreError> {
         "previousSha1": sha1_hex(&original),
         "restoredSha1": sha1_hex(&backup_data),
         "bytesChanged": original != backup_data,
-        "persistentPath": companion.as_ref().map(|c| c.path.clone()),
-        "persistentRestoredFrom": companion.as_ref().map(|c| c.restored_from.clone()),
-        "persistentBackupPath": companion.as_ref().map(|c| c.safety_backup.clone()),
-        "persistentBytesChanged": companion.as_ref().map(|c| c.bytes_changed).unwrap_or(false),
+        "persistentPath": companion_plan.as_ref().map(|p| p.persistent_path.display().to_string()),
+        "persistentRestoredFrom": companion_plan
+            .as_ref()
+            .map(|p| p.companion_backup_path.display().to_string()),
+        "persistentBackupPath": companion_safety_backup
+            .as_ref()
+            .map(|p| p.display().to_string()),
+        "persistentBytesChanged": companion_plan.is_some(),
     }))
 }
 
-struct CompanionRestore {
-    path: String,
-    restored_from: String,
-    safety_backup: String,
-    bytes_changed: bool,
+struct CompanionRestorePlan {
+    persistent_path: PathBuf,
+    companion_backup_path: PathBuf,
+    companion_data: Vec<u8>,
 }
 
-/// When a slot backup is restored, also roll back the paired
-/// `PersistentDataList.sav` backup that `syncPersistentDataList` created in the
-/// same write. Backups are paired by their shared epoch suffix. Without this the
-/// slot file rolls back while `PersistentDataList.sav` keeps the newer
-/// player-save name, leaving scans and the game menu metadata inconsistent.
-fn restore_paired_persistent_data_list_backup(
+/// Locate and validate the paired `PersistentDataList.sav` backup that
+/// `syncPersistentDataList` created in the same write as `slot_backup_path`.
+/// Backups are paired by their shared epoch suffix. This performs no
+/// mutations: it only reads and validates so the caller can abort the restore
+/// before touching any file. Returns `None` when there is no companion to roll
+/// back (no PersistentDataList.sav, no matching backup, or already identical).
+fn prepare_paired_persistent_data_list_restore(
     save_path: &Path,
     slot_backup_path: &Path,
-) -> Result<Option<CompanionRestore>, CoreError> {
+) -> Result<Option<CompanionRestorePlan>, CoreError> {
     let Some(parent) = save_path.parent() else {
         return Ok(None);
     };
@@ -1349,17 +1379,11 @@ fn restore_paired_persistent_data_list_backup(
     if current == companion_data {
         return Ok(None);
     }
-    let safety_backup = create_backup_copy(&persistent_path)?;
-    let tmp_path = persistent_path.with_extension("sav.tmp-goresave-restore");
-    fs::write(&tmp_path, &companion_data)?;
-    fs::remove_file(&persistent_path)?;
-    fs::rename(&tmp_path, &persistent_path)?;
 
-    Ok(Some(CompanionRestore {
-        path: persistent_path.display().to_string(),
-        restored_from: companion_backup_path.display().to_string(),
-        safety_backup: safety_backup.display().to_string(),
-        bytes_changed: true,
+    Ok(Some(CompanionRestorePlan {
+        persistent_path,
+        companion_backup_path,
+        companion_data,
     }))
 }
 
@@ -1407,6 +1431,36 @@ fn unique_backup_path(path: &Path) -> PathBuf {
         }
     }
     path.with_extension(format!("sav.bak.{timestamp}.overflow"))
+}
+
+/// Default save directory used when a caller omits `payload.path`. Derived from
+/// the running user's environment rather than a hardcoded developer profile.
+fn default_save_root() -> PathBuf {
+    default_save_root_from(
+        std::env::var_os("LOCALAPPDATA"),
+        std::env::var_os("USERPROFILE"),
+    )
+}
+
+fn default_save_root_from(
+    local_app_data: Option<std::ffi::OsString>,
+    user_profile: Option<std::ffi::OsString>,
+) -> PathBuf {
+    let suffix = ["G1R", "Saved", "SaveGames"];
+    if let Some(local_app_data) = local_app_data {
+        if !local_app_data.is_empty() {
+            return suffix
+                .iter()
+                .fold(PathBuf::from(local_app_data), |p, c| p.join(c));
+        }
+    }
+    if let Some(user_profile) = user_profile {
+        if !user_profile.is_empty() {
+            let base = PathBuf::from(user_profile).join("AppData").join("Local");
+            return suffix.iter().fold(base, |p, c| p.join(c));
+        }
+    }
+    suffix.iter().fold(PathBuf::new(), |p, c| p.join(c))
 }
 
 fn backup_file_prefix(path: &Path) -> Result<String, CoreError> {
@@ -5090,6 +5144,58 @@ mod tests {
         // A safety backup of the pre-restore PersistentDataList was created.
         let safety = PathBuf::from(value["data"]["persistentBackupPath"].as_str().unwrap());
         assert_eq!(fs::read(&safety).unwrap(), b"GVAS-new-name");
+    }
+
+    #[test]
+    fn restore_backup_aborts_without_touching_slot_when_companion_invalid() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-001.sav");
+        let slot_backup = dir.path().join("G1R-001.sav.bak.200");
+        let persistent = dir.path().join("PersistentDataList.sav");
+        let persistent_backup = dir.path().join("PersistentDataList.sav.bak.200");
+
+        fs::write(&path, minimal_gsav("Live")).unwrap();
+        fs::write(&slot_backup, minimal_gsav("Backup")).unwrap();
+        fs::write(&persistent, b"GVAS-new-name").unwrap();
+        // Paired companion backup (same epoch) is not a valid GVAS file.
+        fs::write(&persistent_backup, b"not-gvas").unwrap();
+
+        let result = restore_backup(&path, &slot_backup);
+        assert!(result.is_err());
+        // Slot file must be untouched because the companion failed validation
+        // before any slot mutation.
+        assert_eq!(
+            inspect_save(&path, false).unwrap()["public"]["playerSaveName"],
+            "Live"
+        );
+        assert_eq!(fs::read(&persistent).unwrap(), b"GVAS-new-name");
+    }
+
+    #[test]
+    fn default_save_root_derives_from_environment() {
+        let suffix = PathBuf::from("G1R").join("Saved").join("SaveGames");
+
+        // Prefers LOCALAPPDATA.
+        let from_local = default_save_root_from(
+            Some(r"D:\LocalAppData".into()),
+            Some(r"D:\Profile".into()),
+        );
+        assert_eq!(from_local, PathBuf::from(r"D:\LocalAppData").join(&suffix));
+
+        // Falls back to USERPROFILE\AppData\Local when LOCALAPPDATA is unset/empty.
+        let from_profile = default_save_root_from(Some("".into()), Some(r"D:\Profile".into()));
+        assert_eq!(
+            from_profile,
+            PathBuf::from(r"D:\Profile")
+                .join("AppData")
+                .join("Local")
+                .join(&suffix)
+        );
+
+        // Neutral relative path when neither variable is available, never a
+        // hardcoded developer profile.
+        let neutral = default_save_root_from(None, None);
+        assert_eq!(neutral, suffix);
     }
 
     #[test]
