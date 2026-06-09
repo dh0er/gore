@@ -40,3 +40,6 @@ work/
 *.sav
 *.sav.bak.*
 !fixtures/**/*.sav
+
+# Distribution build output
+/dist/
