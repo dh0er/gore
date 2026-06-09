@@ -1290,13 +1290,11 @@ fn restore_backup(path: &Path, backup_path: &Path) -> Result<Value, CoreError> {
         None => None,
     };
 
-    // Commit: both files have been validated and staged, so the renames at the
+    // Commit: both files have been validated and staged, so the replaces at the
     // end keep the slot file and PersistentDataList.sav consistent.
-    fs::remove_file(path)?;
-    fs::rename(&slot_tmp, path)?;
+    commit_replace(path, &slot_tmp)?;
     if let (Some(plan), Some(tmp)) = (&companion_plan, &companion_tmp) {
-        fs::remove_file(&plan.persistent_path)?;
-        fs::rename(tmp, &plan.persistent_path)?;
+        commit_replace(&plan.persistent_path, tmp)?;
     }
 
     Ok(json!({
@@ -1408,6 +1406,32 @@ fn ensure_backup_belongs_to_save(path: &Path, backup_path: &Path) -> Result<(), 
         ));
     }
     Ok(())
+}
+
+/// Replace `target` with the staged file at `staged` without ever leaving
+/// `target` missing on failure. Windows `rename` cannot overwrite, so the
+/// current file is moved aside first; if renaming the staged file in fails, the
+/// aside copy is moved back so the slot is never lost.
+fn commit_replace(target: &Path, staged: &Path) -> Result<(), CoreError> {
+    if !target.exists() {
+        fs::rename(staged, target)?;
+        return Ok(());
+    }
+    let aside = target.with_extension("sav.replaced-goresave");
+    // Clear any leftover aside from a previously interrupted write.
+    let _ = fs::remove_file(&aside);
+    fs::rename(target, &aside)?;
+    match fs::rename(staged, target) {
+        Ok(()) => {
+            let _ = fs::remove_file(&aside);
+            Ok(())
+        }
+        Err(err) => {
+            // Roll back so the target path is never left absent.
+            let _ = fs::rename(&aside, target);
+            Err(err.into())
+        }
+    }
 }
 
 fn create_backup_copy(path: &Path) -> Result<PathBuf, CoreError> {
@@ -2749,14 +2773,10 @@ fn write_save_internal(
     } else {
         None
     };
-    if output_path.is_none() {
-        fs::remove_file(path)?;
-    }
-    fs::rename(&tmp_path, target)?;
+    commit_replace(target, &tmp_path)?;
     if let Some(plan) = &persistent_sync {
         if let Some(tmp_path) = &persistent_tmp_path {
-            fs::remove_file(&plan.path)?;
-            fs::rename(tmp_path, &plan.path)?;
+            commit_replace(&plan.path, tmp_path)?;
         }
     }
 
