@@ -1271,6 +1271,8 @@ fn restore_backup(path: &Path, backup_path: &Path) -> Result<Value, CoreError> {
     fs::remove_file(path)?;
     fs::rename(&tmp_path, path)?;
 
+    let companion = restore_paired_persistent_data_list_backup(path, backup_path)?;
+
     Ok(json!({
         "path": path,
         "restoredFrom": backup_path,
@@ -1278,6 +1280,86 @@ fn restore_backup(path: &Path, backup_path: &Path) -> Result<Value, CoreError> {
         "previousSha1": sha1_hex(&original),
         "restoredSha1": sha1_hex(&backup_data),
         "bytesChanged": original != backup_data,
+        "persistentPath": companion.as_ref().map(|c| c.path.clone()),
+        "persistentRestoredFrom": companion.as_ref().map(|c| c.restored_from.clone()),
+        "persistentBackupPath": companion.as_ref().map(|c| c.safety_backup.clone()),
+        "persistentBytesChanged": companion.as_ref().map(|c| c.bytes_changed).unwrap_or(false),
+    }))
+}
+
+struct CompanionRestore {
+    path: String,
+    restored_from: String,
+    safety_backup: String,
+    bytes_changed: bool,
+}
+
+/// When a slot backup is restored, also roll back the paired
+/// `PersistentDataList.sav` backup that `syncPersistentDataList` created in the
+/// same write. Backups are paired by their shared epoch suffix. Without this the
+/// slot file rolls back while `PersistentDataList.sav` keeps the newer
+/// player-save name, leaving scans and the game menu metadata inconsistent.
+fn restore_paired_persistent_data_list_backup(
+    save_path: &Path,
+    slot_backup_path: &Path,
+) -> Result<Option<CompanionRestore>, CoreError> {
+    let Some(parent) = save_path.parent() else {
+        return Ok(None);
+    };
+    let persistent_path = parent.join("PersistentDataList.sav");
+    if !persistent_path.exists() {
+        return Ok(None);
+    }
+    let slot_prefix = backup_file_prefix(save_path)?;
+    let slot_backup_name = slot_backup_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| CoreError::InvalidRequest("backup path has no file name".to_string()))?;
+    let Some(epoch) = parse_backup_epoch(slot_backup_name, &slot_prefix) else {
+        return Ok(None);
+    };
+
+    let companion_prefix = backup_file_prefix(&persistent_path)?;
+    let mut companion_backup_path = None;
+    for entry in fs::read_dir(parent)? {
+        let entry = entry?;
+        let candidate = entry.path();
+        let Some(name) = candidate.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if !name.starts_with(&companion_prefix) {
+            continue;
+        }
+        if parse_backup_epoch(name, &companion_prefix) == Some(epoch) {
+            companion_backup_path = Some(candidate);
+            break;
+        }
+    }
+    let Some(companion_backup_path) = companion_backup_path else {
+        return Ok(None);
+    };
+
+    let companion_data = fs::read(&companion_backup_path)?;
+    if !companion_data.starts_with(b"GVAS") {
+        return Err(CoreError::Parse(
+            "PersistentDataList backup is not a GVAS file".to_string(),
+        ));
+    }
+    let current = fs::read(&persistent_path)?;
+    if current == companion_data {
+        return Ok(None);
+    }
+    let safety_backup = create_backup_copy(&persistent_path)?;
+    let tmp_path = persistent_path.with_extension("sav.tmp-goresave-restore");
+    fs::write(&tmp_path, &companion_data)?;
+    fs::remove_file(&persistent_path)?;
+    fs::rename(&tmp_path, &persistent_path)?;
+
+    Ok(Some(CompanionRestore {
+        path: persistent_path.display().to_string(),
+        restored_from: companion_backup_path.display().to_string(),
+        safety_backup: safety_backup.display().to_string(),
+        bytes_changed: true,
     }))
 }
 
@@ -4971,6 +5053,43 @@ mod tests {
             inspect_save(&current_backup, false).unwrap()["public"]["playerSaveName"],
             "Live"
         );
+    }
+
+    #[test]
+    fn restore_backup_also_restores_paired_persistent_data_list_backup() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-001.sav");
+        let slot_backup = dir.path().join("G1R-001.sav.bak.200");
+        let persistent = dir.path().join("PersistentDataList.sav");
+        let persistent_backup = dir.path().join("PersistentDataList.sav.bak.200");
+
+        fs::write(&path, minimal_gsav("Live")).unwrap();
+        fs::write(&slot_backup, minimal_gsav("Backup")).unwrap();
+        // Current PersistentDataList carries the newer name; its paired backup
+        // (same epoch as the slot backup) carries the older name.
+        fs::write(&persistent, b"GVAS-new-name").unwrap();
+        fs::write(&persistent_backup, b"GVAS-old-name").unwrap();
+
+        let response = execute_json(
+            &json!({
+                "command": "restore_backup",
+                "payload": {"path": path, "backupPath": slot_backup}
+            })
+            .to_string(),
+        );
+        let value: Value = serde_json::from_str(&response).unwrap();
+
+        assert_eq!(value["ok"], true);
+        assert_eq!(value["data"]["persistentBytesChanged"], true);
+        assert_eq!(
+            value["data"]["persistentRestoredFrom"].as_str().unwrap(),
+            persistent_backup.to_string_lossy()
+        );
+        // PersistentDataList rolled back to the paired backup contents.
+        assert_eq!(fs::read(&persistent).unwrap(), b"GVAS-old-name");
+        // A safety backup of the pre-restore PersistentDataList was created.
+        let safety = PathBuf::from(value["data"]["persistentBackupPath"].as_str().unwrap());
+        assert_eq!(fs::read(&safety).unwrap(), b"GVAS-new-name");
     }
 
     #[test]
