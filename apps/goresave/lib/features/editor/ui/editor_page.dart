@@ -1091,7 +1091,15 @@ class _InventoryPanelState extends State<_InventoryPanel> {
                 notifier: widget.notifier,
                 // Inventory writes recompress the payload too, so require a
                 // compress-capable codec host in addition to a full decode.
-                editable: inspection.privateEditable && widget.canCompress,
+                // The core only allows count edits in a detected player
+                // inventory region, advertised via writable; gate on it so other
+                // scopes don't show editors whose saves fail in the core.
+                editable:
+                    inspection.privateEditable &&
+                    widget.canCompress &&
+                    inspection.privateInventory.writable.contains(
+                      'private.inventory.setItemCount',
+                    ),
                 expanded: itemsOpen,
                 onToggle: () => _toggle(_InventorySection.items),
               ),
