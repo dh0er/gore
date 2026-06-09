@@ -1,5 +1,98 @@
 import 'dart:convert';
 
+class ScreenshotSummary {
+  const ScreenshotSummary({
+    required this.mimeType,
+    required this.byteLength,
+    required this.bytesBase64,
+  });
+
+  factory ScreenshotSummary.fromJson(Map<String, Object?> json) {
+    return ScreenshotSummary(
+      mimeType: json['mimeType'] as String? ?? 'image/jpeg',
+      byteLength: (json['byteLength'] as num?)?.toInt() ?? 0,
+      bytesBase64: json['bytesBase64'] as String? ?? '',
+    );
+  }
+
+  static ScreenshotSummary? maybeFromJson(Object? value) {
+    if (value is! Map) return null;
+    return ScreenshotSummary.fromJson(value.cast<String, Object?>());
+  }
+
+  final String mimeType;
+  final int byteLength;
+  final String bytesBase64;
+}
+
+class ProfileSummary {
+  const ProfileSummary({
+    required this.profileId,
+    this.profileName,
+    this.quickSaveSlots = const [],
+    this.autoSaveSlots = const [],
+    this.savedSlots = const [],
+    this.difficultyPreset,
+    this.customCombatSettings,
+    this.customResourcesSettings,
+    this.customProgressionSettings,
+    this.survival,
+    this.permanentDeath,
+    this.permanentDeathGameOver,
+    this.fakeSloppyCombos,
+    this.maxQuick,
+    this.maxAuto,
+  });
+
+  factory ProfileSummary.fromJson(Map<String, Object?> json) {
+    return ProfileSummary(
+      profileId: (json['profileId'] as num?)?.toInt() ?? 0,
+      profileName: json['profileName'] as String?,
+      quickSaveSlots:
+          (json['quickSaveSlots'] as List?)?.whereType<String>().toList() ??
+          const [],
+      autoSaveSlots:
+          (json['autoSaveSlots'] as List?)?.whereType<String>().toList() ??
+          const [],
+      savedSlots:
+          (json['savedSlots'] as List?)?.whereType<String>().toList() ??
+          const [],
+      difficultyPreset: json['difficultyPreset'] as String?,
+      customCombatSettings: json['customCombatSettings'] as String?,
+      customResourcesSettings: json['customResourcesSettings'] as String?,
+      customProgressionSettings: json['customProgressionSettings'] as String?,
+      survival: json['survival'] as bool?,
+      permanentDeath: json['permanentDeath'] as bool?,
+      permanentDeathGameOver: json['permanentDeathGameOver'] as bool?,
+      fakeSloppyCombos: json['fakeSloppyCombos'] as bool?,
+      maxQuick: (json['maxQuick'] as num?)?.toInt(),
+      maxAuto: (json['maxAuto'] as num?)?.toInt(),
+    );
+  }
+
+  final int profileId;
+  final String? profileName;
+  final List<String> quickSaveSlots;
+  final List<String> autoSaveSlots;
+  final List<String> savedSlots;
+  final String? difficultyPreset;
+  final String? customCombatSettings;
+  final String? customResourcesSettings;
+  final String? customProgressionSettings;
+  final bool? survival;
+  final bool? permanentDeath;
+  final bool? permanentDeathGameOver;
+  final bool? fakeSloppyCombos;
+  final int? maxQuick;
+  final int? maxAuto;
+
+  String get displayName {
+    final name = profileName?.trim();
+    if (name == null || name.isEmpty) return 'Profile $profileId';
+    return name == profileId.toString() ? 'Profile $name' : name;
+  }
+}
+
 class SaveSlot {
   const SaveSlot({
     required this.path,
@@ -20,6 +113,7 @@ class SaveSlot {
     this.quickSave,
     this.autoSave,
     this.persistentProfileId,
+    this.screenshot,
   });
 
   factory SaveSlot.fromJson(Map<String, Object?> json) {
@@ -42,6 +136,7 @@ class SaveSlot {
       quickSave: json['quickSave'] as bool?,
       autoSave: json['autoSave'] as bool?,
       persistentProfileId: (json['persistentProfileId'] as num?)?.toInt(),
+      screenshot: ScreenshotSummary.maybeFromJson(json['screenshot']),
     );
   }
 
@@ -63,6 +158,7 @@ class SaveSlot {
   final bool? quickSave;
   final bool? autoSave;
   final int? persistentProfileId;
+  final ScreenshotSummary? screenshot;
 
   String get displayName {
     final name = playerSaveName ?? persistentPlayerSaveName;
@@ -92,6 +188,7 @@ class SaveInspection {
     this.quickSave,
     this.autoSave,
     this.persistentProfileId,
+    this.screenshot,
     this.privateStatus,
     this.privateDecoded = false,
     this.privateDecompressedSize,
@@ -136,6 +233,7 @@ class SaveInspection {
       quickSave: persistent?['quickSave'] as bool?,
       autoSave: persistent?['autoSave'] as bool?,
       persistentProfileId: (persistent?['profileId'] as num?)?.toInt(),
+      screenshot: ScreenshotSummary.maybeFromJson(json['screenshot']),
       privateStatus: privateStatus,
       privateDecoded:
           privateStatus == 'decoded' || privateStatus == 'decoded_preview',
@@ -176,6 +274,7 @@ class SaveInspection {
   final bool? quickSave;
   final bool? autoSave;
   final int? persistentProfileId;
+  final ScreenshotSummary? screenshot;
   final String? privateStatus;
   final bool privateDecoded;
   final int? privateDecompressedSize;

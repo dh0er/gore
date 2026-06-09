@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -151,6 +153,10 @@ class _SaveSidebar extends StatelessWidget {
             ),
           ),
           const Divider(height: 1),
+          _ProfileHeader(
+            profile: state.activeProfile,
+            saveCount: state.saves.length,
+          ),
           Expanded(
             child: state.saves.isEmpty
                 ? const Center(
@@ -169,49 +175,204 @@ class _SaveSidebar extends StatelessWidget {
                     itemBuilder: (context, index) {
                       final save = state.saves[index];
                       final selected = save.path == state.selectedPath;
-                      final subtitle = _saveSlotSubtitle(save);
                       return Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 8),
-                        child: Material(
-                          color: selected
-                              ? const Color(0xFFE0F2F1)
-                              : Colors.white,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(8),
-                            side: BorderSide(
-                              color: selected
-                                  ? const Color(0xFF0F766E)
-                                  : const Color(0xFFE2E8F0),
-                            ),
-                          ),
-                          child: ListTile(
-                            dense: true,
-                            leading: Icon(
-                              save.format == 'GSAV'
-                                  ? Icons.save_alt_outlined
-                                  : Icons.description_outlined,
-                              color: selected ? const Color(0xFF0F766E) : null,
-                            ),
-                            title: Text(
-                              save.displayName,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            subtitle: Text(
-                              subtitle,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            onTap: state.isLoading
-                                ? null
-                                : () => notifier.inspect(save.path),
-                          ),
+                        child: _SaveSlotCard(
+                          save: save,
+                          selected: selected,
+                          enabled: !state.isLoading,
+                          onTap: () => notifier.inspect(save.path),
                         ),
                       );
                     },
                   ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _ProfileHeader extends StatelessWidget {
+  const _ProfileHeader({required this.profile, required this.saveCount});
+
+  final ProfileSummary? profile;
+  final int saveCount;
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    final quickCount = profile?.quickSaveSlots.length ?? 0;
+    final autoCount = profile?.autoSaveSlots.length ?? 0;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        border: Border(bottom: BorderSide(color: Color(0xFFE2E8F0))),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: const Color(0xFFE0F2F1),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: const Icon(Icons.person_outline, color: Color(0xFF0F766E)),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  profile?.displayName ?? 'Profile',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: textTheme.titleMedium,
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  '${_formatCount(saveCount, 'save')} | Quick $quickCount | Auto $autoCount',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: textTheme.bodySmall?.copyWith(
+                    color: const Color(0xFF64748B),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SaveSlotCard extends StatelessWidget {
+  const _SaveSlotCard({
+    required this.save,
+    required this.selected,
+    required this.enabled,
+    required this.onTap,
+  });
+
+  final SaveSlot save;
+  final bool selected;
+  final bool enabled;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = selected ? const Color(0xFF0F766E) : const Color(0xFFCBD5E1);
+    return Material(
+      color: selected ? const Color(0xFFE0F2F1) : Colors.white,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(8),
+        side: BorderSide(color: accent),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: enabled ? onTap : null,
+        child: Padding(
+          padding: const EdgeInsets.all(8),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SizedBox(
+                width: 112,
+                height: 63,
+                child: _ScreenshotPreview(
+                  screenshot: save.screenshot,
+                  slot: save.slot,
+                  compact: true,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: SizedBox(
+                  height: 63,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(
+                            save.format == 'GSAV'
+                                ? Icons.save_alt_outlined
+                                : Icons.description_outlined,
+                            size: 17,
+                            color: selected ? const Color(0xFF0F766E) : null,
+                          ),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              save.displayName,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context).textTheme.titleSmall,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        _saveSlotSubtitle(save),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: const Color(0xFF64748B),
+                        ),
+                      ),
+                      const Spacer(),
+                      _SaveKindIcon(
+                        quickSave: save.quickSave,
+                        autoSave: save.autoSave,
+                        selected: selected,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SaveKindIcon extends StatelessWidget {
+  const _SaveKindIcon({
+    required this.quickSave,
+    required this.autoSave,
+    required this.selected,
+  });
+
+  final bool? quickSave;
+  final bool? autoSave;
+  final bool selected;
+
+  @override
+  Widget build(BuildContext context) {
+    final label = _formatSaveKind(quickSave: quickSave, autoSave: autoSave);
+    if (label == '-') return const SizedBox(height: 16);
+    final icon = quickSave == true
+        ? Icons.flash_on_outlined
+        : autoSave == true
+        ? Icons.timer_outlined
+        : Icons.edit_note_outlined;
+    return Tooltip(
+      message: label,
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: Icon(
+          icon,
+          size: 16,
+          color: selected ? const Color(0xFF0F766E) : const Color(0xFF475569),
+        ),
       ),
     );
   }
@@ -249,6 +410,10 @@ String _formatSaveKind({required bool? quickSave, required bool? autoSave}) {
   if (autoSave == true) return 'Auto save';
   if (quickSave == false || autoSave == false) return 'Manual save';
   return '-';
+}
+
+String _formatCount(int count, String singular) {
+  return count == 1 ? '1 $singular' : '$count ${singular}s';
 }
 
 class _EditorWorkspace extends StatelessWidget {
@@ -307,7 +472,12 @@ class _EditorWorkspace extends StatelessWidget {
             Expanded(
               child: TabBarView(
                 children: [
-                  _OverviewPanel(inspection: inspection, notifier: notifier),
+                  _OverviewPanel(
+                    inspection: inspection,
+                    notifier: notifier,
+                    selectedSave: state.selectedSave,
+                    profile: state.activeProfile,
+                  ),
                   _PrivatePanel(
                     icon: Icons.person_outline,
                     title: 'Player',
@@ -357,17 +527,28 @@ class _EditorWorkspace extends StatelessWidget {
 }
 
 class _OverviewPanel extends StatelessWidget {
-  const _OverviewPanel({required this.inspection, required this.notifier});
+  const _OverviewPanel({
+    required this.inspection,
+    required this.notifier,
+    required this.selectedSave,
+    required this.profile,
+  });
 
   final SaveInspection inspection;
   final EditorNotifier notifier;
+  final SaveSlot? selectedSave;
+  final ProfileSummary? profile;
 
   @override
   Widget build(BuildContext context) {
     return ListView(
       padding: const EdgeInsets.all(20),
       children: [
-        _HeaderCard(inspection: inspection),
+        _HeaderCard(
+          inspection: inspection,
+          save: selectedSave,
+          profile: profile,
+        ),
         const SizedBox(height: 16),
         _MetadataEditor(inspection: inspection, notifier: notifier),
         const SizedBox(height: 16),
@@ -427,43 +608,176 @@ class _OverviewPanel extends StatelessWidget {
 }
 
 class _HeaderCard extends StatelessWidget {
-  const _HeaderCard({required this.inspection});
+  const _HeaderCard({required this.inspection, this.save, this.profile});
 
   final SaveInspection inspection;
+  final SaveSlot? save;
+  final ProfileSummary? profile;
 
   @override
   Widget build(BuildContext context) {
+    final screenshot = save?.screenshot ?? inspection.screenshot;
+    final title =
+        save?.displayName ??
+        inspection.playerSaveName ??
+        inspection.slot ??
+        'Savegame';
+    final slot = save?.slot ?? inspection.slot ?? 'Savegame';
     return Card(
       child: Padding(
-        padding: const EdgeInsets.all(18),
-        child: Row(
-          children: [
-            const Icon(Icons.save_outlined, size: 40, color: Color(0xFF0F766E)),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    inspection.playerSaveName ?? inspection.slot ?? 'Savegame',
-                    style: Theme.of(context).textTheme.titleLarge,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
+        padding: const EdgeInsets.all(16),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final compact = constraints.maxWidth < 560;
+            final previewWidth = compact ? 132.0 : 240.0;
+            final previewHeight = previewWidth * 9 / 16;
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SizedBox(
+                  width: previewWidth,
+                  height: previewHeight,
+                  child: _ScreenshotPreview(
+                    screenshot: screenshot,
+                    slot: slot,
+                    compact: compact,
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    inspection.path ?? '',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.bodySmall,
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          const Icon(
+                            Icons.save_outlined,
+                            size: 28,
+                            color: Color(0xFF0F766E),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              title,
+                              style: Theme.of(context).textTheme.titleLarge,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        inspection.path ?? '',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                      if (profile != null) ...[
+                        const SizedBox(height: 9),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            _InfoPill(
+                              icon: Icons.flash_on_outlined,
+                              label: '${profile!.quickSaveSlots.length} quick',
+                            ),
+                            _InfoPill(
+                              icon: Icons.timer_outlined,
+                              label: '${profile!.autoSaveSlots.length} auto',
+                            ),
+                          ],
+                        ),
+                      ],
+                    ],
                   ),
-                ],
-              ),
+                ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+class _ScreenshotPreview extends StatelessWidget {
+  const _ScreenshotPreview({
+    required this.screenshot,
+    required this.slot,
+    this.compact = false,
+  });
+
+  final ScreenshotSummary? screenshot;
+  final String slot;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    final bytes = _decodeScreenshot(screenshot);
+    final radius = BorderRadius.circular(compact ? 6 : 8);
+    final placeholder = ColoredBox(
+      color: const Color(0xFFE2E8F0),
+      child: Center(
+        child: Icon(
+          Icons.image_not_supported_outlined,
+          size: compact ? 22 : 44,
+          color: const Color(0xFF64748B),
+        ),
+      ),
+    );
+    return ClipRRect(
+      borderRadius: radius,
+      child: bytes == null
+          ? placeholder
+          : Image.memory(
+              bytes,
+              fit: BoxFit.cover,
+              gaplessPlayback: true,
+              semanticLabel: 'Screenshot for $slot',
+              errorBuilder: (_, _, _) => placeholder,
             ),
+    );
+  }
+}
+
+class _InfoPill extends StatelessWidget {
+  const _InfoPill({required this.icon, required this.label});
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: const Color(0xFFF1F5F9),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFFE2E8F0)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 15, color: const Color(0xFF475569)),
+            const SizedBox(width: 5),
+            Text(label, style: Theme.of(context).textTheme.labelMedium),
           ],
         ),
       ),
     );
+  }
+}
+
+Uint8List? _decodeScreenshot(ScreenshotSummary? screenshot) {
+  final encoded = screenshot?.bytesBase64;
+  if (encoded == null || encoded.isEmpty) return null;
+  try {
+    return base64Decode(encoded);
+  } on FormatException {
+    return null;
   }
 }
 

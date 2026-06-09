@@ -6,6 +6,8 @@ import 'package:goresave/utils/default_paths.dart';
 import 'package:path/path.dart' as p;
 import 'package:state_notifier/state_notifier.dart';
 
+const _unchanged = Object();
+
 class EditorState {
   const EditorState({
     required this.saveDir,
@@ -13,6 +15,8 @@ class EditorState {
     required this.gameExePath,
     this.isLoading = false,
     this.saves = const [],
+    this.profiles = const [],
+    this.activeProfileId,
     this.backups = const [],
     this.companionBackups = const [],
     this.selectedPath,
@@ -27,6 +31,8 @@ class EditorState {
   final String gameExePath;
   final bool isLoading;
   final List<SaveSlot> saves;
+  final List<ProfileSummary> profiles;
+  final int? activeProfileId;
   final List<BackupEntry> backups;
   final List<BackupEntry> companionBackups;
   final String? selectedPath;
@@ -42,12 +48,22 @@ class EditorState {
     return null;
   }
 
+  ProfileSummary? get activeProfile {
+    if (profiles.isEmpty) return null;
+    for (final profile in profiles) {
+      if (profile.profileId == activeProfileId) return profile;
+    }
+    return profiles.first;
+  }
+
   EditorState copyWith({
     String? saveDir,
     String? codecHostPath,
     String? gameExePath,
     bool? isLoading,
     List<SaveSlot>? saves,
+    List<ProfileSummary>? profiles,
+    Object? activeProfileId = _unchanged,
     List<BackupEntry>? backups,
     List<BackupEntry>? companionBackups,
     String? selectedPath,
@@ -66,6 +82,10 @@ class EditorState {
       gameExePath: gameExePath ?? this.gameExePath,
       isLoading: isLoading ?? this.isLoading,
       saves: saves ?? this.saves,
+      profiles: profiles ?? this.profiles,
+      activeProfileId: identical(activeProfileId, _unchanged)
+          ? this.activeProfileId
+          : activeProfileId as int?,
       backups: clearBackups ? const [] : backups ?? this.backups,
       companionBackups: clearBackups
           ? const []
@@ -166,7 +186,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
     state = state.copyWith(isLoading: true, clearError: true);
     final response = await _core.execute(
       'scan_save_dir',
-      payload: {'path': state.saveDir},
+      payload: {'path': state.saveDir, ..._codecPayload()},
     );
     if (response['ok'] != true) {
       state = state.copyWith(isLoading: false, error: _errorMessage(response));
@@ -178,12 +198,20 @@ class EditorNotifier extends StateNotifier<EditorState> {
         .whereType<Map>()
         .map((m) => SaveSlot.fromJson(m.cast<String, Object?>()))
         .toList();
+    final rawProfiles = (data?['profiles'] as List?) ?? const [];
+    final profiles = rawProfiles
+        .whereType<Map>()
+        .map((m) => ProfileSummary.fromJson(m.cast<String, Object?>()))
+        .toList();
+    final activeProfileId = (data?['activeProfileId'] as num?)?.toInt();
     final selectedPath = saves.any((save) => save.path == state.selectedPath)
         ? state.selectedPath
         : (saves.isNotEmpty ? saves.first.path : null);
     state = state.copyWith(
       isLoading: false,
       saves: saves,
+      profiles: profiles,
+      activeProfileId: activeProfileId,
       selectedPath: selectedPath,
       clearInspection: selectedPath == null,
       clearBackups: selectedPath == null,

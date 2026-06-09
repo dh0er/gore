@@ -17,6 +17,11 @@ void main() {
       'timePlayedSeconds': 3661.5,
       'quickSave': true,
       'autoSave': false,
+      'screenshot': {
+        'mimeType': 'image/jpeg',
+        'byteLength': 6,
+        'bytesBase64': '/9gBAv/Z',
+      },
     });
 
     expect(slot.displayName, 'Chapter 1');
@@ -27,6 +32,38 @@ void main() {
     expect(slot.timePlayedSeconds, 3661.5);
     expect(slot.quickSave, isTrue);
     expect(slot.autoSave, isFalse);
+    expect(slot.screenshot?.mimeType, 'image/jpeg');
+    expect(slot.screenshot?.byteLength, 6);
+    expect(slot.screenshot?.bytesBase64, '/9gBAv/Z');
+  });
+
+  test('ProfileSummary reads slot groups and difficulty flags', () {
+    final profile = ProfileSummary.fromJson({
+      'profileId': 0,
+      'profileName': '0',
+      'quickSaveSlots': ['G1R-001', 'G1R-002', 'G1R-003'],
+      'autoSaveSlots': ['G1R-001', 'G1R-002'],
+      'savedSlots': ['G1R-001', 'G1R-002'],
+      'difficultyPreset': '/Game/Difficulty/Normal',
+      'customCombatSettings': '/Game/Difficulty/Combat',
+      'customResourcesSettings': '/Game/Difficulty/Resources',
+      'customProgressionSettings': '/Game/Difficulty/Progression',
+      'survival': false,
+      'permanentDeath': true,
+      'permanentDeathGameOver': true,
+      'fakeSloppyCombos': false,
+      'maxQuick': 3,
+      'maxAuto': 2,
+    });
+
+    expect(profile.profileId, 0);
+    expect(profile.displayName, 'Profile 0');
+    expect(profile.quickSaveSlots, ['G1R-001', 'G1R-002', 'G1R-003']);
+    expect(profile.autoSaveSlots, ['G1R-001', 'G1R-002']);
+    expect(profile.savedSlots, ['G1R-001', 'G1R-002']);
+    expect(profile.difficultyPreset, '/Game/Difficulty/Normal');
+    expect(profile.permanentDeath, isTrue);
+    expect(profile.maxQuick, 3);
   });
 
   test('SaveInspection reads nested public and stream summaries', () {
@@ -37,6 +74,11 @@ void main() {
       'size': 1024,
       'sha1': 'abc',
       'trailerSize': 44,
+      'screenshot': {
+        'mimeType': 'image/jpeg',
+        'byteLength': 6,
+        'bytesBase64': '/9gBAv/Z',
+      },
       'public': {'slotName': 'G1R-001', 'playerSaveName': 'Colony'},
       'persistent': {
         'playerSaveName': 'Colony, Day 1',
@@ -75,6 +117,7 @@ void main() {
     expect(inspection.privateStatus, 'native_encoder_in_progress');
     expect(inspection.privateDecompressedSize, isNull);
     expect(inspection.privateStringCount, isNull);
+    expect(inspection.screenshot?.bytesBase64, '/9gBAv/Z');
   });
 
   test('SaveInspection reads decoded private strings', () {

@@ -1,6 +1,7 @@
 pub mod codec_backend;
 mod kraken;
 
+use base64::{Engine as _, engine::general_purpose};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha1::{Digest, Sha1};
@@ -130,6 +131,43 @@ pub struct SaveListItem {
     pub quick_save: Option<bool>,
     pub auto_save: Option<bool>,
     pub persistent_profile_id: Option<i32>,
+    pub screenshot: Option<ScreenshotSummary>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScreenshotSummary {
+    pub mime_type: String,
+    pub byte_length: usize,
+    pub bytes_base64: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileSummary {
+    pub profile_id: i32,
+    pub profile_name: Option<String>,
+    pub quick_save_slots: Vec<String>,
+    pub auto_save_slots: Vec<String>,
+    pub saved_slots: Vec<String>,
+    pub difficulty_preset: Option<String>,
+    pub custom_combat_settings: Option<String>,
+    pub custom_resources_settings: Option<String>,
+    pub custom_progression_settings: Option<String>,
+    pub survival: Option<bool>,
+    pub permanent_death: Option<bool>,
+    pub permanent_death_game_over: Option<bool>,
+    pub fake_sloppy_combos: Option<bool>,
+    pub max_quick: Option<i32>,
+    pub max_auto: Option<i32>,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveDirSummary {
+    pub saves: Vec<SaveListItem>,
+    pub profiles: Vec<ProfileSummary>,
+    pub active_profile_id: Option<i32>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -144,6 +182,12 @@ pub struct PersistentSlotMetadata {
     pub quick_save: Option<bool>,
     pub auto_save: Option<bool>,
     pub profile_id: Option<i32>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct PersistentDataListSummary {
+    slots: HashMap<String, PersistentSlotMetadata>,
+    profiles: Vec<ProfileSummary>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -288,9 +332,19 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
                 .and_then(Value::as_str)
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from(SAVE_ROOT));
+            let codec_backend = payload
+                .get("binaryHost")
+                .map(binary_host_backend_from_config)
+                .transpose()?;
+            let codec_backend = codec_backend
+                .as_ref()
+                .map(|backend| backend as &dyn codec_backend::CodecBackend);
+            let summary = scan_save_dir_summary_with_codec_backend(&path, codec_backend)?;
             Ok(json!({
                 "saveRoot": path,
-                "saves": scan_save_dir(&path)?,
+                "saves": summary.saves,
+                "profiles": summary.profiles,
+                "activeProfileId": summary.active_profile_id,
             }))
         }
         "inspect_save" => {
@@ -401,10 +455,24 @@ fn required_path(payload: &Value) -> Result<PathBuf, CoreError> {
 }
 
 pub fn scan_save_dir(path: &Path) -> Result<Vec<SaveListItem>, CoreError> {
+    Ok(scan_save_dir_summary(path)?.saves)
+}
+
+pub fn scan_save_dir_summary(path: &Path) -> Result<SaveDirSummary, CoreError> {
+    scan_save_dir_summary_with_codec_backend(path, None)
+}
+
+fn scan_save_dir_summary_with_codec_backend(
+    path: &Path,
+    codec_backend: Option<&dyn codec_backend::CodecBackend>,
+) -> Result<SaveDirSummary, CoreError> {
     if !path.exists() {
-        return Ok(Vec::new());
+        return Ok(SaveDirSummary::default());
     }
-    let persistent_slots = persistent_slot_metadata_for_dir(path).unwrap_or_default();
+    let persistent = persistent_data_list_summary_for_dir(path).unwrap_or_default();
+    let persistent_slots = &persistent.slots;
+    let screenshots =
+        screenshot_summaries_for_dir(path, &persistent.profiles, codec_backend).unwrap_or_default();
     let mut saves = Vec::new();
     for entry in fs::read_dir(path)? {
         let entry = entry?;
@@ -412,13 +480,17 @@ pub fn scan_save_dir(path: &Path) -> Result<Vec<SaveListItem>, CoreError> {
         if path.extension().and_then(|e| e.to_str()) != Some("sav") {
             continue;
         }
-        let data = fs::read(&path)?;
         let slot = path
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("unknown")
             .to_string();
+        if is_sidecar_save_stem(&slot) || !looks_slot_name(&slot) {
+            continue;
+        }
+        let data = fs::read(&path)?;
         let persistent = persistent_slots.get(&slot);
+        let screenshot = screenshots.get(&slot).cloned();
         match inspect_bytes(&data, Some(&path), false) {
             Ok(info) => {
                 let public = info.get("public").cloned().unwrap_or_else(|| json!({}));
@@ -464,6 +536,7 @@ pub fn scan_save_dir(path: &Path) -> Result<Vec<SaveListItem>, CoreError> {
                     quick_save: persistent.and_then(|metadata| metadata.quick_save),
                     auto_save: persistent.and_then(|metadata| metadata.auto_save),
                     persistent_profile_id: persistent.and_then(|metadata| metadata.profile_id),
+                    screenshot: screenshot.clone(),
                 });
             }
             Err(err) => saves.push(SaveListItem {
@@ -486,11 +559,121 @@ pub fn scan_save_dir(path: &Path) -> Result<Vec<SaveListItem>, CoreError> {
                 quick_save: persistent.and_then(|metadata| metadata.quick_save),
                 auto_save: persistent.and_then(|metadata| metadata.auto_save),
                 persistent_profile_id: persistent.and_then(|metadata| metadata.profile_id),
+                screenshot: screenshot.clone(),
             }),
         }
     }
     saves.sort_by(|a, b| a.slot.cmp(&b.slot));
-    Ok(saves)
+    let active_profile_id = saves
+        .iter()
+        .find_map(|save| save.persistent_profile_id)
+        .or_else(|| {
+            persistent
+                .profiles
+                .first()
+                .map(|profile| profile.profile_id)
+        });
+    Ok(SaveDirSummary {
+        saves,
+        profiles: persistent.profiles,
+        active_profile_id,
+    })
+}
+
+fn screenshot_summaries_for_dir(
+    dir: &Path,
+    profiles: &[ProfileSummary],
+    codec_backend: Option<&dyn codec_backend::CodecBackend>,
+) -> Result<HashMap<String, ScreenshotSummary>, CoreError> {
+    let mut profile_ids = profiles
+        .iter()
+        .map(|profile| profile.profile_id)
+        .collect::<Vec<_>>();
+    if profile_ids.is_empty() {
+        profile_ids.push(0);
+    }
+    profile_ids.sort_unstable();
+    profile_ids.dedup();
+
+    let mut screenshots = HashMap::new();
+    for profile_id in profile_ids {
+        let path = dir.join(format!("Profile_{profile_id}_Screenshots.sav"));
+        if !path.exists() {
+            continue;
+        }
+        let data = fs::read(path)?;
+        for (slot, screenshot) in parse_screenshot_save(&data, codec_backend)? {
+            screenshots.insert(slot, screenshot);
+        }
+    }
+    Ok(screenshots)
+}
+
+fn parse_screenshot_save(
+    data: &[u8],
+    codec_backend: Option<&dyn codec_backend::CodecBackend>,
+) -> Result<HashMap<String, ScreenshotSummary>, CoreError> {
+    if !data.starts_with(b"GSAV") {
+        return Ok(parse_screenshot_payload(data));
+    }
+    let private_offset = gsav_private_payload_offset(data)?;
+    match parse_compressed_stream(data, private_offset) {
+        Ok(stream) => {
+            let payload = decode_private_payload_best_effort(data, &stream, codec_backend)?;
+            Ok(parse_screenshot_payload(&payload))
+        }
+        Err(_) => Ok(parse_screenshot_payload(
+            data.get(private_offset..).unwrap_or_default(),
+        )),
+    }
+}
+
+fn decode_private_payload_best_effort(
+    data: &[u8],
+    stream: &CompressedStream,
+    codec_backend: Option<&dyn codec_backend::CodecBackend>,
+) -> Result<Vec<u8>, CoreError> {
+    if let Some(backend) = codec_backend {
+        if let Ok(payload) = decompress_private_payload(data, stream, backend) {
+            return Ok(payload);
+        }
+    }
+    stored_private_payload(data, stream)
+        .ok_or_else(|| CoreError::Codec("screenshot payload requires a codec backend".to_string()))
+}
+
+fn stored_private_payload(data: &[u8], stream: &CompressedStream) -> Option<Vec<u8>> {
+    let mut out = Vec::with_capacity(stream.summary_uncompressed_size as usize);
+    for chunk in &stream.chunks {
+        if chunk.compressed_size != chunk.uncompressed_size {
+            return None;
+        }
+        let start = chunk.compressed_offset;
+        let end = start.checked_add(chunk.compressed_size as usize)?;
+        out.extend_from_slice(data.get(start..end)?);
+    }
+    Some(out)
+}
+
+fn gsav_private_payload_offset(data: &[u8]) -> Result<usize, CoreError> {
+    if !data.starts_with(b"GSAV") {
+        return Err(CoreError::Parse("not a GSAV file".to_string()));
+    }
+    if data.len() < 13 {
+        return Err(CoreError::Parse(
+            "GSAV file is shorter than header".to_string(),
+        ));
+    }
+    let public_payload_size = u32::from_le_bytes(data[9..13].try_into().unwrap()) as usize;
+    let private_offset = 13usize
+        .checked_add(public_payload_size)
+        .ok_or_else(|| CoreError::Parse("public payload size overflow".to_string()))?;
+    if private_offset > data.len() {
+        return Err(CoreError::Parse(
+            "public payload extends past EOF".to_string(),
+        ));
+    }
+    Ok(private_offset)
 }
 
 fn persistent_slot_metadata_for_save(path: &Path) -> Option<PersistentSlotMetadata> {
@@ -504,23 +687,33 @@ fn persistent_slot_metadata_for_save(path: &Path) -> Option<PersistentSlotMetada
 fn persistent_slot_metadata_for_dir(
     dir: &Path,
 ) -> Result<HashMap<String, PersistentSlotMetadata>, CoreError> {
+    Ok(persistent_data_list_summary_for_dir(dir)?.slots)
+}
+
+fn persistent_data_list_summary_for_dir(
+    dir: &Path,
+) -> Result<PersistentDataListSummary, CoreError> {
     let path = dir.join("PersistentDataList.sav");
     if !path.exists() {
-        return Ok(HashMap::new());
+        return Ok(PersistentDataListSummary::default());
     }
     let data = fs::read(path)?;
-    Ok(parse_persistent_slot_metadata(&data))
+    Ok(parse_persistent_data_list_summary(&data))
 }
 
 fn parse_persistent_slot_metadata(data: &[u8]) -> HashMap<String, PersistentSlotMetadata> {
+    parse_persistent_data_list_summary(data).slots
+}
+
+fn parse_persistent_data_list_summary(data: &[u8]) -> PersistentDataListSummary {
     if !data.starts_with(b"GVAS") {
-        return HashMap::new();
+        return PersistentDataListSummary::default();
     }
     let refs = scan_fstrings(data, 0);
     let Some((public_data_idx, end_idx)) = persistent_public_data_ref_bounds(&refs) else {
-        return HashMap::new();
+        return PersistentDataListSummary::default();
     };
-    let mut out = HashMap::new();
+    let mut slots = HashMap::new();
     let mut idx = public_data_idx + 1;
     while idx < end_idx {
         if !looks_slot_name(&refs[idx].value)
@@ -542,13 +735,14 @@ fn parse_persistent_slot_metadata(data: &[u8]) -> HashMap<String, PersistentSlot
             })
             .map(|(candidate_idx, _)| candidate_idx)
             .unwrap_or(end_idx);
-        out.insert(
+        slots.insert(
             slot,
             persistent_metadata_from_ref_range(data, &refs, idx, block_end),
         );
         idx = block_end;
     }
-    out
+    let profiles = parse_profile_summaries(data, &refs, &slots);
+    PersistentDataListSummary { slots, profiles }
 }
 
 fn persistent_public_data_ref_bounds(refs: &[FStringRef]) -> Option<(usize, usize)> {
@@ -631,6 +825,304 @@ fn persistent_metadata_from_ref_range(
         auto_save: read_bool_property_in_range(payload, refs, start_idx, end_idx, "m_AutoSave"),
         profile_id: read_i32_property_in_range(payload, refs, start_idx, end_idx, "m_ProfileId"),
     }
+}
+
+fn parse_profile_summaries(
+    payload: &[u8],
+    refs: &[FStringRef],
+    slots: &HashMap<String, PersistentSlotMetadata>,
+) -> Vec<ProfileSummary> {
+    let Some(profiles_idx) = refs
+        .iter()
+        .position(|reference| reference.value == "m_Profiles")
+    else {
+        return profile_summaries_from_slots(slots);
+    };
+    let profiles_end = refs
+        .iter()
+        .enumerate()
+        .skip(profiles_idx + 1)
+        .find(|(_, reference)| matches!(reference.value.as_str(), "SavedDataVersion"))
+        .map(|(idx, _)| idx)
+        .unwrap_or(refs.len());
+    let starts = refs
+        .iter()
+        .enumerate()
+        .take(profiles_end)
+        .skip(profiles_idx + 1)
+        .filter_map(|(idx, reference)| (reference.value == "m_ProfileName").then_some(idx))
+        .collect::<Vec<_>>();
+    if starts.is_empty() {
+        return profile_summaries_from_slots(slots);
+    }
+
+    let mut profiles = starts
+        .iter()
+        .enumerate()
+        .map(|(ordinal, start_idx)| {
+            let end_idx = starts.get(ordinal + 1).copied().unwrap_or(profiles_end);
+            let profile_id =
+                read_i32_property_in_range(payload, refs, *start_idx, end_idx, "m_ProfileId")
+                    .unwrap_or(ordinal as i32);
+            let mut saved_slots =
+                slot_values_after_property_in_range(refs, *start_idx, end_idx, "m_SavedSlotsNames");
+            if saved_slots.is_empty() {
+                saved_slots = slots_for_profile(slots, profile_id, |_| true);
+            }
+            ProfileSummary {
+                profile_id,
+                profile_name: value_after_property_in_range(
+                    refs,
+                    *start_idx,
+                    end_idx,
+                    "m_ProfileName",
+                ),
+                quick_save_slots: slot_values_after_property_in_range(
+                    refs,
+                    *start_idx,
+                    end_idx,
+                    "m_QuickSaveName",
+                ),
+                auto_save_slots: slot_values_after_property_in_range(
+                    refs,
+                    *start_idx,
+                    end_idx,
+                    "m_AutoSaveName",
+                ),
+                saved_slots,
+                difficulty_preset: value_after_property_in_range(
+                    refs,
+                    *start_idx,
+                    end_idx,
+                    "m_difficultyPreset",
+                ),
+                custom_combat_settings: value_after_property_in_range(
+                    refs,
+                    *start_idx,
+                    end_idx,
+                    "m_customCombatSettings",
+                ),
+                custom_resources_settings: value_after_property_in_range(
+                    refs,
+                    *start_idx,
+                    end_idx,
+                    "m_customResourcesSettings",
+                ),
+                custom_progression_settings: value_after_property_in_range(
+                    refs,
+                    *start_idx,
+                    end_idx,
+                    "m_customProgressionSettings",
+                ),
+                survival: read_bool_property_in_range(
+                    payload,
+                    refs,
+                    *start_idx,
+                    end_idx,
+                    "m_Survival",
+                )
+                .or_else(|| {
+                    read_bool_property_in_range(
+                        payload,
+                        refs,
+                        *start_idx,
+                        end_idx,
+                        "m_SurvivalMode",
+                    )
+                }),
+                permanent_death: read_bool_property_in_range(
+                    payload,
+                    refs,
+                    *start_idx,
+                    end_idx,
+                    "m_PermanentDeath",
+                )
+                .or_else(|| {
+                    read_bool_property_in_range(payload, refs, *start_idx, end_idx, "m_PermaDeath")
+                }),
+                permanent_death_game_over: read_bool_property_in_range(
+                    payload,
+                    refs,
+                    *start_idx,
+                    end_idx,
+                    "m_PermanentDeathGameOver",
+                ),
+                fake_sloppy_combos: read_bool_property_in_range(
+                    payload,
+                    refs,
+                    *start_idx,
+                    end_idx,
+                    "m_FakeSloppyCombos",
+                ),
+                max_quick: read_i32_property_in_range(
+                    payload,
+                    refs,
+                    *start_idx,
+                    end_idx,
+                    "m_MaxQuick",
+                ),
+                max_auto: read_i32_property_in_range(
+                    payload,
+                    refs,
+                    *start_idx,
+                    end_idx,
+                    "m_MaxAuto",
+                ),
+            }
+        })
+        .collect::<Vec<_>>();
+    profiles.sort_by_key(|profile| profile.profile_id);
+    profiles
+}
+
+fn profile_summaries_from_slots(
+    slots: &HashMap<String, PersistentSlotMetadata>,
+) -> Vec<ProfileSummary> {
+    let mut profile_ids = slots
+        .values()
+        .filter_map(|metadata| metadata.profile_id)
+        .collect::<Vec<_>>();
+    profile_ids.sort_unstable();
+    profile_ids.dedup();
+    profile_ids
+        .into_iter()
+        .map(|profile_id| ProfileSummary {
+            profile_id,
+            profile_name: Some(profile_id.to_string()),
+            quick_save_slots: slots_for_profile(slots, profile_id, |metadata| {
+                metadata.quick_save == Some(true)
+            }),
+            auto_save_slots: slots_for_profile(slots, profile_id, |metadata| {
+                metadata.auto_save == Some(true)
+            }),
+            saved_slots: slots_for_profile(slots, profile_id, |_| true),
+            difficulty_preset: None,
+            custom_combat_settings: None,
+            custom_resources_settings: None,
+            custom_progression_settings: None,
+            survival: None,
+            permanent_death: None,
+            permanent_death_game_over: None,
+            fake_sloppy_combos: None,
+            max_quick: None,
+            max_auto: None,
+        })
+        .collect()
+}
+
+fn slots_for_profile(
+    slots: &HashMap<String, PersistentSlotMetadata>,
+    profile_id: i32,
+    filter: impl Fn(&PersistentSlotMetadata) -> bool,
+) -> Vec<String> {
+    let mut values = slots
+        .iter()
+        .filter_map(|(slot, metadata)| {
+            (metadata.profile_id == Some(profile_id) && filter(metadata)).then(|| slot.clone())
+        })
+        .collect::<Vec<_>>();
+    values.sort();
+    values
+}
+
+fn slot_values_after_property_in_range(
+    refs: &[FStringRef],
+    start_idx: usize,
+    end_idx: usize,
+    name: &str,
+) -> Vec<String> {
+    let Some(name_idx) = find_ref_in_range(refs, start_idx, end_idx, name) else {
+        return Vec::new();
+    };
+    let mut values = Vec::new();
+    for reference in refs.iter().take(end_idx).skip(name_idx + 1) {
+        if reference.value == "SavedDataVersion"
+            || reference.value == "None"
+            || is_profile_summary_property(reference.value.as_str())
+        {
+            break;
+        }
+        if looks_slot_name(&reference.value) && !values.contains(&reference.value) {
+            values.push(reference.value.clone());
+        }
+    }
+    values
+}
+
+fn is_profile_summary_property(value: &str) -> bool {
+    matches!(
+        value,
+        "m_ProfileName"
+            | "m_ProfileId"
+            | "m_QuickSaveName"
+            | "m_AutoSaveName"
+            | "m_SavedSlotsNames"
+            | "m_difficultyPreset"
+            | "m_customCombatSettings"
+            | "m_customResourcesSettings"
+            | "m_customProgressionSettings"
+            | "m_Survival"
+            | "m_SurvivalMode"
+            | "m_PermanentDeath"
+            | "m_PermaDeath"
+            | "m_PermanentDeathGameOver"
+            | "m_FakeSloppyCombos"
+            | "m_MaxQuick"
+            | "m_MaxAuto"
+    )
+}
+
+fn parse_screenshot_payload(payload: &[u8]) -> HashMap<String, ScreenshotSummary> {
+    let refs = scan_fstrings(payload, 0);
+    let mut screenshots = HashMap::new();
+    for (idx, reference) in refs.iter().enumerate() {
+        if !looks_slot_name(&reference.value) {
+            continue;
+        }
+        let start = reference.len_offset + reference.total_len;
+        let end = refs
+            .iter()
+            .skip(idx + 1)
+            .find(|candidate| looks_slot_name(&candidate.value))
+            .map(|candidate| candidate.len_offset)
+            .unwrap_or(payload.len());
+        let Some(jpeg) = jpeg_after_slot(payload, start, end) else {
+            continue;
+        };
+        screenshots.insert(
+            reference.value.clone(),
+            ScreenshotSummary {
+                mime_type: "image/jpeg".to_string(),
+                byte_length: jpeg.len(),
+                bytes_base64: general_purpose::STANDARD.encode(jpeg),
+            },
+        );
+    }
+    screenshots
+}
+
+fn jpeg_after_slot(payload: &[u8], start: usize, end: usize) -> Option<&[u8]> {
+    if start >= end || end > payload.len() {
+        return None;
+    }
+    let soi = find_bytes(payload, start, end, &[0xff, 0xd8])?;
+    let eoi = find_bytes(payload, soi + 2, end, &[0xff, 0xd9])? + 2;
+    payload.get(soi..eoi)
+}
+
+fn find_bytes(haystack: &[u8], start: usize, end: usize, needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || end > haystack.len() || start >= end || needle.len() > end - start {
+        return None;
+    }
+    haystack[start..end]
+        .windows(needle.len())
+        .position(|window| window == needle)
+        .map(|offset| start + offset)
+}
+
+fn is_sidecar_save_stem(value: &str) -> bool {
+    value == "PersistentDataList"
+        || (value.starts_with("Profile_") && value.ends_with("_Screenshots"))
 }
 
 fn looks_slot_name(value: &str) -> bool {
@@ -3559,6 +4051,17 @@ mod tests {
         out
     }
 
+    fn string_array_property(name: &str, values: &[&str]) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(&fstring(name));
+        out.extend_from_slice(&fstring("ArrayProperty"));
+        out.extend_from_slice(&fstring("StrProperty"));
+        for value in values {
+            out.extend_from_slice(&fstring(value));
+        }
+        out
+    }
+
     fn int_property(name: &str, value: i32) -> Vec<u8> {
         let mut out = Vec::new();
         out.extend_from_slice(&fstring(name));
@@ -3763,7 +4266,86 @@ mod tests {
                 *auto,
             ));
         }
+        let saved_slots = slots
+            .iter()
+            .map(|(slot, _, _, _, _, _, _)| *slot)
+            .collect::<Vec<_>>();
         out.extend_from_slice(&fstring("m_Profiles"));
+        out.extend_from_slice(&fstring("ArrayProperty"));
+        out.extend_from_slice(&fstring("StructProperty"));
+        out.extend_from_slice(&fstring("ProfileData"));
+        out.extend_from_slice(&fstring("/Script/G1R"));
+        out.extend_from_slice(&str_property("m_ProfileName", "0"));
+        out.extend_from_slice(&int_property("m_ProfileId", 0));
+        out.extend_from_slice(&string_array_property(
+            "m_QuickSaveName",
+            &["G1R-001", "G1R-002", "G1R-003"],
+        ));
+        out.extend_from_slice(&string_array_property(
+            "m_AutoSaveName",
+            &["G1R-001", "G1R-002"],
+        ));
+        out.extend_from_slice(&string_array_property("m_SavedSlotsNames", &saved_slots));
+        out.extend_from_slice(&fstring("m_difficultyPreset"));
+        out.extend_from_slice(&fstring("ObjectProperty"));
+        out.extend_from_slice(&fstring("/Game/G1R/Gameplay/Difficulty/Normal"));
+        out.extend_from_slice(&fstring("m_customCombatSettings"));
+        out.extend_from_slice(&fstring("ObjectProperty"));
+        out.extend_from_slice(&fstring("/Game/G1R/Gameplay/Difficulty/CombatDefault"));
+        out.extend_from_slice(&fstring("m_customResourcesSettings"));
+        out.extend_from_slice(&fstring("ObjectProperty"));
+        out.extend_from_slice(&fstring("/Game/G1R/Gameplay/Difficulty/ResourcesDefault"));
+        out.extend_from_slice(&fstring("m_customProgressionSettings"));
+        out.extend_from_slice(&fstring("ObjectProperty"));
+        out.extend_from_slice(&fstring("/Game/G1R/Gameplay/Difficulty/ProgressionDefault"));
+        out.extend_from_slice(&bool_property("m_Survival", false));
+        out.extend_from_slice(&bool_property("m_PermanentDeath", false));
+        out.extend_from_slice(&bool_property("m_PermanentDeathGameOver", false));
+        out.extend_from_slice(&bool_property("m_FakeSloppyCombos", false));
+        out.extend_from_slice(&int_property("m_MaxQuick", 3));
+        out.extend_from_slice(&int_property("m_MaxAuto", 3));
+        out.extend_from_slice(&fstring("None"));
+        out.extend_from_slice(&fstring("SavedDataVersion"));
+        out
+    }
+
+    fn screenshot_private_payload(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(&fstring("m_Screenshots"));
+        out.extend_from_slice(&fstring("MapProperty"));
+        out.extend_from_slice(&fstring("StrProperty"));
+        out.extend_from_slice(&fstring("ArrayProperty"));
+        out.extend_from_slice(&fstring("ByteProperty"));
+        for (slot, jpeg) in entries {
+            out.extend_from_slice(&fstring(slot));
+            out.extend_from_slice(jpeg);
+        }
+        out.extend_from_slice(&fstring("None"));
+        out
+    }
+
+    fn screenshot_gsav_for_tests(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let payload = screenshot_private_payload(entries);
+        build_gsav(
+            2,
+            &public_payload("Screenshots"),
+            &compressed_stream_with_one_chunk(&payload, payload.len()),
+            &[0, 0, 0, 0],
+        )
+    }
+
+    fn raw_screenshot_gsav_for_tests(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let public_payload = public_payload("Screenshots");
+        let private_payload = screenshot_private_payload(entries);
+        let body_size = 13 + public_payload.len() + private_payload.len();
+        let mut out = Vec::new();
+        out.extend_from_slice(b"GSAV");
+        out.push(2);
+        out.extend_from_slice(&(body_size as u32).to_le_bytes());
+        out.extend_from_slice(&(public_payload.len() as u32).to_le_bytes());
+        out.extend_from_slice(&public_payload);
+        out.extend_from_slice(&private_payload);
+        out.extend_from_slice(&[0, 0, 0, 0]);
         out
     }
 
@@ -3980,6 +4562,141 @@ mod tests {
         assert_eq!(value["timePlayedSeconds"], 3661.5);
         assert_eq!(value["quickSave"], true);
         assert_eq!(value["autoSave"], false);
+    }
+
+    #[test]
+    fn scan_save_dir_reports_profile_summaries_from_persistent_data_list() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("G1R-001.sav"), minimal_gsav("Auto")).unwrap();
+        fs::write(dir.path().join("G1R-002.sav"), minimal_gsav("Quick")).unwrap();
+        fs::write(
+            dir.path().join("PersistentDataList.sav"),
+            persistent_data_list(&[
+                ("G1R-001", "Auto", 1, "MainMap", 60.0, false, true),
+                ("G1R-002", "Quick", 1, "MainMap", 120.0, true, false),
+            ]),
+        )
+        .unwrap();
+
+        let value = execute_json_inner(
+            &json!({
+                "command": "scan_save_dir",
+                "payload": { "path": dir.path() }
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        assert_eq!(value["activeProfileId"], 0);
+        assert_eq!(value["profiles"][0]["profileId"], 0);
+        assert_eq!(value["profiles"][0]["profileName"], "0");
+        assert_eq!(
+            value["profiles"][0]["quickSaveSlots"],
+            json!(["G1R-001", "G1R-002", "G1R-003"])
+        );
+        assert_eq!(
+            value["profiles"][0]["autoSaveSlots"],
+            json!(["G1R-001", "G1R-002"])
+        );
+        assert_eq!(
+            value["profiles"][0]["savedSlots"],
+            json!(["G1R-001", "G1R-002"])
+        );
+    }
+
+    #[test]
+    fn scan_save_dir_filters_non_slot_sav_files() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("G1R-001.sav"), minimal_gsav("Auto")).unwrap();
+        fs::write(
+            dir.path().join("EnhancedInputUserSettings.sav"),
+            minimal_gsav("Settings"),
+        )
+        .unwrap();
+
+        let saves = scan_save_dir(dir.path()).unwrap();
+
+        assert_eq!(saves.len(), 1);
+        assert_eq!(saves[0].slot, "G1R-001");
+    }
+
+    #[test]
+    fn parse_screenshot_payload_extracts_jpeg_by_slot() {
+        let payload =
+            screenshot_private_payload(&[("G1R-001", &[0xff, 0xd8, 0x01, 0x02, 0xff, 0xd9])]);
+
+        let screenshots = parse_screenshot_payload(&payload);
+
+        assert_eq!(screenshots["G1R-001"].mime_type, "image/jpeg");
+        assert_eq!(screenshots["G1R-001"].byte_length, 6);
+        assert_eq!(screenshots["G1R-001"].bytes_base64, "/9gBAv/Z");
+    }
+
+    #[test]
+    fn scan_save_dir_attaches_screenshot_to_matching_slot() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("G1R-001.sav"), minimal_gsav("Auto")).unwrap();
+        fs::write(
+            dir.path().join("PersistentDataList.sav"),
+            persistent_data_list(&[("G1R-001", "Auto", 1, "MainMap", 60.0, false, true)]),
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("Profile_0_Screenshots.sav"),
+            screenshot_gsav_for_tests(&[("G1R-001", &[0xff, 0xd8, 0x01, 0x02, 0xff, 0xd9])]),
+        )
+        .unwrap();
+
+        let value = execute_json_inner(
+            &json!({
+                "command": "scan_save_dir",
+                "payload": { "path": dir.path() }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let saves = value["saves"].as_array().unwrap();
+        let save = saves.iter().find(|save| save["slot"] == "G1R-001").unwrap();
+
+        assert_eq!(save["screenshot"]["mimeType"], "image/jpeg");
+        assert_eq!(save["screenshot"]["byteLength"], 6);
+        assert_eq!(save["screenshot"]["bytesBase64"], "/9gBAv/Z");
+        assert!(
+            !saves
+                .iter()
+                .any(|save| save["slot"] == "Profile_0_Screenshots")
+        );
+    }
+
+    #[test]
+    fn scan_save_dir_attaches_raw_gsav_screenshot_sidecar() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("G1R-001.sav"), minimal_gsav("Auto")).unwrap();
+        fs::write(
+            dir.path().join("PersistentDataList.sav"),
+            persistent_data_list(&[("G1R-001", "Auto", 1, "MainMap", 60.0, false, true)]),
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("Profile_0_Screenshots.sav"),
+            raw_screenshot_gsav_for_tests(&[("G1R-001", &[0xff, 0xd8, 0xaa, 0xbb, 0xff, 0xd9])]),
+        )
+        .unwrap();
+
+        let value = execute_json_inner(
+            &json!({
+                "command": "scan_save_dir",
+                "payload": { "path": dir.path() }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let saves = value["saves"].as_array().unwrap();
+        let save = saves.iter().find(|save| save["slot"] == "G1R-001").unwrap();
+
+        assert_eq!(save["screenshot"]["mimeType"], "image/jpeg");
+        assert_eq!(save["screenshot"]["byteLength"], 6);
+        assert_eq!(save["screenshot"]["bytesBase64"], "/9iqu//Z");
     }
 
     #[test]

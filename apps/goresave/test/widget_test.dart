@@ -35,6 +35,8 @@ void main() {
     expect(find.text('Time played'), findsOneWidget);
     expect(find.text('1h 56m'), findsOneWidget);
     expect(find.text('Auto save'), findsOneWidget);
+    expect(find.text('Profile 0'), findsOneWidget);
+    expect(find.bySemanticsLabel('Screenshot for G1R-001'), findsWidgets);
 
     await tester.enterText(
       find.widgetWithText(TextField, 'Public save name'),
@@ -426,8 +428,26 @@ class _FakeCoreService implements GoresaveCoreService {
                 'slotName': 'G1R-001',
                 'compressionMethod': 'Oodle',
                 'chunkCount': 451,
+                'screenshot': {
+                  'mimeType': 'image/png',
+                  'byteLength': 68,
+                  'bytesBase64':
+                      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=',
+                },
               },
             ],
+            'profiles': [
+              {
+                'profileId': 0,
+                'profileName': '0',
+                'quickSaveSlots': ['G1R-001', 'G1R-002', 'G1R-003'],
+                'autoSaveSlots': ['G1R-001', 'G1R-002'],
+                'savedSlots': ['G1R-001'],
+                'maxQuick': 3,
+                'maxAuto': 2,
+              },
+            ],
+            'activeProfileId': 0,
           },
         };
       case 'inspect_save':
@@ -441,6 +461,12 @@ class _FakeCoreService implements GoresaveCoreService {
             'size': 914367,
             'sha1': 'abc',
             'trailerSize': 44,
+            'screenshot': {
+              'mimeType': 'image/png',
+              'byteLength': 68,
+              'bytesBase64':
+                  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=',
+            },
             'public': {
               'slotName': 'G1R-001',
               'playerSaveName': 'Die Welt der Verurteilten',

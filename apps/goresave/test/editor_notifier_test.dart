@@ -74,6 +74,61 @@ void main() {
   });
 
   test(
+    'refresh parses profiles, screenshots, and sends scan codec host',
+    () async {
+      final core = _RecordingCoreService(
+        scanData: {
+          'saves': [
+            {
+              'path': r'C:\tmp\saves\G1R-001.sav',
+              'slot': 'G1R-001',
+              'format': 'GSAV',
+              'fileSize': 914367,
+              'sha1': 'abc',
+              'status': 'ok',
+              'playerSaveName': 'Auto',
+              'screenshot': {
+                'mimeType': 'image/jpeg',
+                'byteLength': 6,
+                'bytesBase64': '/9gBAv/Z',
+              },
+            },
+          ],
+          'profiles': [
+            {
+              'profileId': 0,
+              'profileName': '0',
+              'quickSaveSlots': ['G1R-001', 'G1R-002', 'G1R-003'],
+              'autoSaveSlots': ['G1R-001', 'G1R-002'],
+              'savedSlots': ['G1R-001'],
+            },
+          ],
+          'activeProfileId': 0,
+        },
+      );
+      final notifier = EditorNotifier(
+        core,
+        saveDir: r'C:\tmp\saves',
+        codecHostPath: r'C:\tools\goresave_g1r_codec_host.exe',
+        gameExePath: r'C:\Games\G1R\G1R-Win64-Shipping.exe',
+      );
+
+      await pumpEventQueue();
+
+      final scan = core.requests.firstWhere(
+        (request) => request.command == 'scan_save_dir',
+      );
+      expect(scan.payload['binaryHost'], {
+        'helperPath': r'C:\tools\goresave_g1r_codec_host.exe',
+        'exePath': r'C:\Games\G1R\G1R-Win64-Shipping.exe',
+      });
+      expect(notifier.state.profiles.single.displayName, 'Profile 0');
+      expect(notifier.state.activeProfile?.profileId, 0);
+      expect(notifier.state.selectedSave?.screenshot?.byteLength, 6);
+    },
+  );
+
+  test(
     'inspect sends configured binary host paths and decodes all chunks',
     () async {
       final core = _RecordingCoreService();
@@ -471,6 +526,10 @@ class _RecordedRequest {
 }
 
 class _RecordingCoreService implements GoresaveCoreService {
+  _RecordingCoreService({Map<String, Object?>? scanData})
+    : scanData = scanData ?? {'saves': <Object?>[]};
+
+  final Map<String, Object?> scanData;
   final requests = <_RecordedRequest>[];
 
   @override
@@ -489,7 +548,7 @@ class _RecordingCoreService implements GoresaveCoreService {
       case 'scan_save_dir':
         return {
           'ok': true,
-          'data': {'saveRoot': payload['path'], 'saves': <Object?>[]},
+          'data': {'saveRoot': payload['path'], ...scanData},
         };
       case 'inspect_save':
         final preview = payload.containsKey('privateChunkLimit');
