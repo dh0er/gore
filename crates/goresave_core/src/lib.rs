@@ -280,7 +280,13 @@ impl<'a> Reader<'a> {
             let body = raw.strip_suffix(&[0]).unwrap_or(raw);
             return Ok(String::from_utf8_lossy(body).to_string());
         }
-        let chars = (-n) as usize;
+        // `-n` overflows (panic in debug, wrap in release) when n == i32::MIN
+        // (0x80000000). Reject it via checked negation instead of aborting
+        // across the FFI boundary on a corrupt UTF-16 length.
+        let chars = n
+            .checked_neg()
+            .ok_or_else(|| CoreError::Parse("invalid UTF-16 FString length".to_string()))?
+            as usize;
         let raw = self.read(chars * 2)?;
         let units = raw
             .chunks_exact(2)
@@ -1760,7 +1766,12 @@ fn parse_compressed_stream(data: &[u8], offset: usize) -> Result<CompressedStrea
             "compressed chunk table declares {chunk_count} chunks but only {max_possible_chunks} fit in the remaining {remaining} bytes"
         )));
     }
-    let mut chunks = Vec::with_capacity(chunk_count);
+    // Fallible reservation: even with the bound above, never panic/abort across
+    // the FFI boundary on a large count — surface a parse error instead.
+    let mut chunks: Vec<CompressedChunk> = Vec::new();
+    chunks.try_reserve(chunk_count).map_err(|_| {
+        CoreError::Parse(format!("cannot reserve space for {chunk_count} chunks"))
+    })?;
     for index in 0..chunk_count {
         let compressed_size = r.u64()?;
         let uncompressed_size = r.u64()?;
@@ -5360,6 +5371,15 @@ mod tests {
         // A safety backup of the pre-restore PersistentDataList was created.
         let safety = PathBuf::from(value["data"]["persistentBackupPath"].as_str().unwrap());
         assert_eq!(fs::read(&safety).unwrap(), b"GVAS-new-name");
+    }
+
+    #[test]
+    fn fstring_rejects_i32_min_utf16_length() {
+        // i32::MIN (0x80000000) as a negative UTF-16 length must error, not
+        // panic on `-n` overflow.
+        let data = i32::MIN.to_le_bytes();
+        let mut r = Reader::new(&data, 0);
+        assert!(r.fstring().is_err());
     }
 
     #[test]
