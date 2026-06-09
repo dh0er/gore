@@ -161,6 +161,41 @@ class EditorNotifier extends StateNotifier<EditorState> {
     }
   }
 
+  /// Run a mutating action (write/validate/restore) as a tracked load: show the
+  /// overlay, clear prior errors, and always clear loading afterwards — even if
+  /// the core call throws — so the spinner can't get stuck. Counting also lets
+  /// checkCodec see that a load is in flight and not race it with an inspect.
+  Future<void> _withLoading(Future<void> Function() body) async {
+    _loadStarted();
+    state = state.copyWith(isLoading: true, clearError: true);
+    try {
+      await body();
+    } catch (error) {
+      // A thrown core call (e.g. bad JSON / null native response) must surface
+      // as an error rather than propagate and leave the UI wedged.
+      state = state.copyWith(error: 'Unexpected error: $error');
+    } finally {
+      _loadFinished();
+    }
+  }
+
+  /// Run a `write_save` request as a tracked load, then rescan on success.
+  Future<void> _runWrite({
+    required Map<String, Object?> payload,
+    required String Function(Map<String, Object?> data) message,
+  }) async {
+    await _withLoading(() async {
+      final response = await _execute('write_save', payload: payload);
+      if (response['ok'] != true) {
+        state = state.copyWith(error: _errorMessage(response));
+        return;
+      }
+      final data = (response['data'] as Map).cast<String, Object?>();
+      state = state.copyWith(lastWriteMessage: message(data));
+      await refresh();
+    });
+  }
+
   /// Serializes all core calls. The native layer runs each command in its own
   /// isolate with no serialization, so overlapping write_save/restore_backup
   /// requests on the same file could interleave temp files and renames. Chaining
@@ -374,28 +409,29 @@ class EditorNotifier extends StateNotifier<EditorState> {
   Future<void> restoreBackup(String backupPath) async {
     final path = state.selectedPath;
     if (path == null) return;
-    state = state.copyWith(isLoading: true, clearError: true);
-    final response = await _execute(
-      'restore_backup',
-      payload: {'path': path, 'backupPath': backupPath},
-    );
-    if (response['ok'] != true) {
-      state = state.copyWith(isLoading: false, error: _errorMessage(response));
-      return;
-    }
-    state = state.copyWith(lastWriteMessage: 'Restored backup: $backupPath');
-    // Rescan so the sidebar/profile summary reflect the rolled-back public name
-    // and PersistentDataList metadata, not just the detail pane.
-    await refresh();
-    // The restore itself succeeded on disk; if the follow-up rescan/inspection
-    // failed, make clear the restore worked so the error is not misread as a
-    // failed restore.
-    if (state.error != null) {
-      state = state.copyWith(
-        error:
-            'Restored backup: $backupPath, but reloading the save failed: ${state.error}',
+    await _withLoading(() async {
+      final response = await _execute(
+        'restore_backup',
+        payload: {'path': path, 'backupPath': backupPath},
       );
-    }
+      if (response['ok'] != true) {
+        state = state.copyWith(error: _errorMessage(response));
+        return;
+      }
+      state = state.copyWith(lastWriteMessage: 'Restored backup: $backupPath');
+      // Rescan so the sidebar/profile summary reflect the rolled-back public
+      // name and PersistentDataList metadata, not just the detail pane.
+      await refresh();
+      // The restore itself succeeded on disk; if the follow-up rescan/inspection
+      // failed, make clear the restore worked so the error is not misread as a
+      // failed restore.
+      if (state.error != null) {
+        state = state.copyWith(
+          error:
+              'Restored backup: $backupPath, but reloading the save failed: ${state.error}',
+        );
+      }
+    });
   }
 
   Future<void> checkCodec() async {
@@ -423,50 +459,48 @@ class EditorNotifier extends StateNotifier<EditorState> {
   Future<void> validateSelected() async {
     final path = state.selectedPath;
     if (path == null) return;
-    state = state.copyWith(isLoading: true, clearError: true);
-    final response = await _execute(
-      'validate_roundtrip',
-      payload: {'path': path},
-    );
-    if (response['ok'] != true) {
-      state = state.copyWith(isLoading: false, error: _errorMessage(response));
-      return;
-    }
-    final data = (response['data'] as Map).cast<String, Object?>();
-    state = state.copyWith(
-      isLoading: false,
-      lastWriteMessage: data['identical'] == true
-          ? 'Roundtrip validation passed'
-          : 'Roundtrip validation changed bytes',
-    );
+    await _withLoading(() async {
+      final response = await _execute(
+        'validate_roundtrip',
+        payload: {'path': path},
+      );
+      if (response['ok'] != true) {
+        state = state.copyWith(error: _errorMessage(response));
+        return;
+      }
+      final data = (response['data'] as Map).cast<String, Object?>();
+      state = state.copyWith(
+        lastWriteMessage: data['identical'] == true
+            ? 'Roundtrip validation passed'
+            : 'Roundtrip validation changed bytes',
+      );
+    });
   }
 
   Future<void> validateCodecRoundtrip() async {
     final path = state.selectedPath;
     if (path == null) return;
-    state = state.copyWith(isLoading: true, clearError: true);
-    final response = await _execute(
-      'validate_codec_roundtrip',
-      payload: {'path': path, ..._codecPayload()},
-    );
-    if (response['ok'] != true) {
-      state = state.copyWith(isLoading: false, error: _errorMessage(response));
-      return;
-    }
-    final data = (response['data'] as Map).cast<String, Object?>();
-    state = state.copyWith(
-      isLoading: false,
-      lastWriteMessage:
-          'Codec roundtrip passed: chunk ${data['chunkIndex']} recompressed to ${data['recompressedSize']} bytes',
-    );
+    await _withLoading(() async {
+      final response = await _execute(
+        'validate_codec_roundtrip',
+        payload: {'path': path, ..._codecPayload()},
+      );
+      if (response['ok'] != true) {
+        state = state.copyWith(error: _errorMessage(response));
+        return;
+      }
+      final data = (response['data'] as Map).cast<String, Object?>();
+      state = state.copyWith(
+        lastWriteMessage:
+            'Codec roundtrip passed: chunk ${data['chunkIndex']} recompressed to ${data['recompressedSize']} bytes',
+      );
+    });
   }
 
   Future<void> writePlayerSaveName(String value) async {
     final path = state.selectedPath;
     if (path == null) return;
-    state = state.copyWith(isLoading: true, clearError: true);
-    final response = await _execute(
-      'write_save',
+    await _runWrite(
       payload: {
         'path': path,
         'backup': true,
@@ -475,17 +509,8 @@ class EditorNotifier extends StateNotifier<EditorState> {
           {'path': 'public.m_PlayerSaveName', 'value': value},
         ],
       },
+      message: (data) => _backupMessage('Saved with backup', data),
     );
-    if (response['ok'] != true) {
-      state = state.copyWith(isLoading: false, error: _errorMessage(response));
-      return;
-    }
-    final data = (response['data'] as Map).cast<String, Object?>();
-    state = state.copyWith(
-      isLoading: false,
-      lastWriteMessage: _backupMessage('Saved with backup', data),
-    );
-    await refresh();
   }
 
   Future<void> writePrivateFString({
@@ -494,9 +519,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
   }) async {
     final path = state.selectedPath;
     if (path == null) return;
-    state = state.copyWith(isLoading: true, clearError: true);
-    final response = await _execute(
-      'write_save',
+    await _runWrite(
       payload: {
         'path': path,
         'backup': true,
@@ -508,28 +531,15 @@ class EditorNotifier extends StateNotifier<EditorState> {
         ],
         ..._codecPayload(),
       },
+      message: (data) =>
+          _backupMessage('Private payload saved with backup', data),
     );
-    if (response['ok'] != true) {
-      state = state.copyWith(isLoading: false, error: _errorMessage(response));
-      return;
-    }
-    final data = (response['data'] as Map).cast<String, Object?>();
-    state = state.copyWith(
-      isLoading: false,
-      lastWriteMessage: _backupMessage(
-        'Private payload saved with backup',
-        data,
-      ),
-    );
-    await refresh();
   }
 
   Future<void> writePrivatePlayerName(String value) async {
     final path = state.selectedPath;
     if (path == null) return;
-    state = state.copyWith(isLoading: true, clearError: true);
-    final response = await _execute(
-      'write_save',
+    await _runWrite(
       payload: {
         'path': path,
         'backup': true,
@@ -538,28 +548,15 @@ class EditorNotifier extends StateNotifier<EditorState> {
         ],
         ..._codecPayload(),
       },
+      message: (data) =>
+          _backupMessage('Private player name saved with backup', data),
     );
-    if (response['ok'] != true) {
-      state = state.copyWith(isLoading: false, error: _errorMessage(response));
-      return;
-    }
-    final data = (response['data'] as Map).cast<String, Object?>();
-    state = state.copyWith(
-      isLoading: false,
-      lastWriteMessage: _backupMessage(
-        'Private player name saved with backup',
-        data,
-      ),
-    );
-    await refresh();
   }
 
   Future<void> writePrivateProfileName(String value) async {
     final path = state.selectedPath;
     if (path == null) return;
-    state = state.copyWith(isLoading: true, clearError: true);
-    final response = await _execute(
-      'write_save',
+    await _runWrite(
       payload: {
         'path': path,
         'backup': true,
@@ -568,20 +565,9 @@ class EditorNotifier extends StateNotifier<EditorState> {
         ],
         ..._codecPayload(),
       },
+      message: (data) =>
+          _backupMessage('Private profile name saved with backup', data),
     );
-    if (response['ok'] != true) {
-      state = state.copyWith(isLoading: false, error: _errorMessage(response));
-      return;
-    }
-    final data = (response['data'] as Map).cast<String, Object?>();
-    state = state.copyWith(
-      isLoading: false,
-      lastWriteMessage: _backupMessage(
-        'Private profile name saved with backup',
-        data,
-      ),
-    );
-    await refresh();
   }
 
   Future<void> writePlayerAttribute({
@@ -591,9 +577,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
   }) async {
     final path = state.selectedPath;
     if (path == null) return;
-    state = state.copyWith(isLoading: true, clearError: true);
-    final response = await _execute(
-      'write_save',
+    await _runWrite(
       payload: {
         'path': path,
         'backup': true,
@@ -609,20 +593,9 @@ class EditorNotifier extends StateNotifier<EditorState> {
         ],
         ..._codecPayload(),
       },
+      message: (data) =>
+          _backupMessage('Private player attribute saved with backup', data),
     );
-    if (response['ok'] != true) {
-      state = state.copyWith(isLoading: false, error: _errorMessage(response));
-      return;
-    }
-    final data = (response['data'] as Map).cast<String, Object?>();
-    state = state.copyWith(
-      isLoading: false,
-      lastWriteMessage: _backupMessage(
-        'Private player attribute saved with backup',
-        data,
-      ),
-    );
-    await refresh();
   }
 
   Future<void> writePlayerTransform({
@@ -635,9 +608,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
   }) async {
     final path = state.selectedPath;
     if (path == null) return;
-    state = state.copyWith(isLoading: true, clearError: true);
-    final response = await _execute(
-      'write_save',
+    await _runWrite(
       payload: {
         'path': path,
         'backup': true,
@@ -656,20 +627,9 @@ class EditorNotifier extends StateNotifier<EditorState> {
         ],
         ..._codecPayload(),
       },
+      message: (data) =>
+          _backupMessage('Private player transform saved with backup', data),
     );
-    if (response['ok'] != true) {
-      state = state.copyWith(isLoading: false, error: _errorMessage(response));
-      return;
-    }
-    final data = (response['data'] as Map).cast<String, Object?>();
-    state = state.copyWith(
-      isLoading: false,
-      lastWriteMessage: _backupMessage(
-        'Private player transform saved with backup',
-        data,
-      ),
-    );
-    await refresh();
   }
 
   Future<void> writeInventoryItemCount({
@@ -688,31 +648,20 @@ class EditorNotifier extends StateNotifier<EditorState> {
     if (changes.isEmpty) return;
     final savePath = state.selectedPath;
     if (savePath == null) return;
-    state = state.copyWith(isLoading: true, clearError: true);
-    final response = await _execute(
-      'write_save',
+    await _runWrite(
       payload: {
         'path': savePath,
         'backup': true,
         'edits': changes.map((change) => change.toEditJson()).toList(),
         ..._codecPayload(),
       },
-    );
-    if (response['ok'] != true) {
-      state = state.copyWith(isLoading: false, error: _errorMessage(response));
-      return;
-    }
-    final data = (response['data'] as Map).cast<String, Object?>();
-    state = state.copyWith(
-      isLoading: false,
-      lastWriteMessage: changes.length == 1
+      message: (data) => changes.length == 1
           ? _backupMessage('Inventory count saved with backup', data)
           : _backupMessage(
               '${changes.length} inventory counts saved with backup',
               data,
             ),
     );
-    await refresh();
   }
 
   String _errorMessage(Map<String, Object?> response) {
