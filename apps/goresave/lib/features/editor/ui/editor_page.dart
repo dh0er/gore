@@ -467,7 +467,10 @@ class _EditorWorkspace extends StatelessWidget {
                 leading: const Icon(Icons.error_outline, color: Colors.red),
                 content: Text(state.error!),
                 actions: [
-                  TextButton(onPressed: () {}, child: const Text('OK')),
+                  TextButton(
+                    onPressed: notifier.dismissError,
+                    child: const Text('OK'),
+                  ),
                 ],
               ),
             if (state.lastWriteMessage != null)
@@ -475,7 +478,10 @@ class _EditorWorkspace extends StatelessWidget {
                 leading: const Icon(Icons.check_circle_outline),
                 content: Text(state.lastWriteMessage!),
                 actions: [
-                  TextButton(onPressed: () {}, child: const Text('OK')),
+                  TextButton(
+                    onPressed: notifier.dismissWriteMessage,
+                    child: const Text('OK'),
+                  ),
                 ],
               ),
             Expanded(
@@ -803,6 +809,7 @@ class _MetadataEditor extends StatefulWidget {
 class _MetadataEditorState extends State<_MetadataEditor> {
   late final TextEditingController _controller;
   String? _path;
+  String? _name;
 
   @override
   void initState() {
@@ -824,9 +831,14 @@ class _MetadataEditorState extends State<_MetadataEditor> {
   }
 
   void _sync() {
-    if (_path == widget.inspection.path) return;
+    final name = widget.inspection.playerSaveName ?? '';
+    // Also resync when the name changes for the same path (e.g. after a restore
+    // or rescan returns updated metadata), so the field doesn't keep showing
+    // the stale name.
+    if (_path == widget.inspection.path && _name == name) return;
     _path = widget.inspection.path;
-    _controller.text = widget.inspection.playerSaveName ?? '';
+    _name = name;
+    _controller.text = name;
   }
 
   @override

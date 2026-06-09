@@ -142,6 +142,18 @@ class EditorNotifier extends StateNotifier<EditorState> {
   bool get coreAvailable => _core.isAvailable;
   String get coreDescription => _core.description;
 
+  /// Dismiss the current error banner.
+  void dismissError() {
+    if (state.error != null) state = state.copyWith(clearError: true);
+  }
+
+  /// Dismiss the current success/status banner.
+  void dismissWriteMessage() {
+    if (state.lastWriteMessage != null) {
+      state = state.copyWith(clearWriteMessage: true);
+    }
+  }
+
   Future<Map<String, Object?>> _execute(
     String command, {
     Map<String, Object?> payload = const {},

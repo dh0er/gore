@@ -121,7 +121,10 @@ List<String> _candidateLibraryPaths() {
   final executableDir = p.dirname(Platform.resolvedExecutable);
   final cwd = Directory.current.path;
   return [
-    'goresave_core.dll',
+    // Trusted shipped location first; always a path with separators so the
+    // Windows DLL search order is bypassed. A bare "goresave_core.dll" is
+    // intentionally omitted because it would let a same-named DLL on the
+    // process search path bind instead of the core we ship.
     p.join(executableDir, 'goresave_core.dll'),
     p.normalize(
       p.join(cwd, '..', '..', 'target', 'debug', 'goresave_core.dll'),
