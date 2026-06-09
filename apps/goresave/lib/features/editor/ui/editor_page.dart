@@ -498,7 +498,7 @@ class _EditorWorkspace extends StatelessWidget {
                     title: 'Player',
                     inspection: inspection,
                     notifier: notifier,
-                    editable: true,
+                    editable: inspection.privateEditable,
                     decodedBody:
                         'Private player data is decoded through the G1R codec host.',
                     lockedBody:
@@ -989,6 +989,7 @@ class _InventoryPanel extends StatelessWidget {
           _PrivateInventorySummaryCard(
             inventory: inspection.privateInventory,
             notifier: notifier,
+            editable: inspection.privateEditable,
           ),
           const SizedBox(height: 16),
         ],
@@ -1203,10 +1204,12 @@ class _PrivateInventorySummaryCard extends StatefulWidget {
   const _PrivateInventorySummaryCard({
     required this.inventory,
     required this.notifier,
+    this.editable = true,
   });
 
   final PrivateInventorySummary inventory;
   final EditorNotifier notifier;
+  final bool editable;
 
   @override
   State<_PrivateInventorySummaryCard> createState() =>
@@ -1292,7 +1295,7 @@ class _PrivateInventorySummaryCardState
                 style: Theme.of(context).textTheme.labelLarge,
               ),
               const SizedBox(height: 8),
-              if (_pendingCountChanges.isNotEmpty) ...[
+              if (widget.editable && _pendingCountChanges.isNotEmpty) ...[
                 Row(
                   children: [
                     FilledButton.icon(
@@ -1342,15 +1345,20 @@ class _PrivateInventorySummaryCardState
                       subtitle: item.path.isEmpty
                           ? null
                           : SelectableText(item.path, maxLines: 1),
-                      trailing: _InventoryItemCountEditor(
-                        item: item,
-                        notifier: widget.notifier,
-                        pendingCount:
-                            _pendingCountChanges[_inventoryItemKey(item)]
-                                ?.count,
-                        onPendingCountChanged: (change) =>
-                            _setPendingCountChange(item, change),
-                      ),
+                      trailing: widget.editable
+                          ? _InventoryItemCountEditor(
+                              item: item,
+                              notifier: widget.notifier,
+                              pendingCount:
+                                  _pendingCountChanges[_inventoryItemKey(item)]
+                                      ?.count,
+                              onPendingCountChanged: (change) =>
+                                  _setPendingCountChange(item, change),
+                            )
+                          : Text(
+                              '×${item.count ?? '?'}',
+                              style: Theme.of(context).textTheme.bodyMedium,
+                            ),
                     );
                   },
                 ),

@@ -283,6 +283,11 @@ class SaveInspection {
   final bool privatePreview;
   final int? privateDecodedChunkCount;
   final int? privateTotalChunkCount;
+
+  /// Private writes are only safe when the full payload is decoded. A preview
+  /// (partial) decode shows data read-only, so edit actions stay disabled.
+  bool get privateEditable => privateDecoded && !privatePreview;
+
   final PrivatePlayerSummary privatePlayer;
   final PrivateInventorySummary privateInventory;
   final PrivateProgressionSummary privateProgression;

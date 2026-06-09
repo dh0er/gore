@@ -3435,7 +3435,15 @@ fn decompress_private_payload_with_limit(
             .map(|chunk| chunk.uncompressed_size as usize)
             .sum::<usize>()
     };
-    let mut out = Vec::with_capacity(expected_size);
+    // expected_size derives from the untrusted summary/chunk table; reserve
+    // fallibly so a crafted huge size returns a codec error instead of aborting
+    // the process on OOM through the FFI boundary.
+    let mut out: Vec<u8> = Vec::new();
+    out.try_reserve(expected_size).map_err(|_| {
+        CoreError::Codec(format!(
+            "cannot reserve {expected_size} bytes for decoded private payload"
+        ))
+    })?;
     let chunks = stream
         .chunks
         .iter()
