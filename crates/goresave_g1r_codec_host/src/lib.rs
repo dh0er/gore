@@ -2288,6 +2288,15 @@ fn compress_many_with_runtime_worker(
         &[],
         &worker_request,
     );
+    if report.worker_status != "completed"
+        || report.worker_exit_code != Some(0)
+        || report.compress != "passed"
+    {
+        return Err(runtime_worker_failed_error(
+            "compress_many worker failed runtime verification",
+            &report,
+        ));
+    }
     let outputs_base64 = report
         .compress_outputs_base64
         .take()
@@ -2303,11 +2312,7 @@ fn compress_many_with_runtime_worker(
                 &report,
             )
         })?;
-    if report.worker_status != "completed"
-        || report.worker_exit_code != Some(0)
-        || report.compress != "passed"
-        || outputs_base64.len() != request.chunks.len()
-    {
+    if outputs_base64.len() != request.chunks.len() {
         return Err(runtime_worker_failed_error(
             "compress_many worker failed runtime verification",
             &report,
@@ -2322,6 +2327,10 @@ fn compress_many_with_runtime_worker(
 }
 
 fn runtime_worker_failed_error(message: &str, report: &RuntimeSelftestReport) -> HostError {
+    let message = match report.reason.as_deref().filter(|reason| !reason.is_empty()) {
+        Some(reason) => format!("{message}: {reason}"),
+        None => message.to_string(),
+    };
     HostError::with_details(
         ErrorCode::UnsupportedExe,
         message,

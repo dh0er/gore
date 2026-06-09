@@ -1453,6 +1453,67 @@ fn ipc_compress_many_uses_one_runtime_worker_and_returns_outputs_base64() {
 
 #[cfg(windows)]
 #[test]
+fn ipc_compress_many_reports_worker_failure_before_missing_outputs_base64() {
+    let mut exe = minimal_pe64_with_imports_and_relocations();
+    exe[0x250..0x253].copy_from_slice(&[
+        0x31, 0xc0, // xor eax, eax
+        0xc3, // ret
+    ]);
+    let profile = parse_profile_json(&profile_json(
+        &sha256_hex(&exe),
+        exe.len() as u64,
+        "0x23A85CE7",
+        "0x140000000",
+        "0x1050",
+        "0x1020",
+        "0x1030",
+    ))
+    .unwrap();
+    let temp = write_temp_exe(&exe);
+
+    let response = handle_ipc_line_with_runtime_worker(
+        &format!(
+            r#"{{
+                "id":"req-1",
+                "command":"compress_many",
+                "exePath":"{}",
+                "chunks":[
+                    {{"inputBase64":"AQID","level":6}},
+                    {{"inputBase64":"BAUG","level":6}}
+                ]
+            }}"#,
+            json_escape_path(temp.path())
+        ),
+        &[profile],
+        &helper_binary_path(),
+    );
+    let value: Value = serde_json::from_str(&response).unwrap();
+
+    assert_eq!(value["id"], "req-1");
+    assert_eq!(value["ok"], false);
+    assert_eq!(value["error"]["code"], "unsupported_exe");
+    assert!(
+        value["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("compress_many worker failed runtime verification")
+    );
+    assert!(
+        value["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Oodle compress returned non-positive result 0")
+    );
+    assert!(
+        value["error"]["details"]["runtimeSelftests"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("Oodle compress returned non-positive result 0")
+    );
+}
+
+#[cfg(windows)]
+#[test]
 fn ipc_compress_uses_derived_profile_cache_rvas() {
     let mut exe = minimal_pe64_with_imports_and_relocations();
     exe[0x220..0x237].copy_from_slice(&[
