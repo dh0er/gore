@@ -942,6 +942,7 @@ class _PrivatePanel extends StatelessWidget {
             _PrivatePlayerSummaryCard(
               player: inspection.privatePlayer,
               notifier: notifier,
+              savePath: inspection.path,
             ),
             const SizedBox(height: 16),
           ],
@@ -1566,10 +1567,12 @@ class _PrivatePlayerSummaryCard extends StatelessWidget {
   const _PrivatePlayerSummaryCard({
     required this.player,
     required this.notifier,
+    this.savePath,
   });
 
   final PrivatePlayerSummary player;
   final EditorNotifier notifier;
+  final String? savePath;
 
   @override
   Widget build(BuildContext context) {
@@ -1620,12 +1623,24 @@ class _PrivatePlayerSummaryCard extends StatelessWidget {
             if (player.writable.contains('private.player.setPlayerName') &&
                 player.playerName != null) ...[
               const SizedBox(height: 14),
-              _PrivatePlayerNameEditor(player: player, notifier: notifier),
+              _PrivatePlayerNameEditor(
+                // Key by save identity so switching to another save (even one
+                // with the same parsed name) resets the field instead of
+                // keeping a stale, unsaved edit that could be written to the
+                // newly selected save.
+                key: ValueKey('private-player-name-$savePath'),
+                player: player,
+                notifier: notifier,
+              ),
             ],
             if (player.writable.contains('private.profile.setProfileName') &&
                 player.profileName != null) ...[
               const SizedBox(height: 14),
-              _PrivateProfileNameEditor(player: player, notifier: notifier),
+              _PrivateProfileNameEditor(
+                key: ValueKey('private-profile-name-$savePath'),
+                player: player,
+                notifier: notifier,
+              ),
             ],
             if (player.attributes.isNotEmpty) ...[
               const SizedBox(height: 16),
@@ -1657,6 +1672,7 @@ class _PrivatePlayerSummaryCard extends StatelessWidget {
 
 class _PrivatePlayerNameEditor extends StatefulWidget {
   const _PrivatePlayerNameEditor({
+    super.key,
     required this.player,
     required this.notifier,
   });
@@ -1752,6 +1768,7 @@ class _PrivatePlayerNameEditorState extends State<_PrivatePlayerNameEditor> {
 
 class _PrivateProfileNameEditor extends StatefulWidget {
   const _PrivateProfileNameEditor({
+    super.key,
     required this.player,
     required this.notifier,
   });

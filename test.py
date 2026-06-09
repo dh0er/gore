@@ -35,7 +35,11 @@ FLUTTER = _resolve_tool(
     ["flutter.bat", "flutter"],
     Path.home() / "fvm" / "versions" / "3.44.0" / "bin" / "flutter.bat",
 )
-CARGO = Path.home() / ".cargo" / "bin" / "cargo.exe"
+CARGO = _resolve_tool(
+    "CARGO",
+    ["cargo.exe", "cargo"],
+    Path.home() / ".cargo" / "bin" / "cargo.exe",
+)
 VS_CMAKE_BIN = Path(
     r"C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin"
 )
