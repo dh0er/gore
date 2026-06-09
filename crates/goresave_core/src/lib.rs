@@ -1490,22 +1490,42 @@ fn create_backup_copy(path: &Path) -> Result<PathBuf, CoreError> {
 }
 
 fn unique_backup_path(path: &Path) -> PathBuf {
+    let suffix = shared_backup_suffix(std::slice::from_ref(&path));
+    backup_path_with_suffix(path, &suffix)
+}
+
+fn backup_path_with_suffix(path: &Path, suffix: &str) -> PathBuf {
+    path.with_extension(format!("sav.bak.{suffix}"))
+}
+
+fn create_backup_with_suffix(path: &Path, suffix: &str) -> Result<PathBuf, CoreError> {
+    let backup_path = backup_path_with_suffix(path, suffix);
+    fs::copy(path, &backup_path)?;
+    Ok(backup_path)
+}
+
+/// Pick a single `.bak` suffix that is free for every target, so paired backups
+/// (slot + companion PersistentDataList) share one suffix and restore can match
+/// them even when their creation straddles a one-second boundary.
+fn shared_backup_suffix(targets: &[&Path]) -> String {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
     for attempt in 0..1000 {
-        let extension = if attempt == 0 {
-            format!("sav.bak.{timestamp}")
+        let suffix = if attempt == 0 {
+            format!("{timestamp}")
         } else {
-            format!("sav.bak.{timestamp}.{attempt}")
+            format!("{timestamp}.{attempt}")
         };
-        let candidate = path.with_extension(extension);
-        if !candidate.exists() {
-            return candidate;
+        if targets
+            .iter()
+            .all(|target| !backup_path_with_suffix(target, &suffix).exists())
+        {
+            return suffix;
         }
     }
-    path.with_extension(format!("sav.bak.{timestamp}.overflow"))
+    format!("{timestamp}.overflow")
 }
 
 /// Default save directory used when a caller omits `payload.path`. Derived from
@@ -2795,16 +2815,27 @@ fn write_save_internal(
         None
     };
     let target = output_path.unwrap_or(path);
-    let backup_path = if backup && output_path.is_none() {
-        Some(create_backup_copy(path)?)
-    } else {
-        None
-    };
-    let persistent_backup_path = match &persistent_sync {
-        Some(plan) if backup && plan.original != plan.edited => {
-            Some(create_backup_copy(&plan.path)?)
+    let companion_backup_target = match &persistent_sync {
+        Some(plan) if backup && output_path.is_none() && plan.original != plan.edited => {
+            Some(plan.path.as_path())
         }
         _ => None,
+    };
+    let (backup_path, persistent_backup_path) = if backup && output_path.is_none() {
+        match companion_backup_target {
+            // Back up both files under one shared suffix so restore can pair
+            // them by suffix even if creation straddles a one-second boundary.
+            Some(companion) => {
+                let suffix = shared_backup_suffix(&[path, companion]);
+                (
+                    Some(create_backup_with_suffix(path, &suffix)?),
+                    Some(create_backup_with_suffix(companion, &suffix)?),
+                )
+            }
+            None => (Some(create_backup_copy(path)?), None),
+        }
+    } else {
+        (None, None)
     };
 
     let tmp_path = target.with_extension("sav.tmp-goresave");
@@ -5074,6 +5105,18 @@ mod tests {
                 .contains("PersistentDataList.sav.bak.")
         );
         assert_eq!(value["data"]["persistentBytesChanged"], true);
+
+        // Slot and companion backups must share one suffix so restore can pair
+        // them (see prepare_paired_persistent_data_list_restore).
+        let slot_backup = value["data"]["backupPath"].as_str().unwrap();
+        let companion_backup = value["data"]["persistentBackupPath"].as_str().unwrap();
+        let slot_suffix = slot_backup.rsplit("G1R-001.sav.bak.").next().unwrap();
+        let companion_suffix = companion_backup
+            .rsplit("PersistentDataList.sav.bak.")
+            .next()
+            .unwrap();
+        assert_eq!(slot_suffix, companion_suffix);
+
         let metadata = persistent_slot_metadata_for_dir(dir.path()).unwrap();
         assert_eq!(
             metadata["G1R-001"].player_save_name.as_deref(),

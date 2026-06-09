@@ -316,7 +316,9 @@ class EditorNotifier extends StateNotifier<EditorState> {
     // _loadBackups already surfaced; either way keep the inspection just applied.
     if (backupSnapshot == null) return;
     state = state.copyWith(
-      isLoading: false,
+      // Keep loading if a newer load is still running for this slot; only the
+      // latest load clears the overlay.
+      isLoading: seq != _loadSeq,
       backups: backupSnapshot.backups,
       companionBackups: backupSnapshot.companionBackups,
     );
@@ -330,7 +332,9 @@ class EditorNotifier extends StateNotifier<EditorState> {
     final backupSnapshot = await _loadBackups(path, seq);
     if (backupSnapshot == null) return;
     state = state.copyWith(
-      isLoading: false,
+      // Don't clear loading while a newer load (e.g. an in-flight inspect for
+      // the same slot) is still running.
+      isLoading: seq != _loadSeq,
       backups: backupSnapshot.backups,
       companionBackups: backupSnapshot.companionBackups,
     );
