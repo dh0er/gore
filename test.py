@@ -5,13 +5,36 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).parent
 APP = ROOT / "apps" / "goresave"
-FLUTTER = Path.home() / "fvm" / "versions" / "3.44.0" / "bin" / "flutter.bat"
+
+
+def _resolve_tool(env_var: str, names: list[str], fallback: Path) -> Path:
+    """Resolve a tool from an env override, then PATH, then a local fallback.
+
+    Keeps the runner working on machines where the tool is on PATH or under a
+    different FVM version, instead of failing on a single hard-coded path.
+    """
+    override = os.environ.get(env_var)
+    if override:
+        return Path(override)
+    for name in names:
+        found = shutil.which(name)
+        if found:
+            return Path(found)
+    return fallback
+
+
+FLUTTER = _resolve_tool(
+    "FLUTTER",
+    ["flutter.bat", "flutter"],
+    Path.home() / "fvm" / "versions" / "3.44.0" / "bin" / "flutter.bat",
+)
 CARGO = Path.home() / ".cargo" / "bin" / "cargo.exe"
 VS_CMAKE_BIN = Path(
     r"C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin"

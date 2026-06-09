@@ -294,7 +294,10 @@ class EditorNotifier extends StateNotifier<EditorState> {
       ..._codecPayload(),
     };
     final response = await _execute('inspect_save', payload: payload);
-    if (seq != _loadSeq) return;
+    // Bail only if a newer load superseded us AND the selection moved to a
+    // different slot. A same-path re-inspect (e.g. checkCodec re-running after
+    // selection) is idempotent and may still apply/clear loading.
+    if (seq != _loadSeq && state.selectedPath != path) return;
     if (response['ok'] != true) {
       state = state.copyWith(
         isLoading: false,
@@ -693,9 +696,10 @@ class EditorNotifier extends StateNotifier<EditorState> {
       'list_backups',
       payload: {'path': path},
     );
-    // A newer load superseded this one; let it own loading/error state instead
-    // of clobbering it (which could also leave the overlay spinning).
-    if (seq != _loadSeq) return null;
+    // A newer load for a different slot superseded this one; let it own
+    // loading/error state instead of clobbering it. A same-path supersede is
+    // idempotent, so still apply.
+    if (seq != _loadSeq && state.selectedPath != path) return null;
     if (response['ok'] != true) {
       state = state.copyWith(isLoading: false, error: _errorMessage(response));
       return null;
