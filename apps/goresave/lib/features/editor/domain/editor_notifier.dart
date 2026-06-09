@@ -331,6 +331,12 @@ class EditorNotifier extends StateNotifier<EditorState> {
       if (selectedPath != null) {
         await _inspect(selectedPath);
       }
+    } catch (error) {
+      // A thrown core call (e.g. invalid/null native JSON) must surface as an
+      // in-app error, not just an async console error.
+      if (seq == _loadSeq) {
+        state = state.copyWith(error: 'Failed to scan saves: $error');
+      }
     } finally {
       _loadFinished();
     }
@@ -383,6 +389,14 @@ class EditorNotifier extends StateNotifier<EditorState> {
         backups: backupSnapshot.backups,
         companionBackups: backupSnapshot.companionBackups,
       );
+    } catch (error) {
+      if (seq == _loadSeq) {
+        state = state.copyWith(
+          error: 'Failed to inspect save: $error',
+          clearInspection: true,
+          clearBackups: true,
+        );
+      }
     } finally {
       _loadFinished();
     }
@@ -401,6 +415,10 @@ class EditorNotifier extends StateNotifier<EditorState> {
         backups: backupSnapshot.backups,
         companionBackups: backupSnapshot.companionBackups,
       );
+    } catch (error) {
+      if (seq == _loadSeq) {
+        state = state.copyWith(error: 'Failed to load backups: $error');
+      }
     } finally {
       _loadFinished();
     }
