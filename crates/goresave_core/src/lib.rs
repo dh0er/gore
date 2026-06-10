@@ -1827,9 +1827,9 @@ fn parse_compressed_stream(data: &[u8], offset: usize) -> Result<CompressedStrea
     // Fallible reservation: even with the bound above, never panic/abort across
     // the FFI boundary on a large count — surface a parse error instead.
     let mut chunks: Vec<CompressedChunk> = Vec::new();
-    chunks.try_reserve(chunk_count).map_err(|_| {
-        CoreError::Parse(format!("cannot reserve space for {chunk_count} chunks"))
-    })?;
+    chunks
+        .try_reserve(chunk_count)
+        .map_err(|_| CoreError::Parse(format!("cannot reserve space for {chunk_count} chunks")))?;
     for index in 0..chunk_count {
         let compressed_size = r.u64()?;
         let uncompressed_size = r.u64()?;
@@ -2339,7 +2339,9 @@ fn decoded_private_payload_cached(
 ) -> Result<Vec<u8>, CoreError> {
     let save_sha1 = sha1_hex(data);
     {
-        let guard = DECODED_PAYLOAD_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        let guard = DECODED_PAYLOAD_CACHE
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         if let Some(entry) = guard.as_ref() {
             if entry.path == path && entry.save_sha1 == save_sha1 {
                 return Ok(entry.payload.clone());
@@ -2353,7 +2355,9 @@ fn decoded_private_payload_cached(
 
 /// Store a freshly decoded full private payload as the single cache entry.
 fn store_decoded_payload_cache(path: &Path, save_sha1: String, payload: Vec<u8>) {
-    let mut guard = DECODED_PAYLOAD_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    let mut guard = DECODED_PAYLOAD_CACHE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     *guard = Some(DecodedPayloadEntry {
         path: path.to_path_buf(),
         save_sha1,
@@ -2363,7 +2367,9 @@ fn store_decoded_payload_cache(path: &Path, save_sha1: String, payload: Vec<u8>)
 
 /// Drop the cached decoded payload for `path` (called after a write changes it).
 fn invalidate_decoded_payload_cache(path: &Path) {
-    let mut guard = DECODED_PAYLOAD_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    let mut guard = DECODED_PAYLOAD_CACHE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     if guard.as_ref().is_some_and(|entry| entry.path == path) {
         *guard = None;
     }
@@ -3434,10 +3440,19 @@ fn parse_private_typed_set_value_edit(edit: &Edit) -> Result<PrivateTypedSetValu
     })
 }
 
-fn coerce_typed_scalar(
+/// Replacement value for `private.typed.setValue`: fixed-size scalars patch
+/// in place, string-valued properties (Str/Name/Object/Enum and the
+/// enum-as-byte form of ByteProperty) may change the payload length.
+#[derive(Debug, Clone, PartialEq)]
+enum TypedSetValue {
+    Scalar(properties::ScalarValue),
+    Text(String),
+}
+
+fn coerce_typed_value(
     property: &properties::Property,
     value: &Value,
-) -> Result<properties::ScalarValue, CoreError> {
+) -> Result<TypedSetValue, CoreError> {
     use properties::ScalarValue;
     let type_name = property.type_name.as_str();
     let err = |expected: &str| {
@@ -3445,37 +3460,70 @@ fn coerce_typed_scalar(
             "private.typed.setValue: property is {type_name}, value must be {expected}"
         ))
     };
+    let scalar = |s: ScalarValue| TypedSetValue::Scalar(s);
     match type_name {
         "IntProperty" => value
             .as_i64()
             .and_then(|v| i32::try_from(v).ok())
-            .map(ScalarValue::Int)
+            .map(|v| scalar(ScalarValue::Int(v)))
             .ok_or_else(|| err("an i32 integer")),
         "UInt32Property" => value
             .as_u64()
             .and_then(|v| u32::try_from(v).ok())
-            .map(ScalarValue::UInt32)
+            .map(|v| scalar(ScalarValue::UInt32(v)))
             .ok_or_else(|| err("a u32 integer")),
         "Int64Property" => value
             .as_i64()
-            .map(ScalarValue::Int64)
+            .map(|v| scalar(ScalarValue::Int64(v)))
             .ok_or_else(|| err("an i64 integer")),
         "FloatProperty" => value
             .as_f64()
             .filter(|v| v.is_finite() && (*v as f32).is_finite())
-            .map(|v| ScalarValue::Float(v as f32))
+            .map(|v| scalar(ScalarValue::Float(v as f32)))
             .ok_or_else(|| err("a finite number")),
         "DoubleProperty" => value
             .as_f64()
             .filter(|v| v.is_finite())
-            .map(ScalarValue::Double)
+            .map(|v| scalar(ScalarValue::Double(v)))
             .ok_or_else(|| err("a finite number")),
         "BoolProperty" => value
             .as_bool()
-            .map(ScalarValue::Bool)
+            .map(|v| scalar(ScalarValue::Bool(v)))
             .ok_or_else(|| err("a boolean")),
+        // ByteProperty has two serialized forms: a plain byte (scalar patch in
+        // place) and an enum-as-FString (string patch). Dispatch on the parsed
+        // value, not the tag type.
+        "ByteProperty" => match property.value {
+            properties::PropertyValue::Byte(_) => value
+                .as_u64()
+                .and_then(|v| u8::try_from(v).ok())
+                .map(|v| scalar(ScalarValue::Byte(v)))
+                .ok_or_else(|| err("a u8 integer")),
+            // Enum-as-byte stores the label as an FString. A UI that cannot
+            // tell the two Byte forms apart sends a number when the input
+            // parses as one, so an all-digit enum label (e.g. an unchanged
+            // "1") would arrive as a JSON number. Accept that and stringify
+            // the integer to the label instead of rejecting the write.
+            properties::PropertyValue::Enum(_) => {
+                if let Some(s) = value.as_str() {
+                    Ok(TypedSetValue::Text(s.to_string()))
+                } else if let Some(n) = value.as_i64() {
+                    Ok(TypedSetValue::Text(n.to_string()))
+                } else {
+                    Err(err("a string or integer enum label"))
+                }
+            }
+            _ => Err(CoreError::UnsupportedEdit(
+                "private.typed.setValue does not support this ByteProperty form".to_string(),
+            )),
+        },
+        "StrProperty" | "NameProperty" | "ObjectProperty" | "EnumProperty" => value
+            .as_str()
+            .map(|v| TypedSetValue::Text(v.to_string()))
+            .ok_or_else(|| err("a string")),
         other => Err(CoreError::UnsupportedEdit(format!(
-            "private.typed.setValue does not support {other} targets (fixed-size scalars only)"
+            "private.typed.setValue does not support {other} targets \
+             (fixed-size scalars and string-valued properties only)"
         ))),
     }
 }
@@ -3485,9 +3533,31 @@ fn apply_private_typed_set_value_edit_to_payload(
     edit: &PrivateTypedSetValueEdit,
 ) -> Result<(), CoreError> {
     let root = properties::parse_private_root(payload)?;
-    let target = properties::resolve(&root.properties, &edit.path)?.clone();
-    let scalar = coerce_typed_scalar(&target, &edit.value)?;
-    properties::patch_scalar(payload, &target, scalar)
+    let resolved = properties::resolve_chain(&root.properties, &edit.path)?;
+    let value = coerce_typed_value(resolved.target, &edit.value)?;
+    let target = resolved.target.clone();
+    match value {
+        TypedSetValue::Scalar(scalar) => properties::patch_scalar(payload, &target, scalar),
+        TypedSetValue::Text(text) => {
+            // Length-changing patch: work on a scratch copy and prove with a
+            // strict re-parse that every enclosing size field was fixed up, so
+            // a bug cannot corrupt the caller's payload (or the save).
+            let mut patched = payload.clone();
+            properties::patch_string(
+                &mut patched,
+                &target,
+                &resolved.enclosing_size_fields,
+                &text,
+            )?;
+            properties::parse_private_root(&patched).map_err(|err| {
+                CoreError::Parse(format!(
+                    "string patch produced an inconsistent payload: {err}"
+                ))
+            })?;
+            *payload = patched;
+            Ok(())
+        }
+    }
 }
 
 fn parse_private_fstring_edit(edit: &Edit) -> Result<PrivateFStringEdit, CoreError> {
@@ -4780,6 +4850,43 @@ mod tests {
         out
     }
 
+    fn private_str_property(name: &str, value: &str) -> Vec<u8> {
+        let payload = fstring(value);
+        let mut out = Vec::new();
+        out.extend_from_slice(&fstring(name));
+        out.extend_from_slice(&fstring("StrProperty"));
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        out.push(0);
+        out.extend_from_slice(&payload);
+        out
+    }
+
+    /// ByteProperty in its enum-as-FString form.
+    fn private_byte_enum_property(name: &str, value: &str) -> Vec<u8> {
+        let payload = fstring(value);
+        let mut out = Vec::new();
+        out.extend_from_slice(&fstring(name));
+        out.extend_from_slice(&fstring("ByteProperty"));
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        out.push(0);
+        out.extend_from_slice(&payload);
+        out
+    }
+
+    /// ByteProperty in its plain one-byte form.
+    fn private_byte_plain_property(name: &str, value: u8) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(&fstring(name));
+        out.extend_from_slice(&fstring("ByteProperty"));
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.push(0);
+        out.push(value);
+        out
+    }
+
     fn double_property(name: &str, value: f64) -> Vec<u8> {
         let mut out = Vec::new();
         out.extend_from_slice(&fstring(name));
@@ -5846,8 +5953,11 @@ mod tests {
         let backup = dir.path().join("G1R-001.sav.bak.200");
         fs::write(&path, minimal_gsav("Live")).unwrap();
         // A GVAS sidecar misnamed as a slot backup must not replace the GSAV slot.
-        fs::write(&backup, persistent_data_list(&[("G1R-001", "X", 1, "M", 1.0, false, false)]))
-            .unwrap();
+        fs::write(
+            &backup,
+            persistent_data_list(&[("G1R-001", "X", 1, "M", 1.0, false, false)]),
+        )
+        .unwrap();
 
         let result = restore_backup(&path, &backup);
         assert!(result.is_err());
@@ -5887,10 +5997,8 @@ mod tests {
         let suffix = PathBuf::from("G1R").join("Saved").join("SaveGames");
 
         // Prefers LOCALAPPDATA.
-        let from_local = default_save_root_from(
-            Some(r"D:\LocalAppData".into()),
-            Some(r"D:\Profile".into()),
-        );
+        let from_local =
+            default_save_root_from(Some(r"D:\LocalAppData".into()), Some(r"D:\Profile".into()));
         assert_eq!(from_local, PathBuf::from(r"D:\LocalAppData").join(&suffix));
 
         // Falls back to USERPROFILE\AppData\Local when LOCALAPPDATA is unset/empty.
@@ -5975,10 +6083,7 @@ mod tests {
         .unwrap();
 
         let refs = scan_fstrings(&payload, 0);
-        let name_idx = refs
-            .iter()
-            .position(|r| r.value == "m_PlayerName")
-            .unwrap();
+        let name_idx = refs.iter().position(|r| r.value == "m_PlayerName").unwrap();
         let type_ref = &refs[name_idx + 1];
         assert_eq!(type_ref.value, "StrProperty");
         let value_ref = &refs[name_idx + 2];
@@ -5987,9 +6092,7 @@ mod tests {
         // Size word lives 4 bytes after the type FString and must equal the new
         // encoded value length (4-byte len prefix + bytes + NUL).
         let size_offset = type_ref.len_offset + type_ref.total_len + 4;
-        let size = u32::from_le_bytes(
-            payload[size_offset..size_offset + 4].try_into().unwrap(),
-        );
+        let size = u32::from_le_bytes(payload[size_offset..size_offset + 4].try_into().unwrap());
         assert_eq!(size as usize, encode_fstring("Nameless").len());
         // Trailing "None" terminator survived the splice.
         assert!(refs.iter().any(|r| r.value == "None"));
@@ -6322,12 +6425,8 @@ mod tests {
             seed_uncompressed: private_payload,
         };
 
-        let value = search_typed_properties(
-            &path,
-            &json!({ "query": "MaxQuick" }),
-            Some(&backend),
-        )
-        .unwrap();
+        let value = search_typed_properties(&path, &json!({ "query": "MaxQuick" }), Some(&backend))
+            .unwrap();
 
         assert_eq!(value["count"], 1);
         assert_eq!(value["total"], 1);
@@ -6359,7 +6458,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(page1["count"], 1);
-        assert_ne!(page0["results"][0]["display"], page1["results"][0]["display"]);
+        assert_ne!(
+            page0["results"][0]["display"],
+            page1["results"][0]["display"]
+        );
     }
 
     #[test]
@@ -6421,6 +6523,115 @@ mod tests {
     }
 
     #[test]
+    fn typed_set_value_dispatches_byte_property_forms() {
+        let mut payload = fstring("/Script/Test.Save");
+        payload.push(0);
+        payload.extend_from_slice(&private_byte_plain_property("m_Level", 3));
+        payload.extend_from_slice(&private_byte_enum_property("m_Rank", "ERank::Novice"));
+        payload.extend_from_slice(&fstring("None"));
+        payload.extend_from_slice(&0u32.to_le_bytes());
+
+        // Plain byte: number accepted, string rejected without mutation.
+        let copy = payload.clone();
+        let bad = PrivateTypedSetValueEdit {
+            path: properties::parse_path(&["m_Level".to_string()]).unwrap(),
+            value: json!("ERank::Master"),
+        };
+        assert!(apply_private_typed_set_value_edit_to_payload(&mut payload, &bad).is_err());
+        assert_eq!(payload, copy);
+        let edit = PrivateTypedSetValueEdit {
+            path: properties::parse_path(&["m_Level".to_string()]).unwrap(),
+            value: json!(42),
+        };
+        apply_private_typed_set_value_edit_to_payload(&mut payload, &edit).unwrap();
+
+        // Enum-as-byte: a JSON number is accepted and stringified to the
+        // label, so an all-digit enum value (e.g. an unchanged "1") still
+        // saves instead of failing. A plain string label works too.
+        let edit = PrivateTypedSetValueEdit {
+            path: properties::parse_path(&["m_Rank".to_string()]).unwrap(),
+            value: json!(1),
+        };
+        apply_private_typed_set_value_edit_to_payload(&mut payload, &edit).unwrap();
+        assert_eq!(
+            properties::parse_private_root(&payload).unwrap().properties[1].value,
+            properties::PropertyValue::Enum("1".to_string())
+        );
+        let edit = PrivateTypedSetValueEdit {
+            path: properties::parse_path(&["m_Rank".to_string()]).unwrap(),
+            value: json!("ERank::Master"),
+        };
+        apply_private_typed_set_value_edit_to_payload(&mut payload, &edit).unwrap();
+
+        let root = properties::parse_private_root(&payload).unwrap();
+        assert_eq!(
+            root.properties[0].value,
+            properties::PropertyValue::Byte(42)
+        );
+        assert_eq!(
+            root.properties[1].value,
+            properties::PropertyValue::Enum("ERank::Master".to_string())
+        );
+    }
+
+    #[test]
+    fn write_save_applies_typed_string_edit_with_length_change() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-001.sav");
+        let output_path = dir.path().join("G1R-001-string.sav");
+        let private_payload = {
+            let mut p = fstring("/Script/Angelscript.GothicFinalDataGame");
+            p.push(0);
+            p.extend_from_slice(&private_str_property("m_PlayerName", "Hero"));
+            p.extend_from_slice(&int_property("m_MaxQuick", 3));
+            p.extend_from_slice(&fstring("None"));
+            p.extend_from_slice(&0u32.to_le_bytes());
+            p
+        };
+        let seed_compressed = b"seed-compressed".to_vec();
+        let stream = compressed_stream_with_one_chunk(&seed_compressed, private_payload.len());
+        fs::write(
+            &path,
+            build_gsav(2, &public_payload("Slot A"), &stream, &[0, 0, 0, 0]),
+        )
+        .unwrap();
+        let backend = PrefixCodecBackend {
+            seed_compressed,
+            seed_uncompressed: private_payload,
+        };
+
+        let response = write_save_with_codec_backend(
+            &path,
+            &[json!({
+                "path": "private.typed.setValue",
+                "value": { "path": ["m_PlayerName"], "value": "Nameless" }
+            })],
+            false,
+            Some(&output_path),
+            Some(&backend),
+        )
+        .unwrap();
+        assert_eq!(response["editsApplied"], 1);
+
+        // The grown payload re-parses strictly and surfaces the new value.
+        let value =
+            inspect_save_with_codec_backend(&output_path, true, Some(&backend), None).unwrap();
+        assert_eq!(value["private"]["typedParse"]["status"], "ok");
+        let strings = value["private"]["strings"].as_array().unwrap();
+        assert!(strings.iter().any(|s| s == "Nameless"));
+
+        let searched = search_typed_properties(
+            &output_path,
+            &json!({ "query": "PlayerName" }),
+            Some(&backend),
+        )
+        .unwrap();
+        let hit = &searched["results"][0];
+        assert_eq!(hit["value"], "Nameless");
+        assert_eq!(hit["editable"], true);
+    }
+
+    #[test]
     fn typed_set_value_rejects_wrong_type_and_unknown_path() {
         let mut payload = fstring("/Script/Test.Save");
         payload.push(0);
@@ -6442,6 +6653,13 @@ mod tests {
         assert!(apply_private_typed_set_value_edit_to_payload(&mut copy, &unknown).is_err());
         assert_eq!(copy, payload, "failed edits must not mutate the payload");
 
+        let string_on_int = PrivateTypedSetValueEdit {
+            path: properties::parse_path(&["m_X".to_string()]).unwrap(),
+            value: json!("oops"),
+        };
+        assert!(apply_private_typed_set_value_edit_to_payload(&mut copy, &string_on_int).is_err());
+        assert_eq!(copy, payload, "failed edits must not mutate the payload");
+
         let ok = PrivateTypedSetValueEdit {
             path: properties::parse_path(&["m_X".to_string()]).unwrap(),
             value: json!(42),
@@ -6449,6 +6667,43 @@ mod tests {
         apply_private_typed_set_value_edit_to_payload(&mut copy, &ok).unwrap();
         let root = properties::parse_private_root(&copy).unwrap();
         assert_eq!(root.properties[0].value, properties::PropertyValue::Int(42));
+    }
+
+    #[test]
+    fn typed_set_value_patches_string_with_length_change() {
+        let mut payload = fstring("/Script/Test.Save");
+        payload.push(0);
+        payload.extend_from_slice(&private_str_property("m_PlayerName", "Hero"));
+        payload.extend_from_slice(&int_property("m_Gold", 250));
+        payload.extend_from_slice(&fstring("None"));
+        payload.extend_from_slice(&0u32.to_le_bytes());
+        let original_len = payload.len();
+
+        // Non-string value on a string target must fail without mutation.
+        let copy = payload.clone();
+        let bad = PrivateTypedSetValueEdit {
+            path: properties::parse_path(&["m_PlayerName".to_string()]).unwrap(),
+            value: json!(7),
+        };
+        assert!(apply_private_typed_set_value_edit_to_payload(&mut payload, &bad).is_err());
+        assert_eq!(payload, copy);
+
+        let edit = PrivateTypedSetValueEdit {
+            path: properties::parse_path(&["m_PlayerName".to_string()]).unwrap(),
+            value: json!("Nameless"),
+        };
+        apply_private_typed_set_value_edit_to_payload(&mut payload, &edit).unwrap();
+
+        assert_eq!(payload.len(), original_len + 4);
+        let root = properties::parse_private_root(&payload).unwrap();
+        assert_eq!(
+            root.properties[0].value,
+            properties::PropertyValue::Str("Nameless".to_string())
+        );
+        assert_eq!(
+            root.properties[1].value,
+            properties::PropertyValue::Int(250)
+        );
     }
 
     #[test]

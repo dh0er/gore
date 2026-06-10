@@ -2847,7 +2847,7 @@ class _InfoChip extends StatelessWidget {
 }
 
 /// Generic typed property browser: search every property in the decoded
-/// private payload and edit fixed-size scalars in place. This is the
+/// private payload and edit scalars and strings. This is the
 /// "everything is editable" surface — no curated field list, the user finds
 /// any value by name and edits the ones the core can safely patch.
 class _AllDataPanel extends StatefulWidget {
@@ -2981,8 +2981,8 @@ class _AllDataPanelState extends State<_AllDataPanel> {
           ),
           const SizedBox(height: 4),
           Text(
-            'Search every typed property by name or path. Fixed-size scalars '
-            '(int, float, bool) are editable; strings and structs are shown '
+            'Search every typed property by name or path. Scalars, strings, '
+            'enums and object paths are editable; structs are shown '
             'read-only for now.',
             style: theme.textTheme.bodySmall?.copyWith(
               color: const Color(0xFF64748B),
@@ -3183,9 +3183,23 @@ class _TypedPropertyRowState extends State<_TypedPropertyRow> {
 
   Object? _coerce() {
     final type = widget.hit.type;
+    if (type == 'StrProperty' || type == 'NameProperty') {
+      // String values are written verbatim — leading/trailing whitespace may
+      // be intentional, so no trim.
+      return _controller.text;
+    }
+    if (type == 'ObjectProperty' || type == 'EnumProperty') {
+      return _controller.text.trim();
+    }
     final raw = _controller.text.trim();
     if (type == 'FloatProperty' || type == 'DoubleProperty') {
       return double.tryParse(raw);
+    }
+    if (type == 'ByteProperty') {
+      // Two serialized forms share the tag type: plain byte (number) and
+      // enum-as-FString. Send a number when it parses; otherwise send the
+      // text and let the core validate against the actual form.
+      return int.tryParse(raw) ?? raw;
     }
     return int.tryParse(raw);
   }
