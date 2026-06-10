@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:goresave/features/editor/domain/hero_attributes.dart';
@@ -38,6 +36,25 @@ Widget _wrap(Widget child) => MaterialApp(
       ),
     );
 
+/// Helper: build a HeroStatsCard with a simple pending-change collector.
+HeroStatsCard _card({
+  required Future<HeroAttributesResult> Function() load,
+  void Function(List<TypedValueEdit>, String?)? onPendingChanged,
+  bool editable = true,
+  Object reloadKey = 'save-1',
+  Widget? fallback,
+  Widget? transformCard,
+}) {
+  return HeroStatsCard(
+    load: load,
+    onPendingChanged: onPendingChanged ?? (_, _) {},
+    editable: editable,
+    reloadKey: reloadKey,
+    fallback: fallback,
+    transformCard: transformCard,
+  );
+}
+
 void main() {
   // ---------------------------------------------------------------------------
   // Sidebar visibility / navigation
@@ -52,11 +69,8 @@ void main() {
 
     await tester.pumpWidget(
       _wrap(
-        HeroStatsCard(
+        _card(
           load: () async => HeroAttributesResult(attributes: attributes),
-          save: (_) async => true,
-          editable: true,
-          reloadKey: 'save-1',
         ),
       ),
     );
@@ -72,6 +86,8 @@ void main() {
     expect(find.text('Advanced'), findsNothing);
     // No outer 'Hero stats' wrapper title.
     expect(find.text('Hero stats'), findsNothing);
+    // No per-card save button.
+    expect(find.byTooltip('Save hero stats'), findsNothing);
   });
 
   testWidgets('selecting a group shows its rows and hides others',
@@ -83,11 +99,8 @@ void main() {
 
     await tester.pumpWidget(
       _wrap(
-        HeroStatsCard(
+        _card(
           load: () async => HeroAttributesResult(attributes: attributes),
-          save: (_) async => true,
-          editable: true,
-          reloadKey: 'save-1',
         ),
       ),
     );
@@ -116,14 +129,11 @@ void main() {
       (tester) async {
     await tester.pumpWidget(
       _wrap(
-        HeroStatsCard(
+        _card(
           load: () async =>
               HeroAttributesResult(attributes: [
                 _attribute('MaxHealth', '/Script/G1R.AttributeSet_Health', 64),
               ]),
-          save: (_) async => true,
-          editable: true,
-          reloadKey: 'save-1',
           transformCard: const Text('transform content'),
         ),
       ),
@@ -148,14 +158,11 @@ void main() {
       (tester) async {
     await tester.pumpWidget(
       _wrap(
-        HeroStatsCard(
+        _card(
           load: () async =>
               HeroAttributesResult(attributes: [
                 _attribute('MaxHealth', '/Script/G1R.AttributeSet_Health', 64),
               ]),
-          save: (_) async => true,
-          editable: true,
-          reloadKey: 'save-1',
         ),
       ),
     );
@@ -168,7 +175,7 @@ void main() {
       (tester) async {
     await tester.pumpWidget(
       _wrap(
-        HeroStatsCard(
+        _card(
           load: () async =>
               HeroAttributesResult(attributes: [
                 _attribute(
@@ -177,9 +184,6 @@ void main() {
                   0,
                 ),
               ]),
-          save: (_) async => true,
-          editable: true,
-          reloadKey: 'save-1',
         ),
       ),
     );
@@ -194,13 +198,13 @@ void main() {
   });
 
   // ---------------------------------------------------------------------------
-  // Cross-group save: global save batches ALL dirty fields
+  // onPendingChanged fires with correct edits on valid change
   // ---------------------------------------------------------------------------
 
-  testWidgets(
-      'global save batches dirty fields across different groups in one call',
+  testWidgets('onPendingChanged fires with correct edits on valid change',
       (tester) async {
-    final saved = <List<TypedValueEdit>>[];
+    List<TypedValueEdit>? lastEdits;
+    String? lastError;
     final attributes = [
       _attribute('MaxHealth', '/Script/G1R.AttributeSet_Health', 64),
       _attribute('Critical_OneHand', '/Script/G1R.AttributeSet_Critical', 3),
@@ -208,14 +212,12 @@ void main() {
 
     await tester.pumpWidget(
       _wrap(
-        HeroStatsCard(
+        _card(
           load: () async => HeroAttributesResult(attributes: attributes),
-          save: (edits) async {
-            saved.add(edits);
-            return true;
+          onPendingChanged: (edits, err) {
+            lastEdits = edits;
+            lastError = err;
           },
-          editable: true,
-          reloadKey: 'save-1',
         ),
       ),
     );
@@ -228,6 +230,11 @@ void main() {
     );
     await tester.pump();
 
+    expect(lastError, isNull);
+    expect(lastEdits, isNotNull);
+    expect(lastEdits!.length, 1);
+    expect(lastEdits!.single.path.last, 'BaseValue');
+
     // Switch to Combat skills and edit there.
     await tester.tap(find.text('Combat skills'));
     await tester.pumpAndSettle();
@@ -237,14 +244,74 @@ void main() {
     );
     await tester.pump();
 
-    // Save — both edits must arrive in one batch.
-    await tester.tap(find.byTooltip('Save hero stats'));
+    // Both edits must be present.
+    expect(lastEdits, hasLength(2));
+    final ids = lastEdits!.map((e) => e.path[e.path.length - 2]).toSet();
+    expect(ids, containsAll(['{MaxHealth}', '{Critical_OneHand}']));
+  });
+
+  testWidgets('onPendingChanged fires with empty+error on invalid field',
+      (tester) async {
+    List<TypedValueEdit>? lastEdits;
+    String? lastError;
+
+    await tester.pumpWidget(
+      _wrap(
+        _card(
+          load: () async =>
+              HeroAttributesResult(attributes: [
+                _attribute('MaxHealth', '/Script/G1R.AttributeSet_Health', 64),
+              ]),
+          onPendingChanged: (edits, err) {
+            lastEdits = edits;
+            lastError = err;
+          },
+        ),
+      ),
+    );
     await tester.pumpAndSettle();
 
-    expect(saved, hasLength(1));
-    expect(saved.single, hasLength(2));
-    final ids = saved.single.map((e) => e.path[e.path.length - 2]).toSet();
-    expect(ids, containsAll(['{MaxHealth}', '{Critical_OneHand}']));
+    await tester.enterText(
+      find.widgetWithText(TextField, 'MaxHealth base'),
+      'not a number',
+    );
+    await tester.pump();
+
+    expect(lastEdits, isEmpty);
+    expect(lastError, isNotNull);
+    expect(lastError, contains('Invalid number'));
+    // Inline error shown in the card.
+    expect(find.textContaining('Invalid number'), findsOneWidget);
+  });
+
+  testWidgets('onPendingChanged fires with empty edits on revert to original',
+      (tester) async {
+    List<TypedValueEdit>? lastEdits;
+
+    await tester.pumpWidget(
+      _wrap(
+        _card(
+          load: () async =>
+              HeroAttributesResult(attributes: [
+                _attribute('MaxHealth', '/Script/G1R.AttributeSet_Health', 64),
+              ]),
+          onPendingChanged: (edits, _) {
+            lastEdits = edits;
+          },
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final field = find.widgetWithText(TextField, 'MaxHealth base');
+    await tester.enterText(field, '99');
+    await tester.pump();
+    expect(lastEdits, hasLength(1));
+
+    await tester.enterText(field, '64');
+    await tester.pump();
+    // Reverted to original — no pending.
+    expect(lastEdits, isEmpty);
   });
 
   // ---------------------------------------------------------------------------
@@ -253,6 +320,7 @@ void main() {
 
   testWidgets('pending edit still visible after switching away and back',
       (tester) async {
+    List<TypedValueEdit>? lastEdits;
     final attributes = [
       _attribute('MaxHealth', '/Script/G1R.AttributeSet_Health', 64),
       _attribute('Critical_OneHand', '/Script/G1R.AttributeSet_Critical', 3),
@@ -260,11 +328,9 @@ void main() {
 
     await tester.pumpWidget(
       _wrap(
-        HeroStatsCard(
+        _card(
           load: () async => HeroAttributesResult(attributes: attributes),
-          save: (_) async => true,
-          editable: true,
-          reloadKey: 'save-1',
+          onPendingChanged: (edits, _) => lastEdits = edits,
         ),
       ),
     );
@@ -276,6 +342,7 @@ void main() {
       '77',
     );
     await tester.pump();
+    expect(lastEdits, hasLength(1));
 
     // Switch to Combat skills.
     await tester.tap(find.text('Combat skills'));
@@ -283,6 +350,8 @@ void main() {
 
     // The MaxHealth field is gone from the tree now.
     expect(find.widgetWithText(TextField, 'MaxHealth base'), findsNothing);
+    // But pending is still there — the callback was not cleared.
+    expect(lastEdits, hasLength(1));
 
     // Switch back to Main stats.
     await tester.tap(find.text('Main stats'));
@@ -299,101 +368,15 @@ void main() {
   });
 
   // ---------------------------------------------------------------------------
-  // Save semantics
-  // ---------------------------------------------------------------------------
-
-  testWidgets('reverting an edit to the original value saves nothing',
-      (tester) async {
-    var saveCalled = false;
-
-    await tester.pumpWidget(
-      _wrap(
-        HeroStatsCard(
-          load: () async =>
-              HeroAttributesResult(attributes: [
-                _attribute(
-                  'MaxHealth',
-                  '/Script/G1R.AttributeSet_Health',
-                  64,
-                ),
-              ]),
-          save: (_) async {
-            saveCalled = true;
-            return true;
-          },
-          editable: true,
-          reloadKey: 'save-1',
-        ),
-      ),
-    );
-    await tester.pumpAndSettle();
-
-    final field = find.widgetWithText(TextField, 'MaxHealth base');
-    await tester.enterText(field, '99');
-    await tester.pump();
-    await tester.enterText(field, '64');
-    await tester.pump();
-
-    await tester.tap(find.byTooltip('Save hero stats'));
-    await tester.pumpAndSettle();
-
-    expect(saveCalled, isFalse);
-  });
-
-  testWidgets('double-tapping save issues only one batched write',
-      (tester) async {
-    var saveCalls = 0;
-    final gate = Completer<bool>();
-
-    await tester.pumpWidget(
-      _wrap(
-        HeroStatsCard(
-          load: () async =>
-              HeroAttributesResult(attributes: [
-                _attribute(
-                  'MaxHealth',
-                  '/Script/G1R.AttributeSet_Health',
-                  64,
-                ),
-              ]),
-          save: (_) {
-            saveCalls++;
-            return gate.future;
-          },
-          editable: true,
-          reloadKey: 'save-1',
-        ),
-      ),
-    );
-    await tester.pumpAndSettle();
-
-    await tester.enterText(
-      find.widgetWithText(TextField, 'MaxHealth base'),
-      '99',
-    );
-    // Two taps without pumping a frame in between: the second one hits the
-    // still-enabled button and must be swallowed by the re-entry guard.
-    await tester.tap(find.byTooltip('Save hero stats'));
-    await tester.tap(find.byTooltip('Save hero stats'));
-    gate.complete(true);
-    await tester.pumpAndSettle();
-
-    expect(saveCalls, 1);
-  });
-
-  // ---------------------------------------------------------------------------
   // Load error / fallback
   // ---------------------------------------------------------------------------
 
   testWidgets('shows load error inline', (tester) async {
     await tester.pumpWidget(
       _wrap(
-        HeroStatsCard(
+        _card(
           load: () async =>
               const HeroAttributesResult(error: 'decode failed'),
-          save: (_) async => true,
-          editable: true,
-          reloadKey: 'save-1',
         ),
       ),
     );
@@ -405,12 +388,9 @@ void main() {
   testWidgets('load error renders fallback when provided', (tester) async {
     await tester.pumpWidget(
       _wrap(
-        HeroStatsCard(
+        _card(
           load: () async =>
               const HeroAttributesResult(error: 'decode failed'),
-          save: (_) async => true,
-          editable: true,
-          reloadKey: 'save-1',
           fallback: const Text('legacy editor'),
         ),
       ),
@@ -425,11 +405,8 @@ void main() {
       (tester) async {
     await tester.pumpWidget(
       _wrap(
-        HeroStatsCard(
+        _card(
           load: () async => const HeroAttributesResult(attributes: []),
-          save: (_) async => true,
-          editable: true,
-          reloadKey: 'save-1',
           fallback: const Text('legacy editor'),
         ),
       ),
@@ -437,8 +414,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('legacy editor'), findsOneWidget);
-    // The fallback editor has its own save affordances; the hero-stats save
-    // button is not rendered at all in this state.
+    // No per-card save button in this architecture.
     expect(find.byTooltip('Save hero stats'), findsNothing);
   });
 
@@ -446,7 +422,7 @@ void main() {
       (tester) async {
     await tester.pumpWidget(
       _wrap(
-        HeroStatsCard(
+        _card(
           load: () async =>
               HeroAttributesResult(attributes: [
                 _attribute(
@@ -455,9 +431,6 @@ void main() {
                   64,
                 ),
               ]),
-          save: (_) async => true,
-          editable: true,
-          reloadKey: 'save-1',
           fallback: const Text('legacy editor'),
         ),
       ),
@@ -469,8 +442,6 @@ void main() {
       'not a number',
     );
     await tester.pump();
-    await tester.tap(find.byTooltip('Save hero stats'));
-    await tester.pumpAndSettle();
 
     // The validation error is shown, but the typed editors stay in place —
     // only a failed load swaps in the fallback.
@@ -481,11 +452,11 @@ void main() {
 
   testWidgets('correcting an invalid input clears the stale validation error',
       (tester) async {
-    var saveCalled = false;
+    String? lastError;
 
     await tester.pumpWidget(
       _wrap(
-        HeroStatsCard(
+        _card(
           load: () async =>
               HeroAttributesResult(attributes: [
                 _attribute(
@@ -494,12 +465,7 @@ void main() {
                   64,
                 ),
               ]),
-          save: (_) async {
-            saveCalled = true;
-            return true;
-          },
-          editable: true,
-          reloadKey: 'save-1',
+          onPendingChanged: (_, err) => lastError = err,
         ),
       ),
     );
@@ -508,19 +474,16 @@ void main() {
     final field = find.widgetWithText(TextField, 'MaxHealth base');
     await tester.enterText(field, 'not a number');
     await tester.pump();
-    await tester.tap(find.byTooltip('Save hero stats'));
-    await tester.pumpAndSettle();
     expect(find.textContaining('Invalid number'), findsOneWidget);
+    expect(lastError, isNotNull);
 
     // Correct the field back to the original (valid, unchanged) value: the
-    // save is a no-op, but the stale error must disappear.
+    // pending is empty and the stale error must disappear.
     await tester.enterText(field, '64');
     await tester.pump();
-    await tester.tap(find.byTooltip('Save hero stats'));
-    await tester.pumpAndSettle();
 
     expect(find.textContaining('Invalid number'), findsNothing);
-    expect(saveCalled, isFalse);
+    expect(lastError, isNull);
   });
 
   testWidgets('reloadKey change refreshes row values', (tester) async {
@@ -528,7 +491,7 @@ void main() {
     var reloadKey = Object();
 
     Widget buildCard() => _wrap(
-          HeroStatsCard(
+          _card(
             load: () async => HeroAttributesResult(
               attributes: [
                 _attribute(
@@ -538,8 +501,6 @@ void main() {
                 ),
               ],
             ),
-            save: (_) async => true,
-            editable: true,
             reloadKey: reloadKey,
           ),
         );
@@ -579,24 +540,23 @@ void main() {
     );
   });
 
-  testWidgets('cleared field blocks save with an explicit error',
+  testWidgets('cleared field reports empty+error via onPendingChanged',
       (tester) async {
-    var saveCalled = false;
+    List<TypedValueEdit>? lastEdits;
+    String? lastError;
 
     await tester.pumpWidget(
       _wrap(
-        HeroStatsCard(
+        _card(
           load: () async => HeroAttributesResult(
             attributes: [
               _attribute('MaxHealth', '/Script/G1R.AttributeSet_Health', 64),
             ],
           ),
-          save: (_) async {
-            saveCalled = true;
-            return true;
+          onPendingChanged: (edits, err) {
+            lastEdits = edits;
+            lastError = err;
           },
-          editable: true,
-          reloadKey: 'save-1',
         ),
       ),
     );
@@ -607,55 +567,18 @@ void main() {
       '',
     );
     await tester.pump();
-    await tester.tap(find.byTooltip('Save hero stats'));
-    await tester.pumpAndSettle();
 
+    expect(lastEdits, isEmpty);
+    expect(lastError, isNotNull);
+    expect(lastError, contains('MaxHealth is empty'));
     expect(find.textContaining('MaxHealth is empty'), findsOneWidget);
-    expect(saveCalled, isFalse);
-  });
-
-  testWidgets('rejected save keeps pending edits and shows an inline error',
-      (tester) async {
-    await tester.pumpWidget(
-      _wrap(
-        HeroStatsCard(
-          load: () async => HeroAttributesResult(
-            attributes: [
-              _attribute('MaxHealth', '/Script/G1R.AttributeSet_Health', 64),
-            ],
-          ),
-          save: (_) async => false,
-          editable: true,
-          reloadKey: 'save-1',
-        ),
-      ),
-    );
-    await tester.pumpAndSettle();
-
-    await tester.enterText(
-      find.widgetWithText(TextField, 'MaxHealth base'),
-      '99',
-    );
-    await tester.pump();
-    await tester.tap(find.byTooltip('Save hero stats'));
-    await tester.pumpAndSettle();
-
-    expect(find.textContaining('Save failed'), findsOneWidget);
-    // The unsaved edit stays in the field (no reload happened upstream).
-    expect(
-      tester
-          .widget<TextField>(find.widgetWithText(TextField, 'MaxHealth base'))
-          .controller!
-          .text,
-      '99',
-    );
   });
 
   testWidgets('sidebar selection survives a reloadKey change', (tester) async {
     var reloadKey = Object();
 
     Widget buildCard() => _wrap(
-          HeroStatsCard(
+          _card(
             load: () async => HeroAttributesResult(
               attributes: [
                 _attribute('MaxHealth', '/Script/G1R.AttributeSet_Health', 64),
@@ -666,8 +589,6 @@ void main() {
                 ),
               ],
             ),
-            save: (_) async => true,
-            editable: true,
             reloadKey: reloadKey,
           ),
         );

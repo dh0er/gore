@@ -15,14 +15,15 @@ enum _SidebarEntry {
 }
 
 /// Grouped editors for every hero gameplay attribute. Data arrives through
-/// [load] (typed property search) and leaves through [save] (one batched
-/// private.typed.setValue write). [reloadKey] identifies the inspected save:
-/// when it changes, pending edits are dropped and the card reloads.
+/// [load] (typed property search) and leaves through [onPendingChanged]
+/// (callback fired with the current pending typed edits + any validation
+/// error). [reloadKey] identifies the inspected save: when it changes,
+/// pending edits are dropped and the card reloads.
 ///
 /// Renders a master-detail layout: a slim left sidebar for navigation and a
-/// right detail area showing the selected group's attribute rows plus the
-/// global save control row. Pass [transformCard] to inject the hero-transform
-/// editor as the first sidebar entry.
+/// right detail area showing the selected group's attribute rows. Pass
+/// [transformCard] to inject the hero-transform editor as the first sidebar
+/// entry.
 ///
 /// Fallback behaviour (typed parse failed or no attributes): renders [fallback]
 /// (and [transformCard] when provided) in the legacy stacked layout.
@@ -30,7 +31,7 @@ class HeroStatsCard extends StatefulWidget {
   const HeroStatsCard({
     super.key,
     required this.load,
-    required this.save,
+    required this.onPendingChanged,
     required this.editable,
     required this.reloadKey,
     this.fallback,
@@ -38,7 +39,15 @@ class HeroStatsCard extends StatefulWidget {
   });
 
   final Future<HeroAttributesResult> Function() load;
-  final Future<bool> Function(List<TypedValueEdit> edits) save;
+
+  /// Called whenever the set of pending edits changes.
+  /// [edits] is the full list of TypedValueEdit objects to write (empty when
+  /// there are no dirty or valid pending edits).
+  /// [validationError] is non-null when any field is invalid or empty — in
+  /// that case the whole card's edits are suppressed until corrected.
+  final void Function(List<TypedValueEdit> edits, String? validationError)
+  onPendingChanged;
+
   final bool editable;
   final Object reloadKey;
 
@@ -57,11 +66,10 @@ class HeroStatsCard extends StatefulWidget {
 class _HeroStatsCardState extends State<HeroStatsCard> {
   List<HeroAttribute> _attributes = const [];
   String? _error;
-  // True only when the last load itself failed; save-validation errors set
+  // True only when the last load itself failed; validation errors set
   // _error without this, so they never swap the editors for the fallback.
   bool _loadFailed = false;
   bool _loading = false;
-  bool _saving = false;
   // Pending field texts keyed by the typed path (joined). Cleared on reload.
   final Map<String, String> _pending = {};
   // Currently selected sidebar entry.
@@ -95,6 +103,8 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
       _loading = true;
       _pending.clear();
     });
+    // Notify immediately that pending is cleared.
+    widget.onPendingChanged(const [], null);
     final result = await widget.load();
     // Discard results from superseded reload calls (e.g. rapid reloadKey
     // changes) to avoid applying stale data over a more recent load.
@@ -149,13 +159,13 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
   void _onFieldChanged(List<String>? path, String text) {
     if (path == null) return;
     _pending[_pathKey(path)] = text;
+    _recomputePending();
   }
 
-  Future<void> _save() async {
-    // Re-entry guard: the disabled-button state only lands on the next
-    // frame, so a second tap can still invoke this handler. Bail before
-    // building edits or a duplicate write_save (and backup) goes out.
-    if (_saving) return;
+  /// Recompute the pending edits from all dirty fields and notify the parent.
+  /// On any validation error, notifies with empty edits + the error message
+  /// so the parent can clear the 'heroStats' pending contribution.
+  void _recomputePending() {
     final edits = <TypedValueEdit>[];
     for (final attribute in _attributes) {
       for (final (path, original) in [
@@ -166,58 +176,34 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
         final text = _pending[_pathKey(path)];
         // Untouched fields have no pending entry and are no-ops.
         if (text == null) continue;
-        // A cleared field is almost certainly an accident: silently
-        // skipping it reads as a failed edit, so demand an explicit value.
+        // A cleared field is almost certainly an accident.
         if (text.trim().isEmpty) {
-          setState(
-            () => _error =
-                '${attribute.id} is empty — enter a value or restore the '
-                'original before saving.',
-          );
+          final errMsg =
+              '${attribute.id} is empty — enter a value or restore the '
+              'original before saving.';
+          setState(() => _error = errMsg);
+          widget.onPendingChanged(const [], errMsg);
           return;
         }
         final value = double.tryParse(text.trim());
         if (value == null) {
-          setState(
-            () => _error = 'Invalid number for ${attribute.id}: "$text"',
-          );
+          final errMsg = 'Invalid number for ${attribute.id}: "$text"';
+          setState(() => _error = errMsg);
+          widget.onPendingChanged(const [], errMsg);
           return;
         }
         if (value == original) continue;
         edits.add(TypedValueEdit(path: path, value: value));
       }
     }
-    if (edits.isEmpty) {
-      // The input may have just been corrected back to valid-but-unchanged;
-      // a validation error from the previous attempt must not stick around.
-      if (_error != null && !_loadFailed) setState(() => _error = null);
-      return;
-    }
-    setState(() {
-      _error = null;
-      _saving = true;
-    });
-    try {
-      // On success the save triggers a re-inspect upstream; reloadKey
-      // changes and this card reloads with fresh values. On rejection the
-      // notifier raises its global error banner, but this card must not
-      // look idle either — keep the pending edits and say so inline.
-      final ok = await widget.save(edits);
-      if (!ok && mounted) {
-        setState(
-          () => _error = 'Save failed — the edits above were not written.',
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _saving = false);
-    }
+    // All fields valid. Clear any prior validation error.
+    if (_error != null && !_loadFailed) setState(() => _error = null);
+    widget.onPendingChanged(edits, null);
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final canSave =
-        widget.editable && !_loading && !_saving && _attributes.isNotEmpty;
 
     if (_loading) {
       return Card(
@@ -229,9 +215,8 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
     }
 
     if ((_loadFailed || _attributes.isEmpty) && widget.fallback != null) {
-      // The fallback editor has its own save affordances; a permanently
-      // disabled hero-stats save button above it would only confuse. Keep
-      // the error text so the user sees why the typed editors are gone.
+      // The fallback editor has its own save affordances. Keep the error text
+      // so the user sees why the typed editors are gone.
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -302,41 +287,24 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
             ? _selected!
             : sidebarEntries.first;
 
-    // Slim save-control row: right-aligned save button + optional error text.
-    final saveControlRow = Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Row(
-        children: [
-          if (_error != null)
-            Expanded(
-              child: Text(
-                _error!,
-                style: TextStyle(color: theme.colorScheme.error),
-              ),
-            )
-          else
-            const Spacer(),
-          Tooltip(
-            message: 'Save hero stats',
-            child: IconButton.filledTonal(
-              icon: const Icon(Icons.save_outlined),
-              onPressed: canSave ? _save : null,
+    // Optional inline validation-error row shown above the detail content.
+    final errorRow = _error != null
+        ? Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Text(
+              _error!,
+              style: TextStyle(color: theme.colorScheme.error),
             ),
-          ),
-        ],
-      ),
-    );
+          )
+        : null;
 
-    // Build the detail content for the selected entry. The save control row
-    // is shown on every pane (including transform) so pending hero-stat
-    // edits from other groups — and their validation errors — stay visible
-    // and saveable wherever the user is.
+    // Build the detail content for the selected entry.
     Widget detailContent;
     if (effectiveSelected == _SidebarEntry.transform) {
       detailContent = Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          saveControlRow,
+          ?errorRow,
           widget.transformCard!,
         ],
       );
@@ -346,7 +314,7 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
       detailContent = Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          saveControlRow,
+          ?errorRow,
           Card(
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),

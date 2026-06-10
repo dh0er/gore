@@ -9,6 +9,7 @@ import 'package:goresave/features/app/ui/appearance_settings.dart';
 import 'package:goresave/features/app/ui/window_chrome.dart';
 import 'package:goresave/features/editor/domain/editor_notifier.dart';
 import 'package:goresave/features/editor/domain/editor_models.dart';
+import 'package:goresave/features/editor/domain/pending_edits.dart';
 import 'package:goresave/providers/data_providers.dart';
 import 'package:intl/intl.dart';
 import 'hero_stats_card.dart';
@@ -477,25 +478,56 @@ class _EditorWorkspace extends StatelessWidget {
             );
     } else {
       final inspection = state.inspection!;
+      final pendingCount = state.pendingEdits.values
+          .fold(0, (sum, e) => sum + e.edits.length);
       content = DefaultTabController(
         length: 7,
         child: Column(
           children: [
             Container(
               color: scheme.surfaceContainerLowest,
-              child: const TabBar(
-                isScrollable: true,
-                tabs: [
-                  Tab(icon: Icon(Icons.dashboard_outlined), text: 'Overview'),
-                  Tab(icon: Icon(Icons.person_outline), text: 'Player'),
-                  Tab(
-                    icon: Icon(Icons.inventory_2_outlined),
-                    text: 'Inventory',
+              child: Row(
+                children: [
+                  const Expanded(
+                    child: TabBar(
+                      isScrollable: true,
+                      tabs: [
+                        Tab(
+                          icon: Icon(Icons.dashboard_outlined),
+                          text: 'Overview',
+                        ),
+                        Tab(icon: Icon(Icons.person_outline), text: 'Player'),
+                        Tab(
+                          icon: Icon(Icons.inventory_2_outlined),
+                          text: 'Inventory',
+                        ),
+                        Tab(
+                          icon: Icon(Icons.flag_outlined),
+                          text: 'Progression',
+                        ),
+                        Tab(icon: Icon(Icons.tune), text: 'All data'),
+                        Tab(icon: Icon(Icons.history), text: 'Backups'),
+                        Tab(
+                          icon: Icon(Icons.settings_outlined),
+                          text: 'Settings',
+                        ),
+                      ],
+                    ),
                   ),
-                  Tab(icon: Icon(Icons.flag_outlined), text: 'Progression'),
-                  Tab(icon: Icon(Icons.tune), text: 'All data'),
-                  Tab(icon: Icon(Icons.history), text: 'Backups'),
-                  Tab(icon: Icon(Icons.settings_outlined), text: 'Settings'),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: FilledButton.icon(
+                      icon: const Icon(Icons.save_outlined),
+                      label: Text(
+                        pendingCount == 0
+                            ? 'Save'
+                            : 'Save ($pendingCount)',
+                      ),
+                      onPressed: pendingCount > 0 && !state.isLoading
+                          ? notifier.saveAllPending
+                          : null,
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -1039,6 +1071,33 @@ class _MetadataEditorState extends State<_MetadataEditor> {
     _path = widget.inspection.path;
     _name = name;
     _controller.text = name;
+    // Re-evaluate pending state after a sync (e.g. after a save refreshes
+    // the canonical name back to the field).
+    _updatePending(name);
+  }
+
+  void _updatePending(String fieldText) {
+    final value = fieldText.trim();
+    if (value.isEmpty) {
+      setState(() => _error = 'Required');
+      widget.notifier.clearPendingEdit('publicName');
+      return;
+    }
+    final original = widget.inspection.playerSaveName ?? '';
+    setState(() => _error = null);
+    if (value == original) {
+      widget.notifier.clearPendingEdit('publicName');
+    } else {
+      widget.notifier.setPendingEdit(
+        'publicName',
+        PendingSaveEdit(
+          edits: [
+            {'path': 'public.m_PlayerSaveName', 'value': value},
+          ],
+          syncPersistentDataList: true,
+        ),
+      );
+    }
   }
 
   @override
@@ -1046,40 +1105,14 @@ class _MetadataEditorState extends State<_MetadataEditor> {
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            Expanded(
-              child: TextField(
-                controller: _controller,
-                decoration: InputDecoration(
-                  labelText: 'Public save name',
-                  prefixIcon: const Icon(Icons.edit_outlined),
-                  errorText: _error,
-                ),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Tooltip(
-              message: 'Save metadata',
-              child: FilledButton.icon(
-                icon: const Icon(Icons.save_outlined),
-                label: const Text('Save'),
-                onPressed: () {
-                  // Reject blank/whitespace names, matching the private editors,
-                  // so an empty public.m_PlayerSaveName isn't synced into the
-                  // save and PersistentDataList.
-                  final value = _controller.text.trim();
-                  if (value.isEmpty) {
-                    setState(() => _error = 'Required');
-                    return;
-                  }
-                  setState(() => _error = null);
-                  widget.notifier.writePlayerSaveName(value);
-                },
-              ),
-            ),
-          ],
+        child: TextField(
+          controller: _controller,
+          decoration: InputDecoration(
+            labelText: 'Public save name',
+            prefixIcon: const Icon(Icons.edit_outlined),
+            errorText: _error,
+          ),
+          onChanged: _updatePending,
         ),
       ),
     );
@@ -1187,7 +1220,27 @@ class _PrivatePanel extends StatelessWidget {
             // changing identity drops pending edits and reloads.
             reloadKey: inspection,
             load: notifier.loadHeroAttributes,
-            save: notifier.writeTypedValues,
+            onPendingChanged: (edits, validationError) {
+              if (edits.isEmpty || validationError != null) {
+                notifier.clearPendingEdit('heroStats');
+              } else {
+                notifier.setPendingEdit(
+                  'heroStats',
+                  PendingSaveEdit(
+                    edits: [
+                      for (final edit in edits)
+                        {
+                          'path': 'private.typed.setValue',
+                          'value': {
+                            'path': edit.path,
+                            'value': edit.value,
+                          },
+                        },
+                    ],
+                  ),
+                );
+              }
+            },
             editable: editable,
             // Spec: if the typed search errors out or finds nothing on a
             // typed-OK save, the heuristic editor stays available.
@@ -1562,6 +1615,23 @@ class _PrivateInventorySummaryCardState
     super.didUpdateWidget(oldWidget);
     if (oldWidget.inventory != widget.inventory) {
       _pendingCountChanges.clear();
+      // Inventory was refreshed — clear the pending contribution.
+      widget.notifier.clearPendingEdit('inventory');
+    }
+  }
+
+  void _pushInventoryPending() {
+    if (_pendingCountChanges.isEmpty) {
+      widget.notifier.clearPendingEdit('inventory');
+    } else {
+      widget.notifier.setPendingEdit(
+        'inventory',
+        PendingSaveEdit(
+          edits: _pendingCountChanges.values
+              .map((c) => c.toEditJson())
+              .toList(),
+        ),
+      );
     }
   }
 
@@ -1600,22 +1670,14 @@ class _PrivateInventorySummaryCardState
               if (widget.editable && _pendingCountChanges.isNotEmpty) ...[
                 Row(
                   children: [
-                    FilledButton.icon(
-                      icon: const Icon(Icons.save_outlined),
-                      label: Text(
-                        'Save ${_pendingCountChanges.length} '
-                        '${_pendingCountChanges.length == 1 ? 'change' : 'changes'}',
-                      ),
-                      onPressed: () => widget.notifier.writeInventoryItemCounts(
-                        _pendingCountChanges.values.toList(),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
                     Tooltip(
                       message: 'Reset inventory changes',
                       child: IconButton(
                         icon: const Icon(Icons.undo_outlined),
-                        onPressed: () => setState(_pendingCountChanges.clear),
+                        onPressed: () {
+                          setState(_pendingCountChanges.clear);
+                          widget.notifier.clearPendingEdit('inventory');
+                        },
                       ),
                     ),
                   ],
@@ -1649,7 +1711,6 @@ class _PrivateInventorySummaryCardState
                       trailing: widget.editable
                           ? _InventoryItemCountEditor(
                               item: item,
-                              notifier: widget.notifier,
                               pendingCount:
                                   _pendingCountChanges[_inventoryItemKey(item)]
                                       ?.count,
@@ -1683,19 +1744,18 @@ class _PrivateInventorySummaryCardState
         _pendingCountChanges[key] = change;
       }
     });
+    _pushInventoryPending();
   }
 }
 
 class _InventoryItemCountEditor extends StatefulWidget {
   const _InventoryItemCountEditor({
     required this.item,
-    required this.notifier,
     required this.onPendingCountChanged,
     this.pendingCount,
   });
 
   final PrivateInventoryItem item;
-  final EditorNotifier notifier;
   final int? pendingCount;
   final void Function(InventoryItemCountChange? change) onPendingCountChanged;
 
@@ -1758,42 +1818,16 @@ class _InventoryItemCountEditorState extends State<_InventoryItemCountEditor> {
 
   @override
   Widget build(BuildContext context) {
-    final id = widget.item.id.isEmpty ? widget.item.path : widget.item.id;
     return SizedBox(
-      width: 164,
-      child: Row(
-        children: [
-          Expanded(
-            child: TextField(
-              controller: _controller,
-              keyboardType: TextInputType.number,
-              onChanged: _onCountTextChanged,
-              decoration: InputDecoration(
-                labelText: 'Count',
-                errorText: _error,
-              ),
-            ),
-          ),
-          Tooltip(
-            message: 'Save $id count',
-            child: IconButton(
-              icon: const Icon(Icons.save_outlined),
-              onPressed: () {
-                final parsed = int.tryParse(_controller.text.trim());
-                if (parsed == null || parsed < 0) {
-                  setState(() => _error = 'Invalid');
-                  return;
-                }
-                setState(() => _error = null);
-                widget.notifier.writeInventoryItemCount(
-                  id: widget.item.id,
-                  path: widget.item.path,
-                  count: parsed,
-                );
-              },
-            ),
-          ),
-        ],
+      width: 120,
+      child: TextField(
+        controller: _controller,
+        keyboardType: TextInputType.number,
+        onChanged: _onCountTextChanged,
+        decoration: InputDecoration(
+          labelText: 'Count',
+          errorText: _error,
+        ),
       ),
     );
   }
@@ -1917,13 +1951,6 @@ class _PrivatePlayerTransformEditorState
 
   @override
   Widget build(BuildContext context) {
-    final saveButton = Tooltip(
-      message: 'Save hero transform',
-      child: IconButton.filledTonal(
-        icon: const Icon(Icons.save_outlined),
-        onPressed: widget.editable ? _save : null,
-      ),
-    );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1937,9 +1964,15 @@ class _PrivatePlayerTransformEditorState
                 style: Theme.of(context).textTheme.titleSmall,
               ),
             ),
-            saveButton,
           ],
         ),
+        if (_error != null) ...[
+          const SizedBox(height: 6),
+          Text(
+            _error!,
+            style: TextStyle(color: Theme.of(context).colorScheme.error),
+          ),
+        ],
         const SizedBox(height: 10),
         LayoutBuilder(
           builder: (context, constraints) {
@@ -1949,32 +1982,37 @@ class _PrivatePlayerTransformEditorState
                 controller: _locationXController,
                 label: 'Location X',
                 enabled: widget.editable,
-                errorText: _error,
+                onChanged: (_) => _updatePending(),
               ),
               _TransformNumberField(
                 controller: _locationYController,
                 label: 'Location Y',
                 enabled: widget.editable,
+                onChanged: (_) => _updatePending(),
               ),
               _TransformNumberField(
                 controller: _locationZController,
                 label: 'Location Z',
                 enabled: widget.editable,
+                onChanged: (_) => _updatePending(),
               ),
               _TransformNumberField(
                 controller: _rotationPitchController,
                 label: 'Rotation pitch',
                 enabled: widget.editable,
+                onChanged: (_) => _updatePending(),
               ),
               _TransformNumberField(
                 controller: _rotationYawController,
                 label: 'Rotation yaw',
                 enabled: widget.editable,
+                onChanged: (_) => _updatePending(),
               ),
               _TransformNumberField(
                 controller: _rotationRollController,
                 label: 'Rotation roll',
                 enabled: widget.editable,
+                onChanged: (_) => _updatePending(),
               ),
             ];
             if (compact) {
@@ -2014,7 +2052,8 @@ class _PrivatePlayerTransformEditorState
     );
   }
 
-  void _save() {
+  void _updatePending() {
+    if (!widget.editable) return;
     final locationX = double.tryParse(_locationXController.text.trim());
     final locationY = double.tryParse(_locationYController.text.trim());
     final locationZ = double.tryParse(_locationZController.text.trim());
@@ -2028,16 +2067,41 @@ class _PrivatePlayerTransformEditorState
         rotationYaw == null ||
         rotationRoll == null) {
       setState(() => _error = 'Invalid');
+      widget.notifier.clearPendingEdit('transform');
       return;
     }
     setState(() => _error = null);
-    widget.notifier.writePlayerTransform(
-      locationX: locationX,
-      locationY: locationY,
-      locationZ: locationZ,
-      rotationPitch: rotationPitch,
-      rotationYaw: rotationYaw,
-      rotationRoll: rotationRoll,
+    final orig = widget.transform;
+    if (locationX == orig.location.x &&
+        locationY == orig.location.y &&
+        locationZ == orig.location.z &&
+        rotationPitch == orig.rotation.pitch &&
+        rotationYaw == orig.rotation.yaw &&
+        rotationRoll == orig.rotation.roll) {
+      widget.notifier.clearPendingEdit('transform');
+      return;
+    }
+    widget.notifier.setPendingEdit(
+      'transform',
+      PendingSaveEdit(
+        edits: [
+          {
+            'path': 'private.player.setTransform',
+            'value': {
+              'location': {
+                'x': locationX,
+                'y': locationY,
+                'z': locationZ,
+              },
+              'rotation': {
+                'pitch': rotationPitch,
+                'yaw': rotationYaw,
+                'roll': rotationRoll,
+              },
+            },
+          },
+        ],
+      ),
     );
   }
 }
@@ -2047,24 +2111,25 @@ class _TransformNumberField extends StatelessWidget {
     required this.controller,
     required this.label,
     required this.enabled,
-    this.errorText,
+    this.onChanged,
   });
 
   final TextEditingController controller;
   final String label;
   final bool enabled;
-  final String? errorText;
+  final ValueChanged<String>? onChanged;
 
   @override
   Widget build(BuildContext context) {
     return TextField(
       controller: controller,
       enabled: enabled,
+      onChanged: onChanged,
       keyboardType: const TextInputType.numberWithOptions(
         decimal: true,
         signed: true,
       ),
-      decoration: InputDecoration(labelText: label, errorText: errorText),
+      decoration: InputDecoration(labelText: label),
     );
   }
 }
@@ -2191,20 +2256,15 @@ class _PrivatePlayerAttributeRowState
       controller: _baseController,
       enabled: widget.editable,
       keyboardType: const TextInputType.numberWithOptions(decimal: true),
+      onChanged: (_) => _updatePending(),
       decoration: InputDecoration(labelText: '$name base', errorText: _error),
     );
     final currentField = TextField(
       controller: _currentController,
       enabled: widget.editable,
       keyboardType: const TextInputType.numberWithOptions(decimal: true),
+      onChanged: (_) => _updatePending(),
       decoration: InputDecoration(labelText: '$name current'),
-    );
-    final saveButton = Tooltip(
-      message: 'Save $name attribute',
-      child: IconButton.filledTonal(
-        icon: const Icon(Icons.save_outlined),
-        onPressed: widget.editable ? _save : null,
-      ),
     );
     final label = SizedBox(
       width: 116,
@@ -2221,8 +2281,6 @@ class _PrivatePlayerAttributeRowState
             baseField,
             const SizedBox(height: 6),
             currentField,
-            const SizedBox(height: 6),
-            Align(alignment: Alignment.centerRight, child: saveButton),
           ],
         ),
       );
@@ -2236,25 +2294,42 @@ class _PrivatePlayerAttributeRowState
           Expanded(child: baseField),
           const SizedBox(width: 8),
           Expanded(child: currentField),
-          const SizedBox(width: 8),
-          saveButton,
         ],
       ),
     );
   }
 
-  void _save() {
+  void _updatePending() {
+    if (!widget.editable) return;
+    final id = widget.attribute.id;
     final baseValue = double.tryParse(_baseController.text.trim());
     final currentValue = double.tryParse(_currentController.text.trim());
     if (baseValue == null || currentValue == null) {
       setState(() => _error = 'Invalid');
+      widget.notifier.clearPendingEdit('attr:$id');
       return;
     }
     setState(() => _error = null);
-    widget.notifier.writePlayerAttribute(
-      id: widget.attribute.id,
-      baseValue: baseValue,
-      currentValue: currentValue,
+    final origBase = widget.attribute.baseValue;
+    final origCurrent = widget.attribute.currentValue;
+    if (baseValue == origBase && currentValue == origCurrent) {
+      widget.notifier.clearPendingEdit('attr:$id');
+      return;
+    }
+    widget.notifier.setPendingEdit(
+      'attr:$id',
+      PendingSaveEdit(
+        edits: [
+          {
+            'path': 'private.player.setAttribute',
+            'value': {
+              'id': id,
+              'baseValue': baseValue,
+              'currentValue': currentValue,
+            },
+          },
+        ],
+      ),
     );
   }
 }
@@ -2513,7 +2588,6 @@ class _AllDataPanelState extends State<_AllDataPanel> {
           hit: hit,
           editable: widget.editable && hit.editable,
           notifier: widget.notifier,
-          onSaved: () => _run(offset: result.offset),
         );
       },
     );
@@ -2595,13 +2669,11 @@ class _TypedPropertyRow extends StatefulWidget {
     required this.hit,
     required this.editable,
     required this.notifier,
-    required this.onSaved,
   });
 
   final TypedPropertyHit hit;
   final bool editable;
   final EditorNotifier notifier;
-  final VoidCallback onSaved;
 
   @override
   State<_TypedPropertyRow> createState() => _TypedPropertyRowState();
@@ -2622,6 +2694,8 @@ class _TypedPropertyRowState extends State<_TypedPropertyRow> {
     if (widget.hit.value != oldWidget.hit.value &&
         _controller.text != widget.hit.value) {
       _controller.text = widget.hit.value;
+      // Re-evaluate pending after the canonical value changed (e.g. after save).
+      _updatePending(_controller.text);
     }
   }
 
@@ -2633,17 +2707,20 @@ class _TypedPropertyRowState extends State<_TypedPropertyRow> {
 
   bool get _isBool => widget.hit.type == 'BoolProperty';
 
-  Object? _coerce() {
+  /// Returns a key string that identifies this property in the pending registry.
+  String get _pendingKey => 'typed:${widget.hit.path.join(' ')}';
+
+  Object? _coerce(String text) {
     final type = widget.hit.type;
     if (type == 'StrProperty' || type == 'NameProperty') {
       // String values are written verbatim — leading/trailing whitespace may
       // be intentional, so no trim.
-      return _controller.text;
+      return text;
     }
     if (type == 'ObjectProperty' || type == 'EnumProperty') {
-      return _controller.text.trim();
+      return text.trim();
     }
-    final raw = _controller.text.trim();
+    final raw = text.trim();
     if (type == 'FloatProperty' || type == 'DoubleProperty') {
       return double.tryParse(raw);
     }
@@ -2656,14 +2733,33 @@ class _TypedPropertyRowState extends State<_TypedPropertyRow> {
     return int.tryParse(raw);
   }
 
-  Future<void> _save(Object value) async {
-    final ok = await widget.notifier.writeTypedValue(
-      propertyPath: widget.hit.path,
-      value: value,
+  void _updatePending(String text) {
+    if (!widget.editable) return;
+    final value = _coerce(text);
+    if (value == null) {
+      // Invalid / unparseable — don't contribute to pending.
+      widget.notifier.clearPendingEdit(_pendingKey);
+      return;
+    }
+    // Revert to original → clear pending.
+    if (text == widget.hit.value ||
+        (widget.hit.type != 'StrProperty' &&
+            widget.hit.type != 'NameProperty' &&
+            text.trim() == widget.hit.value.trim())) {
+      widget.notifier.clearPendingEdit(_pendingKey);
+      return;
+    }
+    widget.notifier.setPendingEdit(
+      _pendingKey,
+      PendingSaveEdit(
+        edits: [
+          {
+            'path': 'private.typed.setValue',
+            'value': {'path': widget.hit.path, 'value': value},
+          },
+        ],
+      ),
     );
-    // Only refresh the list when the core accepted the write; a rejected write
-    // surfaces an error in state and must not look like a successful save.
-    if (ok) widget.onSaved();
   }
 
   @override
@@ -2704,31 +2800,18 @@ class _TypedPropertyRowState extends State<_TypedPropertyRow> {
           else if (_isBool)
             _BoolEditor(
               value: hit.value == 'true',
-              onChanged: (next) => _save(next),
+              onChanged: (next) => _updatePending(next.toString()),
             )
           else
             SizedBox(
               width: 220,
-              child: Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _controller,
-                      decoration: const InputDecoration(
-                        isDense: true,
-                        labelText: 'Value',
-                      ),
-                    ),
-                  ),
-                  IconButton(
-                    tooltip: 'Save ${hit.display}',
-                    icon: const Icon(Icons.save_outlined),
-                    onPressed: () {
-                      final value = _coerce();
-                      if (value != null) _save(value);
-                    },
-                  ),
-                ],
+              child: TextField(
+                controller: _controller,
+                onChanged: _updatePending,
+                decoration: const InputDecoration(
+                  isDense: true,
+                  labelText: 'Value',
+                ),
               ),
             ),
         ],

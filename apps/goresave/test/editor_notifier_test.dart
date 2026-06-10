@@ -1,9 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:goresave/features/editor/domain/core_service.dart';
-import 'package:goresave/features/editor/domain/editor_models.dart';
 import 'package:goresave/features/editor/domain/editor_notifier.dart';
 import 'package:goresave/features/editor/domain/editor_settings_store.dart';
-import 'package:goresave/features/editor/domain/hero_attributes.dart';
+import 'package:goresave/features/editor/domain/pending_edits.dart';
 
 void main() {
   test('uses persisted editor paths before defaults', () {
@@ -188,110 +189,240 @@ void main() {
     );
   });
 
+  // ---------------------------------------------------------------------------
+  // Pending-edit registry
+  // ---------------------------------------------------------------------------
+
+  test('setPendingEdit adds entry and updates count', () async {
+    final core = _RecordingCoreService();
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+    notifier.setPendingEdit(
+      'publicName',
+      const PendingSaveEdit(
+        edits: [
+          {'path': 'public.m_PlayerSaveName', 'value': 'New Name'},
+        ],
+        syncPersistentDataList: true,
+      ),
+    );
+
+    expect(notifier.state.pendingEdits.containsKey('publicName'), isTrue);
+    expect(notifier.pendingEditCount, 1);
+  });
+
+  test('clearPendingEdit removes entry', () async {
+    final core = _RecordingCoreService();
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+    notifier.setPendingEdit(
+      'publicName',
+      const PendingSaveEdit(
+        edits: [
+          {'path': 'public.m_PlayerSaveName', 'value': 'New Name'},
+        ],
+      ),
+    );
+    expect(notifier.pendingEditCount, 1);
+
+    notifier.clearPendingEdit('publicName');
+    expect(notifier.state.pendingEdits, isEmpty);
+    expect(notifier.pendingEditCount, 0);
+  });
+
   test(
-    'writePlayerSaveName sends length-changing public metadata edit with slot-list sync',
+    'saveAllPending issues ONE write_save with mixed edits in stable key order',
     () async {
       final core = _RecordingCoreService();
       final notifier = EditorNotifier(
         core,
-        saveDir: r'C:\Users\Daniel\AppData\Local\G1R\Saved\SaveGames',
+        saveDir: r'C:\tmp\saves',
+        codecHostPath: r'C:\tools\goresave_g1r_codec_host.exe',
+        gameExePath: r'C:\Games\G1R\G1R-Win64-Shipping.exe',
       );
       await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
 
-      await notifier.writePlayerSaveName('Much Longer Save Name');
+      // Register two pending edits with keys that sort: 'attr:Health' < 'transform'
+      notifier.setPendingEdit(
+        'transform',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.player.setTransform',
+              'value': {
+                'location': {'x': 1.0, 'y': 2.0, 'z': 3.0},
+                'rotation': {'pitch': 0.0, 'yaw': 0.0, 'roll': 0.0},
+              },
+            },
+          ],
+        ),
+      );
+      notifier.setPendingEdit(
+        'attr:Health',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.player.setAttribute',
+              'value': {'id': 'Health', 'baseValue': 77.0, 'currentValue': 66.0},
+            },
+          ],
+        ),
+      );
+
+      final ok = await notifier.saveAllPending();
+
+      expect(ok, isTrue);
+      final writeRequests = core.requests
+          .where((r) => r.command == 'write_save')
+          .toList();
+      // Exactly one write_save.
+      expect(writeRequests, hasLength(1));
+      final payload = writeRequests.single.payload;
+      expect(payload['backup'], isTrue);
+      // Edits in stable key order: 'attr:Health' before 'transform'.
+      final edits = payload['edits'] as List;
+      expect(edits, hasLength(2));
+      expect(edits[0]['path'], 'private.player.setAttribute');
+      expect(edits[1]['path'], 'private.player.setTransform');
+      // Pending cleared after success.
+      expect(notifier.state.pendingEdits, isEmpty);
+    },
+  );
+
+  test(
+    'saveAllPending sets syncPersistentDataList true when any edit requests it',
+    () async {
+      final core = _RecordingCoreService();
+      final notifier = EditorNotifier(
+        core,
+        saveDir: r'C:\tmp\saves',
+      );
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+      notifier.setPendingEdit(
+        'publicName',
+        const PendingSaveEdit(
+          edits: [
+            {'path': 'public.m_PlayerSaveName', 'value': 'New Name'},
+          ],
+          syncPersistentDataList: true,
+        ),
+      );
+      notifier.setPendingEdit(
+        'attr:Health',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.player.setAttribute',
+              'value': {'id': 'Health', 'baseValue': 80.0, 'currentValue': 80.0},
+            },
+          ],
+        ),
+      );
+
+      await notifier.saveAllPending();
 
       final write = core.requests.lastWhere(
-        (request) => request.command == 'write_save',
+        (r) => r.command == 'write_save',
       );
-      expect(write.payload['backup'], isTrue);
       expect(write.payload['syncPersistentDataList'], isTrue);
-      expect(write.payload['edits'], [
-        {'path': 'public.m_PlayerSaveName', 'value': 'Much Longer Save Name'},
-      ]);
-      expect(
-        notifier.state.lastWriteMessage,
-        contains(r'PersistentDataList.sav.bak.2'),
-      );
+      expect(write.payload['backup'], isTrue);
     },
   );
+
+  test('saveAllPending is a no-op when pendingEdits is empty', () async {
+    final core = _RecordingCoreService();
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+    final countBefore = core.requests
+        .where((r) => r.command == 'write_save')
+        .length;
+
+    final ok = await notifier.saveAllPending();
+
+    expect(ok, isTrue);
+    final countAfter = core.requests
+        .where((r) => r.command == 'write_save')
+        .length;
+    expect(countAfter, countBefore);
+  });
+
+  test('saveAllPending keeps pending edits on failure', () async {
+    final core = _FailingWriteCoreService();
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+    notifier.setPendingEdit(
+      'publicName',
+      const PendingSaveEdit(
+        edits: [
+          {'path': 'public.m_PlayerSaveName', 'value': 'New Name'},
+        ],
+      ),
+    );
+
+    final ok = await notifier.saveAllPending();
+
+    expect(ok, isFalse);
+    // Pending edits must be preserved so the user can retry.
+    expect(notifier.state.pendingEdits.containsKey('publicName'), isTrue);
+  });
+
+  test('selection change clears pending edits', () async {
+    final core = _RecordingCoreService();
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+    notifier.setPendingEdit(
+      'publicName',
+      const PendingSaveEdit(
+        edits: [
+          {'path': 'public.m_PlayerSaveName', 'value': 'New Name'},
+        ],
+      ),
+    );
+    expect(notifier.state.pendingEdits.isNotEmpty, isTrue);
+
+    // Inspect a different path — pending edits must be cleared.
+    await notifier.inspect(r'C:\tmp\saves\G1R-002.sav');
+
+    expect(notifier.state.pendingEdits, isEmpty);
+  });
 
   test(
-    'writePlayerAttribute sends structured host-backed attribute edit',
+    'two rapid saveAllPending calls issue only one write (re-entry safe)',
     () async {
-      final core = _RecordingCoreService();
-      final notifier = EditorNotifier(
-        core,
-        saveDir: r'C:\Users\Daniel\AppData\Local\G1R\Saved\SaveGames',
-        codecHostPath: r'C:\Program Files\goresave\goresave_g1r_codec_host.exe',
-        gameExePath:
-            r'C:\Program Files (x86)\Steam\steamapps\common\Gothic 1 Remake\G1R\Binaries\Win64\G1R-Win64-Shipping.exe',
-      );
+      // Use a slow core so the first call is still in-flight when the second fires.
+      final gate = Completer<void>();
+      final core = _SlowWriteCoreService(gate.future);
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
       await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
-
-      await notifier.writePlayerAttribute(
-        id: 'Health',
-        baseValue: 77,
-        currentValue: 66,
+      notifier.setPendingEdit(
+        'publicName',
+        const PendingSaveEdit(
+          edits: [
+            {'path': 'public.m_PlayerSaveName', 'value': 'Slow Save'},
+          ],
+        ),
       );
 
-      final write = core.requests.lastWhere(
-        (request) => request.command == 'write_save',
-      );
-      expect(write.payload['binaryHost'], {
-        'helperPath': r'C:\Program Files\goresave\goresave_g1r_codec_host.exe',
-        'exePath':
-            r'C:\Program Files (x86)\Steam\steamapps\common\Gothic 1 Remake\G1R\Binaries\Win64\G1R-Win64-Shipping.exe',
-      });
-      expect(write.payload['edits'], [
-        {
-          'path': 'private.player.setAttribute',
-          'value': {'id': 'Health', 'baseValue': 77.0, 'currentValue': 66.0},
-        },
-      ]);
+      // Fire both without awaiting the first.
+      final first = notifier.saveAllPending();
+      final second = notifier.saveAllPending();
+      gate.complete();
+      await Future.wait([first, second]);
+
+      final writes = core.requests
+          .where((r) => r.command == 'write_save')
+          .toList();
+      expect(writes, hasLength(1));
     },
   );
 
-  test(
-    'writePlayerTransform sends structured host-backed transform edit',
-    () async {
-      final core = _RecordingCoreService();
-      final notifier = EditorNotifier(
-        core,
-        saveDir: r'C:\Users\Daniel\AppData\Local\G1R\Saved\SaveGames',
-        codecHostPath: r'C:\Program Files\goresave\goresave_g1r_codec_host.exe',
-        gameExePath:
-            r'C:\Program Files (x86)\Steam\steamapps\common\Gothic 1 Remake\G1R\Binaries\Win64\G1R-Win64-Shipping.exe',
-      );
-      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
-
-      await notifier.writePlayerTransform(
-        locationX: 100,
-        locationY: 200,
-        locationZ: 300,
-        rotationPitch: 1,
-        rotationYaw: 2,
-        rotationRoll: 3,
-      );
-
-      final write = core.requests.lastWhere(
-        (request) => request.command == 'write_save',
-      );
-      expect(write.payload['binaryHost'], {
-        'helperPath': r'C:\Program Files\goresave\goresave_g1r_codec_host.exe',
-        'exePath':
-            r'C:\Program Files (x86)\Steam\steamapps\common\Gothic 1 Remake\G1R\Binaries\Win64\G1R-Win64-Shipping.exe',
-      });
-      expect(write.payload['edits'], [
-        {
-          'path': 'private.player.setTransform',
-          'value': {
-            'location': {'x': 100.0, 'y': 200.0, 'z': 300.0},
-            'rotation': {'pitch': 1.0, 'yaw': 2.0, 'roll': 3.0},
-          },
-        },
-      ]);
-    },
-  );
+  // ---------------------------------------------------------------------------
+  // Other notifier methods (non-write path)
+  // ---------------------------------------------------------------------------
 
   test('verifyCodec unlocks compress edits for an unverified build', () async {
     final core = _RecordingCoreService(codecCanCompress: false);
@@ -338,37 +469,6 @@ void main() {
     expect(notifier.state.codecVerified, isFalse);
     expect(notifier.state.codecCompressReady, isFalse);
     expect(notifier.state.codecError, contains('roundtrip'));
-  });
-
-  test('writeTypedValue sends host-backed typed setValue edit', () async {
-    final core = _RecordingCoreService();
-    final notifier = EditorNotifier(
-      core,
-      saveDir: r'C:\Users\Daniel\AppData\Local\G1R\Saved\SaveGames',
-      codecHostPath: r'C:\Program Files\goresave\goresave_g1r_codec_host.exe',
-      gameExePath:
-          r'C:\Program Files (x86)\Steam\steamapps\common\Gothic 1 Remake\G1R\Binaries\Win64\G1R-Win64-Shipping.exe',
-    );
-    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
-
-    await notifier.writeTypedValue(
-      propertyPath: ['m_GenericData', '{GameTime}', 'CurrentTime', 'm_Day'],
-      value: 4,
-    );
-
-    final write = core.requests.lastWhere(
-      (request) => request.command == 'write_save',
-    );
-    expect(write.payload['edits'], [
-      {
-        'path': 'private.typed.setValue',
-        'value': {
-          'path': ['m_GenericData', '{GameTime}', 'CurrentTime', 'm_Day'],
-          'value': 4,
-        },
-      },
-    ]);
-    expect(write.payload['backup'], isTrue);
   });
 
   test('loadHeroAttributes searches the hero attribute subtree', () async {
@@ -440,83 +540,6 @@ void main() {
     expect(result.attributes.single.id, 'MaxHealth');
   });
 
-  test('writeTypedValues batches several typed edits into one write', () async {
-    final core = _RecordingCoreService();
-    final notifier = EditorNotifier(
-      core,
-      saveDir: r'C:\Users\Daniel\AppData\Local\G1R\Saved\SaveGames',
-      codecHostPath: r'C:\Program Files\goresave\goresave_g1r_codec_host.exe',
-      gameExePath:
-          r'C:\Program Files (x86)\Steam\steamapps\common\Gothic 1 Remake\G1R\Binaries\Win64\G1R-Win64-Shipping.exe',
-    );
-    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
-
-    await notifier.writeTypedValues(const [
-      TypedValueEdit(path: ['a', '{B}', 'BaseValue'], value: 65),
-      TypedValueEdit(path: ['a', '{B}', 'CurrentValue'], value: 65),
-    ]);
-
-    final write = core.requests.lastWhere(
-      (request) => request.command == 'write_save',
-    );
-    expect(write.payload['backup'], isTrue);
-    expect(write.payload['edits'], [
-      {
-        'path': 'private.typed.setValue',
-        'value': {
-          'path': ['a', '{B}', 'BaseValue'],
-          'value': 65,
-        },
-      },
-      {
-        'path': 'private.typed.setValue',
-        'value': {
-          'path': ['a', '{B}', 'CurrentValue'],
-          'value': 65,
-        },
-      },
-    ]);
-  });
-
-  test('writeTypedValues with empty list is a no-op', () async {
-    final core = _RecordingCoreService();
-    final notifier = EditorNotifier(
-      core,
-      saveDir: r'C:\tmp\saves',
-      codecHostPath: r'C:\tools\goresave_g1r_codec_host.exe',
-      gameExePath: r'C:\Games\G1R\G1R-Win64-Shipping.exe',
-    );
-    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
-
-    final ok = await notifier.writeTypedValues(const []);
-
-    expect(ok, isTrue);
-    expect(
-      core.requests.where((r) => r.command == 'write_save'),
-      isEmpty,
-    );
-  });
-
-  test('writeTypedValues without selected save returns false', () async {
-    final core = _RecordingCoreService();
-    final notifier = EditorNotifier(
-      core,
-      saveDir: r'C:\tmp\saves',
-      codecHostPath: r'C:\tools\goresave_g1r_codec_host.exe',
-      gameExePath: r'C:\Games\G1R\G1R-Win64-Shipping.exe',
-    );
-
-    final ok = await notifier.writeTypedValues(
-      const [TypedValueEdit(path: ['a'], value: 1)],
-    );
-
-    expect(ok, isFalse);
-    expect(
-      core.requests.where((r) => r.command == 'write_save'),
-      isEmpty,
-    );
-  });
-
   test('loadHeroAttributes pages through results beyond the search cap',
       () async {
     Map<String, Object?> heroHit(String id, String leaf, String value) => {
@@ -580,105 +603,6 @@ void main() {
     expect(attribute.baseValue, 64);
     expect(attribute.currentValue, 64);
   });
-
-  test(
-    'writeInventoryItemCount sends host-backed private inventory edit',
-    () async {
-      final core = _RecordingCoreService();
-      final notifier = EditorNotifier(
-        core,
-        saveDir: r'C:\Users\Daniel\AppData\Local\G1R\Saved\SaveGames',
-        codecHostPath: r'C:\Program Files\goresave\goresave_g1r_codec_host.exe',
-        gameExePath:
-            r'C:\Program Files (x86)\Steam\steamapps\common\Gothic 1 Remake\G1R\Binaries\Win64\G1R-Win64-Shipping.exe',
-      );
-      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
-
-      await notifier.writeInventoryItemCount(
-        id: 'ItMi_Orenugget',
-        path: '/Script/Angelscript.ItMi_Orenugget',
-        count: 99,
-      );
-
-      final write = core.requests.lastWhere(
-        (request) => request.command == 'write_save',
-      );
-      expect(write.payload['binaryHost'], {
-        'helperPath': r'C:\Program Files\goresave\goresave_g1r_codec_host.exe',
-        'exePath':
-            r'C:\Program Files (x86)\Steam\steamapps\common\Gothic 1 Remake\G1R\Binaries\Win64\G1R-Win64-Shipping.exe',
-      });
-      expect(write.payload['edits'], [
-        {
-          'path': 'private.inventory.setItemCount',
-          'value': {
-            'id': 'ItMi_Orenugget',
-            'path': '/Script/Angelscript.ItMi_Orenugget',
-            'count': 99,
-          },
-        },
-      ]);
-    },
-  );
-
-  test(
-    'writeInventoryItemCounts sends one host-backed write with multiple inventory edits',
-    () async {
-      final core = _RecordingCoreService();
-      final notifier = EditorNotifier(
-        core,
-        saveDir: r'C:\Users\Daniel\AppData\Local\G1R\Saved\SaveGames',
-        codecHostPath: r'C:\Program Files\goresave\goresave_g1r_codec_host.exe',
-        gameExePath:
-            r'C:\Program Files (x86)\Steam\steamapps\common\Gothic 1 Remake\G1R\Binaries\Win64\G1R-Win64-Shipping.exe',
-      );
-      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
-
-      await notifier.writeInventoryItemCounts([
-        const InventoryItemCountChange(
-          id: 'ItMi_Orenugget',
-          path: '/Script/Angelscript.ItMi_Orenugget',
-          count: 99,
-        ),
-        const InventoryItemCountChange(
-          id: 'ItFo_Cheese',
-          path: '/Script/Angelscript.ItFo_Cheese',
-          count: 7,
-        ),
-      ]);
-
-      final write = core.requests.lastWhere(
-        (request) => request.command == 'write_save',
-      );
-      expect(write.payload['binaryHost'], {
-        'helperPath': r'C:\Program Files\goresave\goresave_g1r_codec_host.exe',
-        'exePath':
-            r'C:\Program Files (x86)\Steam\steamapps\common\Gothic 1 Remake\G1R\Binaries\Win64\G1R-Win64-Shipping.exe',
-      });
-      expect(write.payload['edits'], [
-        {
-          'path': 'private.inventory.setItemCount',
-          'value': {
-            'id': 'ItMi_Orenugget',
-            'path': '/Script/Angelscript.ItMi_Orenugget',
-            'count': 99,
-          },
-        },
-        {
-          'path': 'private.inventory.setItemCount',
-          'value': {
-            'id': 'ItFo_Cheese',
-            'path': '/Script/Angelscript.ItFo_Cheese',
-            'count': 7,
-          },
-        },
-      ]);
-      expect(
-        notifier.state.lastWriteMessage,
-        contains('2 inventory counts saved'),
-      );
-    },
-  );
 
   test(
     'validateCodecRoundtrip sends selected save and binary host paths',
@@ -911,6 +835,42 @@ class _RecordingCoreService implements GoresaveCoreService {
           'error': {'message': 'Unhandled command $command'},
         };
     }
+  }
+}
+
+/// write_save always fails.
+class _FailingWriteCoreService extends _RecordingCoreService {
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    if (command == 'write_save') {
+      requests.add(_RecordedRequest(command, Map<String, Object?>.from(payload)));
+      return {
+        'ok': false,
+        'error': {'message': 'write failed'},
+      };
+    }
+    return super.execute(command, payload: payload);
+  }
+}
+
+/// write_save completes only after [gate] resolves.
+class _SlowWriteCoreService extends _RecordingCoreService {
+  _SlowWriteCoreService(this.gate);
+
+  final Future<void> gate;
+
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    if (command == 'write_save') {
+      await gate;
+    }
+    return super.execute(command, payload: payload);
   }
 }
 

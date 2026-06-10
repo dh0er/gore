@@ -5,6 +5,7 @@ import 'package:goresave/features/editor/domain/core_service.dart';
 import 'package:goresave/features/editor/domain/editor_models.dart';
 import 'package:goresave/features/editor/domain/editor_settings_store.dart';
 import 'package:goresave/features/editor/domain/hero_attributes.dart';
+import 'package:goresave/features/editor/domain/pending_edits.dart';
 import 'package:goresave/utils/default_paths.dart';
 import 'package:path/path.dart' as p;
 import 'package:state_notifier/state_notifier.dart';
@@ -51,6 +52,7 @@ class EditorState {
     this.error,
     this.codecError,
     this.lastWriteMessage,
+    this.pendingEdits = const {},
   });
 
   final String saveDir;
@@ -65,6 +67,12 @@ class EditorState {
   final String? selectedPath;
   final SaveInspection? inspection;
   final CodecStatus? codecStatus;
+
+  /// Pending (unsaved) savegame edits, keyed by editor surface
+  /// (e.g. 'publicName', 'heroStats', 'transform', 'attr:Health',
+  /// 'inventory', 'typed:&lt;joined path&gt;'). Cleared on save, refresh to a
+  /// different save, or selection change.
+  final Map<String, PendingSaveEdit> pendingEdits;
 
   /// True once the user ran a successful codec round-trip verification this
   /// session for an executable the probe could not auto-trust (a pattern-
@@ -127,12 +135,14 @@ class EditorState {
     String? error,
     String? codecError,
     String? lastWriteMessage,
+    Map<String, PendingSaveEdit>? pendingEdits,
     bool clearInspection = false,
     bool clearBackups = false,
     bool clearError = false,
     bool clearCodecError = false,
     bool clearCodecStatus = false,
     bool clearWriteMessage = false,
+    bool clearPendingEdits = false,
   }) {
     return EditorState(
       saveDir: saveDir ?? this.saveDir,
@@ -159,6 +169,9 @@ class EditorState {
       lastWriteMessage: clearWriteMessage
           ? null
           : lastWriteMessage ?? this.lastWriteMessage,
+      pendingEdits: clearPendingEdits
+          ? const {}
+          : pendingEdits ?? this.pendingEdits,
     );
   }
 }
@@ -280,6 +293,77 @@ class EditorNotifier extends StateNotifier<EditorState> {
     // Keep the queue alive regardless of this command's success/failure.
     _coreQueue = pending.then((_) {}, onError: (_) {});
     return pending;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Pending-edit registry
+  // ---------------------------------------------------------------------------
+
+  /// Upsert a pending edit for a given editor surface key.
+  void setPendingEdit(String key, PendingSaveEdit edit) {
+    final updated = Map<String, PendingSaveEdit>.from(state.pendingEdits);
+    updated[key] = edit;
+    state = state.copyWith(pendingEdits: updated);
+  }
+
+  /// Remove the pending edit for a given editor surface key.
+  void clearPendingEdit(String key) {
+    if (!state.pendingEdits.containsKey(key)) return;
+    final updated = Map<String, PendingSaveEdit>.from(state.pendingEdits);
+    updated.remove(key);
+    state = state.copyWith(pendingEdits: updated);
+  }
+
+  /// Clear all pending edits.
+  void clearAllPendingEdits() {
+    if (state.pendingEdits.isEmpty) return;
+    state = state.copyWith(clearPendingEdits: true);
+  }
+
+  /// Total number of edit objects across all pending keys.
+  int get pendingEditCount {
+    return state.pendingEdits.values.fold(0, (sum, e) => sum + e.edits.length);
+  }
+
+  /// Save all pending edits in one write_save call. No-op when empty.
+  /// Re-entry-safe: bails immediately if a load is already in flight.
+  /// Returns true on success (or when nothing to save), false on failure.
+  Future<bool> saveAllPending() async {
+    if (state.pendingEdits.isEmpty) return true;
+    if (state.isLoading) return false;
+    final savePath = state.selectedPath;
+    if (savePath == null) return false;
+
+    // Build edits in stable (sorted) key order for determinism.
+    final sortedKeys = state.pendingEdits.keys.toList()..sort();
+    final allEdits = <Map<String, Object?>>[];
+    var syncPersistent = false;
+    for (final key in sortedKeys) {
+      final entry = state.pendingEdits[key]!;
+      allEdits.addAll(entry.edits);
+      if (entry.syncPersistentDataList) syncPersistent = true;
+    }
+
+    final n = allEdits.length;
+    final ok = await _runWrite(
+      payload: {
+        'path': savePath,
+        'backup': true,
+        if (syncPersistent) 'syncPersistentDataList': true,
+        'edits': allEdits,
+        ..._codecPayload(),
+      },
+      message: (data) => _backupMessage(
+        '$n change${n == 1 ? '' : 's'} saved with backup',
+        data,
+      ),
+    );
+    if (ok) {
+      // Clear pending edits on success (the refresh from _runWrite already
+      // populated fresh inspection data).
+      clearAllPendingEdits();
+    }
+    return ok;
   }
 
   Future<void> chooseSaveDir() async {
@@ -412,6 +496,9 @@ class EditorNotifier extends StateNotifier<EditorState> {
       clearWriteMessage: clearWriteMessage,
       clearInspection: switchingSlot,
       clearBackups: switchingSlot,
+      // Stale pending edits from a prior slot must not be written to a
+      // different file. Clear them when switching to a new slot.
+      clearPendingEdits: switchingSlot,
     );
     try {
       final payload = <String, Object?>{
