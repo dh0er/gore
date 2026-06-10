@@ -1281,45 +1281,39 @@ class _InventoryPanelState extends State<_InventoryPanel> {
       );
     }
     final hasItems = inspection.privateInventory.hasData;
-    final itemsOpen = hasItems && _itemsOpen;
+    if (!hasItems) {
+      // Decoded fine, just nothing recognised — say so instead of leaving
+      // the tab blank.
+      return const _MessagePane(
+        icon: Icons.inventory_2_outlined,
+        title: 'Inventory',
+        body: 'No item stacks found in the decoded private payload.',
+      );
+    }
+    final itemsOpen = _itemsOpen;
+    // Inventory writes recompress the payload too, so require a
+    // compress-capable codec host in addition to a full decode.
+    // The core only allows count edits in a detected player
+    // inventory region, advertised via writable; gate on it so other
+    // scopes don't show editors whose saves fail in the core.
+    final itemsCard = _PrivateInventorySummaryCard(
+      inventory: inspection.privateInventory,
+      notifier: widget.notifier,
+      editable:
+          inspection.privateEditable &&
+          widget.canCompress &&
+          inspection.privateInventory.writable.contains(
+            'private.inventory.setItemCount',
+          ),
+      expanded: itemsOpen,
+      onToggle: () => setState(() => _itemsOpen = !_itemsOpen),
+    );
     return Padding(
       padding: const EdgeInsets.all(20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          if (hasItems)
-            itemsOpen
-                ? Expanded(
-                    child: _PrivateInventorySummaryCard(
-                      inventory: inspection.privateInventory,
-                      notifier: widget.notifier,
-                      // Inventory writes recompress the payload too, so require a
-                      // compress-capable codec host in addition to a full decode.
-                      // The core only allows count edits in a detected player
-                      // inventory region, advertised via writable; gate on it so other
-                      // scopes don't show editors whose saves fail in the core.
-                      editable:
-                          inspection.privateEditable &&
-                          widget.canCompress &&
-                          inspection.privateInventory.writable.contains(
-                            'private.inventory.setItemCount',
-                          ),
-                      expanded: itemsOpen,
-                      onToggle: () => setState(() => _itemsOpen = !_itemsOpen),
-                    ),
-                  )
-                : _PrivateInventorySummaryCard(
-                    inventory: inspection.privateInventory,
-                    notifier: widget.notifier,
-                    editable:
-                        inspection.privateEditable &&
-                        widget.canCompress &&
-                        inspection.privateInventory.writable.contains(
-                          'private.inventory.setItemCount',
-                        ),
-                    expanded: false,
-                    onToggle: () => setState(() => _itemsOpen = !_itemsOpen),
-                  ),
+          if (itemsOpen) Expanded(child: itemsCard) else itemsCard,
         ],
       ),
     );
