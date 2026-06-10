@@ -55,6 +55,15 @@ pub struct Property {
     pub value: PropertyValue,
 }
 
+impl Property {
+    /// Absolute offset of the tag's u32 `size` field. The value payload is
+    /// always preceded by `u32 size | u8 tag_flags`, so the size field sits
+    /// five bytes before the recorded value offset.
+    pub fn size_field_offset(&self) -> usize {
+        self.value_offset - 5
+    }
+}
+
 /// Type descriptors serialized between the property type and the value header.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Descriptor {
@@ -124,10 +133,26 @@ pub struct ObjectInstance {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum StructValue {
-    Vector3 { x: f64, y: f64, z: f64 },
-    Vector3f { x: f32, y: f32, z: f32 },
-    Vector4 { x: f64, y: f64, z: f64, w: f64 },
-    Vector2 { x: f64, y: f64 },
+    Vector3 {
+        x: f64,
+        y: f64,
+        z: f64,
+    },
+    Vector3f {
+        x: f32,
+        y: f32,
+        z: f32,
+    },
+    Vector4 {
+        x: f64,
+        y: f64,
+        z: f64,
+        w: f64,
+    },
+    Vector2 {
+        x: f64,
+        y: f64,
+    },
     Guid([u8; 16]),
     DateTime(i64),
     GameplayTagContainer(Vec<String>),
@@ -139,6 +164,9 @@ pub enum StructValue {
 #[derive(Debug, Clone, PartialEq)]
 pub struct InstancedStruct {
     pub actual_type: String,
+    /// Absolute offset of the u32 `data_size` field preceding the body.
+    /// Length-changing edits inside this struct must adjust it.
+    pub data_size_offset: usize,
     pub properties: Vec<Property>,
 }
 
@@ -166,9 +194,9 @@ pub fn parse_path(segments: &[String]) -> Result<Vec<PathSeg>, CoreError> {
             if let Some(key) = raw.strip_prefix('{').and_then(|s| s.strip_suffix('}')) {
                 Ok(PathSeg::MapKey(key.to_string()))
             } else if let Some(idx) = raw.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
-                idx.parse::<usize>()
-                    .map(PathSeg::Index)
-                    .map_err(|_| CoreError::InvalidRequest(format!("invalid index segment {raw:?}")))
+                idx.parse::<usize>().map(PathSeg::Index).map_err(|_| {
+                    CoreError::InvalidRequest(format!("invalid index segment {raw:?}"))
+                })
             } else if raw.is_empty() {
                 Err(CoreError::InvalidRequest("empty path segment".to_string()))
             } else {
@@ -192,11 +220,44 @@ fn map_key_to_string(key: &PropertyValue) -> Option<String> {
     }
 }
 
+/// A resolved typed path plus the absolute offsets of every enclosing u32
+/// size field crossed on the way to the target (outermost first): the tag
+/// `size` of each ancestor property and the `data_size` of each
+/// InstancedStruct wrapper. Length-changing edits must add their byte delta
+/// to each of these fields; the target's own size field is not included.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedChain<'a> {
+    pub target: &'a Property,
+    pub enclosing_size_fields: Vec<usize>,
+}
+
 /// Resolve a path to a tagged property within a parsed tree. The target must
 /// be a `Property` (it carries the absolute value offset needed for patching).
 pub fn resolve<'a>(
     properties: &'a [Property],
     path: &[PathSeg],
+) -> Result<&'a Property, CoreError> {
+    resolve_chain(properties, path).map(|chain| chain.target)
+}
+
+/// Like [`resolve`], but also collects the enclosing size-field offsets needed
+/// to apply a length-changing patch at the target.
+pub fn resolve_chain<'a>(
+    properties: &'a [Property],
+    path: &[PathSeg],
+) -> Result<ResolvedChain<'a>, CoreError> {
+    let mut enclosing_size_fields = Vec::new();
+    let target = resolve_in_properties(properties, path, &mut enclosing_size_fields)?;
+    Ok(ResolvedChain {
+        target,
+        enclosing_size_fields,
+    })
+}
+
+fn resolve_in_properties<'a>(
+    properties: &'a [Property],
+    path: &[PathSeg],
+    sizes: &mut Vec<usize>,
 ) -> Result<&'a Property, CoreError> {
     let Some((first, rest)) = path.split_first() else {
         return Err(CoreError::InvalidRequest("empty typed path".to_string()));
@@ -213,20 +274,23 @@ pub fn resolve<'a>(
     if rest.is_empty() {
         return Ok(property);
     }
-    resolve_in_value(&property.value, rest)
+    sizes.push(property.size_field_offset());
+    resolve_in_value(&property.value, rest, sizes)
 }
 
 fn resolve_in_value<'a>(
     value: &'a PropertyValue,
     path: &[PathSeg],
+    sizes: &mut Vec<usize>,
 ) -> Result<&'a Property, CoreError> {
     let (seg, rest) = path.split_first().expect("path checked non-empty");
     match (value, seg) {
         (PropertyValue::Struct(StructValue::Properties(inner)), PathSeg::Name(_)) => {
-            resolve(inner, path)
+            resolve_in_properties(inner, path, sizes)
         }
         (PropertyValue::Struct(StructValue::Instanced(Some(instanced))), PathSeg::Name(_)) => {
-            resolve(&instanced.properties, path)
+            sizes.push(instanced.data_size_offset);
+            resolve_in_properties(&instanced.properties, path, sizes)
         }
         (PropertyValue::Map { entries, .. }, PathSeg::MapKey(wanted)) => {
             let entry = entries
@@ -238,7 +302,7 @@ fn resolve_in_value<'a>(
                     "path may not end on a map entry; address a property inside it".to_string(),
                 ));
             }
-            resolve_in_value(&entry.1, rest)
+            resolve_in_value(&entry.1, rest, sizes)
         }
         (PropertyValue::Array { elements }, PathSeg::Index(i))
         | (PropertyValue::Set { elements, .. }, PathSeg::Index(i)) => {
@@ -251,7 +315,7 @@ fn resolve_in_value<'a>(
                         .to_string(),
                 ));
             }
-            resolve_in_value(element, rest)
+            resolve_in_value(element, rest, sizes)
         }
         (PropertyValue::ObjectInstances(instances), PathSeg::Index(i)) => {
             let instance = instances
@@ -263,7 +327,7 @@ fn resolve_in_value<'a>(
                         .to_string(),
                 ));
             }
-            resolve(&instance.properties, rest)
+            resolve_in_properties(&instance.properties, rest, sizes)
         }
         (other, seg) => Err(CoreError::InvalidRequest(format!(
             "segment {seg:?} cannot descend into {}",
@@ -307,7 +371,8 @@ pub struct PropertyHit {
     pub type_name: String,
     /// Formatted current value.
     pub value_display: String,
-    /// True for fixed-size scalars that `private.typed.setValue` can patch.
+    /// True for values `private.typed.setValue` can patch: fixed-size scalars
+    /// and Str/Name strings (length-changing, size chain fixed up on write).
     pub editable: bool,
 }
 
@@ -332,7 +397,12 @@ pub fn search_properties(
         total: &mut total,
         hits: &mut hits,
     };
-    walk_search(&root.properties, &mut Vec::new(), &mut String::new(), &mut ctx);
+    walk_search(
+        &root.properties,
+        &mut Vec::new(),
+        &mut String::new(),
+        &mut ctx,
+    );
     (hits, total)
 }
 
@@ -365,6 +435,8 @@ fn scalar_editable(value: &PropertyValue) -> bool {
             | PropertyValue::Float(_)
             | PropertyValue::Double(_)
             | PropertyValue::Bool(_)
+            | PropertyValue::Str(_)
+            | PropertyValue::Name(_)
     )
 }
 
@@ -377,9 +449,10 @@ fn scalar_display(value: &PropertyValue) -> Option<String> {
         PropertyValue::Double(v) => v.to_string(),
         PropertyValue::Bool(v) => v.to_string(),
         PropertyValue::Byte(v) => v.to_string(),
-        PropertyValue::Str(s) | PropertyValue::Name(s) | PropertyValue::Object(s) | PropertyValue::Enum(s) => {
-            s.clone()
-        }
+        PropertyValue::Str(s)
+        | PropertyValue::Name(s)
+        | PropertyValue::Object(s)
+        | PropertyValue::Enum(s) => s.clone(),
         PropertyValue::SoftObject(p) => p.package_name.clone(),
         _ => return None,
     })
@@ -546,7 +619,12 @@ pub fn patch_scalar(
     property: &Property,
     value: ScalarValue,
 ) -> Result<(), CoreError> {
-    fn write(payload: &mut [u8], offset: usize, size: usize, bytes: &[u8]) -> Result<(), CoreError> {
+    fn write(
+        payload: &mut [u8],
+        offset: usize,
+        size: usize,
+        bytes: &[u8],
+    ) -> Result<(), CoreError> {
         if size != bytes.len() || offset + size > payload.len() {
             return Err(CoreError::Parse(format!(
                 "patch target out of bounds: offset {offset}, size {size}"
@@ -562,21 +640,36 @@ pub fn patch_scalar(
         ))
     };
     match (property.type_name.as_str(), value) {
-        ("IntProperty", ScalarValue::Int(v)) => {
-            write(payload, property.value_offset, property.value_size, &v.to_le_bytes())
-        }
-        ("UInt32Property", ScalarValue::UInt32(v)) => {
-            write(payload, property.value_offset, property.value_size, &v.to_le_bytes())
-        }
-        ("Int64Property", ScalarValue::Int64(v)) => {
-            write(payload, property.value_offset, property.value_size, &v.to_le_bytes())
-        }
-        ("FloatProperty", ScalarValue::Float(v)) => {
-            write(payload, property.value_offset, property.value_size, &v.to_le_bytes())
-        }
-        ("DoubleProperty", ScalarValue::Double(v)) => {
-            write(payload, property.value_offset, property.value_size, &v.to_le_bytes())
-        }
+        ("IntProperty", ScalarValue::Int(v)) => write(
+            payload,
+            property.value_offset,
+            property.value_size,
+            &v.to_le_bytes(),
+        ),
+        ("UInt32Property", ScalarValue::UInt32(v)) => write(
+            payload,
+            property.value_offset,
+            property.value_size,
+            &v.to_le_bytes(),
+        ),
+        ("Int64Property", ScalarValue::Int64(v)) => write(
+            payload,
+            property.value_offset,
+            property.value_size,
+            &v.to_le_bytes(),
+        ),
+        ("FloatProperty", ScalarValue::Float(v)) => write(
+            payload,
+            property.value_offset,
+            property.value_size,
+            &v.to_le_bytes(),
+        ),
+        ("DoubleProperty", ScalarValue::Double(v)) => write(
+            payload,
+            property.value_offset,
+            property.value_size,
+            &v.to_le_bytes(),
+        ),
         ("BoolProperty", ScalarValue::Bool(v)) => {
             // No payload; the value is tag_flags bit 0x10, one byte before the
             // recorded value offset.
@@ -585,7 +678,9 @@ pub fn patch_scalar(
                 .checked_sub(1)
                 .ok_or_else(|| CoreError::Parse("bool tag offset underflow".to_string()))?;
             if flag_offset >= payload.len() {
-                return Err(CoreError::Parse("bool tag offset out of bounds".to_string()));
+                return Err(CoreError::Parse(
+                    "bool tag offset out of bounds".to_string(),
+                ));
             }
             if v {
                 payload[flag_offset] |= TAG_FLAG_BOOL_TRUE;
@@ -596,6 +691,91 @@ pub fn patch_scalar(
         }
         _ => Err(mismatch()),
     }
+}
+
+/// Serialized FString payload for a replacement value, mirroring the formats
+/// `Reader::fstring` accepts: empty => bare zero length, ASCII => 8-bit chars
+/// with a NUL terminator, otherwise UTF-16LE with a negative character count.
+fn encode_fstring_value(value: &str) -> Vec<u8> {
+    if value.is_empty() {
+        return 0i32.to_le_bytes().to_vec();
+    }
+    if value.is_ascii() {
+        let mut out = ((value.len() + 1) as i32).to_le_bytes().to_vec();
+        out.extend_from_slice(value.as_bytes());
+        out.push(0);
+        return out;
+    }
+    let units: Vec<u16> = value.encode_utf16().collect();
+    let count = -((units.len() + 1) as i32);
+    let mut out = count.to_le_bytes().to_vec();
+    for unit in units {
+        out.extend_from_slice(&unit.to_le_bytes());
+    }
+    out.extend_from_slice(&[0, 0]);
+    out
+}
+
+/// Replace a Str/Name property's FString payload. The new bytes may differ in
+/// length: the property's own tag size and every enclosing size field in
+/// `enclosing_size_fields` (from [`resolve_chain`]) are adjusted by the byte
+/// delta. All writes are validated before the first mutation, so a failed
+/// patch leaves the payload untouched. Offsets recorded in the parsed tree
+/// are stale after a successful patch — re-parse before further edits.
+pub fn patch_string(
+    payload: &mut Vec<u8>,
+    target: &Property,
+    enclosing_size_fields: &[usize],
+    new_value: &str,
+) -> Result<(), CoreError> {
+    if target.type_name != "StrProperty" && target.type_name != "NameProperty" {
+        return Err(CoreError::InvalidRequest(format!(
+            "string value does not match property type {}",
+            target.type_name
+        )));
+    }
+    let value_end = target
+        .value_offset
+        .checked_add(target.value_size)
+        .filter(|end| *end <= payload.len())
+        .ok_or_else(|| {
+            CoreError::Parse(format!(
+                "patch target out of bounds: offset {}, size {}",
+                target.value_offset, target.value_size
+            ))
+        })?;
+    let encoded = encode_fstring_value(new_value);
+    let new_size = u32::try_from(encoded.len())
+        .map_err(|_| CoreError::InvalidRequest("replacement string too long".to_string()))?;
+    let delta = encoded.len() as i64 - target.value_size as i64;
+
+    // Compute every size-field rewrite up front; mutate only once all are valid.
+    let mut writes = Vec::with_capacity(enclosing_size_fields.len() + 1);
+    if target.value_offset < 5 {
+        return Err(CoreError::Parse("string tag offset underflow".to_string()));
+    }
+    writes.push((target.size_field_offset(), new_size));
+    for &offset in enclosing_size_fields {
+        // Enclosing headers always precede the value they wrap, so they are
+        // unaffected by the splice below.
+        if offset + 4 > target.value_offset {
+            return Err(CoreError::Parse(format!(
+                "enclosing size field at 0x{offset:x} does not precede the patch target"
+            )));
+        }
+        let old = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap());
+        let updated = u32::try_from(i64::from(old) + delta).map_err(|_| {
+            CoreError::Parse(format!(
+                "enclosing size field at 0x{offset:x} would leave the u32 range"
+            ))
+        })?;
+        writes.push((offset, updated));
+    }
+    for (offset, value) in writes {
+        payload[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+    }
+    payload.splice(target.value_offset..value_end, encoded);
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -673,7 +853,9 @@ fn read_object(r: &mut Reader, depth: usize) -> Result<RootObject, CoreError> {
 
 pub(crate) fn read_property_list(r: &mut Reader, depth: usize) -> Result<Vec<Property>, CoreError> {
     if depth > MAX_DEPTH {
-        return Err(CoreError::Parse(format!("property nesting exceeds {MAX_DEPTH}")));
+        return Err(CoreError::Parse(format!(
+            "property nesting exceeds {MAX_DEPTH}"
+        )));
     }
     let mut out = Vec::new();
     loop {
@@ -1001,6 +1183,7 @@ fn read_struct_value(
         }
         "InstancedStruct" => {
             let actual_type = r.fstring()?;
+            let data_size_offset = r.abs_pos();
             let data_size = r.u32()? as usize;
             let body_base = r.abs_pos();
             let body = r.read(data_size)?;
@@ -1017,6 +1200,7 @@ fn read_struct_value(
             }
             Ok(StructValue::Instanced(Some(InstancedStruct {
                 actual_type,
+                data_size_offset,
                 properties,
             })))
         }
@@ -1182,7 +1366,13 @@ mod tests {
         let parsed = parse_private_root(&payload).unwrap();
         match &parsed.properties[0].value {
             PropertyValue::Struct(StructValue::GameplayTagContainer(tags)) => {
-                assert_eq!(tags, &vec!["Guild.Orc.Scout".to_string(), "Memory.Guild.Joined".to_string()]);
+                assert_eq!(
+                    tags,
+                    &vec![
+                        "Guild.Orc.Scout".to_string(),
+                        "Memory.Guild.Joined".to_string()
+                    ]
+                );
             }
             other => panic!("unexpected value {other:?}"),
         }
@@ -1209,7 +1399,10 @@ mod tests {
         match &parsed.properties[0].value {
             PropertyValue::Struct(StructValue::Properties(inner)) => {
                 assert_eq!(inner[0].name, "TagName");
-                assert_eq!(inner[0].value, PropertyValue::Name("CrimeLocation.OldCamp".into()));
+                assert_eq!(
+                    inner[0].value,
+                    PropertyValue::Name("CrimeLocation.OldCamp".into())
+                );
             }
             other => panic!("unexpected value {other:?}"),
         }
@@ -1298,7 +1491,10 @@ mod tests {
         let parsed = parse_private_root(&payload).unwrap();
 
         match &parsed.properties[0].value {
-            PropertyValue::Map { num_to_remove, entries } => {
+            PropertyValue::Map {
+                num_to_remove,
+                entries,
+            } => {
                 assert_eq!(*num_to_remove, 0);
                 assert_eq!(
                     entries[0],
@@ -1438,8 +1634,7 @@ mod tests {
         };
         for path in paths.split(';').filter(|p| !p.is_empty()) {
             let payload = std::fs::read(path).unwrap();
-            let parsed = parse_private_root(&payload)
-                .unwrap_or_else(|err| panic!("{path}: {err}"));
+            let parsed = parse_private_root(&payload).unwrap_or_else(|err| panic!("{path}: {err}"));
             assert_eq!(parsed.consumed, payload.len(), "{path}: incomplete parse");
             fn count(props: &[Property]) -> usize {
                 props
@@ -1464,6 +1659,63 @@ mod tests {
                 payload.len(),
                 parsed.properties.len(),
                 count(&parsed.properties),
+            );
+        }
+    }
+
+    /// Length-changing string patch against real payload dumps: grow the first
+    /// addressable nested string by four bytes, then prove the strict re-parse
+    /// still consumes every byte. Run manually like `real_payload_parses_byte_exact`.
+    #[test]
+    #[ignore = "needs a local payload dump (GORESAVE_PAYLOAD_BIN)"]
+    fn real_payload_string_patch_reparses_byte_exact() {
+        let Ok(paths) = std::env::var("GORESAVE_PAYLOAD_BIN") else {
+            panic!("set GORESAVE_PAYLOAD_BIN to a decompressed payload dump");
+        };
+        for path in paths.split(';').filter(|p| !p.is_empty()) {
+            let mut payload = std::fs::read(path).unwrap();
+            let parsed = parse_private_root(&payload).unwrap();
+            let (hits, _) = search_properties(&parsed, "", 0, 100_000);
+            // Deepest addressable string = longest enclosing size chain.
+            let Some(hit) = hits
+                .iter()
+                .filter(|h| {
+                    h.editable && (h.type_name == "StrProperty" || h.type_name == "NameProperty")
+                })
+                .max_by_key(|h| h.path.len())
+            else {
+                println!("{path}: no addressable string property, skipping");
+                continue;
+            };
+            let segs = parse_path(&hit.path).unwrap();
+            let chain = resolve_chain(&parsed.properties, &segs).unwrap();
+            let target = chain.target.clone();
+            let new_value = format!("{}_ABC", hit.value_display);
+            patch_string(
+                &mut payload,
+                &target,
+                &chain.enclosing_size_fields,
+                &new_value,
+            )
+            .unwrap();
+
+            let reparsed = parse_private_root(&payload)
+                .unwrap_or_else(|err| panic!("{path}: re-parse after string patch failed: {err}"));
+            assert_eq!(
+                reparsed.consumed,
+                payload.len(),
+                "{path}: incomplete re-parse"
+            );
+            let after = resolve(&reparsed.properties, &segs).unwrap();
+            let value = match &after.value {
+                PropertyValue::Str(s) | PropertyValue::Name(s) => s.clone(),
+                other => panic!("{path}: unexpected value {other:?}"),
+            };
+            assert_eq!(value, new_value);
+            println!(
+                "{path}: patched {} ({} enclosing size fields) -> {new_value:?}",
+                hit.display,
+                chain.enclosing_size_fields.len(),
             );
         }
     }
@@ -1520,13 +1772,19 @@ mod tests {
         assert_eq!(total, 1);
         assert_eq!(hits.len(), 1);
         let hit = &hits[0];
-        assert_eq!(hit.path, vec!["m_GenericData", "{ChestStates}", "m_ItemCount"]);
+        assert_eq!(
+            hit.path,
+            vec!["m_GenericData", "{ChestStates}", "m_ItemCount"]
+        );
         assert_eq!(hit.type_name, "IntProperty");
         assert_eq!(hit.value_display, "5");
         assert!(hit.editable);
         // path round-trips through resolve()
         let segs = parse_path(&hit.path).unwrap();
-        assert_eq!(resolve(&root.properties, &segs).unwrap().value, PropertyValue::Int(5));
+        assert_eq!(
+            resolve(&root.properties, &segs).unwrap().value,
+            PropertyValue::Int(5)
+        );
     }
 
     #[test]
@@ -1552,7 +1810,7 @@ mod tests {
     }
 
     #[test]
-    fn search_marks_strings_non_editable() {
+    fn search_marks_strings_editable() {
         // root class string is not a property; build a payload with a StrProperty
         let mut props = str_property("m_ProfileName", "Hero");
         props.extend_from_slice(&int_property("m_Gold", 250));
@@ -1560,9 +1818,28 @@ mod tests {
         let parsed = parse_private_root(&payload).unwrap();
         let (hits, _) = search_properties(&parsed, "m_", 0, 100);
         let name_hit = hits.iter().find(|h| h.display == "m_ProfileName").unwrap();
-        assert!(!name_hit.editable);
+        assert!(name_hit.editable);
         let gold_hit = hits.iter().find(|h| h.display == "m_Gold").unwrap();
         assert!(gold_hit.editable);
+    }
+
+    #[test]
+    fn search_keeps_container_element_strings_non_editable() {
+        // Set<NameProperty> elements surface as hits whose path ends on an
+        // `[index]` segment, which setValue cannot resolve — stay read-only.
+        let mut set_body = 0u32.to_le_bytes().to_vec();
+        set_body.extend_from_slice(&1u32.to_le_bytes());
+        set_body.extend_from_slice(&fstring("Lock_A"));
+        let mut props = tag("m_UnlockedLocks", "SetProperty");
+        props.extend_from_slice(&1u32.to_le_bytes());
+        props.extend_from_slice(&fstring("NameProperty"));
+        props.extend_from_slice(&header(set_body.len() as u32, 0));
+        props.extend_from_slice(&set_body);
+        let payload = root("/Script/Test.Save", &props);
+        let parsed = parse_private_root(&payload).unwrap();
+        let (hits, _) = search_properties(&parsed, "lock", 0, 100);
+        let hit = hits.iter().find(|h| h.value_display == "Lock_A").unwrap();
+        assert!(!hit.editable);
     }
 
     #[test]
@@ -1672,5 +1949,215 @@ mod tests {
         // The recorded offset must index the WHOLE payload, not the inner body.
         let raw = &payload[inner.value_offset..inner.value_offset + inner.value_size];
         assert_eq!(i32::from_le_bytes(raw.try_into().unwrap()), 5);
+    }
+
+    /// Real-save shape with a string leaf: root → MapProperty<Str,
+    /// InstancedStruct> → { m_PlayerName: Str, m_ItemCount: Int }, plus a
+    /// root-level int after the map so a missed size-chain fixup shifts it
+    /// and breaks the strict re-parse.
+    fn nested_string_payload(player_name: &str) -> Vec<u8> {
+        let nested = {
+            let mut n = str_property("m_PlayerName", player_name);
+            n.extend_from_slice(&int_property("m_ItemCount", 5));
+            n.extend_from_slice(&fstring("None"));
+            n
+        };
+        let mut instanced = fstring("/Script/G1R.PlayerCharacter");
+        instanced.extend_from_slice(&(nested.len() as u32).to_le_bytes());
+        instanced.extend_from_slice(&nested);
+
+        let mut map_body = 0u32.to_le_bytes().to_vec(); // num_to_remove
+        map_body.extend_from_slice(&1u32.to_le_bytes()); // count
+        map_body.extend_from_slice(&fstring("CharacterStates"));
+        map_body.extend_from_slice(&instanced);
+
+        let mut props = tag("m_GenericData", "MapProperty");
+        props.extend_from_slice(&2u32.to_le_bytes());
+        props.extend_from_slice(&fstring("StrProperty"));
+        props.extend_from_slice(&0u32.to_le_bytes()); // key_flags
+        props.extend_from_slice(&fstring("StructProperty"));
+        props.extend_from_slice(&1u32.to_le_bytes());
+        props.extend_from_slice(&fstring("InstancedStruct"));
+        props.extend_from_slice(&1u32.to_le_bytes());
+        props.extend_from_slice(&fstring("/Script/StructUtils"));
+        props.extend_from_slice(&header(map_body.len() as u32, TAG_FLAG_NATIVE_SERIALIZE));
+        props.extend_from_slice(&map_body);
+        props.extend_from_slice(&int_property("m_AfterMap", 7));
+        root("/Script/Test.Save", &props)
+    }
+
+    fn player_name_path() -> Vec<PathSeg> {
+        parse_path(&[
+            "m_GenericData".into(),
+            "{CharacterStates}".into(),
+            "m_PlayerName".into(),
+        ])
+        .unwrap()
+    }
+
+    /// Re-parse strictly and assert the string took the new value while the
+    /// nested int and the root-level property after the map stayed intact.
+    fn assert_nested_string_patch(payload: &[u8], expected_name: &str) {
+        let reparsed = parse_private_root(payload).unwrap();
+        let name = resolve(&reparsed.properties, &player_name_path()).unwrap();
+        assert_eq!(name.value, PropertyValue::Str(expected_name.to_string()));
+        let count_path = parse_path(&[
+            "m_GenericData".into(),
+            "{CharacterStates}".into(),
+            "m_ItemCount".into(),
+        ])
+        .unwrap();
+        let count = resolve(&reparsed.properties, &count_path).unwrap();
+        assert_eq!(count.value, PropertyValue::Int(5));
+        let after = parse_path(&["m_AfterMap".into()]).unwrap();
+        let after = resolve(&reparsed.properties, &after).unwrap();
+        assert_eq!(after.value, PropertyValue::Int(7));
+    }
+
+    #[test]
+    fn resolve_chain_collects_enclosing_size_fields() {
+        let payload = nested_string_payload("Hero");
+        let parsed = parse_private_root(&payload).unwrap();
+        let chain = resolve_chain(&parsed.properties, &player_name_path()).unwrap();
+        assert_eq!(chain.target.type_name, "StrProperty");
+
+        let map_property = &parsed.properties[0];
+        let PropertyValue::Map { entries, .. } = &map_property.value else {
+            panic!("expected map");
+        };
+        let PropertyValue::Struct(StructValue::Instanced(Some(instanced))) = &entries[0].1 else {
+            panic!("expected instanced struct");
+        };
+        // Outermost first: the map tag's size, then the instanced data_size.
+        assert_eq!(
+            chain.enclosing_size_fields,
+            vec![map_property.size_field_offset(), instanced.data_size_offset]
+        );
+        // Both offsets index the size fields the parser consumed.
+        let map_size = u32::from_le_bytes(
+            payload[map_property.size_field_offset()..map_property.size_field_offset() + 4]
+                .try_into()
+                .unwrap(),
+        );
+        assert_eq!(map_size as usize, map_property.value_size);
+    }
+
+    #[test]
+    fn patch_string_grows_nested_string_and_fixes_size_chain() {
+        let mut payload = nested_string_payload("Hero");
+        let original_len = payload.len();
+        let parsed = parse_private_root(&payload).unwrap();
+        let chain = resolve_chain(&parsed.properties, &player_name_path()).unwrap();
+        let target = chain.target.clone();
+        patch_string(
+            &mut payload,
+            &target,
+            &chain.enclosing_size_fields,
+            "Nameless",
+        )
+        .unwrap();
+
+        assert_eq!(payload.len(), original_len + 4);
+        assert_nested_string_patch(&payload, "Nameless");
+    }
+
+    #[test]
+    fn patch_string_shrinks_nested_string_and_fixes_size_chain() {
+        let mut payload = nested_string_payload("Hero");
+        let original_len = payload.len();
+        let parsed = parse_private_root(&payload).unwrap();
+        let chain = resolve_chain(&parsed.properties, &player_name_path()).unwrap();
+        let target = chain.target.clone();
+        patch_string(&mut payload, &target, &chain.enclosing_size_fields, "Po").unwrap();
+
+        assert_eq!(payload.len(), original_len - 2);
+        assert_nested_string_patch(&payload, "Po");
+    }
+
+    #[test]
+    fn patch_string_handles_same_length_and_name_property() {
+        let nested = {
+            let mut n = tag("m_QuestTag", "NameProperty");
+            let value = fstring("Quest.A");
+            n.extend_from_slice(&header(value.len() as u32, 0));
+            n.extend_from_slice(&value);
+            n
+        };
+        let mut payload = root("/Script/Test.Save", &nested);
+        let parsed = parse_private_root(&payload).unwrap();
+        let path = parse_path(&["m_QuestTag".into()]).unwrap();
+        let chain = resolve_chain(&parsed.properties, &path).unwrap();
+        assert!(chain.enclosing_size_fields.is_empty());
+        let target = chain.target.clone();
+        patch_string(
+            &mut payload,
+            &target,
+            &chain.enclosing_size_fields,
+            "Quest.B",
+        )
+        .unwrap();
+
+        let reparsed = parse_private_root(&payload).unwrap();
+        let after = resolve(&reparsed.properties, &path).unwrap();
+        assert_eq!(after.value, PropertyValue::Name("Quest.B".to_string()));
+    }
+
+    #[test]
+    fn patch_string_writes_utf16_for_non_ascii() {
+        let mut payload = nested_string_payload("Hero");
+        let parsed = parse_private_root(&payload).unwrap();
+        let chain = resolve_chain(&parsed.properties, &player_name_path()).unwrap();
+        let target = chain.target.clone();
+        patch_string(
+            &mut payload,
+            &target,
+            &chain.enclosing_size_fields,
+            "Hörnchen",
+        )
+        .unwrap();
+
+        assert_nested_string_patch(&payload, "Hörnchen");
+        // The new payload is UTF-16: negative character count incl. terminator.
+        let reparsed = parse_private_root(&payload).unwrap();
+        let after = resolve(&reparsed.properties, &player_name_path()).unwrap();
+        let count = i32::from_le_bytes(
+            payload[after.value_offset..after.value_offset + 4]
+                .try_into()
+                .unwrap(),
+        );
+        assert_eq!(count, -9);
+        assert_eq!(after.value_size, 4 + 9 * 2);
+    }
+
+    #[test]
+    fn patch_string_supports_empty_replacement() {
+        let mut payload = nested_string_payload("Hero");
+        let parsed = parse_private_root(&payload).unwrap();
+        let chain = resolve_chain(&parsed.properties, &player_name_path()).unwrap();
+        let target = chain.target.clone();
+        patch_string(&mut payload, &target, &chain.enclosing_size_fields, "").unwrap();
+
+        assert_nested_string_patch(&payload, "");
+    }
+
+    #[test]
+    fn patch_string_rejects_non_string_target() {
+        let mut payload = nested_string_payload("Hero");
+        let original = payload.clone();
+        let parsed = parse_private_root(&payload).unwrap();
+        let path = parse_path(&[
+            "m_GenericData".into(),
+            "{CharacterStates}".into(),
+            "m_ItemCount".into(),
+        ])
+        .unwrap();
+        let chain = resolve_chain(&parsed.properties, &path).unwrap();
+        let target = chain.target.clone();
+        let err = patch_string(&mut payload, &target, &chain.enclosing_size_fields, "oops");
+        assert!(err.is_err());
+        assert_eq!(
+            payload, original,
+            "failed patches must not mutate the payload"
+        );
     }
 }

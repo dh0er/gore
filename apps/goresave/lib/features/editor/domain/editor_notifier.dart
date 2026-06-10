@@ -769,9 +769,11 @@ class EditorNotifier extends StateNotifier<EditorState> {
     }
   }
 
-  /// Layout-verified typed edit: set a fixed-size scalar (int/float/bool) at
-  /// a typed property path. Only offered by the core when the strict typed
-  /// parse of the save succeeded (`private.typed.setValue` in writable).
+  /// Layout-verified typed edit: set a fixed-size scalar (int/float/bool) or
+  /// a Str/Name string at a typed property path. String edits may change the
+  /// payload length; the core fixes up every enclosing size field. Only
+  /// offered by the core when the strict typed parse of the save succeeded
+  /// (`private.typed.setValue` in writable).
   ///
   /// Path segments: property name, `{mapKey}` for map entries, `[i]` for
   /// container/object-array indices.
