@@ -3,3 +3,9 @@
 *.dart text eol=lf
 *.rs   text eol=lf
 *.py   text eol=lf
+
+# Flutter regenerates these with LF on every build; pin eol=lf so autocrlf
+# doesn't reintroduce a CRLF/LF-only diff each time.
+apps/goresave/windows/flutter/generated_plugin_registrant.cc text eol=lf
+apps/goresave/windows/flutter/generated_plugin_registrant.h  text eol=lf
+apps/goresave/windows/flutter/generated_plugins.cmake        text eol=lf
