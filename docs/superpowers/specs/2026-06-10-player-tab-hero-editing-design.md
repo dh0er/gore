@@ -35,8 +35,17 @@ UI, and the useless FString card disappears.
 - Player equipment/inventory slots live under
   `{PlayersSavedData}/m_SavedPlayers` (separate concern, Inventory tab).
 - `search_typed_properties` matches whitespace-separated, case-insensitive
-  terms against the display path, so a fixed query
-  `AttributesByGlobalId/{Hero}` returns exactly the hero attribute leaves.
+  terms against the display path (segments joined with `" › "`), so the fixed
+  two-term query `AttributesByGlobalId {Hero}` returns exactly the hero
+  attribute leaves.
+- **Core gap found during feasibility probing:** `AttributeSetsByClass` is a
+  map with ObjectProperty keys. `map_key_to_string` in
+  `crates/goresave_core/src/properties.rs` cannot stringify Object keys, so
+  search labels them `{?}` and `private.typed.setValue` fails with
+  `map key "?" not found` — the hero attributes are reported editable but are
+  not actually writable today. Extending `map_key_to_string` with
+  `PropertyValue::Object` fixes label and resolve in lockstep; verified on a
+  real save (MaxHealth 64→65 written and read back).
 - The full private decode is cached after `inspect_save`
   (`store_decoded_payload_cache`), so the typed search in the Player tab does
   not pay a second ~20s decode.
@@ -101,8 +110,10 @@ compatibility; the "All data" browser covers string edits in the UI.
   assignment (known IDs to their groups, unknown IDs to "Erweitert").
 - Widget test: hero stats card renders groups, edits a value, dispatches the
   batched write with the correct typed paths.
-- Rust core: no changes needed (existing `search_typed_properties` and
-  `private.typed.setValue` are reused). Existing tests stay green.
+- Rust core: one targeted change — Object map keys become addressable in
+  typed property paths (`map_key_to_string`), with a unit test that a search
+  hit under an Object-keyed map round-trips through `resolve`. Everything
+  else reuses existing commands; existing tests stay green.
 
 ## Decisions log
 
