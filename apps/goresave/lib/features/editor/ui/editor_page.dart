@@ -60,22 +60,6 @@ class EditorPage extends ConsumerWidget {
         scrolledUnderElevation: 0,
         surfaceTintColor: Colors.transparent,
         actions: [
-          Tooltip(
-            message: 'Validate',
-            child: IconButton(
-              icon: const Icon(Icons.verified_outlined),
-              onPressed: state.selectedPath == null || state.isLoading
-                  ? null
-                  : notifier.validateSelected,
-            ),
-          ),
-          Tooltip(
-            message: 'Refresh',
-            child: IconButton(
-              icon: const Icon(Icons.refresh),
-              onPressed: state.isLoading ? null : notifier.refresh,
-            ),
-          ),
           const SizedBox(width: 8),
           Tooltip(
             message: 'Press Ctrl +/- to zoom in/out',

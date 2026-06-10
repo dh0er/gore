@@ -719,27 +719,6 @@ class EditorNotifier extends StateNotifier<EditorState> {
     });
   }
 
-  Future<void> validateSelected() async {
-    final path = state.selectedPath;
-    if (path == null) return;
-    await _withLoading(() async {
-      final response = await _execute(
-        'validate_roundtrip',
-        payload: {'path': path},
-      );
-      if (response['ok'] != true) {
-        state = state.copyWith(error: _errorMessage(response));
-        return;
-      }
-      final data = (response['data'] as Map).cast<String, Object?>();
-      state = state.copyWith(
-        lastWriteMessage: data['identical'] == true
-            ? 'Roundtrip validation passed'
-            : 'Roundtrip validation changed bytes',
-      );
-    });
-  }
-
   Future<void> validateCodecRoundtrip() async {
     final path = state.selectedPath;
     if (path == null) return;
