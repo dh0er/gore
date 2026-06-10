@@ -32,6 +32,9 @@ class HeroStatsCard extends StatefulWidget {
 class _HeroStatsCardState extends State<HeroStatsCard> {
   List<HeroAttribute> _attributes = const [];
   String? _error;
+  // True only when the last load itself failed; save-validation errors set
+  // _error without this, so they never swap the editors for the fallback.
+  bool _loadFailed = false;
   bool _loading = false;
   bool _saving = false;
   // Pending field texts keyed by the typed path (joined). Cleared on reload.
@@ -73,6 +76,7 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
     setState(() {
       _loading = false;
       _error = result.error;
+      _loadFailed = result.error != null;
       _attributes = result.attributes;
     });
   }
@@ -167,8 +171,7 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
                 padding: EdgeInsets.all(16),
                 child: Center(child: CircularProgressIndicator()),
               )
-            else if (!_loading &&
-                (_error != null || _attributes.isEmpty) &&
+            else if ((_loadFailed || _attributes.isEmpty) &&
                 widget.fallback != null)
               widget.fallback!
             else

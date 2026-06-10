@@ -338,6 +338,48 @@ void main() {
     expect(saveCalled, isFalse);
   });
 
+  testWidgets('save validation error keeps typed editors over the fallback',
+      (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: HeroStatsCard(
+              load: () async => HeroAttributesResult(
+                attributes: [
+                  _attribute(
+                    'MaxHealth',
+                    '/Script/G1R.AttributeSet_Health',
+                    64,
+                  ),
+                ],
+              ),
+              save: (_) async => true,
+              editable: true,
+              reloadKey: 'save-1',
+              fallback: const Text('legacy editor'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.enterText(
+      find.widgetWithText(TextField, 'MaxHealth base'),
+      'not a number',
+    );
+    await tester.pump();
+    await tester.tap(find.byTooltip('Save hero stats'));
+    await tester.pumpAndSettle();
+
+    // The validation error is shown, but the typed editors stay in place —
+    // only a failed load swaps in the fallback.
+    expect(find.textContaining('Invalid number'), findsOneWidget);
+    expect(find.text('legacy editor'), findsNothing);
+    expect(find.widgetWithText(TextField, 'MaxHealth base'), findsOneWidget);
+  });
+
   group('formatHeroValue', () {
     test('integer value renders without decimal point', () {
       expect(formatHeroValue(64), '64');
