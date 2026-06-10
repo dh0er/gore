@@ -641,29 +641,6 @@ class EditorNotifier extends StateNotifier<EditorState> {
     );
   }
 
-  Future<void> writePrivateFString({
-    required String oldValue,
-    required String newValue,
-  }) async {
-    final path = state.selectedPath;
-    if (path == null) return;
-    await _runWrite(
-      payload: {
-        'path': path,
-        'backup': true,
-        'edits': [
-          {
-            'path': 'private.replaceFString',
-            'value': {'oldValue': oldValue, 'newValue': newValue},
-          },
-        ],
-        ..._codecPayload(),
-      },
-      message: (data) =>
-          _backupMessage('Private payload saved with backup', data),
-    );
-  }
-
   Future<void> writePrivatePlayerName(String value) async {
     final path = state.selectedPath;
     if (path == null) return;

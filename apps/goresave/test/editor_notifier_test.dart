@@ -215,35 +215,6 @@ void main() {
     },
   );
 
-  test('writePrivateFString sends host-backed private edit', () async {
-    final core = _RecordingCoreService();
-    final notifier = EditorNotifier(
-      core,
-      saveDir: r'C:\Users\Daniel\AppData\Local\G1R\Saved\SaveGames',
-      codecHostPath: r'C:\Program Files\goresave\goresave_g1r_codec_host.exe',
-      gameExePath:
-          r'C:\Program Files (x86)\Steam\steamapps\common\Gothic 1 Remake\G1R\Binaries\Win64\G1R-Win64-Shipping.exe',
-    );
-    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
-
-    await notifier.writePrivateFString(oldValue: 'Hero', newValue: 'Mage');
-
-    final write = core.requests.lastWhere(
-      (request) => request.command == 'write_save',
-    );
-    expect(write.payload['binaryHost'], {
-      'helperPath': r'C:\Program Files\goresave\goresave_g1r_codec_host.exe',
-      'exePath':
-          r'C:\Program Files (x86)\Steam\steamapps\common\Gothic 1 Remake\G1R\Binaries\Win64\G1R-Win64-Shipping.exe',
-    });
-    expect(write.payload['edits'], [
-      {
-        'path': 'private.replaceFString',
-        'value': {'oldValue': 'Hero', 'newValue': 'Mage'},
-      },
-    ]);
-  });
-
   test('writePrivatePlayerName sends structured host-backed player edit', () async {
     final core = _RecordingCoreService();
     final notifier = EditorNotifier(
