@@ -659,6 +659,16 @@ class _OverviewInspectionJsonState extends State<_OverviewInspectionJson> {
   bool _expanded = false;
   String? _cachedJson;
 
+  @override
+  void didUpdateWidget(covariant _OverviewInspectionJson oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Every refresh/save produces a new SaveInspection instance; a cached
+    // pretty-print of the old one would show (and copy) stale data.
+    if (!identical(widget.inspection, oldWidget.inspection)) {
+      _cachedJson = null;
+    }
+  }
+
   String _getJson() {
     _cachedJson ??= widget.inspection.prettyJson();
     return _cachedJson!;
