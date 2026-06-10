@@ -446,6 +446,27 @@ class _EditorWorkspace extends StatelessWidget {
                   ),
                 ],
               ),
+            if (state.codecNeedsVerification)
+              MaterialBanner(
+                backgroundColor: const Color(0xFFFFF4E5),
+                leading: const Icon(
+                  Icons.shield_outlined,
+                  color: Color(0xFFB26A00),
+                ),
+                content: const Text(
+                  'This game build is not auto-trusted for compression. '
+                  'Verify the codec to unlock private edits — it round-trips a '
+                  'real save chunk through the game executable.',
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: state.isLoading || state.selectedPath == null
+                        ? null
+                        : notifier.verifyCodec,
+                    child: const Text('Verify codec'),
+                  ),
+                ],
+              ),
             Expanded(
               child: TabBarView(
                 children: [
@@ -460,10 +481,10 @@ class _EditorWorkspace extends StatelessWidget {
                     inspection: inspection,
                     notifier: notifier,
                     // Private writes recompress the payload, so also require the
-                    // codec host to be compress-capable, not just decode-ready.
+                    // codec host to be compress-ready (auto-trusted or verified
+                    // this session), not just decode-ready.
                     editable:
-                        inspection.privateEditable &&
-                        (state.codecStatus?.canCompress ?? false),
+                        inspection.privateEditable && state.codecCompressReady,
                     decodedBody:
                         'Private player data is decoded through the G1R codec host.',
                     lockedBody:
@@ -472,7 +493,7 @@ class _EditorWorkspace extends StatelessWidget {
                   _InventoryPanel(
                     inspection: inspection,
                     notifier: notifier,
-                    canCompress: state.codecStatus?.canCompress ?? false,
+                    canCompress: state.codecCompressReady,
                   ),
                   _ProgressionPanel(inspection: inspection, notifier: notifier),
                   _AdvancedPanel(inspection: inspection),

@@ -22,6 +22,7 @@ class EditorState {
     this.selectedPath,
     this.inspection,
     this.codecStatus,
+    this.codecVerified = false,
     this.error,
     this.codecError,
     this.lastWriteMessage,
@@ -39,7 +40,25 @@ class EditorState {
   final String? selectedPath;
   final SaveInspection? inspection;
   final CodecStatus? codecStatus;
+
+  /// True once the user ran a successful codec round-trip verification this
+  /// session for an executable the probe could not auto-trust (a pattern-
+  /// resolved / unknown game build where canCompress is false). Known-profile
+  /// builds report canCompress directly and never need this.
+  final bool codecVerified;
   final String? error;
+
+  /// Compression-dependent private writes are safe when the probe already
+  /// trusts the codec, or the user verified it this session.
+  bool get codecCompressReady =>
+      (codecStatus?.canCompress ?? false) || codecVerified;
+
+  /// The codec is usable but not yet trusted for compression — a manual
+  /// verification round-trip would unlock writes.
+  bool get codecNeedsVerification =>
+      (codecStatus?.available ?? false) &&
+      !(codecStatus?.canCompress ?? false) &&
+      !codecVerified;
 
   /// Error from the most recent codec check. Kept separate from [error] so a
   /// save-directory refresh does not wipe a standing codec configuration error.
@@ -79,6 +98,7 @@ class EditorState {
     Object? selectedPath = _unchanged,
     SaveInspection? inspection,
     CodecStatus? codecStatus,
+    bool? codecVerified,
     String? error,
     String? codecError,
     String? lastWriteMessage,
@@ -108,6 +128,7 @@ class EditorState {
           : selectedPath as String?,
       inspection: clearInspection ? null : inspection ?? this.inspection,
       codecStatus: clearCodecStatus ? null : codecStatus ?? this.codecStatus,
+      codecVerified: codecVerified ?? this.codecVerified,
       error: clearError ? null : error ?? this.error,
       codecError: clearCodecError ? null : codecError ?? this.codecError,
       lastWriteMessage: clearWriteMessage
@@ -478,7 +499,14 @@ class EditorNotifier extends StateNotifier<EditorState> {
       }
       final data = (response['data'] as Map).cast<String, Object?>();
       final status = CodecStatus.fromJson(data);
-      state = state.copyWith(codecStatus: status, clearCodecError: true);
+      // A fresh probe supersedes any earlier manual verification (the host
+      // path or executable may have changed), so drop the session flag and let
+      // the new probe — or a new verification — decide compress readiness.
+      state = state.copyWith(
+        codecStatus: status,
+        codecVerified: false,
+        clearCodecError: true,
+      );
       // Re-decode the selected save now the codec is available — but only if no
       // load is already running. An in-flight inspect is already the latest load
       // and will populate; spawning another here would just race it.
@@ -493,6 +521,34 @@ class EditorNotifier extends StateNotifier<EditorState> {
         clearCodecStatus: true,
       );
     }
+  }
+
+  /// Verify the configured codec by round-tripping a real private chunk from
+  /// the selected save through decompress → compress → decompress in the game
+  /// executable. On success, compression-dependent edits unlock for the session
+  /// even when the probe could not auto-trust the build (pattern-resolved /
+  /// unknown executable). This is the manual bridge for non-known game builds.
+  Future<void> verifyCodec() async {
+    final path = state.selectedPath;
+    if (path == null) return;
+    await _withLoading(() async {
+      final response = await _execute(
+        'validate_codec_roundtrip',
+        payload: {'path': path, ..._codecPayload()},
+      );
+      if (response['ok'] != true) {
+        state = state.copyWith(
+          codecVerified: false,
+          codecError: _errorMessage(response),
+        );
+        return;
+      }
+      state = state.copyWith(
+        codecVerified: true,
+        lastWriteMessage: 'Codec verified — private edits unlocked',
+        clearCodecError: true,
+      );
+    });
   }
 
   Future<void> validateSelected() async {
