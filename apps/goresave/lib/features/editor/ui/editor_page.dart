@@ -2698,6 +2698,10 @@ class _TypedPropertyRowState extends State<_TypedPropertyRow> {
   late final TextEditingController _controller = TextEditingController(
     text: widget.hit.value,
   );
+  // Unsaved bool toggle. The switch has no text controller to hold draft
+  // state, so without this it would snap back to the canonical value on the
+  // next rebuild even though the pending edit is registered.
+  bool? _boolDraft;
 
   @override
   void didUpdateWidget(covariant _TypedPropertyRow oldWidget) {
@@ -2709,6 +2713,7 @@ class _TypedPropertyRowState extends State<_TypedPropertyRow> {
     if (widget.hit.value != oldWidget.hit.value &&
         _controller.text != widget.hit.value) {
       _controller.text = widget.hit.value;
+      _boolDraft = null;
       // No registry mutation here: provider writes are illegal during the
       // build phase, and every flow that changes the canonical value
       // (save/restore/refresh) already cleared pending centrally.
@@ -2737,6 +2742,12 @@ class _TypedPropertyRowState extends State<_TypedPropertyRow> {
       return text.trim();
     }
     final raw = text.trim();
+    if (type == 'BoolProperty') {
+      // The bool toggle reports 'true'/'false'; anything else is invalid.
+      if (raw == 'true') return true;
+      if (raw == 'false') return false;
+      return null;
+    }
     if (type == 'FloatProperty' || type == 'DoubleProperty') {
       return double.tryParse(raw);
     }
@@ -2815,8 +2826,11 @@ class _TypedPropertyRowState extends State<_TypedPropertyRow> {
             )
           else if (_isBool)
             _BoolEditor(
-              value: hit.value == 'true',
-              onChanged: (next) => _updatePending(next.toString()),
+              value: _boolDraft ?? (hit.value == 'true'),
+              onChanged: (next) {
+                setState(() => _boolDraft = next);
+                _updatePending(next.toString());
+              },
             )
           else
             SizedBox(
