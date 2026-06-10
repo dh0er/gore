@@ -3441,7 +3441,8 @@ fn parse_private_typed_set_value_edit(edit: &Edit) -> Result<PrivateTypedSetValu
 }
 
 /// Replacement value for `private.typed.setValue`: fixed-size scalars patch
-/// in place, Str/Name strings may change the payload length.
+/// in place, string-valued properties (Str/Name/Object/Enum and the
+/// enum-as-byte form of ByteProperty) may change the payload length.
 #[derive(Debug, Clone, PartialEq)]
 enum TypedSetValue {
     Scalar(properties::ScalarValue),
@@ -3489,13 +3490,30 @@ fn coerce_typed_value(
             .as_bool()
             .map(|v| scalar(ScalarValue::Bool(v)))
             .ok_or_else(|| err("a boolean")),
-        "StrProperty" | "NameProperty" => value
+        // ByteProperty has two serialized forms: a plain byte (scalar patch in
+        // place) and an enum-as-FString (string patch). Dispatch on the parsed
+        // value, not the tag type.
+        "ByteProperty" => match property.value {
+            properties::PropertyValue::Byte(_) => value
+                .as_u64()
+                .and_then(|v| u8::try_from(v).ok())
+                .map(|v| scalar(ScalarValue::Byte(v)))
+                .ok_or_else(|| err("a u8 integer")),
+            properties::PropertyValue::Enum(_) => value
+                .as_str()
+                .map(|v| TypedSetValue::Text(v.to_string()))
+                .ok_or_else(|| err("a string (this ByteProperty holds an enum name)")),
+            _ => Err(CoreError::UnsupportedEdit(
+                "private.typed.setValue does not support this ByteProperty form".to_string(),
+            )),
+        },
+        "StrProperty" | "NameProperty" | "ObjectProperty" | "EnumProperty" => value
             .as_str()
             .map(|v| TypedSetValue::Text(v.to_string()))
             .ok_or_else(|| err("a string")),
         other => Err(CoreError::UnsupportedEdit(format!(
             "private.typed.setValue does not support {other} targets \
-             (fixed-size scalars and Str/Name strings only)"
+             (fixed-size scalars and string-valued properties only)"
         ))),
     }
 }
@@ -4831,6 +4849,31 @@ mod tests {
         out.extend_from_slice(&(payload.len() as u32).to_le_bytes());
         out.push(0);
         out.extend_from_slice(&payload);
+        out
+    }
+
+    /// ByteProperty in its enum-as-FString form.
+    fn private_byte_enum_property(name: &str, value: &str) -> Vec<u8> {
+        let payload = fstring(value);
+        let mut out = Vec::new();
+        out.extend_from_slice(&fstring(name));
+        out.extend_from_slice(&fstring("ByteProperty"));
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        out.push(0);
+        out.extend_from_slice(&payload);
+        out
+    }
+
+    /// ByteProperty in its plain one-byte form.
+    fn private_byte_plain_property(name: &str, value: u8) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(&fstring(name));
+        out.extend_from_slice(&fstring("ByteProperty"));
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.push(0);
+        out.push(value);
         out
     }
 
@@ -6467,6 +6510,54 @@ mod tests {
         // patched payload re-parses and carries the new value
         let strings = value["private"]["strings"].as_array().unwrap();
         assert!(strings.iter().any(|s| s == "m_MaxQuick"));
+    }
+
+    #[test]
+    fn typed_set_value_dispatches_byte_property_forms() {
+        let mut payload = fstring("/Script/Test.Save");
+        payload.push(0);
+        payload.extend_from_slice(&private_byte_plain_property("m_Level", 3));
+        payload.extend_from_slice(&private_byte_enum_property("m_Rank", "ERank::Novice"));
+        payload.extend_from_slice(&fstring("None"));
+        payload.extend_from_slice(&0u32.to_le_bytes());
+
+        // Plain byte: number accepted, string rejected without mutation.
+        let copy = payload.clone();
+        let bad = PrivateTypedSetValueEdit {
+            path: properties::parse_path(&["m_Level".to_string()]).unwrap(),
+            value: json!("ERank::Master"),
+        };
+        assert!(apply_private_typed_set_value_edit_to_payload(&mut payload, &bad).is_err());
+        assert_eq!(payload, copy);
+        let edit = PrivateTypedSetValueEdit {
+            path: properties::parse_path(&["m_Level".to_string()]).unwrap(),
+            value: json!(42),
+        };
+        apply_private_typed_set_value_edit_to_payload(&mut payload, &edit).unwrap();
+
+        // Enum-as-byte: string accepted (length change), number rejected.
+        let copy = payload.clone();
+        let bad = PrivateTypedSetValueEdit {
+            path: properties::parse_path(&["m_Rank".to_string()]).unwrap(),
+            value: json!(1),
+        };
+        assert!(apply_private_typed_set_value_edit_to_payload(&mut payload, &bad).is_err());
+        assert_eq!(payload, copy);
+        let edit = PrivateTypedSetValueEdit {
+            path: properties::parse_path(&["m_Rank".to_string()]).unwrap(),
+            value: json!("ERank::Master"),
+        };
+        apply_private_typed_set_value_edit_to_payload(&mut payload, &edit).unwrap();
+
+        let root = properties::parse_private_root(&payload).unwrap();
+        assert_eq!(
+            root.properties[0].value,
+            properties::PropertyValue::Byte(42)
+        );
+        assert_eq!(
+            root.properties[1].value,
+            properties::PropertyValue::Enum("ERank::Master".to_string())
+        );
     }
 
     #[test]

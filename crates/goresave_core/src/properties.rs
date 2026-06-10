@@ -435,8 +435,11 @@ fn scalar_editable(value: &PropertyValue) -> bool {
             | PropertyValue::Float(_)
             | PropertyValue::Double(_)
             | PropertyValue::Bool(_)
+            | PropertyValue::Byte(_)
             | PropertyValue::Str(_)
             | PropertyValue::Name(_)
+            | PropertyValue::Object(_)
+            | PropertyValue::Enum(_)
     )
 }
 
@@ -609,6 +612,9 @@ pub enum ScalarValue {
     Float(f32),
     Double(f64),
     Bool(bool),
+    /// Plain one-byte ByteProperty only; the enum-as-FString form goes
+    /// through `patch_string`.
+    Byte(u8),
 }
 
 /// Patch a resolved property's value in place. Only fixed-size scalars are
@@ -670,6 +676,14 @@ pub fn patch_scalar(
             property.value_size,
             &v.to_le_bytes(),
         ),
+        ("ByteProperty", ScalarValue::Byte(v)) => {
+            // Only the plain one-byte form; enum-as-byte payloads are FStrings
+            // and longer than one byte, which the size check below rejects.
+            if !matches!(property.value, PropertyValue::Byte(_)) {
+                return Err(mismatch());
+            }
+            write(payload, property.value_offset, property.value_size, &[v])
+        }
         ("BoolProperty", ScalarValue::Bool(v)) => {
             // No payload; the value is tag_flags bit 0x10, one byte before the
             // recorded value offset.
@@ -716,19 +730,30 @@ fn encode_fstring_value(value: &str) -> Vec<u8> {
     out
 }
 
-/// Replace a Str/Name property's FString payload. The new bytes may differ in
-/// length: the property's own tag size and every enclosing size field in
-/// `enclosing_size_fields` (from [`resolve_chain`]) are adjusted by the byte
-/// delta. All writes are validated before the first mutation, so a failed
-/// patch leaves the payload untouched. Offsets recorded in the parsed tree
-/// are stale after a successful patch — re-parse before further edits.
+/// True when a tagged property's whole value payload is a single FString that
+/// [`patch_string`] can replace: Str/Name/Object/Enum properties, plus the
+/// enum-as-FString form of ByteProperty (the plain one-byte form is a scalar).
+pub fn string_patchable(property: &Property) -> bool {
+    match property.type_name.as_str() {
+        "StrProperty" | "NameProperty" | "ObjectProperty" | "EnumProperty" => true,
+        "ByteProperty" => matches!(property.value, PropertyValue::Enum(_)),
+        _ => false,
+    }
+}
+
+/// Replace a string-valued property's FString payload. The new bytes may
+/// differ in length: the property's own tag size and every enclosing size
+/// field in `enclosing_size_fields` (from [`resolve_chain`]) are adjusted by
+/// the byte delta. All writes are validated before the first mutation, so a
+/// failed patch leaves the payload untouched. Offsets recorded in the parsed
+/// tree are stale after a successful patch — re-parse before further edits.
 pub fn patch_string(
     payload: &mut Vec<u8>,
     target: &Property,
     enclosing_size_fields: &[usize],
     new_value: &str,
 ) -> Result<(), CoreError> {
-    if target.type_name != "StrProperty" && target.type_name != "NameProperty" {
+    if !string_patchable(target) {
         return Err(CoreError::InvalidRequest(format!(
             "string value does not match property type {}",
             target.type_name
@@ -2159,5 +2184,153 @@ mod tests {
             payload, original,
             "failed patches must not mutate the payload"
         );
+    }
+
+    /// Tagged property whose value payload is a single FString.
+    fn fstring_property(name: &str, type_name: &str, value: &str) -> Vec<u8> {
+        let payload = fstring(value);
+        let mut out = tag(name, type_name);
+        out.extend_from_slice(&header(payload.len() as u32, 0));
+        out.extend_from_slice(&payload);
+        out
+    }
+
+    fn enum_property(name: &str, enum_type: &str, value: &str) -> Vec<u8> {
+        let payload = fstring(value);
+        let mut out = tag(name, "EnumProperty");
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&fstring(enum_type));
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&fstring("/Script/Test"));
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&fstring("ByteProperty"));
+        out.extend_from_slice(&header(payload.len() as u32, 0));
+        out.extend_from_slice(&payload);
+        out
+    }
+
+    fn plain_byte_property(name: &str, value: u8) -> Vec<u8> {
+        let mut out = tag(name, "ByteProperty");
+        out.extend_from_slice(&header(1, 0));
+        out.push(value);
+        out
+    }
+
+    #[test]
+    fn patch_string_updates_object_and_enum_properties() {
+        let mut props = fstring_property("m_Weapon", "ObjectProperty", "/Script/G1R.ItMw_Sword");
+        props.extend_from_slice(&enum_property("m_Guild", "EGuild", "EGuild::Old"));
+        props.extend_from_slice(&int_property("m_After", 7));
+        let mut payload = root("/Script/Test.Save", &props);
+
+        for (name, new_value) in [
+            ("m_Weapon", "/Script/G1R.ItMw_Axe_TwoHanded"),
+            ("m_Guild", "EGuild::None"),
+        ] {
+            let parsed = parse_private_root(&payload).unwrap();
+            let path = parse_path(&[name.to_string()]).unwrap();
+            let chain = resolve_chain(&parsed.properties, &path).unwrap();
+            let target = chain.target.clone();
+            patch_string(
+                &mut payload,
+                &target,
+                &chain.enclosing_size_fields,
+                new_value,
+            )
+            .unwrap();
+
+            let reparsed = parse_private_root(&payload).unwrap();
+            let after = resolve(&reparsed.properties, &path).unwrap();
+            let read = match &after.value {
+                PropertyValue::Object(s) | PropertyValue::Enum(s) => s.clone(),
+                other => panic!("unexpected value {other:?}"),
+            };
+            assert_eq!(read, new_value);
+            let after_int = resolve(
+                &reparsed.properties,
+                &parse_path(&["m_After".into()]).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(after_int.value, PropertyValue::Int(7));
+        }
+    }
+
+    #[test]
+    fn patch_string_updates_enum_as_byte_property() {
+        // enum-as-byte: ByteProperty whose payload is an FString enum name
+        let mut props = fstring_property("m_Rank", "ByteProperty", "ERank::Novice");
+        props.extend_from_slice(&int_property("m_After", 7));
+        let mut payload = root("/Script/Test.Save", &props);
+
+        let parsed = parse_private_root(&payload).unwrap();
+        let path = parse_path(&["m_Rank".into()]).unwrap();
+        let chain = resolve_chain(&parsed.properties, &path).unwrap();
+        assert_eq!(
+            chain.target.value,
+            PropertyValue::Enum("ERank::Novice".into())
+        );
+        let target = chain.target.clone();
+        patch_string(
+            &mut payload,
+            &target,
+            &chain.enclosing_size_fields,
+            "ERank::Master",
+        )
+        .unwrap();
+
+        let reparsed = parse_private_root(&payload).unwrap();
+        let after = resolve(&reparsed.properties, &path).unwrap();
+        assert_eq!(after.value, PropertyValue::Enum("ERank::Master".into()));
+        let after_int = resolve(
+            &reparsed.properties,
+            &parse_path(&["m_After".into()]).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(after_int.value, PropertyValue::Int(7));
+    }
+
+    #[test]
+    fn patch_scalar_updates_plain_byte_and_rejects_enum_form() {
+        let mut props = plain_byte_property("m_Level", 3);
+        props.extend_from_slice(&fstring_property("m_Rank", "ByteProperty", "ERank::Novice"));
+        let mut payload = root("/Script/Test.Save", &props);
+
+        let parsed = parse_private_root(&payload).unwrap();
+        let level = resolve(
+            &parsed.properties,
+            &parse_path(&["m_Level".into()]).unwrap(),
+        )
+        .unwrap()
+        .clone();
+        assert_eq!(level.value, PropertyValue::Byte(3));
+        patch_scalar(&mut payload, &level, ScalarValue::Byte(42)).unwrap();
+        let reparsed = parse_private_root(&payload).unwrap();
+        assert_eq!(reparsed.properties[0].value, PropertyValue::Byte(42));
+
+        // Scalar byte write on the enum-as-byte form must be rejected.
+        let rank = resolve(
+            &reparsed.properties,
+            &parse_path(&["m_Rank".into()]).unwrap(),
+        )
+        .unwrap()
+        .clone();
+        assert!(patch_scalar(&mut payload, &rank, ScalarValue::Byte(1)).is_err());
+        // And the plain-byte form must reject a string patch.
+        assert!(patch_string(&mut payload, &level, &[], "oops").is_err());
+    }
+
+    #[test]
+    fn search_marks_object_enum_and_byte_editable() {
+        let mut props = fstring_property("m_Weapon", "ObjectProperty", "/Script/G1R.ItMw_Sword");
+        props.extend_from_slice(&enum_property("m_Guild", "EGuild", "EGuild::Old"));
+        props.extend_from_slice(&fstring_property("m_Rank", "ByteProperty", "ERank::Novice"));
+        props.extend_from_slice(&plain_byte_property("m_Level", 3));
+        let payload = root("/Script/Test.Save", &props);
+        let parsed = parse_private_root(&payload).unwrap();
+        let (hits, _) = search_properties(&parsed, "m_", 0, 100);
+        for name in ["m_Weapon", "m_Guild", "m_Rank", "m_Level"] {
+            let hit = hits.iter().find(|h| h.display == name).unwrap();
+            assert!(hit.editable, "{name} should be editable");
+        }
     }
 }

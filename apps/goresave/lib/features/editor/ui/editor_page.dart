@@ -2981,8 +2981,8 @@ class _AllDataPanelState extends State<_AllDataPanel> {
           ),
           const SizedBox(height: 4),
           Text(
-            'Search every typed property by name or path. Scalars (int, '
-            'float, bool) and strings are editable; structs are shown '
+            'Search every typed property by name or path. Scalars, strings, '
+            'enums and object paths are editable; structs are shown '
             'read-only for now.',
             style: theme.textTheme.bodySmall?.copyWith(
               color: const Color(0xFF64748B),
@@ -3188,9 +3188,18 @@ class _TypedPropertyRowState extends State<_TypedPropertyRow> {
       // be intentional, so no trim.
       return _controller.text;
     }
+    if (type == 'ObjectProperty' || type == 'EnumProperty') {
+      return _controller.text.trim();
+    }
     final raw = _controller.text.trim();
     if (type == 'FloatProperty' || type == 'DoubleProperty') {
       return double.tryParse(raw);
+    }
+    if (type == 'ByteProperty') {
+      // Two serialized forms share the tag type: plain byte (number) and
+      // enum-as-FString. Send a number when it parses; otherwise send the
+      // text and let the core validate against the actual form.
+      return int.tryParse(raw) ?? raw;
     }
     return int.tryParse(raw);
   }
