@@ -1671,13 +1671,19 @@ fn probe_exe_inner(
     {
         validate_known_profile(profile, &pe, file_size)?;
         let codec_rvas = runtime_codec_rvas_from_profile(profile);
+        // A known profile is matched by full-file SHA-256, so the executable is
+        // bit-identical to the one these codec RVAs were reverse-engineered and
+        // round-trip tested against. Decode/encode are therefore as verified as
+        // a runtime selftest would make them — advertise both as capable.
+        // (Pattern-resolved/unknown executables still require runtime
+        // verification before compress is trusted.)
         return Ok(ProbeResponse {
             supported: true,
             profile: Some(profile.name.clone()),
             resolution_mode: Some(ResolutionMode::KnownProfile),
             resolved_rvas: Some(codec_rvas),
-            can_compress: false,
-            can_decompress: false,
+            can_compress: true,
+            can_decompress: true,
             exe_sha256,
             file_size,
             pe_timestamp: pe.timestamp(),
