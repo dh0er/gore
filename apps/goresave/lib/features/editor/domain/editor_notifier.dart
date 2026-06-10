@@ -763,6 +763,10 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// set instead of trusting one request. The decode cache is already seeded
   /// by inspect, so this does not pay a second full private-payload decode.
   Future<HeroAttributesResult> loadHeroAttributes() async {
+    // Pin the save under load: searchTypedProperties always reads the
+    // current selection, so a save switch mid-pagination would silently
+    // merge pages from two different files into one stat list.
+    final loadPath = state.selectedPath;
     final hits = <TypedPropertyHit>[];
     var offset = 0;
     while (true) {
@@ -771,6 +775,11 @@ class EditorNotifier extends StateNotifier<EditorState> {
         offset: offset,
         limit: 1000,
       );
+      if (state.selectedPath != loadPath) {
+        return const HeroAttributesResult(
+          error: 'Save selection changed while loading hero attributes.',
+        );
+      }
       if (result.error != null) {
         return HeroAttributesResult(error: result.error);
       }
