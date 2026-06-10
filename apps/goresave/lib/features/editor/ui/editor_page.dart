@@ -11,6 +11,7 @@ import 'package:goresave/features/editor/domain/editor_notifier.dart';
 import 'package:goresave/features/editor/domain/editor_models.dart';
 import 'package:goresave/providers/data_providers.dart';
 import 'package:intl/intl.dart';
+import 'hero_stats_card.dart';
 
 final _bytes = NumberFormat.decimalPattern();
 
@@ -1080,6 +1081,20 @@ class _PrivatePanel extends StatelessWidget {
               savePath: inspection.path,
               // Reuse the panel's already compress-gated flag.
               editable: editable,
+              // The typed hero stats card supersedes the heuristic
+              // attribute editor whenever the strict typed parse is OK.
+              showLegacyAttributes: !inspection.privateTypedVerified,
+            ),
+            const SizedBox(height: 16),
+          ],
+          if (title == 'Player' && inspection.privateTypedVerified) ...[
+            HeroStatsCard(
+              // New SaveInspection instance after every write/refresh —
+              // changing identity drops pending edits and reloads.
+              reloadKey: inspection,
+              load: notifier.loadHeroAttributes,
+              save: notifier.writeTypedValues,
+              editable: editable,
             ),
             const SizedBox(height: 16),
           ],
@@ -1748,12 +1763,14 @@ class _PrivatePlayerSummaryCard extends StatelessWidget {
     required this.notifier,
     this.savePath,
     this.editable = true,
+    this.showLegacyAttributes = true,
   });
 
   final PrivatePlayerSummary player;
   final EditorNotifier notifier;
   final String? savePath;
   final bool editable;
+  final bool showLegacyAttributes;
 
   @override
   Widget build(BuildContext context) {
@@ -1825,7 +1842,7 @@ class _PrivatePlayerSummaryCard extends StatelessWidget {
                 notifier: notifier,
               ),
             ],
-            if (player.attributes.isNotEmpty) ...[
+            if (showLegacyAttributes && player.attributes.isNotEmpty) ...[
               const SizedBox(height: 16),
               const Divider(height: 1),
               const SizedBox(height: 12),
