@@ -3158,6 +3158,19 @@ class _TypedPropertyRowState extends State<_TypedPropertyRow> {
   );
 
   @override
+  void didUpdateWidget(covariant _TypedPropertyRow oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // A successful save refreshes the list and rebinds this row to a hit with
+    // the persisted (possibly normalized) value. Sync the field to it so it
+    // stops showing the pre-save text. Only rows whose value actually changed
+    // update, so an unrelated row's save cannot clobber in-progress typing here.
+    if (widget.hit.value != oldWidget.hit.value &&
+        _controller.text != widget.hit.value) {
+      _controller.text = widget.hit.value;
+    }
+  }
+
+  @override
   void dispose() {
     _controller.dispose();
     super.dispose();
