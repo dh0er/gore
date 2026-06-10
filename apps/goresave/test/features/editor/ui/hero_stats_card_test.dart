@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:goresave/features/editor/domain/hero_attributes.dart';
@@ -395,6 +397,52 @@ void main() {
     expect(find.textContaining('Invalid number'), findsOneWidget);
     expect(find.text('legacy editor'), findsNothing);
     expect(find.widgetWithText(TextField, 'MaxHealth base'), findsOneWidget);
+  });
+
+  testWidgets('double-tapping save issues only one batched write',
+      (tester) async {
+    var saveCalls = 0;
+    final gate = Completer<bool>();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: HeroStatsCard(
+              load: () async => HeroAttributesResult(
+                attributes: [
+                  _attribute(
+                    'MaxHealth',
+                    '/Script/G1R.AttributeSet_Health',
+                    64,
+                  ),
+                ],
+              ),
+              save: (_) {
+                saveCalls++;
+                return gate.future;
+              },
+              editable: true,
+              reloadKey: 'save-1',
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.enterText(
+      find.widgetWithText(TextField, 'MaxHealth base'),
+      '99',
+    );
+    // Two taps without pumping a frame in between: the second one hits the
+    // still-enabled button and must be swallowed by the re-entry guard.
+    await tester.tap(find.byTooltip('Save hero stats'));
+    await tester.tap(find.byTooltip('Save hero stats'));
+    gate.complete(true);
+    await tester.pumpAndSettle();
+
+    expect(saveCalls, 1);
   });
 
   group('formatHeroValue', () {

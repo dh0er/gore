@@ -93,6 +93,10 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
   }
 
   Future<void> _save() async {
+    // Re-entry guard: the disabled-button state only lands on the next
+    // frame, so a second tap can still invoke this handler. Bail before
+    // building edits or a duplicate write_save (and backup) goes out.
+    if (_saving) return;
     final edits = <TypedValueEdit>[];
     for (final attribute in _attributes) {
       for (final (path, original) in [
