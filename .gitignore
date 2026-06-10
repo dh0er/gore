@@ -26,6 +26,7 @@ __pycache__/
 *.py[cod]
 
 # Editor / OS noise
+.claude/
 .idea/
 .vscode/
 *.swp

@@ -40,17 +40,7 @@ class EditorPage extends ConsumerWidget {
                 semanticLabel: 'goresave logo',
               ),
               const SizedBox(width: 10),
-              const Text('goresave'),
-              const SizedBox(width: 16),
-              TextButton(
-                onPressed: () {
-                  showDialog(
-                    context: context,
-                    builder: (_) => const GoresaveAboutDialog(),
-                  );
-                },
-                child: const Text('About'),
-              ),
+              const Text('Gothic Remake Savegame Editor'),
               const Expanded(child: SizedBox()),
             ],
           ),
@@ -107,6 +97,16 @@ class EditorPage extends ConsumerWidget {
                   .setThemeMode(isDark ? ThemeMode.light : ThemeMode.dark);
             },
             tooltip: isDark ? 'Switch to light mode' : 'Switch to dark mode',
+          ),
+          IconButton(
+            icon: const Icon(Icons.info_outline),
+            onPressed: () {
+              showDialog(
+                context: context,
+                builder: (_) => const GoresaveAboutDialog(),
+              );
+            },
+            tooltip: 'About',
           ),
           const SizedBox(width: 16),
           const WindowControls(),

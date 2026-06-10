@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:file_selector/file_selector.dart';
 import 'package:goresave/features/editor/domain/core_service.dart';
 import 'package:goresave/features/editor/domain/editor_models.dart';
@@ -7,6 +9,28 @@ import 'package:path/path.dart' as p;
 import 'package:state_notifier/state_notifier.dart';
 
 const _unchanged = Object();
+
+/// Sorts saves by file last-modified time, newest first. Saves whose file
+/// can't be stat'd (e.g. fake paths in tests) sink to the bottom rather than
+/// throwing, so a transient FS error never breaks the scan.
+void _sortByLastModifiedDesc(List<SaveSlot> saves) {
+  final mtime = <String, DateTime>{};
+  for (final save in saves) {
+    try {
+      mtime[save.path] = File(save.path).lastModifiedSync();
+    } catch (_) {
+      // Leave unset; treated as oldest below.
+    }
+  }
+  saves.sort((a, b) {
+    final ma = mtime[a.path];
+    final mb = mtime[b.path];
+    if (ma == null && mb == null) return 0;
+    if (ma == null) return 1;
+    if (mb == null) return -1;
+    return mb.compareTo(ma);
+  });
+}
 
 class EditorState {
   const EditorState({
@@ -338,6 +362,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
           .whereType<Map>()
           .map((m) => SaveSlot.fromJson(m.cast<String, Object?>()))
           .toList();
+      _sortByLastModifiedDesc(saves);
       final rawProfiles = (data?['profiles'] as List?) ?? const [];
       final profiles = rawProfiles
           .whereType<Map>()
