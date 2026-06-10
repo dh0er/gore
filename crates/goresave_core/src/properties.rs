@@ -306,32 +306,48 @@ pub struct PropertyHit {
 }
 
 /// Walk the whole property tree and collect properties whose display path
-/// contains every whitespace-separated term in `query` (case-insensitive).
-/// An empty query matches everything (bounded by `limit`). Returns hits plus
-/// whether the limit truncated the result.
+/// contains every whitespace-separated term in `query` (case-insensitive). An
+/// empty query matches everything. Returns the `[offset, offset+limit)` page of
+/// matches plus the total match count (the whole tree is walked either way, so
+/// the total supports last-page navigation).
 pub fn search_properties(
     root: &RootObject,
     query: &str,
+    offset: usize,
     limit: usize,
-) -> (Vec<PropertyHit>, bool) {
+) -> (Vec<PropertyHit>, usize) {
     let terms: Vec<String> = query.split_whitespace().map(|t| t.to_lowercase()).collect();
     let mut hits = Vec::new();
-    let mut truncated = false;
+    let mut total = 0usize;
     let mut ctx = SearchCtx {
         terms: &terms,
+        offset,
         limit,
+        total: &mut total,
         hits: &mut hits,
-        truncated: &mut truncated,
     };
     walk_search(&root.properties, &mut Vec::new(), &mut String::new(), &mut ctx);
-    (hits, truncated)
+    (hits, total)
 }
 
 struct SearchCtx<'a> {
     terms: &'a [String],
+    offset: usize,
     limit: usize,
+    total: &'a mut usize,
     hits: &'a mut Vec<PropertyHit>,
-    truncated: &'a mut bool,
+}
+
+impl SearchCtx<'_> {
+    /// Record a match: count it toward the total and push it if it falls inside
+    /// the requested page window.
+    fn record(&mut self, hit: PropertyHit) {
+        let index = *self.total;
+        *self.total += 1;
+        if index >= self.offset && self.hits.len() < self.limit {
+            self.hits.push(hit);
+        }
+    }
 }
 
 fn scalar_editable(value: &PropertyValue) -> bool {
@@ -370,41 +386,29 @@ fn walk_search(
     ctx: &mut SearchCtx,
 ) {
     for p in props {
-        if *ctx.truncated {
-            return;
-        }
         let display_len = display.len();
-        let path_pushed;
         if !display.is_empty() {
             display.push_str(" › ");
         }
         display.push_str(&p.name);
         path.push(p.name.clone());
-        path_pushed = true;
 
         // Leaf value?
         if let Some(value_display) = scalar_display(&p.value) {
-            let matches = ctx.terms.iter().all(|t| display.to_lowercase().contains(t));
-            if matches {
-                if ctx.hits.len() >= ctx.limit {
-                    *ctx.truncated = true;
-                } else {
-                    ctx.hits.push(PropertyHit {
-                        path: path.clone(),
-                        display: display.clone(),
-                        type_name: p.type_name.clone(),
-                        value_display,
-                        editable: scalar_editable(&p.value),
-                    });
-                }
+            if ctx.terms.iter().all(|t| display.to_lowercase().contains(t)) {
+                ctx.record(PropertyHit {
+                    path: path.clone(),
+                    display: display.clone(),
+                    type_name: p.type_name.clone(),
+                    value_display,
+                    editable: scalar_editable(&p.value),
+                });
             }
         } else {
             walk_value_search(&p.value, path, display, ctx);
         }
 
-        if path_pushed {
-            path.pop();
-        }
+        path.pop();
         display.truncate(display_len);
     }
 }
@@ -424,26 +428,17 @@ fn walk_value_search(
         }
         PropertyValue::ObjectInstances(objs) => {
             for (idx, obj) in objs.iter().enumerate() {
-                if *ctx.truncated {
-                    return;
-                }
                 descend_indexed(idx, &obj.properties, path, display, ctx);
             }
         }
         PropertyValue::Map { entries, .. } => {
             for (key, val) in entries {
-                if *ctx.truncated {
-                    return;
-                }
                 let key_label = map_key_label(key);
                 descend_value(&format!("{{{key_label}}}"), val, path, display, ctx);
             }
         }
         PropertyValue::Array { elements } | PropertyValue::Set { elements, .. } => {
             for (idx, el) in elements.iter().enumerate() {
-                if *ctx.truncated {
-                    return;
-                }
                 descend_value(&format!("[{idx}]"), el, path, display, ctx);
             }
         }
@@ -478,19 +473,14 @@ fn descend_value(
     display.push_str(seg);
     path.push(seg.to_string());
     if let Some(value_display) = scalar_display(value) {
-        let matches = ctx.terms.iter().all(|t| display.to_lowercase().contains(t));
-        if matches {
-            if ctx.hits.len() >= ctx.limit {
-                *ctx.truncated = true;
-            } else {
-                ctx.hits.push(PropertyHit {
-                    path: path.clone(),
-                    display: display.clone(),
-                    type_name: container_value_type(value).to_string(),
-                    value_display,
-                    editable: scalar_editable(value),
-                });
-            }
+        if ctx.terms.iter().all(|t| display.to_lowercase().contains(t)) {
+            ctx.record(PropertyHit {
+                path: path.clone(),
+                display: display.clone(),
+                type_name: container_value_type(value).to_string(),
+                value_display,
+                editable: scalar_editable(value),
+            });
         }
     } else {
         walk_value_search(value, path, display, ctx);
@@ -1519,8 +1509,8 @@ mod tests {
     fn search_finds_nested_scalar_with_addressable_path() {
         let payload = map_of_instanced_payload();
         let root = parse_private_root(&payload).unwrap();
-        let (hits, truncated) = search_properties(&root, "itemcount", 100);
-        assert!(!truncated);
+        let (hits, total) = search_properties(&root, "itemcount", 0, 100);
+        assert_eq!(total, 1);
         assert_eq!(hits.len(), 1);
         let hit = &hits[0];
         assert_eq!(hit.path, vec!["m_GenericData", "{ChestStates}", "m_ItemCount"]);
@@ -1536,12 +1526,22 @@ mod tests {
     fn search_empty_query_lists_all_and_truncates() {
         let payload = map_of_instanced_payload();
         let root = parse_private_root(&payload).unwrap();
-        let (all, _) = search_properties(&root, "", 100);
+        let (all, total) = search_properties(&root, "", 0, 100);
         // m_ItemCount + bLooted are the two leaf scalars
+        assert_eq!(total, 2);
         assert_eq!(all.len(), 2);
-        let (capped, truncated) = search_properties(&root, "", 1);
-        assert_eq!(capped.len(), 1);
-        assert!(truncated);
+        // page size 1 returns one entry but still reports the full total
+        let (page0, total0) = search_properties(&root, "", 0, 1);
+        assert_eq!(page0.len(), 1);
+        assert_eq!(total0, 2);
+        // second page returns the next entry, no overlap
+        let (page1, _) = search_properties(&root, "", 1, 1);
+        assert_eq!(page1.len(), 1);
+        assert_ne!(page0[0].display, page1[0].display);
+        // offset past the end yields an empty page with the real total
+        let (empty, total_end) = search_properties(&root, "", 99, 10);
+        assert!(empty.is_empty());
+        assert_eq!(total_end, 2);
     }
 
     #[test]
@@ -1551,7 +1551,7 @@ mod tests {
         props.extend_from_slice(&int_property("m_Gold", 250));
         let payload = root("/Script/Test.Save", &props);
         let parsed = parse_private_root(&payload).unwrap();
-        let (hits, _) = search_properties(&parsed, "m_", 100);
+        let (hits, _) = search_properties(&parsed, "m_", 0, 100);
         let name_hit = hits.iter().find(|h| h.display == "m_ProfileName").unwrap();
         assert!(!name_hit.editable);
         let gold_hit = hits.iter().find(|h| h.display == "m_Gold").unwrap();

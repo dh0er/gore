@@ -2862,10 +2862,26 @@ class _AllDataPanel extends StatefulWidget {
 }
 
 class _AllDataPanelState extends State<_AllDataPanel> {
+  static const _pageSizes = [25, 50, 100, 250, 500];
+
   final _controller = TextEditingController();
   TypedSearchResult? _result;
   bool _searching = false;
   int _requestSeq = 0;
+  int _pageSize = 50;
+  String _activeQuery = '';
+
+  @override
+  void initState() {
+    super.initState();
+    // Empty query lists everything — show the first page as soon as the tab
+    // opens for a decoded save.
+    if (widget.inspection.privateDecoded) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _run(offset: 0);
+      });
+    }
+  }
 
   @override
   void dispose() {
@@ -2873,15 +2889,35 @@ class _AllDataPanelState extends State<_AllDataPanel> {
     super.dispose();
   }
 
-  Future<void> _run(String query) async {
+  /// Run the search at [offset] for the current query and page size. A new
+  /// query resets to the first page (passed explicitly by the caller).
+  Future<void> _run({required int offset}) async {
+    _activeQuery = _controller.text.trim();
     final seq = ++_requestSeq;
     setState(() => _searching = true);
-    final result = await widget.notifier.searchTypedProperties(query);
+    final result = await widget.notifier.searchTypedProperties(
+      _activeQuery,
+      offset: offset,
+      limit: _pageSize,
+    );
     if (!mounted || seq != _requestSeq) return;
     setState(() {
       _result = result;
       _searching = false;
     });
+  }
+
+  void _goToPage(int pageIndex) {
+    final result = _result;
+    if (result == null) return;
+    final clamped = pageIndex.clamp(0, result.pageCount - 1);
+    _run(offset: clamped * _pageSize);
+  }
+
+  void _setPageSize(int? size) {
+    if (size == null || size == _pageSize) return;
+    setState(() => _pageSize = size);
+    _run(offset: 0);
   }
 
   @override
@@ -2926,7 +2962,8 @@ class _AllDataPanelState extends State<_AllDataPanel> {
           TextField(
             controller: _controller,
             decoration: InputDecoration(
-              labelText: 'Search properties (e.g. Health, GameTime, m_Day)',
+              labelText:
+                  'Search properties (empty = list everything) — e.g. Health, GameTime',
               prefixIcon: const Icon(Icons.search),
               suffixIcon: _searching
                   ? const Padding(
@@ -2939,12 +2976,14 @@ class _AllDataPanelState extends State<_AllDataPanel> {
                     )
                   : IconButton(
                       icon: const Icon(Icons.arrow_forward),
-                      onPressed: () => _run(_controller.text.trim()),
+                      onPressed: () => _run(offset: 0),
                     ),
             ),
-            onSubmitted: (value) => _run(value.trim()),
+            onSubmitted: (_) => _run(offset: 0),
           ),
           const SizedBox(height: 12),
+          _buildPaginationBar(theme),
+          const SizedBox(height: 8),
           Expanded(child: _buildResults(theme)),
         ],
       ),
@@ -2954,12 +2993,21 @@ class _AllDataPanelState extends State<_AllDataPanel> {
   Widget _buildResults(ThemeData theme) {
     final result = _result;
     if (result == null) {
+      if (_searching) {
+        return const _MessagePane(
+          icon: Icons.hourglass_empty,
+          title: 'Decoding save…',
+          body:
+              'Decoding the full private payload for the first search. This '
+              'runs once per save, then searches are instant.',
+        );
+      }
       return const _MessagePane(
         icon: Icons.search,
         title: 'Search the save',
         body:
             'Type a property name and press enter. Leave it empty to list '
-            'everything (the first match page).',
+            'everything.',
       );
     }
     if (result.error != null) {
@@ -2976,35 +3024,83 @@ class _AllDataPanelState extends State<_AllDataPanel> {
         body: 'No property path contained all of those terms.',
       );
     }
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
+    return ListView.separated(
+      itemCount: result.results.length,
+      separatorBuilder: (_, _) => const Divider(height: 1),
+      itemBuilder: (context, index) {
+        final hit = result.results[index];
+        return _TypedPropertyRow(
+          key: ValueKey(hit.display),
+          hit: hit,
+          editable: widget.editable && hit.editable,
+          notifier: widget.notifier,
+          onSaved: () => _run(offset: result.offset),
+        );
+      },
+    );
+  }
+
+  Widget _buildPaginationBar(ThemeData theme) {
+    final result = _result;
+    if (result == null || (result.error != null) || result.total == 0) {
+      return const SizedBox.shrink();
+    }
+    final first = result.offset + 1;
+    final last = result.offset + result.results.length;
+    final busy = _searching;
+    final muted = theme.textTheme.bodySmall?.copyWith(
+      color: const Color(0xFF64748B),
+    );
+    return Wrap(
+      crossAxisAlignment: WrapCrossAlignment.center,
+      spacing: 4,
+      runSpacing: 4,
       children: [
-        if (result.truncated)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: Text(
-              'Showing the first ${result.results.length} matches — refine the '
-              'search to narrow down.',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: const Color(0xFFB26A00),
-              ),
-            ),
-          ),
-        Expanded(
-          child: ListView.separated(
-            itemCount: result.results.length,
-            separatorBuilder: (_, _) => const Divider(height: 1),
-            itemBuilder: (context, index) {
-              final hit = result.results[index];
-              return _TypedPropertyRow(
-                key: ValueKey(hit.display),
-                hit: hit,
-                editable: widget.editable && hit.editable,
-                notifier: widget.notifier,
-                onSaved: () => _run(_controller.text.trim()),
-              );
-            },
-          ),
+        IconButton(
+          tooltip: 'First page',
+          visualDensity: VisualDensity.compact,
+          icon: const Icon(Icons.first_page),
+          onPressed: busy || !result.hasPrevious ? null : () => _goToPage(0),
+        ),
+        IconButton(
+          tooltip: 'Previous page',
+          visualDensity: VisualDensity.compact,
+          icon: const Icon(Icons.chevron_left),
+          onPressed: busy || !result.hasPrevious
+              ? null
+              : () => _goToPage(result.pageIndex - 1),
+        ),
+        IconButton(
+          tooltip: 'Next page',
+          visualDensity: VisualDensity.compact,
+          icon: const Icon(Icons.chevron_right),
+          onPressed: busy || !result.hasNext
+              ? null
+              : () => _goToPage(result.pageIndex + 1),
+        ),
+        IconButton(
+          tooltip: 'Last page',
+          visualDensity: VisualDensity.compact,
+          icon: const Icon(Icons.last_page),
+          onPressed: busy || !result.hasNext
+              ? null
+              : () => _goToPage(result.pageCount - 1),
+        ),
+        const SizedBox(width: 4),
+        Text('Page ${result.pageIndex + 1} / ${result.pageCount}', style: muted),
+        const SizedBox(width: 8),
+        Text('$first–$last of ${result.total}', style: muted),
+        const SizedBox(width: 8),
+        Text('Per page:', style: muted),
+        DropdownButton<int>(
+          value: _pageSize,
+          isDense: true,
+          underline: const SizedBox.shrink(),
+          onChanged: busy ? null : _setPageSize,
+          items: [
+            for (final size in _pageSizes)
+              DropdownMenuItem(value: size, child: Text('$size')),
+          ],
         ),
       ],
     );

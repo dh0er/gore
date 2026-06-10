@@ -34,7 +34,9 @@ class TypedPropertyHit {
 class TypedSearchResult {
   const TypedSearchResult({
     this.results = const [],
-    this.truncated = false,
+    this.offset = 0,
+    this.limit = 50,
+    this.total = 0,
     this.error,
   });
 
@@ -46,13 +48,26 @@ class TypedSearchResult {
               .map((e) => TypedPropertyHit.fromJson(e.cast<String, Object?>()))
               .toList(growable: false) ??
           const [],
-      truncated: json['truncated'] as bool? ?? false,
+      offset: (json['offset'] as num?)?.toInt() ?? 0,
+      limit: (json['limit'] as num?)?.toInt() ?? 50,
+      total: (json['total'] as num?)?.toInt() ?? 0,
     );
   }
 
   final List<TypedPropertyHit> results;
-  final bool truncated;
+  final int offset;
+  final int limit;
+  final int total;
   final String? error;
+
+  /// Zero-based index of the current page.
+  int get pageIndex => limit == 0 ? 0 : offset ~/ limit;
+
+  /// Total number of pages (at least 1).
+  int get pageCount => total == 0 ? 1 : (total + limit - 1) ~/ limit;
+
+  bool get hasPrevious => offset > 0;
+  bool get hasNext => offset + results.length < total;
 }
 
 class ScreenshotSummary {

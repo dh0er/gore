@@ -2372,8 +2372,13 @@ fn search_typed_properties(
         .get("limit")
         .and_then(Value::as_u64)
         .map(|v| v as usize)
-        .unwrap_or(500)
-        .clamp(1, 5000);
+        .unwrap_or(50)
+        .clamp(1, 1000);
+    let offset = payload
+        .get("offset")
+        .and_then(Value::as_u64)
+        .map(|v| v as usize)
+        .unwrap_or(0);
 
     let data = fs::read(path)?;
     if !data.starts_with(b"GSAV") {
@@ -2385,7 +2390,7 @@ fn search_typed_properties(
     let stream = parse_compressed_stream(&data, 13 + parts.public_payload.len())?;
     let decoded = decoded_private_payload_cached(path, &data, &stream, backend)?;
     let root = properties::parse_private_root(&decoded)?;
-    let (hits, truncated) = properties::search_properties(&root, query, limit);
+    let (hits, total) = properties::search_properties(&root, query, offset, limit);
 
     let results = hits
         .into_iter()
@@ -2402,8 +2407,9 @@ fn search_typed_properties(
 
     Ok(json!({
         "query": query,
+        "offset": offset,
         "limit": limit,
-        "truncated": truncated,
+        "total": total,
         "count": results.len(),
         "results": results,
     }))
@@ -6309,7 +6315,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(value["count"], 1);
-        assert_eq!(value["truncated"], false);
+        assert_eq!(value["total"], 1);
         let hit = &value["results"][0];
         assert_eq!(hit["display"], "m_MaxQuick");
         assert_eq!(hit["type"], "IntProperty");
@@ -6319,7 +6325,26 @@ mod tests {
 
         // empty query lists every leaf scalar
         let all = search_typed_properties(&path, &json!({ "query": "" }), Some(&backend)).unwrap();
+        assert_eq!(all["total"], 2);
         assert_eq!(all["count"], 2);
+
+        // pagination: page size 1 returns one entry and the full total
+        let page0 = search_typed_properties(
+            &path,
+            &json!({ "query": "", "offset": 0, "limit": 1 }),
+            Some(&backend),
+        )
+        .unwrap();
+        assert_eq!(page0["count"], 1);
+        assert_eq!(page0["total"], 2);
+        let page1 = search_typed_properties(
+            &path,
+            &json!({ "query": "", "offset": 1, "limit": 1 }),
+            Some(&backend),
+        )
+        .unwrap();
+        assert_eq!(page1["count"], 1);
+        assert_ne!(page0["results"][0]["display"], page1["results"][0]["display"]);
     }
 
     #[test]

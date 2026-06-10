@@ -733,7 +733,8 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// instead of throwing, so the browser UI can render it inline.
   Future<TypedSearchResult> searchTypedProperties(
     String query, {
-    int limit = 500,
+    int offset = 0,
+    int limit = 50,
   }) async {
     final path = state.selectedPath;
     if (path == null) {
@@ -745,6 +746,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
         payload: {
           'path': path,
           'query': query,
+          'offset': offset,
           'limit': limit,
           ..._codecPayload(),
         },
