@@ -1176,26 +1176,33 @@ class _PrivatePanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (inspection.privateDecoded) {
+      // Typed path: HeroStatsCard manages its own internal scroll for the
+      // detail area and pins the sidebar. Give it the full pane via Padding
+      // (not ListView) so it has a finite height to work with.
+      if (title == 'Player' && inspection.privateTypedVerified) {
+        return Padding(
+          padding: const EdgeInsets.all(20),
+          child: HeroStatsCard(
+            // New SaveInspection instance after every write/refresh —
+            // changing identity drops pending edits and reloads.
+            reloadKey: inspection,
+            load: notifier.loadHeroAttributes,
+            save: notifier.writeTypedValues,
+            editable: editable,
+            // Spec: if the typed search errors out or finds nothing on a
+            // typed-OK save, the heuristic editor stays available.
+            fallback: inspection.privatePlayer.attributes.isNotEmpty
+                ? _legacyAttributesCard()
+                : null,
+            transformCard: _transformCard(),
+          ),
+        );
+      }
+      // Legacy / non-typed path: stacked layout in a ListView.
       return ListView(
         padding: const EdgeInsets.all(20),
         children: [
-          if (title == 'Player' && inspection.privateTypedVerified) ...[
-            HeroStatsCard(
-              // New SaveInspection instance after every write/refresh —
-              // changing identity drops pending edits and reloads.
-              reloadKey: inspection,
-              load: notifier.loadHeroAttributes,
-              save: notifier.writeTypedValues,
-              editable: editable,
-              // Spec: if the typed search errors out or finds nothing on a
-              // typed-OK save, the heuristic editor stays available.
-              fallback: inspection.privatePlayer.attributes.isNotEmpty
-                  ? _legacyAttributesCard()
-                  : null,
-              transformCard: _transformCard(),
-            ),
-            const SizedBox(height: 16),
-          ] else if (title == 'Player') ...[
+          if (title == 'Player') ...[
             // Typed parse failed or not verified: stacked legacy layout —
             // no sidebar, no typed load call.
             if (inspection.privatePlayer.attributes.isNotEmpty) ...[

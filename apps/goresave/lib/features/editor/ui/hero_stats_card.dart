@@ -2,14 +2,15 @@ import 'package:flutter/material.dart';
 
 import '../domain/hero_attributes.dart';
 
-/// Describes one entry in the player-tab sidebar. The transform entry comes
-/// first (when present); then one entry per non-empty attribute group.
+/// Describes one entry in the player-tab sidebar. Entries appear in enum
+/// declaration order in the sidebar: core, combat, resistances, thieving,
+/// transform (when present), advanced.
 enum _SidebarEntry {
-  transform,
   core,
   combat,
   resistances,
   thieving,
+  transform,
   advanced,
 }
 
@@ -76,14 +77,6 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
     HeroAttributeGroup.advanced: 'Advanced',
   };
 
-  static const _entrySidebarEntry = {
-    HeroAttributeGroup.core: _SidebarEntry.core,
-    HeroAttributeGroup.combat: _SidebarEntry.combat,
-    HeroAttributeGroup.resistances: _SidebarEntry.resistances,
-    HeroAttributeGroup.thieving: _SidebarEntry.thieving,
-    HeroAttributeGroup.advanced: _SidebarEntry.advanced,
-  };
-
   @override
   void initState() {
     super.initState();
@@ -120,7 +113,7 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
   }
 
   /// Choose the default sidebar entry: prefer 'Main stats' when present, else
-  /// the first available entry (transform or first non-empty group).
+  /// the first available entry in sidebar (enum declaration) order.
   _SidebarEntry? _defaultSelection(List<HeroAttribute> attributes) {
     final byGroup = _byGroup(attributes);
     // Prefer Main stats.
@@ -128,10 +121,12 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
       return _SidebarEntry.core;
     }
     // Fall back to first available entry in sidebar order.
-    if (widget.transformCard != null) return _SidebarEntry.transform;
-    for (final group in HeroAttributeGroup.values) {
-      if (byGroup[group]?.isNotEmpty == true) {
-        return _entrySidebarEntry[group];
+    for (final entry in _SidebarEntry.values) {
+      if (entry == _SidebarEntry.transform) {
+        if (widget.transformCard != null) return entry;
+      } else {
+        final group = _entryToGroup(entry);
+        if (group != null && byGroup[group]?.isNotEmpty == true) return entry;
       }
     }
     return null;
@@ -279,14 +274,17 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
     // --- Sidebar layout ---
     final byGroup = _byGroup(_attributes);
 
-    // Build sidebar entries in display order.
+    // Build sidebar entries in display order (enum declaration order).
+    // transform is included between thieving and advanced when provided.
     final sidebarEntries = <_SidebarEntry>[];
-    if (widget.transformCard != null) {
-      sidebarEntries.add(_SidebarEntry.transform);
-    }
-    for (final group in HeroAttributeGroup.values) {
-      if (byGroup[group]?.isNotEmpty == true) {
-        sidebarEntries.add(_entrySidebarEntry[group]!);
+    for (final entry in _SidebarEntry.values) {
+      if (entry == _SidebarEntry.transform) {
+        if (widget.transformCard != null) sidebarEntries.add(entry);
+      } else {
+        final group = _entryToGroup(entry);
+        if (group != null && byGroup[group]?.isNotEmpty == true) {
+          sidebarEntries.add(entry);
+        }
       }
     }
 
@@ -369,10 +367,13 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
       );
     }
 
+    // CrossAxisAlignment.stretch makes both children fill the available height
+    // so the sidebar background extends to the bottom regardless of content
+    // length, and the right side can use SingleChildScrollView.
     return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // Left sidebar: ~200px, styled to echo the save-list sidebar idiom.
+        // Left sidebar: ~200px, fixed — never scrolls away with content.
         SizedBox(
           width: 200,
           child: DecoratedBox(
@@ -380,28 +381,33 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
               color: theme.colorScheme.surfaceContainerLow,
               borderRadius: BorderRadius.circular(12),
             ),
-            child: ListView(
-              shrinkWrap: true,
+            // SingleChildScrollView so the sidebar itself can scroll on very
+            // small viewports while remaining pinned relative to the detail.
+            child: SingleChildScrollView(
               padding: const EdgeInsets.symmetric(vertical: 6),
-              children: [
-                for (final entry in sidebarEntries)
-                  _SidebarTile(
-                    label: _entryLabel(entry),
-                    icon: _entryIcon(entry),
-                    selected: entry == effectiveSelected,
-                    onTap: () {
-                      if (_selected != entry) {
-                        setState(() => _selected = entry);
-                      }
-                    },
-                  ),
-              ],
+              child: Column(
+                children: [
+                  for (final entry in sidebarEntries)
+                    _SidebarTile(
+                      label: _entryLabel(entry),
+                      icon: _entryIcon(entry),
+                      selected: entry == effectiveSelected,
+                      onTap: () {
+                        if (_selected != entry) {
+                          setState(() => _selected = entry);
+                        }
+                      },
+                    ),
+                ],
+              ),
             ),
           ),
         ),
         const SizedBox(width: 16),
-        // Right detail area.
-        Expanded(child: detailContent),
+        // Right detail area: scrolls independently while the sidebar stays put.
+        Expanded(
+          child: SingleChildScrollView(child: detailContent),
+        ),
       ],
     );
   }
