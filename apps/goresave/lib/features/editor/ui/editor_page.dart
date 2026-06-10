@@ -2916,10 +2916,13 @@ class _AllDataPanelState extends State<_AllDataPanel> {
     super.dispose();
   }
 
-  /// Run the search at [offset] for the current query and page size. A new
-  /// query resets to the first page (passed explicitly by the caller).
-  Future<void> _run({required int offset}) async {
-    _activeQuery = _controller.text.trim();
+  /// Run the search at [offset] for the active query and page size. Only an
+  /// explicit new search ([newQuery] true, which also resets to the first page
+  /// via the caller's offset) adopts the field text; pagination, page-size
+  /// changes, and post-save refreshes reuse [_activeQuery] so they cannot query
+  /// uncommitted field text at a stale offset or show mismatched totals.
+  Future<void> _run({required int offset, bool newQuery = false}) async {
+    if (newQuery) _activeQuery = _controller.text.trim();
     final seq = ++_requestSeq;
     setState(() => _searching = true);
     final result = await widget.notifier.searchTypedProperties(
@@ -3003,10 +3006,10 @@ class _AllDataPanelState extends State<_AllDataPanel> {
                     )
                   : IconButton(
                       icon: const Icon(Icons.arrow_forward),
-                      onPressed: () => _run(offset: 0),
+                      onPressed: () => _run(offset: 0, newQuery: true),
                     ),
             ),
-            onSubmitted: (_) => _run(offset: 0),
+            onSubmitted: (_) => _run(offset: 0, newQuery: true),
           ),
           const SizedBox(height: 12),
           _buildPaginationBar(theme),
