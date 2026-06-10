@@ -178,10 +178,16 @@ pub fn parse_path(segments: &[String]) -> Result<Vec<PathSeg>, CoreError> {
         .collect()
 }
 
+/// Render a map key as the `{mapKey}` path segment used by both the typed
+/// search (to build paths) and `resolve` (to match them). The two must stay in
+/// lockstep: any key type search can label must also be resolvable here, or a
+/// nested scalar would surface as editable with a path `setValue` cannot find.
+/// Returns `None` for key types that cannot be addressed as a path segment.
 fn map_key_to_string(key: &PropertyValue) -> Option<String> {
     match key {
         PropertyValue::Str(s) | PropertyValue::Name(s) | PropertyValue::Enum(s) => Some(s.clone()),
         PropertyValue::Int(i) => Some(i.to_string()),
+        PropertyValue::Struct(StructValue::Guid(raw)) => Some(hex_guid(raw)),
         _ => None,
     }
 }
@@ -494,12 +500,9 @@ fn descend_value(
 }
 
 fn map_key_label(key: &PropertyValue) -> String {
-    match key {
-        PropertyValue::Str(s) | PropertyValue::Name(s) | PropertyValue::Enum(s) => s.clone(),
-        PropertyValue::Int(i) => i.to_string(),
-        PropertyValue::Struct(StructValue::Guid(raw)) => hex_guid(raw),
-        _ => "?".to_string(),
-    }
+    // Delegate to the resolver's segment renderer so search-built paths always
+    // round-trip through `resolve`. Unaddressable key types collapse to "?".
+    map_key_to_string(key).unwrap_or_else(|| "?".to_string())
 }
 
 fn hex_guid(raw: &[u8; 16]) -> String {
