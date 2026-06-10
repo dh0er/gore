@@ -514,9 +514,11 @@ class EditorNotifier extends StateNotifier<EditorState> {
       clearWriteMessage: clearWriteMessage,
       clearInspection: switchingSlot,
       clearBackups: switchingSlot,
-      // Stale pending edits from a prior slot must not be written to a
-      // different file. Clear them when switching to a new slot.
-      clearPendingEdits: switchingSlot,
+      // Every inspect produces a fresh inspection that re-seeds the editors,
+      // so pending edits always get discarded — also when re-selecting the
+      // SAME save, where stale registry entries would otherwise no longer
+      // match what the fields show and still be written by the Save button.
+      clearPendingEdits: true,
     );
     try {
       final payload = <String, Object?>{

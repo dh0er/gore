@@ -390,6 +390,28 @@ void main() {
     expect(notifier.state.pendingEdits, isEmpty);
   });
 
+  test('re-inspecting the same save clears pending edits', () async {
+    final core = _RecordingCoreService();
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+    notifier.setPendingEdit(
+      'publicName',
+      const PendingSaveEdit(
+        edits: [
+          {'path': 'public.m_PlayerSaveName', 'value': 'New Name'},
+        ],
+      ),
+    );
+    expect(notifier.state.pendingEdits.isNotEmpty, isTrue);
+
+    // Re-selecting the already-selected save re-seeds every editor from the
+    // fresh inspection; stale registry entries must not survive it.
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+    expect(notifier.state.pendingEdits, isEmpty);
+  });
+
   // ---------------------------------------------------------------------------
   // Regression tests for finding 1: central pending-edit lifecycle
   // ---------------------------------------------------------------------------

@@ -218,43 +218,49 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
 
     if ((_loadFailed || _attributes.isEmpty) && widget.fallback != null) {
       // The fallback editor has its own save affordances. Keep the error text
-      // so the user sees why the typed editors are gone.
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          if (_error != null)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 4),
-              child: Text(
-                _error!,
-                style: TextStyle(color: theme.colorScheme.error),
+      // so the user sees why the typed editors are gone. The caller gives
+      // this widget the full pane height (no outer ListView), so the stacked
+      // fallback must scroll on its own or tall content overflows the tab.
+      return SingleChildScrollView(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (_error != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Text(
+                  _error!,
+                  style: TextStyle(color: theme.colorScheme.error),
+                ),
               ),
-            ),
-          // Same order as the legacy stacked path: attributes first.
-          widget.fallback!,
-          if (widget.transformCard != null) ...[
-            const SizedBox(height: 16),
-            widget.transformCard!,
+            // Same order as the legacy stacked path: attributes first.
+            widget.fallback!,
+            if (widget.transformCard != null) ...[
+              const SizedBox(height: 16),
+              widget.transformCard!,
+            ],
           ],
-        ],
+        ),
       );
     }
 
     if ((_loadFailed || _attributes.isEmpty) && widget.transformCard != null) {
-      // No stats and no fallback — just show transform.
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          if (_error != null)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 4),
-              child: Text(
-                _error!,
-                style: TextStyle(color: theme.colorScheme.error),
+      // No stats and no fallback — just show transform (scrolling, see above).
+      return SingleChildScrollView(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (_error != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Text(
+                  _error!,
+                  style: TextStyle(color: theme.colorScheme.error),
+                ),
               ),
-            ),
-          widget.transformCard!,
-        ],
+            widget.transformCard!,
+          ],
+        ),
       );
     }
 
