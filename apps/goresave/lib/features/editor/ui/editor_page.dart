@@ -224,7 +224,11 @@ class _ProfileHeader extends StatelessWidget {
     final autoCount = profile?.autoSaveSlots.length ?? 0;
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
+      // Match the icon+text TabBar row height (72) in the workspace next
+      // door so the header's bottom edge lines up with the tab bar's.
+      height: 72,
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      alignment: Alignment.centerLeft,
       decoration: BoxDecoration(
         color: scheme.surfaceContainerLowest,
         border: Border(bottom: BorderSide(color: scheme.outlineVariant)),
@@ -243,6 +247,7 @@ class _ProfileHeader extends StatelessWidget {
           const SizedBox(width: 12),
           Expanded(
             child: Column(
+              mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(

@@ -352,6 +352,27 @@ class EditorNotifier extends StateNotifier<EditorState> {
       if (entry.syncPersistentDataList) syncPersistent = true;
     }
 
+    // The same typed property can be edited from two surfaces at once (the
+    // Player tab's hero stats and the All data browser). Batching both would
+    // silently let sorted-key order pick the winner — refuse instead and let
+    // the user resolve the conflict.
+    final seenTypedPaths = <String>{};
+    for (final edit in allEdits) {
+      if (edit['path'] != 'private.typed.setValue') continue;
+      final value = edit['value'];
+      if (value is! Map) continue;
+      final path = (value['path'] as List?)?.join(' › ') ?? '';
+      if (!seenTypedPaths.add(path)) {
+        state = state.copyWith(
+          error:
+              'Conflicting unsaved edits target the same property '
+              '($path) from two tabs. Reset or revert one of them, '
+              'then save again.',
+        );
+        return false;
+      }
+    }
+
     final n = allEdits.length;
     final ok = await _runWrite(
       payload: {
