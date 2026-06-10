@@ -409,7 +409,7 @@ List<HeroAttribute> parseHeroAttributes(List<TypedPropertyHit> hits) {
         setClass = seg.substring(1, seg.length - 1);
       }
     }
-    final prefix = path.sublist(0, path.length - 1).join(' ');
+    final prefix = path.sublist(0, path.length - 1).join(' ');
     final builder = byPrefix.putIfAbsent(
       prefix,
       () => _HeroAttributeBuilder(id: id, setClass: setClass),
@@ -457,7 +457,7 @@ class _HeroAttributeBuilder {
 }
 ```
 
-Note the prefix join uses `' '` as separator so path segments containing `'/'` (the set-class object paths) cannot collide.
+Note the prefix join uses `' '` as separator so path segments containing `'/'` (the set-class object paths) cannot collide.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
@@ -905,7 +905,7 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
     });
   }
 
-  String _pathKey(List<String> path) => path.join(' ');
+  String _pathKey(List<String> path) => path.join(' ');
 
   void _onFieldChanged(List<String>? path, String text) {
     if (path == null) return;
