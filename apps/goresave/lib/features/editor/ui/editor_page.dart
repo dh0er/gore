@@ -2709,8 +2709,9 @@ class _TypedPropertyRowState extends State<_TypedPropertyRow> {
     if (widget.hit.value != oldWidget.hit.value &&
         _controller.text != widget.hit.value) {
       _controller.text = widget.hit.value;
-      // Re-evaluate pending after the canonical value changed (e.g. after save).
-      _updatePending(_controller.text);
+      // No registry mutation here: provider writes are illegal during the
+      // build phase, and every flow that changes the canonical value
+      // (save/restore/refresh) already cleared pending centrally.
     }
   }
 
