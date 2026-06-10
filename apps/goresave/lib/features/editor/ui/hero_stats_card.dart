@@ -28,9 +28,12 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
   List<HeroAttribute> _attributes = const [];
   String? _error;
   bool _loading = false;
+  bool _saving = false;
   // Pending field texts keyed by the typed path (joined). Cleared on reload.
   final Map<String, String> _pending = {};
   bool _advancedExpanded = false;
+  // Epoch counter used to discard results from superseded reload calls.
+  int _reloadEpoch = 0;
 
   static const _groupTitles = {
     HeroAttributeGroup.core: 'Main stats',
@@ -53,12 +56,15 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
   }
 
   Future<void> _reload() async {
+    final epoch = ++_reloadEpoch;
     setState(() {
       _loading = true;
       _pending.clear();
     });
     final result = await widget.load();
-    if (!mounted) return;
+    // Discard results from superseded reload calls (e.g. rapid reloadKey
+    // changes) to avoid applying stale data over a more recent load.
+    if (!mounted || epoch != _reloadEpoch) return;
     setState(() {
       _loading = false;
       _error = result.error;
@@ -82,10 +88,13 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
       ]) {
         if (path == null) continue;
         final text = _pending[_pathKey(path)];
-        if (text == null) continue;
+        // Treat missing or whitespace-only text as "no change".
+        if (text == null || text.trim().isEmpty) continue;
         final value = double.tryParse(text.trim());
         if (value == null) {
-          setState(() => _error = 'Invalid number: "$text"');
+          setState(
+            () => _error = 'Invalid number for ${attribute.id}: "$text"',
+          );
           return;
         }
         if (value == original) continue;
@@ -93,10 +102,17 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
       }
     }
     if (edits.isEmpty) return;
-    setState(() => _error = null);
-    await widget.save(edits);
-    // The save triggers a re-inspect upstream; reloadKey changes and this
-    // card reloads with fresh values.
+    setState(() {
+      _error = null;
+      _saving = true;
+    });
+    try {
+      await widget.save(edits);
+      // The save triggers a re-inspect upstream; reloadKey changes and this
+      // card reloads with fresh values.
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
   }
 
   @override
@@ -123,7 +139,7 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
                   child: IconButton.filledTonal(
                     icon: const Icon(Icons.save_outlined),
                     onPressed:
-                        widget.editable && !_loading ? _save : null,
+                        widget.editable && !_loading && !_saving ? _save : null,
                   ),
                 ),
               ],
@@ -171,6 +187,10 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
             ),
             initiallyExpanded: _advancedExpanded,
             onExpansionChanged: (open) => _advancedExpanded = open,
+            // Keep collapsed rows alive so their text controllers stay in sync
+            // with _pending; without this, collapsing and re-expanding would
+            // reset the fields while _pending still held the dirty values.
+            maintainState: true,
             children: [for (final a in attributes) _row(a)],
           ),
         );
@@ -189,11 +209,11 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
     final duplicate =
         _attributes.where((a) => a.id == attribute.id).length > 1;
     return _HeroAttributeRow(
-      // Keyed by save identity and full path so a different save (or set)
-      // never reuses stale field state.
-      key: ValueKey(
-        '${widget.reloadKey}-${attribute.setClass}-${attribute.id}',
-      ),
+      // Record key compares reloadKey by its own equality (identity for
+      // SaveInspection, which has no == override), not by toString(), so a
+      // fresh SaveInspection instance always causes a new row to be built
+      // rather than reusing stale field state from the previous load.
+      key: ValueKey((widget.reloadKey, attribute.setClass, attribute.id)),
       attribute: attribute,
       duplicate: duplicate,
       editable: widget.editable,
@@ -255,7 +275,6 @@ class _HeroAttributeRowState extends State<_HeroAttributeRow> {
 
   @override
   Widget build(BuildContext context) {
-    final name = widget.attribute.id;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 5),
       child: LayoutBuilder(
@@ -269,7 +288,7 @@ class _HeroAttributeRowState extends State<_HeroAttributeRow> {
               decimal: true,
               signed: true,
             ),
-            decoration: InputDecoration(labelText: '$name base'),
+            decoration: InputDecoration(labelText: '$_label base'),
           );
           final currentField = TextField(
             controller: _currentController,
@@ -280,9 +299,9 @@ class _HeroAttributeRowState extends State<_HeroAttributeRow> {
               decimal: true,
               signed: true,
             ),
-            decoration: InputDecoration(labelText: '$name current'),
+            decoration: InputDecoration(labelText: '$_label current'),
           );
-          final label = Text(
+          final rowLabel = Text(
             _label,
             style: Theme.of(context).textTheme.labelLarge,
           );
@@ -290,7 +309,7 @@ class _HeroAttributeRowState extends State<_HeroAttributeRow> {
             return Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                label,
+                rowLabel,
                 const SizedBox(height: 6),
                 baseField,
                 const SizedBox(height: 6),
@@ -301,7 +320,7 @@ class _HeroAttributeRowState extends State<_HeroAttributeRow> {
           return Row(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              SizedBox(width: 170, child: label),
+              SizedBox(width: 170, child: rowLabel),
               Expanded(child: baseField),
               const SizedBox(width: 8),
               Expanded(child: currentField),
@@ -313,10 +332,17 @@ class _HeroAttributeRowState extends State<_HeroAttributeRow> {
   }
 }
 
-/// Integers render without a decimal point; everything else keeps up to two
+/// Integers render without a decimal point; non-integers keep up to two
 /// decimals (mirrors the attribute formatting used elsewhere in the editor).
+/// An editable field's text becomes the saved value, so never seed it with
+/// a lossy rounding: if the shortened form does not parse back to the same
+/// value (e.g. 0.125 rounds to 0.13), fall back to the full toString().
 String formatHeroValue(double? value) {
   if (value == null) return '';
   if (value == value.roundToDouble()) return value.toInt().toString();
-  return value.toStringAsFixed(2).replaceFirst(RegExp(r'\.?0+$'), '');
+  final rounded =
+      value.toStringAsFixed(2).replaceFirst(RegExp(r'\.?0+$'), '');
+  // An editable field's text becomes the saved value, so never seed it with
+  // a lossy rounding (0.125 must not display — and then save — as 0.13).
+  return double.tryParse(rounded) == value ? rounded : value.toString();
 }

@@ -59,7 +59,7 @@ void main() {
     expect(find.text('Combat skills'), findsOneWidget);
     expect(find.text('Advanced'), findsOneWidget);
     expect(find.text('MaxHealth'), findsOneWidget);
-    // Advanced group is collapsed: its row is not built.
+    // Advanced group is collapsed: its row is not visible.
     expect(find.text('Swampweed'), findsNothing);
 
     // Edit MaxHealth base value, then save.
@@ -119,5 +119,191 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.textContaining('decode failed'), findsOneWidget);
+  });
+
+  testWidgets('reloadKey change refreshes row values', (tester) async {
+    var loadValue = 64.0;
+    var reloadKey = Object();
+
+    Widget buildCard() => MaterialApp(
+          home: Scaffold(
+            body: SingleChildScrollView(
+              child: HeroStatsCard(
+                load: () async => HeroAttributesResult(
+                  attributes: [
+                    _attribute(
+                      'MaxHealth',
+                      '/Script/G1R.AttributeSet_Health',
+                      loadValue,
+                    ),
+                  ],
+                ),
+                save: (_) async => true,
+                editable: true,
+                reloadKey: reloadKey,
+              ),
+            ),
+          ),
+        );
+
+    await tester.pumpWidget(buildCard());
+    await tester.pumpAndSettle();
+
+    // First load: both base and current fields show '64'.
+    expect(
+      find.descendant(
+        of: find.byType(TextField),
+        matching: find.text('64'),
+      ),
+      findsWidgets,
+    );
+
+    // Change reloadKey and load value — simulates a fresh SaveInspection.
+    loadValue = 70.0;
+    reloadKey = Object();
+    await tester.pumpWidget(buildCard());
+    await tester.pumpAndSettle();
+
+    // Fields now show '70'; no stale '64' remains.
+    expect(
+      find.descendant(
+        of: find.byType(TextField),
+        matching: find.text('70'),
+      ),
+      findsWidgets,
+    );
+    expect(
+      find.descendant(
+        of: find.byType(TextField),
+        matching: find.text('64'),
+      ),
+      findsNothing,
+    );
+  });
+
+  testWidgets('collapsed advanced edits are still saved consistently',
+      (tester) async {
+    final saved = <List<TypedValueEdit>>[];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: HeroStatsCard(
+              load: () async => HeroAttributesResult(
+                attributes: [
+                  _attribute(
+                    'Swampweed',
+                    '/Script/G1R.AttributeSet_Drugs',
+                    0,
+                  ),
+                ],
+              ),
+              save: (edits) async {
+                saved.add(edits);
+                return true;
+              },
+              editable: true,
+              reloadKey: 'save-1',
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // Expand Advanced tile and enter a value.
+    await tester.tap(find.text('Advanced'));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Swampweed base'),
+      '99',
+    );
+    await tester.pump();
+
+    // Collapse the tile, then re-expand; maintainState keeps the text.
+    await tester.tap(find.text('Advanced'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Advanced'));
+    await tester.pumpAndSettle();
+
+    expect(
+      tester
+          .widget<TextField>(find.widgetWithText(TextField, 'Swampweed base'))
+          .controller!
+          .text,
+      '99',
+    );
+
+    // Save and assert the single edit has value 99.
+    await tester.tap(find.byTooltip('Save hero stats'));
+    await tester.pumpAndSettle();
+
+    expect(saved, hasLength(1));
+    expect(saved.single, hasLength(1));
+    expect(saved.single.single.value, 99);
+  });
+
+  testWidgets('reverting an edit to the original value saves nothing',
+      (tester) async {
+    var saveCalled = false;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: HeroStatsCard(
+              load: () async => HeroAttributesResult(
+                attributes: [
+                  _attribute(
+                    'MaxHealth',
+                    '/Script/G1R.AttributeSet_Health',
+                    64,
+                  ),
+                ],
+              ),
+              save: (_) async {
+                saveCalled = true;
+                return true;
+              },
+              editable: true,
+              reloadKey: 'save-1',
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // Change the field, then revert it back to the original value.
+    final field = find.widgetWithText(TextField, 'MaxHealth base');
+    await tester.enterText(field, '99');
+    await tester.pump();
+    await tester.enterText(field, '64');
+    await tester.pump();
+
+    await tester.tap(find.byTooltip('Save hero stats'));
+    await tester.pumpAndSettle();
+
+    expect(saveCalled, isFalse);
+  });
+
+  group('formatHeroValue', () {
+    test('integer value renders without decimal point', () {
+      expect(formatHeroValue(64), '64');
+    });
+
+    test('negative half renders as -0.5', () {
+      expect(formatHeroValue(-0.5), '-0.5');
+    });
+
+    test('0.125 is round-trip safe (not rounded to 0.13)', () {
+      expect(formatHeroValue(0.125), '0.125');
+    });
+
+    test('null renders as empty string', () {
+      expect(formatHeroValue(null), '');
+    });
   });
 }
