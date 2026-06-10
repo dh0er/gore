@@ -174,7 +174,7 @@ pub struct InstancedStruct {
 ///
 /// String form (used by the `private.typed.setValue` edit):
 /// - `name`      — property by name in the current property list
-/// - `{key}`     — map entry by stringified key (Str/Name/Enum keys)
+/// - `{key}`     — map entry by stringified key (Str/Name/Enum/Object keys)
 /// - `[3]`       — array/set element or instanced-object index
 ///
 /// Struct property lists and InstancedStruct wrappers are descended through
@@ -213,7 +213,10 @@ pub fn parse_path(segments: &[String]) -> Result<Vec<PathSeg>, CoreError> {
 /// Returns `None` for key types that cannot be addressed as a path segment.
 fn map_key_to_string(key: &PropertyValue) -> Option<String> {
     match key {
-        PropertyValue::Str(s) | PropertyValue::Name(s) | PropertyValue::Enum(s) => Some(s.clone()),
+        PropertyValue::Str(s)
+        | PropertyValue::Name(s)
+        | PropertyValue::Enum(s)
+        | PropertyValue::Object(s) => Some(s.clone()),
         PropertyValue::Int(i) => Some(i.to_string()),
         PropertyValue::Struct(StructValue::Guid(raw)) => Some(hex_guid(raw)),
         _ => None,
@@ -1787,6 +1790,67 @@ mod tests {
         props.extend_from_slice(&header(map_body.len() as u32, TAG_FLAG_NATIVE_SERIALIZE));
         props.extend_from_slice(&map_body);
         root("/Script/Test.Save", &props)
+    }
+
+    fn float_property(name: &str, value: f32) -> Vec<u8> {
+        let mut out = tag(name, "FloatProperty");
+        out.extend_from_slice(&header(4, 0));
+        out.extend_from_slice(&value.to_le_bytes());
+        out
+    }
+
+    fn map_of_object_keyed_instanced_payload() -> Vec<u8> {
+        let nested = {
+            let mut n = float_property("BaseValue", 64.0);
+            n.extend_from_slice(&fstring("None"));
+            n
+        };
+        let mut instanced = fstring("/Script/G1R.GameplayAttributeData");
+        instanced.extend_from_slice(&(nested.len() as u32).to_le_bytes());
+        instanced.extend_from_slice(&nested);
+
+        let mut map_body = 0u32.to_le_bytes().to_vec(); // num_to_remove
+        map_body.extend_from_slice(&1u32.to_le_bytes()); // count
+        map_body.extend_from_slice(&fstring("/Script/G1R.AttributeSet_Health")); // ObjectProperty key
+        map_body.extend_from_slice(&instanced); // value: InstancedStruct inline
+
+        let mut props = tag("AttributeSetsByClass", "MapProperty");
+        props.extend_from_slice(&2u32.to_le_bytes());
+        props.extend_from_slice(&fstring("ObjectProperty"));
+        props.extend_from_slice(&0u32.to_le_bytes()); // key_flags
+        props.extend_from_slice(&fstring("StructProperty"));
+        props.extend_from_slice(&1u32.to_le_bytes());
+        props.extend_from_slice(&fstring("InstancedStruct"));
+        props.extend_from_slice(&1u32.to_le_bytes());
+        props.extend_from_slice(&fstring("/Script/StructUtils"));
+        props.extend_from_slice(&header(map_body.len() as u32, TAG_FLAG_NATIVE_SERIALIZE));
+        props.extend_from_slice(&map_body);
+        root("/Script/Test.Save", &props)
+    }
+
+    #[test]
+    fn search_addresses_object_map_keys() {
+        let payload = map_of_object_keyed_instanced_payload();
+        let root = parse_private_root(&payload).unwrap();
+        let (hits, total) = search_properties(&root, "basevalue", 0, 100);
+        assert_eq!(total, 1);
+        let hit = &hits[0];
+        assert_eq!(
+            hit.path,
+            vec![
+                "AttributeSetsByClass",
+                "{/Script/G1R.AttributeSet_Health}",
+                "BaseValue"
+            ]
+        );
+        assert_eq!(hit.type_name, "FloatProperty");
+        assert!(hit.editable);
+        // The search-built path must round-trip through resolve().
+        let segs = parse_path(&hit.path).unwrap();
+        assert_eq!(
+            resolve(&root.properties, &segs).unwrap().value,
+            PropertyValue::Float(64.0)
+        );
     }
 
     #[test]
