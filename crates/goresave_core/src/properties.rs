@@ -479,7 +479,11 @@ fn descend_value(
                 display: display.clone(),
                 type_name: container_value_type(value).to_string(),
                 value_display,
-                editable: scalar_editable(value),
+                // This hit's path ends on a `{mapKey}` or `[index]` segment.
+                // `setValue` only resolves to tagged Property nodes and rejects
+                // paths ending on a container element, so such scalars are not
+                // editable even though they are fixed-size.
+                editable: false,
             });
         }
     } else {

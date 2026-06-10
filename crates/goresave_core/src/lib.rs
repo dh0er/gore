@@ -1708,7 +1708,7 @@ fn inspect_bytes_with_codec_backend(
                     .unwrap_or(0) as usize;
             let stream = parse_compressed_stream(data, stream_offset)?;
             value["private"] =
-                inspect_private_payload(data, &stream, codec_backend, private_chunk_limit)?;
+                inspect_private_payload(data, path, &stream, codec_backend, private_chunk_limit)?;
         }
         if let Some(metadata) = path.and_then(persistent_slot_metadata_for_save) {
             value["persistent"] =
@@ -2091,6 +2091,7 @@ fn extract_script_paths(data: &[u8]) -> Vec<String> {
 
 fn inspect_private_payload(
     data: &[u8],
+    path: Option<&Path>,
     stream: &CompressedStream,
     codec_backend: Option<&dyn codec_backend::CodecBackend>,
     private_chunk_limit: Option<usize>,
@@ -2100,6 +2101,16 @@ fn inspect_private_payload(
     };
     match decompress_private_payload_with_limit(data, stream, backend, private_chunk_limit) {
         Ok((payload, decoded_chunk_count)) => {
+            let preview = decoded_chunk_count < stream.chunk_count;
+            // A full (non-preview) decode here is identical to what the typed
+            // property browser would re-decode on its first search. Seed the
+            // shared cache so the common inspect-then-browse path pays the
+            // ~20s decode only once per save.
+            if !preview {
+                if let Some(p) = path {
+                    store_decoded_payload_cache(p, sha1_hex(data), payload.clone());
+                }
+            }
             let refs = scan_fstrings(&payload, 0);
             let strings = refs
                 .iter()
@@ -2110,7 +2121,6 @@ fn inspect_private_payload(
             let player = summarize_private_player_payload(&payload, &refs);
             let inventory = summarize_private_inventory_payload(&payload, &refs);
             let progression = summarize_private_progression_payload(&refs);
-            let preview = decoded_chunk_count < stream.chunk_count;
             let typed_parse = summarize_typed_parse(&payload, preview);
             let mut writable = vec!["private.replaceFString"];
             if typed_parse["status"] == "ok" {
@@ -2337,13 +2347,18 @@ fn decoded_private_payload_cached(
         }
     }
     let payload = decompress_private_payload(data, stream, backend)?;
+    store_decoded_payload_cache(path, save_sha1, payload.clone());
+    Ok(payload)
+}
+
+/// Store a freshly decoded full private payload as the single cache entry.
+fn store_decoded_payload_cache(path: &Path, save_sha1: String, payload: Vec<u8>) {
     let mut guard = DECODED_PAYLOAD_CACHE.lock().unwrap_or_else(|e| e.into_inner());
     *guard = Some(DecodedPayloadEntry {
         path: path.to_path_buf(),
         save_sha1,
-        payload: payload.clone(),
+        payload,
     });
-    Ok(payload)
 }
 
 /// Drop the cached decoded payload for `path` (called after a write changes it).

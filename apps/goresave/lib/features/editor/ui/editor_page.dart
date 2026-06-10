@@ -500,7 +500,11 @@ class _EditorWorkspace extends StatelessWidget {
                   _AllDataPanel(
                     inspection: inspection,
                     notifier: notifier,
-                    editable: state.codecCompressReady,
+                    // Typed writes recompress the private payload, so require a
+                    // full private decode (not a preview) plus a compress-ready
+                    // codec, matching the Player and Inventory gating.
+                    editable:
+                        inspection.privateEditable && state.codecCompressReady,
                   ),
                   _AdvancedPanel(inspection: inspection),
                   _BackupsPanel(state: state, notifier: notifier),
@@ -2884,6 +2888,29 @@ class _AllDataPanelState extends State<_AllDataPanel> {
   }
 
   @override
+  void didUpdateWidget(covariant _AllDataPanel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // A different save was selected while this tab stayed mounted. The cached
+    // results belong to the old file; drop them (otherwise they show stale rows
+    // while writes target the newly selected save) and re-list from page one.
+    if (widget.inspection.path != oldWidget.inspection.path) {
+      _controller.clear();
+      _activeQuery = '';
+      // Invalidate any in-flight search for the previous save.
+      _requestSeq++;
+      setState(() {
+        _result = null;
+        _searching = false;
+      });
+      if (widget.inspection.privateDecoded) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _run(offset: 0);
+        });
+      }
+    }
+  }
+
+  @override
   void dispose() {
     _controller.dispose();
     super.dispose();
@@ -3148,11 +3175,13 @@ class _TypedPropertyRowState extends State<_TypedPropertyRow> {
   }
 
   Future<void> _save(Object value) async {
-    await widget.notifier.writeTypedValue(
+    final ok = await widget.notifier.writeTypedValue(
       propertyPath: widget.hit.path,
       value: value,
     );
-    widget.onSaved();
+    // Only refresh the list when the core accepted the write; a rejected write
+    // surfaces an error in state and must not look like a successful save.
+    if (ok) widget.onSaved();
   }
 
   @override

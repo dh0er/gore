@@ -202,10 +202,13 @@ class EditorNotifier extends StateNotifier<EditorState> {
   }
 
   /// Run a `write_save` request as a tracked load, then rescan on success.
-  Future<void> _runWrite({
+  /// Returns true only when the core accepted the write; a rejected write sets
+  /// `state.error` and returns false so callers can skip success-only follow-ups.
+  Future<bool> _runWrite({
     required Map<String, Object?> payload,
     required String Function(Map<String, Object?> data) message,
   }) async {
+    var ok = false;
     await _withLoading(() async {
       final response = await _execute('write_save', payload: payload);
       if (response['ok'] != true) {
@@ -215,7 +218,9 @@ class EditorNotifier extends StateNotifier<EditorState> {
       final data = (response['data'] as Map).cast<String, Object?>();
       state = state.copyWith(lastWriteMessage: message(data));
       await refresh();
+      ok = true;
     });
+    return ok;
   }
 
   /// Serializes all core calls. The native layer runs each command in its own
@@ -494,6 +499,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
         state = state.copyWith(
           codecError: _errorMessage(response),
           clearCodecStatus: true,
+          codecVerified: false,
         );
         return;
       }
@@ -519,6 +525,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
       state = state.copyWith(
         codecError: 'Codec check failed: $error',
         clearCodecStatus: true,
+        codecVerified: false,
       );
     }
   }
@@ -768,13 +775,13 @@ class EditorNotifier extends StateNotifier<EditorState> {
   ///
   /// Path segments: property name, `{mapKey}` for map entries, `[i]` for
   /// container/object-array indices.
-  Future<void> writeTypedValue({
+  Future<bool> writeTypedValue({
     required List<String> propertyPath,
     required Object value,
   }) async {
     final savePath = state.selectedPath;
-    if (savePath == null) return;
-    await _runWrite(
+    if (savePath == null) return false;
+    return _runWrite(
       payload: {
         'path': savePath,
         'backup': true,
