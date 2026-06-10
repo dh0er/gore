@@ -2397,7 +2397,11 @@ class _PrivatePlayerAttributeRowState
 String _formatAttributeValue(double? value) {
   if (value == null) return '';
   if (value == value.roundToDouble()) return value.toInt().toString();
-  return value.toStringAsFixed(2).replaceFirst(RegExp(r'\.?0+$'), '');
+  final rounded = value.toStringAsFixed(2).replaceFirst(RegExp(r'\.?0+$'), '');
+  // These texts seed editable fields whose parsed value gets written back —
+  // a lossy rounding (0.125 → 0.13) would silently corrupt untouched axes
+  // the moment any sibling field changes. Round-trip or full precision.
+  return double.tryParse(rounded) == value ? rounded : value.toString();
 }
 
 class _SummaryMetric extends StatelessWidget {
