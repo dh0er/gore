@@ -579,6 +579,78 @@ void main() {
     );
   });
 
+  testWidgets('cleared field blocks save with an explicit error',
+      (tester) async {
+    var saveCalled = false;
+
+    await tester.pumpWidget(
+      _wrap(
+        HeroStatsCard(
+          load: () async => HeroAttributesResult(
+            attributes: [
+              _attribute('MaxHealth', '/Script/G1R.AttributeSet_Health', 64),
+            ],
+          ),
+          save: (_) async {
+            saveCalled = true;
+            return true;
+          },
+          editable: true,
+          reloadKey: 'save-1',
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.enterText(
+      find.widgetWithText(TextField, 'MaxHealth base'),
+      '',
+    );
+    await tester.pump();
+    await tester.tap(find.byTooltip('Save hero stats'));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('MaxHealth is empty'), findsOneWidget);
+    expect(saveCalled, isFalse);
+  });
+
+  testWidgets('rejected save keeps pending edits and shows an inline error',
+      (tester) async {
+    await tester.pumpWidget(
+      _wrap(
+        HeroStatsCard(
+          load: () async => HeroAttributesResult(
+            attributes: [
+              _attribute('MaxHealth', '/Script/G1R.AttributeSet_Health', 64),
+            ],
+          ),
+          save: (_) async => false,
+          editable: true,
+          reloadKey: 'save-1',
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.enterText(
+      find.widgetWithText(TextField, 'MaxHealth base'),
+      '99',
+    );
+    await tester.pump();
+    await tester.tap(find.byTooltip('Save hero stats'));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Save failed'), findsOneWidget);
+    // The unsaved edit stays in the field (no reload happened upstream).
+    expect(
+      tester
+          .widget<TextField>(find.widgetWithText(TextField, 'MaxHealth base'))
+          .controller!
+          .text,
+      '99',
+    );
+  });
+
   testWidgets('sidebar selection survives a reloadKey change', (tester) async {
     var reloadKey = Object();
 

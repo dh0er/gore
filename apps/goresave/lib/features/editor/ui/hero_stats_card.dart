@@ -169,8 +169,18 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
       ]) {
         if (path == null) continue;
         final text = _pending[_pathKey(path)];
-        // Treat missing or whitespace-only text as "no change".
-        if (text == null || text.trim().isEmpty) continue;
+        // Untouched fields have no pending entry and are no-ops.
+        if (text == null) continue;
+        // A cleared field is almost certainly an accident: silently
+        // skipping it reads as a failed edit, so demand an explicit value.
+        if (text.trim().isEmpty) {
+          setState(
+            () => _error =
+                '${attribute.id} is empty — enter a value or restore the '
+                'original before saving.',
+          );
+          return;
+        }
         final value = double.tryParse(text.trim());
         if (value == null) {
           setState(
@@ -193,9 +203,16 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
       _saving = true;
     });
     try {
-      await widget.save(edits);
-      // The save triggers a re-inspect upstream; reloadKey changes and this
-      // card reloads with fresh values.
+      // On success the save triggers a re-inspect upstream; reloadKey
+      // changes and this card reloads with fresh values. On rejection the
+      // notifier raises its global error banner, but this card must not
+      // look idle either — keep the pending edits and say so inline.
+      final ok = await widget.save(edits);
+      if (!ok && mounted) {
+        setState(
+          () => _error = 'Save failed — the edits above were not written.',
+        );
+      }
     } finally {
       if (mounted) setState(() => _saving = false);
     }
