@@ -376,6 +376,84 @@ void main() {
     },
   );
 
+  test('verifyCodec unlocks compress edits for an unverified build', () async {
+    final core = _RecordingCoreService(codecCanCompress: false);
+    final notifier = EditorNotifier(
+      core,
+      saveDir: r'C:\Users\Daniel\AppData\Local\G1R\Saved\SaveGames',
+      codecHostPath: r'C:\Program Files\goresave\goresave_g1r_codec_host.exe',
+      gameExePath:
+          r'C:\Program Files (x86)\Steam\steamapps\common\Gothic 1 Remake\G1R\Binaries\Win64\G1R-Win64-Shipping.exe',
+    );
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+    await Future<void>.delayed(Duration.zero);
+
+    // Codec decodes but is not auto-trusted for compression yet.
+    expect(notifier.state.codecCompressReady, isFalse);
+    expect(notifier.state.codecNeedsVerification, isTrue);
+
+    await notifier.verifyCodec();
+
+    final verify = core.requests.lastWhere(
+      (request) => request.command == 'validate_codec_roundtrip',
+    );
+    expect(verify.payload['path'], r'C:\tmp\saves\G1R-001.sav');
+    expect(verify.payload['binaryHost'], isNotNull);
+    expect(notifier.state.codecVerified, isTrue);
+    expect(notifier.state.codecCompressReady, isTrue);
+    expect(notifier.state.codecNeedsVerification, isFalse);
+  });
+
+  test('verifyCodec surfaces failure and keeps edits locked', () async {
+    final core = _FailingVerifyCoreService();
+    final notifier = EditorNotifier(
+      core,
+      saveDir: r'C:\Users\Daniel\AppData\Local\G1R\Saved\SaveGames',
+      codecHostPath: r'C:\Program Files\goresave\goresave_g1r_codec_host.exe',
+      gameExePath:
+          r'C:\Program Files (x86)\Steam\steamapps\common\Gothic 1 Remake\G1R\Binaries\Win64\G1R-Win64-Shipping.exe',
+    );
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+    await Future<void>.delayed(Duration.zero);
+
+    await notifier.verifyCodec();
+
+    expect(notifier.state.codecVerified, isFalse);
+    expect(notifier.state.codecCompressReady, isFalse);
+    expect(notifier.state.codecError, contains('roundtrip'));
+  });
+
+  test('writeTypedValue sends host-backed typed setValue edit', () async {
+    final core = _RecordingCoreService();
+    final notifier = EditorNotifier(
+      core,
+      saveDir: r'C:\Users\Daniel\AppData\Local\G1R\Saved\SaveGames',
+      codecHostPath: r'C:\Program Files\goresave\goresave_g1r_codec_host.exe',
+      gameExePath:
+          r'C:\Program Files (x86)\Steam\steamapps\common\Gothic 1 Remake\G1R\Binaries\Win64\G1R-Win64-Shipping.exe',
+    );
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+    await notifier.writeTypedValue(
+      propertyPath: ['m_GenericData', '{GameTime}', 'CurrentTime', 'm_Day'],
+      value: 4,
+    );
+
+    final write = core.requests.lastWhere(
+      (request) => request.command == 'write_save',
+    );
+    expect(write.payload['edits'], [
+      {
+        'path': 'private.typed.setValue',
+        'value': {
+          'path': ['m_GenericData', '{GameTime}', 'CurrentTime', 'm_Day'],
+          'value': 4,
+        },
+      },
+    ]);
+    expect(write.payload['backup'], isTrue);
+  });
+
   test(
     'writeInventoryItemCount sends host-backed private inventory edit',
     () async {
@@ -526,10 +604,11 @@ class _RecordedRequest {
 }
 
 class _RecordingCoreService implements GoresaveCoreService {
-  _RecordingCoreService({Map<String, Object?>? scanData})
+  _RecordingCoreService({Map<String, Object?>? scanData, this.codecCanCompress = true})
     : scanData = scanData ?? {'saves': <Object?>[]};
 
   final Map<String, Object?> scanData;
+  final bool codecCanCompress;
   final requests = <_RecordedRequest>[];
 
   @override
@@ -661,8 +740,10 @@ class _RecordingCoreService implements GoresaveCoreService {
             'selectedBackend': 'g1r_binary_host',
             'available': true,
             'canDecompress': true,
-            'canCompress': true,
-            'status': 'codec_host_ready',
+            'canCompress': codecCanCompress,
+            'status': codecCanCompress
+                ? 'codec_host_ready'
+                : 'codec_host_supported_needs_runtime_selftest',
             'adapter': 'g1r_binary_host',
             'message': 'G1R codec host is configured.',
           },
@@ -673,5 +754,28 @@ class _RecordingCoreService implements GoresaveCoreService {
           'error': {'message': 'Unhandled command $command'},
         };
     }
+  }
+}
+
+/// Codec decodes but the verification round-trip fails (e.g. a mis-resolved
+/// encoder on an unknown build).
+class _FailingVerifyCoreService extends _RecordingCoreService {
+  _FailingVerifyCoreService() : super(codecCanCompress: false);
+
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    if (command == 'validate_codec_roundtrip') {
+      requests.add(_RecordedRequest(command, Map<String, Object?>.from(payload)));
+      return {
+        'ok': false,
+        'error': {
+          'message': 'codec roundtrip output did not match decoded chunk',
+        },
+      };
+    }
+    return super.execute(command, payload: payload);
   }
 }

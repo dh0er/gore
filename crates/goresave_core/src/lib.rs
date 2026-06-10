@@ -1,5 +1,6 @@
 pub mod codec_backend;
 mod kraken;
+pub mod properties;
 
 use base64::{Engine as _, engine::general_purpose};
 use serde::{Deserialize, Serialize};
@@ -10,6 +11,7 @@ use std::ffi::{CStr, CString, c_char};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::ptr;
+use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
@@ -211,14 +213,14 @@ struct FStringRef {
     utf16: bool,
 }
 
-struct Reader<'a> {
+pub(crate) struct Reader<'a> {
     data: &'a [u8],
     pos: usize,
     base_offset: usize,
 }
 
 impl<'a> Reader<'a> {
-    fn new(data: &'a [u8], base_offset: usize) -> Self {
+    pub(crate) fn new(data: &'a [u8], base_offset: usize) -> Self {
         Self {
             data,
             pos: 0,
@@ -226,15 +228,15 @@ impl<'a> Reader<'a> {
         }
     }
 
-    fn abs_pos(&self) -> usize {
+    pub(crate) fn abs_pos(&self) -> usize {
         self.base_offset + self.pos
     }
 
-    fn remaining(&self) -> usize {
+    pub(crate) fn remaining(&self) -> usize {
         self.data.len().saturating_sub(self.pos)
     }
 
-    fn read(&mut self, n: usize) -> Result<&'a [u8], CoreError> {
+    pub(crate) fn read(&mut self, n: usize) -> Result<&'a [u8], CoreError> {
         if self.pos + n > self.data.len() {
             return Err(CoreError::Parse(format!(
                 "read out of bounds at 0x{:x}: need {}, remaining {}",
@@ -248,29 +250,47 @@ impl<'a> Reader<'a> {
         Ok(out)
     }
 
-    fn u8(&mut self) -> Result<u8, CoreError> {
+    pub(crate) fn u8(&mut self) -> Result<u8, CoreError> {
         Ok(self.read(1)?[0])
     }
 
-    fn u32(&mut self) -> Result<u32, CoreError> {
+    pub(crate) fn u32(&mut self) -> Result<u32, CoreError> {
         let mut b = [0u8; 4];
         b.copy_from_slice(self.read(4)?);
         Ok(u32::from_le_bytes(b))
     }
 
-    fn i32(&mut self) -> Result<i32, CoreError> {
+    pub(crate) fn i32(&mut self) -> Result<i32, CoreError> {
         let mut b = [0u8; 4];
         b.copy_from_slice(self.read(4)?);
         Ok(i32::from_le_bytes(b))
     }
 
-    fn u64(&mut self) -> Result<u64, CoreError> {
+    pub(crate) fn u64(&mut self) -> Result<u64, CoreError> {
         let mut b = [0u8; 8];
         b.copy_from_slice(self.read(8)?);
         Ok(u64::from_le_bytes(b))
     }
 
-    fn fstring(&mut self) -> Result<String, CoreError> {
+    pub(crate) fn i64(&mut self) -> Result<i64, CoreError> {
+        let mut b = [0u8; 8];
+        b.copy_from_slice(self.read(8)?);
+        Ok(i64::from_le_bytes(b))
+    }
+
+    pub(crate) fn f32(&mut self) -> Result<f32, CoreError> {
+        let mut b = [0u8; 4];
+        b.copy_from_slice(self.read(4)?);
+        Ok(f32::from_le_bytes(b))
+    }
+
+    pub(crate) fn f64(&mut self) -> Result<f64, CoreError> {
+        let mut b = [0u8; 8];
+        b.copy_from_slice(self.read(8)?);
+        Ok(f64::from_le_bytes(b))
+    }
+
+    pub(crate) fn fstring(&mut self) -> Result<String, CoreError> {
         let n = self.i32()?;
         if n == 0 {
             return Ok(String::new());
@@ -377,6 +397,17 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
             )?)
         }
         "check_codec" => check_codec(&payload),
+        "search_typed_properties" => {
+            let path = required_path(&payload)?;
+            let codec_backend = payload
+                .get("binaryHost")
+                .map(binary_host_backend_from_config)
+                .transpose()?;
+            let codec_backend = codec_backend
+                .as_ref()
+                .map(|backend| backend as &dyn codec_backend::CodecBackend);
+            search_typed_properties(&path, &payload, codec_backend)
+        }
         "validate_roundtrip" => {
             let path = required_path(&payload)?;
             Ok(validate_roundtrip(&path)?)
@@ -1677,7 +1708,7 @@ fn inspect_bytes_with_codec_backend(
                     .unwrap_or(0) as usize;
             let stream = parse_compressed_stream(data, stream_offset)?;
             value["private"] =
-                inspect_private_payload(data, &stream, codec_backend, private_chunk_limit)?;
+                inspect_private_payload(data, path, &stream, codec_backend, private_chunk_limit)?;
         }
         if let Some(metadata) = path.and_then(persistent_slot_metadata_for_save) {
             value["persistent"] =
@@ -2060,6 +2091,7 @@ fn extract_script_paths(data: &[u8]) -> Vec<String> {
 
 fn inspect_private_payload(
     data: &[u8],
+    path: Option<&Path>,
     stream: &CompressedStream,
     codec_backend: Option<&dyn codec_backend::CodecBackend>,
     private_chunk_limit: Option<usize>,
@@ -2069,6 +2101,16 @@ fn inspect_private_payload(
     };
     match decompress_private_payload_with_limit(data, stream, backend, private_chunk_limit) {
         Ok((payload, decoded_chunk_count)) => {
+            let preview = decoded_chunk_count < stream.chunk_count;
+            // A full (non-preview) decode here is identical to what the typed
+            // property browser would re-decode on its first search. Seed the
+            // shared cache so the common inspect-then-browse path pays the
+            // ~20s decode only once per save.
+            if !preview {
+                if let Some(p) = path {
+                    store_decoded_payload_cache(p, sha1_hex(data), payload.clone());
+                }
+            }
             let refs = scan_fstrings(&payload, 0);
             let strings = refs
                 .iter()
@@ -2079,7 +2121,11 @@ fn inspect_private_payload(
             let player = summarize_private_player_payload(&payload, &refs);
             let inventory = summarize_private_inventory_payload(&payload, &refs);
             let progression = summarize_private_progression_payload(&refs);
-            let preview = decoded_chunk_count < stream.chunk_count;
+            let typed_parse = summarize_typed_parse(&payload, preview);
+            let mut writable = vec!["private.replaceFString"];
+            if typed_parse["status"] == "ok" {
+                writable.push("private.typed.setValue");
+            }
             Ok(json!({
                 "status": if preview { "decoded_preview" } else { "decoded" },
                 "message": if preview {
@@ -2101,7 +2147,8 @@ fn inspect_private_payload(
                 "player": player,
                 "inventory": inventory,
                 "progression": progression,
-                "writable": ["private.replaceFString"],
+                "typedParse": typed_parse,
+                "writable": writable,
             }))
         }
         Err(err) => Ok(json!({
@@ -2235,6 +2282,152 @@ fn summarize_private_inventory_payload(payload: &[u8], refs: &[FStringRef]) -> V
         "properties": properties,
         "writable": writable,
     })
+}
+
+/// Attempt a strict typed parse of the full decompressed payload and report a
+/// compact status. This is the foundation for typed (layout-verified) private
+/// edits; for now it surfaces whether the proven UE property grammar fully
+/// accounts for this save's bytes. Skipped for previews (truncated payloads
+/// cannot parse to completion).
+fn summarize_typed_parse(payload: &[u8], preview: bool) -> Value {
+    if preview {
+        return json!({
+            "status": "skipped_preview",
+            "message": "Typed parse needs the full decoded payload.",
+        });
+    }
+    match properties::parse_private_root(payload) {
+        Ok(root) => {
+            let counts = properties::count_properties(&root.properties);
+            json!({
+                "status": "ok",
+                "rootClass": root.class,
+                "topLevelProperties": root.properties.len(),
+                "propertyCount": counts.total,
+                "maxDepth": counts.max_depth,
+                "consumed": root.consumed,
+                "payloadSize": payload.len(),
+            })
+        }
+        Err(err) => json!({
+            "status": "failed",
+            "message": err.to_string(),
+        }),
+    }
+}
+
+/// In-memory cache of the most recently decoded private payload. Decoding all
+/// chunks costs ~20s, so the typed property browser must not re-decode on every
+/// search/edit. Holds a single entry (the active save), bounded to one payload
+/// (~77 MB) and keyed by the save file's SHA-1 so an external change misses.
+static DECODED_PAYLOAD_CACHE: Mutex<Option<DecodedPayloadEntry>> = Mutex::new(None);
+
+struct DecodedPayloadEntry {
+    path: PathBuf,
+    save_sha1: String,
+    payload: Vec<u8>,
+}
+
+/// Return the decoded private payload for `path`, using the cache when the save
+/// file is unchanged, otherwise decoding through the codec backend and storing
+/// the result.
+fn decoded_private_payload_cached(
+    path: &Path,
+    data: &[u8],
+    stream: &CompressedStream,
+    backend: &dyn codec_backend::CodecBackend,
+) -> Result<Vec<u8>, CoreError> {
+    let save_sha1 = sha1_hex(data);
+    {
+        let guard = DECODED_PAYLOAD_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(entry) = guard.as_ref() {
+            if entry.path == path && entry.save_sha1 == save_sha1 {
+                return Ok(entry.payload.clone());
+            }
+        }
+    }
+    let payload = decompress_private_payload(data, stream, backend)?;
+    store_decoded_payload_cache(path, save_sha1, payload.clone());
+    Ok(payload)
+}
+
+/// Store a freshly decoded full private payload as the single cache entry.
+fn store_decoded_payload_cache(path: &Path, save_sha1: String, payload: Vec<u8>) {
+    let mut guard = DECODED_PAYLOAD_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    *guard = Some(DecodedPayloadEntry {
+        path: path.to_path_buf(),
+        save_sha1,
+        payload,
+    });
+}
+
+/// Drop the cached decoded payload for `path` (called after a write changes it).
+fn invalidate_decoded_payload_cache(path: &Path) {
+    let mut guard = DECODED_PAYLOAD_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    if guard.as_ref().is_some_and(|entry| entry.path == path) {
+        *guard = None;
+    }
+}
+
+/// Search every typed property in the decoded private payload. Powers the
+/// "all data" property browser: a query filters by display path, results carry
+/// a setValue-addressable path and an editable flag for fixed-size scalars.
+fn search_typed_properties(
+    path: &Path,
+    payload: &Value,
+    backend: Option<&dyn codec_backend::CodecBackend>,
+) -> Result<Value, CoreError> {
+    let backend = backend.ok_or_else(|| {
+        CoreError::Codec(
+            "typed property search requires a configured and verified G1R codec host".to_string(),
+        )
+    })?;
+    let query = payload.get("query").and_then(Value::as_str).unwrap_or("");
+    let limit = payload
+        .get("limit")
+        .and_then(Value::as_u64)
+        .map(|v| v as usize)
+        .unwrap_or(50)
+        .clamp(1, 1000);
+    let offset = payload
+        .get("offset")
+        .and_then(Value::as_u64)
+        .map(|v| v as usize)
+        .unwrap_or(0);
+
+    let data = fs::read(path)?;
+    if !data.starts_with(b"GSAV") {
+        return Err(CoreError::UnsupportedEdit(
+            "typed property search is only available for GSAV files".to_string(),
+        ));
+    }
+    let parts = split_gsav(&data)?;
+    let stream = parse_compressed_stream(&data, 13 + parts.public_payload.len())?;
+    let decoded = decoded_private_payload_cached(path, &data, &stream, backend)?;
+    let root = properties::parse_private_root(&decoded)?;
+    let (hits, total) = properties::search_properties(&root, query, offset, limit);
+
+    let results = hits
+        .into_iter()
+        .map(|hit| {
+            json!({
+                "path": hit.path,
+                "display": hit.display,
+                "type": hit.type_name,
+                "value": hit.value_display,
+                "editable": hit.editable,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    Ok(json!({
+        "query": query,
+        "offset": offset,
+        "limit": limit,
+        "total": total,
+        "count": results.len(),
+        "results": results,
+    }))
 }
 
 fn summarize_private_progression_payload(refs: &[FStringRef]) -> Value {
@@ -2945,6 +3138,10 @@ fn write_save_internal(
         slot_pending.commit();
     }
 
+    // The save bytes changed on disk; drop any cached decoded payload so the
+    // typed property browser re-decodes the edited save on its next search.
+    invalidate_decoded_payload_cache(target);
+
     Ok(json!({
         "path": target,
         "backupPath": backup_path,
@@ -3114,6 +3311,9 @@ fn apply_private_edits(
             "private.inventory.setItemCount" => {
                 parse_private_inventory_item_count_edit(edit).map(PrivateEdit::InventoryItemCount)
             }
+            "private.typed.setValue" => {
+                parse_private_typed_set_value_edit(edit).map(PrivateEdit::TypedSetValue)
+            }
             other => Err(CoreError::UnsupportedEdit(format!(
                 "{other} is not writable in this build"
             ))),
@@ -3190,6 +3390,104 @@ enum PrivateEdit {
     PlayerAttribute(PrivatePlayerAttributeEdit),
     PlayerTransform(PrivatePlayerTransformEdit),
     InventoryItemCount(PrivateInventoryItemCountEdit),
+    TypedSetValue(PrivateTypedSetValueEdit),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct PrivateTypedSetValueEdit {
+    path: Vec<properties::PathSeg>,
+    value: Value,
+}
+
+fn parse_private_typed_set_value_edit(edit: &Edit) -> Result<PrivateTypedSetValueEdit, CoreError> {
+    let value = edit.value.as_object().ok_or_else(|| {
+        CoreError::InvalidRequest("private.typed.setValue value must be an object".to_string())
+    })?;
+    let segments = value
+        .get("path")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            CoreError::InvalidRequest(
+                "private.typed.setValue requires value.path as an array of segments".to_string(),
+            )
+        })?
+        .iter()
+        .map(|segment| {
+            segment.as_str().map(str::to_string).ok_or_else(|| {
+                CoreError::InvalidRequest(
+                    "private.typed.setValue path segments must be strings".to_string(),
+                )
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if segments.is_empty() {
+        return Err(CoreError::InvalidRequest(
+            "private.typed.setValue requires a non-empty value.path".to_string(),
+        ));
+    }
+    let new_value = value.get("value").cloned().ok_or_else(|| {
+        CoreError::InvalidRequest("private.typed.setValue requires value.value".to_string())
+    })?;
+    Ok(PrivateTypedSetValueEdit {
+        path: properties::parse_path(&segments)?,
+        value: new_value,
+    })
+}
+
+fn coerce_typed_scalar(
+    property: &properties::Property,
+    value: &Value,
+) -> Result<properties::ScalarValue, CoreError> {
+    use properties::ScalarValue;
+    let type_name = property.type_name.as_str();
+    let err = |expected: &str| {
+        CoreError::InvalidRequest(format!(
+            "private.typed.setValue: property is {type_name}, value must be {expected}"
+        ))
+    };
+    match type_name {
+        "IntProperty" => value
+            .as_i64()
+            .and_then(|v| i32::try_from(v).ok())
+            .map(ScalarValue::Int)
+            .ok_or_else(|| err("an i32 integer")),
+        "UInt32Property" => value
+            .as_u64()
+            .and_then(|v| u32::try_from(v).ok())
+            .map(ScalarValue::UInt32)
+            .ok_or_else(|| err("a u32 integer")),
+        "Int64Property" => value
+            .as_i64()
+            .map(ScalarValue::Int64)
+            .ok_or_else(|| err("an i64 integer")),
+        "FloatProperty" => value
+            .as_f64()
+            .filter(|v| v.is_finite() && (*v as f32).is_finite())
+            .map(|v| ScalarValue::Float(v as f32))
+            .ok_or_else(|| err("a finite number")),
+        "DoubleProperty" => value
+            .as_f64()
+            .filter(|v| v.is_finite())
+            .map(ScalarValue::Double)
+            .ok_or_else(|| err("a finite number")),
+        "BoolProperty" => value
+            .as_bool()
+            .map(ScalarValue::Bool)
+            .ok_or_else(|| err("a boolean")),
+        other => Err(CoreError::UnsupportedEdit(format!(
+            "private.typed.setValue does not support {other} targets (fixed-size scalars only)"
+        ))),
+    }
+}
+
+fn apply_private_typed_set_value_edit_to_payload(
+    payload: &mut Vec<u8>,
+    edit: &PrivateTypedSetValueEdit,
+) -> Result<(), CoreError> {
+    let root = properties::parse_private_root(payload)?;
+    let target = properties::resolve(&root.properties, &edit.path)?.clone();
+    let scalar = coerce_typed_scalar(&target, &edit.value)?;
+    properties::patch_scalar(payload, &target, scalar)
 }
 
 fn parse_private_fstring_edit(edit: &Edit) -> Result<PrivateFStringEdit, CoreError> {
@@ -3538,6 +3836,9 @@ fn apply_private_edit_to_payload(
         }
         PrivateEdit::InventoryItemCount(edit) => {
             apply_private_inventory_item_count_edit_to_payload(payload, edit)
+        }
+        PrivateEdit::TypedSetValue(edit) => {
+            apply_private_typed_set_value_edit_to_payload(payload, edit)
         }
     }
 }
@@ -4375,6 +4676,33 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
     use tempfile::tempdir;
+
+    #[test]
+    fn summarize_typed_parse_reports_status() {
+        // skipped for previews
+        let skipped = summarize_typed_parse(&[], true);
+        assert_eq!(skipped["status"], "skipped_preview");
+
+        // ok for a valid minimal root object
+        let mut payload = fstring("/Script/Test.Save");
+        payload.push(0); // object flag
+        payload.extend_from_slice(&fstring("m_X"));
+        payload.extend_from_slice(&fstring("IntProperty"));
+        payload.extend_from_slice(&0u32.to_le_bytes()); // array_index
+        payload.extend_from_slice(&4u32.to_le_bytes()); // size
+        payload.push(0); // tag_flags
+        payload.extend_from_slice(&7i32.to_le_bytes());
+        payload.extend_from_slice(&fstring("None"));
+        payload.extend_from_slice(&0u32.to_le_bytes()); // footer
+        let ok = summarize_typed_parse(&payload, false);
+        assert_eq!(ok["status"], "ok");
+        assert_eq!(ok["propertyCount"], 1);
+        assert_eq!(ok["consumed"], payload.len());
+
+        // failed for garbage
+        let bad = summarize_typed_parse(&[1, 2, 3, 4, 5, 6], false);
+        assert_eq!(bad["status"], "failed");
+    }
 
     fn fstring(value: &str) -> Vec<u8> {
         let mut out = Vec::new();
@@ -5967,6 +6295,160 @@ mod tests {
                 }
             ])
         );
+    }
+
+    #[test]
+    fn search_typed_properties_finds_editable_scalars() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-search.sav");
+        let private_payload = {
+            let mut p = fstring("/Script/Angelscript.GothicFinalDataGame");
+            p.push(0);
+            p.extend_from_slice(&int_property("m_SaveVersionNumber", 17));
+            p.extend_from_slice(&int_property("m_MaxQuick", 3));
+            p.extend_from_slice(&fstring("None"));
+            p.extend_from_slice(&0u32.to_le_bytes());
+            p
+        };
+        let seed_compressed = b"seed".to_vec();
+        let stream = compressed_stream_with_one_chunk(&seed_compressed, private_payload.len());
+        fs::write(
+            &path,
+            build_gsav(2, &public_payload("Slot"), &stream, &[0, 0, 0, 0]),
+        )
+        .unwrap();
+        let backend = PrefixCodecBackend {
+            seed_compressed,
+            seed_uncompressed: private_payload,
+        };
+
+        let value = search_typed_properties(
+            &path,
+            &json!({ "query": "MaxQuick" }),
+            Some(&backend),
+        )
+        .unwrap();
+
+        assert_eq!(value["count"], 1);
+        assert_eq!(value["total"], 1);
+        let hit = &value["results"][0];
+        assert_eq!(hit["display"], "m_MaxQuick");
+        assert_eq!(hit["type"], "IntProperty");
+        assert_eq!(hit["value"], "3");
+        assert_eq!(hit["editable"], true);
+        assert_eq!(hit["path"], json!(["m_MaxQuick"]));
+
+        // empty query lists every leaf scalar
+        let all = search_typed_properties(&path, &json!({ "query": "" }), Some(&backend)).unwrap();
+        assert_eq!(all["total"], 2);
+        assert_eq!(all["count"], 2);
+
+        // pagination: page size 1 returns one entry and the full total
+        let page0 = search_typed_properties(
+            &path,
+            &json!({ "query": "", "offset": 0, "limit": 1 }),
+            Some(&backend),
+        )
+        .unwrap();
+        assert_eq!(page0["count"], 1);
+        assert_eq!(page0["total"], 2);
+        let page1 = search_typed_properties(
+            &path,
+            &json!({ "query": "", "offset": 1, "limit": 1 }),
+            Some(&backend),
+        )
+        .unwrap();
+        assert_eq!(page1["count"], 1);
+        assert_ne!(page0["results"][0]["display"], page1["results"][0]["display"]);
+    }
+
+    #[test]
+    fn write_save_applies_typed_set_value_edit() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-001.sav");
+        let output_path = dir.path().join("G1R-001-typed.sav");
+        // Valid typed root: class + flag + {m_SaveVersionNumber:17, m_MaxQuick:3} + None + footer
+        let private_payload = {
+            let mut p = fstring("/Script/Angelscript.GothicFinalDataGame");
+            p.push(0);
+            p.extend_from_slice(&int_property("m_SaveVersionNumber", 17));
+            p.extend_from_slice(&int_property("m_MaxQuick", 3));
+            p.extend_from_slice(&fstring("None"));
+            p.extend_from_slice(&0u32.to_le_bytes());
+            p
+        };
+        let seed_compressed = b"seed-compressed".to_vec();
+        let stream = compressed_stream_with_one_chunk(&seed_compressed, private_payload.len());
+        fs::write(
+            &path,
+            build_gsav(2, &public_payload("Slot A"), &stream, &[0, 0, 0, 0]),
+        )
+        .unwrap();
+        let backend = PrefixCodecBackend {
+            seed_compressed,
+            seed_uncompressed: private_payload,
+        };
+
+        // typed parse must gate the writable entry
+        let inspected = inspect_save_with_codec_backend(&path, true, Some(&backend), None).unwrap();
+        assert_eq!(inspected["private"]["typedParse"]["status"], "ok");
+        assert!(
+            inspected["private"]["writable"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("private.typed.setValue"))
+        );
+
+        let response = write_save_with_codec_backend(
+            &path,
+            &[json!({
+                "path": "private.typed.setValue",
+                "value": { "path": ["m_MaxQuick"], "value": 9 }
+            })],
+            false,
+            Some(&output_path),
+            Some(&backend),
+        )
+        .unwrap();
+        assert_eq!(response["editsApplied"], 1);
+
+        let value =
+            inspect_save_with_codec_backend(&output_path, true, Some(&backend), None).unwrap();
+        assert_eq!(value["private"]["typedParse"]["status"], "ok");
+        // patched payload re-parses and carries the new value
+        let strings = value["private"]["strings"].as_array().unwrap();
+        assert!(strings.iter().any(|s| s == "m_MaxQuick"));
+    }
+
+    #[test]
+    fn typed_set_value_rejects_wrong_type_and_unknown_path() {
+        let mut payload = fstring("/Script/Test.Save");
+        payload.push(0);
+        payload.extend_from_slice(&int_property("m_X", 1));
+        payload.extend_from_slice(&fstring("None"));
+        payload.extend_from_slice(&0u32.to_le_bytes());
+
+        let mut copy = payload.clone();
+        let bad_type = PrivateTypedSetValueEdit {
+            path: properties::parse_path(&["m_X".to_string()]).unwrap(),
+            value: json!(true),
+        };
+        assert!(apply_private_typed_set_value_edit_to_payload(&mut copy, &bad_type).is_err());
+
+        let unknown = PrivateTypedSetValueEdit {
+            path: properties::parse_path(&["m_Y".to_string()]).unwrap(),
+            value: json!(2),
+        };
+        assert!(apply_private_typed_set_value_edit_to_payload(&mut copy, &unknown).is_err());
+        assert_eq!(copy, payload, "failed edits must not mutate the payload");
+
+        let ok = PrivateTypedSetValueEdit {
+            path: properties::parse_path(&["m_X".to_string()]).unwrap(),
+            value: json!(42),
+        };
+        apply_private_typed_set_value_edit_to_payload(&mut copy, &ok).unwrap();
+        let root = properties::parse_private_root(&copy).unwrap();
+        assert_eq!(root.properties[0].value, properties::PropertyValue::Int(42));
     }
 
     #[test]

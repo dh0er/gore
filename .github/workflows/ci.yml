@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.44.0
+          channel: stable
+          cache: true
+
+      # test.py resolves cargo/flutter from PATH (provided above), so no FVM
+      # fallback is needed on CI.
+      - name: Run all tests (rust, tools, analyze, flutter)
+        run: python test.py all

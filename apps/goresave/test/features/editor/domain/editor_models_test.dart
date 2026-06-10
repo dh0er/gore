@@ -141,6 +141,55 @@ void main() {
     expect(inspection.privateStrings, ['Hero', 'ChapterOne']);
   });
 
+  test('SaveInspection reads typed parse status', () {
+    final inspection = SaveInspection.fromJson({
+      'format': 'GSAV',
+      'path': r'C:\saves\G1R-001.sav',
+      'slot': 'G1R-001',
+      'size': 1024,
+      'sha1': 'abc',
+      'private': {
+        'status': 'decoded',
+        'typedParse': {
+          'status': 'ok',
+          'rootClass': '/Script/Angelscript.GothicFinalDataGame',
+          'propertyCount': 889357,
+          'maxDepth': 10,
+          'consumed': 76866251,
+          'payloadSize': 76866251,
+        },
+      },
+    });
+
+    expect(inspection.privateTypedParseStatus, 'ok');
+    expect(inspection.privateTypedVerified, isTrue);
+    expect(inspection.privateTypedPropertyCount, 889357);
+    expect(inspection.privateTypedMaxDepth, 10);
+  });
+
+  test('SaveInspection treats failed or missing typed parse as unverified', () {
+    final failed = SaveInspection.fromJson({
+      'format': 'GSAV',
+      'size': 1,
+      'sha1': 'a',
+      'private': {
+        'status': 'decoded',
+        'typedParse': {'status': 'failed', 'message': 'boom'},
+      },
+    });
+    expect(failed.privateTypedParseStatus, 'failed');
+    expect(failed.privateTypedVerified, isFalse);
+
+    final missing = SaveInspection.fromJson({
+      'format': 'GSAV',
+      'size': 1,
+      'sha1': 'a',
+      'private': {'status': 'decoded'},
+    });
+    expect(missing.privateTypedParseStatus, isNull);
+    expect(missing.privateTypedVerified, isFalse);
+  });
+
   test('SaveInspection reads typed private player summary', () {
     final inspection = SaveInspection.fromJson({
       'format': 'GSAV',

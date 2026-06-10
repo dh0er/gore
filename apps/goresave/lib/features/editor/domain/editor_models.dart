@@ -1,5 +1,75 @@
 import 'dart:convert';
 
+/// One property surfaced by the typed property browser search.
+class TypedPropertyHit {
+  const TypedPropertyHit({
+    required this.path,
+    required this.display,
+    required this.type,
+    required this.value,
+    required this.editable,
+  });
+
+  factory TypedPropertyHit.fromJson(Map<String, Object?> json) {
+    return TypedPropertyHit(
+      path:
+          (json['path'] as List?)?.whereType<String>().toList(growable: false) ??
+          const [],
+      display: json['display'] as String? ?? '',
+      type: json['type'] as String? ?? '',
+      value: json['value'] as String? ?? '',
+      editable: json['editable'] as bool? ?? false,
+    );
+  }
+
+  /// setValue-addressable path segments (name / `{mapKey}` / `[index]`).
+  final List<String> path;
+  final String display;
+  final String type;
+  final String value;
+  final bool editable;
+}
+
+/// Result of a typed property search over the decoded private payload.
+class TypedSearchResult {
+  const TypedSearchResult({
+    this.results = const [],
+    this.offset = 0,
+    this.limit = 50,
+    this.total = 0,
+    this.error,
+  });
+
+  factory TypedSearchResult.fromJson(Map<String, Object?> json) {
+    return TypedSearchResult(
+      results:
+          (json['results'] as List?)
+              ?.whereType<Map>()
+              .map((e) => TypedPropertyHit.fromJson(e.cast<String, Object?>()))
+              .toList(growable: false) ??
+          const [],
+      offset: (json['offset'] as num?)?.toInt() ?? 0,
+      limit: (json['limit'] as num?)?.toInt() ?? 50,
+      total: (json['total'] as num?)?.toInt() ?? 0,
+    );
+  }
+
+  final List<TypedPropertyHit> results;
+  final int offset;
+  final int limit;
+  final int total;
+  final String? error;
+
+  /// Zero-based index of the current page.
+  int get pageIndex => limit == 0 ? 0 : offset ~/ limit;
+
+  /// Total number of pages (at least 1).
+  int get pageCount => total == 0 ? 1 : (total + limit - 1) ~/ limit;
+
+  bool get hasPrevious => offset > 0;
+  bool get hasNext => offset + results.length < total;
+}
+
 class ScreenshotSummary {
   const ScreenshotSummary({
     required this.mimeType,
@@ -200,6 +270,9 @@ class SaveInspection {
     this.privatePlayer = const PrivatePlayerSummary(),
     this.privateInventory = const PrivateInventorySummary(),
     this.privateProgression = const PrivateProgressionSummary(),
+    this.privateTypedParseStatus,
+    this.privateTypedPropertyCount,
+    this.privateTypedMaxDepth,
   });
 
   factory SaveInspection.fromJson(Map<String, Object?> json) {
@@ -213,6 +286,7 @@ class SaveInspection {
     final privateProgression = (private?['progression'] as Map?)
         ?.cast<String, Object?>();
     final privateStatus = private?['status'] as String?;
+    final typedParse = (private?['typedParse'] as Map?)?.cast<String, Object?>();
     return SaveInspection(
       format: json['format'] as String? ?? 'UNKNOWN',
       path: json['path'] as String?,
@@ -256,6 +330,10 @@ class SaveInspection {
       privateProgression: PrivateProgressionSummary.fromJson(
         privateProgression,
       ),
+      privateTypedParseStatus: typedParse?['status'] as String?,
+      privateTypedPropertyCount: (typedParse?['propertyCount'] as num?)
+          ?.toInt(),
+      privateTypedMaxDepth: (typedParse?['maxDepth'] as num?)?.toInt(),
       raw: json,
     );
   }
@@ -296,6 +374,17 @@ class SaveInspection {
   final PrivatePlayerSummary privatePlayer;
   final PrivateInventorySummary privateInventory;
   final PrivateProgressionSummary privateProgression;
+
+  /// Status of the strict typed property parse of the decoded private payload
+  /// ('ok', 'failed', 'skipped_preview'); null when no private decode ran.
+  final String? privateTypedParseStatus;
+  final int? privateTypedPropertyCount;
+  final int? privateTypedMaxDepth;
+
+  /// The byte-exact typed parse succeeded — the save's full property layout is
+  /// verified and typed (layout-aware) edits are safe.
+  bool get privateTypedVerified => privateTypedParseStatus == 'ok';
+
   final Map<String, Object?> raw;
 
   String prettyJson() {

@@ -1831,8 +1831,10 @@ fn probe_accepts_known_profile_when_hash_and_pe_match() {
     assert!(response.supported);
     assert_eq!(response.profile.as_deref(), Some("g1r-test"));
     assert_eq!(response.resolution_mode, Some(ResolutionMode::KnownProfile));
-    assert!(!response.can_compress);
-    assert!(!response.can_decompress);
+    // SHA-256-matched known profile is bit-identical to the tested executable,
+    // so decode and encode are both trusted.
+    assert!(response.can_compress);
+    assert!(response.can_decompress);
 }
 
 #[test]

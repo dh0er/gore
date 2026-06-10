@@ -22,6 +22,7 @@ class EditorState {
     this.selectedPath,
     this.inspection,
     this.codecStatus,
+    this.codecVerified = false,
     this.error,
     this.codecError,
     this.lastWriteMessage,
@@ -39,7 +40,25 @@ class EditorState {
   final String? selectedPath;
   final SaveInspection? inspection;
   final CodecStatus? codecStatus;
+
+  /// True once the user ran a successful codec round-trip verification this
+  /// session for an executable the probe could not auto-trust (a pattern-
+  /// resolved / unknown game build where canCompress is false). Known-profile
+  /// builds report canCompress directly and never need this.
+  final bool codecVerified;
   final String? error;
+
+  /// Compression-dependent private writes are safe when the probe already
+  /// trusts the codec, or the user verified it this session.
+  bool get codecCompressReady =>
+      (codecStatus?.canCompress ?? false) || codecVerified;
+
+  /// The codec is usable but not yet trusted for compression — a manual
+  /// verification round-trip would unlock writes.
+  bool get codecNeedsVerification =>
+      (codecStatus?.available ?? false) &&
+      !(codecStatus?.canCompress ?? false) &&
+      !codecVerified;
 
   /// Error from the most recent codec check. Kept separate from [error] so a
   /// save-directory refresh does not wipe a standing codec configuration error.
@@ -79,6 +98,7 @@ class EditorState {
     Object? selectedPath = _unchanged,
     SaveInspection? inspection,
     CodecStatus? codecStatus,
+    bool? codecVerified,
     String? error,
     String? codecError,
     String? lastWriteMessage,
@@ -108,6 +128,7 @@ class EditorState {
           : selectedPath as String?,
       inspection: clearInspection ? null : inspection ?? this.inspection,
       codecStatus: clearCodecStatus ? null : codecStatus ?? this.codecStatus,
+      codecVerified: codecVerified ?? this.codecVerified,
       error: clearError ? null : error ?? this.error,
       codecError: clearCodecError ? null : codecError ?? this.codecError,
       lastWriteMessage: clearWriteMessage
@@ -181,10 +202,13 @@ class EditorNotifier extends StateNotifier<EditorState> {
   }
 
   /// Run a `write_save` request as a tracked load, then rescan on success.
-  Future<void> _runWrite({
+  /// Returns true only when the core accepted the write; a rejected write sets
+  /// `state.error` and returns false so callers can skip success-only follow-ups.
+  Future<bool> _runWrite({
     required Map<String, Object?> payload,
     required String Function(Map<String, Object?> data) message,
   }) async {
+    var ok = false;
     await _withLoading(() async {
       final response = await _execute('write_save', payload: payload);
       if (response['ok'] != true) {
@@ -194,7 +218,9 @@ class EditorNotifier extends StateNotifier<EditorState> {
       final data = (response['data'] as Map).cast<String, Object?>();
       state = state.copyWith(lastWriteMessage: message(data));
       await refresh();
+      ok = true;
     });
+    return ok;
   }
 
   /// Serializes all core calls. The native layer runs each command in its own
@@ -473,12 +499,20 @@ class EditorNotifier extends StateNotifier<EditorState> {
         state = state.copyWith(
           codecError: _errorMessage(response),
           clearCodecStatus: true,
+          codecVerified: false,
         );
         return;
       }
       final data = (response['data'] as Map).cast<String, Object?>();
       final status = CodecStatus.fromJson(data);
-      state = state.copyWith(codecStatus: status, clearCodecError: true);
+      // A fresh probe supersedes any earlier manual verification (the host
+      // path or executable may have changed), so drop the session flag and let
+      // the new probe — or a new verification — decide compress readiness.
+      state = state.copyWith(
+        codecStatus: status,
+        codecVerified: false,
+        clearCodecError: true,
+      );
       // Re-decode the selected save now the codec is available — but only if no
       // load is already running. An in-flight inspect is already the latest load
       // and will populate; spawning another here would just race it.
@@ -491,8 +525,37 @@ class EditorNotifier extends StateNotifier<EditorState> {
       state = state.copyWith(
         codecError: 'Codec check failed: $error',
         clearCodecStatus: true,
+        codecVerified: false,
       );
     }
+  }
+
+  /// Verify the configured codec by round-tripping a real private chunk from
+  /// the selected save through decompress → compress → decompress in the game
+  /// executable. On success, compression-dependent edits unlock for the session
+  /// even when the probe could not auto-trust the build (pattern-resolved /
+  /// unknown executable). This is the manual bridge for non-known game builds.
+  Future<void> verifyCodec() async {
+    final path = state.selectedPath;
+    if (path == null) return;
+    await _withLoading(() async {
+      final response = await _execute(
+        'validate_codec_roundtrip',
+        payload: {'path': path, ..._codecPayload()},
+      );
+      if (response['ok'] != true) {
+        state = state.copyWith(
+          codecVerified: false,
+          codecError: _errorMessage(response),
+        );
+        return;
+      }
+      state = state.copyWith(
+        codecVerified: true,
+        lastWriteMessage: 'Codec verified — private edits unlocked',
+        clearCodecError: true,
+      );
+    });
   }
 
   Future<void> validateSelected() async {
@@ -668,6 +731,70 @@ class EditorNotifier extends StateNotifier<EditorState> {
       },
       message: (data) =>
           _backupMessage('Private player transform saved with backup', data),
+    );
+  }
+
+  /// Search every typed property in the decoded private payload. The core
+  /// caches the decoded payload, so the first search pays the decode cost and
+  /// later searches are instant. Returns a result carrying an error string
+  /// instead of throwing, so the browser UI can render it inline.
+  Future<TypedSearchResult> searchTypedProperties(
+    String query, {
+    int offset = 0,
+    int limit = 50,
+  }) async {
+    final path = state.selectedPath;
+    if (path == null) {
+      return const TypedSearchResult(error: 'No save selected.');
+    }
+    try {
+      final response = await _execute(
+        'search_typed_properties',
+        payload: {
+          'path': path,
+          'query': query,
+          'offset': offset,
+          'limit': limit,
+          ..._codecPayload(),
+        },
+      );
+      if (response['ok'] != true) {
+        return TypedSearchResult(error: _errorMessage(response));
+      }
+      return TypedSearchResult.fromJson(
+        (response['data'] as Map).cast<String, Object?>(),
+      );
+    } catch (error) {
+      return TypedSearchResult(error: 'Property search failed: $error');
+    }
+  }
+
+  /// Layout-verified typed edit: set a fixed-size scalar (int/float/bool) at
+  /// a typed property path. Only offered by the core when the strict typed
+  /// parse of the save succeeded (`private.typed.setValue` in writable).
+  ///
+  /// Path segments: property name, `{mapKey}` for map entries, `[i]` for
+  /// container/object-array indices.
+  Future<bool> writeTypedValue({
+    required List<String> propertyPath,
+    required Object value,
+  }) async {
+    final savePath = state.selectedPath;
+    if (savePath == null) return false;
+    return _runWrite(
+      payload: {
+        'path': savePath,
+        'backup': true,
+        'edits': [
+          {
+            'path': 'private.typed.setValue',
+            'value': {'path': propertyPath, 'value': value},
+          },
+        ],
+        ..._codecPayload(),
+      },
+      message: (data) =>
+          _backupMessage('Typed value saved with backup', data),
     );
   }
 
