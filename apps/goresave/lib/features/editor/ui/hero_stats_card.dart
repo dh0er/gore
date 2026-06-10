@@ -306,20 +306,20 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
           )
         : null;
 
-    // Build the detail content for the selected entry.
-    Widget detailContent;
-    if (effectiveSelected == _SidebarEntry.transform) {
-      detailContent = Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          ?errorRow,
-          widget.transformCard!,
-        ],
-      );
-    } else {
-      final group = _entryToGroup(effectiveSelected)!;
+    // Build the detail content for one entry.
+    Widget detailFor(_SidebarEntry entry) {
+      if (entry == _SidebarEntry.transform) {
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            ?errorRow,
+            widget.transformCard!,
+          ],
+        );
+      }
+      final group = _entryToGroup(entry)!;
       final attributes = byGroup[group] ?? const [];
-      detailContent = Column(
+      return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           ?errorRow,
@@ -380,9 +380,22 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
           ),
         ),
         const SizedBox(width: 16),
-        // Right detail area: scrolls independently while the sidebar stays put.
+        // Right detail area: scrolls independently while the sidebar stays
+        // put. Every pane stays mounted (Offstage) so editor state — most
+        // importantly the transform editor's unsaved field drafts, which back
+        // a registered pending edit — survives switching sidebar entries.
+        // Disposing it would re-seed the fields from the inspection while the
+        // global Save still counted the stale registry entry.
         Expanded(
-          child: SingleChildScrollView(child: detailContent),
+          child: Stack(
+            children: [
+              for (final entry in sidebarEntries)
+                Offstage(
+                  offstage: entry != effectiveSelected,
+                  child: SingleChildScrollView(child: detailFor(entry)),
+                ),
+            ],
+          ),
         ),
       ],
     );

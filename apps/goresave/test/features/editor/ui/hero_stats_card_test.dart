@@ -3,6 +3,34 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:goresave/features/editor/domain/hero_attributes.dart';
 import 'package:goresave/features/editor/ui/hero_stats_card.dart';
 
+/// Stateful probe standing in for the transform editor: its TextField draft
+/// lives in widget state, so losing state across sidebar switches is visible.
+class _StatefulTransformProbe extends StatefulWidget {
+  const _StatefulTransformProbe();
+
+  @override
+  State<_StatefulTransformProbe> createState() =>
+      _StatefulTransformProbeState();
+}
+
+class _StatefulTransformProbeState extends State<_StatefulTransformProbe> {
+  final _controller = TextEditingController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return TextField(
+      controller: _controller,
+      decoration: const InputDecoration(labelText: 'probe'),
+    );
+  }
+}
+
 HeroAttribute _attribute(String id, String setClass, double value) {
   final prefix = [
     'm_GenericData',
@@ -572,6 +600,41 @@ void main() {
     expect(lastError, isNotNull);
     expect(lastError, contains('MaxHealth is empty'));
     expect(find.textContaining('MaxHealth is empty'), findsOneWidget);
+  });
+
+  testWidgets('transform editor state survives switching sidebar entries',
+      (tester) async {
+    await tester.pumpWidget(
+      _wrap(
+        _card(
+          load: () async => HeroAttributesResult(attributes: [
+            _attribute('MaxHealth', '/Script/G1R.AttributeSet_Health', 64),
+          ]),
+          transformCard: const _StatefulTransformProbe(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Hero transform'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.widgetWithText(TextField, 'probe'), '123');
+    await tester.pump();
+
+    // Switch away and back: the editor must keep its unsaved draft — its
+    // text backs a registered pending edit that would otherwise go stale.
+    await tester.tap(find.text('Main stats'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Hero transform'));
+    await tester.pumpAndSettle();
+
+    expect(
+      tester
+          .widget<TextField>(find.widgetWithText(TextField, 'probe'))
+          .controller!
+          .text,
+      '123',
+    );
   });
 
   testWidgets('sidebar selection survives a reloadKey change', (tester) async {
