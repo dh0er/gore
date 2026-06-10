@@ -470,10 +470,9 @@ class EditorNotifier extends StateNotifier<EditorState> {
       final selectedPath = saves.any((save) => save.path == state.selectedPath)
           ? state.selectedPath
           : (saves.isNotEmpty ? saves.first.path : null);
-      // Clear all pending edits on every refresh: toolbar Refresh, post-save
-      // refresh, and restore-then-refresh all land here. Clearing centrally in
-      // the notifier (event-handler context) prevents widgets from mutating the
-      // provider during build, which throws with flutter_riverpod.
+      // Pending edits are cleared by _inspect once the fresh inspection
+      // actually lands (so a failed re-inspect keeps them retryable); only
+      // when nothing remains selected is there no inspect to do it.
       state = state.copyWith(
         saves: saves,
         profiles: profiles,
@@ -481,7 +480,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
         selectedPath: selectedPath,
         clearInspection: selectedPath == null,
         clearBackups: selectedPath == null,
-        clearPendingEdits: true,
+        clearPendingEdits: selectedPath == null,
       );
       if (selectedPath != null) {
         await _inspect(selectedPath);
@@ -514,11 +513,12 @@ class EditorNotifier extends StateNotifier<EditorState> {
       clearWriteMessage: clearWriteMessage,
       clearInspection: switchingSlot,
       clearBackups: switchingSlot,
-      // Every inspect produces a fresh inspection that re-seeds the editors,
-      // so pending edits always get discarded — also when re-selecting the
-      // SAME save, where stale registry entries would otherwise no longer
-      // match what the fields show and still be written by the Save button.
-      clearPendingEdits: true,
+      // Slot switch: stale edits must never be written into a different
+      // file, so drop them immediately. Same-save re-inspects clear pending
+      // only once the fresh inspection lands (below) — if the inspect fails,
+      // fields still show the drafts and the registry must keep matching
+      // them so the user can retry the save.
+      clearPendingEdits: switchingSlot,
     );
     try {
       final payload = <String, Object?>{
@@ -542,7 +542,12 @@ class EditorNotifier extends StateNotifier<EditorState> {
       final data = (response['data'] as Map).cast<String, Object?>();
       // Apply the parsed inspection immediately so a later list_backups failure
       // does not drop the save metadata/private views that already loaded.
-      state = state.copyWith(inspection: SaveInspection.fromJson(data));
+      // The fresh inspection re-seeds every editor, so pending edits are
+      // discarded in the same state change — never earlier (see above).
+      state = state.copyWith(
+        inspection: SaveInspection.fromJson(data),
+        clearPendingEdits: true,
+      );
       final backupSnapshot = await _loadBackups(path, seq);
       if (backupSnapshot == null) return;
       state = state.copyWith(

@@ -412,6 +412,28 @@ void main() {
     expect(notifier.state.pendingEdits, isEmpty);
   });
 
+  test('failed same-save re-inspect keeps pending edits retryable', () async {
+    final core = _FailingSecondInspectCoreService();
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+    notifier.setPendingEdit(
+      'publicName',
+      const PendingSaveEdit(
+        edits: [
+          {'path': 'public.m_PlayerSaveName', 'value': 'New Name'},
+        ],
+      ),
+    );
+
+    // The re-inspect fails: editors keep showing the drafts (no fresh
+    // inspection re-seeded them), so the registry must keep matching them.
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+    expect(notifier.state.error, isNotNull);
+    expect(notifier.state.pendingEdits.isNotEmpty, isTrue);
+  });
+
   // ---------------------------------------------------------------------------
   // Regression tests for finding 1: central pending-edit lifecycle
   // ---------------------------------------------------------------------------
@@ -991,6 +1013,30 @@ class _SlowWriteCoreService extends _RecordingCoreService {
 
 /// Codec decodes but the verification round-trip fails (e.g. a mis-resolved
 /// encoder on an unknown build).
+class _FailingSecondInspectCoreService extends _RecordingCoreService {
+  var _inspectCalls = 0;
+
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    if (command == 'inspect_save') {
+      _inspectCalls++;
+      if (_inspectCalls > 1) {
+        requests.add(
+          _RecordedRequest(command, Map<String, Object?>.from(payload)),
+        );
+        return {
+          'ok': false,
+          'error': {'message': 'private payload decode failed'},
+        };
+      }
+    }
+    return super.execute(command, payload: payload);
+  }
+}
+
 class _FailingVerifyCoreService extends _RecordingCoreService {
   _FailingVerifyCoreService() : super(codecCanCompress: false);
 
