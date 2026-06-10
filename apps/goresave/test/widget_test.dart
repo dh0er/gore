@@ -48,6 +48,24 @@ void main() {
     expect(find.text('Auto save'), findsOneWidget);
     expect(find.bySemanticsLabel('Screenshot for G1R-001'), findsWidgets);
 
+    // Inspection JSON card exists and is collapsed by default.
+    expect(find.text('Inspection JSON'), findsOneWidget);
+    expect(find.text('Raw save inspection data'), findsOneWidget);
+    // JSON content is not visible until expanded.
+    expect(find.text('"format"'), findsNothing);
+    // Expand the card and confirm JSON content appears.
+    await tester.scrollUntilVisible(
+      find.text('Inspection JSON'),
+      120,
+      scrollable: find.byType(Scrollable).last,
+    );
+    await tester.tap(find.text('Inspection JSON'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('"format"'), findsOneWidget);
+    // Collapse it again.
+    await tester.tap(find.text('Inspection JSON'));
+    await tester.pumpAndSettle();
+
     await tester.enterText(
       find.widgetWithText(TextField, 'Public save name'),
       'Much Longer Save Name',

@@ -478,7 +478,7 @@ class _EditorWorkspace extends StatelessWidget {
     } else {
       final inspection = state.inspection!;
       content = DefaultTabController(
-        length: 8,
+        length: 7,
         child: Column(
           children: [
             Container(
@@ -494,7 +494,6 @@ class _EditorWorkspace extends StatelessWidget {
                   ),
                   Tab(icon: Icon(Icons.flag_outlined), text: 'Progression'),
                   Tab(icon: Icon(Icons.tune), text: 'All data'),
-                  Tab(icon: Icon(Icons.data_object), text: 'Advanced'),
                   Tab(icon: Icon(Icons.history), text: 'Backups'),
                   Tab(icon: Icon(Icons.settings_outlined), text: 'Settings'),
                 ],
@@ -584,7 +583,6 @@ class _EditorWorkspace extends StatelessWidget {
                     editable:
                         inspection.privateEditable && state.codecCompressReady,
                   ),
-                  _AdvancedPanel(inspection: inspection),
                   _BackupsPanel(state: state, notifier: notifier),
                   _SettingsPanel(state: state, notifier: notifier),
                 ],
@@ -640,7 +638,69 @@ class _OverviewPanel extends StatelessWidget {
         _MetadataEditor(inspection: inspection, notifier: notifier),
         const SizedBox(height: 16),
         _OverviewDiagnostics(inspection: inspection),
+        const SizedBox(height: 16),
+        _OverviewInspectionJson(inspection: inspection),
       ],
+    );
+  }
+}
+
+class _OverviewInspectionJson extends StatefulWidget {
+  const _OverviewInspectionJson({required this.inspection});
+
+  final SaveInspection inspection;
+
+  @override
+  State<_OverviewInspectionJson> createState() =>
+      _OverviewInspectionJsonState();
+}
+
+class _OverviewInspectionJsonState extends State<_OverviewInspectionJson> {
+  bool _expanded = false;
+  String? _cachedJson;
+
+  String _getJson() {
+    _cachedJson ??= widget.inspection.prettyJson();
+    return _cachedJson!;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _CollapsibleCardHeader(
+              icon: Icons.data_object,
+              title: 'Inspection JSON',
+              subtitle: 'Raw save inspection data',
+              expanded: _expanded,
+              onToggle: () => setState(() => _expanded = !_expanded),
+            ),
+            if (_expanded) ...[
+              const SizedBox(height: 8),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  IconButton(
+                    tooltip: 'Copy',
+                    icon: const Icon(Icons.copy),
+                    onPressed: () => Clipboard.setData(
+                      ClipboardData(text: _getJson()),
+                    ),
+                  ),
+                ],
+              ),
+              SelectableText(
+                _getJson(),
+                style: const TextStyle(fontFamily: 'Consolas', fontSize: 12),
+              ),
+            ],
+          ],
+        ),
+      ),
     );
   }
 }
@@ -2679,57 +2739,6 @@ class _BoolEditor extends StatelessWidget {
       child: Align(
         alignment: Alignment.centerRight,
         child: Switch(value: value, onChanged: onChanged),
-      ),
-    );
-  }
-}
-
-class _AdvancedPanel extends StatelessWidget {
-  const _AdvancedPanel({required this.inspection});
-
-  final SaveInspection inspection;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.all(20),
-      child: Card(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
-              child: Row(
-                children: [
-                  const Icon(Icons.data_object),
-                  const SizedBox(width: 8),
-                  Text(
-                    'Inspection JSON',
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
-                  const Spacer(),
-                  IconButton(
-                    tooltip: 'Copy',
-                    icon: const Icon(Icons.copy),
-                    onPressed: () => Clipboard.setData(
-                      ClipboardData(text: inspection.prettyJson()),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const Divider(height: 1),
-            Expanded(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.all(16),
-                child: SelectableText(
-                  inspection.prettyJson(),
-                  style: const TextStyle(fontFamily: 'Consolas', fontSize: 12),
-                ),
-              ),
-            ),
-          ],
-        ),
       ),
     );
   }
