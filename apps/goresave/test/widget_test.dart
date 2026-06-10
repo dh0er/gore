@@ -65,66 +65,22 @@ void main() {
     await tester.tap(find.widgetWithText(Tab, 'Player'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Player summary'), findsOneWidget);
-    expect(find.text('Save version'), findsOneWidget);
-    expect(find.text('17'), findsOneWidget);
-    expect(find.text('Current world'), findsOneWidget);
-    expect(find.text('WORLD'), findsOneWidget);
-    expect(find.text('Hero'), findsAtLeastNWidgets(1));
-    expect(find.text('Profile name'), findsOneWidget);
-    expect(find.text('0'), findsAtLeastNWidgets(1));
-    expect(find.text('Preview: 1 / 541 chunks'), findsNothing);
-    expect(find.widgetWithText(FilledButton, 'Load all'), findsNothing);
+    // Player summary card and name editor fields are deleted.
+    expect(find.text('Player summary'), findsNothing);
+    expect(find.text('Save version'), findsNothing);
+    expect(find.text('Current world'), findsNothing);
+    expect(find.text('Profile name'), findsNothing);
     expect(
       find.widgetWithText(TextField, 'Private player name'),
-      findsOneWidget,
+      findsNothing,
     );
-
-    await tester.enterText(
-      find.widgetWithText(TextField, 'Private player name'),
-      'Nameless',
-    );
-    await tester.scrollUntilVisible(
-      find.byTooltip('Save private player name'),
-      120,
-      scrollable: find.byType(Scrollable).last,
-    );
-    await tester.pumpAndSettle();
-    await tester.tap(find.byTooltip('Save private player name'));
-    await tester.pumpAndSettle();
-
-    final playerWrite = core.requests.lastWhere(
-      (request) => request.command == 'write_save',
-    );
-    expect(playerWrite.payload['edits'], [
-      {'path': 'private.player.setPlayerName', 'value': 'Nameless'},
-    ]);
-
-    await tester.scrollUntilVisible(
+    expect(
       find.widgetWithText(TextField, 'Private profile name'),
-      120,
-      scrollable: find.byType(Scrollable).last,
+      findsNothing,
     );
-    await tester.enterText(
-      find.widgetWithText(TextField, 'Private profile name'),
-      'goresave',
-    );
-    await tester.scrollUntilVisible(
-      find.byTooltip('Save private profile name'),
-      120,
-      scrollable: find.byType(Scrollable).last,
-    );
-    await tester.pumpAndSettle();
-    await tester.tap(find.byTooltip('Save private profile name'));
-    await tester.pumpAndSettle();
 
-    final profileWrite = core.requests.lastWhere(
-      (request) => request.command == 'write_save',
-    );
-    expect(profileWrite.payload['edits'], [
-      {'path': 'private.profile.setProfileName', 'value': 'goresave'},
-    ]);
-
+    // Legacy path (no typedParse in fixture): attributes render inside their
+    // own Card titled 'Hero attributes'.
     await tester.scrollUntilVisible(
       find.text('Hero attributes'),
       120,

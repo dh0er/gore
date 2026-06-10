@@ -26,7 +26,7 @@ HeroAttribute _attribute(String id, String setClass, double value) {
 }
 
 void main() {
-  testWidgets('renders groups and saves dirty rows as one batch',
+  testWidgets('renders groups as separate cards and saves dirty rows as one batch',
       (tester) async {
     final saved = <List<TypedValueEdit>>[];
     final attributes = [
@@ -54,13 +54,29 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    // Groups: core and combat sections visible, advanced collapsed.
+    // No outer 'Hero stats' wrapper title.
+    expect(find.text('Hero stats'), findsNothing);
+
+    // Group titles rendered as card headers.
     expect(find.text('Main stats'), findsOneWidget);
     expect(find.text('Combat skills'), findsOneWidget);
     expect(find.text('Advanced'), findsOneWidget);
     expect(find.text('MaxHealth'), findsOneWidget);
     // Advanced group is collapsed: its row is not visible.
     expect(find.text('Swampweed'), findsNothing);
+
+    // Each non-advanced group title lives inside its own Card.
+    expect(
+      find.ancestor(of: find.text('Main stats'), matching: find.byType(Card)),
+      findsOneWidget,
+    );
+    expect(
+      find.ancestor(
+        of: find.text('Combat skills'),
+        matching: find.byType(Card),
+      ),
+      findsOneWidget,
+    );
 
     // Edit MaxHealth base value, then save.
     final baseField = find.widgetWithText(TextField, 'MaxHealth base');
@@ -95,6 +111,12 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+
+    // Advanced group is its own Card.
+    expect(
+      find.ancestor(of: find.text('Advanced'), matching: find.byType(Card)),
+      findsOneWidget,
+    );
 
     await tester.tap(find.text('Advanced'));
     await tester.pumpAndSettle();

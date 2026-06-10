@@ -641,40 +641,6 @@ class EditorNotifier extends StateNotifier<EditorState> {
     );
   }
 
-  Future<void> writePrivatePlayerName(String value) async {
-    final path = state.selectedPath;
-    if (path == null) return;
-    await _runWrite(
-      payload: {
-        'path': path,
-        'backup': true,
-        'edits': [
-          {'path': 'private.player.setPlayerName', 'value': value},
-        ],
-        ..._codecPayload(),
-      },
-      message: (data) =>
-          _backupMessage('Private player name saved with backup', data),
-    );
-  }
-
-  Future<void> writePrivateProfileName(String value) async {
-    final path = state.selectedPath;
-    if (path == null) return;
-    await _runWrite(
-      payload: {
-        'path': path,
-        'backup': true,
-        'edits': [
-          {'path': 'private.profile.setProfileName', 'value': value},
-        ],
-        ..._codecPayload(),
-      },
-      message: (data) =>
-          _backupMessage('Private profile name saved with backup', data),
-    );
-  }
-
   Future<void> writePlayerAttribute({
     required String id,
     required double baseValue,

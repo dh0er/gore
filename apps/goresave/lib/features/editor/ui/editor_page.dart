@@ -566,8 +566,6 @@ class _EditorWorkspace extends StatelessWidget {
                     // this session), not just decode-ready.
                     editable:
                         inspection.privateEditable && state.codecCompressReady,
-                    decodedBody:
-                        'Private player data is decoded through the G1R codec host.',
                     lockedBody:
                         'Private player edits need a verified G1R codec host.',
                   ),
@@ -1064,7 +1062,6 @@ class _PrivatePanel extends StatelessWidget {
     required this.inspection,
     required this.notifier,
     required this.editable,
-    required this.decodedBody,
     required this.lockedBody,
   });
 
@@ -1073,8 +1070,20 @@ class _PrivatePanel extends StatelessWidget {
   final SaveInspection inspection;
   final EditorNotifier notifier;
   final bool editable;
-  final String decodedBody;
   final String lockedBody;
+
+  Widget _legacyAttributesCard() {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: _PrivatePlayerAttributesEditor(
+          player: inspection.privatePlayer,
+          notifier: notifier,
+          editable: editable,
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1082,19 +1091,6 @@ class _PrivatePanel extends StatelessWidget {
       return ListView(
         padding: const EdgeInsets.all(20),
         children: [
-          if (title == 'Player' && inspection.privatePlayer.hasData) ...[
-            _PrivatePlayerSummaryCard(
-              player: inspection.privatePlayer,
-              notifier: notifier,
-              savePath: inspection.path,
-              // Reuse the panel's already compress-gated flag.
-              editable: editable,
-              // The typed hero stats card supersedes the heuristic
-              // attribute editor whenever the strict typed parse is OK.
-              showLegacyAttributes: !inspection.privateTypedVerified,
-            ),
-            const SizedBox(height: 16),
-          ],
           if (title == 'Player' && inspection.privateTypedVerified) ...[
             HeroStatsCard(
               // New SaveInspection instance after every write/refresh —
@@ -1106,21 +1102,37 @@ class _PrivatePanel extends StatelessWidget {
               // Spec: if the typed search errors out or finds nothing on a
               // typed-OK save, the heuristic editor stays available.
               fallback: inspection.privatePlayer.attributes.isNotEmpty
-                  ? _PrivatePlayerAttributesEditor(
-                      player: inspection.privatePlayer,
-                      notifier: notifier,
-                      editable: editable,
-                    )
+                  ? _legacyAttributesCard()
                   : null,
             ),
             const SizedBox(height: 16),
+          ] else if (title == 'Player' &&
+              inspection.privatePlayer.attributes.isNotEmpty) ...[
+            // Typed parse failed or not verified: heuristic editor available.
+            _legacyAttributesCard(),
+            const SizedBox(height: 16),
           ],
-          _PrivateSummaryCard(
-            icon: Icons.lock_open_outlined,
-            title: title,
-            body: decodedBody,
-            inspection: inspection,
-          ),
+          if (title == 'Player' &&
+              inspection.privatePlayer.transform != null) ...[
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 12,
+                ),
+                child: _PrivatePlayerTransformEditor(
+                  transform: inspection.privatePlayer.transform!,
+                  editable:
+                      editable &&
+                      inspection.privatePlayer.writable.contains(
+                        'private.player.setTransform',
+                      ),
+                  notifier: notifier,
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+          ],
         ],
       );
     }
@@ -1767,312 +1779,6 @@ String _inventoryScopeLabel(String scope) {
   };
 }
 
-class _PrivatePlayerSummaryCard extends StatelessWidget {
-  const _PrivatePlayerSummaryCard({
-    required this.player,
-    required this.notifier,
-    this.savePath,
-    this.editable = true,
-    this.showLegacyAttributes = true,
-  });
-
-  final PrivatePlayerSummary player;
-  final EditorNotifier notifier;
-  final String? savePath;
-  final bool editable;
-  final bool showLegacyAttributes;
-
-  @override
-  Widget build(BuildContext context) {
-    final metrics = <Widget>[
-      if (player.saveVersionNumber != null)
-        _SummaryMetric(
-          label: 'Save version',
-          value: player.saveVersionNumber.toString(),
-        ),
-      if (player.currentWorld != null)
-        _SummaryMetric(label: 'Current world', value: player.currentWorld!),
-      if (player.playerName != null)
-        _SummaryMetric(label: 'Player name', value: player.playerName!),
-      if (player.profileName != null)
-        _SummaryMetric(label: 'Profile name', value: player.profileName!),
-      if (player.scriptPaths.isNotEmpty)
-        _SummaryMetric(
-          label: 'Script paths',
-          value: player.scriptPaths.length.toString(),
-        ),
-      if (player.properties.isNotEmpty)
-        _SummaryMetric(
-          label: 'Properties',
-          value: player.properties.length.toString(),
-        ),
-    ];
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                const Icon(Icons.person_search_outlined),
-                const SizedBox(width: 8),
-                Text(
-                  'Player summary',
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-                const SizedBox(width: 18),
-                Expanded(
-                  child: Wrap(spacing: 8, runSpacing: 8, children: metrics),
-                ),
-              ],
-            ),
-            if (editable &&
-                player.writable.contains('private.player.setPlayerName') &&
-                player.playerName != null) ...[
-              const SizedBox(height: 14),
-              _PrivatePlayerNameEditor(
-                // Key by save identity so switching to another save (even one
-                // with the same parsed name) resets the field instead of
-                // keeping a stale, unsaved edit that could be written to the
-                // newly selected save.
-                key: ValueKey('private-player-name-$savePath'),
-                player: player,
-                notifier: notifier,
-              ),
-            ],
-            if (editable &&
-                player.writable.contains('private.profile.setProfileName') &&
-                player.profileName != null) ...[
-              const SizedBox(height: 14),
-              _PrivateProfileNameEditor(
-                key: ValueKey('private-profile-name-$savePath'),
-                player: player,
-                notifier: notifier,
-              ),
-            ],
-            if (showLegacyAttributes && player.attributes.isNotEmpty) ...[
-              const SizedBox(height: 16),
-              const Divider(height: 1),
-              const SizedBox(height: 12),
-              _PrivatePlayerAttributesEditor(
-                player: player,
-                notifier: notifier,
-                editable: editable,
-              ),
-            ],
-            if (player.transform != null) ...[
-              const SizedBox(height: 16),
-              const Divider(height: 1),
-              const SizedBox(height: 12),
-              _PrivatePlayerTransformEditor(
-                transform: player.transform!,
-                editable:
-                    editable &&
-                    player.writable.contains('private.player.setTransform'),
-                notifier: notifier,
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _PrivatePlayerNameEditor extends StatefulWidget {
-  const _PrivatePlayerNameEditor({
-    super.key,
-    required this.player,
-    required this.notifier,
-  });
-
-  final PrivatePlayerSummary player;
-  final EditorNotifier notifier;
-
-  @override
-  State<_PrivatePlayerNameEditor> createState() =>
-      _PrivatePlayerNameEditorState();
-}
-
-class _PrivatePlayerNameEditorState extends State<_PrivatePlayerNameEditor> {
-  late final TextEditingController _controller;
-  String? _lastName;
-  String? _error;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = TextEditingController();
-    _sync();
-  }
-
-  @override
-  void didUpdateWidget(covariant _PrivatePlayerNameEditor oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    _sync();
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  void _sync() {
-    if (_lastName == widget.player.playerName) return;
-    _lastName = widget.player.playerName;
-    _controller.text = widget.player.playerName ?? '';
-    _error = null;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final field = TextField(
-          controller: _controller,
-          decoration: InputDecoration(
-            labelText: 'Private player name',
-            prefixIcon: const Icon(Icons.badge_outlined),
-            errorText: _error,
-          ),
-        );
-        final button = Tooltip(
-          message: 'Save private player name',
-          child: IconButton.filledTonal(
-            icon: const Icon(Icons.save_outlined),
-            onPressed: () {
-              final value = _controller.text.trim();
-              if (value.isEmpty) {
-                setState(() => _error = 'Required');
-                return;
-              }
-              setState(() => _error = null);
-              widget.notifier.writePrivatePlayerName(value);
-            },
-          ),
-        );
-        if (constraints.maxWidth < 520) {
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              field,
-              const SizedBox(height: 8),
-              Align(alignment: Alignment.centerRight, child: button),
-            ],
-          );
-        }
-        return Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(child: field),
-            const SizedBox(width: 8),
-            button,
-          ],
-        );
-      },
-    );
-  }
-}
-
-class _PrivateProfileNameEditor extends StatefulWidget {
-  const _PrivateProfileNameEditor({
-    super.key,
-    required this.player,
-    required this.notifier,
-  });
-
-  final PrivatePlayerSummary player;
-  final EditorNotifier notifier;
-
-  @override
-  State<_PrivateProfileNameEditor> createState() =>
-      _PrivateProfileNameEditorState();
-}
-
-class _PrivateProfileNameEditorState extends State<_PrivateProfileNameEditor> {
-  late final TextEditingController _controller;
-  String? _lastName;
-  String? _error;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = TextEditingController();
-    _sync();
-  }
-
-  @override
-  void didUpdateWidget(covariant _PrivateProfileNameEditor oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    _sync();
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  void _sync() {
-    if (_lastName == widget.player.profileName) return;
-    _lastName = widget.player.profileName;
-    _controller.text = widget.player.profileName ?? '';
-    _error = null;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final field = TextField(
-          controller: _controller,
-          decoration: InputDecoration(
-            labelText: 'Private profile name',
-            prefixIcon: const Icon(Icons.account_circle_outlined),
-            errorText: _error,
-          ),
-        );
-        final button = Tooltip(
-          message: 'Save private profile name',
-          child: IconButton.filledTonal(
-            icon: const Icon(Icons.save_outlined),
-            onPressed: () {
-              final value = _controller.text.trim();
-              if (value.isEmpty) {
-                setState(() => _error = 'Required');
-                return;
-              }
-              setState(() => _error = null);
-              widget.notifier.writePrivateProfileName(value);
-            },
-          ),
-        );
-        if (constraints.maxWidth < 520) {
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              field,
-              const SizedBox(height: 8),
-              Align(alignment: Alignment.centerRight, child: button),
-            ],
-          );
-        }
-        return Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(child: field),
-            const SizedBox(width: 8),
-            button,
-          ],
-        );
-      },
-    );
-  }
-}
-
 class _PrivatePlayerTransformEditor extends StatefulWidget {
   const _PrivatePlayerTransformEditor({
     required this.transform,
@@ -2705,74 +2411,6 @@ class _InventoryDiagnostics extends StatelessWidget {
                   ],
                 ),
               ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _PrivateSummaryCard extends StatelessWidget {
-  const _PrivateSummaryCard({
-    required this.icon,
-    required this.title,
-    required this.body,
-    required this.inspection,
-  });
-
-  final IconData icon;
-  final String title;
-  final String body;
-  final SaveInspection inspection;
-
-  @override
-  Widget build(BuildContext context) {
-    final strings = inspection.privateStrings.take(40).toList();
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(icon, color: Theme.of(context).colorScheme.primary),
-                const SizedBox(width: 8),
-                Text(title, style: Theme.of(context).textTheme.titleMedium),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Text(body),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                _InfoChip(
-                  label:
-                      '${_bytes.format(inspection.privateDecompressedSize ?? 0)} bytes',
-                ),
-                _InfoChip(
-                  label:
-                      '${_bytes.format(inspection.privateStringCount ?? strings.length)} strings',
-                ),
-              ],
-            ),
-            if (strings.isNotEmpty) ...[
-              const SizedBox(height: 16),
-              Text(
-                'Decoded strings',
-                style: Theme.of(context).textTheme.labelLarge,
-              ),
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: strings
-                    .map((value) => Chip(label: Text(value, maxLines: 1)))
-                    .toList(),
-              ),
-            ],
           ],
         ),
       ),

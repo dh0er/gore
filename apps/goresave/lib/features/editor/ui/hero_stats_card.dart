@@ -6,6 +6,10 @@ import '../domain/hero_attributes.dart';
 /// [load] (typed property search) and leaves through [save] (one batched
 /// private.typed.setValue write). [reloadKey] identifies the inspected save:
 /// when it changes, pending edits are dropped and the card reloads.
+///
+/// Renders one [Card] per non-empty attribute group, plus a slim save-control
+/// row (save button + error text) above the group cards. No outer "Hero stats"
+/// wrapper card.
 class HeroStatsCard extends StatefulWidget {
   const HeroStatsCard({
     super.key,
@@ -127,62 +131,72 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                const Icon(Icons.monitor_heart_outlined),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    'Hero stats',
-                    style: theme.textTheme.titleMedium,
-                  ),
-                ),
-                Tooltip(
-                  message: 'Save hero stats',
-                  child: IconButton.filledTonal(
-                    icon: const Icon(Icons.save_outlined),
-                    onPressed:
-                        widget.editable &&
-                                !_loading &&
-                                !_saving &&
-                                _attributes.isNotEmpty
-                            ? _save
-                            : null,
-                  ),
-                ),
-              ],
-            ),
-            if (_error != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: Text(
-                  _error!,
-                  style: TextStyle(color: theme.colorScheme.error),
-                ),
+    final canSave =
+        widget.editable &&
+        !_loading &&
+        !_saving &&
+        _attributes.isNotEmpty;
+
+    // Slim save-control row: right-aligned save button + optional error text.
+    final saveControlRow = Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Row(
+        children: [
+          if (_error != null)
+            Expanded(
+              child: Text(
+                _error!,
+                style: TextStyle(color: theme.colorScheme.error),
               ),
-            if (_loading)
-              const Padding(
-                padding: EdgeInsets.all(16),
-                child: Center(child: CircularProgressIndicator()),
-              )
-            else if ((_loadFailed || _attributes.isEmpty) &&
-                widget.fallback != null)
-              widget.fallback!
-            else
-              ..._buildGroups(context),
-          ],
-        ),
+            )
+          else
+            const Spacer(),
+          Tooltip(
+            message: 'Save hero stats',
+            child: IconButton.filledTonal(
+              icon: const Icon(Icons.save_outlined),
+              onPressed: canSave ? _save : null,
+            ),
+          ),
+        ],
       ),
+    );
+
+    if (_loading) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          saveControlRow,
+          Card(
+            child: const Padding(
+              padding: EdgeInsets.all(24),
+              child: Center(child: CircularProgressIndicator()),
+            ),
+          ),
+        ],
+      );
+    }
+
+    if ((_loadFailed || _attributes.isEmpty) && widget.fallback != null) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          saveControlRow,
+          widget.fallback!,
+        ],
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        saveControlRow,
+        ..._buildGroupCards(context),
+      ],
     );
   }
 
-  List<Widget> _buildGroups(BuildContext context) {
+  List<Widget> _buildGroupCards(BuildContext context) {
     final theme = Theme.of(context);
     final byGroup = <HeroAttributeGroup, List<HeroAttribute>>{};
     for (final attribute in _attributes) {
@@ -190,36 +204,57 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
           .putIfAbsent(heroAttributeGroup(attribute.id), () => [])
           .add(attribute);
     }
-    final widgets = <Widget>[];
+    final cards = <Widget>[];
     for (final group in HeroAttributeGroup.values) {
       final attributes = byGroup[group];
       if (attributes == null || attributes.isEmpty) continue;
       if (group == HeroAttributeGroup.advanced) {
-        widgets.add(
-          ExpansionTile(
-            tilePadding: EdgeInsets.zero,
-            title: Text(
-              _groupTitles[group]!,
-              style: theme.textTheme.titleSmall,
+        cards.add(
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              child: ExpansionTile(
+                tilePadding: EdgeInsets.zero,
+                title: Text(
+                  _groupTitles[group]!,
+                  style: theme.textTheme.titleSmall,
+                ),
+                initiallyExpanded: _advancedExpanded,
+                onExpansionChanged: (open) => _advancedExpanded = open,
+                // Keep collapsed rows alive so their text controllers stay in sync
+                // with _pending; without this, collapsing and re-expanding would
+                // reset the fields while _pending still held the dirty values.
+                maintainState: true,
+                children: [for (final a in attributes) _row(a)],
+              ),
             ),
-            initiallyExpanded: _advancedExpanded,
-            onExpansionChanged: (open) => _advancedExpanded = open,
-            // Keep collapsed rows alive so their text controllers stay in sync
-            // with _pending; without this, collapsing and re-expanding would
-            // reset the fields while _pending still held the dirty values.
-            maintainState: true,
-            children: [for (final a in attributes) _row(a)],
           ),
         );
-        continue;
+      } else {
+        cards.add(
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    _groupTitles[group]!,
+                    style: theme.textTheme.titleSmall,
+                  ),
+                  const SizedBox(height: 4),
+                  for (final a in attributes) _row(a),
+                ],
+              ),
+            ),
+          ),
+        );
       }
-      widgets
-        ..add(const SizedBox(height: 12))
-        ..add(Text(_groupTitles[group]!, style: theme.textTheme.titleSmall))
-        ..add(const SizedBox(height: 4))
-        ..addAll([for (final a in attributes) _row(a)]);
+      if (group != HeroAttributeGroup.values.last) {
+        cards.add(const SizedBox(height: 8));
+      }
     }
-    return widgets;
+    return cards;
   }
 
   Widget _row(HeroAttribute attribute) {
