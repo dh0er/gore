@@ -1095,6 +1095,15 @@ class _PrivatePanel extends StatelessWidget {
               load: notifier.loadHeroAttributes,
               save: notifier.writeTypedValues,
               editable: editable,
+              // Spec: if the typed search errors out or finds nothing on a
+              // typed-OK save, the heuristic editor stays available.
+              fallback: inspection.privatePlayer.attributes.isNotEmpty
+                  ? _PrivatePlayerAttributesEditor(
+                      player: inspection.privatePlayer,
+                      notifier: notifier,
+                      editable: editable,
+                    )
+                  : null,
             ),
             const SizedBox(height: 16),
           ],

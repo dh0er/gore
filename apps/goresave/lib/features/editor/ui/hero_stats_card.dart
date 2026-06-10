@@ -13,12 +13,17 @@ class HeroStatsCard extends StatefulWidget {
     required this.save,
     required this.editable,
     required this.reloadKey,
+    this.fallback,
   });
 
   final Future<HeroAttributesResult> Function() load;
   final Future<bool> Function(List<TypedValueEdit> edits) save;
   final bool editable;
   final Object reloadKey;
+
+  /// Rendered instead of the group editors when loading finished with an error
+  /// or zero attributes, so callers can keep a legacy editing surface available.
+  final Widget? fallback;
 
   @override
   State<HeroStatsCard> createState() => _HeroStatsCardState();
@@ -139,7 +144,12 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
                   child: IconButton.filledTonal(
                     icon: const Icon(Icons.save_outlined),
                     onPressed:
-                        widget.editable && !_loading && !_saving ? _save : null,
+                        widget.editable &&
+                                !_loading &&
+                                !_saving &&
+                                _attributes.isNotEmpty
+                            ? _save
+                            : null,
                   ),
                 ),
               ],
@@ -157,6 +167,10 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
                 padding: EdgeInsets.all(16),
                 child: Center(child: CircularProgressIndicator()),
               )
+            else if (!_loading &&
+                (_error != null || _attributes.isEmpty) &&
+                widget.fallback != null)
+              widget.fallback!
             else
               ..._buildGroups(context),
           ],

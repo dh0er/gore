@@ -62,13 +62,13 @@ reports `private.typed.setValue` as writable (strict typed parse OK).
   `HeroAttribute { id, basePath, currentPath, base, current }` (pairs the
   `.../{Id}/BaseValue` and `.../{Id}/CurrentValue` leaves).
 - Grouped UI sections:
-  - **Hauptwerte:** Health/MaxHealth, Mana/MaxMana, Strength, Dexterity,
-    Level, Experience, SkillPoints (labelled "Lernpunkte"), MagicianLevel
-  - **Kampf-Skills:** Critical_Fists, Critical_OneHand, Critical_TwoHand,
+  - **Main stats:** Health/MaxHealth, Mana/MaxMana, Strength, Dexterity,
+    Level, Experience, SkillPoints (labelled "Skill points (LP)"), MagicianLevel
+  - **Combat skills:** Critical_Fists, Critical_OneHand, Critical_TwoHand,
     Critical_Orc
-  - **Resistenzen:** the 8 `Resistance_*` IDs
-  - **Diebeskunst:** LockpickDurability, LockpickPrecision, PickPocketing
-  - **Erweitert** (collapsed by default): every remaining ID, including IDs
+  - **Resistances:** the 8 `Resistance_*` IDs
+  - **Thieving:** LockpickDurability, LockpickPrecision, PickPocketing
+  - **Advanced** (collapsed by default): every remaining ID, including IDs
     unknown to the app — unmapped attributes land here automatically so
     nothing is silently dropped.
 - Editing: numeric fields for base/current; writes go through

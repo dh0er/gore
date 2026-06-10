@@ -121,6 +121,55 @@ void main() {
     expect(find.textContaining('decode failed'), findsOneWidget);
   });
 
+  testWidgets('load error renders fallback when provided', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: HeroStatsCard(
+            load: () async =>
+                const HeroAttributesResult(error: 'decode failed'),
+            save: (_) async => true,
+            editable: true,
+            reloadKey: 'save-1',
+            fallback: const Text('legacy editor'),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('decode failed'), findsOneWidget);
+    expect(find.text('legacy editor'), findsOneWidget);
+  });
+
+  testWidgets('zero attributes render fallback and disable save',
+      (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: HeroStatsCard(
+            load: () async => const HeroAttributesResult(attributes: []),
+            save: (_) async => true,
+            editable: true,
+            reloadKey: 'save-1',
+            fallback: const Text('legacy editor'),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('legacy editor'), findsOneWidget);
+    // Save button must be disabled when attributes are empty.
+    final saveButton = tester.widget<IconButton>(
+      find.descendant(
+        of: find.byTooltip('Save hero stats'),
+        matching: find.byType(IconButton),
+      ),
+    );
+    expect(saveButton.onPressed, isNull);
+  });
+
   testWidgets('reloadKey change refreshes row values', (tester) async {
     var loadValue = 64.0;
     var reloadKey = Object();
