@@ -160,10 +160,6 @@ void main() {
     expect(find.text('ItFo_Cheese'), findsOneWidget);
     expect(find.text('42'), findsAtLeastNWidgets(1));
 
-    // Diagnostics (metrics, candidates, scope) collapse by default.
-    expect(find.text('Candidates'), findsNothing);
-    expect(find.text('ITMI_GOLD'), findsNothing);
-
     final oreCountField = find.descendant(
       of: find.ancestor(
         of: find.text('ItMi_Orenugget'),
@@ -263,21 +259,6 @@ void main() {
         },
       },
     ]);
-
-    // Expand diagnostics to reveal metrics, candidates, and scope.
-    await tester.scrollUntilVisible(
-      find.text('Diagnostics & details'),
-      200,
-      scrollable: find.byType(Scrollable).last,
-    );
-    await tester.tap(find.text('Diagnostics & details'));
-    await tester.pumpAndSettle();
-
-    expect(find.text('Candidates'), findsOneWidget);
-    expect(find.text('2'), findsAtLeastNWidgets(1));
-    expect(find.text('ITMI_GOLD'), findsOneWidget);
-    expect(find.text('BP_Item_Ore'), findsOneWidget);
-    expect(find.text('Player inventory'), findsOneWidget);
 
     await tester.tap(find.widgetWithText(Tab, 'Progression'));
     await tester.pumpAndSettle();

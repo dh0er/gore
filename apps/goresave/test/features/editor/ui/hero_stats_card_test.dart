@@ -27,116 +27,373 @@ HeroAttribute _attribute(String id, String setClass, double value) {
   );
 }
 
+// Wrap in a constrained box so LayoutBuilder in rows has a finite width.
+Widget _wrap(Widget child) => MaterialApp(
+      home: Scaffold(
+        body: SizedBox(
+          width: 800,
+          height: 600,
+          child: child,
+        ),
+      ),
+    );
+
 void main() {
-  testWidgets('renders groups as separate cards and saves dirty rows as one batch',
+  // ---------------------------------------------------------------------------
+  // Sidebar visibility / navigation
+  // ---------------------------------------------------------------------------
+
+  testWidgets('sidebar shows only non-empty groups', (tester) async {
+    final attributes = [
+      _attribute('MaxHealth', '/Script/G1R.AttributeSet_Health', 64),
+      _attribute('Critical_OneHand', '/Script/G1R.AttributeSet_Critical', 3),
+      // No thieving, no resistances.
+    ];
+
+    await tester.pumpWidget(
+      _wrap(
+        HeroStatsCard(
+          load: () async => HeroAttributesResult(attributes: attributes),
+          save: (_) async => true,
+          editable: true,
+          reloadKey: 'save-1',
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // Sidebar entries present for non-empty groups (may also appear in the
+    // detail card header, so use findsWidgets not findsOneWidget).
+    expect(find.text('Main stats'), findsWidgets);
+    expect(find.text('Combat skills'), findsWidgets);
+    // Entries absent for empty groups.
+    expect(find.text('Resistances'), findsNothing);
+    expect(find.text('Thieving'), findsNothing);
+    expect(find.text('Advanced'), findsNothing);
+    // No outer 'Hero stats' wrapper title.
+    expect(find.text('Hero stats'), findsNothing);
+  });
+
+  testWidgets('selecting a group shows its rows and hides others',
+      (tester) async {
+    final attributes = [
+      _attribute('MaxHealth', '/Script/G1R.AttributeSet_Health', 64),
+      _attribute('Critical_OneHand', '/Script/G1R.AttributeSet_Critical', 3),
+    ];
+
+    await tester.pumpWidget(
+      _wrap(
+        HeroStatsCard(
+          load: () async => HeroAttributesResult(attributes: attributes),
+          save: (_) async => true,
+          editable: true,
+          reloadKey: 'save-1',
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // Default selection is Main stats — its row is shown.
+    expect(find.widgetWithText(TextField, 'MaxHealth base'), findsOneWidget);
+    // Combat skills row is not shown yet.
+    expect(
+      find.widgetWithText(TextField, 'Critical_OneHand base'),
+      findsNothing,
+    );
+
+    // Switch to Combat skills.
+    await tester.tap(find.text('Combat skills'));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.widgetWithText(TextField, 'Critical_OneHand base'),
+      findsOneWidget,
+    );
+    expect(find.widgetWithText(TextField, 'MaxHealth base'), findsNothing);
+  });
+
+  testWidgets('hero transform entry shown when transformCard provided',
+      (tester) async {
+    await tester.pumpWidget(
+      _wrap(
+        HeroStatsCard(
+          load: () async =>
+              HeroAttributesResult(attributes: [
+                _attribute('MaxHealth', '/Script/G1R.AttributeSet_Health', 64),
+              ]),
+          save: (_) async => true,
+          editable: true,
+          reloadKey: 'save-1',
+          transformCard: const Text('transform content'),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // Sidebar entry present.
+    expect(find.text('Hero transform'), findsOneWidget);
+    // Detail area currently shows Main stats (default selection).
+    expect(find.widgetWithText(TextField, 'MaxHealth base'), findsOneWidget);
+    expect(find.text('transform content'), findsNothing);
+
+    // Tap transform entry.
+    await tester.tap(find.text('Hero transform'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('transform content'), findsOneWidget);
+    expect(find.widgetWithText(TextField, 'MaxHealth base'), findsNothing);
+  });
+
+  testWidgets('hero transform not shown when transformCard is null',
+      (tester) async {
+    await tester.pumpWidget(
+      _wrap(
+        HeroStatsCard(
+          load: () async =>
+              HeroAttributesResult(attributes: [
+                _attribute('MaxHealth', '/Script/G1R.AttributeSet_Health', 64),
+              ]),
+          save: (_) async => true,
+          editable: true,
+          reloadKey: 'save-1',
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Hero transform'), findsNothing);
+  });
+
+  testWidgets('Advanced is a regular sidebar entry (no ExpansionTile)',
+      (tester) async {
+    await tester.pumpWidget(
+      _wrap(
+        HeroStatsCard(
+          load: () async =>
+              HeroAttributesResult(attributes: [
+                _attribute(
+                  'Swampweed',
+                  '/Script/G1R.AttributeSet_Drugs',
+                  0,
+                ),
+              ]),
+          save: (_) async => true,
+          editable: true,
+          reloadKey: 'save-1',
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // Sidebar entry exists (may appear in sidebar AND card header).
+    expect(find.text('Advanced'), findsWidgets);
+    // Default: only group, so it's selected — row is immediately visible.
+    expect(find.widgetWithText(TextField, 'Swampweed base'), findsOneWidget);
+    // No ExpansionTile needed.
+    expect(find.byType(ExpansionTile), findsNothing);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Cross-group save: global save batches ALL dirty fields
+  // ---------------------------------------------------------------------------
+
+  testWidgets(
+      'global save batches dirty fields across different groups in one call',
       (tester) async {
     final saved = <List<TypedValueEdit>>[];
     final attributes = [
       _attribute('MaxHealth', '/Script/G1R.AttributeSet_Health', 64),
       _attribute('Critical_OneHand', '/Script/G1R.AttributeSet_Critical', 3),
-      _attribute('Swampweed', '/Script/G1R.AttributeSet_Drugs', 0),
     ];
 
     await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: SingleChildScrollView(
-            child: HeroStatsCard(
-              load: () async => HeroAttributesResult(attributes: attributes),
-              save: (edits) async {
-                saved.add(edits);
-                return true;
-              },
-              editable: true,
-              reloadKey: 'save-1',
-            ),
-          ),
+      _wrap(
+        HeroStatsCard(
+          load: () async => HeroAttributesResult(attributes: attributes),
+          save: (edits) async {
+            saved.add(edits);
+            return true;
+          },
+          editable: true,
+          reloadKey: 'save-1',
         ),
       ),
     );
     await tester.pumpAndSettle();
 
-    // No outer 'Hero stats' wrapper title.
-    expect(find.text('Hero stats'), findsNothing);
-
-    // Group titles rendered as card headers.
-    expect(find.text('Main stats'), findsOneWidget);
-    expect(find.text('Combat skills'), findsOneWidget);
-    expect(find.text('Advanced'), findsOneWidget);
-    expect(find.text('MaxHealth'), findsOneWidget);
-    // Advanced group is collapsed: its row is not visible.
-    expect(find.text('Swampweed'), findsNothing);
-
-    // Each non-advanced group title lives inside its own Card.
-    expect(
-      find.ancestor(of: find.text('Main stats'), matching: find.byType(Card)),
-      findsOneWidget,
+    // Edit MaxHealth (Main stats — default selected).
+    await tester.enterText(
+      find.widgetWithText(TextField, 'MaxHealth base'),
+      '99',
     );
-    expect(
-      find.ancestor(
-        of: find.text('Combat skills'),
-        matching: find.byType(Card),
-      ),
-      findsOneWidget,
-    );
-
-    // Edit MaxHealth base value, then save.
-    final baseField = find.widgetWithText(TextField, 'MaxHealth base');
-    await tester.enterText(baseField, '99');
     await tester.pump();
+
+    // Switch to Combat skills and edit there.
+    await tester.tap(find.text('Combat skills'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Critical_OneHand base'),
+      '10',
+    );
+    await tester.pump();
+
+    // Save — both edits must arrive in one batch.
     await tester.tap(find.byTooltip('Save hero stats'));
     await tester.pumpAndSettle();
 
     expect(saved, hasLength(1));
-    expect(saved.single, hasLength(1));
-    final edit = saved.single.single;
-    expect(edit.path.last, 'BaseValue');
-    expect(edit.path[edit.path.length - 2], '{MaxHealth}');
-    expect(edit.value, 99);
+    expect(saved.single, hasLength(2));
+    final ids = saved.single.map((e) => e.path[e.path.length - 2]).toSet();
+    expect(ids, containsAll(['{MaxHealth}', '{Critical_OneHand}']));
   });
 
-  testWidgets('expanding advanced shows remaining attributes', (tester) async {
+  // ---------------------------------------------------------------------------
+  // Pending edit survives sidebar switch and is visible on return
+  // ---------------------------------------------------------------------------
+
+  testWidgets('pending edit still visible after switching away and back',
+      (tester) async {
+    final attributes = [
+      _attribute('MaxHealth', '/Script/G1R.AttributeSet_Health', 64),
+      _attribute('Critical_OneHand', '/Script/G1R.AttributeSet_Critical', 3),
+    ];
+
     await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: SingleChildScrollView(
-            child: HeroStatsCard(
-              load: () async => HeroAttributesResult(attributes: [
-                _attribute('Swampweed', '/Script/G1R.AttributeSet_Drugs', 0),
-              ]),
-              save: (_) async => true,
-              editable: true,
-              reloadKey: 'save-1',
-            ),
-          ),
+      _wrap(
+        HeroStatsCard(
+          load: () async => HeroAttributesResult(attributes: attributes),
+          save: (_) async => true,
+          editable: true,
+          reloadKey: 'save-1',
         ),
       ),
     );
     await tester.pumpAndSettle();
 
-    // Advanced group is its own Card.
-    expect(
-      find.ancestor(of: find.text('Advanced'), matching: find.byType(Card)),
-      findsOneWidget,
+    // Edit MaxHealth (Main stats).
+    await tester.enterText(
+      find.widgetWithText(TextField, 'MaxHealth base'),
+      '77',
     );
+    await tester.pump();
 
-    await tester.tap(find.text('Advanced'));
+    // Switch to Combat skills.
+    await tester.tap(find.text('Combat skills'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Swampweed'), findsOneWidget);
+    // The MaxHealth field is gone from the tree now.
+    expect(find.widgetWithText(TextField, 'MaxHealth base'), findsNothing);
+
+    // Switch back to Main stats.
+    await tester.tap(find.text('Main stats'));
+    await tester.pumpAndSettle();
+
+    // Pending edit '77' must be visible again.
+    expect(
+      tester
+          .widget<TextField>(find.widgetWithText(TextField, 'MaxHealth base'))
+          .controller!
+          .text,
+      '77',
+    );
   });
+
+  // ---------------------------------------------------------------------------
+  // Save semantics
+  // ---------------------------------------------------------------------------
+
+  testWidgets('reverting an edit to the original value saves nothing',
+      (tester) async {
+    var saveCalled = false;
+
+    await tester.pumpWidget(
+      _wrap(
+        HeroStatsCard(
+          load: () async =>
+              HeroAttributesResult(attributes: [
+                _attribute(
+                  'MaxHealth',
+                  '/Script/G1R.AttributeSet_Health',
+                  64,
+                ),
+              ]),
+          save: (_) async {
+            saveCalled = true;
+            return true;
+          },
+          editable: true,
+          reloadKey: 'save-1',
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final field = find.widgetWithText(TextField, 'MaxHealth base');
+    await tester.enterText(field, '99');
+    await tester.pump();
+    await tester.enterText(field, '64');
+    await tester.pump();
+
+    await tester.tap(find.byTooltip('Save hero stats'));
+    await tester.pumpAndSettle();
+
+    expect(saveCalled, isFalse);
+  });
+
+  testWidgets('double-tapping save issues only one batched write',
+      (tester) async {
+    var saveCalls = 0;
+    final gate = Completer<bool>();
+
+    await tester.pumpWidget(
+      _wrap(
+        HeroStatsCard(
+          load: () async =>
+              HeroAttributesResult(attributes: [
+                _attribute(
+                  'MaxHealth',
+                  '/Script/G1R.AttributeSet_Health',
+                  64,
+                ),
+              ]),
+          save: (_) {
+            saveCalls++;
+            return gate.future;
+          },
+          editable: true,
+          reloadKey: 'save-1',
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.enterText(
+      find.widgetWithText(TextField, 'MaxHealth base'),
+      '99',
+    );
+    // Two taps without pumping a frame in between: the second one hits the
+    // still-enabled button and must be swallowed by the re-entry guard.
+    await tester.tap(find.byTooltip('Save hero stats'));
+    await tester.tap(find.byTooltip('Save hero stats'));
+    gate.complete(true);
+    await tester.pumpAndSettle();
+
+    expect(saveCalls, 1);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Load error / fallback
+  // ---------------------------------------------------------------------------
 
   testWidgets('shows load error inline', (tester) async {
     await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: HeroStatsCard(
-            load: () async =>
-                const HeroAttributesResult(error: 'decode failed'),
-            save: (_) async => true,
-            editable: true,
-            reloadKey: 'save-1',
-          ),
+      _wrap(
+        HeroStatsCard(
+          load: () async =>
+              const HeroAttributesResult(error: 'decode failed'),
+          save: (_) async => true,
+          editable: true,
+          reloadKey: 'save-1',
         ),
       ),
     );
@@ -147,16 +404,14 @@ void main() {
 
   testWidgets('load error renders fallback when provided', (tester) async {
     await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: HeroStatsCard(
-            load: () async =>
-                const HeroAttributesResult(error: 'decode failed'),
-            save: (_) async => true,
-            editable: true,
-            reloadKey: 'save-1',
-            fallback: const Text('legacy editor'),
-          ),
+      _wrap(
+        HeroStatsCard(
+          load: () async =>
+              const HeroAttributesResult(error: 'decode failed'),
+          save: (_) async => true,
+          editable: true,
+          reloadKey: 'save-1',
+          fallback: const Text('legacy editor'),
         ),
       ),
     );
@@ -169,15 +424,13 @@ void main() {
   testWidgets('zero attributes render fallback without a save button',
       (tester) async {
     await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: HeroStatsCard(
-            load: () async => const HeroAttributesResult(attributes: []),
-            save: (_) async => true,
-            editable: true,
-            reloadKey: 'save-1',
-            fallback: const Text('legacy editor'),
-          ),
+      _wrap(
+        HeroStatsCard(
+          load: () async => const HeroAttributesResult(attributes: []),
+          save: (_) async => true,
+          editable: true,
+          reloadKey: 'save-1',
+          fallback: const Text('legacy editor'),
         ),
       ),
     );
@@ -189,35 +442,112 @@ void main() {
     expect(find.byTooltip('Save hero stats'), findsNothing);
   });
 
+  testWidgets('save validation error keeps typed editors over the fallback',
+      (tester) async {
+    await tester.pumpWidget(
+      _wrap(
+        HeroStatsCard(
+          load: () async =>
+              HeroAttributesResult(attributes: [
+                _attribute(
+                  'MaxHealth',
+                  '/Script/G1R.AttributeSet_Health',
+                  64,
+                ),
+              ]),
+          save: (_) async => true,
+          editable: true,
+          reloadKey: 'save-1',
+          fallback: const Text('legacy editor'),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.enterText(
+      find.widgetWithText(TextField, 'MaxHealth base'),
+      'not a number',
+    );
+    await tester.pump();
+    await tester.tap(find.byTooltip('Save hero stats'));
+    await tester.pumpAndSettle();
+
+    // The validation error is shown, but the typed editors stay in place —
+    // only a failed load swaps in the fallback.
+    expect(find.textContaining('Invalid number'), findsOneWidget);
+    expect(find.text('legacy editor'), findsNothing);
+    expect(find.widgetWithText(TextField, 'MaxHealth base'), findsOneWidget);
+  });
+
+  testWidgets('correcting an invalid input clears the stale validation error',
+      (tester) async {
+    var saveCalled = false;
+
+    await tester.pumpWidget(
+      _wrap(
+        HeroStatsCard(
+          load: () async =>
+              HeroAttributesResult(attributes: [
+                _attribute(
+                  'MaxHealth',
+                  '/Script/G1R.AttributeSet_Health',
+                  64,
+                ),
+              ]),
+          save: (_) async {
+            saveCalled = true;
+            return true;
+          },
+          editable: true,
+          reloadKey: 'save-1',
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final field = find.widgetWithText(TextField, 'MaxHealth base');
+    await tester.enterText(field, 'not a number');
+    await tester.pump();
+    await tester.tap(find.byTooltip('Save hero stats'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Invalid number'), findsOneWidget);
+
+    // Correct the field back to the original (valid, unchanged) value: the
+    // save is a no-op, but the stale error must disappear.
+    await tester.enterText(field, '64');
+    await tester.pump();
+    await tester.tap(find.byTooltip('Save hero stats'));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Invalid number'), findsNothing);
+    expect(saveCalled, isFalse);
+  });
+
   testWidgets('reloadKey change refreshes row values', (tester) async {
     var loadValue = 64.0;
     var reloadKey = Object();
 
-    Widget buildCard() => MaterialApp(
-          home: Scaffold(
-            body: SingleChildScrollView(
-              child: HeroStatsCard(
-                load: () async => HeroAttributesResult(
-                  attributes: [
-                    _attribute(
-                      'MaxHealth',
-                      '/Script/G1R.AttributeSet_Health',
-                      loadValue,
-                    ),
-                  ],
+    Widget buildCard() => _wrap(
+          HeroStatsCard(
+            load: () async => HeroAttributesResult(
+              attributes: [
+                _attribute(
+                  'MaxHealth',
+                  '/Script/G1R.AttributeSet_Health',
+                  loadValue,
                 ),
-                save: (_) async => true,
-                editable: true,
-                reloadKey: reloadKey,
-              ),
+              ],
             ),
+            save: (_) async => true,
+            editable: true,
+            reloadKey: reloadKey,
           ),
         );
 
     await tester.pumpWidget(buildCard());
     await tester.pumpAndSettle();
 
-    // First load: both base and current fields show '64'.
+    // First load: fields show '64'.
     expect(
       find.descendant(
         of: find.byType(TextField),
@@ -249,250 +579,9 @@ void main() {
     );
   });
 
-  testWidgets('collapsed advanced edits are still saved consistently',
-      (tester) async {
-    final saved = <List<TypedValueEdit>>[];
-
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: SingleChildScrollView(
-            child: HeroStatsCard(
-              load: () async => HeroAttributesResult(
-                attributes: [
-                  _attribute(
-                    'Swampweed',
-                    '/Script/G1R.AttributeSet_Drugs',
-                    0,
-                  ),
-                ],
-              ),
-              save: (edits) async {
-                saved.add(edits);
-                return true;
-              },
-              editable: true,
-              reloadKey: 'save-1',
-            ),
-          ),
-        ),
-      ),
-    );
-    await tester.pumpAndSettle();
-
-    // Expand Advanced tile and enter a value.
-    await tester.tap(find.text('Advanced'));
-    await tester.pumpAndSettle();
-
-    await tester.enterText(
-      find.widgetWithText(TextField, 'Swampweed base'),
-      '99',
-    );
-    await tester.pump();
-
-    // Collapse the tile, then re-expand; maintainState keeps the text.
-    await tester.tap(find.text('Advanced'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Advanced'));
-    await tester.pumpAndSettle();
-
-    expect(
-      tester
-          .widget<TextField>(find.widgetWithText(TextField, 'Swampweed base'))
-          .controller!
-          .text,
-      '99',
-    );
-
-    // Save and assert the single edit has value 99.
-    await tester.tap(find.byTooltip('Save hero stats'));
-    await tester.pumpAndSettle();
-
-    expect(saved, hasLength(1));
-    expect(saved.single, hasLength(1));
-    expect(saved.single.single.value, 99);
-  });
-
-  testWidgets('reverting an edit to the original value saves nothing',
-      (tester) async {
-    var saveCalled = false;
-
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: SingleChildScrollView(
-            child: HeroStatsCard(
-              load: () async => HeroAttributesResult(
-                attributes: [
-                  _attribute(
-                    'MaxHealth',
-                    '/Script/G1R.AttributeSet_Health',
-                    64,
-                  ),
-                ],
-              ),
-              save: (_) async {
-                saveCalled = true;
-                return true;
-              },
-              editable: true,
-              reloadKey: 'save-1',
-            ),
-          ),
-        ),
-      ),
-    );
-    await tester.pumpAndSettle();
-
-    // Change the field, then revert it back to the original value.
-    final field = find.widgetWithText(TextField, 'MaxHealth base');
-    await tester.enterText(field, '99');
-    await tester.pump();
-    await tester.enterText(field, '64');
-    await tester.pump();
-
-    await tester.tap(find.byTooltip('Save hero stats'));
-    await tester.pumpAndSettle();
-
-    expect(saveCalled, isFalse);
-  });
-
-  testWidgets('save validation error keeps typed editors over the fallback',
-      (tester) async {
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: SingleChildScrollView(
-            child: HeroStatsCard(
-              load: () async => HeroAttributesResult(
-                attributes: [
-                  _attribute(
-                    'MaxHealth',
-                    '/Script/G1R.AttributeSet_Health',
-                    64,
-                  ),
-                ],
-              ),
-              save: (_) async => true,
-              editable: true,
-              reloadKey: 'save-1',
-              fallback: const Text('legacy editor'),
-            ),
-          ),
-        ),
-      ),
-    );
-    await tester.pumpAndSettle();
-
-    await tester.enterText(
-      find.widgetWithText(TextField, 'MaxHealth base'),
-      'not a number',
-    );
-    await tester.pump();
-    await tester.tap(find.byTooltip('Save hero stats'));
-    await tester.pumpAndSettle();
-
-    // The validation error is shown, but the typed editors stay in place —
-    // only a failed load swaps in the fallback.
-    expect(find.textContaining('Invalid number'), findsOneWidget);
-    expect(find.text('legacy editor'), findsNothing);
-    expect(find.widgetWithText(TextField, 'MaxHealth base'), findsOneWidget);
-  });
-
-  testWidgets('correcting an invalid input clears the stale validation error',
-      (tester) async {
-    var saveCalled = false;
-
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: SingleChildScrollView(
-            child: HeroStatsCard(
-              load: () async => HeroAttributesResult(
-                attributes: [
-                  _attribute(
-                    'MaxHealth',
-                    '/Script/G1R.AttributeSet_Health',
-                    64,
-                  ),
-                ],
-              ),
-              save: (_) async {
-                saveCalled = true;
-                return true;
-              },
-              editable: true,
-              reloadKey: 'save-1',
-            ),
-          ),
-        ),
-      ),
-    );
-    await tester.pumpAndSettle();
-
-    final field = find.widgetWithText(TextField, 'MaxHealth base');
-    await tester.enterText(field, 'not a number');
-    await tester.pump();
-    await tester.tap(find.byTooltip('Save hero stats'));
-    await tester.pumpAndSettle();
-    expect(find.textContaining('Invalid number'), findsOneWidget);
-
-    // Correct the field back to the original (valid, unchanged) value: the
-    // save is a no-op, but the stale error must disappear.
-    await tester.enterText(field, '64');
-    await tester.pump();
-    await tester.tap(find.byTooltip('Save hero stats'));
-    await tester.pumpAndSettle();
-
-    expect(find.textContaining('Invalid number'), findsNothing);
-    expect(saveCalled, isFalse);
-  });
-
-  testWidgets('double-tapping save issues only one batched write',
-      (tester) async {
-    var saveCalls = 0;
-    final gate = Completer<bool>();
-
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: SingleChildScrollView(
-            child: HeroStatsCard(
-              load: () async => HeroAttributesResult(
-                attributes: [
-                  _attribute(
-                    'MaxHealth',
-                    '/Script/G1R.AttributeSet_Health',
-                    64,
-                  ),
-                ],
-              ),
-              save: (_) {
-                saveCalls++;
-                return gate.future;
-              },
-              editable: true,
-              reloadKey: 'save-1',
-            ),
-          ),
-        ),
-      ),
-    );
-    await tester.pumpAndSettle();
-
-    await tester.enterText(
-      find.widgetWithText(TextField, 'MaxHealth base'),
-      '99',
-    );
-    // Two taps without pumping a frame in between: the second one hits the
-    // still-enabled button and must be swallowed by the re-entry guard.
-    await tester.tap(find.byTooltip('Save hero stats'));
-    await tester.tap(find.byTooltip('Save hero stats'));
-    gate.complete(true);
-    await tester.pumpAndSettle();
-
-    expect(saveCalls, 1);
-  });
+  // ---------------------------------------------------------------------------
+  // formatHeroValue unit group
+  // ---------------------------------------------------------------------------
 
   group('formatHeroValue', () {
     test('integer value renders without decimal point', () {

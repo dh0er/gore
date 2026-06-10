@@ -1085,6 +1085,24 @@ class _PrivatePanel extends StatelessWidget {
     );
   }
 
+  Widget? _transformCard() {
+    if (inspection.privatePlayer.transform == null) return null;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: _PrivatePlayerTransformEditor(
+          transform: inspection.privatePlayer.transform!,
+          editable:
+              editable &&
+              inspection.privatePlayer.writable.contains(
+                'private.player.setTransform',
+              ),
+          notifier: notifier,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (inspection.privateDecoded) {
@@ -1104,34 +1122,20 @@ class _PrivatePanel extends StatelessWidget {
               fallback: inspection.privatePlayer.attributes.isNotEmpty
                   ? _legacyAttributesCard()
                   : null,
+              transformCard: _transformCard(),
             ),
             const SizedBox(height: 16),
-          ] else if (title == 'Player' &&
-              inspection.privatePlayer.attributes.isNotEmpty) ...[
-            // Typed parse failed or not verified: heuristic editor available.
-            _legacyAttributesCard(),
-            const SizedBox(height: 16),
-          ],
-          if (title == 'Player' &&
-              inspection.privatePlayer.transform != null) ...[
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 12,
-                ),
-                child: _PrivatePlayerTransformEditor(
-                  transform: inspection.privatePlayer.transform!,
-                  editable:
-                      editable &&
-                      inspection.privatePlayer.writable.contains(
-                        'private.player.setTransform',
-                      ),
-                  notifier: notifier,
-                ),
-              ),
-            ),
-            const SizedBox(height: 16),
+          ] else if (title == 'Player') ...[
+            // Typed parse failed or not verified: stacked legacy layout —
+            // no sidebar, no typed load call.
+            if (inspection.privatePlayer.attributes.isNotEmpty) ...[
+              _legacyAttributesCard(),
+              const SizedBox(height: 16),
+            ],
+            if (inspection.privatePlayer.transform != null) ...[
+              _transformCard()!,
+              const SizedBox(height: 16),
+            ],
           ],
         ],
       );
@@ -1187,8 +1191,6 @@ class _CollapsibleCardHeader extends StatelessWidget {
   }
 }
 
-enum _InventorySection { items, diagnostics }
-
 class _InventoryPanel extends StatefulWidget {
   const _InventoryPanel({
     required this.inspection,
@@ -1205,12 +1207,7 @@ class _InventoryPanel extends StatefulWidget {
 }
 
 class _InventoryPanelState extends State<_InventoryPanel> {
-  // Accordion: at most one section open at a time; the open one fills height.
-  _InventorySection? _open = _InventorySection.items;
-
-  void _toggle(_InventorySection section) {
-    setState(() => _open = _open == section ? null : section);
-  }
+  bool _itemsOpen = true;
 
   @override
   Widget build(BuildContext context) {
@@ -1224,54 +1221,48 @@ class _InventoryPanelState extends State<_InventoryPanel> {
       );
     }
     final hasItems = inspection.privateInventory.hasData;
-    final itemsOpen = hasItems && _open == _InventorySection.items;
-    final diagnosticsOpen = _open == _InventorySection.diagnostics;
+    final itemsOpen = hasItems && _itemsOpen;
     return Padding(
       padding: const EdgeInsets.all(20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          if (hasItems) ...[
-            _expandable(
-              open: itemsOpen,
-              child: _PrivateInventorySummaryCard(
-                inventory: inspection.privateInventory,
-                notifier: widget.notifier,
-                // Inventory writes recompress the payload too, so require a
-                // compress-capable codec host in addition to a full decode.
-                // The core only allows count edits in a detected player
-                // inventory region, advertised via writable; gate on it so other
-                // scopes don't show editors whose saves fail in the core.
-                editable:
-                    inspection.privateEditable &&
-                    widget.canCompress &&
-                    inspection.privateInventory.writable.contains(
-                      'private.inventory.setItemCount',
+          if (hasItems)
+            itemsOpen
+                ? Expanded(
+                    child: _PrivateInventorySummaryCard(
+                      inventory: inspection.privateInventory,
+                      notifier: widget.notifier,
+                      // Inventory writes recompress the payload too, so require a
+                      // compress-capable codec host in addition to a full decode.
+                      // The core only allows count edits in a detected player
+                      // inventory region, advertised via writable; gate on it so other
+                      // scopes don't show editors whose saves fail in the core.
+                      editable:
+                          inspection.privateEditable &&
+                          widget.canCompress &&
+                          inspection.privateInventory.writable.contains(
+                            'private.inventory.setItemCount',
+                          ),
+                      expanded: itemsOpen,
+                      onToggle: () => setState(() => _itemsOpen = !_itemsOpen),
                     ),
-                expanded: itemsOpen,
-                onToggle: () => _toggle(_InventorySection.items),
-              ),
-            ),
-            const SizedBox(height: 16),
-          ],
-          _expandable(
-            open: diagnosticsOpen,
-            child: _InventoryDiagnostics(
-              inventory: inspection.privateInventory,
-              inspection: inspection,
-              expanded: diagnosticsOpen,
-              onToggle: () => _toggle(_InventorySection.diagnostics),
-            ),
-          ),
+                  )
+                : _PrivateInventorySummaryCard(
+                    inventory: inspection.privateInventory,
+                    notifier: widget.notifier,
+                    editable:
+                        inspection.privateEditable &&
+                        widget.canCompress &&
+                        inspection.privateInventory.writable.contains(
+                          'private.inventory.setItemCount',
+                        ),
+                    expanded: false,
+                    onToggle: () => setState(() => _itemsOpen = !_itemsOpen),
+                  ),
         ],
       ),
     );
-  }
-
-  // The open section fills the remaining vertical space; collapsed sections
-  // size to their header only.
-  Widget _expandable({required bool open, required Widget child}) {
-    return open ? Expanded(child: child) : child;
   }
 }
 
@@ -1771,14 +1762,6 @@ String _inventoryItemKey(PrivateInventoryItem item) {
   return '${item.id}\u0000${item.path}';
 }
 
-String _inventoryScopeLabel(String scope) {
-  return switch (scope) {
-    'player_inventory_region' => 'Player inventory',
-    'global_observed' => 'Observed globally',
-    _ => scope,
-  };
-}
-
 class _PrivatePlayerTransformEditor extends StatefulWidget {
   const _PrivatePlayerTransformEditor({
     required this.transform,
@@ -2240,195 +2223,6 @@ class _SummaryMetric extends StatelessWidget {
           ),
         ],
       ),
-    );
-  }
-}
-
-class _InventoryDiagnostics extends StatelessWidget {
-  const _InventoryDiagnostics({
-    required this.inventory,
-    required this.inspection,
-    this.expanded = false,
-    this.onToggle,
-  });
-
-  final PrivateInventorySummary inventory;
-  final SaveInspection inspection;
-  final bool expanded;
-  final VoidCallback? onToggle;
-
-  @override
-  Widget build(BuildContext context) {
-    final candidates = inventory.candidates.take(60).toList();
-    final decoded = inspection.privateStrings.take(40).toList();
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: expanded ? MainAxisSize.max : MainAxisSize.min,
-          children: [
-            _CollapsibleCardHeader(
-              icon: Icons.science_outlined,
-              title: 'Diagnostics & details',
-              subtitle: 'Read-only format inspection',
-              expanded: expanded,
-              onToggle: onToggle,
-            ),
-            if (expanded)
-              Expanded(
-                child: ListView(
-                  padding: const EdgeInsets.only(top: 12),
-                  children: [
-                    Text(
-                      inspection.privateTypedVerified
-                          ? 'Save layout verified: the typed property parse covers '
-                                'every byte of the decoded payload. '
-                                'Typed edits are available.'
-                          : inspection.privateTypedParseStatus == 'failed'
-                          ? 'Inventory candidates are discovered from decoded private '
-                                'payload strings. Typed edits stay disabled: the typed '
-                                'parse failed for this save.'
-                          : 'Inventory candidates are discovered from decoded private '
-                                'payload strings. Typed edits remain disabled until the '
-                                'save layout is verified.',
-                    ),
-                    const SizedBox(height: 12),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: [
-                        if (inspection.privateTypedParseStatus != null)
-                          _SummaryMetric(
-                            label: 'Typed parse',
-                            value: inspection.privateTypedVerified
-                                ? 'Verified'
-                                : inspection.privateTypedParseStatus!,
-                          ),
-                        if (inspection.privateTypedPropertyCount != null)
-                          _SummaryMetric(
-                            label: 'Typed properties',
-                            value: _bytes.format(
-                              inspection.privateTypedPropertyCount,
-                            ),
-                          ),
-                        _SummaryMetric(
-                          label: 'Candidates',
-                          value: inventory.candidateCount.toString(),
-                        ),
-                        _SummaryMetric(
-                          label: 'Item stacks',
-                          value: inventory.itemStackCount.toString(),
-                        ),
-                        if (inventory.itemScope != null)
-                          _SummaryMetric(
-                            label: 'Scope',
-                            value: _inventoryScopeLabel(inventory.itemScope!),
-                          ),
-                        _SummaryMetric(
-                          label: 'Properties',
-                          value: inventory.properties.length.toString(),
-                        ),
-                        _SummaryMetric(
-                          label: 'Scripts',
-                          value: inventory.scriptPaths.length.toString(),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 12),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: [
-                        _InfoChip(
-                          label:
-                              '${_bytes.format(inspection.privateDecompressedSize ?? 0)} bytes',
-                        ),
-                        _InfoChip(
-                          label:
-                              '${_bytes.format(inspection.privateStringCount ?? decoded.length)} strings',
-                        ),
-                      ],
-                    ),
-                    if (candidates.isNotEmpty) ...[
-                      const SizedBox(height: 16),
-                      Text(
-                        'Candidate strings',
-                        style: Theme.of(context).textTheme.labelLarge,
-                      ),
-                      const SizedBox(height: 8),
-                      SizedBox(
-                        height: 180,
-                        child: ListView.separated(
-                          itemCount: candidates.length,
-                          separatorBuilder: (_, _) => const Divider(height: 1),
-                          itemBuilder: (context, index) {
-                            final value = candidates[index];
-                            return ListTile(
-                              dense: true,
-                              leading: const Icon(Icons.inventory_outlined),
-                              title: SelectableText(value, maxLines: 1),
-                            );
-                          },
-                        ),
-                      ),
-                    ],
-                    if (inventory.scriptPaths.isNotEmpty) ...[
-                      const SizedBox(height: 16),
-                      Text(
-                        'Inventory scripts',
-                        style: Theme.of(context).textTheme.labelLarge,
-                      ),
-                      const SizedBox(height: 8),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: inventory.scriptPaths
-                            .take(8)
-                            .map(
-                              (value) => Chip(label: Text(value, maxLines: 1)),
-                            )
-                            .toList(),
-                      ),
-                    ],
-                    if (decoded.isNotEmpty) ...[
-                      const SizedBox(height: 16),
-                      Text(
-                        'Decoded strings',
-                        style: Theme.of(context).textTheme.labelLarge,
-                      ),
-                      const SizedBox(height: 8),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: decoded
-                            .map(
-                              (value) => Chip(label: Text(value, maxLines: 1)),
-                            )
-                            .toList(),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _InfoChip extends StatelessWidget {
-  const _InfoChip({required this.label});
-
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    return Chip(
-      label: Text(label),
-      backgroundColor: Theme.of(context).colorScheme.primaryContainer,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
     );
   }
 }
