@@ -112,7 +112,9 @@ class EditorPage extends ConsumerWidget {
             child: Row(
               children: [
                 SizedBox(
-                  width: 380,
+                  // Narrow enough that long save names ("…, Tag 4, 08:59")
+                  // wrap before "Tag", keeping day+time together on line two.
+                  width: 350,
                   child: _SaveSidebar(state: state, notifier: notifier),
                 ),
                 const VerticalDivider(width: 1),
