@@ -3499,10 +3499,20 @@ fn coerce_typed_value(
                 .and_then(|v| u8::try_from(v).ok())
                 .map(|v| scalar(ScalarValue::Byte(v)))
                 .ok_or_else(|| err("a u8 integer")),
-            properties::PropertyValue::Enum(_) => value
-                .as_str()
-                .map(|v| TypedSetValue::Text(v.to_string()))
-                .ok_or_else(|| err("a string (this ByteProperty holds an enum name)")),
+            // Enum-as-byte stores the label as an FString. A UI that cannot
+            // tell the two Byte forms apart sends a number when the input
+            // parses as one, so an all-digit enum label (e.g. an unchanged
+            // "1") would arrive as a JSON number. Accept that and stringify
+            // the integer to the label instead of rejecting the write.
+            properties::PropertyValue::Enum(_) => {
+                if let Some(s) = value.as_str() {
+                    Ok(TypedSetValue::Text(s.to_string()))
+                } else if let Some(n) = value.as_i64() {
+                    Ok(TypedSetValue::Text(n.to_string()))
+                } else {
+                    Err(err("a string or integer enum label"))
+                }
+            }
             _ => Err(CoreError::UnsupportedEdit(
                 "private.typed.setValue does not support this ByteProperty form".to_string(),
             )),
@@ -6535,14 +6545,18 @@ mod tests {
         };
         apply_private_typed_set_value_edit_to_payload(&mut payload, &edit).unwrap();
 
-        // Enum-as-byte: string accepted (length change), number rejected.
-        let copy = payload.clone();
-        let bad = PrivateTypedSetValueEdit {
+        // Enum-as-byte: a JSON number is accepted and stringified to the
+        // label, so an all-digit enum value (e.g. an unchanged "1") still
+        // saves instead of failing. A plain string label works too.
+        let edit = PrivateTypedSetValueEdit {
             path: properties::parse_path(&["m_Rank".to_string()]).unwrap(),
             value: json!(1),
         };
-        assert!(apply_private_typed_set_value_edit_to_payload(&mut payload, &bad).is_err());
-        assert_eq!(payload, copy);
+        apply_private_typed_set_value_edit_to_payload(&mut payload, &edit).unwrap();
+        assert_eq!(
+            properties::parse_private_root(&payload).unwrap().properties[1].value,
+            properties::PropertyValue::Enum("1".to_string())
+        );
         let edit = PrivateTypedSetValueEdit {
             path: properties::parse_path(&["m_Rank".to_string()]).unwrap(),
             value: json!("ERank::Master"),
