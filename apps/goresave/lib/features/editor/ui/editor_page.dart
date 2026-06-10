@@ -3,6 +3,10 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:goresave/features/app/domain/ui_settings.dart';
+import 'package:goresave/features/app/ui/about_dialog.dart';
+import 'package:goresave/features/app/ui/appearance_settings.dart';
+import 'package:goresave/features/app/ui/window_chrome.dart';
 import 'package:goresave/features/editor/domain/editor_notifier.dart';
 import 'package:goresave/features/editor/domain/editor_models.dart';
 import 'package:goresave/providers/data_providers.dart';
@@ -17,21 +21,44 @@ class EditorPage extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final state = ref.watch(editorProvider);
     final notifier = ref.read(editorProvider.notifier);
+    final uiScale = ref.watch(uiScaleProvider);
+    final zoomPct = (uiScale * 100).round();
+    final scheme = Theme.of(context).colorScheme;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return Scaffold(
+      // The AppBar doubles as the window title bar: dragging the empty space
+      // moves the window, double-click toggles maximize/restore.
       appBar: AppBar(
-        title: const Row(
-          children: [
-            Icon(Icons.shield_outlined),
-            SizedBox(width: 10),
-            Text('goresave'),
-            SizedBox(width: 12),
-            Text(
-              'Gothic Remake Savegame-Editor',
-              style: TextStyle(fontSize: 14, color: Color(0xFF64748B)),
-            ),
-          ],
+        title: WindowDragArea(
+          child: Row(
+            children: [
+              const SizedBox(width: 16),
+              Image.asset(
+                'assets/goresave_icon.png',
+                height: 32,
+                semanticLabel: 'goresave logo',
+              ),
+              const SizedBox(width: 10),
+              const Text('goresave'),
+              const SizedBox(width: 16),
+              TextButton(
+                onPressed: () {
+                  showDialog(
+                    context: context,
+                    builder: (_) => const GoresaveAboutDialog(),
+                  );
+                },
+                child: const Text('About'),
+              ),
+              const Expanded(child: SizedBox()),
+            ],
+          ),
         ),
+        titleSpacing: 0,
+        centerTitle: false,
+        scrolledUnderElevation: 0,
+        surfaceTintColor: Colors.transparent,
         actions: [
           Tooltip(
             message: 'Validate',
@@ -50,6 +77,39 @@ class EditorPage extends ConsumerWidget {
             ),
           ),
           const SizedBox(width: 8),
+          Tooltip(
+            message: 'Press Ctrl +/- to zoom in/out',
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              decoration: BoxDecoration(
+                color: scheme.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.zoom_in, size: 18),
+                  const SizedBox(width: 3),
+                  Text(
+                    '$zoomPct%',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          IconButton(
+            icon: Icon(isDark ? Icons.light_mode : Icons.dark_mode),
+            onPressed: () {
+              ref
+                  .read(themeModeProvider.notifier)
+                  .setThemeMode(isDark ? ThemeMode.light : ThemeMode.dark);
+            },
+            tooltip: isDark ? 'Switch to light mode' : 'Switch to dark mode',
+          ),
+          const SizedBox(width: 16),
+          const WindowControls(),
         ],
       ),
       body: Column(
@@ -73,7 +133,6 @@ class EditorPage extends ConsumerWidget {
     );
   }
 }
-
 
 class _SaveSidebar extends StatelessWidget {
   const _SaveSidebar({required this.state, required this.notifier});
@@ -99,7 +158,9 @@ class _SaveSidebar extends StatelessWidget {
               )
               .toList();
     return DecoratedBox(
-      decoration: const BoxDecoration(color: Color(0xFFF8FAFC)),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerLow,
+      ),
       child: Column(
         children: [
           Padding(
@@ -171,14 +232,15 @@ class _ProfileHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
+    final scheme = Theme.of(context).colorScheme;
     final quickCount = profile?.quickSaveSlots.length ?? 0;
     final autoCount = profile?.autoSaveSlots.length ?? 0;
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        border: Border(bottom: BorderSide(color: Color(0xFFE2E8F0))),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerLowest,
+        border: Border(bottom: BorderSide(color: scheme.outlineVariant)),
       ),
       child: Row(
         children: [
@@ -186,10 +248,10 @@ class _ProfileHeader extends StatelessWidget {
             width: 40,
             height: 40,
             decoration: BoxDecoration(
-              color: const Color(0xFFE0F2F1),
+              color: scheme.primaryContainer,
               borderRadius: BorderRadius.circular(8),
             ),
-            child: const Icon(Icons.person_outline, color: Color(0xFF0F766E)),
+            child: Icon(Icons.person_outline, color: scheme.primary),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -208,7 +270,7 @@ class _ProfileHeader extends StatelessWidget {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: textTheme.bodySmall?.copyWith(
-                    color: const Color(0xFF64748B),
+                    color: scheme.onSurfaceVariant,
                   ),
                 ),
               ],
@@ -235,9 +297,10 @@ class _SaveSlotCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final accent = selected ? const Color(0xFF0F766E) : const Color(0xFFCBD5E1);
+    final scheme = Theme.of(context).colorScheme;
+    final accent = selected ? scheme.primary : scheme.outline;
     return Material(
-      color: selected ? const Color(0xFFE0F2F1) : Colors.white,
+      color: selected ? scheme.primaryContainer : scheme.surfaceContainerLowest,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(8),
         side: BorderSide(color: accent),
@@ -293,7 +356,7 @@ class _SaveSlotCard extends StatelessWidget {
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: const Color(0xFF64748B),
+                        color: scheme.onSurfaceVariant,
                       ),
                     ),
                   ],
@@ -334,7 +397,9 @@ class _SaveKindIcon extends StatelessWidget {
         child: Icon(
           icon,
           size: 16,
-          color: selected ? const Color(0xFF0F766E) : const Color(0xFF475569),
+          color: selected
+              ? Theme.of(context).colorScheme.primary
+              : Theme.of(context).colorScheme.onSurfaceVariant,
         ),
       ),
     );
@@ -386,6 +451,8 @@ class _EditorWorkspace extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     Widget content;
     if (state.inspection == null) {
       content = state.error != null
@@ -406,7 +473,7 @@ class _EditorWorkspace extends StatelessWidget {
         child: Column(
           children: [
             Container(
-              color: Colors.white,
+              color: scheme.surfaceContainerLowest,
               child: const TabBar(
                 isScrollable: true,
                 tabs: [
@@ -426,8 +493,8 @@ class _EditorWorkspace extends StatelessWidget {
             ),
             if (state.error != null)
               MaterialBanner(
-                backgroundColor: const Color(0xFFFDECEA),
-                leading: const Icon(Icons.error_outline, color: Colors.red),
+                backgroundColor: scheme.errorContainer,
+                leading: Icon(Icons.error_outline, color: scheme.error),
                 content: Text(state.error!),
                 actions: [
                   TextButton(
@@ -449,10 +516,14 @@ class _EditorWorkspace extends StatelessWidget {
               ),
             if (state.codecNeedsVerification)
               MaterialBanner(
-                backgroundColor: const Color(0xFFFFF4E5),
-                leading: const Icon(
+                backgroundColor: isDark
+                    ? const Color(0xFF3A2E1A)
+                    : const Color(0xFFFFF4E5),
+                leading: Icon(
                   Icons.shield_outlined,
-                  color: Color(0xFFB26A00),
+                  color: isDark
+                      ? const Color(0xFFE0A95C)
+                      : const Color(0xFFB26A00),
                 ),
                 content: const Text(
                   'This game build is not auto-trusted for compression. '
@@ -523,7 +594,7 @@ class _EditorWorkspace extends StatelessWidget {
         if (state.isLoading)
           Positioned.fill(
             child: ColoredBox(
-              color: const Color(0x66FFFFFF),
+              color: scheme.surface.withValues(alpha: 0.6),
               child: Center(
                 child: Semantics(
                   label: 'Loading editor data',
@@ -619,8 +690,7 @@ class _OverviewDiagnosticsState extends State<_OverviewDiagnostics> {
                             quickSave: inspection.quickSave,
                             autoSave: inspection.autoSave,
                           ),
-                        'File size':
-                            '${_bytes.format(inspection.size)} bytes',
+                        'File size': '${_bytes.format(inspection.size)} bytes',
                         'Compression': inspection.compressionMethod ?? '-',
                         'Chunks': inspection.chunkCount?.toString() ?? '-',
                         'Uncompressed': inspection.uncompressedSize == null
@@ -700,10 +770,10 @@ class _HeaderCard extends StatelessWidget {
                     children: [
                       Row(
                         children: [
-                          const Icon(
+                          Icon(
                             Icons.save_outlined,
                             size: 28,
-                            color: Color(0xFF0F766E),
+                            color: Theme.of(context).colorScheme.primary,
                           ),
                           const SizedBox(width: 10),
                           Expanded(
@@ -747,7 +817,11 @@ class _HeaderCard extends StatelessWidget {
                           if (pills.isEmpty) return const SizedBox.shrink();
                           return Padding(
                             padding: const EdgeInsets.only(top: 9),
-                            child: Wrap(spacing: 8, runSpacing: 8, children: pills),
+                            child: Wrap(
+                              spacing: 8,
+                              runSpacing: 8,
+                              children: pills,
+                            ),
                           );
                         },
                       ),
@@ -778,13 +852,14 @@ class _ScreenshotPreview extends StatelessWidget {
   Widget build(BuildContext context) {
     final bytes = _decodeScreenshot(screenshot);
     final radius = BorderRadius.circular(compact ? 6 : 8);
+    final scheme = Theme.of(context).colorScheme;
     final placeholder = ColoredBox(
-      color: const Color(0xFFE2E8F0),
+      color: scheme.surfaceContainerHighest,
       child: Center(
         child: Icon(
           Icons.image_not_supported_outlined,
           size: compact ? 22 : 44,
-          color: const Color(0xFF64748B),
+          color: scheme.onSurfaceVariant,
         ),
       ),
     );
@@ -811,18 +886,19 @@ class _InfoPill extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: const Color(0xFFF1F5F9),
+        color: scheme.surfaceContainerHighest,
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: const Color(0xFFE2E8F0)),
+        border: Border.all(color: scheme.outlineVariant),
       ),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 15, color: const Color(0xFF475569)),
+            Icon(icon, size: 15, color: scheme.onSurfaceVariant),
             const SizedBox(width: 5),
             Text(label, style: Theme.of(context).textTheme.labelMedium),
           ],
@@ -955,7 +1031,9 @@ class _MetricGrid extends StatelessWidget {
                     width: 130,
                     child: Text(
                       entry.key,
-                      style: const TextStyle(color: Color(0xFF64748B)),
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
                     ),
                   ),
                   // No maxLines: a multiline cap makes SelectableText reserve
@@ -2417,9 +2495,9 @@ class _SummaryMetric extends StatelessWidget {
             label,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: Theme.of(
-              context,
-            ).textTheme.labelSmall?.copyWith(color: const Color(0xFF64748B)),
+            style: Theme.of(context).textTheme.labelSmall?.copyWith(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
           ),
           Text(
             value,
@@ -2470,127 +2548,133 @@ class _InventoryDiagnostics extends StatelessWidget {
                   padding: const EdgeInsets.only(top: 12),
                   children: [
                     Text(
-            inspection.privateTypedVerified
-                ? 'Save layout verified: the typed property parse covers '
-                      'every byte of the decoded payload. '
-                      'Typed edits are available.'
-                : inspection.privateTypedParseStatus == 'failed'
-                ? 'Inventory candidates are discovered from decoded private '
-                      'payload strings. Typed edits stay disabled: the typed '
-                      'parse failed for this save.'
-                : 'Inventory candidates are discovered from decoded private '
-                      'payload strings. Typed edits remain disabled until the '
-                      'save layout is verified.',
-          ),
-          const SizedBox(height: 12),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              if (inspection.privateTypedParseStatus != null)
-                _SummaryMetric(
-                  label: 'Typed parse',
-                  value: inspection.privateTypedVerified
-                      ? 'Verified'
-                      : inspection.privateTypedParseStatus!,
-                ),
-              if (inspection.privateTypedPropertyCount != null)
-                _SummaryMetric(
-                  label: 'Typed properties',
-                  value: _bytes.format(inspection.privateTypedPropertyCount),
-                ),
-              _SummaryMetric(
-                label: 'Candidates',
-                value: inventory.candidateCount.toString(),
-              ),
-              _SummaryMetric(
-                label: 'Item stacks',
-                value: inventory.itemStackCount.toString(),
-              ),
-              if (inventory.itemScope != null)
-                _SummaryMetric(
-                  label: 'Scope',
-                  value: _inventoryScopeLabel(inventory.itemScope!),
-                ),
-              _SummaryMetric(
-                label: 'Properties',
-                value: inventory.properties.length.toString(),
-              ),
-              _SummaryMetric(
-                label: 'Scripts',
-                value: inventory.scriptPaths.length.toString(),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              _InfoChip(
-                label:
-                    '${_bytes.format(inspection.privateDecompressedSize ?? 0)} bytes',
-              ),
-              _InfoChip(
-                label:
-                    '${_bytes.format(inspection.privateStringCount ?? decoded.length)} strings',
-              ),
-            ],
-          ),
-          if (candidates.isNotEmpty) ...[
-            const SizedBox(height: 16),
-            Text(
-              'Candidate strings',
-              style: Theme.of(context).textTheme.labelLarge,
-            ),
-            const SizedBox(height: 8),
-            SizedBox(
-              height: 180,
-              child: ListView.separated(
-                itemCount: candidates.length,
-                separatorBuilder: (_, _) => const Divider(height: 1),
-                itemBuilder: (context, index) {
-                  final value = candidates[index];
-                  return ListTile(
-                    dense: true,
-                    leading: const Icon(Icons.inventory_outlined),
-                    title: SelectableText(value, maxLines: 1),
-                  );
-                },
-              ),
-            ),
-          ],
-          if (inventory.scriptPaths.isNotEmpty) ...[
-            const SizedBox(height: 16),
-            Text(
-              'Inventory scripts',
-              style: Theme.of(context).textTheme.labelLarge,
-            ),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: inventory.scriptPaths
-                  .take(8)
-                  .map((value) => Chip(label: Text(value, maxLines: 1)))
-                  .toList(),
-            ),
-          ],
-          if (decoded.isNotEmpty) ...[
-            const SizedBox(height: 16),
-            Text(
-              'Decoded strings',
-              style: Theme.of(context).textTheme.labelLarge,
-            ),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: decoded
-                  .map((value) => Chip(label: Text(value, maxLines: 1)))
-                  .toList(),
-            ),
-          ],
+                      inspection.privateTypedVerified
+                          ? 'Save layout verified: the typed property parse covers '
+                                'every byte of the decoded payload. '
+                                'Typed edits are available.'
+                          : inspection.privateTypedParseStatus == 'failed'
+                          ? 'Inventory candidates are discovered from decoded private '
+                                'payload strings. Typed edits stay disabled: the typed '
+                                'parse failed for this save.'
+                          : 'Inventory candidates are discovered from decoded private '
+                                'payload strings. Typed edits remain disabled until the '
+                                'save layout is verified.',
+                    ),
+                    const SizedBox(height: 12),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        if (inspection.privateTypedParseStatus != null)
+                          _SummaryMetric(
+                            label: 'Typed parse',
+                            value: inspection.privateTypedVerified
+                                ? 'Verified'
+                                : inspection.privateTypedParseStatus!,
+                          ),
+                        if (inspection.privateTypedPropertyCount != null)
+                          _SummaryMetric(
+                            label: 'Typed properties',
+                            value: _bytes.format(
+                              inspection.privateTypedPropertyCount,
+                            ),
+                          ),
+                        _SummaryMetric(
+                          label: 'Candidates',
+                          value: inventory.candidateCount.toString(),
+                        ),
+                        _SummaryMetric(
+                          label: 'Item stacks',
+                          value: inventory.itemStackCount.toString(),
+                        ),
+                        if (inventory.itemScope != null)
+                          _SummaryMetric(
+                            label: 'Scope',
+                            value: _inventoryScopeLabel(inventory.itemScope!),
+                          ),
+                        _SummaryMetric(
+                          label: 'Properties',
+                          value: inventory.properties.length.toString(),
+                        ),
+                        _SummaryMetric(
+                          label: 'Scripts',
+                          value: inventory.scriptPaths.length.toString(),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        _InfoChip(
+                          label:
+                              '${_bytes.format(inspection.privateDecompressedSize ?? 0)} bytes',
+                        ),
+                        _InfoChip(
+                          label:
+                              '${_bytes.format(inspection.privateStringCount ?? decoded.length)} strings',
+                        ),
+                      ],
+                    ),
+                    if (candidates.isNotEmpty) ...[
+                      const SizedBox(height: 16),
+                      Text(
+                        'Candidate strings',
+                        style: Theme.of(context).textTheme.labelLarge,
+                      ),
+                      const SizedBox(height: 8),
+                      SizedBox(
+                        height: 180,
+                        child: ListView.separated(
+                          itemCount: candidates.length,
+                          separatorBuilder: (_, _) => const Divider(height: 1),
+                          itemBuilder: (context, index) {
+                            final value = candidates[index];
+                            return ListTile(
+                              dense: true,
+                              leading: const Icon(Icons.inventory_outlined),
+                              title: SelectableText(value, maxLines: 1),
+                            );
+                          },
+                        ),
+                      ),
+                    ],
+                    if (inventory.scriptPaths.isNotEmpty) ...[
+                      const SizedBox(height: 16),
+                      Text(
+                        'Inventory scripts',
+                        style: Theme.of(context).textTheme.labelLarge,
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: inventory.scriptPaths
+                            .take(8)
+                            .map(
+                              (value) => Chip(label: Text(value, maxLines: 1)),
+                            )
+                            .toList(),
+                      ),
+                    ],
+                    if (decoded.isNotEmpty) ...[
+                      const SizedBox(height: 16),
+                      Text(
+                        'Decoded strings',
+                        style: Theme.of(context).textTheme.labelLarge,
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: decoded
+                            .map(
+                              (value) => Chip(label: Text(value, maxLines: 1)),
+                            )
+                            .toList(),
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -2625,7 +2709,7 @@ class _PrivateSummaryCard extends StatelessWidget {
           children: [
             Row(
               children: [
-                Icon(icon, color: const Color(0xFF0F766E)),
+                Icon(icon, color: Theme.of(context).colorScheme.primary),
                 const SizedBox(width: 8),
                 Text(title, style: Theme.of(context).textTheme.titleMedium),
               ],
@@ -2840,7 +2924,7 @@ class _InfoChip extends StatelessWidget {
   Widget build(BuildContext context) {
     return Chip(
       label: Text(label),
-      backgroundColor: const Color(0xFFE0F2F1),
+      backgroundColor: Theme.of(context).colorScheme.primaryContainer,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
     );
   }
@@ -2972,10 +3056,7 @@ class _AllDataPanelState extends State<_AllDataPanel> {
               const Icon(Icons.tune),
               const SizedBox(width: 8),
               Expanded(
-                child: Text(
-                  'All data',
-                  style: theme.textTheme.titleMedium,
-                ),
+                child: Text('All data', style: theme.textTheme.titleMedium),
               ),
             ],
           ),
@@ -2985,7 +3066,7 @@ class _AllDataPanelState extends State<_AllDataPanel> {
             'enums and object paths are editable; structs are shown '
             'read-only for now.',
             style: theme.textTheme.bodySmall?.copyWith(
-              color: const Color(0xFF64748B),
+              color: theme.colorScheme.onSurfaceVariant,
             ),
           ),
           const SizedBox(height: 12),
@@ -3079,7 +3160,7 @@ class _AllDataPanelState extends State<_AllDataPanel> {
     final last = result.offset + result.results.length;
     final busy = _searching;
     final muted = theme.textTheme.bodySmall?.copyWith(
-      color: const Color(0xFF64748B),
+      color: theme.colorScheme.onSurfaceVariant,
     );
     return Wrap(
       crossAxisAlignment: WrapCrossAlignment.center,
@@ -3117,7 +3198,10 @@ class _AllDataPanelState extends State<_AllDataPanel> {
               : () => _goToPage(result.pageCount - 1),
         ),
         const SizedBox(width: 4),
-        Text('Page ${result.pageIndex + 1} / ${result.pageCount}', style: muted),
+        Text(
+          'Page ${result.pageIndex + 1} / ${result.pageCount}',
+          style: muted,
+        ),
         const SizedBox(width: 8),
         Text('$first–$last of ${result.total}', style: muted),
         const SizedBox(width: 8),
@@ -3231,7 +3315,7 @@ class _TypedPropertyRowState extends State<_TypedPropertyRow> {
                 Text(
                   hit.type,
                   style: theme.textTheme.labelSmall?.copyWith(
-                    color: const Color(0xFF94A3B8),
+                    color: theme.colorScheme.outline,
                   ),
                 ),
               ],
@@ -3245,7 +3329,7 @@ class _TypedPropertyRowState extends State<_TypedPropertyRow> {
                 hit.value,
                 textAlign: TextAlign.right,
                 style: theme.textTheme.bodyMedium?.copyWith(
-                  color: const Color(0xFF64748B),
+                  color: theme.colorScheme.onSurfaceVariant,
                 ),
               ),
             )
@@ -3451,7 +3535,7 @@ class _BackupCard extends StatelessWidget {
                     ? Icons.restore_page_outlined
                     : Icons.warning_amber_outlined,
                 color: backup.status == 'ok'
-                    ? const Color(0xFF0F766E)
+                    ? Theme.of(context).colorScheme.primary
                     : Colors.orange.shade800,
               ),
               const SizedBox(width: 12),
@@ -3524,10 +3608,11 @@ class _InlineNotice extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: const Color(0xFFF8FAFC),
-        border: Border.all(color: const Color(0xFFE2E8F0)),
+        color: scheme.surfaceContainerLow,
+        border: Border.all(color: scheme.outlineVariant),
         borderRadius: BorderRadius.circular(8),
       ),
       child: Padding(
@@ -3569,9 +3654,9 @@ class _SmallFact extends StatelessWidget {
         children: [
           Text(
             label,
-            style: Theme.of(
-              context,
-            ).textTheme.labelSmall?.copyWith(color: const Color(0xFF64748B)),
+            style: Theme.of(context).textTheme.labelSmall?.copyWith(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
           ),
           Text(value, maxLines: 2, overflow: TextOverflow.ellipsis),
         ],
@@ -3606,6 +3691,8 @@ class _SettingsPanel extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.all(20),
       children: [
+        const AppearanceSettingsCard(),
+        const SizedBox(height: 16),
         Card(
           child: Padding(
             padding: const EdgeInsets.all(16),
@@ -3653,16 +3740,18 @@ class _SettingsPanel extends StatelessWidget {
                   Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Icon(
+                      Icon(
                         Icons.error_outline,
-                        color: Colors.red,
+                        color: Theme.of(context).colorScheme.error,
                         size: 18,
                       ),
                       const SizedBox(width: 6),
                       Expanded(
                         child: Text(
                           state.codecError!,
-                          style: const TextStyle(color: Colors.red),
+                          style: TextStyle(
+                            color: Theme.of(context).colorScheme.error,
+                          ),
                         ),
                       ),
                     ],
@@ -3717,7 +3806,9 @@ class _PathSettingRow extends StatelessWidget {
             constraints: const BoxConstraints(minHeight: 40),
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
             decoration: BoxDecoration(
-              border: Border.all(color: const Color(0xFFD1D5DB)),
+              border: Border.all(
+                color: Theme.of(context).colorScheme.outlineVariant,
+              ),
               borderRadius: BorderRadius.circular(8),
             ),
             child: SelectableText(
@@ -3760,7 +3851,11 @@ class _MessagePane extends StatelessWidget {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(icon, size: 48, color: const Color(0xFF0F766E)),
+                Icon(
+                  icon,
+                  size: 48,
+                  color: Theme.of(context).colorScheme.primary,
+                ),
                 const SizedBox(height: 12),
                 Text(title, style: Theme.of(context).textTheme.titleLarge),
                 const SizedBox(height: 8),
