@@ -29,7 +29,7 @@ void main() {
 
     await tester.pumpAndSettle();
 
-    expect(find.text('goresave'), findsOneWidget);
+    expect(find.text('Gothic Remake Savegame Editor'), findsOneWidget);
     expect(find.text('Die Welt der Verurteilten'), findsAtLeastNWidgets(1));
     expect(find.text('Overview'), findsOneWidget);
     expect(find.text('Public save name'), findsOneWidget);

@@ -41,7 +41,15 @@ class EditorPage extends ConsumerWidget {
                 semanticLabel: 'goresave logo',
               ),
               const SizedBox(width: 10),
-              const Text('Gothic Remake Savegame Editor'),
+              // Flexible + ellipsis: at narrow window widths the long title
+              // must truncate instead of overflowing the title bar row.
+              const Flexible(
+                child: Text(
+                  'Gothic Remake Savegame Editor',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
               const Expanded(child: SizedBox()),
             ],
           ),
