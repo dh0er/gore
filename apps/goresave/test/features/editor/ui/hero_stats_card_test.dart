@@ -164,7 +164,7 @@ void main() {
     expect(find.text('legacy editor'), findsOneWidget);
   });
 
-  testWidgets('zero attributes render fallback and disable save',
+  testWidgets('zero attributes render fallback without a save button',
       (tester) async {
     await tester.pumpWidget(
       MaterialApp(
@@ -182,14 +182,9 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('legacy editor'), findsOneWidget);
-    // Save button must be disabled when attributes are empty.
-    final saveButton = tester.widget<IconButton>(
-      find.descendant(
-        of: find.byTooltip('Save hero stats'),
-        matching: find.byType(IconButton),
-      ),
-    );
-    expect(saveButton.onPressed, isNull);
+    // The fallback editor has its own save affordances; the hero-stats save
+    // button is not rendered at all in this state.
+    expect(find.byTooltip('Save hero stats'), findsNothing);
   });
 
   testWidgets('reloadKey change refreshes row values', (tester) async {

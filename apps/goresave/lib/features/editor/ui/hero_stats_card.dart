@@ -178,10 +178,20 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
     }
 
     if ((_loadFailed || _attributes.isEmpty) && widget.fallback != null) {
+      // The fallback editor has its own save affordances; a permanently
+      // disabled hero-stats save button above it would only confuse. Keep
+      // the error text so the user sees why the typed editors are gone.
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          saveControlRow,
+          if (_error != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Text(
+                _error!,
+                style: TextStyle(color: theme.colorScheme.error),
+              ),
+            ),
           widget.fallback!,
         ],
       );
@@ -208,6 +218,8 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
     for (final group in HeroAttributeGroup.values) {
       final attributes = byGroup[group];
       if (attributes == null || attributes.isEmpty) continue;
+      // Same 16px rhythm as the sibling top-level cards in the Player tab.
+      if (cards.isNotEmpty) cards.add(const SizedBox(height: 16));
       if (group == HeroAttributeGroup.advanced) {
         cards.add(
           Card(
@@ -249,9 +261,6 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
             ),
           ),
         );
-      }
-      if (group != HeroAttributeGroup.values.last) {
-        cards.add(const SizedBox(height: 8));
       }
     }
     return cards;
