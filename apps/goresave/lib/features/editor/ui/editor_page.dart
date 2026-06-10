@@ -173,29 +173,6 @@ class _SaveSidebar extends StatelessWidget {
       ),
       child: Column(
         children: [
-          Padding(
-            padding: const EdgeInsets.all(12),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    state.saveDir,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                ),
-                Tooltip(
-                  message: 'Choose folder',
-                  child: IconButton(
-                    icon: const Icon(Icons.folder_open_outlined),
-                    onPressed: state.isLoading ? null : notifier.chooseSaveDir,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const Divider(height: 1),
           _ProfileHeader(profile: state.activeProfile, saveCount: saves.length),
           Expanded(
             child: saves.isEmpty
@@ -514,7 +491,17 @@ class _EditorWorkspace extends StatelessWidget {
                     ),
                   ),
                   Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    padding: const EdgeInsets.only(right: 8),
+                    child: OutlinedButton.icon(
+                      icon: const Icon(Icons.undo),
+                      label: const Text('Reset'),
+                      onPressed: pendingCount > 0 && !state.isLoading
+                          ? notifier.refresh
+                          : null,
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.only(right: 12),
                     child: FilledButton.icon(
                       icon: const Icon(Icons.save_outlined),
                       label: Text(
@@ -581,41 +568,58 @@ class _EditorWorkspace extends StatelessWidget {
             Expanded(
               child: TabBarView(
                 children: [
-                  _OverviewPanel(
-                    inspection: inspection,
-                    notifier: notifier,
-                    selectedSave: state.selectedSave,
+                  _KeepAliveTab(
+                    child: _OverviewPanel(
+                      inspection: inspection,
+                      notifier: notifier,
+                      selectedSave: state.selectedSave,
+                    ),
                   ),
-                  _PrivatePanel(
-                    icon: Icons.person_outline,
-                    title: 'Player',
-                    inspection: inspection,
-                    notifier: notifier,
-                    // Private writes recompress the payload, so also require the
-                    // codec host to be compress-ready (auto-trusted or verified
-                    // this session), not just decode-ready.
-                    editable:
-                        inspection.privateEditable && state.codecCompressReady,
-                    lockedBody:
-                        'Private player edits need a verified G1R codec host.',
+                  _KeepAliveTab(
+                    child: _PrivatePanel(
+                      icon: Icons.person_outline,
+                      title: 'Player',
+                      inspection: inspection,
+                      notifier: notifier,
+                      // Private writes recompress the payload, so also require the
+                      // codec host to be compress-ready (auto-trusted or verified
+                      // this session), not just decode-ready.
+                      editable:
+                          inspection.privateEditable && state.codecCompressReady,
+                      lockedBody:
+                          'Private player edits need a verified G1R codec host.',
+                    ),
                   ),
-                  _InventoryPanel(
-                    inspection: inspection,
-                    notifier: notifier,
-                    canCompress: state.codecCompressReady,
+                  _KeepAliveTab(
+                    child: _InventoryPanel(
+                      inspection: inspection,
+                      notifier: notifier,
+                      canCompress: state.codecCompressReady,
+                    ),
                   ),
-                  _ProgressionPanel(inspection: inspection, notifier: notifier),
-                  _AllDataPanel(
-                    inspection: inspection,
-                    notifier: notifier,
-                    // Typed writes recompress the private payload, so require a
-                    // full private decode (not a preview) plus a compress-ready
-                    // codec, matching the Player and Inventory gating.
-                    editable:
-                        inspection.privateEditable && state.codecCompressReady,
+                  _KeepAliveTab(
+                    child: _ProgressionPanel(
+                      inspection: inspection,
+                      notifier: notifier,
+                    ),
                   ),
-                  _BackupsPanel(state: state, notifier: notifier),
-                  _SettingsPanel(state: state, notifier: notifier),
+                  _KeepAliveTab(
+                    child: _AllDataPanel(
+                      inspection: inspection,
+                      notifier: notifier,
+                      // Typed writes recompress the private payload, so require a
+                      // full private decode (not a preview) plus a compress-ready
+                      // codec, matching the Player and Inventory gating.
+                      editable:
+                          inspection.privateEditable && state.codecCompressReady,
+                    ),
+                  ),
+                  _KeepAliveTab(
+                    child: _BackupsPanel(state: state, notifier: notifier),
+                  ),
+                  _KeepAliveTab(
+                    child: _SettingsPanel(state: state, notifier: notifier),
+                  ),
                 ],
               ),
             ),
@@ -645,6 +649,33 @@ class _EditorWorkspace extends StatelessWidget {
           ),
       ],
     );
+  }
+}
+
+/// Keeps a tab's widget tree alive when the user switches to another tab so
+/// that unsaved field state (and the matching pending-edit registry entries)
+/// stay consistent. Without this, TabBarView disposes off-screen tabs, which
+/// destroys field controllers while the pending registry still counts those
+/// edits — leading to a visible mismatch where typed text vanishes but the
+/// Save button still shows a non-zero count.
+class _KeepAliveTab extends StatefulWidget {
+  const _KeepAliveTab({required this.child});
+
+  final Widget child;
+
+  @override
+  State<_KeepAliveTab> createState() => _KeepAliveTabState();
+}
+
+class _KeepAliveTabState extends State<_KeepAliveTab>
+    with AutomaticKeepAliveClientMixin {
+  @override
+  bool get wantKeepAlive => true;
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context); // required by AutomaticKeepAliveClientMixin
+    return widget.child;
   }
 }
 
@@ -1038,6 +1069,7 @@ class _MetadataEditor extends StatefulWidget {
 
 class _MetadataEditorState extends State<_MetadataEditor> {
   late final TextEditingController _controller;
+  Object? _inspectionIdentity;
   String? _path;
   String? _name;
   String? _error;
@@ -1063,10 +1095,15 @@ class _MetadataEditorState extends State<_MetadataEditor> {
 
   void _sync() {
     final name = widget.inspection.playerSaveName ?? '';
-    // Also resync when the name changes for the same path (e.g. after a restore
-    // or rescan returns updated metadata), so the field doesn't keep showing
-    // the stale name.
-    if (_path == widget.inspection.path && _name == name) return;
+    // Re-seed whenever the inspection identity changes (e.g. after a Reset /
+    // refresh that produces a new SaveInspection instance) or when path/name
+    // changes. This ensures that after a Reset the field visually reverts to
+    // the canonical value even if the canonical value itself did not change.
+    final sameIdentity = identical(widget.inspection, _inspectionIdentity);
+    if (sameIdentity && _path == widget.inspection.path && _name == name) {
+      return;
+    }
+    _inspectionIdentity = widget.inspection;
     _path = widget.inspection.path;
     _name = name;
     _controller.text = name;
@@ -1186,6 +1223,7 @@ class _PrivatePanel extends StatelessWidget {
           player: inspection.privatePlayer,
           notifier: notifier,
           editable: editable,
+          reloadKey: inspection,
         ),
       ),
     );
@@ -1204,6 +1242,7 @@ class _PrivatePanel extends StatelessWidget {
                 'private.player.setTransform',
               ),
           notifier: notifier,
+          reloadKey: inspection,
         ),
       ),
     );
@@ -1324,7 +1363,7 @@ class _CollapsibleCardHeader extends StatelessWidget {
   }
 }
 
-class _InventoryPanel extends StatefulWidget {
+class _InventoryPanel extends StatelessWidget {
   const _InventoryPanel({
     required this.inspection,
     required this.notifier,
@@ -1336,15 +1375,7 @@ class _InventoryPanel extends StatefulWidget {
   final bool canCompress;
 
   @override
-  State<_InventoryPanel> createState() => _InventoryPanelState();
-}
-
-class _InventoryPanelState extends State<_InventoryPanel> {
-  bool _itemsOpen = true;
-
-  @override
   Widget build(BuildContext context) {
-    final inspection = widget.inspection;
     if (!inspection.privateDecoded) {
       return const _MessagePane(
         icon: Icons.inventory_2_outlined,
@@ -1363,31 +1394,22 @@ class _InventoryPanelState extends State<_InventoryPanel> {
         body: 'No item stacks found in the decoded private payload.',
       );
     }
-    final itemsOpen = _itemsOpen;
     // Inventory writes recompress the payload too, so require a
     // compress-capable codec host in addition to a full decode.
     // The core only allows count edits in a detected player
     // inventory region, advertised via writable; gate on it so other
     // scopes don't show editors whose saves fail in the core.
-    final itemsCard = _PrivateInventorySummaryCard(
-      inventory: inspection.privateInventory,
-      notifier: widget.notifier,
-      editable:
-          inspection.privateEditable &&
-          widget.canCompress &&
-          inspection.privateInventory.writable.contains(
-            'private.inventory.setItemCount',
-          ),
-      expanded: itemsOpen,
-      onToggle: () => setState(() => _itemsOpen = !_itemsOpen),
-    );
     return Padding(
       padding: const EdgeInsets.all(20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          if (itemsOpen) Expanded(child: itemsCard) else itemsCard,
-        ],
+      child: _PrivateInventorySummaryCard(
+        inventory: inspection.privateInventory,
+        notifier: notifier,
+        editable:
+            inspection.privateEditable &&
+            canCompress &&
+            inspection.privateInventory.writable.contains(
+              'private.inventory.setItemCount',
+            ),
       ),
     );
   }
@@ -1593,15 +1615,11 @@ class _PrivateInventorySummaryCard extends StatefulWidget {
     required this.inventory,
     required this.notifier,
     this.editable = true,
-    this.expanded = true,
-    this.onToggle,
   });
 
   final PrivateInventorySummary inventory;
   final EditorNotifier notifier;
   final bool editable;
-  final bool expanded;
-  final VoidCallback? onToggle;
 
   @override
   State<_PrivateInventorySummaryCard> createState() =>
@@ -1656,15 +1674,20 @@ class _PrivateInventorySummaryCardState
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: widget.expanded ? MainAxisSize.max : MainAxisSize.min,
           children: [
-            _CollapsibleCardHeader(
-              icon: Icons.inventory_2_outlined,
-              title: 'Inventory',
-              expanded: widget.expanded,
-              onToggle: widget.onToggle,
+            Row(
+              children: [
+                const Icon(Icons.inventory_2_outlined),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Inventory',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                ),
+              ],
             ),
-            if (widget.expanded && items.isNotEmpty) ...[
+            if (items.isNotEmpty) ...[
               const SizedBox(height: 16),
               Text(
                 'Observed item stacks',
@@ -1876,11 +1899,16 @@ class _PrivatePlayerTransformEditor extends StatefulWidget {
     required this.transform,
     required this.editable,
     required this.notifier,
+    this.reloadKey,
   });
 
   final PrivatePlayerTransform transform;
   final bool editable;
   final EditorNotifier notifier;
+  // When provided, a change in identity triggers a field reseed even if the
+  // transform values haven't changed (e.g. Reset followed by re-inspect that
+  // returns the same values).
+  final Object? reloadKey;
 
   @override
   State<_PrivatePlayerTransformEditor> createState() =>
@@ -1896,6 +1924,10 @@ class _PrivatePlayerTransformEditorState
   late final TextEditingController _rotationYawController;
   late final TextEditingController _rotationRollController;
   PrivatePlayerTransform? _lastTransform;
+  // Track the inspection (widget parent) identity so that a Reset/refresh that
+  // produces a new inspection instance triggers a reseed even when the
+  // transform values themselves haven't changed.
+  Object? _inspectionIdentity;
   String? _error;
 
   @override
@@ -1930,7 +1962,16 @@ class _PrivatePlayerTransformEditorState
   void _sync() {
     final transform = widget.transform;
     final last = _lastTransform;
-    if (last != null &&
+    // Re-seed on reloadKey identity change (e.g. after Reset/refresh that
+    // produces a new SaveInspection) even when the transform values themselves
+    // are unchanged, so the fields visually revert after a Reset.
+    final newKey = widget.reloadKey;
+    final sameKey = newKey == null || identical(newKey, _inspectionIdentity);
+    if (!sameKey) {
+      _inspectionIdentity = newKey;
+    }
+    if (sameKey &&
+        last != null &&
         last.location.x == transform.location.x &&
         last.location.y == transform.location.y &&
         last.location.z == transform.location.z &&
@@ -2143,11 +2184,13 @@ class _PrivatePlayerAttributesEditor extends StatelessWidget {
     required this.player,
     required this.notifier,
     this.editable = true,
+    this.reloadKey,
   });
 
   final PrivatePlayerSummary player;
   final EditorNotifier notifier;
   final bool editable;
+  final Object? reloadKey;
 
   @override
   Widget build(BuildContext context) {
@@ -2179,6 +2222,7 @@ class _PrivatePlayerAttributesEditor extends StatelessWidget {
                       notifier: notifier,
                       editable: editable,
                       compact: compact,
+                      reloadKey: reloadKey,
                     ),
                   )
                   .toList(),
@@ -2196,12 +2240,17 @@ class _PrivatePlayerAttributeRow extends StatefulWidget {
     required this.notifier,
     required this.editable,
     required this.compact,
+    this.reloadKey,
   });
 
   final PrivatePlayerAttribute attribute;
   final EditorNotifier notifier;
   final bool editable;
   final bool compact;
+  // When provided, a change in identity triggers a field reseed even if the
+  // attribute values haven't changed (e.g. after a Reset that reverts to the
+  // same canonical value).
+  final Object? reloadKey;
 
   @override
   State<_PrivatePlayerAttributeRow> createState() =>
@@ -2215,6 +2264,7 @@ class _PrivatePlayerAttributeRowState
   String? _lastId;
   double? _lastBase;
   double? _lastCurrent;
+  Object? _lastReloadKey;
   String? _error;
 
   @override
@@ -2240,7 +2290,13 @@ class _PrivatePlayerAttributeRowState
 
   void _sync() {
     final attribute = widget.attribute;
-    if (_lastId == attribute.id &&
+    final newKey = widget.reloadKey;
+    final sameKey = newKey == null || identical(newKey, _lastReloadKey);
+    if (!sameKey) {
+      _lastReloadKey = newKey;
+    }
+    if (sameKey &&
+        _lastId == attribute.id &&
         _lastBase == attribute.baseValue &&
         _lastCurrent == attribute.currentValue) {
       return;
@@ -2405,10 +2461,14 @@ class _AllDataPanelState extends State<_AllDataPanel> {
   int _requestSeq = 0;
   int _pageSize = 50;
   String _activeQuery = '';
+  // Tracks the inspection identity so _TypedPropertyRow can reset draft text
+  // when a Reset/refresh produces a new inspection (same path, same values).
+  Object? _inspectionReloadKey;
 
   @override
   void initState() {
     super.initState();
+    _inspectionReloadKey = widget.inspection;
     // Empty query lists everything — show the first page as soon as the tab
     // opens for a decoded save.
     if (widget.inspection.privateDecoded) {
@@ -2430,6 +2490,7 @@ class _AllDataPanelState extends State<_AllDataPanel> {
       _activeQuery = '';
       // Invalidate any in-flight search for the previous save.
       _requestSeq++;
+      _inspectionReloadKey = widget.inspection;
       setState(() {
         _result = null;
         _searching = false;
@@ -2441,8 +2502,10 @@ class _AllDataPanelState extends State<_AllDataPanel> {
       }
     } else if (!identical(widget.inspection, oldWidget.inspection)) {
       // Same path but a new SaveInspection instance — the save was written and
-      // refreshed. Re-run the active query at the current offset so the All
-      // data panel shows the post-save values rather than stale pre-save rows.
+      // refreshed (or Reset). Re-run the active query so the All data panel
+      // shows the post-save values; also update the reloadKey so row fields
+      // reseed their draft text to the canonical value.
+      _inspectionReloadKey = widget.inspection;
       if (widget.inspection.privateDecoded) {
         final currentOffset = _result?.offset ?? 0;
         WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -2506,55 +2569,60 @@ class _AllDataPanelState extends State<_AllDataPanel> {
     final theme = Theme.of(context);
     return Padding(
       padding: const EdgeInsets.all(20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
+      child: Card(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const Icon(Icons.tune),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text('All data', style: theme.textTheme.titleMedium),
+              Row(
+                children: [
+                  const Icon(Icons.tune),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text('All data', style: theme.textTheme.titleMedium),
+                  ),
+                ],
               ),
+              const SizedBox(height: 4),
+              Text(
+                'Search every typed property by name or path. Scalars, strings, '
+                'enums and object paths are editable; structs are shown '
+                'read-only for now.',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _controller,
+                decoration: InputDecoration(
+                  labelText:
+                      'Search properties (empty = list everything) — e.g. Health, GameTime',
+                  prefixIcon: const Icon(Icons.search),
+                  suffixIcon: _searching
+                      ? const Padding(
+                          padding: EdgeInsets.all(12),
+                          child: SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                        )
+                      : IconButton(
+                          icon: const Icon(Icons.arrow_forward),
+                          onPressed: () => _run(offset: 0, newQuery: true),
+                        ),
+                ),
+                onSubmitted: (_) => _run(offset: 0, newQuery: true),
+              ),
+              const SizedBox(height: 12),
+              _buildPaginationBar(theme),
+              const SizedBox(height: 8),
+              Expanded(child: _buildResults(theme)),
             ],
           ),
-          const SizedBox(height: 4),
-          Text(
-            'Search every typed property by name or path. Scalars, strings, '
-            'enums and object paths are editable; structs are shown '
-            'read-only for now.',
-            style: theme.textTheme.bodySmall?.copyWith(
-              color: theme.colorScheme.onSurfaceVariant,
-            ),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _controller,
-            decoration: InputDecoration(
-              labelText:
-                  'Search properties (empty = list everything) — e.g. Health, GameTime',
-              prefixIcon: const Icon(Icons.search),
-              suffixIcon: _searching
-                  ? const Padding(
-                      padding: EdgeInsets.all(12),
-                      child: SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      ),
-                    )
-                  : IconButton(
-                      icon: const Icon(Icons.arrow_forward),
-                      onPressed: () => _run(offset: 0, newQuery: true),
-                    ),
-            ),
-            onSubmitted: (_) => _run(offset: 0, newQuery: true),
-          ),
-          const SizedBox(height: 12),
-          _buildPaginationBar(theme),
-          const SizedBox(height: 8),
-          Expanded(child: _buildResults(theme)),
-        ],
+        ),
       ),
     );
   }
@@ -2603,6 +2671,7 @@ class _AllDataPanelState extends State<_AllDataPanel> {
           hit: hit,
           editable: widget.editable && hit.editable,
           notifier: widget.notifier,
+          reloadKey: _inspectionReloadKey,
         );
       },
     );
@@ -2684,11 +2753,15 @@ class _TypedPropertyRow extends StatefulWidget {
     required this.hit,
     required this.editable,
     required this.notifier,
+    this.reloadKey,
   });
 
   final TypedPropertyHit hit;
   final bool editable;
   final EditorNotifier notifier;
+  // When provided, a change in identity forces a reseed of the field from the
+  // canonical hit value (e.g. after a Reset that reverts to the same value).
+  final Object? reloadKey;
 
   @override
   State<_TypedPropertyRow> createState() => _TypedPropertyRowState();
@@ -2702,16 +2775,32 @@ class _TypedPropertyRowState extends State<_TypedPropertyRow> {
   // state, so without this it would snap back to the canonical value on the
   // next rebuild even though the pending edit is registered.
   bool? _boolDraft;
+  Object? _lastReloadKey;
+
+  @override
+  void initState() {
+    super.initState();
+    _lastReloadKey = widget.reloadKey;
+  }
 
   @override
   void didUpdateWidget(covariant _TypedPropertyRow oldWidget) {
     super.didUpdateWidget(oldWidget);
+    // Re-seed when the reloadKey identity changes (e.g. after Reset/refresh
+    // that produces a new inspection — same canonical value, draft must go).
+    final newKey = widget.reloadKey;
+    final keyChanged =
+        newKey != null && !identical(newKey, _lastReloadKey);
+    if (keyChanged) {
+      _lastReloadKey = newKey;
+    }
     // A successful save refreshes the list and rebinds this row to a hit with
     // the persisted (possibly normalized) value. Sync the field to it so it
     // stops showing the pre-save text. Only rows whose value actually changed
     // update, so an unrelated row's save cannot clobber in-progress typing here.
-    if (widget.hit.value != oldWidget.hit.value &&
-        _controller.text != widget.hit.value) {
+    if (keyChanged ||
+        (widget.hit.value != oldWidget.hit.value &&
+            _controller.text != widget.hit.value)) {
       _controller.text = widget.hit.value;
       _boolDraft = null;
       // No registry mutation here: provider writes are illegal during the
@@ -3122,6 +3211,33 @@ class _SettingsPanel extends StatelessWidget {
       padding: const EdgeInsets.all(20),
       children: [
         const AppearanceSettingsCard(),
+        const SizedBox(height: 16),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Icon(Icons.folder_outlined),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Savegame directory',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                _PathSettingRow(
+                  label: 'Folder',
+                  value: state.saveDir,
+                  onBrowse: notifier.chooseSaveDir,
+                ),
+              ],
+            ),
+          ),
+        ),
         const SizedBox(height: 16),
         Card(
           child: Padding(

@@ -329,9 +329,15 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    _groupTitles[group]!,
-                    style: theme.textTheme.titleSmall,
+                  Row(
+                    children: [
+                      Icon(_entryIcon(entry)),
+                      const SizedBox(width: 8),
+                      Text(
+                        _groupTitles[group]!,
+                        style: theme.textTheme.titleSmall,
+                      ),
+                    ],
                   ),
                   const SizedBox(height: 4),
                   for (final a in attributes) _row(a),

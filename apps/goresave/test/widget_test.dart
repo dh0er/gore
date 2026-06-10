@@ -319,6 +319,121 @@ void main() {
     );
   });
 
+  testWidgets(
+    'switching tabs preserves unsaved edit and Save count',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1400, 1000));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final core = _FakeCoreService();
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            coreServiceProvider.overrideWithValue(core),
+            editorSettingsStoreProvider.overrideWithValue(
+              const NoopEditorSettingsStore(),
+            ),
+          ],
+          child: const GoresaveApp(),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Enter a draft in the public name field on Overview.
+      await tester.enterText(
+        find.widgetWithText(TextField, 'Public save name'),
+        'Draft Name',
+      );
+      await tester.pump();
+      // Save button now shows 1 pending edit.
+      expect(find.widgetWithText(FilledButton, 'Save (1)'), findsOneWidget);
+
+      // Switch to Player tab.
+      await tester.tap(find.widgetWithText(Tab, 'Player'));
+      await tester.pumpAndSettle();
+
+      // Save count must still be 1 (tab switch must not drop pending edits).
+      expect(find.widgetWithText(FilledButton, 'Save (1)'), findsOneWidget);
+
+      // Switch back to Overview tab.
+      await tester.tap(find.widgetWithText(Tab, 'Overview'));
+      await tester.pumpAndSettle();
+
+      // The draft text must still be visible in the field.
+      final field = find.widgetWithText(TextField, 'Public save name');
+      final editableText = tester.widget<EditableText>(
+        find.descendant(of: field, matching: find.byType(EditableText)),
+      );
+      expect(editableText.controller.text, 'Draft Name');
+      // Save button still shows 1.
+      expect(find.widgetWithText(FilledButton, 'Save (1)'), findsOneWidget);
+    },
+  );
+
+  testWidgets('Reset button discards pending and restores field text',
+      (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1400, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final core = _FakeCoreService();
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          coreServiceProvider.overrideWithValue(core),
+          editorSettingsStoreProvider.overrideWithValue(
+            const NoopEditorSettingsStore(),
+          ),
+        ],
+        child: const GoresaveApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // Confirm Reset is disabled with no pending edits.
+    final resetFinder = find.widgetWithText(OutlinedButton, 'Reset');
+    expect(resetFinder, findsOneWidget);
+    expect(
+      tester.widget<OutlinedButton>(resetFinder).onPressed,
+      isNull,
+    );
+
+    // Enter a draft in the public name field.
+    final originalName = 'Die Welt der Verurteilten';
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Public save name'),
+      'Edited Name',
+    );
+    await tester.pump();
+    expect(find.widgetWithText(FilledButton, 'Save (1)'), findsOneWidget);
+    // Reset should now be enabled.
+    expect(
+      tester.widget<OutlinedButton>(resetFinder).onPressed,
+      isNotNull,
+    );
+
+    // Tap Reset.
+    await tester.tap(resetFinder);
+    await tester.pumpAndSettle();
+
+    // Pending count must be 0 and Reset disabled again.
+    expect(find.widgetWithText(FilledButton, 'Save'), findsOneWidget);
+    expect(
+      tester
+          .widget<FilledButton>(find.widgetWithText(FilledButton, 'Save'))
+          .onPressed,
+      isNull,
+    );
+    expect(
+      tester.widget<OutlinedButton>(resetFinder).onPressed,
+      isNull,
+    );
+
+    // The field must display the canonical (original) name again.
+    final field = find.widgetWithText(TextField, 'Public save name');
+    final editableText = tester.widget<EditableText>(
+      find.descendant(of: field, matching: find.byType(EditableText)),
+    );
+    expect(editableText.controller.text, originalName);
+  });
+
   testWidgets('shows loading spinner in main editor view', (tester) async {
     final core = _SlowInspectCoreService();
     await tester.pumpWidget(
