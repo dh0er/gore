@@ -807,25 +807,8 @@ class EditorNotifier extends StateNotifier<EditorState> {
   Future<bool> writeTypedValue({
     required List<String> propertyPath,
     required Object value,
-  }) async {
-    final savePath = state.selectedPath;
-    if (savePath == null) return false;
-    return _runWrite(
-      payload: {
-        'path': savePath,
-        'backup': true,
-        'edits': [
-          {
-            'path': 'private.typed.setValue',
-            'value': {'path': propertyPath, 'value': value},
-          },
-        ],
-        ..._codecPayload(),
-      },
-      message: (data) =>
-          _backupMessage('Typed value saved with backup', data),
-    );
-  }
+  }) =>
+      writeTypedValues([TypedValueEdit(path: propertyPath, value: value)]);
 
   /// Search query that returns exactly the hero attribute leaves: both terms
   /// must appear in the display path, which only holds for entries under
@@ -843,13 +826,21 @@ class EditorNotifier extends StateNotifier<EditorState> {
     if (result.error != null) {
       return HeroAttributesResult(error: result.error);
     }
+    if (result.total > result.results.length) {
+      return HeroAttributesResult(
+        error:
+            'Hero attribute search returned ${result.total} hits; only the '
+            'first ${result.results.length} were loaded.',
+      );
+    }
     return HeroAttributesResult(
       attributes: parseHeroAttributes(result.results),
     );
   }
 
   /// Apply several typed edits as one write_save call: one backup, one
-  /// re-inspect, all-or-nothing from the user's point of view.
+  /// re-inspect, all-or-nothing from the user's point of view. An empty list
+  /// is a successful no-op: no write is performed and no backup is created.
   Future<bool> writeTypedValues(List<TypedValueEdit> edits) async {
     if (edits.isEmpty) return true;
     final savePath = state.selectedPath;

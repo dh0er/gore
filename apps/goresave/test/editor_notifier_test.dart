@@ -562,6 +562,90 @@ void main() {
     ]);
   });
 
+  test('writeTypedValues with empty list is a no-op', () async {
+    final core = _RecordingCoreService();
+    final notifier = EditorNotifier(
+      core,
+      saveDir: r'C:\tmp\saves',
+      codecHostPath: r'C:\tools\goresave_g1r_codec_host.exe',
+      gameExePath: r'C:\Games\G1R\G1R-Win64-Shipping.exe',
+    );
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+    final ok = await notifier.writeTypedValues(const []);
+
+    expect(ok, isTrue);
+    expect(
+      core.requests.where((r) => r.command == 'write_save'),
+      isEmpty,
+    );
+  });
+
+  test('writeTypedValues without selected save returns false', () async {
+    final core = _RecordingCoreService();
+    final notifier = EditorNotifier(
+      core,
+      saveDir: r'C:\tmp\saves',
+      codecHostPath: r'C:\tools\goresave_g1r_codec_host.exe',
+      gameExePath: r'C:\Games\G1R\G1R-Win64-Shipping.exe',
+    );
+
+    final ok = await notifier.writeTypedValues(
+      const [TypedValueEdit(path: ['a'], value: 1)],
+    );
+
+    expect(ok, isFalse);
+    expect(
+      core.requests.where((r) => r.command == 'write_save'),
+      isEmpty,
+    );
+  });
+
+  test('loadHeroAttributes surfaces truncated results as error', () async {
+    final core = _RecordingCoreService(
+      typedSearchData: {
+        'query': 'AttributesByGlobalId {Hero}',
+        'offset': 0,
+        'limit': 1000,
+        'total': 2000,
+        'count': 1,
+        'results': [
+          {
+            'path': [
+              'm_GenericData',
+              '{CharacterStates}',
+              'AnyCharacterType',
+              'AttributesByGlobalId',
+              '{Hero}',
+              'AttributeSetsByClass',
+              '{/Script/G1R.AttributeSet_Health}',
+              'Attributes',
+              '{MaxHealth}',
+              'BaseValue',
+            ],
+            'display': '…',
+            'type': 'FloatProperty',
+            'value': '64',
+            'editable': true,
+          },
+        ],
+      },
+    );
+    final notifier = EditorNotifier(
+      core,
+      saveDir: r'C:\tmp\saves',
+      codecHostPath: r'C:\tools\goresave_g1r_codec_host.exe',
+      gameExePath: r'C:\Games\G1R\G1R-Win64-Shipping.exe',
+    );
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+    final result = await notifier.loadHeroAttributes();
+
+    expect(result.error, isNotNull);
+    expect(result.error, contains('2000'));
+    expect(result.attributes, isEmpty);
+  });
+
   test(
     'writeInventoryItemCount sends host-backed private inventory edit',
     () async {
