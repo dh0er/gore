@@ -101,7 +101,6 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
     setState(() {
       _loading = true;
       _pending.clear();
-      _selected = null;
     });
     final result = await widget.load();
     // Discard results from superseded reload calls (e.g. rapid reloadKey
@@ -112,7 +111,11 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
       _error = result.error;
       _loadFailed = result.error != null;
       _attributes = result.attributes;
-      _selected = _defaultSelection(result.attributes);
+      // Keep the user's pane across save-triggered reloads (every save makes
+      // a new inspection and lands here); only pick the default when nothing
+      // is selected yet. effectiveSelected guards against entries that
+      // disappeared.
+      _selected ??= _defaultSelection(result.attributes);
     });
   }
 
@@ -228,11 +231,12 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
                 style: TextStyle(color: theme.colorScheme.error),
               ),
             ),
-          if (widget.transformCard != null) ...[
-            widget.transformCard!,
-            const SizedBox(height: 16),
-          ],
+          // Same order as the legacy stacked path: attributes first.
           widget.fallback!,
+          if (widget.transformCard != null) ...[
+            const SizedBox(height: 16),
+            widget.transformCard!,
+          ],
         ],
       );
     }
@@ -308,10 +312,19 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
       ),
     );
 
-    // Build the detail content for the selected entry.
+    // Build the detail content for the selected entry. The save control row
+    // is shown on every pane (including transform) so pending hero-stat
+    // edits from other groups — and their validation errors — stay visible
+    // and saveable wherever the user is.
     Widget detailContent;
     if (effectiveSelected == _SidebarEntry.transform) {
-      detailContent = widget.transformCard!;
+      detailContent = Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          saveControlRow,
+          widget.transformCard!,
+        ],
+      );
     } else {
       final group = _entryToGroup(effectiveSelected)!;
       final attributes = byGroup[group] ?? const [];

@@ -579,6 +579,51 @@ void main() {
     );
   });
 
+  testWidgets('sidebar selection survives a reloadKey change', (tester) async {
+    var reloadKey = Object();
+
+    Widget buildCard() => _wrap(
+          HeroStatsCard(
+            load: () async => HeroAttributesResult(
+              attributes: [
+                _attribute('MaxHealth', '/Script/G1R.AttributeSet_Health', 64),
+                _attribute(
+                  'Critical_OneHand',
+                  '/Script/G1R.AttributeSet_Critical',
+                  3,
+                ),
+              ],
+            ),
+            save: (_) async => true,
+            editable: true,
+            reloadKey: reloadKey,
+          ),
+        );
+
+    await tester.pumpWidget(buildCard());
+    await tester.pumpAndSettle();
+
+    // Navigate to Combat skills.
+    await tester.tap(find.text('Combat skills'));
+    await tester.pumpAndSettle();
+    expect(
+      find.widgetWithText(TextField, 'Critical_OneHand base'),
+      findsOneWidget,
+    );
+
+    // A save produces a fresh SaveInspection upstream — simulate the reload.
+    reloadKey = Object();
+    await tester.pumpWidget(buildCard());
+    await tester.pumpAndSettle();
+
+    // Still on Combat skills, not snapped back to Main stats.
+    expect(
+      find.widgetWithText(TextField, 'Critical_OneHand base'),
+      findsOneWidget,
+    );
+    expect(find.widgetWithText(TextField, 'MaxHealth base'), findsNothing);
+  });
+
   // ---------------------------------------------------------------------------
   // formatHeroValue unit group
   // ---------------------------------------------------------------------------
