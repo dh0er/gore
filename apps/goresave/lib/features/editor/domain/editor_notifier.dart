@@ -4,6 +4,7 @@ import 'package:file_selector/file_selector.dart';
 import 'package:goresave/features/editor/domain/core_service.dart';
 import 'package:goresave/features/editor/domain/editor_models.dart';
 import 'package:goresave/features/editor/domain/editor_settings_store.dart';
+import 'package:goresave/features/editor/domain/hero_attributes.dart';
 import 'package:goresave/utils/default_paths.dart';
 import 'package:path/path.dart' as p;
 import 'package:state_notifier/state_notifier.dart';
@@ -823,6 +824,55 @@ class EditorNotifier extends StateNotifier<EditorState> {
       },
       message: (data) =>
           _backupMessage('Typed value saved with backup', data),
+    );
+  }
+
+  /// Search query that returns exactly the hero attribute leaves: both terms
+  /// must appear in the display path, which only holds for entries under
+  /// AttributesByGlobalId/{Hero}.
+  static const heroAttributesQuery = 'AttributesByGlobalId {Hero}';
+
+  /// Load every hero gameplay attribute from the typed property tree. The
+  /// decode cache is already seeded by inspect, so this does not pay a
+  /// second full private-payload decode.
+  Future<HeroAttributesResult> loadHeroAttributes() async {
+    final result = await searchTypedProperties(
+      heroAttributesQuery,
+      limit: 1000,
+    );
+    if (result.error != null) {
+      return HeroAttributesResult(error: result.error);
+    }
+    return HeroAttributesResult(
+      attributes: parseHeroAttributes(result.results),
+    );
+  }
+
+  /// Apply several typed edits as one write_save call: one backup, one
+  /// re-inspect, all-or-nothing from the user's point of view.
+  Future<bool> writeTypedValues(List<TypedValueEdit> edits) async {
+    if (edits.isEmpty) return true;
+    final savePath = state.selectedPath;
+    if (savePath == null) return false;
+    return _runWrite(
+      payload: {
+        'path': savePath,
+        'backup': true,
+        'edits': [
+          for (final edit in edits)
+            {
+              'path': 'private.typed.setValue',
+              'value': {'path': edit.path, 'value': edit.value},
+            },
+        ],
+        ..._codecPayload(),
+      },
+      message: (data) => _backupMessage(
+        edits.length == 1
+            ? 'Typed value saved with backup'
+            : '${edits.length} typed values saved with backup',
+        data,
+      ),
     );
   }
 

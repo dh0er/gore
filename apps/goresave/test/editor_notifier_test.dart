@@ -3,6 +3,7 @@ import 'package:goresave/features/editor/domain/core_service.dart';
 import 'package:goresave/features/editor/domain/editor_models.dart';
 import 'package:goresave/features/editor/domain/editor_notifier.dart';
 import 'package:goresave/features/editor/domain/editor_settings_store.dart';
+import 'package:goresave/features/editor/domain/hero_attributes.dart';
 
 void main() {
   test('uses persisted editor paths before defaults', () {
@@ -454,6 +455,113 @@ void main() {
     expect(write.payload['backup'], isTrue);
   });
 
+  test('loadHeroAttributes searches the hero attribute subtree', () async {
+    final core = _RecordingCoreService(
+      typedSearchData: {
+        'query': 'AttributesByGlobalId {Hero}',
+        'offset': 0,
+        'limit': 1000,
+        'total': 2,
+        'count': 2,
+        'results': [
+          {
+            'path': [
+              'm_GenericData',
+              '{CharacterStates}',
+              'AnyCharacterType',
+              'AttributesByGlobalId',
+              '{Hero}',
+              'AttributeSetsByClass',
+              '{/Script/G1R.AttributeSet_Health}',
+              'Attributes',
+              '{MaxHealth}',
+              'BaseValue',
+            ],
+            'display': '…',
+            'type': 'FloatProperty',
+            'value': '64',
+            'editable': true,
+          },
+          {
+            'path': [
+              'm_GenericData',
+              '{CharacterStates}',
+              'AnyCharacterType',
+              'AttributesByGlobalId',
+              '{Hero}',
+              'AttributeSetsByClass',
+              '{/Script/G1R.AttributeSet_Health}',
+              'Attributes',
+              '{MaxHealth}',
+              'CurrentValue',
+            ],
+            'display': '…',
+            'type': 'FloatProperty',
+            'value': '64',
+            'editable': true,
+          },
+        ],
+      },
+    );
+    final notifier = EditorNotifier(
+      core,
+      saveDir: r'C:\Users\Daniel\AppData\Local\G1R\Saved\SaveGames',
+      codecHostPath: r'C:\Program Files\goresave\goresave_g1r_codec_host.exe',
+      gameExePath:
+          r'C:\Program Files (x86)\Steam\steamapps\common\Gothic 1 Remake\G1R\Binaries\Win64\G1R-Win64-Shipping.exe',
+    );
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+    final result = await notifier.loadHeroAttributes();
+
+    final search = core.requests.lastWhere(
+      (request) => request.command == 'search_typed_properties',
+    );
+    expect(search.payload['query'], 'AttributesByGlobalId {Hero}');
+    expect(search.payload['limit'], 1000);
+    expect(result.error, isNull);
+    expect(result.attributes, hasLength(1));
+    expect(result.attributes.single.id, 'MaxHealth');
+  });
+
+  test('writeTypedValues batches several typed edits into one write', () async {
+    final core = _RecordingCoreService();
+    final notifier = EditorNotifier(
+      core,
+      saveDir: r'C:\Users\Daniel\AppData\Local\G1R\Saved\SaveGames',
+      codecHostPath: r'C:\Program Files\goresave\goresave_g1r_codec_host.exe',
+      gameExePath:
+          r'C:\Program Files (x86)\Steam\steamapps\common\Gothic 1 Remake\G1R\Binaries\Win64\G1R-Win64-Shipping.exe',
+    );
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+    await notifier.writeTypedValues(const [
+      TypedValueEdit(path: ['a', '{B}', 'BaseValue'], value: 65),
+      TypedValueEdit(path: ['a', '{B}', 'CurrentValue'], value: 65),
+    ]);
+
+    final write = core.requests.lastWhere(
+      (request) => request.command == 'write_save',
+    );
+    expect(write.payload['backup'], isTrue);
+    expect(write.payload['edits'], [
+      {
+        'path': 'private.typed.setValue',
+        'value': {
+          'path': ['a', '{B}', 'BaseValue'],
+          'value': 65,
+        },
+      },
+      {
+        'path': 'private.typed.setValue',
+        'value': {
+          'path': ['a', '{B}', 'CurrentValue'],
+          'value': 65,
+        },
+      },
+    ]);
+  });
+
   test(
     'writeInventoryItemCount sends host-backed private inventory edit',
     () async {
@@ -604,11 +712,15 @@ class _RecordedRequest {
 }
 
 class _RecordingCoreService implements GoresaveCoreService {
-  _RecordingCoreService({Map<String, Object?>? scanData, this.codecCanCompress = true})
-    : scanData = scanData ?? {'saves': <Object?>[]};
+  _RecordingCoreService({
+    Map<String, Object?>? scanData,
+    this.codecCanCompress = true,
+    this.typedSearchData,
+  }) : scanData = scanData ?? {'saves': <Object?>[]};
 
   final Map<String, Object?> scanData;
   final bool codecCanCompress;
+  final Map<String, Object?>? typedSearchData;
   final requests = <_RecordedRequest>[];
 
   @override
@@ -722,6 +834,19 @@ class _RecordingCoreService implements GoresaveCoreService {
               'persistentBytesChanged': true,
             },
           },
+        };
+      case 'search_typed_properties':
+        return {
+          'ok': true,
+          'data': typedSearchData ??
+              {
+                'query': '',
+                'offset': 0,
+                'limit': 1000,
+                'total': 0,
+                'count': 0,
+                'results': [],
+              },
         };
       case 'validate_codec_roundtrip':
         return {

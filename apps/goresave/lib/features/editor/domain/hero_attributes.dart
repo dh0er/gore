@@ -1,5 +1,21 @@
 import 'editor_models.dart';
 
+/// One pending `private.typed.setValue` edit.
+class TypedValueEdit {
+  const TypedValueEdit({required this.path, required this.value});
+
+  final List<String> path;
+  final Object value;
+}
+
+/// Result of loading the hero attribute subtree.
+class HeroAttributesResult {
+  const HeroAttributesResult({this.attributes = const [], this.error});
+
+  final List<HeroAttribute> attributes;
+  final String? error;
+}
+
 /// One hero gameplay attribute: the BaseValue/CurrentValue pair found at
 /// `.../AttributesByGlobalId/{Hero}/AttributeSetsByClass/{setClass}/Attributes/{id}/...`
 /// in the typed property tree. Paths are `private.typed.setValue` addressable.
@@ -78,15 +94,15 @@ String heroAttributeLabel(String id) {
 }
 
 int _groupRank(String id) {
-  const orders = [
-    heroCoreAttributeOrder,
-    heroCombatAttributes,
-    heroResistanceAttributes,
-    heroThievingAttributes,
-  ];
   final group = heroAttributeGroup(id);
-  if (group == HeroAttributeGroup.advanced) return 1 << 20;
-  final order = orders[group.index];
+  final order = switch (group) {
+    HeroAttributeGroup.core => heroCoreAttributeOrder,
+    HeroAttributeGroup.combat => heroCombatAttributes,
+    HeroAttributeGroup.resistances => heroResistanceAttributes,
+    HeroAttributeGroup.thieving => heroThievingAttributes,
+    HeroAttributeGroup.advanced => null,
+  };
+  if (order == null) return 1 << 20;
   return (group.index << 12) + order.indexOf(id);
 }
 
