@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
+import 'package:path/path.dart' as p;
 
 class UiSettings {
   const UiSettings({this.themeMode = ThemeMode.light, this.uiScale = 1.0});
@@ -64,9 +65,23 @@ class JsonFileUiSettingsStore implements UiSettingsStore {
     Map<String, String>? environment,
   }) {
     final env = environment ?? Platform.environment;
-    final root =
-        env['APPDATA'] ?? env['LOCALAPPDATA'] ?? Directory.current.path;
-    return JsonFileUiSettingsStore(File('$root\\goresave\\ui_settings.json'));
+    final String root;
+    if (Platform.isWindows) {
+      root = env['APPDATA'] ?? env['LOCALAPPDATA'] ?? Directory.current.path;
+    } else if (Platform.isMacOS) {
+      final home = env['HOME'];
+      root = home == null
+          ? Directory.current.path
+          : p.join(home, 'Library', 'Application Support');
+    } else {
+      final home = env['HOME'];
+      root =
+          env['XDG_CONFIG_HOME'] ??
+          (home == null ? Directory.current.path : p.join(home, '.config'));
+    }
+    return JsonFileUiSettingsStore(
+      File(p.join(root, 'goresave', 'ui_settings.json')),
+    );
   }
 
   final File file;

@@ -4,8 +4,15 @@ import 'package:url_launcher/url_launcher.dart';
 
 const _githubUrl = 'https://github.com/dh0er/goresave';
 
-class GoresaveAboutDialog extends StatelessWidget {
+class GoresaveAboutDialog extends StatefulWidget {
   const GoresaveAboutDialog({super.key});
+
+  @override
+  State<GoresaveAboutDialog> createState() => _GoresaveAboutDialogState();
+}
+
+class _GoresaveAboutDialogState extends State<GoresaveAboutDialog> {
+  final Future<PackageInfo> _packageInfo = PackageInfo.fromPlatform();
 
   @override
   Widget build(BuildContext context) {
@@ -28,7 +35,7 @@ class GoresaveAboutDialog extends StatelessWidget {
               ),
               const SizedBox(height: 4),
               FutureBuilder<PackageInfo>(
-                future: PackageInfo.fromPlatform(),
+                future: _packageInfo,
                 builder: (context, snapshot) {
                   final info = snapshot.data;
                   final version = info == null
