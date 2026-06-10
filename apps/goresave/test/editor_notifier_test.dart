@@ -390,6 +390,99 @@ void main() {
     expect(notifier.state.pendingEdits, isEmpty);
   });
 
+  // ---------------------------------------------------------------------------
+  // Regression tests for finding 1: central pending-edit lifecycle
+  // ---------------------------------------------------------------------------
+
+  test('refresh() clears all pending edits (same slot)', () async {
+    // Central clear on refresh prevents widgets from mutating the provider
+    // during build (which throws with flutter_riverpod).
+    final core = _RecordingCoreService();
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+    notifier.setPendingEdit(
+      'publicName',
+      const PendingSaveEdit(
+        edits: [
+          {'path': 'public.m_PlayerSaveName', 'value': 'New Name'},
+        ],
+      ),
+    );
+    notifier.setPendingEdit(
+      'heroStats',
+      const PendingSaveEdit(
+        edits: [
+          {
+            'path': 'private.typed.setValue',
+            'value': {'path': ['MaxHealth'], 'value': 99.0},
+          },
+        ],
+      ),
+    );
+    expect(notifier.state.pendingEdits.length, 2);
+
+    // Toolbar Refresh — same selected path stays selected.
+    await notifier.refresh();
+
+    expect(notifier.state.pendingEdits, isEmpty,
+        reason: 'refresh() must clear ALL pending edits');
+  });
+
+  test('restoreBackup() clears all pending edits via refresh()', () async {
+    final core = _RecordingCoreService();
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+    notifier.setPendingEdit(
+      'publicName',
+      const PendingSaveEdit(
+        edits: [
+          {'path': 'public.m_PlayerSaveName', 'value': 'Draft'},
+        ],
+      ),
+    );
+    expect(notifier.state.pendingEdits.isNotEmpty, isTrue);
+
+    await notifier.restoreBackup(r'C:\tmp\saves\G1R-001.sav.bak.200');
+
+    expect(notifier.state.pendingEdits, isEmpty,
+        reason: 'restoreBackup() must clear pending edits via refresh()');
+  });
+
+  test('pendingEditCount on EditorState counts individual edits', () async {
+    final core = _RecordingCoreService();
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+    // One entry with 2 edits and another with 1 edit → count = 3.
+    notifier.setPendingEdit(
+      'heroStats',
+      const PendingSaveEdit(
+        edits: [
+          {
+            'path': 'private.typed.setValue',
+            'value': {'path': ['MaxHealth'], 'value': 99.0},
+          },
+          {
+            'path': 'private.typed.setValue',
+            'value': {'path': ['Strength'], 'value': 20.0},
+          },
+        ],
+      ),
+    );
+    notifier.setPendingEdit(
+      'publicName',
+      const PendingSaveEdit(
+        edits: [
+          {'path': 'public.m_PlayerSaveName', 'value': 'New Name'},
+        ],
+      ),
+    );
+
+    expect(notifier.state.pendingEditCount, 3);
+  });
+
   test(
     'two rapid saveAllPending calls issue only one write (re-entry safe)',
     () async {

@@ -618,6 +618,72 @@ void main() {
   });
 
   // ---------------------------------------------------------------------------
+  // Regression: _reload must NOT call onPendingChanged during build
+  // ---------------------------------------------------------------------------
+
+  testWidgets(
+    'reloadKey change does not call onPendingChanged synchronously '
+    '(no provider mutation during build)',
+    (tester) async {
+      // Regression guard for finding 1: _reload previously called
+      // widget.onPendingChanged(const [], null) synchronously before awaiting
+      // the load future. With flutter_riverpod, calling
+      // clearPendingEdit/setPendingEdit from initState/didUpdateWidget (the
+      // call site for _reload) mutates the StateNotifier during the build
+      // phase and throws "Tried to modify a provider while the widget tree
+      // was building". The fix: _reload clears only local widget state
+      // (_pending map); the notifier centrally clears 'heroStats' in
+      // refresh() (event-handler context).
+      var callCount = 0;
+      var reloadKey = Object();
+
+      Widget buildCard() => _wrap(
+            _card(
+              load: () async => HeroAttributesResult(
+                attributes: [
+                  _attribute(
+                    'MaxHealth',
+                    '/Script/G1R.AttributeSet_Health',
+                    64,
+                  ),
+                ],
+              ),
+              onPendingChanged: (_, _) => callCount++,
+              reloadKey: reloadKey,
+            ),
+          );
+
+      await tester.pumpWidget(buildCard());
+      await tester.pumpAndSettle();
+
+      // No exception from initial load.
+      expect(tester.takeException(), isNull);
+
+      final countAfterFirstLoad = callCount;
+
+      // Simulate a save: reloadKey changes (new SaveInspection instance).
+      reloadKey = Object();
+      await tester.pumpWidget(buildCard());
+      // pump (not pumpAndSettle) to catch any synchronous mutation during the
+      // first build frame triggered by didUpdateWidget → _reload.
+      await tester.pump();
+
+      // Must not throw "Tried to modify a provider while tree was building".
+      expect(tester.takeException(), isNull);
+
+      // After settling the async load completes; the callback fires when the
+      // user changes a field, but NOT synchronously from _reload.
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+
+      // onPendingChanged should not have been called from _reload; it was only
+      // called from the initial load completion (count stays the same across
+      // the reloadKey-triggered rebuild until the user edits a field).
+      expect(callCount, countAfterFirstLoad);
+    },
+  );
+
+  // ---------------------------------------------------------------------------
   // formatHeroValue unit group
   // ---------------------------------------------------------------------------
 

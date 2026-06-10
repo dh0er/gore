@@ -98,6 +98,10 @@ class EditorState {
   final String? codecError;
   final String? lastWriteMessage;
 
+  /// Total number of edit objects across all pending keys.
+  int get pendingEditCount =>
+      pendingEdits.values.fold(0, (n, e) => n + e.edits.length);
+
   SaveSlot? get selectedSave {
     for (final save in saves) {
       if (save.path == selectedPath) return save;
@@ -271,6 +275,9 @@ class EditorNotifier extends StateNotifier<EditorState> {
   bool get coreAvailable => _core.isAvailable;
   String get coreDescription => _core.description;
 
+  /// Convenience forwarder — prefer [EditorState.pendingEditCount].
+  int get pendingEditCount => state.pendingEditCount;
+
   /// Dismiss the current error banner.
   void dismissError() {
     if (state.error != null) state = state.copyWith(clearError: true);
@@ -320,11 +327,6 @@ class EditorNotifier extends StateNotifier<EditorState> {
     state = state.copyWith(clearPendingEdits: true);
   }
 
-  /// Total number of edit objects across all pending keys.
-  int get pendingEditCount {
-    return state.pendingEdits.values.fold(0, (sum, e) => sum + e.edits.length);
-  }
-
   /// Save all pending edits in one write_save call. No-op when empty.
   /// Re-entry-safe: bails immediately if a load is already in flight.
   /// Returns true on success (or when nothing to save), false on failure.
@@ -334,11 +336,17 @@ class EditorNotifier extends StateNotifier<EditorState> {
     final savePath = state.selectedPath;
     if (savePath == null) return false;
 
-    // Build edits in stable (sorted) key order for determinism.
-    final sortedKeys = state.pendingEdits.keys.toList()..sort();
+    // Snapshot the keys in stable (sorted) order for determinism. We clear
+    // exactly these keys on success rather than using clearAllPendingEdits()
+    // so that an edit typed during the in-flight write (which lives only in
+    // widget-local text until onChanged fires again) isn't silently discarded
+    // by a subsequent refresh-clears-all; the refresh's central clear will
+    // wipe those mid-write registry entries anyway, but the snapshot-key
+    // path is the explicit safety net for any failed-then-refreshed scenarios.
+    final snapshotKeys = state.pendingEdits.keys.toList()..sort();
     final allEdits = <Map<String, Object?>>[];
     var syncPersistent = false;
-    for (final key in sortedKeys) {
+    for (final key in snapshotKeys) {
       final entry = state.pendingEdits[key]!;
       allEdits.addAll(entry.edits);
       if (entry.syncPersistentDataList) syncPersistent = true;
@@ -359,9 +367,14 @@ class EditorNotifier extends StateNotifier<EditorState> {
       ),
     );
     if (ok) {
-      // Clear pending edits on success (the refresh from _runWrite already
-      // populated fresh inspection data).
-      clearAllPendingEdits();
+      // Clear exactly the snapshot keys. The _runWrite → refresh() call has
+      // already triggered a central clearAllPendingEdits() (refresh always
+      // clears all pending), so this is a belt-and-suspenders guard for the
+      // case where a mid-write keystroke registered a new key after the
+      // snapshot was taken but before refresh ran.
+      for (final key in snapshotKeys) {
+        clearPendingEdit(key);
+      }
     }
     return ok;
   }
@@ -457,6 +470,10 @@ class EditorNotifier extends StateNotifier<EditorState> {
       final selectedPath = saves.any((save) => save.path == state.selectedPath)
           ? state.selectedPath
           : (saves.isNotEmpty ? saves.first.path : null);
+      // Clear all pending edits on every refresh: toolbar Refresh, post-save
+      // refresh, and restore-then-refresh all land here. Clearing centrally in
+      // the notifier (event-handler context) prevents widgets from mutating the
+      // provider during build, which throws with flutter_riverpod.
       state = state.copyWith(
         saves: saves,
         profiles: profiles,
@@ -464,6 +481,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
         selectedPath: selectedPath,
         clearInspection: selectedPath == null,
         clearBackups: selectedPath == null,
+        clearPendingEdits: true,
       );
       if (selectedPath != null) {
         await _inspect(selectedPath);
@@ -586,6 +604,8 @@ class EditorNotifier extends StateNotifier<EditorState> {
       state = state.copyWith(lastWriteMessage: restoreMessage);
       // Rescan so the sidebar/profile summary reflect the rolled-back public
       // name and PersistentDataList metadata, not just the detail pane.
+      // refresh() also centrally clears all pending edits (avoids mutating
+      // the provider from widget lifecycle hooks).
       await refresh();
       // The restore itself succeeded on disk; if the follow-up rescan/inspection
       // failed, make clear the restore worked so the error is not misread as a
@@ -712,84 +732,6 @@ class EditorNotifier extends StateNotifier<EditorState> {
     });
   }
 
-  Future<void> writePlayerSaveName(String value) async {
-    final path = state.selectedPath;
-    if (path == null) return;
-    await _runWrite(
-      payload: {
-        'path': path,
-        'backup': true,
-        'syncPersistentDataList': true,
-        'edits': [
-          {'path': 'public.m_PlayerSaveName', 'value': value},
-        ],
-      },
-      message: (data) => _backupMessage('Saved with backup', data),
-    );
-  }
-
-  Future<void> writePlayerAttribute({
-    required String id,
-    required double baseValue,
-    required double currentValue,
-  }) async {
-    final path = state.selectedPath;
-    if (path == null) return;
-    await _runWrite(
-      payload: {
-        'path': path,
-        'backup': true,
-        'edits': [
-          {
-            'path': 'private.player.setAttribute',
-            'value': {
-              'id': id,
-              'baseValue': baseValue,
-              'currentValue': currentValue,
-            },
-          },
-        ],
-        ..._codecPayload(),
-      },
-      message: (data) =>
-          _backupMessage('Private player attribute saved with backup', data),
-    );
-  }
-
-  Future<void> writePlayerTransform({
-    required double locationX,
-    required double locationY,
-    required double locationZ,
-    required double rotationPitch,
-    required double rotationYaw,
-    required double rotationRoll,
-  }) async {
-    final path = state.selectedPath;
-    if (path == null) return;
-    await _runWrite(
-      payload: {
-        'path': path,
-        'backup': true,
-        'edits': [
-          {
-            'path': 'private.player.setTransform',
-            'value': {
-              'location': {'x': locationX, 'y': locationY, 'z': locationZ},
-              'rotation': {
-                'pitch': rotationPitch,
-                'yaw': rotationYaw,
-                'roll': rotationRoll,
-              },
-            },
-          },
-        ],
-        ..._codecPayload(),
-      },
-      message: (data) =>
-          _backupMessage('Private player transform saved with backup', data),
-    );
-  }
-
   /// Search every typed property in the decoded private payload. The core
   /// caches the decoded payload, so the first search pays the decode cost and
   /// later searches are instant. Returns a result carrying an error string
@@ -824,21 +766,6 @@ class EditorNotifier extends StateNotifier<EditorState> {
       return TypedSearchResult(error: 'Property search failed: $error');
     }
   }
-
-  /// Layout-verified typed edit: set a fixed-size scalar (int/float/bool/
-  /// byte) or a string-valued property (Str/Name/Object/Enum and the
-  /// enum-as-byte form of ByteProperty) at a typed property path. String
-  /// edits may change the payload length; the core fixes up every enclosing
-  /// size field. Only offered by the core when the strict typed parse of the
-  /// save succeeded (`private.typed.setValue` in writable).
-  ///
-  /// Path segments: property name, `{mapKey}` for map entries, `[i]` for
-  /// container/object-array indices.
-  Future<bool> writeTypedValue({
-    required List<String> propertyPath,
-    required Object value,
-  }) =>
-      writeTypedValues([TypedValueEdit(path: propertyPath, value: value)]);
 
   /// Search query that returns exactly the hero attribute leaves: both terms
   /// must appear in the display path, which only holds for entries under
@@ -875,67 +802,6 @@ class EditorNotifier extends StateNotifier<EditorState> {
       if (offset >= result.total || result.results.isEmpty) break;
     }
     return HeroAttributesResult(attributes: parseHeroAttributes(hits));
-  }
-
-  /// Apply several typed edits as one write_save call: one backup, one
-  /// re-inspect, all-or-nothing from the user's point of view. An empty list
-  /// is a successful no-op: no write is performed and no backup is created.
-  Future<bool> writeTypedValues(List<TypedValueEdit> edits) async {
-    if (edits.isEmpty) return true;
-    final savePath = state.selectedPath;
-    if (savePath == null) return false;
-    return _runWrite(
-      payload: {
-        'path': savePath,
-        'backup': true,
-        'edits': [
-          for (final edit in edits)
-            {
-              'path': 'private.typed.setValue',
-              'value': {'path': edit.path, 'value': edit.value},
-            },
-        ],
-        ..._codecPayload(),
-      },
-      message: (data) => _backupMessage(
-        edits.length == 1
-            ? 'Typed value saved with backup'
-            : '${edits.length} typed values saved with backup',
-        data,
-      ),
-    );
-  }
-
-  Future<void> writeInventoryItemCount({
-    required String id,
-    required String path,
-    required int count,
-  }) async {
-    await writeInventoryItemCounts([
-      InventoryItemCountChange(id: id, path: path, count: count),
-    ]);
-  }
-
-  Future<void> writeInventoryItemCounts(
-    List<InventoryItemCountChange> changes,
-  ) async {
-    if (changes.isEmpty) return;
-    final savePath = state.selectedPath;
-    if (savePath == null) return;
-    await _runWrite(
-      payload: {
-        'path': savePath,
-        'backup': true,
-        'edits': changes.map((change) => change.toEditJson()).toList(),
-        ..._codecPayload(),
-      },
-      message: (data) => changes.length == 1
-          ? _backupMessage('Inventory count saved with backup', data)
-          : _backupMessage(
-              '${changes.length} inventory counts saved with backup',
-              data,
-            ),
-    );
   }
 
   String _errorMessage(Map<String, Object?> response) {

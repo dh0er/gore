@@ -103,8 +103,10 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
       _loading = true;
       _pending.clear();
     });
-    // Notify immediately that pending is cleared.
-    widget.onPendingChanged(const [], null);
+    // Do NOT call widget.onPendingChanged here: the notifier centrally clears
+    // the 'heroStats' pending entry in refresh() (event-handler context).
+    // Calling onPendingChanged → clearPendingEdit from initState/didUpdateWidget
+    // mutates the provider during build and throws with flutter_riverpod.
     final result = await widget.load();
     // Discard results from superseded reload calls (e.g. rapid reloadKey
     // changes) to avoid applying stale data over a more recent load.

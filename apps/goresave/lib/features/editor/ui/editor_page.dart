@@ -478,8 +478,7 @@ class _EditorWorkspace extends StatelessWidget {
             );
     } else {
       final inspection = state.inspection!;
-      final pendingCount = state.pendingEdits.values
-          .fold(0, (sum, e) => sum + e.edits.length);
+      final pendingCount = state.pendingEditCount;
       content = DefaultTabController(
         length: 7,
         child: Column(
@@ -1071,9 +1070,13 @@ class _MetadataEditorState extends State<_MetadataEditor> {
     _path = widget.inspection.path;
     _name = name;
     _controller.text = name;
-    // Re-evaluate pending state after a sync (e.g. after a save refreshes
-    // the canonical name back to the field).
-    _updatePending(name);
+    // Do NOT call _updatePending here: refresh() centrally clears all pending
+    // edits in the notifier (event-handler context). Calling clearPendingEdit /
+    // setPendingEdit from initState / didUpdateWidget mutates the provider
+    // during build and throws with flutter_riverpod. The field is re-seeded
+    // from the canonical value above; the next user keystroke (onChanged) will
+    // re-register a pending edit if needed.
+    setState(() => _error = null);
   }
 
   void _updatePending(String fieldText) {
@@ -1614,9 +1617,10 @@ class _PrivateInventorySummaryCardState
   void didUpdateWidget(covariant _PrivateInventorySummaryCard oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.inventory != widget.inventory) {
+      // Inventory was refreshed — clear local widget state. The notifier
+      // centrally clears 'inventory' in refresh() (event-handler context),
+      // so mutating the provider here would throw during build.
       _pendingCountChanges.clear();
-      // Inventory was refreshed — clear the pending contribution.
-      widget.notifier.clearPendingEdit('inventory');
     }
   }
 
@@ -2417,10 +2421,11 @@ class _AllDataPanelState extends State<_AllDataPanel> {
   @override
   void didUpdateWidget(covariant _AllDataPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // A different save was selected while this tab stayed mounted. The cached
-    // results belong to the old file; drop them (otherwise they show stale rows
-    // while writes target the newly selected save) and re-list from page one.
     if (widget.inspection.path != oldWidget.inspection.path) {
+      // A different save was selected while this tab stayed mounted. The cached
+      // results belong to the old file; drop them (otherwise they show stale
+      // rows while writes target the newly selected save) and re-list from
+      // page one.
       _controller.clear();
       _activeQuery = '';
       // Invalidate any in-flight search for the previous save.
@@ -2432,6 +2437,16 @@ class _AllDataPanelState extends State<_AllDataPanel> {
       if (widget.inspection.privateDecoded) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted) _run(offset: 0);
+        });
+      }
+    } else if (!identical(widget.inspection, oldWidget.inspection)) {
+      // Same path but a new SaveInspection instance — the save was written and
+      // refreshed. Re-run the active query at the current offset so the All
+      // data panel shows the post-save values rather than stale pre-save rows.
+      if (widget.inspection.privateDecoded) {
+        final currentOffset = _result?.offset ?? 0;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _run(offset: currentOffset);
         });
       }
     }
