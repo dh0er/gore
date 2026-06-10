@@ -399,6 +399,55 @@ void main() {
     expect(find.widgetWithText(TextField, 'MaxHealth base'), findsOneWidget);
   });
 
+  testWidgets('correcting an invalid input clears the stale validation error',
+      (tester) async {
+    var saveCalled = false;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: HeroStatsCard(
+              load: () async => HeroAttributesResult(
+                attributes: [
+                  _attribute(
+                    'MaxHealth',
+                    '/Script/G1R.AttributeSet_Health',
+                    64,
+                  ),
+                ],
+              ),
+              save: (_) async {
+                saveCalled = true;
+                return true;
+              },
+              editable: true,
+              reloadKey: 'save-1',
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final field = find.widgetWithText(TextField, 'MaxHealth base');
+    await tester.enterText(field, 'not a number');
+    await tester.pump();
+    await tester.tap(find.byTooltip('Save hero stats'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Invalid number'), findsOneWidget);
+
+    // Correct the field back to the original (valid, unchanged) value: the
+    // save is a no-op, but the stale error must disappear.
+    await tester.enterText(field, '64');
+    await tester.pump();
+    await tester.tap(find.byTooltip('Save hero stats'));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Invalid number'), findsNothing);
+    expect(saveCalled, isFalse);
+  });
+
   testWidgets('double-tapping save issues only one batched write',
       (tester) async {
     var saveCalls = 0;

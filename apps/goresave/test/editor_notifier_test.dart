@@ -517,35 +517,45 @@ void main() {
     );
   });
 
-  test('loadHeroAttributes surfaces truncated results as error', () async {
+  test('loadHeroAttributes pages through results beyond the search cap',
+      () async {
+    Map<String, Object?> heroHit(String id, String leaf, String value) => {
+          'path': [
+            'm_GenericData',
+            '{CharacterStates}',
+            'AnyCharacterType',
+            'AttributesByGlobalId',
+            '{Hero}',
+            'AttributeSetsByClass',
+            '{/Script/G1R.AttributeSet_Health}',
+            'Attributes',
+            '{$id}',
+            leaf,
+          ],
+          'display': '…',
+          'type': 'FloatProperty',
+          'value': value,
+          'editable': true,
+        };
     final core = _RecordingCoreService(
-      typedSearchData: {
-        'query': 'AttributesByGlobalId {Hero}',
-        'offset': 0,
-        'limit': 1000,
-        'total': 2000,
-        'count': 1,
-        'results': [
-          {
-            'path': [
-              'm_GenericData',
-              '{CharacterStates}',
-              'AnyCharacterType',
-              'AttributesByGlobalId',
-              '{Hero}',
-              'AttributeSetsByClass',
-              '{/Script/G1R.AttributeSet_Health}',
-              'Attributes',
-              '{MaxHealth}',
-              'BaseValue',
-            ],
-            'display': '…',
-            'type': 'FloatProperty',
-            'value': '64',
-            'editable': true,
-          },
-        ],
-      },
+      typedSearchPages: [
+        {
+          'query': 'AttributesByGlobalId {Hero}',
+          'offset': 0,
+          'limit': 1000,
+          'total': 2,
+          'count': 1,
+          'results': [heroHit('MaxHealth', 'BaseValue', '64')],
+        },
+        {
+          'query': 'AttributesByGlobalId {Hero}',
+          'offset': 1,
+          'limit': 1000,
+          'total': 2,
+          'count': 1,
+          'results': [heroHit('MaxHealth', 'CurrentValue', '64')],
+        },
+      ],
     );
     final notifier = EditorNotifier(
       core,
@@ -557,9 +567,18 @@ void main() {
 
     final result = await notifier.loadHeroAttributes();
 
-    expect(result.error, isNotNull);
-    expect(result.error, contains('2000'));
-    expect(result.attributes, isEmpty);
+    final searches = core.requests
+        .where((request) => request.command == 'search_typed_properties')
+        .toList();
+    expect(searches, hasLength(2));
+    expect(searches[0].payload['offset'], 0);
+    expect(searches[1].payload['offset'], 1);
+    expect(result.error, isNull);
+    // Both pages were folded into one fully paired attribute.
+    final attribute = result.attributes.single;
+    expect(attribute.id, 'MaxHealth');
+    expect(attribute.baseValue, 64);
+    expect(attribute.currentValue, 64);
   });
 
   test(
@@ -716,11 +735,18 @@ class _RecordingCoreService implements GoresaveCoreService {
     Map<String, Object?>? scanData,
     this.codecCanCompress = true,
     this.typedSearchData,
+    this.typedSearchPages,
   }) : scanData = scanData ?? {'saves': <Object?>[]};
 
   final Map<String, Object?> scanData;
   final bool codecCanCompress;
   final Map<String, Object?>? typedSearchData;
+
+  /// Per-call responses for search_typed_properties (pagination tests). The
+  /// n-th search call returns the n-th page; takes precedence over
+  /// [typedSearchData]. The last page repeats if called more often.
+  final List<Map<String, Object?>>? typedSearchPages;
+  var _typedSearchCalls = 0;
   final requests = <_RecordedRequest>[];
 
   @override
@@ -836,6 +862,12 @@ class _RecordingCoreService implements GoresaveCoreService {
           },
         };
       case 'search_typed_properties':
+        final pages = typedSearchPages;
+        if (pages != null && pages.isNotEmpty) {
+          final page = pages[_typedSearchCalls.clamp(0, pages.length - 1)];
+          _typedSearchCalls++;
+          return {'ok': true, 'data': page};
+        }
         return {
           'ok': true,
           'data': typedSearchData ??

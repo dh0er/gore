@@ -118,7 +118,12 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
         edits.add(TypedValueEdit(path: path, value: value));
       }
     }
-    if (edits.isEmpty) return;
+    if (edits.isEmpty) {
+      // The input may have just been corrected back to valid-but-unchanged;
+      // a validation error from the previous attempt must not stick around.
+      if (_error != null && !_loadFailed) setState(() => _error = null);
+      return;
+    }
     setState(() {
       _error = null;
       _saving = true;

@@ -759,26 +759,26 @@ class EditorNotifier extends StateNotifier<EditorState> {
   static const heroAttributesQuery = 'AttributesByGlobalId {Hero}';
 
   /// Load every hero gameplay attribute from the typed property tree. The
-  /// decode cache is already seeded by inspect, so this does not pay a
-  /// second full private-payload decode.
+  /// core caps each search page at 1000 hits, so page through the full match
+  /// set instead of trusting one request. The decode cache is already seeded
+  /// by inspect, so this does not pay a second full private-payload decode.
   Future<HeroAttributesResult> loadHeroAttributes() async {
-    final result = await searchTypedProperties(
-      heroAttributesQuery,
-      limit: 1000,
-    );
-    if (result.error != null) {
-      return HeroAttributesResult(error: result.error);
-    }
-    if (result.total > result.results.length) {
-      return HeroAttributesResult(
-        error:
-            'Hero attribute search returned ${result.total} hits; only the '
-            'first ${result.results.length} were loaded.',
+    final hits = <TypedPropertyHit>[];
+    var offset = 0;
+    while (true) {
+      final result = await searchTypedProperties(
+        heroAttributesQuery,
+        offset: offset,
+        limit: 1000,
       );
+      if (result.error != null) {
+        return HeroAttributesResult(error: result.error);
+      }
+      hits.addAll(result.results);
+      offset += result.results.length;
+      if (offset >= result.total || result.results.isEmpty) break;
     }
-    return HeroAttributesResult(
-      attributes: parseHeroAttributes(result.results),
-    );
+    return HeroAttributesResult(attributes: parseHeroAttributes(hits));
   }
 
   /// Apply several typed edits as one write_save call: one backup, one
