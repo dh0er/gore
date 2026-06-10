@@ -402,7 +402,7 @@ class _EditorWorkspace extends StatelessWidget {
     } else {
       final inspection = state.inspection!;
       content = DefaultTabController(
-        length: 7,
+        length: 8,
         child: Column(
           children: [
             Container(
@@ -417,6 +417,7 @@ class _EditorWorkspace extends StatelessWidget {
                     text: 'Inventory',
                   ),
                   Tab(icon: Icon(Icons.flag_outlined), text: 'Progression'),
+                  Tab(icon: Icon(Icons.tune), text: 'All data'),
                   Tab(icon: Icon(Icons.data_object), text: 'Advanced'),
                   Tab(icon: Icon(Icons.history), text: 'Backups'),
                   Tab(icon: Icon(Icons.settings_outlined), text: 'Settings'),
@@ -496,6 +497,11 @@ class _EditorWorkspace extends StatelessWidget {
                     canCompress: state.codecCompressReady,
                   ),
                   _ProgressionPanel(inspection: inspection, notifier: notifier),
+                  _AllDataPanel(
+                    inspection: inspection,
+                    notifier: notifier,
+                    editable: state.codecCompressReady,
+                  ),
                   _AdvancedPanel(inspection: inspection),
                   _BackupsPanel(state: state, notifier: notifier),
                   _SettingsPanel(state: state, notifier: notifier),
@@ -2832,6 +2838,312 @@ class _InfoChip extends StatelessWidget {
       label: Text(label),
       backgroundColor: const Color(0xFFE0F2F1),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+    );
+  }
+}
+
+/// Generic typed property browser: search every property in the decoded
+/// private payload and edit fixed-size scalars in place. This is the
+/// "everything is editable" surface — no curated field list, the user finds
+/// any value by name and edits the ones the core can safely patch.
+class _AllDataPanel extends StatefulWidget {
+  const _AllDataPanel({
+    required this.inspection,
+    required this.notifier,
+    required this.editable,
+  });
+
+  final SaveInspection inspection;
+  final EditorNotifier notifier;
+  final bool editable;
+
+  @override
+  State<_AllDataPanel> createState() => _AllDataPanelState();
+}
+
+class _AllDataPanelState extends State<_AllDataPanel> {
+  final _controller = TextEditingController();
+  TypedSearchResult? _result;
+  bool _searching = false;
+  int _requestSeq = 0;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _run(String query) async {
+    final seq = ++_requestSeq;
+    setState(() => _searching = true);
+    final result = await widget.notifier.searchTypedProperties(query);
+    if (!mounted || seq != _requestSeq) return;
+    setState(() {
+      _result = result;
+      _searching = false;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!widget.inspection.privateDecoded) {
+      return const _MessagePane(
+        icon: Icons.tune,
+        title: 'All data',
+        body:
+            'The full property browser needs decoded private payload data from '
+            'the G1R codec host.',
+      );
+    }
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.tune),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'All data',
+                  style: theme.textTheme.titleMedium,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Search every typed property by name or path. Fixed-size scalars '
+            '(int, float, bool) are editable; strings and structs are shown '
+            'read-only for now.',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: const Color(0xFF64748B),
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _controller,
+            decoration: InputDecoration(
+              labelText: 'Search properties (e.g. Health, GameTime, m_Day)',
+              prefixIcon: const Icon(Icons.search),
+              suffixIcon: _searching
+                  ? const Padding(
+                      padding: EdgeInsets.all(12),
+                      child: SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    )
+                  : IconButton(
+                      icon: const Icon(Icons.arrow_forward),
+                      onPressed: () => _run(_controller.text.trim()),
+                    ),
+            ),
+            onSubmitted: (value) => _run(value.trim()),
+          ),
+          const SizedBox(height: 12),
+          Expanded(child: _buildResults(theme)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildResults(ThemeData theme) {
+    final result = _result;
+    if (result == null) {
+      return const _MessagePane(
+        icon: Icons.search,
+        title: 'Search the save',
+        body:
+            'Type a property name and press enter. Leave it empty to list '
+            'everything (the first match page).',
+      );
+    }
+    if (result.error != null) {
+      return _MessagePane(
+        icon: Icons.error_outline,
+        title: 'Search failed',
+        body: result.error!,
+      );
+    }
+    if (result.results.isEmpty) {
+      return const _MessagePane(
+        icon: Icons.search_off,
+        title: 'No matches',
+        body: 'No property path contained all of those terms.',
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (result.truncated)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Text(
+              'Showing the first ${result.results.length} matches — refine the '
+              'search to narrow down.',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: const Color(0xFFB26A00),
+              ),
+            ),
+          ),
+        Expanded(
+          child: ListView.separated(
+            itemCount: result.results.length,
+            separatorBuilder: (_, _) => const Divider(height: 1),
+            itemBuilder: (context, index) {
+              final hit = result.results[index];
+              return _TypedPropertyRow(
+                key: ValueKey(hit.display),
+                hit: hit,
+                editable: widget.editable && hit.editable,
+                notifier: widget.notifier,
+                onSaved: () => _run(_controller.text.trim()),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _TypedPropertyRow extends StatefulWidget {
+  const _TypedPropertyRow({
+    super.key,
+    required this.hit,
+    required this.editable,
+    required this.notifier,
+    required this.onSaved,
+  });
+
+  final TypedPropertyHit hit;
+  final bool editable;
+  final EditorNotifier notifier;
+  final VoidCallback onSaved;
+
+  @override
+  State<_TypedPropertyRow> createState() => _TypedPropertyRowState();
+}
+
+class _TypedPropertyRowState extends State<_TypedPropertyRow> {
+  late final TextEditingController _controller = TextEditingController(
+    text: widget.hit.value,
+  );
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  bool get _isBool => widget.hit.type == 'BoolProperty';
+
+  Object? _coerce() {
+    final type = widget.hit.type;
+    final raw = _controller.text.trim();
+    if (type == 'FloatProperty' || type == 'DoubleProperty') {
+      return double.tryParse(raw);
+    }
+    return int.tryParse(raw);
+  }
+
+  Future<void> _save(Object value) async {
+    await widget.notifier.writeTypedValue(
+      propertyPath: widget.hit.path,
+      value: value,
+    );
+    widget.onSaved();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final hit = widget.hit;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SelectableText(hit.display, maxLines: 2),
+                Text(
+                  hit.type,
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: const Color(0xFF94A3B8),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          if (!widget.editable)
+            SizedBox(
+              width: 220,
+              child: Text(
+                hit.value,
+                textAlign: TextAlign.right,
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: const Color(0xFF64748B),
+                ),
+              ),
+            )
+          else if (_isBool)
+            _BoolEditor(
+              value: hit.value == 'true',
+              onChanged: (next) => _save(next),
+            )
+          else
+            SizedBox(
+              width: 220,
+              child: Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _controller,
+                      decoration: const InputDecoration(
+                        isDense: true,
+                        labelText: 'Value',
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'Save ${hit.display}',
+                    icon: const Icon(Icons.save_outlined),
+                    onPressed: () {
+                      final value = _coerce();
+                      if (value != null) _save(value);
+                    },
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _BoolEditor extends StatelessWidget {
+  const _BoolEditor({required this.value, required this.onChanged});
+
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 220,
+      child: Align(
+        alignment: Alignment.centerRight,
+        child: Switch(value: value, onChanged: onChanged),
+      ),
     );
   }
 }

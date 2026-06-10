@@ -291,6 +291,245 @@ fn value_kind(value: &PropertyValue) -> &'static str {
     }
 }
 
+/// A single property surfaced by a typed search, addressable for editing.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PropertyHit {
+    /// setValue-compatible path segments (name / `{mapKey}` / `[index]`).
+    pub path: Vec<String>,
+    /// Human-readable dotted path for display.
+    pub display: String,
+    pub type_name: String,
+    /// Formatted current value.
+    pub value_display: String,
+    /// True for fixed-size scalars that `private.typed.setValue` can patch.
+    pub editable: bool,
+}
+
+/// Walk the whole property tree and collect properties whose display path
+/// contains every whitespace-separated term in `query` (case-insensitive).
+/// An empty query matches everything (bounded by `limit`). Returns hits plus
+/// whether the limit truncated the result.
+pub fn search_properties(
+    root: &RootObject,
+    query: &str,
+    limit: usize,
+) -> (Vec<PropertyHit>, bool) {
+    let terms: Vec<String> = query.split_whitespace().map(|t| t.to_lowercase()).collect();
+    let mut hits = Vec::new();
+    let mut truncated = false;
+    let mut ctx = SearchCtx {
+        terms: &terms,
+        limit,
+        hits: &mut hits,
+        truncated: &mut truncated,
+    };
+    walk_search(&root.properties, &mut Vec::new(), &mut String::new(), &mut ctx);
+    (hits, truncated)
+}
+
+struct SearchCtx<'a> {
+    terms: &'a [String],
+    limit: usize,
+    hits: &'a mut Vec<PropertyHit>,
+    truncated: &'a mut bool,
+}
+
+fn scalar_editable(value: &PropertyValue) -> bool {
+    matches!(
+        value,
+        PropertyValue::Int(_)
+            | PropertyValue::UInt32(_)
+            | PropertyValue::Int64(_)
+            | PropertyValue::Float(_)
+            | PropertyValue::Double(_)
+            | PropertyValue::Bool(_)
+    )
+}
+
+fn scalar_display(value: &PropertyValue) -> Option<String> {
+    Some(match value {
+        PropertyValue::Int(v) => v.to_string(),
+        PropertyValue::UInt32(v) => v.to_string(),
+        PropertyValue::Int64(v) => v.to_string(),
+        PropertyValue::Float(v) => v.to_string(),
+        PropertyValue::Double(v) => v.to_string(),
+        PropertyValue::Bool(v) => v.to_string(),
+        PropertyValue::Byte(v) => v.to_string(),
+        PropertyValue::Str(s) | PropertyValue::Name(s) | PropertyValue::Object(s) | PropertyValue::Enum(s) => {
+            s.clone()
+        }
+        PropertyValue::SoftObject(p) => p.package_name.clone(),
+        _ => return None,
+    })
+}
+
+fn walk_search(
+    props: &[Property],
+    path: &mut Vec<String>,
+    display: &mut String,
+    ctx: &mut SearchCtx,
+) {
+    for p in props {
+        if *ctx.truncated {
+            return;
+        }
+        let display_len = display.len();
+        let path_pushed;
+        if !display.is_empty() {
+            display.push_str(" › ");
+        }
+        display.push_str(&p.name);
+        path.push(p.name.clone());
+        path_pushed = true;
+
+        // Leaf value?
+        if let Some(value_display) = scalar_display(&p.value) {
+            let matches = ctx.terms.iter().all(|t| display.to_lowercase().contains(t));
+            if matches {
+                if ctx.hits.len() >= ctx.limit {
+                    *ctx.truncated = true;
+                } else {
+                    ctx.hits.push(PropertyHit {
+                        path: path.clone(),
+                        display: display.clone(),
+                        type_name: p.type_name.clone(),
+                        value_display,
+                        editable: scalar_editable(&p.value),
+                    });
+                }
+            }
+        } else {
+            walk_value_search(&p.value, path, display, ctx);
+        }
+
+        if path_pushed {
+            path.pop();
+        }
+        display.truncate(display_len);
+    }
+}
+
+fn walk_value_search(
+    value: &PropertyValue,
+    path: &mut Vec<String>,
+    display: &mut String,
+    ctx: &mut SearchCtx,
+) {
+    match value {
+        PropertyValue::Struct(StructValue::Properties(inner)) => {
+            walk_search(inner, path, display, ctx);
+        }
+        PropertyValue::Struct(StructValue::Instanced(Some(i))) => {
+            walk_search(&i.properties, path, display, ctx);
+        }
+        PropertyValue::ObjectInstances(objs) => {
+            for (idx, obj) in objs.iter().enumerate() {
+                if *ctx.truncated {
+                    return;
+                }
+                descend_indexed(idx, &obj.properties, path, display, ctx);
+            }
+        }
+        PropertyValue::Map { entries, .. } => {
+            for (key, val) in entries {
+                if *ctx.truncated {
+                    return;
+                }
+                let key_label = map_key_label(key);
+                descend_value(&format!("{{{key_label}}}"), val, path, display, ctx);
+            }
+        }
+        PropertyValue::Array { elements } | PropertyValue::Set { elements, .. } => {
+            for (idx, el) in elements.iter().enumerate() {
+                if *ctx.truncated {
+                    return;
+                }
+                descend_value(&format!("[{idx}]"), el, path, display, ctx);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn descend_indexed(
+    idx: usize,
+    props: &[Property],
+    path: &mut Vec<String>,
+    display: &mut String,
+    ctx: &mut SearchCtx,
+) {
+    let display_len = display.len();
+    let seg = format!("[{idx}]");
+    display.push_str(&seg);
+    path.push(seg);
+    walk_search(props, path, display, ctx);
+    path.pop();
+    display.truncate(display_len);
+}
+
+fn descend_value(
+    seg: &str,
+    value: &PropertyValue,
+    path: &mut Vec<String>,
+    display: &mut String,
+    ctx: &mut SearchCtx,
+) {
+    let display_len = display.len();
+    display.push_str(seg);
+    path.push(seg.to_string());
+    if let Some(value_display) = scalar_display(value) {
+        let matches = ctx.terms.iter().all(|t| display.to_lowercase().contains(t));
+        if matches {
+            if ctx.hits.len() >= ctx.limit {
+                *ctx.truncated = true;
+            } else {
+                ctx.hits.push(PropertyHit {
+                    path: path.clone(),
+                    display: display.clone(),
+                    type_name: container_value_type(value).to_string(),
+                    value_display,
+                    editable: scalar_editable(value),
+                });
+            }
+        }
+    } else {
+        walk_value_search(value, path, display, ctx);
+    }
+    path.pop();
+    display.truncate(display_len);
+}
+
+fn map_key_label(key: &PropertyValue) -> String {
+    match key {
+        PropertyValue::Str(s) | PropertyValue::Name(s) | PropertyValue::Enum(s) => s.clone(),
+        PropertyValue::Int(i) => i.to_string(),
+        PropertyValue::Struct(StructValue::Guid(raw)) => hex_guid(raw),
+        _ => "?".to_string(),
+    }
+}
+
+fn hex_guid(raw: &[u8; 16]) -> String {
+    raw.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn container_value_type(value: &PropertyValue) -> &'static str {
+    match value {
+        PropertyValue::Int(_) => "IntProperty",
+        PropertyValue::UInt32(_) => "UInt32Property",
+        PropertyValue::Int64(_) => "Int64Property",
+        PropertyValue::Float(_) => "FloatProperty",
+        PropertyValue::Double(_) => "DoubleProperty",
+        PropertyValue::Bool(_) => "BoolProperty",
+        PropertyValue::Byte(_) => "ByteProperty",
+        PropertyValue::Str(_) => "StrProperty",
+        PropertyValue::Name(_) => "NameProperty",
+        PropertyValue::Object(_) => "ObjectProperty",
+        PropertyValue::Enum(_) => "EnumProperty",
+        PropertyValue::SoftObject(_) => "SoftObjectProperty",
+        _ => "StructProperty",
+    }
+}
+
 /// Fixed-size scalar replacement value for in-place typed patching.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ScalarValue {
@@ -1274,6 +1513,49 @@ mod tests {
         props.extend_from_slice(&header(map_body.len() as u32, TAG_FLAG_NATIVE_SERIALIZE));
         props.extend_from_slice(&map_body);
         root("/Script/Test.Save", &props)
+    }
+
+    #[test]
+    fn search_finds_nested_scalar_with_addressable_path() {
+        let payload = map_of_instanced_payload();
+        let root = parse_private_root(&payload).unwrap();
+        let (hits, truncated) = search_properties(&root, "itemcount", 100);
+        assert!(!truncated);
+        assert_eq!(hits.len(), 1);
+        let hit = &hits[0];
+        assert_eq!(hit.path, vec!["m_GenericData", "{ChestStates}", "m_ItemCount"]);
+        assert_eq!(hit.type_name, "IntProperty");
+        assert_eq!(hit.value_display, "5");
+        assert!(hit.editable);
+        // path round-trips through resolve()
+        let segs = parse_path(&hit.path).unwrap();
+        assert_eq!(resolve(&root.properties, &segs).unwrap().value, PropertyValue::Int(5));
+    }
+
+    #[test]
+    fn search_empty_query_lists_all_and_truncates() {
+        let payload = map_of_instanced_payload();
+        let root = parse_private_root(&payload).unwrap();
+        let (all, _) = search_properties(&root, "", 100);
+        // m_ItemCount + bLooted are the two leaf scalars
+        assert_eq!(all.len(), 2);
+        let (capped, truncated) = search_properties(&root, "", 1);
+        assert_eq!(capped.len(), 1);
+        assert!(truncated);
+    }
+
+    #[test]
+    fn search_marks_strings_non_editable() {
+        // root class string is not a property; build a payload with a StrProperty
+        let mut props = str_property("m_ProfileName", "Hero");
+        props.extend_from_slice(&int_property("m_Gold", 250));
+        let payload = root("/Script/Test.Save", &props);
+        let parsed = parse_private_root(&payload).unwrap();
+        let (hits, _) = search_properties(&parsed, "m_", 100);
+        let name_hit = hits.iter().find(|h| h.display == "m_ProfileName").unwrap();
+        assert!(!name_hit.editable);
+        let gold_hit = hits.iter().find(|h| h.display == "m_Gold").unwrap();
+        assert!(gold_hit.editable);
     }
 
     #[test]

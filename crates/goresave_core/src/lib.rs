@@ -11,6 +11,7 @@ use std::ffi::{CStr, CString, c_char};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::ptr;
+use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
@@ -396,6 +397,17 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
             )?)
         }
         "check_codec" => check_codec(&payload),
+        "search_typed_properties" => {
+            let path = required_path(&payload)?;
+            let codec_backend = payload
+                .get("binaryHost")
+                .map(binary_host_backend_from_config)
+                .transpose()?;
+            let codec_backend = codec_backend
+                .as_ref()
+                .map(|backend| backend as &dyn codec_backend::CodecBackend);
+            search_typed_properties(&path, &payload, codec_backend)
+        }
         "validate_roundtrip" => {
             let path = required_path(&payload)?;
             Ok(validate_roundtrip(&path)?)
@@ -2294,6 +2306,109 @@ fn summarize_typed_parse(payload: &[u8], preview: bool) -> Value {
     }
 }
 
+/// In-memory cache of the most recently decoded private payload. Decoding all
+/// chunks costs ~20s, so the typed property browser must not re-decode on every
+/// search/edit. Holds a single entry (the active save), bounded to one payload
+/// (~77 MB) and keyed by the save file's SHA-1 so an external change misses.
+static DECODED_PAYLOAD_CACHE: Mutex<Option<DecodedPayloadEntry>> = Mutex::new(None);
+
+struct DecodedPayloadEntry {
+    path: PathBuf,
+    save_sha1: String,
+    payload: Vec<u8>,
+}
+
+/// Return the decoded private payload for `path`, using the cache when the save
+/// file is unchanged, otherwise decoding through the codec backend and storing
+/// the result.
+fn decoded_private_payload_cached(
+    path: &Path,
+    data: &[u8],
+    stream: &CompressedStream,
+    backend: &dyn codec_backend::CodecBackend,
+) -> Result<Vec<u8>, CoreError> {
+    let save_sha1 = sha1_hex(data);
+    {
+        let guard = DECODED_PAYLOAD_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(entry) = guard.as_ref() {
+            if entry.path == path && entry.save_sha1 == save_sha1 {
+                return Ok(entry.payload.clone());
+            }
+        }
+    }
+    let payload = decompress_private_payload(data, stream, backend)?;
+    let mut guard = DECODED_PAYLOAD_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    *guard = Some(DecodedPayloadEntry {
+        path: path.to_path_buf(),
+        save_sha1,
+        payload: payload.clone(),
+    });
+    Ok(payload)
+}
+
+/// Drop the cached decoded payload for `path` (called after a write changes it).
+fn invalidate_decoded_payload_cache(path: &Path) {
+    let mut guard = DECODED_PAYLOAD_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    if guard.as_ref().is_some_and(|entry| entry.path == path) {
+        *guard = None;
+    }
+}
+
+/// Search every typed property in the decoded private payload. Powers the
+/// "all data" property browser: a query filters by display path, results carry
+/// a setValue-addressable path and an editable flag for fixed-size scalars.
+fn search_typed_properties(
+    path: &Path,
+    payload: &Value,
+    backend: Option<&dyn codec_backend::CodecBackend>,
+) -> Result<Value, CoreError> {
+    let backend = backend.ok_or_else(|| {
+        CoreError::Codec(
+            "typed property search requires a configured and verified G1R codec host".to_string(),
+        )
+    })?;
+    let query = payload.get("query").and_then(Value::as_str).unwrap_or("");
+    let limit = payload
+        .get("limit")
+        .and_then(Value::as_u64)
+        .map(|v| v as usize)
+        .unwrap_or(500)
+        .clamp(1, 5000);
+
+    let data = fs::read(path)?;
+    if !data.starts_with(b"GSAV") {
+        return Err(CoreError::UnsupportedEdit(
+            "typed property search is only available for GSAV files".to_string(),
+        ));
+    }
+    let parts = split_gsav(&data)?;
+    let stream = parse_compressed_stream(&data, 13 + parts.public_payload.len())?;
+    let decoded = decoded_private_payload_cached(path, &data, &stream, backend)?;
+    let root = properties::parse_private_root(&decoded)?;
+    let (hits, truncated) = properties::search_properties(&root, query, limit);
+
+    let results = hits
+        .into_iter()
+        .map(|hit| {
+            json!({
+                "path": hit.path,
+                "display": hit.display,
+                "type": hit.type_name,
+                "value": hit.value_display,
+                "editable": hit.editable,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    Ok(json!({
+        "query": query,
+        "limit": limit,
+        "truncated": truncated,
+        "count": results.len(),
+        "results": results,
+    }))
+}
+
 fn summarize_private_progression_payload(refs: &[FStringRef]) -> Value {
     let script_paths = unique_strings(
         refs.iter()
@@ -3001,6 +3116,10 @@ fn write_save_internal(
     } else {
         slot_pending.commit();
     }
+
+    // The save bytes changed on disk; drop any cached decoded payload so the
+    // typed property browser re-decodes the edited save on its next search.
+    invalidate_decoded_payload_cache(target);
 
     Ok(json!({
         "path": target,
@@ -6155,6 +6274,52 @@ mod tests {
                 }
             ])
         );
+    }
+
+    #[test]
+    fn search_typed_properties_finds_editable_scalars() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-search.sav");
+        let private_payload = {
+            let mut p = fstring("/Script/Angelscript.GothicFinalDataGame");
+            p.push(0);
+            p.extend_from_slice(&int_property("m_SaveVersionNumber", 17));
+            p.extend_from_slice(&int_property("m_MaxQuick", 3));
+            p.extend_from_slice(&fstring("None"));
+            p.extend_from_slice(&0u32.to_le_bytes());
+            p
+        };
+        let seed_compressed = b"seed".to_vec();
+        let stream = compressed_stream_with_one_chunk(&seed_compressed, private_payload.len());
+        fs::write(
+            &path,
+            build_gsav(2, &public_payload("Slot"), &stream, &[0, 0, 0, 0]),
+        )
+        .unwrap();
+        let backend = PrefixCodecBackend {
+            seed_compressed,
+            seed_uncompressed: private_payload,
+        };
+
+        let value = search_typed_properties(
+            &path,
+            &json!({ "query": "MaxQuick" }),
+            Some(&backend),
+        )
+        .unwrap();
+
+        assert_eq!(value["count"], 1);
+        assert_eq!(value["truncated"], false);
+        let hit = &value["results"][0];
+        assert_eq!(hit["display"], "m_MaxQuick");
+        assert_eq!(hit["type"], "IntProperty");
+        assert_eq!(hit["value"], "3");
+        assert_eq!(hit["editable"], true);
+        assert_eq!(hit["path"], json!(["m_MaxQuick"]));
+
+        // empty query lists every leaf scalar
+        let all = search_typed_properties(&path, &json!({ "query": "" }), Some(&backend)).unwrap();
+        assert_eq!(all["count"], 2);
     }
 
     #[test]

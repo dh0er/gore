@@ -727,6 +727,39 @@ class EditorNotifier extends StateNotifier<EditorState> {
     );
   }
 
+  /// Search every typed property in the decoded private payload. The core
+  /// caches the decoded payload, so the first search pays the decode cost and
+  /// later searches are instant. Returns a result carrying an error string
+  /// instead of throwing, so the browser UI can render it inline.
+  Future<TypedSearchResult> searchTypedProperties(
+    String query, {
+    int limit = 500,
+  }) async {
+    final path = state.selectedPath;
+    if (path == null) {
+      return const TypedSearchResult(error: 'No save selected.');
+    }
+    try {
+      final response = await _execute(
+        'search_typed_properties',
+        payload: {
+          'path': path,
+          'query': query,
+          'limit': limit,
+          ..._codecPayload(),
+        },
+      );
+      if (response['ok'] != true) {
+        return TypedSearchResult(error: _errorMessage(response));
+      }
+      return TypedSearchResult.fromJson(
+        (response['data'] as Map).cast<String, Object?>(),
+      );
+    } catch (error) {
+      return TypedSearchResult(error: 'Property search failed: $error');
+    }
+  }
+
   /// Layout-verified typed edit: set a fixed-size scalar (int/float/bool) at
   /// a typed property path. Only offered by the core when the strict typed
   /// parse of the save succeeded (`private.typed.setValue` in writable).
