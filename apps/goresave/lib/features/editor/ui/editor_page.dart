@@ -208,9 +208,10 @@ class _ProfileHeader extends StatelessWidget {
     final autoCount = profile?.autoSaveSlots.length ?? 0;
     return Container(
       width: double.infinity,
-      // Match the icon+text TabBar row height (72) in the workspace next
-      // door so the header's bottom edge lines up with the tab bar's.
-      height: 72,
+      // Match the icon+text TabBar row in the workspace next door (72 tab
+      // height + 2 indicator weight = 74, measured) so the header's bottom
+      // edge lines up with the tab bar's.
+      height: 74,
       padding: const EdgeInsets.symmetric(horizontal: 16),
       alignment: Alignment.centerLeft,
       decoration: BoxDecoration(
