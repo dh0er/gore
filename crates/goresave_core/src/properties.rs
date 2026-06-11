@@ -606,6 +606,83 @@ fn container_value_type(value: &PropertyValue) -> &'static str {
     }
 }
 
+/// Depth-first search for the first property named `name` anywhere in the
+/// tree. Returns the setValue-addressable path segments leading to it
+/// (inclusive) plus the property. Map entries whose keys cannot be rendered as
+/// path segments are skipped (a hit behind such a key would not be
+/// addressable anyway).
+pub fn find_property_by_name<'a>(
+    root: &'a RootObject,
+    name: &str,
+) -> Option<(Vec<String>, &'a Property)> {
+    fn in_props<'a>(
+        props: &'a [Property],
+        name: &str,
+        path: &mut Vec<String>,
+    ) -> Option<&'a Property> {
+        for p in props {
+            path.push(p.name.clone());
+            if p.name == name {
+                return Some(p);
+            }
+            if let Some(found) = in_value(&p.value, name, path) {
+                return Some(found);
+            }
+            path.pop();
+        }
+        None
+    }
+    fn in_value<'a>(
+        value: &'a PropertyValue,
+        name: &str,
+        path: &mut Vec<String>,
+    ) -> Option<&'a Property> {
+        match value {
+            PropertyValue::Struct(StructValue::Properties(inner)) => in_props(inner, name, path),
+            PropertyValue::Struct(StructValue::Instanced(Some(i))) => {
+                in_props(&i.properties, name, path)
+            }
+            PropertyValue::Map { entries, .. } => {
+                for (key, val) in entries {
+                    let Some(key) = map_key_to_string(key) else {
+                        continue;
+                    };
+                    path.push(format!("{{{key}}}"));
+                    if let Some(found) = in_value(val, name, path) {
+                        return Some(found);
+                    }
+                    path.pop();
+                }
+                None
+            }
+            PropertyValue::Array { elements } | PropertyValue::Set { elements, .. } => {
+                for (i, e) in elements.iter().enumerate() {
+                    path.push(format!("[{i}]"));
+                    if let Some(found) = in_value(e, name, path) {
+                        return Some(found);
+                    }
+                    path.pop();
+                }
+                None
+            }
+            PropertyValue::ObjectInstances(objs) => {
+                for (i, o) in objs.iter().enumerate() {
+                    path.push(format!("[{i}]"));
+                    if let Some(found) = in_props(&o.properties, name, path) {
+                        return Some(found);
+                    }
+                    path.pop();
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+    let mut path = Vec::new();
+    let target = in_props(&root.properties, name, &mut path)?;
+    Some((path, target))
+}
+
 /// Fixed-size scalar replacement value for in-place typed patching.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ScalarValue {
@@ -2884,6 +2961,47 @@ mod tests {
         assert!(
             patch_container(&mut payload, &target, &[], &ContainerEdit::ArrayRemove(0)).is_err()
         );
+    }
+
+    #[test]
+    fn find_property_by_name_returns_addressable_path() {
+        // Map { "CharacterStates" => InstancedStruct { Knowledge: Set } }
+        let nested = {
+            let mut n = name_set_property("Knowledge", &["Voiceline_A"]);
+            n.extend_from_slice(&fstring("None"));
+            n
+        };
+        let mut instanced = fstring("/Script/Test.CharacterStates");
+        instanced.extend_from_slice(&(nested.len() as u32).to_le_bytes());
+        instanced.extend_from_slice(&nested);
+
+        let mut map_body = 0u32.to_le_bytes().to_vec();
+        map_body.extend_from_slice(&1u32.to_le_bytes());
+        map_body.extend_from_slice(&fstring("CharacterStates")); // Name key
+        map_body.extend_from_slice(&instanced);
+
+        let mut props = tag("m_GenericData", "MapProperty");
+        props.extend_from_slice(&2u32.to_le_bytes());
+        props.extend_from_slice(&fstring("NameProperty"));
+        props.extend_from_slice(&0u32.to_le_bytes()); // key_flags
+        props.extend_from_slice(&fstring("StructProperty"));
+        props.extend_from_slice(&1u32.to_le_bytes());
+        props.extend_from_slice(&fstring("InstancedStruct"));
+        props.extend_from_slice(&1u32.to_le_bytes());
+        props.extend_from_slice(&fstring("/Script/StructUtils"));
+        props.extend_from_slice(&header(map_body.len() as u32, TAG_FLAG_NATIVE_SERIALIZE));
+        props.extend_from_slice(&map_body);
+        let payload = root("/Script/Test.Save", &props);
+
+        let parsed = parse_private_root(&payload).unwrap();
+        let (path, prop) = find_property_by_name(&parsed, "Knowledge").unwrap();
+        assert_eq!(path, vec!["m_GenericData", "{CharacterStates}", "Knowledge"]);
+        assert!(matches!(prop.value, PropertyValue::Set { .. }));
+        // The returned path round-trips through resolve().
+        let segs = parse_path(&path).unwrap();
+        assert_eq!(resolve(&parsed.properties, &segs).unwrap().name, "Knowledge");
+
+        assert!(find_property_by_name(&parsed, "DoesNotExist").is_none());
     }
 
     #[test]
