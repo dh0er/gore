@@ -69,9 +69,7 @@ void main() {
     // Global Save button starts disabled (no pending edits yet).
     expect(
       tester
-          .widget<FilledButton>(
-            find.widgetWithText(FilledButton, 'Save'),
-          )
+          .widget<FilledButton>(find.widgetWithText(FilledButton, 'Save'))
           .onPressed,
       isNull,
     );
@@ -102,9 +100,7 @@ void main() {
     expect(find.widgetWithText(FilledButton, 'Save'), findsOneWidget);
     expect(
       tester
-          .widget<FilledButton>(
-            find.widgetWithText(FilledButton, 'Save'),
-          )
+          .widget<FilledButton>(find.widgetWithText(FilledButton, 'Save'))
           .onPressed,
       isNull,
     );
@@ -117,10 +113,7 @@ void main() {
     expect(find.text('Save version'), findsNothing);
     expect(find.text('Current world'), findsNothing);
     expect(find.text('Profile name'), findsNothing);
-    expect(
-      find.widgetWithText(TextField, 'Private player name'),
-      findsNothing,
-    );
+    expect(find.widgetWithText(TextField, 'Private player name'), findsNothing);
     expect(
       find.widgetWithText(TextField, 'Private profile name'),
       findsNothing,
@@ -188,10 +181,11 @@ void main() {
     // Stable key order: 'attr:Health' < 'transform'.
     expect(edits, hasLength(2));
     expect(edits[0]['path'], 'private.player.setAttribute');
-    expect(
-      edits[0]['value'],
-      {'id': 'Health', 'baseValue': 77.0, 'currentValue': 66.0},
-    );
+    expect(edits[0]['value'], {
+      'id': 'Health',
+      'baseValue': 77.0,
+      'currentValue': 66.0,
+    });
     expect(edits[1]['path'], 'private.player.setTransform');
     expect(edits[1]['value'], {
       'location': {'x': 100.0, 'y': 200.0, 'z': 300.0},
@@ -267,19 +261,27 @@ void main() {
     await tester.tap(find.widgetWithText(Tab, 'Progression'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Progression summary'), findsOneWidget);
-    expect(find.text('Generated events'), findsOneWidget);
-    expect(find.text('Quest.Main.Chapter01'), findsOneWidget);
-    expect(find.text('Dialog.Diego.IntroDone'), findsOneWidget);
+    // Overview/summary card is gone; sidebar entries are visible instead.
+    expect(find.text('Progression summary'), findsNothing);
+    expect(find.text('Quests total'), findsNothing);
+    expect(find.text('Knowledge NPCs'), findsNothing);
 
+    // Sidebar: Quests is default selection; quest list loads immediately.
+    // 'Quests' appears in both the sidebar tile and the detail header.
+    expect(find.text('Quests'), findsAtLeastNWidgets(1));
+    expect(find.text('Knowledge'), findsOneWidget);
+    expect(find.text('Events'), findsOneWidget);
+    // Quests detail loads and shows the fake quest name.
+    expect(find.text('SLEEPER'), findsOneWidget);
+
+    // Search quests — filter is inside the Quests detail's TextField.
     await tester.enterText(
-      find.widgetWithText(TextField, 'Filter progression'),
-      'dialog',
+      find.widgetWithText(TextField, 'Search quests'),
+      'sleeper',
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Dialog.Diego.IntroDone'), findsOneWidget);
-    expect(find.text('Quest.Main.Chapter01'), findsNothing);
+    expect(find.text('SLEEPER'), findsOneWidget);
 
     await tester.drag(find.byType(TabBar), const Offset(-500, 0));
     await tester.pumpAndSettle();
@@ -319,58 +321,58 @@ void main() {
     );
   });
 
-  testWidgets(
-    'switching tabs preserves unsaved edit and Save count',
-    (tester) async {
-      await tester.binding.setSurfaceSize(const Size(1400, 1000));
-      addTearDown(() => tester.binding.setSurfaceSize(null));
-      final core = _FakeCoreService();
-      await tester.pumpWidget(
-        ProviderScope(
-          overrides: [
-            coreServiceProvider.overrideWithValue(core),
-            editorSettingsStoreProvider.overrideWithValue(
-              const NoopEditorSettingsStore(),
-            ),
-          ],
-          child: const GoresaveApp(),
-        ),
-      );
-      await tester.pumpAndSettle();
+  testWidgets('switching tabs preserves unsaved edit and Save count', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1400, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final core = _FakeCoreService();
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          coreServiceProvider.overrideWithValue(core),
+          editorSettingsStoreProvider.overrideWithValue(
+            const NoopEditorSettingsStore(),
+          ),
+        ],
+        child: const GoresaveApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
 
-      // Enter a draft in the public name field on Overview.
-      await tester.enterText(
-        find.widgetWithText(TextField, 'Public save name'),
-        'Draft Name',
-      );
-      await tester.pump();
-      // Save button now shows 1 pending edit.
-      expect(find.widgetWithText(FilledButton, 'Save (1)'), findsOneWidget);
+    // Enter a draft in the public name field on Overview.
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Public save name'),
+      'Draft Name',
+    );
+    await tester.pump();
+    // Save button now shows 1 pending edit.
+    expect(find.widgetWithText(FilledButton, 'Save (1)'), findsOneWidget);
 
-      // Switch to Player tab.
-      await tester.tap(find.widgetWithText(Tab, 'Player'));
-      await tester.pumpAndSettle();
+    // Switch to Player tab.
+    await tester.tap(find.widgetWithText(Tab, 'Player'));
+    await tester.pumpAndSettle();
 
-      // Save count must still be 1 (tab switch must not drop pending edits).
-      expect(find.widgetWithText(FilledButton, 'Save (1)'), findsOneWidget);
+    // Save count must still be 1 (tab switch must not drop pending edits).
+    expect(find.widgetWithText(FilledButton, 'Save (1)'), findsOneWidget);
 
-      // Switch back to Overview tab.
-      await tester.tap(find.widgetWithText(Tab, 'Overview'));
-      await tester.pumpAndSettle();
+    // Switch back to Overview tab.
+    await tester.tap(find.widgetWithText(Tab, 'Overview'));
+    await tester.pumpAndSettle();
 
-      // The draft text must still be visible in the field.
-      final field = find.widgetWithText(TextField, 'Public save name');
-      final editableText = tester.widget<EditableText>(
-        find.descendant(of: field, matching: find.byType(EditableText)),
-      );
-      expect(editableText.controller.text, 'Draft Name');
-      // Save button still shows 1.
-      expect(find.widgetWithText(FilledButton, 'Save (1)'), findsOneWidget);
-    },
-  );
+    // The draft text must still be visible in the field.
+    final field = find.widgetWithText(TextField, 'Public save name');
+    final editableText = tester.widget<EditableText>(
+      find.descendant(of: field, matching: find.byType(EditableText)),
+    );
+    expect(editableText.controller.text, 'Draft Name');
+    // Save button still shows 1.
+    expect(find.widgetWithText(FilledButton, 'Save (1)'), findsOneWidget);
+  });
 
-  testWidgets('Reset button discards pending and restores field text',
-      (tester) async {
+  testWidgets('Reset button discards pending and restores field text', (
+    tester,
+  ) async {
     await tester.binding.setSurfaceSize(const Size(1400, 1000));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final core = _FakeCoreService();
@@ -390,10 +392,7 @@ void main() {
     // Confirm Reset is disabled with no pending edits.
     final resetFinder = find.widgetWithText(OutlinedButton, 'Reset');
     expect(resetFinder, findsOneWidget);
-    expect(
-      tester.widget<OutlinedButton>(resetFinder).onPressed,
-      isNull,
-    );
+    expect(tester.widget<OutlinedButton>(resetFinder).onPressed, isNull);
 
     // Enter a draft in the public name field.
     final originalName = 'Die Welt der Verurteilten';
@@ -404,10 +403,7 @@ void main() {
     await tester.pump();
     expect(find.widgetWithText(FilledButton, 'Save (1)'), findsOneWidget);
     // Reset should now be enabled.
-    expect(
-      tester.widget<OutlinedButton>(resetFinder).onPressed,
-      isNotNull,
-    );
+    expect(tester.widget<OutlinedButton>(resetFinder).onPressed, isNotNull);
 
     // Tap Reset.
     await tester.tap(resetFinder);
@@ -421,10 +417,7 @@ void main() {
           .onPressed,
       isNull,
     );
-    expect(
-      tester.widget<OutlinedButton>(resetFinder).onPressed,
-      isNull,
-    );
+    expect(tester.widget<OutlinedButton>(resetFinder).onPressed, isNull);
 
     // The field must display the canonical (original) name again.
     final field = find.widgetWithText(TextField, 'Public save name');
@@ -624,19 +617,20 @@ class _FakeCoreService implements GoresaveCoreService {
                 'writable': ['private.inventory.setItemCount'],
               },
               'progression': {
-                'candidateCount': 3,
-                'candidates': [
-                  'Quest.Main.Chapter01',
-                  'Dialog.Diego.IntroDone',
-                  'Knowledge.OldCamp.PathKnown',
+                'status': 'ok',
+                'questTotal': 3,
+                'questStates': {'Available': 1, 'Running': 1, 'Succeeded': 1},
+                'knowledgeCharacters': 2,
+                'knowledgeEntries': 5,
+                'memoryCharacters': 1,
+                'memoryEvents': 12,
+                'writable': [
+                  'private.typed.setValue',
+                  'private.typed.setAdd',
+                  'private.typed.setRemove',
+                  'private.typed.arrayRemove',
+                  'private.typed.arrayDuplicate',
                 ],
-                'gameplayTags': [
-                  'Quest.Main.Chapter01',
-                  'Dialog.Diego.IntroDone',
-                ],
-                'sections': ['Generated events', 'Memorized events'],
-                'scriptPaths': ['/Script/G1R.QuestSaveGameData'],
-                'properties': ['m_GeneratedEvents', 'm_MemorizedEvents'],
               },
             },
           },
@@ -704,6 +698,112 @@ class _FakeCoreService implements GoresaveCoreService {
             'path': payload['path'],
             'restoredFrom': payload['backupPath'],
             'backupPath': r'C:\tmp\saves\G1R-001.sav.bak.300',
+          },
+        };
+      case 'query_progression':
+        final section = payload['section'] as String? ?? 'quests';
+        if (section == 'quests') {
+          return {
+            'ok': true,
+            'data': {
+              'section': 'quests',
+              'total': 1,
+              'offset': 0,
+              'limit': 100,
+              'count': 1,
+              'stateCounts': {'Running': 1},
+              'quests': [
+                {
+                  'questClass': '/Script/Angelscript.Quest_OldCamp_SLEEPER',
+                  'id': 'Quest_OldCamp_SLEEPER',
+                  'group': 'OldCamp',
+                  'name': 'SLEEPER',
+                  'currentState': 'EQuestState::Running',
+                  'statePath': [
+                    'QuestDataByClass',
+                    '{/Script/Angelscript.Quest_OldCamp_SLEEPER}',
+                    'CurrentState',
+                  ],
+                  'writable': true,
+                },
+              ],
+            },
+          };
+        }
+        if (section == 'knowledge') {
+          final character = payload['character'] as String?;
+          if (character == null) {
+            return {
+              'ok': true,
+              'data': {
+                'section': 'knowledge',
+                'total': 1,
+                'offset': 0,
+                'limit': 100,
+                'count': 1,
+                'characters': [
+                  {'name': 'OC_STT_Diego', 'entryCount': 2},
+                ],
+              },
+            };
+          }
+          return {
+            'ok': true,
+            'data': {
+              'section': 'knowledge',
+              'character': character,
+              'total': 1,
+              'offset': 0,
+              'limit': 200,
+              'count': 1,
+              'entries': ['Voiceline_info_diego'],
+              'setPath': [
+                'CharacterKnowledgeByUniqueName',
+                '{$character}',
+                'Knowledge',
+              ],
+            },
+          };
+        }
+        // events section
+        final character = payload['character'] as String?;
+        if (character == null) {
+          return {
+            'ok': true,
+            'data': {
+              'section': 'events',
+              'total': 1,
+              'offset': 0,
+              'limit': 100,
+              'count': 1,
+              'characters': [
+                {'id': 'Hero', 'eventCount': 1},
+              ],
+            },
+          };
+        }
+        return {
+          'ok': true,
+          'data': {
+            'section': 'events',
+            'character': character,
+            'total': 1,
+            'offset': 0,
+            'limit': 100,
+            'count': 1,
+            'events': [
+              {
+                'index': 0,
+                'tags': ['Memory.Quest.Started'],
+                'timeSeconds': 100.0,
+                'affected': 'Hero',
+              },
+            ],
+            'arrayPath': [
+              'LongTermMemoryByGlobalId',
+              '{$character}',
+              'MemorizedEvents',
+            ],
           },
         };
       default:

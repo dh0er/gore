@@ -5,6 +5,7 @@ import 'package:goresave/features/editor/domain/core_service.dart';
 import 'package:goresave/features/editor/domain/editor_notifier.dart';
 import 'package:goresave/features/editor/domain/editor_settings_store.dart';
 import 'package:goresave/features/editor/domain/pending_edits.dart';
+import 'package:goresave/features/editor/domain/progression_models.dart';
 
 void main() {
   test('uses persisted editor paths before defaults', () {
@@ -265,7 +266,11 @@ void main() {
           edits: [
             {
               'path': 'private.player.setAttribute',
-              'value': {'id': 'Health', 'baseValue': 77.0, 'currentValue': 66.0},
+              'value': {
+                'id': 'Health',
+                'baseValue': 77.0,
+                'currentValue': 66.0,
+              },
             },
           ],
         ),
@@ -295,10 +300,7 @@ void main() {
     'saveAllPending sets syncPersistentDataList true when any edit requests it',
     () async {
       final core = _RecordingCoreService();
-      final notifier = EditorNotifier(
-        core,
-        saveDir: r'C:\tmp\saves',
-      );
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
       await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
 
       notifier.setPendingEdit(
@@ -316,7 +318,11 @@ void main() {
           edits: [
             {
               'path': 'private.player.setAttribute',
-              'value': {'id': 'Health', 'baseValue': 80.0, 'currentValue': 80.0},
+              'value': {
+                'id': 'Health',
+                'baseValue': 80.0,
+                'currentValue': 80.0,
+              },
             },
           ],
         ),
@@ -324,9 +330,7 @@ void main() {
 
       await notifier.saveAllPending();
 
-      final write = core.requests.lastWhere(
-        (r) => r.command == 'write_save',
-      );
+      final write = core.requests.lastWhere((r) => r.command == 'write_save');
       expect(write.payload['syncPersistentDataList'], isTrue);
       expect(write.payload['backup'], isTrue);
     },
@@ -412,47 +416,46 @@ void main() {
     expect(notifier.state.pendingEdits, isEmpty);
   });
 
-  test('saveAllPending refuses conflicting edits for the same typed path',
-      () async {
-    final core = _RecordingCoreService();
-    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
-    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+  test(
+    'saveAllPending refuses conflicting edits for the same typed path',
+    () async {
+      final core = _RecordingCoreService();
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
 
-    const path = ['m_GenericData', '{X}', 'BaseValue'];
-    notifier.setPendingEdit(
-      'heroStats',
-      const PendingSaveEdit(
-        edits: [
-          {
-            'path': 'private.typed.setValue',
-            'value': {'path': path, 'value': 1.0},
-          },
-        ],
-      ),
-    );
-    notifier.setPendingEdit(
-      'typed:m_GenericData {X} BaseValue',
-      const PendingSaveEdit(
-        edits: [
-          {
-            'path': 'private.typed.setValue',
-            'value': {'path': path, 'value': 2.0},
-          },
-        ],
-      ),
-    );
+      const path = ['m_GenericData', '{X}', 'BaseValue'];
+      notifier.setPendingEdit(
+        'heroStats',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.typed.setValue',
+              'value': {'path': path, 'value': 1.0},
+            },
+          ],
+        ),
+      );
+      notifier.setPendingEdit(
+        'typed:m_GenericData {X} BaseValue',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.typed.setValue',
+              'value': {'path': path, 'value': 2.0},
+            },
+          ],
+        ),
+      );
 
-    final ok = await notifier.saveAllPending();
+      final ok = await notifier.saveAllPending();
 
-    expect(ok, isFalse);
-    expect(notifier.state.error, contains('Conflicting'));
-    expect(
-      core.requests.where((r) => r.command == 'write_save'),
-      isEmpty,
-    );
-    // Both pending entries survive so the user can resolve the conflict.
-    expect(notifier.state.pendingEdits.length, 2);
-  });
+      expect(ok, isFalse);
+      expect(notifier.state.error, contains('Conflicting'));
+      expect(core.requests.where((r) => r.command == 'write_save'), isEmpty);
+      // Both pending entries survive so the user can resolve the conflict.
+      expect(notifier.state.pendingEdits.length, 2);
+    },
+  );
 
   test('failed same-save re-inspect keeps pending edits retryable', () async {
     final core = _FailingSecondInspectCoreService();
@@ -501,7 +504,10 @@ void main() {
         edits: [
           {
             'path': 'private.typed.setValue',
-            'value': {'path': ['MaxHealth'], 'value': 99.0},
+            'value': {
+              'path': ['MaxHealth'],
+              'value': 99.0,
+            },
           },
         ],
       ),
@@ -511,8 +517,11 @@ void main() {
     // Toolbar Refresh — same selected path stays selected.
     await notifier.refresh();
 
-    expect(notifier.state.pendingEdits, isEmpty,
-        reason: 'refresh() must clear ALL pending edits');
+    expect(
+      notifier.state.pendingEdits,
+      isEmpty,
+      reason: 'refresh() must clear ALL pending edits',
+    );
   });
 
   test('restoreBackup() clears all pending edits via refresh()', () async {
@@ -532,8 +541,11 @@ void main() {
 
     await notifier.restoreBackup(r'C:\tmp\saves\G1R-001.sav.bak.200');
 
-    expect(notifier.state.pendingEdits, isEmpty,
-        reason: 'restoreBackup() must clear pending edits via refresh()');
+    expect(
+      notifier.state.pendingEdits,
+      isEmpty,
+      reason: 'restoreBackup() must clear pending edits via refresh()',
+    );
   });
 
   test('pendingEditCount on EditorState counts individual edits', () async {
@@ -548,11 +560,17 @@ void main() {
         edits: [
           {
             'path': 'private.typed.setValue',
-            'value': {'path': ['MaxHealth'], 'value': 99.0},
+            'value': {
+              'path': ['MaxHealth'],
+              'value': 99.0,
+            },
           },
           {
             'path': 'private.typed.setValue',
-            'value': {'path': ['Strength'], 'value': 20.0},
+            'value': {
+              'path': ['Strength'],
+              'value': 20.0,
+            },
           },
         ],
       ),
@@ -719,69 +737,71 @@ void main() {
     expect(result.attributes.single.id, 'MaxHealth');
   });
 
-  test('loadHeroAttributes pages through results beyond the search cap',
-      () async {
-    Map<String, Object?> heroHit(String id, String leaf, String value) => {
-          'path': [
-            'm_GenericData',
-            '{CharacterStates}',
-            'AnyCharacterType',
-            'AttributesByGlobalId',
-            '{Hero}',
-            'AttributeSetsByClass',
-            '{/Script/G1R.AttributeSet_Health}',
-            'Attributes',
-            '{$id}',
-            leaf,
-          ],
-          'display': '…',
-          'type': 'FloatProperty',
-          'value': value,
-          'editable': true,
-        };
-    final core = _RecordingCoreService(
-      typedSearchPages: [
-        {
-          'query': 'AttributesByGlobalId {Hero}',
-          'offset': 0,
-          'limit': 1000,
-          'total': 2,
-          'count': 1,
-          'results': [heroHit('MaxHealth', 'BaseValue', '64')],
-        },
-        {
-          'query': 'AttributesByGlobalId {Hero}',
-          'offset': 1,
-          'limit': 1000,
-          'total': 2,
-          'count': 1,
-          'results': [heroHit('MaxHealth', 'CurrentValue', '64')],
-        },
-      ],
-    );
-    final notifier = EditorNotifier(
-      core,
-      saveDir: r'C:\tmp\saves',
-      codecHostPath: r'C:\tools\goresave_g1r_codec_host.exe',
-      gameExePath: r'C:\Games\G1R\G1R-Win64-Shipping.exe',
-    );
-    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+  test(
+    'loadHeroAttributes pages through results beyond the search cap',
+    () async {
+      Map<String, Object?> heroHit(String id, String leaf, String value) => {
+        'path': [
+          'm_GenericData',
+          '{CharacterStates}',
+          'AnyCharacterType',
+          'AttributesByGlobalId',
+          '{Hero}',
+          'AttributeSetsByClass',
+          '{/Script/G1R.AttributeSet_Health}',
+          'Attributes',
+          '{$id}',
+          leaf,
+        ],
+        'display': '…',
+        'type': 'FloatProperty',
+        'value': value,
+        'editable': true,
+      };
+      final core = _RecordingCoreService(
+        typedSearchPages: [
+          {
+            'query': 'AttributesByGlobalId {Hero}',
+            'offset': 0,
+            'limit': 1000,
+            'total': 2,
+            'count': 1,
+            'results': [heroHit('MaxHealth', 'BaseValue', '64')],
+          },
+          {
+            'query': 'AttributesByGlobalId {Hero}',
+            'offset': 1,
+            'limit': 1000,
+            'total': 2,
+            'count': 1,
+            'results': [heroHit('MaxHealth', 'CurrentValue', '64')],
+          },
+        ],
+      );
+      final notifier = EditorNotifier(
+        core,
+        saveDir: r'C:\tmp\saves',
+        codecHostPath: r'C:\tools\goresave_g1r_codec_host.exe',
+        gameExePath: r'C:\Games\G1R\G1R-Win64-Shipping.exe',
+      );
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
 
-    final result = await notifier.loadHeroAttributes();
+      final result = await notifier.loadHeroAttributes();
 
-    final searches = core.requests
-        .where((request) => request.command == 'search_typed_properties')
-        .toList();
-    expect(searches, hasLength(2));
-    expect(searches[0].payload['offset'], 0);
-    expect(searches[1].payload['offset'], 1);
-    expect(result.error, isNull);
-    // Both pages were folded into one fully paired attribute.
-    final attribute = result.attributes.single;
-    expect(attribute.id, 'MaxHealth');
-    expect(attribute.baseValue, 64);
-    expect(attribute.currentValue, 64);
-  });
+      final searches = core.requests
+          .where((request) => request.command == 'search_typed_properties')
+          .toList();
+      expect(searches, hasLength(2));
+      expect(searches[0].payload['offset'], 0);
+      expect(searches[1].payload['offset'], 1);
+      expect(result.error, isNull);
+      // Both pages were folded into one fully paired attribute.
+      final attribute = result.attributes.single;
+      expect(attribute.id, 'MaxHealth');
+      expect(attribute.baseValue, 64);
+      expect(attribute.currentValue, 64);
+    },
+  );
 
   test(
     'validateCodecRoundtrip sends selected save and binary host paths',
@@ -807,6 +827,424 @@ void main() {
         'exePath':
             r'C:\Program Files (x86)\Steam\steamapps\common\Gothic 1 Remake\G1R\Binaries\Win64\G1R-Win64-Shipping.exe',
       });
+    },
+  );
+
+  // ---------------------------------------------------------------------------
+  // Progression query methods (Task 9)
+  // ---------------------------------------------------------------------------
+
+  test('loadProgressionQuests queries the core and parses the page', () async {
+    final core = _RecordingCoreService(
+      progressionData: {
+        'section': 'quests',
+        'total': 1,
+        'offset': 0,
+        'limit': 100,
+        'count': 1,
+        'stateCounts': {'Running': 1},
+        'quests': [
+          {
+            'questClass': '/Script/Angelscript.Quest_X',
+            'id': 'Quest_X',
+            'group': 'X',
+            'name': '',
+            'currentState': 'EQuestState::Running',
+            'statePath': [
+              'QuestDataByClass',
+              '{/Script/Angelscript.Quest_X}',
+              'CurrentState',
+            ],
+            'writable': true,
+          },
+        ],
+      },
+    );
+    final notifier = EditorNotifier(
+      core,
+      saveDir: r'C:\tmp\saves',
+      codecHostPath: r'C:\tools\goresave_g1r_codec_host.exe',
+      gameExePath: r'C:\Games\G1R\G1R-Win64-Shipping.exe',
+    );
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+    final page = await notifier.loadProgressionQuests(query: 'x');
+
+    expect(page.error, isNull);
+    expect(page.quests.single.id, 'Quest_X');
+    final call = core.requests.singleWhere(
+      (r) => r.command == 'query_progression',
+    );
+    expect(call.payload['section'], 'quests');
+    expect(call.payload['query'], 'x');
+    expect(call.payload['path'], r'C:\tmp\saves\G1R-001.sav');
+  });
+
+  test(
+    'loadProgressionQuests passes state and group params to the core',
+    () async {
+      final core = _RecordingCoreService(
+        progressionData: {
+          'section': 'quests',
+          'total': 0,
+          'offset': 0,
+          'limit': 50,
+          'count': 0,
+          'stateCounts': <String, Object?>{},
+          'groupCounts': <String, Object?>{},
+          'quests': <Object?>[],
+        },
+      );
+      final notifier = EditorNotifier(
+        core,
+        saveDir: r'C:\tmp\saves',
+        codecHostPath: r'C:\tools\goresave_g1r_codec_host.exe',
+        gameExePath: r'C:\Games\G1R\G1R-Win64-Shipping.exe',
+      );
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+      await notifier.loadProgressionQuests(
+        state: 'Running',
+        group: 'OldCamp',
+        limit: 50,
+      );
+
+      final call = core.requests.lastWhere(
+        (r) => r.command == 'query_progression',
+      );
+      expect(call.payload['state'], 'Running');
+      expect(call.payload['group'], 'OldCamp');
+
+      // Null/empty filters must NOT appear in the payload.
+      await notifier.loadProgressionQuests(limit: 50);
+      final callNoFilter = core.requests.lastWhere(
+        (r) => r.command == 'query_progression',
+      );
+      expect(callNoFilter.payload.containsKey('state'), isFalse);
+      expect(callNoFilter.payload.containsKey('group'), isFalse);
+    },
+  );
+
+  test('progression loaders surface core errors inline', () async {
+    // The default _RecordingCoreService returns ok:false for query_progression
+    // (no progressionData set), so the loader should surface the error inline.
+    final core = _RecordingCoreService();
+    final notifier = EditorNotifier(
+      core,
+      saveDir: r'C:\tmp\saves',
+      codecHostPath: r'C:\tools\goresave_g1r_codec_host.exe',
+      gameExePath: r'C:\Games\G1R\G1R-Win64-Shipping.exe',
+    );
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+    final page = await notifier.loadKnowledgeCharacters();
+
+    expect(page.error, isNotNull);
+  });
+
+  test(
+    'applyMemoryEventEdit is blocked and sets error when isLoading is true',
+    () async {
+      // Use a slow write to hold the notifier in isLoading state, then verify
+      // that a concurrent applyMemoryEventEdit sets a user-visible error.
+      final gate = Completer<void>();
+      final core = _SlowWriteCoreService(gate.future);
+      final notifier = EditorNotifier(
+        core,
+        saveDir: r'C:\tmp\saves',
+        codecHostPath: r'C:\tools\goresave_g1r_codec_host.exe',
+        gameExePath: r'C:\Games\G1R\G1R-Win64-Shipping.exe',
+      );
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+      notifier.setPendingEdit(
+        'x',
+        const PendingSaveEdit(
+          edits: [
+            {'path': 'public.m_PlayerSaveName', 'value': 'Slow'},
+          ],
+        ),
+      );
+
+      // Start a write that will stall — notifier is now isLoading.
+      final writeFuture = notifier.saveAllPending();
+      expect(notifier.state.isLoading, isTrue);
+
+      // applyMemoryEventEdit must refuse and set an error while loading.
+      final result = await notifier.applyMemoryEventEdit(
+        MemoryEventEdit.remove(arrayPath: const ['MemorizedEvents'], index: 0),
+      );
+
+      expect(result, isFalse);
+      expect(notifier.state.error, isNotNull);
+      expect(
+        notifier.state.error,
+        contains('Another operation is in progress'),
+      );
+
+      // Unblock the write so the test can cleanly complete.
+      gate.complete();
+      await writeFuture;
+    },
+  );
+
+  test(
+    'applyMemoryEventEdit is blocked and sets error when pendingEdits is non-empty',
+    () async {
+      final core = _RecordingCoreService();
+      final notifier = EditorNotifier(
+        core,
+        saveDir: r'C:\tmp\saves',
+        codecHostPath: r'C:\tools\goresave_g1r_codec_host.exe',
+        gameExePath: r'C:\Games\G1R\G1R-Win64-Shipping.exe',
+      );
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+      // Seed a pending edit (e.g. an unsaved quest-state change).
+      notifier.setPendingEdit(
+        'x',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.typed.setValue',
+              'value': {
+                'path': ['CurrentState'],
+                'value': 'EQuestState::None',
+              },
+            },
+          ],
+        ),
+      );
+
+      final writesBefore = core.requests
+          .where((r) => r.command == 'write_save')
+          .length;
+
+      final result = await notifier.applyMemoryEventEdit(
+        MemoryEventEdit.remove(arrayPath: const ['MemorizedEvents'], index: 0),
+      );
+
+      expect(result, isFalse);
+      expect(notifier.state.error, isNotNull);
+      // No write_save must have been issued.
+      final writesAfter = core.requests
+          .where((r) => r.command == 'write_save')
+          .length;
+      expect(writesAfter, writesBefore);
+      // Pending edit must still be intact.
+      expect(notifier.state.pendingEdits.containsKey('x'), isTrue);
+    },
+  );
+
+  // ---------------------------------------------------------------------------
+  // Profile switcher (selectProfile)
+  // ---------------------------------------------------------------------------
+
+  test(
+    'selectProfile filters visibleSaves and moves selection to that profile',
+    () async {
+      // Two profiles: profile 0 has G1R-001, profile 1 has G1R-002.
+      final core = _RecordingCoreService(
+        scanData: {
+          'saves': [
+            {
+              'path': r'C:\tmp\saves\G1R-001.sav',
+              'slot': 'G1R-001',
+              'format': 'GSAV',
+              'fileSize': 100,
+              'sha1': 'a',
+              'status': 'ok',
+              'playerSaveName': 'Save A',
+              'persistentProfileId': 0,
+            },
+            {
+              'path': r'C:\tmp\saves\G1R-002.sav',
+              'slot': 'G1R-002',
+              'format': 'GSAV',
+              'fileSize': 100,
+              'sha1': 'b',
+              'status': 'ok',
+              'playerSaveName': 'Save B',
+              'persistentProfileId': 1,
+            },
+          ],
+          'profiles': [
+            {
+              'profileId': 0,
+              'profileName': '0',
+              'quickSaveSlots': <String>[],
+              'autoSaveSlots': <String>[],
+              'savedSlots': ['G1R-001'],
+            },
+            {
+              'profileId': 1,
+              'profileName': '1',
+              'quickSaveSlots': <String>[],
+              'autoSaveSlots': <String>[],
+              'savedSlots': ['G1R-002'],
+            },
+          ],
+          'activeProfileId': 0,
+        },
+      );
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await pumpEventQueue();
+
+      // Initial selection should be profile 0's save (first after sort).
+      // Both profiles exist so visibleSaves should only show profile 0 saves.
+      expect(notifier.state.profiles.length, 2);
+      expect(
+        notifier.state.visibleSaves.map((s) => s.slot),
+        contains('G1R-001'),
+      );
+      expect(
+        notifier.state.visibleSaves.map((s) => s.slot),
+        isNot(contains('G1R-002')),
+      );
+
+      // Switch to profile 1.
+      await notifier.selectProfile(1);
+
+      // visibleSaves should now only show profile 1's save.
+      expect(
+        notifier.state.visibleSaves.map((s) => s.slot),
+        contains('G1R-002'),
+      );
+      expect(
+        notifier.state.visibleSaves.map((s) => s.slot),
+        isNot(contains('G1R-001')),
+      );
+      // Selection moved to profile 1's save.
+      expect(notifier.state.selectedPath, r'C:\tmp\saves\G1R-002.sav');
+    },
+  );
+
+  test(
+    'selectProfile with pending edits is blocked and sets an error',
+    () async {
+      final core = _RecordingCoreService(
+        scanData: {
+          'saves': [
+            {
+              'path': r'C:\tmp\saves\G1R-001.sav',
+              'slot': 'G1R-001',
+              'format': 'GSAV',
+              'fileSize': 100,
+              'sha1': 'a',
+              'status': 'ok',
+              'playerSaveName': 'Save A',
+              'persistentProfileId': 0,
+            },
+            {
+              'path': r'C:\tmp\saves\G1R-002.sav',
+              'slot': 'G1R-002',
+              'format': 'GSAV',
+              'fileSize': 100,
+              'sha1': 'b',
+              'status': 'ok',
+              'playerSaveName': 'Save B',
+              'persistentProfileId': 1,
+            },
+          ],
+          'profiles': [
+            {
+              'profileId': 0,
+              'profileName': '0',
+              'quickSaveSlots': <String>[],
+              'autoSaveSlots': <String>[],
+              'savedSlots': ['G1R-001'],
+            },
+            {
+              'profileId': 1,
+              'profileName': '1',
+              'quickSaveSlots': <String>[],
+              'autoSaveSlots': <String>[],
+              'savedSlots': ['G1R-002'],
+            },
+          ],
+          'activeProfileId': 0,
+        },
+      );
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await pumpEventQueue();
+
+      notifier.setPendingEdit(
+        'publicName',
+        const PendingSaveEdit(
+          edits: [
+            {'path': 'public.m_PlayerSaveName', 'value': 'Draft'},
+          ],
+        ),
+      );
+
+      final profileBefore = notifier.state.selectedProfileId;
+      await notifier.selectProfile(1);
+
+      // Profile must not have changed.
+      expect(notifier.state.selectedProfileId, profileBefore);
+      // An error must be set.
+      expect(notifier.state.error, isNotNull);
+      expect(notifier.state.error, contains('unsaved changes'));
+    },
+  );
+
+  test(
+    'refresh keeps selectedProfileId when the profile still exists',
+    () async {
+      final core = _RecordingCoreService(
+        scanData: {
+          'saves': [
+            {
+              'path': r'C:\tmp\saves\G1R-001.sav',
+              'slot': 'G1R-001',
+              'format': 'GSAV',
+              'fileSize': 100,
+              'sha1': 'a',
+              'status': 'ok',
+              'playerSaveName': 'Save A',
+              'persistentProfileId': 0,
+            },
+            {
+              'path': r'C:\tmp\saves\G1R-002.sav',
+              'slot': 'G1R-002',
+              'format': 'GSAV',
+              'fileSize': 100,
+              'sha1': 'b',
+              'status': 'ok',
+              'playerSaveName': 'Save B',
+              'persistentProfileId': 1,
+            },
+          ],
+          'profiles': [
+            {
+              'profileId': 0,
+              'profileName': '0',
+              'quickSaveSlots': <String>[],
+              'autoSaveSlots': <String>[],
+              'savedSlots': ['G1R-001'],
+            },
+            {
+              'profileId': 1,
+              'profileName': '1',
+              'quickSaveSlots': <String>[],
+              'autoSaveSlots': <String>[],
+              'savedSlots': ['G1R-002'],
+            },
+          ],
+          'activeProfileId': 0,
+        },
+      );
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await pumpEventQueue();
+
+      // Select profile 1 explicitly.
+      await notifier.selectProfile(1);
+      expect(notifier.state.selectedProfileId, 1);
+
+      // Refresh — profile 1 still exists in scan data.
+      await notifier.refresh();
+
+      // selectedProfileId must be preserved.
+      expect(notifier.state.selectedProfileId, 1);
     },
   );
 }
@@ -839,6 +1277,7 @@ class _RecordingCoreService implements GoresaveCoreService {
     this.codecCanCompress = true,
     this.typedSearchData,
     this.typedSearchPages,
+    this.progressionData,
   }) : scanData = scanData ?? {'saves': <Object?>[]};
 
   final Map<String, Object?> scanData;
@@ -850,6 +1289,11 @@ class _RecordingCoreService implements GoresaveCoreService {
   /// [typedSearchData]. The last page repeats if called more often.
   final List<Map<String, Object?>>? typedSearchPages;
   var _typedSearchCalls = 0;
+
+  /// Canned response data for query_progression. When null the command falls
+  /// through to the default unhandled-command error response.
+  final Map<String, Object?>? progressionData;
+
   final requests = <_RecordedRequest>[];
 
   @override
@@ -973,7 +1417,8 @@ class _RecordingCoreService implements GoresaveCoreService {
         }
         return {
           'ok': true,
-          'data': typedSearchData ??
+          'data':
+              typedSearchData ??
               {
                 'query': '',
                 'offset': 0,
@@ -1008,6 +1453,14 @@ class _RecordingCoreService implements GoresaveCoreService {
             'message': 'G1R codec host is configured.',
           },
         };
+      case 'query_progression':
+        if (progressionData != null) {
+          return {'ok': true, 'data': progressionData!};
+        }
+        return {
+          'ok': false,
+          'error': {'message': 'Unhandled command $command'},
+        };
       default:
         return {
           'ok': false,
@@ -1025,7 +1478,9 @@ class _FailingWriteCoreService extends _RecordingCoreService {
     Map<String, Object?> payload = const {},
   }) async {
     if (command == 'write_save') {
-      requests.add(_RecordedRequest(command, Map<String, Object?>.from(payload)));
+      requests.add(
+        _RecordedRequest(command, Map<String, Object?>.from(payload)),
+      );
       return {
         'ok': false,
         'error': {'message': 'write failed'},
@@ -1088,7 +1543,9 @@ class _FailingVerifyCoreService extends _RecordingCoreService {
     Map<String, Object?> payload = const {},
   }) async {
     if (command == 'validate_codec_roundtrip') {
-      requests.add(_RecordedRequest(command, Map<String, Object?>.from(payload)));
+      requests.add(
+        _RecordedRequest(command, Map<String, Object?>.from(payload)),
+      );
       return {
         'ok': false,
         'error': {

@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'package:goresave/features/editor/domain/progression_models.dart';
+
 /// One property surfaced by the typed property browser search.
 class TypedPropertyHit {
   const TypedPropertyHit({
@@ -269,7 +271,7 @@ class SaveInspection {
     this.privateTotalChunkCount,
     this.privatePlayer = const PrivatePlayerSummary(),
     this.privateInventory = const PrivateInventorySummary(),
-    this.privateProgression = const PrivateProgressionSummary(),
+    this.privateProgression = const ProgressionOverview(),
     this.privateTypedParseStatus,
     this.privateTypedPropertyCount,
     this.privateTypedMaxDepth,
@@ -327,9 +329,7 @@ class SaveInspection {
       privateTotalChunkCount: (private?['totalChunkCount'] as num?)?.toInt(),
       privatePlayer: PrivatePlayerSummary.fromJson(privatePlayer),
       privateInventory: PrivateInventorySummary.fromJson(privateInventory),
-      privateProgression: PrivateProgressionSummary.fromJson(
-        privateProgression,
-      ),
+      privateProgression: ProgressionOverview.fromJson(privateProgression),
       privateTypedParseStatus: typedParse?['status'] as String?,
       privateTypedPropertyCount: (typedParse?['propertyCount'] as num?)
           ?.toInt(),
@@ -373,7 +373,7 @@ class SaveInspection {
 
   final PrivatePlayerSummary privatePlayer;
   final PrivateInventorySummary privateInventory;
-  final PrivateProgressionSummary privateProgression;
+  final ProgressionOverview privateProgression;
 
   /// Status of the strict typed property parse of the decoded private payload
   /// ('ok', 'failed', 'skipped_preview'); null when no private decode ran.
@@ -603,58 +603,6 @@ class PrivateInventoryItem {
   final String id;
   final String path;
   final int? count;
-}
-
-class PrivateProgressionSummary {
-  const PrivateProgressionSummary({
-    this.candidateCount = 0,
-    this.candidates = const [],
-    this.gameplayTags = const [],
-    this.sections = const [],
-    this.scriptPaths = const [],
-    this.properties = const [],
-    this.writable = const [],
-  });
-
-  factory PrivateProgressionSummary.fromJson(Map<String, Object?>? json) {
-    return PrivateProgressionSummary(
-      candidateCount: (json?['candidateCount'] as num?)?.toInt() ?? 0,
-      candidates:
-          (json?['candidates'] as List?)?.whereType<String>().toList() ??
-          const [],
-      gameplayTags:
-          (json?['gameplayTags'] as List?)?.whereType<String>().toList() ??
-          const [],
-      sections:
-          (json?['sections'] as List?)?.whereType<String>().toList() ??
-          const [],
-      scriptPaths:
-          (json?['scriptPaths'] as List?)?.whereType<String>().toList() ??
-          const [],
-      properties:
-          (json?['properties'] as List?)?.whereType<String>().toList() ??
-          const [],
-      writable:
-          (json?['writable'] as List?)?.whereType<String>().toList() ??
-          const [],
-    );
-  }
-
-  final int candidateCount;
-  final List<String> candidates;
-  final List<String> gameplayTags;
-  final List<String> sections;
-  final List<String> scriptPaths;
-  final List<String> properties;
-  final List<String> writable;
-
-  bool get hasData =>
-      candidateCount > 0 ||
-      candidates.isNotEmpty ||
-      gameplayTags.isNotEmpty ||
-      sections.isNotEmpty ||
-      scriptPaths.isNotEmpty ||
-      properties.isNotEmpty;
 }
 
 class InventoryItemCountChange {

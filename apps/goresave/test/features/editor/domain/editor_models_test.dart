@@ -309,7 +309,7 @@ void main() {
     ]);
   });
 
-  test('SaveInspection reads typed private progression summary', () {
+  test('SaveInspection reads structured progression overview', () {
     final inspection = SaveInspection.fromJson({
       'format': 'GSAV',
       'path': r'C:\saves\G1R-001.sav',
@@ -319,41 +319,30 @@ void main() {
       'private': {
         'status': 'decoded',
         'progression': {
-          'candidateCount': 3,
-          'candidates': [
-            'Quest.Main.Chapter01',
-            'Dialog.Diego.IntroDone',
-            'Knowledge.OldCamp.PathKnown',
-          ],
-          'gameplayTags': ['Quest.Main.Chapter01', 'Dialog.Diego.IntroDone'],
-          'sections': ['Generated events', 'Memorized events'],
-          'scriptPaths': ['/Script/G1R.QuestSaveGameData'],
-          'properties': ['m_GeneratedEvents', 'm_MemorizedEvents'],
+          'status': 'ok',
+          'questTotal': 707,
+          'questStates': {'Available': 700, 'Running': 5, 'Succeeded': 2},
+          'knowledgeCharacters': 12,
+          'knowledgeEntries': 340,
+          'memoryCharacters': 3,
+          'memoryEvents': 1500,
+          'writable': ['private.typed.setValue', 'private.typed.setAdd'],
         },
       },
     });
 
-    expect(inspection.privateProgression.candidateCount, 3);
-    expect(inspection.privateProgression.candidates, [
-      'Quest.Main.Chapter01',
-      'Dialog.Diego.IntroDone',
-      'Knowledge.OldCamp.PathKnown',
-    ]);
-    expect(inspection.privateProgression.gameplayTags, [
-      'Quest.Main.Chapter01',
-      'Dialog.Diego.IntroDone',
-    ]);
-    expect(inspection.privateProgression.sections, [
-      'Generated events',
-      'Memorized events',
-    ]);
-    expect(inspection.privateProgression.scriptPaths, [
-      '/Script/G1R.QuestSaveGameData',
-    ]);
-    expect(inspection.privateProgression.properties, [
-      'm_GeneratedEvents',
-      'm_MemorizedEvents',
-    ]);
+    expect(inspection.privateProgression.status, 'ok');
+    expect(inspection.privateProgression.available, isTrue);
+    expect(inspection.privateProgression.questTotal, 707);
+    expect(inspection.privateProgression.questStates['Running'], 5);
+    expect(inspection.privateProgression.knowledgeCharacters, 12);
+    expect(inspection.privateProgression.knowledgeEntries, 340);
+    expect(inspection.privateProgression.memoryCharacters, 3);
+    expect(inspection.privateProgression.memoryEvents, 1500);
+    expect(
+      inspection.privateProgression.writable,
+      contains('private.typed.setAdd'),
+    );
   });
 
   test('SaveInspection treats decoded preview as usable private data', () {

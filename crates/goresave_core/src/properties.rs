@@ -606,6 +606,83 @@ fn container_value_type(value: &PropertyValue) -> &'static str {
     }
 }
 
+/// Depth-first search for the first property named `name` anywhere in the
+/// tree. Returns the setValue-addressable path segments leading to it
+/// (inclusive) plus the property. Map entries whose keys cannot be rendered as
+/// path segments are skipped (a hit behind such a key would not be
+/// addressable anyway).
+pub fn find_property_by_name<'a>(
+    root: &'a RootObject,
+    name: &str,
+) -> Option<(Vec<String>, &'a Property)> {
+    fn in_props<'a>(
+        props: &'a [Property],
+        name: &str,
+        path: &mut Vec<String>,
+    ) -> Option<&'a Property> {
+        for p in props {
+            path.push(p.name.clone());
+            if p.name == name {
+                return Some(p);
+            }
+            if let Some(found) = in_value(&p.value, name, path) {
+                return Some(found);
+            }
+            path.pop();
+        }
+        None
+    }
+    fn in_value<'a>(
+        value: &'a PropertyValue,
+        name: &str,
+        path: &mut Vec<String>,
+    ) -> Option<&'a Property> {
+        match value {
+            PropertyValue::Struct(StructValue::Properties(inner)) => in_props(inner, name, path),
+            PropertyValue::Struct(StructValue::Instanced(Some(i))) => {
+                in_props(&i.properties, name, path)
+            }
+            PropertyValue::Map { entries, .. } => {
+                for (key, val) in entries {
+                    let Some(key) = map_key_to_string(key) else {
+                        continue;
+                    };
+                    path.push(format!("{{{key}}}"));
+                    if let Some(found) = in_value(val, name, path) {
+                        return Some(found);
+                    }
+                    path.pop();
+                }
+                None
+            }
+            PropertyValue::Array { elements } | PropertyValue::Set { elements, .. } => {
+                for (i, e) in elements.iter().enumerate() {
+                    path.push(format!("[{i}]"));
+                    if let Some(found) = in_value(e, name, path) {
+                        return Some(found);
+                    }
+                    path.pop();
+                }
+                None
+            }
+            PropertyValue::ObjectInstances(objs) => {
+                for (i, o) in objs.iter().enumerate() {
+                    path.push(format!("[{i}]"));
+                    if let Some(found) = in_props(&o.properties, name, path) {
+                        return Some(found);
+                    }
+                    path.pop();
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+    let mut path = Vec::new();
+    let target = in_props(&root.properties, name, &mut path)?;
+    Some((path, target))
+}
+
 /// Fixed-size scalar replacement value for in-place typed patching.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ScalarValue {
@@ -803,6 +880,254 @@ pub fn patch_string(
         payload[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
     }
     payload.splice(target.value_offset..value_end, encoded);
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContainerKind {
+    Array,
+    Set,
+}
+
+/// Byte layout of a Set/Array property's value: where the element-count field
+/// sits and the absolute byte range of every element. Computed by re-reading
+/// the container body, since the parsed tree does not record inline element
+/// offsets.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ContainerLayout {
+    pub kind: ContainerKind,
+    pub inner_type: String,
+    /// Absolute offset of the u32 element-count field.
+    pub count_offset: usize,
+    pub count: usize,
+    /// Absolute byte range of each element within the payload.
+    pub element_ranges: Vec<core::ops::Range<usize>>,
+}
+
+pub fn container_layout(
+    payload: &[u8],
+    property: &Property,
+) -> Result<ContainerLayout, CoreError> {
+    let kind = match property.type_name.as_str() {
+        "ArrayProperty" => ContainerKind::Array,
+        "SetProperty" => ContainerKind::Set,
+        other => {
+            return Err(CoreError::InvalidRequest(format!(
+                "container edits require an ArrayProperty or SetProperty target, got {other}"
+            )));
+        }
+    };
+    // Instanced-object arrays interleave full object streams; element-level
+    // splicing is not supported for them.
+    if matches!(property.value, PropertyValue::ObjectInstances(_)) {
+        return Err(CoreError::UnsupportedEdit(
+            "container edits do not support instanced-object arrays".to_string(),
+        ));
+    }
+    let inner = property
+        .descriptor
+        .inner
+        .as_deref()
+        .ok_or_else(|| CoreError::Parse("container property missing inner descriptor".into()))?;
+    let end = property
+        .value_offset
+        .checked_add(property.value_size)
+        .filter(|end| *end <= payload.len())
+        .ok_or_else(|| CoreError::Parse("container value out of bounds".to_string()))?;
+    let mut r = Reader::new(&payload[property.value_offset..end], property.value_offset);
+    if kind == ContainerKind::Set {
+        let _num_to_remove = r.u32()?;
+    }
+    let count_offset = r.abs_pos();
+    let count = r.u32()? as usize;
+    let mut element_ranges = Vec::with_capacity(count.min(1 << 16));
+    for _ in 0..count {
+        let start = r.abs_pos();
+        read_inline_value(&mut r, inner, 0)?;
+        element_ranges.push(start..r.abs_pos());
+    }
+    if r.remaining() != 0 {
+        return Err(CoreError::Parse(format!(
+            "container body left {} bytes after {count} elements",
+            r.remaining()
+        )));
+    }
+    Ok(ContainerLayout {
+        kind,
+        inner_type: inner.type_name.clone(),
+        count_offset,
+        count,
+        element_ranges,
+    })
+}
+
+/// Structural container edit applied by `patch_container`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ContainerEdit {
+    /// Append a Name/Str element to a SetProperty (rejects duplicates).
+    SetAdd(String),
+    /// Remove a Name/Str element from a SetProperty by value.
+    SetRemove(String),
+    /// Remove an ArrayProperty element by index.
+    ArrayRemove(usize),
+    /// Duplicate an ArrayProperty element in place (copy inserted right after
+    /// the source element).
+    ArrayDuplicate(usize),
+}
+
+fn set_string_elements(target: &Property) -> Option<&[PropertyValue]> {
+    match &target.value {
+        PropertyValue::Set { elements, .. } => Some(elements),
+        _ => None,
+    }
+}
+
+/// Locate a string element in a set. `fold_case` follows UE FName semantics:
+/// Name sets compare case-insensitively, Str sets hold regular strings where
+/// case-only variants are distinct values.
+fn set_element_position(
+    elements: &[PropertyValue],
+    value: &str,
+    fold_case: bool,
+) -> Option<usize> {
+    elements.iter().position(|e| match e {
+        PropertyValue::Name(s) | PropertyValue::Str(s) => {
+            if fold_case {
+                s.eq_ignore_ascii_case(value)
+            } else {
+                s == value
+            }
+        }
+        _ => false,
+    })
+}
+
+/// Apply a structural set/array edit to a resolved container property. The
+/// element count, the property's own tag size, and every enclosing size field
+/// (from [`resolve_chain`]) are adjusted by the byte delta; all writes are
+/// validated before the first mutation, so a failed patch leaves the payload
+/// untouched. Offsets recorded in the parsed tree are stale after a successful
+/// patch — re-parse before further edits.
+pub fn patch_container(
+    payload: &mut Vec<u8>,
+    target: &Property,
+    enclosing_size_fields: &[usize],
+    edit: &ContainerEdit,
+) -> Result<(), CoreError> {
+    let layout = container_layout(payload, target)?;
+    let require_kind = |wanted: ContainerKind, op: &str| {
+        if layout.kind == wanted {
+            Ok(())
+        } else {
+            Err(CoreError::InvalidRequest(format!(
+                "{op} requires a {wanted:?} target, got {:?}",
+                layout.kind
+            )))
+        }
+    };
+    // Each edit is one splice: either remove a byte range or insert bytes at a
+    // position. `count_delta` is +1 or -1.
+    let (remove_range, insert_at, insert_bytes, count_delta): (
+        Option<core::ops::Range<usize>>,
+        usize,
+        Vec<u8>,
+        i64,
+    ) = match edit {
+        ContainerEdit::SetAdd(value) => {
+            require_kind(ContainerKind::Set, "setAdd")?;
+            if !matches!(layout.inner_type.as_str(), "NameProperty" | "StrProperty") {
+                return Err(CoreError::UnsupportedEdit(format!(
+                    "setAdd supports Name/Str sets; this set holds {}",
+                    layout.inner_type
+                )));
+            }
+            let elements = set_string_elements(target)
+                .ok_or_else(|| CoreError::Parse("set value not parsed as a set".into()))?;
+            let fold_case = layout.inner_type == "NameProperty";
+            if set_element_position(elements, value, fold_case).is_some() {
+                return Err(CoreError::InvalidRequest(format!(
+                    "set already contains {value:?}"
+                )));
+            }
+            let end = target.value_offset + target.value_size;
+            (None, end, encode_fstring_value(value), 1)
+        }
+        ContainerEdit::SetRemove(value) => {
+            require_kind(ContainerKind::Set, "setRemove")?;
+            let elements = set_string_elements(target)
+                .ok_or_else(|| CoreError::Parse("set value not parsed as a set".into()))?;
+            let fold_case = layout.inner_type == "NameProperty";
+            let index = set_element_position(elements, value, fold_case).ok_or_else(|| {
+                CoreError::Parse(format!("set does not contain {value:?}"))
+            })?;
+            let range = layout.element_ranges[index].clone();
+            (Some(range.clone()), range.start, Vec::new(), -1)
+        }
+        ContainerEdit::ArrayRemove(index) => {
+            require_kind(ContainerKind::Array, "arrayRemove")?;
+            let range = layout.element_ranges.get(*index).cloned().ok_or_else(|| {
+                CoreError::InvalidRequest(format!(
+                    "array index {index} out of bounds ({} elements)",
+                    layout.count
+                ))
+            })?;
+            (Some(range.clone()), range.start, Vec::new(), -1)
+        }
+        ContainerEdit::ArrayDuplicate(index) => {
+            require_kind(ContainerKind::Array, "arrayDuplicate")?;
+            let range = layout.element_ranges.get(*index).cloned().ok_or_else(|| {
+                CoreError::InvalidRequest(format!(
+                    "array index {index} out of bounds ({} elements)",
+                    layout.count
+                ))
+            })?;
+            let bytes = payload[range.clone()].to_vec();
+            (None, range.end, bytes, 1)
+        }
+    };
+    let removed = remove_range.as_ref().map_or(0, |r| r.len());
+    let delta = insert_bytes.len() as i64 - removed as i64;
+    let new_count = u32::try_from(layout.count as i64 + count_delta)
+        .map_err(|_| CoreError::Parse("container count underflow".to_string()))?;
+    let new_size = u32::try_from(target.value_size as i64 + delta)
+        .map_err(|_| CoreError::Parse("container size would leave the u32 range".to_string()))?;
+
+    // Compute every size-field rewrite up front; mutate only once all are
+    // valid (same discipline as patch_string).
+    let mut writes = Vec::with_capacity(enclosing_size_fields.len() + 2);
+    if target.value_offset < 5 {
+        return Err(CoreError::Parse("container tag offset underflow".to_string()));
+    }
+    writes.push((target.size_field_offset(), new_size));
+    for &offset in enclosing_size_fields {
+        if offset + 4 > target.value_offset {
+            return Err(CoreError::Parse(format!(
+                "enclosing size field at 0x{offset:x} does not precede the patch target"
+            )));
+        }
+        let old = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap());
+        let updated = u32::try_from(i64::from(old) + delta).map_err(|_| {
+            CoreError::Parse(format!(
+                "enclosing size field at 0x{offset:x} would leave the u32 range"
+            ))
+        })?;
+        writes.push((offset, updated));
+    }
+    // The count field lives inside the value payload but always precedes the
+    // splice position (elements follow the count), so writing it before the
+    // splice is safe.
+    writes.push((layout.count_offset, new_count));
+    for (offset, value) in writes {
+        payload[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+    }
+    match remove_range {
+        Some(range) => {
+            payload.splice(range, core::iter::empty());
+        }
+        None => {
+            payload.splice(insert_at..insert_at, insert_bytes);
+        }
+    }
     Ok(())
 }
 
@@ -2381,6 +2706,406 @@ mod tests {
         assert!(patch_scalar(&mut payload, &rank, ScalarValue::Byte(1)).is_err());
         // And the plain-byte form must reject a string patch.
         assert!(patch_string(&mut payload, &level, &[], "oops").is_err());
+    }
+
+    fn name_set_property(name: &str, values: &[&str]) -> Vec<u8> {
+        let mut body = 0u32.to_le_bytes().to_vec(); // num_to_remove
+        body.extend_from_slice(&(values.len() as u32).to_le_bytes());
+        for v in values {
+            body.extend_from_slice(&fstring(v));
+        }
+        let mut out = tag(name, "SetProperty");
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&fstring("NameProperty"));
+        out.extend_from_slice(&header(body.len() as u32, 0));
+        out.extend_from_slice(&body);
+        out
+    }
+
+    fn int_array_property(name: &str, values: &[i32]) -> Vec<u8> {
+        let mut body = (values.len() as u32).to_le_bytes().to_vec();
+        for v in values {
+            body.extend_from_slice(&v.to_le_bytes());
+        }
+        let mut out = tag(name, "ArrayProperty");
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&fstring("IntProperty"));
+        out.extend_from_slice(&header(body.len() as u32, 0));
+        out.extend_from_slice(&body);
+        out
+    }
+
+    #[test]
+    fn container_layout_reports_set_element_ranges() {
+        let payload = root(
+            "/Script/Test.Save",
+            &name_set_property("Knowledge", &["Voiceline_A", "ChoiceB"]),
+        );
+        let parsed = parse_private_root(&payload).unwrap();
+        let target = &parsed.properties[0];
+
+        let layout = container_layout(&payload, target).unwrap();
+        assert_eq!(layout.kind, ContainerKind::Set);
+        assert_eq!(layout.inner_type, "NameProperty");
+        assert_eq!(layout.count, 2);
+        // count field sits after the u32 num_to_remove
+        assert_eq!(layout.count_offset, target.value_offset + 4);
+        assert_eq!(layout.element_ranges.len(), 2);
+        // elements are FStrings: 4-byte length + chars + NUL
+        let first = &layout.element_ranges[0];
+        assert_eq!(first.start, target.value_offset + 8);
+        assert_eq!(first.len(), 4 + "Voiceline_A".len() + 1);
+        let second = &layout.element_ranges[1];
+        assert_eq!(second.start, first.end);
+        assert_eq!(second.end, target.value_offset + target.value_size);
+    }
+
+    #[test]
+    fn container_layout_reports_array_element_ranges() {
+        let payload = root("/Script/Test.Save", &int_array_property("Nums", &[7, 8, 9]));
+        let parsed = parse_private_root(&payload).unwrap();
+        let target = &parsed.properties[0];
+
+        let layout = container_layout(&payload, target).unwrap();
+        assert_eq!(layout.kind, ContainerKind::Array);
+        assert_eq!(layout.count, 3);
+        assert_eq!(layout.count_offset, target.value_offset);
+        assert_eq!(
+            layout.element_ranges,
+            vec![
+                target.value_offset + 4..target.value_offset + 8,
+                target.value_offset + 8..target.value_offset + 12,
+                target.value_offset + 12..target.value_offset + 16,
+            ]
+        );
+    }
+
+    #[test]
+    fn container_layout_rejects_non_container_targets() {
+        let payload = root("/Script/Test.Save", &int_property("m_X", 1));
+        let parsed = parse_private_root(&payload).unwrap();
+        assert!(container_layout(&payload, &parsed.properties[0]).is_err());
+    }
+
+    fn struct_wrapping(name: &str, struct_type: &str, inner_props: &[u8]) -> Vec<u8> {
+        let mut body = inner_props.to_vec();
+        body.extend_from_slice(&fstring("None"));
+        let mut out = tag(name, "StructProperty");
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&fstring(struct_type));
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&fstring("/Script/Test"));
+        out.extend_from_slice(&header(body.len() as u32, 0));
+        out.extend_from_slice(&body);
+        out
+    }
+
+    fn resolve_set_target(payload: &[u8]) -> (RootObject, Vec<PathSeg>) {
+        let parsed = parse_private_root(payload).unwrap();
+        let path = parse_path(&[
+            "KnowledgeSet".to_string(),
+            "Knowledge".to_string(),
+        ])
+        .unwrap();
+        (parsed, path)
+    }
+
+    #[test]
+    fn patch_container_set_add_appends_and_fixes_sizes() {
+        let mut payload = root(
+            "/Script/Test.Save",
+            &struct_wrapping(
+                "KnowledgeSet",
+                "KnowledgeSet",
+                &name_set_property("Knowledge", &["Voiceline_A"]),
+            ),
+        );
+        let (parsed, path) = resolve_set_target(&payload);
+        let chain = resolve_chain(&parsed.properties, &path).unwrap();
+        let target = chain.target.clone();
+
+        patch_container(
+            &mut payload,
+            &target,
+            &chain.enclosing_size_fields,
+            &ContainerEdit::SetAdd("ChoiceB".to_string()),
+        )
+        .unwrap();
+
+        // Strict re-parse proves every size field (set tag + wrapping struct
+        // tag) was adjusted.
+        let reparsed = parse_private_root(&payload).unwrap();
+        let set = resolve(&reparsed.properties, &path).unwrap();
+        assert_eq!(
+            set.value,
+            PropertyValue::Set {
+                num_to_remove: 0,
+                elements: vec![
+                    PropertyValue::Name("Voiceline_A".to_string()),
+                    PropertyValue::Name("ChoiceB".to_string()),
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn patch_container_set_add_rejects_duplicates_without_mutation() {
+        let mut payload = root(
+            "/Script/Test.Save",
+            &name_set_property("Knowledge", &["Voiceline_A"]),
+        );
+        let parsed = parse_private_root(&payload).unwrap();
+        let target = parsed.properties[0].clone();
+        let copy = payload.clone();
+        assert!(
+            patch_container(
+                &mut payload,
+                &target,
+                &[],
+                &ContainerEdit::SetAdd("Voiceline_A".to_string()),
+            )
+            .is_err()
+        );
+        assert_eq!(payload, copy);
+
+        // UE FNames are case-insensitive: a case-variant is a duplicate too.
+        assert!(
+            patch_container(
+                &mut payload,
+                &target,
+                &[],
+                &ContainerEdit::SetAdd("VOICELINE_a".to_string()),
+            )
+            .is_err()
+        );
+        assert_eq!(payload, copy);
+    }
+
+    #[test]
+    fn patch_container_name_set_remove_folds_case() {
+        let mut payload = root(
+            "/Script/Test.Save",
+            &name_set_property("Knowledge", &["Voiceline_A", "ChoiceB"]),
+        );
+        let parsed = parse_private_root(&payload).unwrap();
+        let target = parsed.properties[0].clone();
+        // FName semantics: a case-variant removes the existing member.
+        patch_container(
+            &mut payload,
+            &target,
+            &[],
+            &ContainerEdit::SetRemove("VOICELINE_a".to_string()),
+        )
+        .unwrap();
+        let reparsed = parse_private_root(&payload).unwrap();
+        assert_eq!(
+            reparsed.properties[0].value,
+            PropertyValue::Set {
+                num_to_remove: 0,
+                elements: vec![PropertyValue::Name("ChoiceB".to_string())],
+            }
+        );
+    }
+
+    #[test]
+    fn patch_container_str_set_add_keeps_case_sensitivity() {
+        // Str sets hold regular strings: case-only variants are distinct.
+        let mut body = 0u32.to_le_bytes().to_vec(); // num_to_remove
+        body.extend_from_slice(&1u32.to_le_bytes());
+        body.extend_from_slice(&fstring("foo"));
+        let mut props = tag("Tags", "SetProperty");
+        props.extend_from_slice(&1u32.to_le_bytes());
+        props.extend_from_slice(&fstring("StrProperty"));
+        props.extend_from_slice(&header(body.len() as u32, 0));
+        props.extend_from_slice(&body);
+        let mut payload = root("/Script/Test.Save", &props);
+
+        let parsed = parse_private_root(&payload).unwrap();
+        let target = parsed.properties[0].clone();
+        patch_container(
+            &mut payload,
+            &target,
+            &[],
+            &ContainerEdit::SetAdd("Foo".to_string()),
+        )
+        .unwrap();
+
+        let reparsed = parse_private_root(&payload).unwrap();
+        assert_eq!(
+            reparsed.properties[0].value,
+            PropertyValue::Set {
+                num_to_remove: 0,
+                elements: vec![
+                    PropertyValue::Str("foo".to_string()),
+                    PropertyValue::Str("Foo".to_string()),
+                ],
+            }
+        );
+
+        // Exact duplicates are still rejected.
+        let parsed = parse_private_root(&payload).unwrap();
+        let target = parsed.properties[0].clone();
+        let copy = payload.clone();
+        assert!(
+            patch_container(
+                &mut payload,
+                &target,
+                &[],
+                &ContainerEdit::SetAdd("Foo".to_string()),
+            )
+            .is_err()
+        );
+        assert_eq!(payload, copy);
+    }
+
+    #[test]
+    fn patch_container_set_remove_splices_element_out() {
+        let mut payload = root(
+            "/Script/Test.Save",
+            &struct_wrapping(
+                "KnowledgeSet",
+                "KnowledgeSet",
+                &name_set_property("Knowledge", &["Voiceline_A", "ChoiceB", "Voiceline_C"]),
+            ),
+        );
+        let (parsed, path) = resolve_set_target(&payload);
+        let chain = resolve_chain(&parsed.properties, &path).unwrap();
+        let target = chain.target.clone();
+
+        patch_container(
+            &mut payload,
+            &target,
+            &chain.enclosing_size_fields,
+            &ContainerEdit::SetRemove("ChoiceB".to_string()),
+        )
+        .unwrap();
+
+        let reparsed = parse_private_root(&payload).unwrap();
+        let set = resolve(&reparsed.properties, &path).unwrap();
+        assert_eq!(
+            set.value,
+            PropertyValue::Set {
+                num_to_remove: 0,
+                elements: vec![
+                    PropertyValue::Name("Voiceline_A".to_string()),
+                    PropertyValue::Name("Voiceline_C".to_string()),
+                ],
+            }
+        );
+
+        // Removing a value that is not present fails without mutation.
+        let parsed = parse_private_root(&payload).unwrap();
+        let chain = resolve_chain(&parsed.properties, &path).unwrap();
+        let target = chain.target.clone();
+        let copy = payload.clone();
+        assert!(
+            patch_container(
+                &mut payload,
+                &target,
+                &chain.enclosing_size_fields,
+                &ContainerEdit::SetRemove("ChoiceB".to_string()),
+            )
+            .is_err()
+        );
+        assert_eq!(payload, copy);
+    }
+
+    #[test]
+    fn patch_container_array_remove_and_duplicate() {
+        let mut payload = root("/Script/Test.Save", &int_array_property("Nums", &[7, 8, 9]));
+        let parsed = parse_private_root(&payload).unwrap();
+        let target = parsed.properties[0].clone();
+
+        patch_container(&mut payload, &target, &[], &ContainerEdit::ArrayRemove(1)).unwrap();
+        let reparsed = parse_private_root(&payload).unwrap();
+        assert_eq!(
+            reparsed.properties[0].value,
+            PropertyValue::Array {
+                elements: vec![PropertyValue::Int(7), PropertyValue::Int(9)],
+            }
+        );
+
+        let target = reparsed.properties[0].clone();
+        patch_container(&mut payload, &target, &[], &ContainerEdit::ArrayDuplicate(0)).unwrap();
+        let reparsed = parse_private_root(&payload).unwrap();
+        assert_eq!(
+            reparsed.properties[0].value,
+            PropertyValue::Array {
+                elements: vec![
+                    PropertyValue::Int(7),
+                    PropertyValue::Int(7),
+                    PropertyValue::Int(9),
+                ],
+            }
+        );
+
+        // Out-of-bounds index fails without mutation.
+        let target = reparsed.properties[0].clone();
+        let copy = payload.clone();
+        assert!(
+            patch_container(&mut payload, &target, &[], &ContainerEdit::ArrayRemove(3)).is_err()
+        );
+        assert_eq!(payload, copy);
+    }
+
+    #[test]
+    fn patch_container_rejects_kind_mismatch() {
+        let mut payload = root("/Script/Test.Save", &int_array_property("Nums", &[7]));
+        let parsed = parse_private_root(&payload).unwrap();
+        let target = parsed.properties[0].clone();
+        // set ops on an array
+        assert!(
+            patch_container(&mut payload, &target, &[], &ContainerEdit::SetAdd("X".into()))
+                .is_err()
+        );
+        // array ops on a set
+        let mut payload = root("/Script/Test.Save", &name_set_property("S", &["A"]));
+        let parsed = parse_private_root(&payload).unwrap();
+        let target = parsed.properties[0].clone();
+        assert!(
+            patch_container(&mut payload, &target, &[], &ContainerEdit::ArrayRemove(0)).is_err()
+        );
+    }
+
+    #[test]
+    fn find_property_by_name_returns_addressable_path() {
+        // Map { "CharacterStates" => InstancedStruct { Knowledge: Set } }
+        let nested = {
+            let mut n = name_set_property("Knowledge", &["Voiceline_A"]);
+            n.extend_from_slice(&fstring("None"));
+            n
+        };
+        let mut instanced = fstring("/Script/Test.CharacterStates");
+        instanced.extend_from_slice(&(nested.len() as u32).to_le_bytes());
+        instanced.extend_from_slice(&nested);
+
+        let mut map_body = 0u32.to_le_bytes().to_vec();
+        map_body.extend_from_slice(&1u32.to_le_bytes());
+        map_body.extend_from_slice(&fstring("CharacterStates")); // Name key
+        map_body.extend_from_slice(&instanced);
+
+        let mut props = tag("m_GenericData", "MapProperty");
+        props.extend_from_slice(&2u32.to_le_bytes());
+        props.extend_from_slice(&fstring("NameProperty"));
+        props.extend_from_slice(&0u32.to_le_bytes()); // key_flags
+        props.extend_from_slice(&fstring("StructProperty"));
+        props.extend_from_slice(&1u32.to_le_bytes());
+        props.extend_from_slice(&fstring("InstancedStruct"));
+        props.extend_from_slice(&1u32.to_le_bytes());
+        props.extend_from_slice(&fstring("/Script/StructUtils"));
+        props.extend_from_slice(&header(map_body.len() as u32, TAG_FLAG_NATIVE_SERIALIZE));
+        props.extend_from_slice(&map_body);
+        let payload = root("/Script/Test.Save", &props);
+
+        let parsed = parse_private_root(&payload).unwrap();
+        let (path, prop) = find_property_by_name(&parsed, "Knowledge").unwrap();
+        assert_eq!(path, vec!["m_GenericData", "{CharacterStates}", "Knowledge"]);
+        assert!(matches!(prop.value, PropertyValue::Set { .. }));
+        // The returned path round-trips through resolve().
+        let segs = parse_path(&path).unwrap();
+        assert_eq!(resolve(&parsed.properties, &segs).unwrap().name, "Knowledge");
+
+        assert!(find_property_by_name(&parsed, "DoesNotExist").is_none());
     }
 
     #[test]

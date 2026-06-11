@@ -13,6 +13,7 @@ import 'package:goresave/features/editor/domain/pending_edits.dart';
 import 'package:goresave/providers/data_providers.dart';
 import 'package:intl/intl.dart';
 import 'hero_stats_card.dart';
+import 'progression_panel.dart';
 
 final _bytes = NumberFormat.decimalPattern();
 
@@ -140,28 +141,22 @@ class _SaveSidebar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Scope the list to the active profile so the list, the header total, and
-    // the profile-scoped Quick/Auto counts all agree in a multi-profile folder.
-    final activeProfileId = state.activeProfile?.profileId;
-    final saves = activeProfileId == null
-        ? state.saves
-        : state.saves
-              .where(
-                (s) =>
-                    // Keep this profile's saves, plus saves with unknown profile
-                    // metadata, and never hide the currently selected save.
-                    s.persistentProfileId == activeProfileId ||
-                    s.persistentProfileId == null ||
-                    s.path == state.selectedPath,
-              )
-              .toList();
+    // Use the notifier-computed visible saves so the list, header count, and
+    // Quick/Auto stats all agree.
+    final saves = state.visibleSaves;
     return DecoratedBox(
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surfaceContainerLow,
       ),
       child: Column(
         children: [
-          _ProfileHeader(profile: state.activeProfile, saveCount: saves.length),
+          _ProfileHeader(
+            profile: state.activeProfile,
+            profiles: state.profiles,
+            saveCount: saves.length,
+            notifier: notifier,
+            isLoading: state.isLoading,
+          ),
           Expanded(
             child: saves.isEmpty
                 ? const Center(
@@ -199,10 +194,19 @@ class _SaveSidebar extends StatelessWidget {
 }
 
 class _ProfileHeader extends StatelessWidget {
-  const _ProfileHeader({required this.profile, required this.saveCount});
+  const _ProfileHeader({
+    required this.profile,
+    required this.profiles,
+    required this.saveCount,
+    required this.notifier,
+    required this.isLoading,
+  });
 
   final ProfileSummary? profile;
+  final List<ProfileSummary> profiles;
   final int saveCount;
+  final EditorNotifier notifier;
+  final bool isLoading;
 
   @override
   Widget build(BuildContext context) {
@@ -210,13 +214,14 @@ class _ProfileHeader extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final quickCount = profile?.quickSaveSlots.length ?? 0;
     final autoCount = profile?.autoSaveSlots.length ?? 0;
+    final multiProfile = profiles.length > 1;
     return Container(
       width: double.infinity,
       // Match the icon+text TabBar row in the workspace next door (72 tab
       // height + 2 indicator weight = 74, measured) so the header's bottom
       // edge lines up with the tab bar's.
       height: 74,
-      padding: const EdgeInsets.symmetric(horizontal: 16),
+      padding: const EdgeInsets.only(left: 16, right: 4),
       alignment: Alignment.centerLeft,
       decoration: BoxDecoration(
         color: scheme.surfaceContainerLowest,
@@ -239,12 +244,20 @@ class _ProfileHeader extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  profile?.displayName ?? 'Profile',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: textTheme.titleMedium,
-                ),
+                if (multiProfile)
+                  _ProfileSwitcher(
+                    profile: profile,
+                    profiles: profiles,
+                    notifier: notifier,
+                    isLoading: isLoading,
+                  )
+                else
+                  Text(
+                    profile?.displayName ?? 'Profile',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: textTheme.titleMedium,
+                  ),
                 const SizedBox(height: 2),
                 Text(
                   '${_formatCount(saveCount, 'save')} | Quick $quickCount | Auto $autoCount',
@@ -256,6 +269,110 @@ class _ProfileHeader extends StatelessWidget {
                 ),
               ],
             ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            tooltip: 'Rescan save folder',
+            visualDensity: VisualDensity.compact,
+            iconSize: 20,
+            onPressed: isLoading ? null : () => _confirmRefresh(context),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Rescanning re-inspects the selected slot, which clears the global
+  /// pending-edit registry — never silently discard unsaved drafts.
+  Future<void> _confirmRefresh(BuildContext context) async {
+    final pendingCount = notifier.pendingEditCount;
+    if (pendingCount > 0) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Discard unsaved changes?'),
+          content: Text(
+            'Rescanning reloads every save and discards your $pendingCount '
+            'unsaved change${pendingCount == 1 ? '' : 's'}.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('Discard and rescan'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true) return;
+    }
+    await notifier.refresh();
+  }
+}
+
+/// Profile name shown as a [PopupMenuButton] when multiple profiles exist.
+/// Selecting a profile calls [EditorNotifier.selectProfile].
+class _ProfileSwitcher extends StatelessWidget {
+  const _ProfileSwitcher({
+    required this.profile,
+    required this.profiles,
+    required this.notifier,
+    required this.isLoading,
+  });
+
+  final ProfileSummary? profile;
+  final List<ProfileSummary> profiles;
+  final EditorNotifier notifier;
+  final bool isLoading;
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    final scheme = Theme.of(context).colorScheme;
+    final currentId = profile?.profileId;
+    return PopupMenuButton<int>(
+      tooltip: 'Switch profile',
+      enabled: !isLoading,
+      onSelected: (id) => notifier.selectProfile(id),
+      itemBuilder: (context) => [
+        for (final p in profiles)
+          PopupMenuItem<int>(
+            value: p.profileId,
+            child: Row(
+              children: [
+                if (p.profileId == currentId)
+                  Icon(Icons.check, size: 18, color: scheme.primary)
+                else
+                  const SizedBox(width: 18),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    '${p.displayName} (${p.savedSlots.length} saves)',
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+          ),
+      ],
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Flexible(
+            child: Text(
+              profile?.displayName ?? 'Profile',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: textTheme.titleMedium,
+            ),
+          ),
+          Icon(
+            Icons.arrow_drop_down,
+            size: 18,
+            color: isLoading ? scheme.onSurfaceVariant : scheme.primary,
           ),
         ],
       ),
@@ -499,9 +616,7 @@ class _EditorWorkspace extends StatelessWidget {
                     child: FilledButton.icon(
                       icon: const Icon(Icons.save_outlined),
                       label: Text(
-                        pendingCount == 0
-                            ? 'Save'
-                            : 'Save ($pendingCount)',
+                        pendingCount == 0 ? 'Save' : 'Save ($pendingCount)',
                       ),
                       onPressed: pendingCount > 0 && !state.isLoading
                           ? notifier.saveAllPending
@@ -579,7 +694,8 @@ class _EditorWorkspace extends StatelessWidget {
                       // codec host to be compress-ready (auto-trusted or verified
                       // this session), not just decode-ready.
                       editable:
-                          inspection.privateEditable && state.codecCompressReady,
+                          inspection.privateEditable &&
+                          state.codecCompressReady,
                       lockedBody:
                           'Private player edits need a verified G1R codec host.',
                     ),
@@ -592,9 +708,13 @@ class _EditorWorkspace extends StatelessWidget {
                     ),
                   ),
                   _KeepAliveTab(
-                    child: _ProgressionPanel(
+                    child: ProgressionPanel(
                       inspection: inspection,
                       notifier: notifier,
+                      editable:
+                          inspection.privateEditable &&
+                          inspection.privateTypedVerified &&
+                          state.codecCompressReady,
                     ),
                   ),
                   _KeepAliveTab(
@@ -605,7 +725,8 @@ class _EditorWorkspace extends StatelessWidget {
                       // full private decode (not a preview) plus a compress-ready
                       // codec, matching the Player and Inventory gating.
                       editable:
-                          inspection.privateEditable && state.codecCompressReady,
+                          inspection.privateEditable &&
+                          state.codecCompressReady,
                     ),
                   ),
                   _KeepAliveTab(
@@ -753,9 +874,8 @@ class _OverviewInspectionJsonState extends State<_OverviewInspectionJson> {
                   IconButton(
                     tooltip: 'Copy',
                     icon: const Icon(Icons.copy),
-                    onPressed: () => Clipboard.setData(
-                      ClipboardData(text: _getJson()),
-                    ),
+                    onPressed: () =>
+                        Clipboard.setData(ClipboardData(text: _getJson())),
                   ),
                 ],
               ),
@@ -1267,10 +1387,7 @@ class _PrivatePanel extends StatelessWidget {
                       for (final edit in edits)
                         {
                           'path': 'private.typed.setValue',
-                          'value': {
-                            'path': edit.path,
-                            'value': edit.value,
-                          },
+                          'value': {'path': edit.path, 'value': edit.value},
                         },
                     ],
                   ),
@@ -1404,201 +1521,6 @@ class _InventoryPanel extends StatelessWidget {
             inspection.privateInventory.writable.contains(
               'private.inventory.setItemCount',
             ),
-      ),
-    );
-  }
-}
-
-class _ProgressionPanel extends StatelessWidget {
-  const _ProgressionPanel({required this.inspection, required this.notifier});
-
-  final SaveInspection inspection;
-  final EditorNotifier notifier;
-
-  @override
-  Widget build(BuildContext context) {
-    if (!inspection.privateDecoded) {
-      return const _MessagePane(
-        icon: Icons.flag_outlined,
-        title: 'Progression',
-        body:
-            'Progression data needs decoded private payload data from the G1R codec host.',
-      );
-    }
-    return ListView(
-      padding: const EdgeInsets.all(20),
-      children: [
-        if (inspection.privateProgression.hasData)
-          _PrivateProgressionSummaryCard(
-            progression: inspection.privateProgression,
-          )
-        else
-          const _MessagePane(
-            icon: Icons.flag_outlined,
-            title: 'Progression',
-            body:
-                'No progression markers found in the decoded private payload.',
-          ),
-      ],
-    );
-  }
-}
-
-class _PrivateProgressionSummaryCard extends StatefulWidget {
-  const _PrivateProgressionSummaryCard({required this.progression});
-
-  final PrivateProgressionSummary progression;
-
-  @override
-  State<_PrivateProgressionSummaryCard> createState() =>
-      _PrivateProgressionSummaryCardState();
-}
-
-class _PrivateProgressionSummaryCardState
-    extends State<_PrivateProgressionSummaryCard> {
-  String _query = '';
-
-  @override
-  Widget build(BuildContext context) {
-    final progression = widget.progression;
-    final query = _query.trim().toLowerCase();
-    final candidates = progression.candidates
-        .where((value) => query.isEmpty || value.toLowerCase().contains(query))
-        .take(160)
-        .toList();
-    final candidateSet = candidates.toSet();
-    final tags = progression.gameplayTags
-        .where(
-          (value) =>
-              (query.isEmpty || value.toLowerCase().contains(query)) &&
-              !candidateSet.contains(value),
-        )
-        .take(160)
-        .toList();
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                const Icon(Icons.flag_outlined),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    'Progression summary',
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                _SummaryMetric(
-                  label: 'Candidates',
-                  value: progression.candidateCount.toString(),
-                ),
-                _SummaryMetric(
-                  label: 'Gameplay tags',
-                  value: progression.gameplayTags.length.toString(),
-                ),
-                _SummaryMetric(
-                  label: 'Sections',
-                  value: progression.sections.length.toString(),
-                ),
-                _SummaryMetric(
-                  label: 'Properties',
-                  value: progression.properties.length.toString(),
-                ),
-                _SummaryMetric(
-                  label: 'Scripts',
-                  value: progression.scriptPaths.length.toString(),
-                ),
-              ],
-            ),
-            if (progression.sections.isNotEmpty) ...[
-              const SizedBox(height: 16),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: progression.sections
-                    .map((value) => Chip(label: Text(value, maxLines: 1)))
-                    .toList(),
-              ),
-            ],
-            const SizedBox(height: 16),
-            TextField(
-              decoration: const InputDecoration(
-                labelText: 'Filter progression',
-                prefixIcon: Icon(Icons.search),
-              ),
-              onChanged: (value) => setState(() => _query = value),
-            ),
-            if (candidates.isNotEmpty) ...[
-              const SizedBox(height: 16),
-              Text(
-                'Progression markers',
-                style: Theme.of(context).textTheme.labelLarge,
-              ),
-              const SizedBox(height: 8),
-              _StringList(values: candidates, icon: Icons.flag_outlined),
-            ],
-            if (tags.isNotEmpty) ...[
-              const SizedBox(height: 16),
-              Text(
-                'Gameplay tags',
-                style: Theme.of(context).textTheme.labelLarge,
-              ),
-              const SizedBox(height: 8),
-              _StringList(values: tags, icon: Icons.sell_outlined),
-            ],
-            if (progression.scriptPaths.isNotEmpty) ...[
-              const SizedBox(height: 16),
-              Text(
-                'Progression scripts',
-                style: Theme.of(context).textTheme.labelLarge,
-              ),
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: progression.scriptPaths
-                    .take(8)
-                    .map((value) => Chip(label: Text(value, maxLines: 1)))
-                    .toList(),
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _StringList extends StatelessWidget {
-  const _StringList({required this.values, required this.icon});
-
-  final List<String> values;
-  final IconData icon;
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      height: 220,
-      child: ListView.separated(
-        itemCount: values.length,
-        separatorBuilder: (_, _) => const Divider(height: 1),
-        itemBuilder: (context, index) {
-          return ListTile(
-            dense: true,
-            leading: Icon(icon),
-            title: SelectableText(values[index], maxLines: 1),
-          );
-        },
       ),
     );
   }
@@ -1845,10 +1767,7 @@ class _InventoryItemCountEditorState extends State<_InventoryItemCountEditor> {
         controller: _controller,
         keyboardType: TextInputType.number,
         onChanged: _onCountTextChanged,
-        decoration: InputDecoration(
-          labelText: 'Count',
-          errorText: _error,
-        ),
+        decoration: InputDecoration(labelText: 'Count', errorText: _error),
       ),
     );
   }
@@ -2127,11 +2046,7 @@ class _PrivatePlayerTransformEditorState
           {
             'path': 'private.player.setTransform',
             'value': {
-              'location': {
-                'x': locationX,
-                'y': locationY,
-                'z': locationZ,
-              },
+              'location': {'x': locationX, 'y': locationY, 'z': locationZ},
               'rotation': {
                 'pitch': rotationPitch,
                 'yaw': rotationYaw,
@@ -2396,39 +2311,6 @@ String _formatAttributeValue(double? value) {
   // a lossy rounding (0.125 → 0.13) would silently corrupt untouched axes
   // the moment any sibling field changes. Round-trip or full precision.
   return double.tryParse(rounded) == value ? rounded : value.toString();
-}
-
-class _SummaryMetric extends StatelessWidget {
-  const _SummaryMetric({required this.label, required this.value});
-
-  final String label;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      width: 120,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            label,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: Theme.of(context).textTheme.labelSmall?.copyWith(
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
-            ),
-          ),
-          Text(
-            value,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: Theme.of(context).textTheme.bodyMedium,
-          ),
-        ],
-      ),
-    );
-  }
 }
 
 /// Generic typed property browser: search every property in the decoded
@@ -2810,8 +2692,7 @@ class _TypedPropertyRowState extends State<_TypedPropertyRow> {
     // Re-seed when the reloadKey identity changes (e.g. after Reset/refresh
     // that produces a new inspection — same canonical value, draft must go).
     final newKey = widget.reloadKey;
-    final keyChanged =
-        newKey != null && !identical(newKey, _lastReloadKey);
+    final keyChanged = newKey != null && !identical(newKey, _lastReloadKey);
     if (keyChanged) {
       _lastReloadKey = newKey;
     }

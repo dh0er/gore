@@ -1,7 +1,7 @@
 # Progression Tab v2 — Design
 
 Date: 2026-06-11
-Status: approved by user (chat), pending spec review
+Status: implemented (branch progression-tab-v2)
 
 ## Problem
 
@@ -119,10 +119,15 @@ Out of scope for v1:
 - Composing a memory event from scratch. "Add event" is
   `arrayDuplicate` + editing the duplicate's scalar leaves (time,
   magnitude, instigator/affected names).
-- Rewriting tags inside a duplicated event's `GameplayTagContainer`.
-  Stretch goal (v1.1): if the typed parser can address the tag FStrings
-  inside the container, the same splice machinery applies; otherwise the
-  duplicate keeps the source tags.
+- Deferred to v1.1: duplicate-then-edit scalar workflow. v1 ships
+  `arrayDuplicate` as an exact-clone operation with a confirmation
+  dialog; per-element leaf paths and an edit dialog on the duplicated
+  event are v1.1 work.
+- Deferred to v1.1: rewriting tags inside a duplicated event's
+  `GameplayTagContainer`. The duplicate keeps the source event's tags
+  in v1; tag rewriting requires addressing the FStrings inside the
+  container and is scoped together with the duplicate-then-edit
+  workflow above.
 
 ### 3. App side (Flutter, Inventory-card pattern)
 

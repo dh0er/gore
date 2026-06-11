@@ -6,25 +6,40 @@ import 'package:goresave/features/editor/domain/editor_models.dart';
 import 'package:goresave/features/editor/domain/editor_settings_store.dart';
 import 'package:goresave/features/editor/domain/hero_attributes.dart';
 import 'package:goresave/features/editor/domain/pending_edits.dart';
+import 'package:goresave/features/editor/domain/progression_models.dart';
 import 'package:goresave/utils/default_paths.dart';
 import 'package:path/path.dart' as p;
 import 'package:state_notifier/state_notifier.dart';
 
 const _unchanged = Object();
 
-/// Sorts saves by file last-modified time, newest first. Saves whose file
-/// can't be stat'd (e.g. fake paths in tests) sink to the bottom rather than
-/// throwing, so a transient FS error never breaks the scan.
-void _sortByLastModifiedDesc(List<SaveSlot> saves) {
+/// Sorts saves by in-game playtime (highest first). Slots with null playtime
+/// sink to the bottom. Equal or both-null playtime falls back to file
+/// last-modified descending so the order is stable on files that lack
+/// persistent metadata — saves whose file can't be stat'd sink to the very
+/// bottom rather than throwing, so a transient FS error never breaks the scan.
+void _sortByPlaytimeDesc(List<SaveSlot> saves) {
   final mtime = <String, DateTime>{};
   for (final save in saves) {
     try {
       mtime[save.path] = File(save.path).lastModifiedSync();
     } catch (_) {
-      // Leave unset; treated as oldest below.
+      // Leave unset; treated as oldest in the mtime tie-break below.
     }
   }
   saves.sort((a, b) {
+    final pa = a.timePlayedSeconds;
+    final pb = b.timePlayedSeconds;
+    // Primary key: playtime descending; nulls sink to the bottom.
+    if (pa != null && pb != null) {
+      final cmp = pb.compareTo(pa);
+      if (cmp != 0) return cmp;
+    } else if (pa == null && pb != null) {
+      return 1;
+    } else if (pa != null && pb == null) {
+      return -1;
+    }
+    // Secondary key: last-modified descending (tie-break / no-metadata path).
     final ma = mtime[a.path];
     final mb = mtime[b.path];
     if (ma == null && mb == null) return 0;
@@ -43,6 +58,7 @@ class EditorState {
     this.saves = const [],
     this.profiles = const [],
     this.activeProfileId,
+    this.selectedProfileId,
     this.backups = const [],
     this.companionBackups = const [],
     this.selectedPath,
@@ -62,6 +78,11 @@ class EditorState {
   final List<SaveSlot> saves;
   final List<ProfileSummary> profiles;
   final int? activeProfileId;
+
+  /// Explicitly selected profile id. Null means no explicit selection — use
+  /// [effectiveProfileId] for the resolved value.
+  final int? selectedProfileId;
+
   final List<BackupEntry> backups;
   final List<BackupEntry> companionBackups;
   final String? selectedPath;
@@ -109,11 +130,37 @@ class EditorState {
     return null;
   }
 
+  /// The profile id to use for filtering: the explicitly selected profile, or
+  /// fall back to the scan's active profile id.
+  /// One resolution shared by the header and the save-list filter, so they
+  /// can never disagree: explicit switcher choice first, then the selected
+  /// save's own profile, then the scan's active profile id.
+  int? get effectiveProfileId =>
+      selectedProfileId ?? selectedSave?.persistentProfileId ?? activeProfileId;
+
+  /// Saves to show in the sidebar. When there are fewer than 2 profiles, or
+  /// no effective profile id, all saves are shown. Otherwise only saves whose
+  /// [SaveSlot.persistentProfileId] matches [effectiveProfileId] are shown
+  /// (saves with a null persistentProfileId stay visible in every profile —
+  /// they cannot be attributed). The currently selected save is always kept
+  /// visible so it is never silently removed from the list mid-session.
+  List<SaveSlot> get visibleSaves {
+    final eid = effectiveProfileId;
+    if (eid == null || profiles.length < 2) return saves;
+    return saves
+        .where(
+          (s) =>
+              s.persistentProfileId == eid ||
+              s.persistentProfileId == null ||
+              s.path == selectedPath,
+        )
+        .toList();
+  }
+
   ProfileSummary? get activeProfile {
-    // Prefer the selected save's own profile so a mixed-profile folder shows the
-    // profile that the selected slot belongs to, falling back to the scan's
-    // active profile id.
-    final targetProfileId = selectedSave?.persistentProfileId ?? activeProfileId;
+    // Same resolution as the save-list filter (effectiveProfileId), so the
+    // header always describes the profile whose saves are listed.
+    final targetProfileId = effectiveProfileId;
     for (final profile in profiles) {
       if (profile.profileId == targetProfileId) return profile;
     }
@@ -130,6 +177,7 @@ class EditorState {
     List<SaveSlot>? saves,
     List<ProfileSummary>? profiles,
     Object? activeProfileId = _unchanged,
+    Object? selectedProfileId = _unchanged,
     List<BackupEntry>? backups,
     List<BackupEntry>? companionBackups,
     Object? selectedPath = _unchanged,
@@ -158,6 +206,9 @@ class EditorState {
       activeProfileId: identical(activeProfileId, _unchanged)
           ? this.activeProfileId
           : activeProfileId as int?,
+      selectedProfileId: identical(selectedProfileId, _unchanged)
+          ? this.selectedProfileId
+          : selectedProfileId as int?,
       backups: clearBackups ? const [] : backups ?? this.backups,
       companionBackups: clearBackups
           ? const []
@@ -287,6 +338,73 @@ class EditorNotifier extends StateNotifier<EditorState> {
   void dismissWriteMessage() {
     if (state.lastWriteMessage != null) {
       state = state.copyWith(clearWriteMessage: true);
+    }
+  }
+
+  /// Switch the active profile filter. Pass null to clear the explicit
+  /// selection (show all profiles).
+  ///
+  /// Blocked with an error when there are unsaved edits — switching profiles
+  /// changes which saves are visible and would potentially move selection away
+  /// from the save the edits target.
+  ///
+  /// If the currently selected save is not in the new visible set, the first
+  /// visible save is selected (triggering [_inspect]); if there are none,
+  /// the selection is cleared.
+  Future<void> selectProfile(int? profileId) async {
+    if (state.pendingEdits.isNotEmpty) {
+      state = state.copyWith(
+        error:
+            'Save or reset your unsaved changes first — switching profiles '
+            'would move away from the current save.',
+      );
+      return;
+    }
+
+    // Check whether the current selection belongs to the target profile before
+    // updating state. We avoid relying on visibleSaves here so that the "keep
+    // selected save visible" exemption cannot silently keep the old save in view
+    // and prevent the selection from moving.
+    final currentSave = state.selectedSave;
+    final selectionMatchesNewProfile =
+        profileId == null ||
+        state.profiles.length < 2 ||
+        currentSave == null ||
+        currentSave.persistentProfileId == null ||
+        currentSave.persistentProfileId == profileId;
+
+    state = state.copyWith(selectedProfileId: profileId);
+
+    if (selectionMatchesNewProfile) {
+      // Current selection is compatible with the new profile — stay put.
+      return;
+    }
+
+    // Current save does not belong to the new profile — move to the first
+    // save that does. Prefer saves attributed to the target profile; an
+    // unattributed (null persistentProfileId) save is only a fallback so it
+    // cannot shadow the profile's own saves in global sort order. The
+    // selectedPath exemption is intentionally absent (we have already
+    // established the current save is the wrong profile).
+    final attributed = state.saves.where(
+      (s) => s.persistentProfileId == profileId,
+    );
+    final unattributed = state.saves.where(
+      (s) => s.persistentProfileId == null,
+    );
+    final candidate = attributed.isNotEmpty
+        ? attributed.first
+        : (unattributed.isNotEmpty ? unattributed.first : null);
+
+    if (candidate != null) {
+      await _inspect(candidate.path);
+    } else {
+      state = state.copyWith(
+        selectedPath: null,
+        clearInspection: true,
+        clearBackups: true,
+        clearPendingEdits: true,
+      );
     }
   }
 
@@ -442,6 +560,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
       profiles: const [],
       selectedPath: null,
       activeProfileId: null,
+      selectedProfileId: null,
       clearInspection: true,
       clearBackups: true,
     );
@@ -481,23 +600,43 @@ class EditorNotifier extends StateNotifier<EditorState> {
           .whereType<Map>()
           .map((m) => SaveSlot.fromJson(m.cast<String, Object?>()))
           .toList();
-      _sortByLastModifiedDesc(saves);
+      _sortByPlaytimeDesc(saves);
       final rawProfiles = (data?['profiles'] as List?) ?? const [];
       final profiles = rawProfiles
           .whereType<Map>()
           .map((m) => ProfileSummary.fromJson(m.cast<String, Object?>()))
           .toList();
       final activeProfileId = (data?['activeProfileId'] as num?)?.toInt();
-      final selectedPath = saves.any((save) => save.path == state.selectedPath)
-          ? state.selectedPath
-          : (saves.isNotEmpty ? saves.first.path : null);
-      // Pending edits are cleared by _inspect once the fresh inspection
-      // actually lands (so a failed re-inspect keeps them retryable); only
-      // when nothing remains selected is there no inspect to do it.
-      state = state.copyWith(
+      // Keep the explicit profile selection if that profile still exists in
+      // the new scan result, otherwise reset it to null.
+      final profileIds = profiles.map((p) => p.profileId).toSet();
+      final keptSelectedProfileId =
+          (state.selectedProfileId != null &&
+              profileIds.contains(state.selectedProfileId))
+          ? state.selectedProfileId
+          : null;
+
+      // When the explicit selection was reset, fall back to any visible save;
+      // otherwise restrict to the still-valid profile's visible saves.
+      final newState = state.copyWith(
         saves: saves,
         profiles: profiles,
         activeProfileId: activeProfileId,
+        selectedProfileId: keptSelectedProfileId,
+      );
+      // Compute visible saves with the updated state fields to find a
+      // sensible first selection path when the folder or profile changed.
+      final visibleAfterRefresh = newState.visibleSaves;
+      final selectedPath =
+          visibleAfterRefresh.any((s) => s.path == state.selectedPath)
+          ? state.selectedPath
+          : (visibleAfterRefresh.isNotEmpty
+                ? visibleAfterRefresh.first.path
+                : null);
+      // Pending edits are cleared by _inspect once the fresh inspection
+      // actually lands (so a failed re-inspect keeps them retryable); only
+      // when nothing remains selected is there no inspect to do it.
+      state = newState.copyWith(
         selectedPath: selectedPath,
         clearInspection: selectedPath == null,
         clearBackups: selectedPath == null,
@@ -649,10 +788,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
 
   Future<void> checkCodec() async {
     try {
-      final response = await _execute(
-        'check_codec',
-        payload: _codecPayload(),
-      );
+      final response = await _execute('check_codec', payload: _codecPayload());
       if (response['ok'] != true) {
         // Use the dedicated codec error channel so a concurrent/later refresh
         // does not wipe this message, and drop the now-stale codec status so
@@ -811,6 +947,161 @@ class EditorNotifier extends StateNotifier<EditorState> {
     return HeroAttributesResult(attributes: parseHeroAttributes(hits));
   }
 
+  /// Run one progression section query. Returns the raw data map, or null
+  /// with [onError] called, so each typed loader below can build its own page
+  /// object with an inline error.
+  Future<Map<String, Object?>?> _queryProgression(
+    Map<String, Object?> params, {
+    required void Function(String message) onError,
+  }) async {
+    final path = state.selectedPath;
+    if (path == null) {
+      onError('No save selected.');
+      return null;
+    }
+    try {
+      final response = await _execute(
+        'query_progression',
+        payload: {'path': path, ...params, ..._codecPayload()},
+      );
+      if (response['ok'] != true) {
+        onError(_errorMessage(response));
+        return null;
+      }
+      return (response['data'] as Map).cast<String, Object?>();
+    } catch (error) {
+      onError('Progression query failed: $error');
+      return null;
+    }
+  }
+
+  Future<ProgressionQuestPage> loadProgressionQuests({
+    String query = '',
+    int offset = 0,
+    int limit = 100,
+    String? state,
+    String? group,
+  }) async {
+    String? error;
+    final data = await _queryProgression({
+      'section': 'quests',
+      'query': query,
+      'offset': offset,
+      'limit': limit,
+      if (state != null && state.isNotEmpty) 'state': state,
+      if (group != null && group.isNotEmpty) 'group': group,
+    }, onError: (message) => error = message);
+    if (data == null) return ProgressionQuestPage(error: error);
+    return ProgressionQuestPage.fromJson(data);
+  }
+
+  Future<KnowledgeCharactersPage> loadKnowledgeCharacters({
+    String query = '',
+    int offset = 0,
+    int limit = 100,
+  }) async {
+    String? error;
+    final data = await _queryProgression({
+      'section': 'knowledge',
+      'query': query,
+      'offset': offset,
+      'limit': limit,
+    }, onError: (message) => error = message);
+    if (data == null) return KnowledgeCharactersPage(error: error);
+    return KnowledgeCharactersPage.fromJson(data);
+  }
+
+  Future<KnowledgeEntriesPage> loadKnowledgeEntries(
+    String character, {
+    String query = '',
+    int offset = 0,
+    int limit = 200,
+  }) async {
+    String? error;
+    final data = await _queryProgression({
+      'section': 'knowledge',
+      'character': character,
+      'query': query,
+      'offset': offset,
+      'limit': limit,
+    }, onError: (message) => error = message);
+    if (data == null) return KnowledgeEntriesPage(error: error);
+    return KnowledgeEntriesPage.fromJson(data);
+  }
+
+  Future<MemoryCharactersPage> loadMemoryCharacters({
+    String query = '',
+    int offset = 0,
+    int limit = 100,
+  }) async {
+    String? error;
+    final data = await _queryProgression({
+      'section': 'events',
+      'query': query,
+      'offset': offset,
+      'limit': limit,
+    }, onError: (message) => error = message);
+    if (data == null) return MemoryCharactersPage(error: error);
+    return MemoryCharactersPage.fromJson(data);
+  }
+
+  Future<MemoryEventsPage> loadMemoryEvents(
+    String character, {
+    String query = '',
+    int offset = 0,
+    int limit = 100,
+  }) async {
+    String? error;
+    final data = await _queryProgression({
+      'section': 'events',
+      'character': character,
+      'query': query,
+      'offset': offset,
+      'limit': limit,
+    }, onError: (message) => error = message);
+    if (data == null) return MemoryEventsPage(error: error);
+    return MemoryEventsPage.fromJson(data);
+  }
+
+  /// Apply one structural progression edit (event remove/duplicate)
+  /// immediately, with backup. Index-addressed array edits must go one per
+  /// write round — indices shift after every structural change — so this is
+  /// intentionally not part of the pending-edit registry.
+  Future<bool> applyMemoryEventEdit(MemoryEventEdit edit) async {
+    final savePath = state.selectedPath;
+    if (savePath == null) {
+      state = state.copyWith(error: 'No save selected.');
+      return false;
+    }
+    if (state.isLoading) {
+      state = state.copyWith(
+        error: 'Another operation is in progress — try again when it finishes.',
+      );
+      return false;
+    }
+    if (state.pendingEdits.isNotEmpty) {
+      state = state.copyWith(
+        error:
+            'Save or reset your unsaved changes first — removing or '
+            'duplicating a memory event writes the file immediately and '
+            'would discard them.',
+      );
+      return false;
+    }
+    return _runWrite(
+      payload: {
+        'path': savePath,
+        'backup': true,
+        'edits': [edit.toEditJson()],
+        ..._codecPayload(),
+      },
+      message: (data) => _backupMessage(
+        edit.isRemove ? 'Memory event removed' : 'Memory event duplicated',
+        data,
+      ),
+    );
+  }
+
   String _errorMessage(Map<String, Object?> response) {
     final error = (response['error'] as Map?)?.cast<String, Object?>();
     return error?['message'] as String? ?? 'Unknown core error';
@@ -826,10 +1117,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
   }
 
   Future<_BackupSnapshot?> _loadBackups(String path, int seq) async {
-    final response = await _execute(
-      'list_backups',
-      payload: {'path': path},
-    );
+    final response = await _execute('list_backups', payload: {'path': path});
     // Only the latest load applies; a superseded load must not replace the
     // fresher list with its outdated result.
     if (seq != _loadSeq) return null;

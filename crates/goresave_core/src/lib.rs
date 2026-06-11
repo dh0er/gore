@@ -408,6 +408,17 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
                 .map(|backend| backend as &dyn codec_backend::CodecBackend);
             search_typed_properties(&path, &payload, codec_backend)
         }
+        "query_progression" => {
+            let path = required_path(&payload)?;
+            let codec_backend = payload
+                .get("binaryHost")
+                .map(binary_host_backend_from_config)
+                .transpose()?;
+            let codec_backend = codec_backend
+                .as_ref()
+                .map(|backend| backend as &dyn codec_backend::CodecBackend);
+            query_progression(&path, &payload, codec_backend)
+        }
         "validate_roundtrip" => {
             let path = required_path(&payload)?;
             Ok(validate_roundtrip(&path)?)
@@ -1199,18 +1210,45 @@ pub fn list_save_backups(path: &Path) -> Result<Vec<BackupListItem>, CoreError> 
     }
     let prefix = backup_file_prefix(path)?;
     let mut backups = Vec::new();
+
+    // Collect candidate (backup_path, file_name) pairs from both locations:
+    // 1. Legacy: files in the save's parent directory matching the prefix.
+    // 2. New: files in the goresave_backups subfolder matching the prefix.
+    let mut candidates: Vec<(PathBuf, String)> = Vec::new();
     for entry in fs::read_dir(parent)? {
         let entry = entry?;
-        let backup_path = entry.path();
-        let Some(file_name) = backup_path.file_name().and_then(|value| value.to_str()) else {
-            continue;
-        };
-        if !file_name.starts_with(&prefix) {
+        let p = entry.path();
+        if !p.is_file() {
             continue;
         }
+        let Some(file_name) = p.file_name().and_then(|v| v.to_str()).map(str::to_owned) else {
+            continue;
+        };
+        if file_name.starts_with(&prefix) {
+            candidates.push((p, file_name));
+        }
+    }
+    let subfolder = parent.join("goresave_backups");
+    if subfolder.is_dir() {
+        for entry in fs::read_dir(&subfolder)? {
+            let entry = entry?;
+            let p = entry.path();
+            if !p.is_file() {
+                continue;
+            }
+            let Some(file_name) = p.file_name().and_then(|v| v.to_str()).map(str::to_owned) else {
+                continue;
+            };
+            if file_name.starts_with(&prefix) {
+                candidates.push((p, file_name));
+            }
+        }
+    }
+
+    for (backup_path, file_name) in candidates {
         let data = fs::read(&backup_path)?;
-        let metadata = entry.metadata()?;
-        let created_epoch = parse_backup_epoch(file_name, &prefix);
+        let metadata = fs::metadata(&backup_path)?;
+        let created_epoch = parse_backup_epoch(&file_name, &prefix);
         let (status, player_save_name, slot_name) =
             match inspect_bytes(&data, Some(&backup_path), false) {
                 Ok(info) => {
@@ -1231,7 +1269,7 @@ pub fn list_save_backups(path: &Path) -> Result<Vec<BackupListItem>, CoreError> 
             };
         backups.push(BackupListItem {
             path: backup_path.display().to_string(),
-            file_name: file_name.to_string(),
+            file_name,
             file_size: metadata.len(),
             sha1: sha1_hex(&data),
             created_epoch,
@@ -1262,27 +1300,54 @@ fn list_persistent_data_list_backups_for_save(
     let persistent_path = parent.join("PersistentDataList.sav");
     let prefix = backup_file_prefix(&persistent_path)?;
     let mut backups = Vec::new();
+
+    // Collect candidate (backup_path, file_name) pairs from both locations:
+    // 1. Legacy: files in the save's parent directory matching the prefix.
+    // 2. New: files in the goresave_backups subfolder matching the prefix.
+    let mut candidates: Vec<(PathBuf, String)> = Vec::new();
     for entry in fs::read_dir(parent)? {
         let entry = entry?;
-        let backup_path = entry.path();
-        let Some(file_name) = backup_path.file_name().and_then(|value| value.to_str()) else {
-            continue;
-        };
-        if !file_name.starts_with(&prefix) {
+        let p = entry.path();
+        if !p.is_file() {
             continue;
         }
+        let Some(file_name) = p.file_name().and_then(|v| v.to_str()).map(str::to_owned) else {
+            continue;
+        };
+        if file_name.starts_with(&prefix) {
+            candidates.push((p, file_name));
+        }
+    }
+    let subfolder = parent.join("goresave_backups");
+    if subfolder.is_dir() {
+        for entry in fs::read_dir(&subfolder)? {
+            let entry = entry?;
+            let p = entry.path();
+            if !p.is_file() {
+                continue;
+            }
+            let Some(file_name) = p.file_name().and_then(|v| v.to_str()).map(str::to_owned) else {
+                continue;
+            };
+            if file_name.starts_with(&prefix) {
+                candidates.push((p, file_name));
+            }
+        }
+    }
+
+    for (backup_path, file_name) in candidates {
         let data = fs::read(&backup_path)?;
-        let metadata = entry.metadata()?;
-        let created_epoch = parse_backup_epoch(file_name, &prefix);
+        let metadata = fs::metadata(&backup_path)?;
+        let created_epoch = parse_backup_epoch(&file_name, &prefix);
         let (status, player_save_name, slot_name) =
             match inspect_bytes(&data, Some(&backup_path), false) {
                 Ok(_) => {
                     let persistent_slots = parse_persistent_slot_metadata(&data);
                     match persistent_slots.get(slot) {
-                        Some(metadata) => (
+                        Some(slot_meta) => (
                             "ok".to_string(),
-                            metadata.player_save_name.clone(),
-                            metadata
+                            slot_meta.player_save_name.clone(),
+                            slot_meta
                                 .slot_name
                                 .clone()
                                 .or_else(|| Some(slot.to_string())),
@@ -1298,7 +1363,7 @@ fn list_persistent_data_list_backups_for_save(
             };
         backups.push(BackupListItem {
             path: backup_path.display().to_string(),
-            file_name: file_name.to_string(),
+            file_name,
             file_size: metadata.len(),
             sha1: sha1_hex(&data),
             created_epoch,
@@ -1445,15 +1510,36 @@ fn prepare_paired_persistent_data_list_restore(
 
     let companion_prefix = backup_file_prefix(&persistent_path)?;
     let mut companion_backup_path = None;
-    for entry in fs::read_dir(parent)? {
-        let entry = entry?;
-        let candidate = entry.path();
-        let Some(name) = candidate.file_name().and_then(|value| value.to_str()) else {
+    // Paired backups share one suffix AND one directory (they are written in
+    // the same round). Search the selected slot backup's own directory first,
+    // so a companion in the other location with a colliding suffix cannot
+    // pair the slot and companion to different write rounds.
+    let search_dirs: Vec<PathBuf> = {
+        let mut dirs = Vec::new();
+        if let Some(backup_dir) = slot_backup_path.parent() {
+            dirs.push(backup_dir.to_path_buf());
+        }
+        for fallback in [parent.to_path_buf(), parent.join("goresave_backups")] {
+            if !dirs.contains(&fallback) {
+                dirs.push(fallback);
+            }
+        }
+        dirs
+    };
+    'outer: for search_dir in &search_dirs {
+        if !search_dir.is_dir() {
             continue;
-        };
-        if name.strip_prefix(&companion_prefix) == Some(slot_suffix) {
-            companion_backup_path = Some(candidate);
-            break;
+        }
+        for entry in fs::read_dir(search_dir)? {
+            let entry = entry?;
+            let candidate = entry.path();
+            let Some(name) = candidate.file_name().and_then(|value| value.to_str()) else {
+                continue;
+            };
+            if name.strip_prefix(&companion_prefix) == Some(slot_suffix) {
+                companion_backup_path = Some(candidate);
+                break 'outer;
+            }
         }
     }
     let Some(companion_backup_path) = companion_backup_path else {
@@ -1497,9 +1583,16 @@ fn ensure_backup_belongs_to_save(path: &Path, backup_path: &Path) -> Result<(), 
     }
     let save_parent = path.parent().unwrap_or_else(|| Path::new("."));
     let backup_parent = backup_path.parent().unwrap_or_else(|| Path::new("."));
-    if fs::canonicalize(save_parent)? != fs::canonicalize(backup_parent)? {
+    let canonical_save_parent = fs::canonicalize(save_parent)?;
+    let canonical_backup_parent = fs::canonicalize(backup_parent)?;
+    // Accept backups both in the save's parent directory (legacy) and in
+    // its goresave_backups subfolder (new layout).
+    let subfolder = canonical_save_parent.join("goresave_backups");
+    if canonical_backup_parent != canonical_save_parent
+        && canonical_backup_parent != subfolder
+    {
         return Err(CoreError::InvalidRequest(
-            "backupPath must be next to the selected save file".to_string(),
+            "backupPath must be next to the selected save file or in its goresave_backups subfolder".to_string(),
         ));
     }
     Ok(())
@@ -1538,6 +1631,30 @@ impl PendingReplace {
     }
 }
 
+/// Map an I/O error that occurred while renaming or replacing a live save file
+/// into a human-readable [`CoreError`] when the error indicates that another
+/// process holds the file open (Windows sharing/lock violation).
+///
+/// `context` is appended to the message for disambiguation (e.g. the file path
+/// or operation description). On non-Windows platforms or for unrelated errors
+/// the original error is wrapped unchanged.
+fn map_locked_file_error(err: std::io::Error, context: &str) -> CoreError {
+    let is_locked = match err.raw_os_error() {
+        // ERROR_SHARING_VIOLATION = 32, ERROR_LOCK_VIOLATION = 33
+        Some(32) | Some(33) => true,
+        _ => err.kind() == std::io::ErrorKind::PermissionDenied,
+    };
+    if is_locked {
+        CoreError::Io(format!(
+            "the save file is locked by another process \
+             (is the game running?) — close the game or its load screen, \
+             then retry: {err} ({context})"
+        ))
+    } else {
+        CoreError::Io(err.to_string())
+    }
+}
+
 /// Replace `target` with the staged file at `staged` without ever leaving
 /// `target` missing on failure. Windows `rename` cannot overwrite, so the
 /// current file is moved aside first; if renaming the staged file in fails, the
@@ -1545,7 +1662,7 @@ impl PendingReplace {
 /// [`PendingReplace`] must be either committed or rolled back.
 fn begin_replace(target: &Path, staged: &Path) -> Result<PendingReplace, CoreError> {
     if !target.exists() {
-        fs::rename(staged, target)?;
+        fs::rename(staged, target).map_err(|e| map_locked_file_error(e, &target.display().to_string()))?;
         return Ok(PendingReplace {
             target: target.to_path_buf(),
             aside: None,
@@ -1554,7 +1671,8 @@ fn begin_replace(target: &Path, staged: &Path) -> Result<PendingReplace, CoreErr
     let aside = target.with_extension("sav.replaced-goresave");
     // Clear any leftover aside from a previously interrupted write.
     let _ = fs::remove_file(&aside);
-    fs::rename(target, &aside)?;
+    fs::rename(target, &aside)
+        .map_err(|e| map_locked_file_error(e, &target.display().to_string()))?;
     match fs::rename(staged, target) {
         Ok(()) => Ok(PendingReplace {
             target: target.to_path_buf(),
@@ -1563,13 +1681,16 @@ fn begin_replace(target: &Path, staged: &Path) -> Result<PendingReplace, CoreErr
         Err(err) => {
             // Roll back so the target path is never left absent.
             let _ = fs::rename(&aside, target);
-            Err(err.into())
+            Err(map_locked_file_error(err, &target.display().to_string()))
         }
     }
 }
 
 fn create_backup_copy(path: &Path) -> Result<PathBuf, CoreError> {
     let backup_path = unique_backup_path(path);
+    if let Some(parent) = backup_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
     fs::copy(path, &backup_path)?;
     Ok(backup_path)
 }
@@ -1580,11 +1701,21 @@ fn unique_backup_path(path: &Path) -> PathBuf {
 }
 
 fn backup_path_with_suffix(path: &Path, suffix: &str) -> PathBuf {
-    path.with_extension(format!("sav.bak.{suffix}"))
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    parent
+        .join("goresave_backups")
+        .join(format!("{file_name}.bak.{suffix}"))
 }
 
 fn create_backup_with_suffix(path: &Path, suffix: &str) -> Result<PathBuf, CoreError> {
     let backup_path = backup_path_with_suffix(path, suffix);
+    if let Some(parent) = backup_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
     fs::copy(path, &backup_path)?;
     Ok(backup_path)
 }
@@ -2120,11 +2251,25 @@ fn inspect_private_payload(
                 .collect::<Vec<_>>();
             let player = summarize_private_player_payload(&payload, &refs);
             let inventory = summarize_private_inventory_payload(&payload, &refs);
-            let progression = summarize_private_progression_payload(&refs);
-            let typed_parse = summarize_typed_parse(&payload, preview);
+            let typed_result = if preview {
+                None
+            } else {
+                Some(properties::parse_private_root(&payload))
+            };
+            let typed_parse = summarize_typed_parse_result(&payload, typed_result.as_ref());
+            let typed_ok = typed_parse["status"] == "ok";
+            let progression = summarize_private_progression_overview(
+                typed_result.as_ref().and_then(|r| r.as_ref().ok()).filter(|_| typed_ok),
+            );
             let mut writable = vec!["private.replaceFString"];
             if typed_parse["status"] == "ok" {
-                writable.push("private.typed.setValue");
+                writable.extend([
+                    "private.typed.setValue",
+                    "private.typed.setAdd",
+                    "private.typed.setRemove",
+                    "private.typed.arrayRemove",
+                    "private.typed.arrayDuplicate",
+                ]);
             }
             Ok(json!({
                 "status": if preview { "decoded_preview" } else { "decoded" },
@@ -2289,14 +2434,20 @@ fn summarize_private_inventory_payload(payload: &[u8], refs: &[FStringRef]) -> V
 /// edits; for now it surfaces whether the proven UE property grammar fully
 /// accounts for this save's bytes. Skipped for previews (truncated payloads
 /// cannot parse to completion).
-fn summarize_typed_parse(payload: &[u8], preview: bool) -> Value {
-    if preview {
+///
+/// `result` is `None` when the parse was skipped (preview mode); `Some(&Ok(...))`
+/// or `Some(&Err(...))` when parsing was attempted.
+fn summarize_typed_parse_result(
+    payload: &[u8],
+    result: Option<&Result<properties::RootObject, CoreError>>,
+) -> Value {
+    let Some(result) = result else {
         return json!({
             "status": "skipped_preview",
             "message": "Typed parse needs the full decoded payload.",
         });
-    }
-    match properties::parse_private_root(payload) {
+    };
+    match result {
         Ok(root) => {
             let counts = properties::count_properties(&root.properties);
             json!({
@@ -2436,48 +2587,584 @@ fn search_typed_properties(
     }))
 }
 
-fn summarize_private_progression_payload(refs: &[FStringRef]) -> Value {
-    let script_paths = unique_strings(
-        refs.iter()
-            .map(|r| r.value.as_str())
-            .filter(|value| value.starts_with("/Script/") && looks_progression_text(value)),
-        80,
-    );
-    let properties = unique_strings(
-        refs.iter()
-            .map(|r| r.value.as_str())
-            .filter(|value| value.starts_with("m_") && looks_progression_text(value)),
-        120,
-    );
-    let candidates = unique_strings(
-        refs.iter()
-            .map(|r| r.value.as_str())
-            .filter(|value| looks_progression_candidate(value)),
-        240,
-    );
-    let gameplay_tags = unique_strings(
-        candidates
-            .iter()
-            .map(String::as_str)
-            .filter(|value| looks_gameplay_tag_candidate(value)),
-        240,
-    );
-    let sections = unique_strings(
-        properties
-            .iter()
-            .filter_map(|property| progression_section_label(property)),
-        80,
-    );
+/// Structured progression queries over the decoded private payload. Sections:
+/// "quests" (QuestDataByClass entries with setValue-addressable state paths),
+/// "knowledge" (per-NPC dialog knowledge sets), "events" (per-character
+/// memorized event arrays). Uses the shared decode cache like the typed
+/// property search.
+fn query_progression(
+    path: &Path,
+    payload: &Value,
+    backend: Option<&dyn codec_backend::CodecBackend>,
+) -> Result<Value, CoreError> {
+    let backend = backend.ok_or_else(|| {
+        CoreError::Codec(
+            "progression queries require a configured and verified G1R codec host".to_string(),
+        )
+    })?;
+    let section = payload
+        .get("section")
+        .and_then(Value::as_str)
+        .unwrap_or("quests");
+    let query = payload
+        .get("query")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    let limit = payload
+        .get("limit")
+        .and_then(Value::as_u64)
+        .map(|v| v as usize)
+        .unwrap_or(100)
+        .clamp(1, 1000);
+    let offset = payload
+        .get("offset")
+        .and_then(Value::as_u64)
+        .map(|v| v as usize)
+        .unwrap_or(0);
+    let character = payload.get("character").and_then(Value::as_str);
+    let state_filter = payload
+        .get("state")
+        .and_then(Value::as_str)
+        .map(|s| s.trim().to_ascii_lowercase())
+        .filter(|s| !s.is_empty());
+    let group_filter = payload
+        .get("group")
+        .and_then(Value::as_str)
+        .map(|s| s.trim().to_ascii_lowercase())
+        .filter(|s| !s.is_empty());
+
+    let data = fs::read(path)?;
+    if !data.starts_with(b"GSAV") {
+        return Err(CoreError::UnsupportedEdit(
+            "progression queries are only available for GSAV files".to_string(),
+        ));
+    }
+    let parts = split_gsav(&data)?;
+    let stream = parse_compressed_stream(&data, 13 + parts.public_payload.len())?;
+    let decoded = decoded_private_payload_cached(path, &data, &stream, backend)?;
+    let root = properties::parse_private_root(&decoded)?;
+    match section {
+        "quests" => progression_quests(
+            &root,
+            &query,
+            state_filter.as_deref(),
+            group_filter.as_deref(),
+            offset,
+            limit,
+        ),
+        "knowledge" => progression_knowledge(&root, &query, character, offset, limit),
+        "events" => progression_events(&root, &query, character, offset, limit),
+        other => Err(CoreError::InvalidRequest(format!(
+            "unknown progression section {other:?}"
+        ))),
+    }
+}
+
+/// Property lookup inside a struct-valued map entry (tagged property list or
+/// InstancedStruct wrapper).
+fn struct_member<'a>(
+    value: &'a properties::PropertyValue,
+    name: &str,
+) -> Option<&'a properties::PropertyValue> {
+    let props = match value {
+        properties::PropertyValue::Struct(properties::StructValue::Properties(p)) => p,
+        properties::PropertyValue::Struct(properties::StructValue::Instanced(Some(i))) => {
+            &i.properties
+        }
+        _ => return None,
+    };
+    props.iter().find(|p| p.name == name).map(|p| &p.value)
+}
+
+fn map_key_string(key: &properties::PropertyValue) -> Option<&str> {
+    match key {
+        properties::PropertyValue::Str(s)
+        | properties::PropertyValue::Name(s)
+        | properties::PropertyValue::Enum(s)
+        | properties::PropertyValue::Object(s) => Some(s),
+        _ => None,
+    }
+}
+
+/// "EQuestState::Running" → "Running" for the overview/state-count labels.
+fn short_enum_label(value: &str) -> &str {
+    value.rsplit("::").next().unwrap_or(value)
+}
+
+/// Parse the id, group, and name from a quest class path. The tail after
+/// the last '.' is the id; strip "Quest_" prefix, then split on the first
+/// '_' to get group and name. This is factored out so the filter and the
+/// page-entry renderer use identical logic and can never diverge.
+fn quest_id_group_name(class_path: &str) -> (String, String, String) {
+    let id = class_path
+        .rsplit('.')
+        .next()
+        .unwrap_or(class_path)
+        .to_string();
+    let trimmed = id.strip_prefix("Quest_").unwrap_or(&id);
+    let (group, name) = match trimmed.split_once('_') {
+        Some((g, n)) => (g.to_string(), n.to_string()),
+        None => (trimmed.to_string(), String::new()),
+    };
+    (id, group, name)
+}
+
+fn progression_quests(
+    root: &properties::RootObject,
+    query: &str,
+    state_filter: Option<&str>,
+    group_filter: Option<&str>,
+    offset: usize,
+    limit: usize,
+) -> Result<Value, CoreError> {
+    let (base_path, map_prop) = properties::find_property_by_name(root, "QuestDataByClass")
+        .ok_or_else(|| {
+            CoreError::Parse("QuestDataByClass not found in the decoded payload".to_string())
+        })?;
+    let properties::PropertyValue::Map { entries, .. } = &map_prop.value else {
+        return Err(CoreError::Parse(
+            "QuestDataByClass is not a map".to_string(),
+        ));
+    };
+    // Collect all entries as tuples first, then do three filtered passes for
+    // faceted counts (each facet counts over every OTHER active filter but not
+    // its own) plus one pass for the quests list.
+    struct Entry {
+        class_path: String,
+        id: String,
+        group: String,
+        name: String,
+        state: Option<String>,
+        label: String,
+    }
+    let mut all: Vec<Entry> = Vec::new();
+    for (key, value) in entries {
+        let Some(class_path) = map_key_string(key) else {
+            continue;
+        };
+        let state = struct_member(value, "CurrentState").and_then(|v| match v {
+            properties::PropertyValue::Enum(s) => Some(s.clone()),
+            _ => None,
+        });
+        let label = state
+            .as_deref()
+            .map(short_enum_label)
+            .unwrap_or("unknown")
+            .to_string();
+        let (id, group, name) = quest_id_group_name(class_path);
+        all.push(Entry {
+            class_path: class_path.to_string(),
+            id,
+            group,
+            name,
+            state,
+            label,
+        });
+    }
+
+    // Helper closures for each filter predicate.
+    let matches_query = |e: &Entry| -> bool {
+        query.is_empty() || e.class_path.to_ascii_lowercase().contains(query)
+    };
+    let matches_state = |e: &Entry| -> bool {
+        match state_filter {
+            None => true,
+            Some(sf) => {
+                // Accept short label ("Running") or full enum form ("EQuestState::Running"),
+                // both case-insensitive.
+                let short =
+                    short_enum_label(e.state.as_deref().unwrap_or("")).to_ascii_lowercase();
+                let full = e.state.as_deref().unwrap_or("").to_ascii_lowercase();
+                short == sf || full == sf
+            }
+        }
+    };
+    let matches_group = |e: &Entry| -> bool {
+        match group_filter {
+            None => true,
+            Some(gf) => e.group.to_ascii_lowercase() == gf,
+        }
+    };
+
+    // stateCounts: query + group filter, state filter NOT applied.
+    let mut state_counts = std::collections::BTreeMap::<String, usize>::new();
+    for e in &all {
+        if matches_query(e) && matches_group(e) {
+            *state_counts.entry(e.label.clone()).or_default() += 1;
+        }
+    }
+
+    // groupCounts: query + state filter, group filter NOT applied.
+    let mut group_counts = std::collections::BTreeMap::<String, usize>::new();
+    for e in &all {
+        if matches_query(e) && matches_state(e) {
+            *group_counts.entry(e.group.clone()).or_default() += 1;
+        }
+    }
+
+    // Quests list: all three filters, sorted by class_path.
+    let mut matches: Vec<&Entry> = all
+        .iter()
+        .filter(|e| matches_query(e) && matches_state(e) && matches_group(e))
+        .collect();
+    matches.sort_by(|a, b| a.class_path.cmp(&b.class_path));
+    let total = matches.len();
+    let quests = matches
+        .into_iter()
+        .skip(offset)
+        .take(limit)
+        .map(|e| {
+            let mut state_path = base_path.clone();
+            state_path.push(format!("{{{}}}", e.class_path));
+            state_path.push("CurrentState".to_string());
+            let writable = e.state.is_some();
+            json!({
+                "questClass": e.class_path,
+                "id": e.id,
+                "group": e.group,
+                "name": e.name,
+                "currentState": e.state,
+                "statePath": state_path,
+                "writable": writable,
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(json!({
+        "section": "quests",
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "count": quests.len(),
+        "stateCounts": state_counts,
+        "groupCounts": group_counts,
+        "quests": quests,
+    }))
+}
+
+fn progression_knowledge(
+    root: &properties::RootObject,
+    query: &str,
+    character: Option<&str>,
+    offset: usize,
+    limit: usize,
+) -> Result<Value, CoreError> {
+    let (base_path, map_prop) =
+        properties::find_property_by_name(root, "CharacterKnowledgeByUniqueName").ok_or_else(
+            || {
+                CoreError::Parse(
+                    "CharacterKnowledgeByUniqueName not found in the decoded payload".to_string(),
+                )
+            },
+        )?;
+    let properties::PropertyValue::Map { entries, .. } = &map_prop.value else {
+        return Err(CoreError::Parse(
+            "CharacterKnowledgeByUniqueName is not a map".to_string(),
+        ));
+    };
+    let knowledge_entries = |value: &properties::PropertyValue| -> Vec<String> {
+        match struct_member(value, "Knowledge") {
+            Some(properties::PropertyValue::Set { elements, .. }) => elements
+                .iter()
+                .filter_map(|e| match e {
+                    properties::PropertyValue::Name(s) | properties::PropertyValue::Str(s) => {
+                        Some(s.clone())
+                    }
+                    _ => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        }
+    };
+    match character {
+        None => {
+            let mut characters: Vec<(String, usize)> = entries
+                .iter()
+                .filter_map(|(key, value)| {
+                    let name = map_key_string(key)?;
+                    if !query.is_empty() && !name.to_ascii_lowercase().contains(query) {
+                        return None;
+                    }
+                    Some((name.to_string(), knowledge_entries(value).len()))
+                })
+                .collect();
+            characters.sort_by(|a, b| a.0.cmp(&b.0));
+            let total = characters.len();
+            let page = characters
+                .into_iter()
+                .skip(offset)
+                .take(limit)
+                .map(|(name, entry_count)| json!({ "name": name, "entryCount": entry_count }))
+                .collect::<Vec<_>>();
+            Ok(json!({
+                "section": "knowledge",
+                "total": total,
+                "offset": offset,
+                "limit": limit,
+                "count": page.len(),
+                "characters": page,
+            }))
+        }
+        Some(character) => {
+            let value = entries
+                .iter()
+                .find(|(key, _)| map_key_string(key) == Some(character))
+                .map(|(_, value)| value)
+                .ok_or_else(|| {
+                    CoreError::Parse(format!("character {character:?} has no knowledge entry"))
+                })?;
+            let mut all = knowledge_entries(value);
+            if !query.is_empty() {
+                all.retain(|e| e.to_ascii_lowercase().contains(query));
+            }
+            let total = all.len();
+            let page = all
+                .into_iter()
+                .skip(offset)
+                .take(limit)
+                .collect::<Vec<_>>();
+            let mut set_path = base_path.clone();
+            set_path.push(format!("{{{character}}}"));
+            set_path.push("Knowledge".to_string());
+            Ok(json!({
+                "section": "knowledge",
+                "character": character,
+                "total": total,
+                "offset": offset,
+                "limit": limit,
+                "count": page.len(),
+                "entries": page,
+                "setPath": set_path,
+            }))
+        }
+    }
+}
+
+fn progression_events(
+    root: &properties::RootObject,
+    query: &str,
+    character: Option<&str>,
+    offset: usize,
+    limit: usize,
+) -> Result<Value, CoreError> {
+    let (base_path, map_prop) =
+        properties::find_property_by_name(root, "LongTermMemoryByGlobalId").ok_or_else(|| {
+            CoreError::Parse(
+                "LongTermMemoryByGlobalId not found in the decoded payload".to_string(),
+            )
+        })?;
+    let properties::PropertyValue::Map { entries, .. } = &map_prop.value else {
+        return Err(CoreError::Parse(
+            "LongTermMemoryByGlobalId is not a map".to_string(),
+        ));
+    };
+    let memorized = |value: &properties::PropertyValue| -> Option<usize> {
+        match struct_member(value, "MemorizedEvents") {
+            Some(properties::PropertyValue::Array { elements }) => Some(elements.len()),
+            _ => None,
+        }
+    };
+    match character {
+        None => {
+            let mut characters: Vec<(String, usize)> = entries
+                .iter()
+                .filter_map(|(key, value)| {
+                    let id = map_key_string(key)?;
+                    if !query.is_empty() && !id.to_ascii_lowercase().contains(query) {
+                        return None;
+                    }
+                    Some((id.to_string(), memorized(value).unwrap_or(0)))
+                })
+                .collect();
+            characters.sort_by(|a, b| a.0.cmp(&b.0));
+            let total = characters.len();
+            let page = characters
+                .into_iter()
+                .skip(offset)
+                .take(limit)
+                .map(|(id, event_count)| json!({ "id": id, "eventCount": event_count }))
+                .collect::<Vec<_>>();
+            Ok(json!({
+                "section": "events",
+                "total": total,
+                "offset": offset,
+                "limit": limit,
+                "count": page.len(),
+                "characters": page,
+            }))
+        }
+        Some(character) => {
+            let value = entries
+                .iter()
+                .find(|(key, _)| map_key_string(key) == Some(character))
+                .map(|(_, value)| value)
+                .ok_or_else(|| {
+                    CoreError::Parse(format!("character {character:?} has no memory entry"))
+                })?;
+            let Some(properties::PropertyValue::Array { elements }) =
+                struct_member(value, "MemorizedEvents")
+            else {
+                return Err(CoreError::Parse(
+                    "MemorizedEvents missing or not an array".to_string(),
+                ));
+            };
+            let event_json = |index: usize, element: &properties::PropertyValue| -> Value {
+                let tags = match struct_member(element, "EventTags") {
+                    Some(properties::PropertyValue::Struct(
+                        properties::StructValue::GameplayTagContainer(tags),
+                    )) => tags.clone(),
+                    _ => Vec::new(),
+                };
+                let in_game_seconds = |name: &str| -> Option<f64> {
+                    match struct_member(element, name)
+                        .and_then(|t| struct_member(t, "TotalSeconds"))
+                    {
+                        Some(properties::PropertyValue::Double(v)) => Some(*v),
+                        _ => None,
+                    }
+                };
+                let name_member = |name: &str| -> Option<String> {
+                    match struct_member(element, name) {
+                        Some(properties::PropertyValue::Name(s)) => Some(s.clone()),
+                        _ => None,
+                    }
+                };
+                let soft_member = |name: &str| -> Option<String> {
+                    match struct_member(element, name) {
+                        Some(properties::PropertyValue::SoftObject(p))
+                            if !p.package_name.is_empty() && p.package_name != "None" =>
+                        {
+                            Some(p.package_name.clone())
+                        }
+                        _ => None,
+                    }
+                };
+                let magnitude = match struct_member(element, "Magnitude") {
+                    Some(properties::PropertyValue::Float(v)) => Some(f64::from(*v)),
+                    _ => None,
+                };
+                json!({
+                    "index": index,
+                    "tags": tags,
+                    "magnitude": magnitude,
+                    "timeSeconds": in_game_seconds("Time"),
+                    "durationSeconds": in_game_seconds("Duration"),
+                    "instigator": name_member("InstigatorGlobalId"),
+                    "affected": name_member("AffectedCharacterGlobalId"),
+                    "optionalClass1": soft_member("OptionalClass1"),
+                    "optionalClass2": soft_member("OptionalClass2"),
+                })
+            };
+            let matches_query = |event: &Value| -> bool {
+                if query.is_empty() {
+                    return true;
+                }
+                let hay = [
+                    event["tags"].to_string(),
+                    event["instigator"].to_string(),
+                    event["affected"].to_string(),
+                    event["optionalClass1"].to_string(),
+                    event["optionalClass2"].to_string(),
+                ]
+                .join(" ")
+                .to_ascii_lowercase();
+                hay.contains(query)
+            };
+            let all: Vec<Value> = elements
+                .iter()
+                .enumerate()
+                .map(|(index, element)| event_json(index, element))
+                .filter(|e| matches_query(e))
+                .collect();
+            let total = all.len();
+            let page = all.into_iter().skip(offset).take(limit).collect::<Vec<_>>();
+            let mut array_path = base_path.clone();
+            array_path.push(format!("{{{character}}}"));
+            array_path.push("MemorizedEvents".to_string());
+            Ok(json!({
+                "section": "events",
+                "character": character,
+                "total": total,
+                "offset": offset,
+                "limit": limit,
+                "count": page.len(),
+                "events": page,
+                "arrayPath": array_path,
+            }))
+        }
+    }
+}
+
+/// Structured progression overview for the inspect response: quest counts by
+/// state plus knowledge/memory totals. `root` is Some only when the strict
+/// typed parse succeeded on a full (non-preview) decode.
+fn summarize_private_progression_overview(root: Option<&properties::RootObject>) -> Value {
+    let Some(root) = root else {
+        return json!({ "status": "unavailable", "writable": [] });
+    };
+    let mut quest_total = 0usize;
+    let mut quest_states = std::collections::BTreeMap::<String, usize>::new();
+    if let Some((_, prop)) = properties::find_property_by_name(root, "QuestDataByClass") {
+        if let properties::PropertyValue::Map { entries, .. } = &prop.value {
+            quest_total = entries.len();
+            for (_, value) in entries {
+                let label = match struct_member(value, "CurrentState") {
+                    Some(properties::PropertyValue::Enum(s)) => short_enum_label(s).to_string(),
+                    _ => "unknown".to_string(),
+                };
+                *quest_states.entry(label).or_default() += 1;
+            }
+        }
+    }
+    let mut knowledge_characters = 0usize;
+    let mut knowledge_entries = 0usize;
+    if let Some((_, prop)) =
+        properties::find_property_by_name(root, "CharacterKnowledgeByUniqueName")
+    {
+        if let properties::PropertyValue::Map { entries, .. } = &prop.value {
+            knowledge_characters = entries.len();
+            for (_, value) in entries {
+                if let Some(properties::PropertyValue::Set { elements, .. }) =
+                    struct_member(value, "Knowledge")
+                {
+                    knowledge_entries += elements.len();
+                }
+            }
+        }
+    }
+    let mut memory_characters = 0usize;
+    let mut memory_events = 0usize;
+    if let Some((_, prop)) = properties::find_property_by_name(root, "LongTermMemoryByGlobalId") {
+        if let properties::PropertyValue::Map { entries, .. } = &prop.value {
+            memory_characters = entries.len();
+            for (_, value) in entries {
+                if let Some(properties::PropertyValue::Array { elements }) =
+                    struct_member(value, "MemorizedEvents")
+                {
+                    memory_events += elements.len();
+                }
+            }
+        }
+    }
     json!({
-        "candidateCount": candidates.len(),
-        "candidates": candidates,
-        "gameplayTags": gameplay_tags,
-        "sections": sections,
-        "scriptPaths": script_paths,
-        "properties": properties,
-        "writable": [],
+        "status": "ok",
+        "questTotal": quest_total,
+        "questStates": quest_states,
+        "knowledgeCharacters": knowledge_characters,
+        "knowledgeEntries": knowledge_entries,
+        "memoryCharacters": memory_characters,
+        "memoryEvents": memory_events,
+        "writable": [
+            "private.typed.setValue",
+            "private.typed.setAdd",
+            "private.typed.setRemove",
+            "private.typed.arrayRemove",
+            "private.typed.arrayDuplicate",
+        ],
     })
 }
+
 
 fn summarize_private_inventory_items(
     payload: &[u8],
@@ -2664,58 +3351,6 @@ fn looks_inventory_candidate(value: &str) -> bool {
         return true;
     }
     lower.contains("/items/") || lower.contains("bp_item_") || lower.contains("inventoryitem")
-}
-
-fn looks_progression_candidate(value: &str) -> bool {
-    if value.starts_with("m_") || value.starts_with("/Script/") || is_property_type_name(value) {
-        return false;
-    }
-    if matches!(
-        value,
-        "GameplayTag" | "GameplayTagContainer" | "TagName" | "None"
-    ) {
-        return false;
-    }
-    looks_progression_text(value) && value.contains('.')
-}
-
-fn looks_gameplay_tag_candidate(value: &str) -> bool {
-    value.contains('.')
-        && !value.starts_with('/')
-        && !value.starts_with("m_")
-        && looks_progression_text(value)
-}
-
-fn looks_progression_text(value: &str) -> bool {
-    contains_any_ci(
-        value,
-        &[
-            "quest",
-            "dialog",
-            "knowledge",
-            "event",
-            "chapter",
-            "guild",
-            "faction",
-            "mission",
-            "journal",
-            "progress",
-            "gameplaytag",
-        ],
-    )
-}
-
-fn progression_section_label(property: &str) -> Option<&'static str> {
-    match property {
-        "m_GeneratedEvents" | "GeneratedEvents" => Some("Generated events"),
-        "m_MemorizedEvents" | "MemorizedEvents" => Some("Memorized events"),
-        "m_ActiveQuestTags" | "ActiveQuestTags" => Some("Active quest tags"),
-        "m_ActiveQuests" | "ActiveQuests" => Some("Active quests"),
-        "m_CompletedQuests" | "CompletedQuests" => Some("Completed quests"),
-        "m_QuestLog" | "QuestLog" => Some("Quest log"),
-        "m_Knowledge" | "Knowledge" => Some("Knowledge"),
-        _ => None,
-    }
 }
 
 fn contains_any_ci(value: &str, needles: &[&str]) -> bool {
@@ -3320,11 +3955,48 @@ fn apply_private_edits(
             "private.typed.setValue" => {
                 parse_private_typed_set_value_edit(edit).map(PrivateEdit::TypedSetValue)
             }
+            // Index-addressed edits (arrayRemove/arrayDuplicate) target indices
+            // that shift after each structural change within the same batch;
+            // callers must submit at most one structural array edit per write.
+            // Each edit re-parses the payload, so value-addressed ops
+            // (setAdd/setRemove) batch safely.
+            "private.typed.setAdd"
+            | "private.typed.setRemove"
+            | "private.typed.arrayRemove"
+            | "private.typed.arrayDuplicate" => {
+                parse_private_typed_container_edit(edit, edit.path.as_str())
+                    .map(PrivateEdit::TypedContainer)
+            }
             other => Err(CoreError::UnsupportedEdit(format!(
                 "{other} is not writable in this build"
             ))),
         })
         .collect::<Result<Vec<_>, _>>()?;
+    // Index-addressed structural edits are interpreted against the array as
+    // it exists when that edit applies, so a second arrayRemove/arrayDuplicate
+    // in the same batch would silently target shifted indices. Reject the
+    // batch instead of guessing the caller's intent.
+    let structural_array_edits = edit_specs
+        .iter()
+        .filter(|edit| {
+            matches!(
+                edit,
+                PrivateEdit::TypedContainer(PrivateTypedContainerEdit {
+                    edit: properties::ContainerEdit::ArrayRemove(_)
+                        | properties::ContainerEdit::ArrayDuplicate(_),
+                    ..
+                })
+            )
+        })
+        .count();
+    if structural_array_edits > 1 {
+        return Err(CoreError::UnsupportedEdit(format!(
+            "a write may contain at most one structural array edit \
+             (arrayRemove/arrayDuplicate); got {structural_array_edits} — \
+             indices shift after each structural change, submit them as \
+             separate writes"
+        )));
+    }
     let mut private_payload = decompress_private_payload(data, &stream, backend)?;
     for edit in &edit_specs {
         apply_private_edit_to_payload(&mut private_payload, edit)?;
@@ -3397,6 +4069,7 @@ enum PrivateEdit {
     PlayerTransform(PrivatePlayerTransformEdit),
     InventoryItemCount(PrivateInventoryItemCountEdit),
     TypedSetValue(PrivateTypedSetValueEdit),
+    TypedContainer(PrivateTypedContainerEdit),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -3405,38 +4078,104 @@ struct PrivateTypedSetValueEdit {
     value: Value,
 }
 
-fn parse_private_typed_set_value_edit(edit: &Edit) -> Result<PrivateTypedSetValueEdit, CoreError> {
-    let value = edit.value.as_object().ok_or_else(|| {
-        CoreError::InvalidRequest("private.typed.setValue value must be an object".to_string())
-    })?;
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PrivateTypedContainerEdit {
+    path: Vec<properties::PathSeg>,
+    edit: properties::ContainerEdit,
+}
+
+fn parse_typed_edit_path(
+    op: &str,
+    value: &serde_json::Map<String, Value>,
+) -> Result<Vec<properties::PathSeg>, CoreError> {
     let segments = value
         .get("path")
         .and_then(Value::as_array)
         .ok_or_else(|| {
-            CoreError::InvalidRequest(
-                "private.typed.setValue requires value.path as an array of segments".to_string(),
-            )
+            CoreError::InvalidRequest(format!(
+                "{op} requires value.path as an array of segments"
+            ))
         })?
         .iter()
         .map(|segment| {
             segment.as_str().map(str::to_string).ok_or_else(|| {
-                CoreError::InvalidRequest(
-                    "private.typed.setValue path segments must be strings".to_string(),
-                )
+                CoreError::InvalidRequest(format!("{op} path segments must be strings"))
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
     if segments.is_empty() {
-        return Err(CoreError::InvalidRequest(
-            "private.typed.setValue requires a non-empty value.path".to_string(),
-        ));
+        return Err(CoreError::InvalidRequest(format!(
+            "{op} requires a non-empty value.path"
+        )));
     }
+    properties::parse_path(&segments)
+}
+
+fn parse_private_typed_set_value_edit(edit: &Edit) -> Result<PrivateTypedSetValueEdit, CoreError> {
+    let value = edit.value.as_object().ok_or_else(|| {
+        CoreError::InvalidRequest("private.typed.setValue value must be an object".to_string())
+    })?;
+    let path = parse_typed_edit_path("private.typed.setValue", value)?;
     let new_value = value.get("value").cloned().ok_or_else(|| {
         CoreError::InvalidRequest("private.typed.setValue requires value.value".to_string())
     })?;
     Ok(PrivateTypedSetValueEdit {
-        path: properties::parse_path(&segments)?,
+        path,
         value: new_value,
+    })
+}
+
+fn parse_private_typed_container_edit(
+    edit: &Edit,
+    op: &str,
+) -> Result<PrivateTypedContainerEdit, CoreError> {
+    let value = edit.value.as_object().ok_or_else(|| {
+        CoreError::InvalidRequest(format!("{op} value must be an object"))
+    })?;
+    let path = parse_typed_edit_path(op, value)?;
+    let container_edit = match op {
+        "private.typed.setAdd" | "private.typed.setRemove" => {
+            let element = value
+                .get("value")
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+                .ok_or_else(|| {
+                    CoreError::InvalidRequest(format!(
+                        "{op} requires a non-empty string value.value"
+                    ))
+                })?
+                .to_string();
+            if op == "private.typed.setAdd" {
+                properties::ContainerEdit::SetAdd(element)
+            } else {
+                properties::ContainerEdit::SetRemove(element)
+            }
+        }
+        "private.typed.arrayRemove" | "private.typed.arrayDuplicate" => {
+            let index = value
+                .get("index")
+                .and_then(Value::as_u64)
+                .and_then(|v| usize::try_from(v).ok())
+                .ok_or_else(|| {
+                    CoreError::InvalidRequest(format!(
+                        "{op} requires a non-negative integer value.index"
+                    ))
+                })?;
+            if op == "private.typed.arrayRemove" {
+                properties::ContainerEdit::ArrayRemove(index)
+            } else {
+                properties::ContainerEdit::ArrayDuplicate(index)
+            }
+        }
+        other => {
+            return Err(CoreError::UnsupportedEdit(format!(
+                "{other} is not a typed container edit"
+            )));
+        }
+    };
+    Ok(PrivateTypedContainerEdit {
+        path,
+        edit: container_edit,
     })
 }
 
@@ -3910,7 +4649,36 @@ fn apply_private_edit_to_payload(
         PrivateEdit::TypedSetValue(edit) => {
             apply_private_typed_set_value_edit_to_payload(payload, edit)
         }
+        PrivateEdit::TypedContainer(edit) => {
+            apply_private_typed_container_edit_to_payload(payload, edit)
+        }
     }
+}
+
+fn apply_private_typed_container_edit_to_payload(
+    payload: &mut Vec<u8>,
+    edit: &PrivateTypedContainerEdit,
+) -> Result<(), CoreError> {
+    let root = properties::parse_private_root(payload)?;
+    let resolved = properties::resolve_chain(&root.properties, &edit.path)?;
+    let target = resolved.target.clone();
+    // Length-changing patch: work on a scratch copy and prove with a strict
+    // re-parse that every size and count field was fixed up, so a bug cannot
+    // corrupt the caller's payload (or the save).
+    let mut patched = payload.clone();
+    properties::patch_container(
+        &mut patched,
+        &target,
+        &resolved.enclosing_size_fields,
+        &edit.edit,
+    )?;
+    properties::parse_private_root(&patched).map_err(|err| {
+        CoreError::Parse(format!(
+            "container patch produced an inconsistent payload: {err}"
+        ))
+    })?;
+    *payload = patched;
+    Ok(())
 }
 
 fn apply_private_fstring_edit_to_payload(
@@ -4749,8 +5517,8 @@ mod tests {
 
     #[test]
     fn summarize_typed_parse_reports_status() {
-        // skipped for previews
-        let skipped = summarize_typed_parse(&[], true);
+        // skipped for previews (result = None)
+        let skipped = summarize_typed_parse_result(&[], None);
         assert_eq!(skipped["status"], "skipped_preview");
 
         // ok for a valid minimal root object
@@ -4764,13 +5532,15 @@ mod tests {
         payload.extend_from_slice(&7i32.to_le_bytes());
         payload.extend_from_slice(&fstring("None"));
         payload.extend_from_slice(&0u32.to_le_bytes()); // footer
-        let ok = summarize_typed_parse(&payload, false);
+        let parse_ok = properties::parse_private_root(&payload);
+        let ok = summarize_typed_parse_result(&payload, Some(&parse_ok));
         assert_eq!(ok["status"], "ok");
         assert_eq!(ok["propertyCount"], 1);
         assert_eq!(ok["consumed"], payload.len());
 
         // failed for garbage
-        let bad = summarize_typed_parse(&[1, 2, 3, 4, 5, 6], false);
+        let parse_bad = properties::parse_private_root(&[1, 2, 3, 4, 5, 6]);
+        let bad = summarize_typed_parse_result(&[1, 2, 3, 4, 5, 6], Some(&parse_bad));
         assert_eq!(bad["status"], "failed");
     }
 
@@ -5695,9 +6465,12 @@ mod tests {
     fn list_backups_returns_matching_save_backups_newest_first() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("G1R-001.sav");
-        let older = dir.path().join("G1R-001.sav.bak.100");
-        let newer = dir.path().join("G1R-001.sav.bak.200");
-        let unrelated = dir.path().join("G1R-002.sav.bak.300");
+        let subfolder = dir.path().join("goresave_backups");
+        fs::create_dir_all(&subfolder).unwrap();
+        let older = subfolder.join("G1R-001.sav.bak.100");
+        let newer = subfolder.join("G1R-001.sav.bak.200");
+        // Unrelated file in subfolder must not appear.
+        let unrelated = subfolder.join("G1R-002.sav.bak.300");
         fs::write(&path, minimal_gsav("Live")).unwrap();
         fs::write(&older, minimal_gsav("Older")).unwrap();
         fs::write(&newer, minimal_gsav("Newer")).unwrap();
@@ -5730,11 +6503,66 @@ mod tests {
     }
 
     #[test]
+    fn list_backups_includes_legacy_backups_next_to_save_alongside_subfolder_ones() {
+        // Legacy backups (placed directly in the save's parent dir) must still
+        // appear in list_save_backups alongside new subfolder backups.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-001.sav");
+        let subfolder = dir.path().join("goresave_backups");
+        fs::create_dir_all(&subfolder).unwrap();
+        // Legacy file next to the save.
+        let legacy = dir.path().join("G1R-001.sav.bak.50");
+        // New file in the subfolder.
+        let new_backup = subfolder.join("G1R-001.sav.bak.150");
+        fs::write(&path, minimal_gsav("Live")).unwrap();
+        fs::write(&legacy, minimal_gsav("Legacy")).unwrap();
+        fs::write(&new_backup, minimal_gsav("New")).unwrap();
+
+        let backups = list_save_backups(&path).unwrap();
+        assert_eq!(backups.len(), 2, "both legacy and subfolder backups expected");
+        // Newest-first: epoch 150 before epoch 50.
+        assert!(backups[0].path.contains("150"), "subfolder backup first");
+        assert!(backups[1].path.contains("50"), "legacy backup second");
+    }
+
+    #[test]
+    fn create_backup_copy_writes_two_consecutive_backups_to_subfolder() {
+        // Two consecutive backup writes must produce two distinct files, both
+        // located in the goresave_backups subfolder.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-001.sav");
+        fs::write(&path, minimal_gsav("Slot A")).unwrap();
+
+        // First backup — also triggers subfolder creation.
+        let b1 = create_backup_copy(&path).unwrap();
+        // Mutate the file so the second backup is distinct.
+        fs::write(&path, minimal_gsav("Slot B")).unwrap();
+        let b2 = create_backup_copy(&path).unwrap();
+
+        assert_ne!(b1, b2, "two backups must have distinct paths");
+        assert!(b1.exists(), "first backup file must exist");
+        assert!(b2.exists(), "second backup file must exist");
+
+        let subfolder = dir.path().join("goresave_backups");
+        assert!(
+            b1.starts_with(&subfolder),
+            "first backup must be in goresave_backups subfolder"
+        );
+        assert!(
+            b2.starts_with(&subfolder),
+            "second backup must be in goresave_backups subfolder"
+        );
+    }
+
+    #[test]
     fn list_backups_returns_persistent_data_list_companion_backups_for_selected_slot() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("G1R-001.sav");
-        let companion = dir.path().join("PersistentDataList.sav.bak.250");
-        let unrelated = dir.path().join("G1R-002.sav.bak.300");
+        let subfolder = dir.path().join("goresave_backups");
+        fs::create_dir_all(&subfolder).unwrap();
+        let companion = subfolder.join("PersistentDataList.sav.bak.250");
+        // Unrelated file in subfolder must not appear.
+        let unrelated = subfolder.join("G1R-002.sav.bak.300");
         fs::write(&path, minimal_gsav("Live")).unwrap();
         fs::write(
             &companion,
@@ -5787,7 +6615,9 @@ mod tests {
     fn restore_backup_validates_backup_and_preserves_current_save() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("G1R-001.sav");
-        let backup = dir.path().join("G1R-001.sav.bak.200");
+        let subfolder = dir.path().join("goresave_backups");
+        fs::create_dir_all(&subfolder).unwrap();
+        let backup = subfolder.join("G1R-001.sav.bak.200");
         fs::write(&path, minimal_gsav("Live")).unwrap();
         fs::write(&backup, minimal_gsav("Backup")).unwrap();
 
@@ -5807,6 +6637,11 @@ mod tests {
         );
         let current_backup = PathBuf::from(value["data"]["backupPath"].as_str().unwrap());
         assert!(current_backup.exists());
+        // The safety backup of "Live" must also be in the subfolder.
+        assert!(
+            current_backup.starts_with(&subfolder),
+            "safety backup must be written to goresave_backups subfolder"
+        );
         assert_eq!(
             inspect_save(&path, false).unwrap()["public"]["playerSaveName"],
             "Backup"
@@ -5821,9 +6656,11 @@ mod tests {
     fn restore_backup_also_restores_paired_persistent_data_list_backup() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("G1R-001.sav");
-        let slot_backup = dir.path().join("G1R-001.sav.bak.200");
+        let subfolder = dir.path().join("goresave_backups");
+        fs::create_dir_all(&subfolder).unwrap();
+        let slot_backup = subfolder.join("G1R-001.sav.bak.200");
         let persistent = dir.path().join("PersistentDataList.sav");
-        let persistent_backup = dir.path().join("PersistentDataList.sav.bak.200");
+        let persistent_backup = subfolder.join("PersistentDataList.sav.bak.200");
 
         fs::write(&path, minimal_gsav("Live")).unwrap();
         fs::write(&slot_backup, minimal_gsav("Backup")).unwrap();
@@ -5886,12 +6723,14 @@ mod tests {
     fn restore_backup_pairs_companion_by_full_suffix_within_same_second() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("G1R-001.sav");
+        let subfolder = dir.path().join("goresave_backups");
+        fs::create_dir_all(&subfolder).unwrap();
         // Two paired backups created in the same second: ".200" and ".200.1".
-        let slot_backup_first = dir.path().join("G1R-001.sav.bak.200");
-        let slot_backup_second = dir.path().join("G1R-001.sav.bak.200.1");
+        let slot_backup_first = subfolder.join("G1R-001.sav.bak.200");
+        let slot_backup_second = subfolder.join("G1R-001.sav.bak.200.1");
         let persistent = dir.path().join("PersistentDataList.sav");
-        let persistent_first = dir.path().join("PersistentDataList.sav.bak.200");
-        let persistent_second = dir.path().join("PersistentDataList.sav.bak.200.1");
+        let persistent_first = subfolder.join("PersistentDataList.sav.bak.200");
+        let persistent_second = subfolder.join("PersistentDataList.sav.bak.200.1");
 
         fs::write(&path, minimal_gsav("Live")).unwrap();
         fs::write(&slot_backup_first, minimal_gsav("First")).unwrap();
@@ -5923,7 +6762,9 @@ mod tests {
     fn restore_backup_flags_present_companion_left_unrestored() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("G1R-001.sav");
-        let slot_backup = dir.path().join("G1R-001.sav.bak.200");
+        let subfolder = dir.path().join("goresave_backups");
+        fs::create_dir_all(&subfolder).unwrap();
+        let slot_backup = subfolder.join("G1R-001.sav.bak.200");
         let persistent = dir.path().join("PersistentDataList.sav");
         // PersistentDataList exists but there is no .bak.200 companion for it.
         fs::write(&path, minimal_gsav("Live")).unwrap();
@@ -5950,7 +6791,9 @@ mod tests {
     fn restore_backup_rejects_mismatched_container_format() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("G1R-001.sav");
-        let backup = dir.path().join("G1R-001.sav.bak.200");
+        let subfolder = dir.path().join("goresave_backups");
+        fs::create_dir_all(&subfolder).unwrap();
+        let backup = subfolder.join("G1R-001.sav.bak.200");
         fs::write(&path, minimal_gsav("Live")).unwrap();
         // A GVAS sidecar misnamed as a slot backup must not replace the GSAV slot.
         fs::write(
@@ -5971,9 +6814,11 @@ mod tests {
     fn restore_backup_aborts_without_touching_slot_when_companion_invalid() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("G1R-001.sav");
-        let slot_backup = dir.path().join("G1R-001.sav.bak.200");
+        let subfolder = dir.path().join("goresave_backups");
+        fs::create_dir_all(&subfolder).unwrap();
+        let slot_backup = subfolder.join("G1R-001.sav.bak.200");
         let persistent = dir.path().join("PersistentDataList.sav");
-        let persistent_backup = dir.path().join("PersistentDataList.sav.bak.200");
+        let persistent_backup = subfolder.join("PersistentDataList.sav.bak.200");
 
         fs::write(&path, minimal_gsav("Live")).unwrap();
         fs::write(&slot_backup, minimal_gsav("Backup")).unwrap();
@@ -5990,6 +6835,31 @@ mod tests {
             "Live"
         );
         assert_eq!(fs::read(&persistent).unwrap(), b"GVAS-new-name");
+    }
+
+    #[test]
+    fn map_locked_file_error_produces_game_running_message_for_sharing_violation() {
+        // ERROR_SHARING_VIOLATION = 32 (Windows). The helper must produce a
+        // message that contains "is the game running" so the user knows the
+        // cause without a raw OS error code.
+        let io_err = std::io::Error::from_raw_os_error(32);
+        let core_err = map_locked_file_error(io_err, "G1R-001.sav");
+        let msg = core_err.to_string();
+        assert!(
+            msg.contains("is the game running"),
+            "message should mention game running, got: {msg}"
+        );
+
+        // ERROR_LOCK_VIOLATION = 33 must also trigger the friendly message.
+        let io_err_33 = std::io::Error::from_raw_os_error(33);
+        let core_err_33 = map_locked_file_error(io_err_33, "G1R-001.sav");
+        assert!(core_err_33.to_string().contains("is the game running"));
+
+        // An unrelated OS error (e.g. ENOENT = 2) must NOT produce the game-
+        // running message; it must propagate the original description.
+        let io_unrelated = std::io::Error::from_raw_os_error(2);
+        let core_unrelated = map_locked_file_error(io_unrelated, "G1R-001.sav");
+        assert!(!core_unrelated.to_string().contains("is the game running"));
     }
 
     #[test]
@@ -7099,20 +7969,16 @@ mod tests {
     }
 
     #[test]
-    fn inspect_save_reports_private_progression_summary() {
+    fn inspect_save_reports_progression_overview_unavailable_on_bad_payload() {
+        // When the private payload cannot be typed-parsed the overview reports
+        // "unavailable" rather than returning the deleted heuristic shape.
         let dir = tempdir().unwrap();
         let path = dir.path().join("G1R-001.sav");
+        // Raw fstrings are not a valid typed payload — the typed parse will fail.
         let private_payload = [
             fstring("/Script/G1R.QuestSaveGameData"),
             fstring("m_GeneratedEvents"),
-            fstring("m_MemorizedEvents"),
-            fstring("m_ActiveQuestTags"),
-            fstring("GameplayTag"),
-            fstring("TagName"),
             fstring("Quest.Main.Chapter01"),
-            fstring("Dialog.Diego.IntroDone"),
-            fstring("Knowledge.OldCamp.PathKnown"),
-            fstring("m_ItemCount"),
         ]
         .concat();
         let seed_compressed = b"seed-compressed".to_vec();
@@ -7129,39 +7995,12 @@ mod tests {
 
         let value = inspect_save_with_codec_backend(&path, true, Some(&backend), None).unwrap();
 
-        assert_eq!(value["private"]["progression"]["candidateCount"], 3);
-        assert_eq!(
-            value["private"]["progression"]["candidates"],
-            json!([
-                "Quest.Main.Chapter01",
-                "Dialog.Diego.IntroDone",
-                "Knowledge.OldCamp.PathKnown"
-            ])
-        );
-        assert_eq!(
-            value["private"]["progression"]["properties"],
-            json!([
-                "m_GeneratedEvents",
-                "m_MemorizedEvents",
-                "m_ActiveQuestTags"
-            ])
-        );
-        assert_eq!(
-            value["private"]["progression"]["scriptPaths"],
-            json!(["/Script/G1R.QuestSaveGameData"])
-        );
-        assert_eq!(
-            value["private"]["progression"]["sections"],
-            json!(["Generated events", "Memorized events", "Active quest tags"])
-        );
-        assert_eq!(
-            value["private"]["progression"]["gameplayTags"],
-            json!([
-                "Quest.Main.Chapter01",
-                "Dialog.Diego.IntroDone",
-                "Knowledge.OldCamp.PathKnown"
-            ])
-        );
+        // Typed parse fails on garbage → overview is unavailable.
+        assert_eq!(value["private"]["progression"]["status"], "unavailable");
+        // Old heuristic fields must not appear.
+        assert!(value["private"]["progression"].get("candidates").is_none());
+        assert!(value["private"]["progression"].get("sections").is_none());
+        assert!(value["private"]["progression"].get("gameplayTags").is_none());
     }
 
     #[test]
@@ -7386,5 +8225,714 @@ mod tests {
                 .unwrap()
                 .contains("io error")
         );
+    }
+
+    fn private_name_set_property(name: &str, values: &[&str]) -> Vec<u8> {
+        let mut body = 0u32.to_le_bytes().to_vec();
+        body.extend_from_slice(&(values.len() as u32).to_le_bytes());
+        for v in values {
+            body.extend_from_slice(&fstring(v));
+        }
+        let mut out = fstring(name);
+        out.extend_from_slice(&fstring("SetProperty"));
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&fstring("NameProperty"));
+        out.extend_from_slice(&0u32.to_le_bytes()); // array_index
+        out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        out.push(0); // tag_flags
+        out.extend_from_slice(&body);
+        out
+    }
+
+    #[test]
+    fn typed_container_edits_apply_and_validate() {
+        let mut payload = fstring("/Script/Test.Save");
+        payload.push(0);
+        payload.extend_from_slice(&private_name_set_property("Knowledge", &["A", "B"]));
+        payload.extend_from_slice(&fstring("None"));
+        payload.extend_from_slice(&0u32.to_le_bytes());
+
+        let edit = PrivateTypedContainerEdit {
+            path: properties::parse_path(&["Knowledge".to_string()]).unwrap(),
+            edit: properties::ContainerEdit::SetAdd("C".to_string()),
+        };
+        apply_private_typed_container_edit_to_payload(&mut payload, &edit).unwrap();
+        let edit = PrivateTypedContainerEdit {
+            path: properties::parse_path(&["Knowledge".to_string()]).unwrap(),
+            edit: properties::ContainerEdit::SetRemove("A".to_string()),
+        };
+        apply_private_typed_container_edit_to_payload(&mut payload, &edit).unwrap();
+
+        let root = properties::parse_private_root(&payload).unwrap();
+        assert_eq!(
+            root.properties[0].value,
+            properties::PropertyValue::Set {
+                num_to_remove: 0,
+                elements: vec![
+                    properties::PropertyValue::Name("B".to_string()),
+                    properties::PropertyValue::Name("C".to_string()),
+                ],
+            }
+        );
+
+        // Unknown path fails without mutation.
+        let copy = payload.clone();
+        let bad = PrivateTypedContainerEdit {
+            path: properties::parse_path(&["Nope".to_string()]).unwrap(),
+            edit: properties::ContainerEdit::SetAdd("X".to_string()),
+        };
+        assert!(apply_private_typed_container_edit_to_payload(&mut payload, &bad).is_err());
+        assert_eq!(payload, copy);
+    }
+
+    #[test]
+    fn write_save_applies_typed_container_edits() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-001.sav");
+        let output_path = dir.path().join("G1R-001-container.sav");
+        let private_payload = {
+            let mut p = fstring("/Script/Angelscript.GothicFinalDataGame");
+            p.push(0);
+            p.extend_from_slice(&private_name_set_property("Knowledge", &["Voiceline_A"]));
+            p.extend_from_slice(&fstring("None"));
+            p.extend_from_slice(&0u32.to_le_bytes());
+            p
+        };
+        let seed_compressed = b"seed-compressed".to_vec();
+        let stream = compressed_stream_with_one_chunk(&seed_compressed, private_payload.len());
+        fs::write(
+            &path,
+            build_gsav(2, &public_payload("Slot A"), &stream, &[0, 0, 0, 0]),
+        )
+        .unwrap();
+        let backend = PrefixCodecBackend {
+            seed_compressed,
+            seed_uncompressed: private_payload,
+        };
+
+        // The container ops must be advertised once the typed parse is ok.
+        let inspected = inspect_save_with_codec_backend(&path, true, Some(&backend), None).unwrap();
+        let writable = inspected["private"]["writable"].as_array().unwrap();
+        for op in [
+            "private.typed.setAdd",
+            "private.typed.setRemove",
+            "private.typed.arrayRemove",
+            "private.typed.arrayDuplicate",
+        ] {
+            assert!(writable.contains(&json!(op)), "missing writable {op}");
+        }
+
+        let response = write_save_with_codec_backend(
+            &path,
+            &[json!({
+                "path": "private.typed.setAdd",
+                "value": { "path": ["Knowledge"], "value": "ChoiceB" }
+            })],
+            false,
+            Some(&output_path),
+            Some(&backend),
+        )
+        .unwrap();
+        assert_eq!(response["editsApplied"], 1);
+
+        let value =
+            inspect_save_with_codec_backend(&output_path, true, Some(&backend), None).unwrap();
+        assert_eq!(value["private"]["typedParse"]["status"], "ok");
+        let strings = value["private"]["strings"].as_array().unwrap();
+        assert!(strings.iter().any(|s| s == "ChoiceB"));
+    }
+
+    fn private_str_array_property(name: &str, values: &[&str]) -> Vec<u8> {
+        let mut body = (values.len() as u32).to_le_bytes().to_vec();
+        for v in values {
+            body.extend_from_slice(&fstring(v));
+        }
+        let mut out = fstring(name);
+        out.extend_from_slice(&fstring("ArrayProperty"));
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&fstring("StrProperty"));
+        out.extend_from_slice(&0u32.to_le_bytes()); // array_index
+        out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        out.push(0); // tag_flags
+        out.extend_from_slice(&body);
+        out
+    }
+
+    #[test]
+    fn write_save_rejects_multiple_structural_array_edits() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-001.sav");
+        let output_path = dir.path().join("G1R-001-multi.sav");
+        let private_payload = {
+            let mut p = fstring("/Script/Angelscript.GothicFinalDataGame");
+            p.push(0);
+            p.extend_from_slice(&private_str_array_property("Events", &["A", "B", "C"]));
+            p.extend_from_slice(&fstring("None"));
+            p.extend_from_slice(&0u32.to_le_bytes());
+            p
+        };
+        let seed_compressed = b"seed-compressed".to_vec();
+        let stream = compressed_stream_with_one_chunk(&seed_compressed, private_payload.len());
+        fs::write(
+            &path,
+            build_gsav(2, &public_payload("Slot A"), &stream, &[0, 0, 0, 0]),
+        )
+        .unwrap();
+        let backend = PrefixCodecBackend {
+            seed_compressed,
+            seed_uncompressed: private_payload,
+        };
+
+        // Two index-addressed structural edits in one batch are rejected: the
+        // second index would silently target the post-splice array.
+        let err = write_save_with_codec_backend(
+            &path,
+            &[
+                json!({
+                    "path": "private.typed.arrayRemove",
+                    "value": { "path": ["Events"], "index": 0 }
+                }),
+                json!({
+                    "path": "private.typed.arrayRemove",
+                    "value": { "path": ["Events"], "index": 1 }
+                }),
+            ],
+            false,
+            Some(&output_path),
+            Some(&backend),
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("at most one structural array edit"),
+            "unexpected error: {err}"
+        );
+        assert!(!output_path.exists(), "rejected write must not produce a file");
+
+        // A single structural edit (even alongside a value-addressed edit)
+        // still applies.
+        let response = write_save_with_codec_backend(
+            &path,
+            &[json!({
+                "path": "private.typed.arrayRemove",
+                "value": { "path": ["Events"], "index": 1 }
+            })],
+            false,
+            Some(&output_path),
+            Some(&backend),
+        )
+        .unwrap();
+        assert_eq!(response["editsApplied"], 1);
+    }
+
+    // ── Task 5 helpers ──────────────────────────────────────────────────────
+
+    fn private_enum_property(name: &str, enum_type: &str, label: &str) -> Vec<u8> {
+        let body = fstring(label);
+        let mut out = fstring(name);
+        out.extend_from_slice(&fstring("EnumProperty"));
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&fstring(enum_type));
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&fstring("/Script/G1R"));
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&fstring("ByteProperty"));
+        out.extend_from_slice(&0u32.to_le_bytes()); // array_index
+        out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        out.push(0); // tag_flags
+        out.extend_from_slice(&body);
+        out
+    }
+
+    fn quest_map_payload() -> Vec<u8> {
+        let quest_value = |state: &str| {
+            let mut v = private_enum_property("CurrentState", "EQuestState", state);
+            v.extend_from_slice(&fstring("None"));
+            v
+        };
+        let mut map_body = 0u32.to_le_bytes().to_vec(); // num_to_remove
+        map_body.extend_from_slice(&2u32.to_le_bytes()); // count
+        map_body.extend_from_slice(&fstring("/Script/Angelscript.Quest_OldCamp_SLEEPER"));
+        map_body.extend_from_slice(&quest_value("EQuestState::Running"));
+        map_body.extend_from_slice(&fstring("/Script/Angelscript.Quest_BanditsCamp_BANDITSTRUST"));
+        map_body.extend_from_slice(&quest_value("EQuestState::Available"));
+
+        let mut props = fstring("QuestDataByClass");
+        props.extend_from_slice(&fstring("MapProperty"));
+        props.extend_from_slice(&2u32.to_le_bytes());
+        props.extend_from_slice(&fstring("ObjectProperty"));
+        props.extend_from_slice(&0u32.to_le_bytes()); // key_flags
+        props.extend_from_slice(&fstring("StructProperty"));
+        props.extend_from_slice(&1u32.to_le_bytes());
+        props.extend_from_slice(&fstring("SingleQuestSaveGameData"));
+        props.extend_from_slice(&1u32.to_le_bytes());
+        props.extend_from_slice(&fstring("/Script/G1R"));
+        props.extend_from_slice(&0u32.to_le_bytes()); // array_index
+        props.extend_from_slice(&(map_body.len() as u32).to_le_bytes());
+        props.push(0); // tag_flags (struct map values are tagged property lists)
+        props.extend_from_slice(&map_body);
+
+        let mut p = fstring("/Script/Angelscript.GothicFinalDataGame");
+        p.push(0);
+        p.extend_from_slice(&props);
+        p.extend_from_slice(&fstring("None"));
+        p.extend_from_slice(&0u32.to_le_bytes());
+        p
+    }
+
+    #[test]
+    fn query_progression_lists_quests_with_state_paths() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-quests.sav");
+        let private_payload = quest_map_payload();
+        let seed_compressed = b"seed".to_vec();
+        let stream = compressed_stream_with_one_chunk(&seed_compressed, private_payload.len());
+        fs::write(
+            &path,
+            build_gsav(2, &public_payload("Slot"), &stream, &[0, 0, 0, 0]),
+        )
+        .unwrap();
+        let backend = PrefixCodecBackend {
+            seed_compressed,
+            seed_uncompressed: private_payload,
+        };
+
+        let value =
+            query_progression(&path, &json!({ "section": "quests" }), Some(&backend)).unwrap();
+        assert_eq!(value["section"], "quests");
+        assert_eq!(value["total"], 2);
+        assert_eq!(value["stateCounts"]["Running"], 1);
+        assert_eq!(value["stateCounts"]["Available"], 1);
+        // Sorted by class path: BanditsCamp before OldCamp.
+        let first = &value["quests"][0];
+        assert_eq!(
+            first["questClass"],
+            "/Script/Angelscript.Quest_BanditsCamp_BANDITSTRUST"
+        );
+        assert_eq!(first["id"], "Quest_BanditsCamp_BANDITSTRUST");
+        assert_eq!(first["group"], "BanditsCamp");
+        assert_eq!(first["name"], "BANDITSTRUST");
+        assert_eq!(first["currentState"], "EQuestState::Available");
+        assert_eq!(
+            first["statePath"],
+            json!([
+                "QuestDataByClass",
+                "{/Script/Angelscript.Quest_BanditsCamp_BANDITSTRUST}",
+                "CurrentState"
+            ])
+        );
+
+        // Query filter + paging.
+        let filtered = query_progression(
+            &path,
+            &json!({ "section": "quests", "query": "sleeper" }),
+            Some(&backend),
+        )
+        .unwrap();
+        assert_eq!(filtered["total"], 1);
+        assert_eq!(filtered["quests"][0]["name"], "SLEEPER");
+
+        // The statePath round-trips through the existing setValue write.
+        let output_path = dir.path().join("G1R-quests-out.sav");
+        let response = write_save_with_codec_backend(
+            &path,
+            &[json!({
+                "path": "private.typed.setValue",
+                "value": {
+                    "path": [
+                        "QuestDataByClass",
+                        "{/Script/Angelscript.Quest_BanditsCamp_BANDITSTRUST}",
+                        "CurrentState"
+                    ],
+                    "value": "EQuestState::Succeeded"
+                }
+            })],
+            false,
+            Some(&output_path),
+            Some(&backend),
+        )
+        .unwrap();
+        assert_eq!(response["editsApplied"], 1);
+        let after = query_progression(
+            &output_path,
+            &json!({ "section": "quests", "query": "banditstrust" }),
+            Some(&backend),
+        )
+        .unwrap();
+        assert_eq!(after["quests"][0]["currentState"], "EQuestState::Succeeded");
+    }
+
+    #[test]
+    fn query_progression_quests_state_and_group_filters() {
+        // Fixture: OldCamp_SLEEPER Running, BanditsCamp_BANDITSTRUST Available.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-filter.sav");
+        let private_payload = quest_map_payload();
+        let seed_compressed = b"seed".to_vec();
+        let stream = compressed_stream_with_one_chunk(&seed_compressed, private_payload.len());
+        fs::write(
+            &path,
+            build_gsav(2, &public_payload("Slot"), &stream, &[0, 0, 0, 0]),
+        )
+        .unwrap();
+        let backend = PrefixCodecBackend {
+            seed_compressed,
+            seed_uncompressed: private_payload,
+        };
+
+        // No filters: both facets cover all entries.
+        let base = query_progression(&path, &json!({ "section": "quests" }), Some(&backend))
+            .unwrap();
+        assert_eq!(base["groupCounts"]["BanditsCamp"], 1);
+        assert_eq!(base["groupCounts"]["OldCamp"], 1);
+        assert_eq!(base["stateCounts"]["Running"], 1);
+        assert_eq!(base["stateCounts"]["Available"], 1);
+
+        // state:"Running" → 1 hit (SLEEPER).
+        // groupCounts respects query+state (not group), so only Running entries counted.
+        // stateCounts respects query+group (no group filter), so all entries counted.
+        let running =
+            query_progression(&path, &json!({ "section": "quests", "state": "Running" }), Some(&backend))
+                .unwrap();
+        assert_eq!(running["total"], 1);
+        assert_eq!(running["quests"][0]["name"], "SLEEPER");
+        // groupCounts: only Running entries → OldCamp=1, BanditsCamp absent.
+        assert_eq!(running["groupCounts"]["OldCamp"], 1);
+        assert!(running["groupCounts"]["BanditsCamp"].is_null());
+        // stateCounts: no group filter applied → all entries.
+        assert_eq!(running["stateCounts"]["Running"], 1);
+        assert_eq!(running["stateCounts"]["Available"], 1);
+
+        // state:"EQuestState::Running" (full form) → same result.
+        let running_full = query_progression(
+            &path,
+            &json!({ "section": "quests", "state": "EQuestState::Running" }),
+            Some(&backend),
+        )
+        .unwrap();
+        assert_eq!(running_full["total"], 1);
+        assert_eq!(running_full["quests"][0]["name"], "SLEEPER");
+
+        // state:"running" (case-insensitive) → same result.
+        let running_lower = query_progression(
+            &path,
+            &json!({ "section": "quests", "state": "running" }),
+            Some(&backend),
+        )
+        .unwrap();
+        assert_eq!(running_lower["total"], 1);
+        assert_eq!(running_lower["quests"][0]["name"], "SLEEPER");
+
+        // group:"banditscamp" → 1 hit (BANDITSTRUST).
+        // stateCounts respects query+group → only BanditsCamp entries → Available=1 only.
+        // groupCounts respects query+state (no state filter) → all entries.
+        let by_group = query_progression(
+            &path,
+            &json!({ "section": "quests", "group": "banditscamp" }),
+            Some(&backend),
+        )
+        .unwrap();
+        assert_eq!(by_group["total"], 1);
+        assert_eq!(by_group["quests"][0]["name"], "BANDITSTRUST");
+        assert_eq!(by_group["stateCounts"]["Available"], 1);
+        assert!(by_group["stateCounts"]["Running"].is_null());
+        assert_eq!(by_group["groupCounts"]["BanditsCamp"], 1);
+        assert_eq!(by_group["groupCounts"]["OldCamp"], 1);
+
+        // Combined state=Running + group=BanditsCamp → 0 results (Running quest is in OldCamp).
+        // stateCounts: query+group(BanditsCamp) → only BanditsCamp entry → Available=1.
+        // groupCounts: query+state(Running) → only Running entry → OldCamp=1.
+        let no_match = query_progression(
+            &path,
+            &json!({ "section": "quests", "state": "Running", "group": "BanditsCamp" }),
+            Some(&backend),
+        )
+        .unwrap();
+        assert_eq!(no_match["total"], 0);
+        // stateCounts sees only BanditsCamp entries (Available).
+        assert_eq!(no_match["stateCounts"]["Available"], 1);
+        assert!(no_match["stateCounts"]["Running"].is_null());
+        // groupCounts sees only Running entries (OldCamp).
+        assert_eq!(no_match["groupCounts"]["OldCamp"], 1);
+        assert!(no_match["groupCounts"]["BanditsCamp"].is_null());
+    }
+
+    // ── Task 6 helpers ──────────────────────────────────────────────────────
+
+    fn private_double_property(name: &str, value: f64) -> Vec<u8> {
+        let mut out = fstring(name);
+        out.extend_from_slice(&fstring("DoubleProperty"));
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&8u32.to_le_bytes());
+        out.push(0);
+        out.extend_from_slice(&value.to_le_bytes());
+        out
+    }
+
+    fn private_struct_property(name: &str, struct_type: &str, body: &[u8], flags: u8) -> Vec<u8> {
+        let mut out = fstring(name);
+        out.extend_from_slice(&fstring("StructProperty"));
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&fstring(struct_type));
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&fstring("/Script/G1R"));
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        out.push(flags);
+        out.extend_from_slice(body);
+        out
+    }
+
+    fn name_keyed_struct_map(map_name: &str, entries: &[(&str, Vec<u8>)]) -> Vec<u8> {
+        let mut map_body = 0u32.to_le_bytes().to_vec();
+        map_body.extend_from_slice(&(entries.len() as u32).to_le_bytes());
+        for (key, value_props) in entries {
+            map_body.extend_from_slice(&fstring(key));
+            map_body.extend_from_slice(value_props);
+            map_body.extend_from_slice(&fstring("None"));
+        }
+        let mut out = fstring(map_name);
+        out.extend_from_slice(&fstring("MapProperty"));
+        out.extend_from_slice(&2u32.to_le_bytes());
+        out.extend_from_slice(&fstring("NameProperty"));
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&fstring("StructProperty"));
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&fstring("KnowledgeSet"));
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&fstring("/Script/G1R"));
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&(map_body.len() as u32).to_le_bytes());
+        out.push(0);
+        out.extend_from_slice(&map_body);
+        out
+    }
+
+    #[test]
+    fn query_progression_knowledge_lists_characters_and_entries() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-knowledge.sav");
+        let private_payload = {
+            let diego = private_name_set_property(
+                "Knowledge",
+                &["Voiceline_info_diego_gamestart_11_00", "ChoiceDiegoGamestart"],
+            );
+            let xardas = private_name_set_property("Knowledge", &["Voiceline_xardas_intro"]);
+            let map = name_keyed_struct_map(
+                "CharacterKnowledgeByUniqueName",
+                &[("OC_STT_Diego", diego), ("NoneCamp_Xardas", xardas)],
+            );
+            let mut p = fstring("/Script/Angelscript.GothicFinalDataGame");
+            p.push(0);
+            p.extend_from_slice(&map);
+            p.extend_from_slice(&fstring("None"));
+            p.extend_from_slice(&0u32.to_le_bytes());
+            p
+        };
+        let seed_compressed = b"seed".to_vec();
+        let stream = compressed_stream_with_one_chunk(&seed_compressed, private_payload.len());
+        fs::write(
+            &path,
+            build_gsav(2, &public_payload("Slot"), &stream, &[0, 0, 0, 0]),
+        )
+        .unwrap();
+        let backend = PrefixCodecBackend {
+            seed_compressed,
+            seed_uncompressed: private_payload,
+        };
+
+        // Character list (no `character` param).
+        let value =
+            query_progression(&path, &json!({ "section": "knowledge" }), Some(&backend)).unwrap();
+        assert_eq!(value["total"], 2);
+        // Sorted by name: NoneCamp_Xardas before OC_STT_Diego.
+        assert_eq!(value["characters"][0]["name"], "NoneCamp_Xardas");
+        assert_eq!(value["characters"][0]["entryCount"], 1);
+        assert_eq!(value["characters"][1]["name"], "OC_STT_Diego");
+        assert_eq!(value["characters"][1]["entryCount"], 2);
+
+        // Entries for one character.
+        let value = query_progression(
+            &path,
+            &json!({ "section": "knowledge", "character": "OC_STT_Diego" }),
+            Some(&backend),
+        )
+        .unwrap();
+        assert_eq!(value["character"], "OC_STT_Diego");
+        assert_eq!(value["total"], 2);
+        assert_eq!(
+            value["setPath"],
+            json!([
+                "CharacterKnowledgeByUniqueName",
+                "{OC_STT_Diego}",
+                "Knowledge"
+            ])
+        );
+        let entries = value["entries"].as_array().unwrap();
+        assert!(entries.contains(&json!("ChoiceDiegoGamestart")));
+
+        // Query filter on entries.
+        let value = query_progression(
+            &path,
+            &json!({ "section": "knowledge", "character": "OC_STT_Diego", "query": "choice" }),
+            Some(&backend),
+        )
+        .unwrap();
+        assert_eq!(value["total"], 1);
+
+        // Unknown character errors.
+        assert!(
+            query_progression(
+                &path,
+                &json!({ "section": "knowledge", "character": "Nobody" }),
+                Some(&backend),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn query_progression_events_lists_characters_and_events() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-events.sav");
+        let private_payload = {
+            // One memory event struct: EventTags (native GameplayTagContainer)
+            // + Time (InGameTime property list) + AffectedCharacterGlobalId.
+            let event = {
+                let mut tags_body = 1u32.to_le_bytes().to_vec();
+                tags_body.extend_from_slice(&fstring("Memory.Quest.Started"));
+                let mut e = private_struct_property(
+                    "EventTags",
+                    "GameplayTagContainer",
+                    &tags_body,
+                    properties::TAG_FLAG_NATIVE_SERIALIZE,
+                );
+                let time_body = {
+                    let mut t = private_double_property("TotalSeconds", 1234.5);
+                    t.extend_from_slice(&fstring("None"));
+                    t
+                };
+                e.extend_from_slice(&private_struct_property(
+                    "Time", "InGameTime", &time_body, 0,
+                ));
+                let mut affected = fstring("AffectedCharacterGlobalId");
+                affected.extend_from_slice(&fstring("NameProperty"));
+                affected.extend_from_slice(&0u32.to_le_bytes());
+                let hero = fstring("Hero");
+                affected.extend_from_slice(&(hero.len() as u32).to_le_bytes());
+                affected.push(0);
+                affected.extend_from_slice(&hero);
+                e.extend_from_slice(&affected);
+                e
+            };
+            // MemorizedEvents: ArrayProperty of MemoryEvent structs (inline
+            // tagged property lists, "None"-terminated).
+            let memorized = {
+                let mut element = event.clone();
+                element.extend_from_slice(&fstring("None"));
+                let mut body = 1u32.to_le_bytes().to_vec();
+                body.extend_from_slice(&element);
+                let mut out = fstring("MemorizedEvents");
+                out.extend_from_slice(&fstring("ArrayProperty"));
+                out.extend_from_slice(&1u32.to_le_bytes());
+                out.extend_from_slice(&fstring("StructProperty"));
+                out.extend_from_slice(&1u32.to_le_bytes());
+                out.extend_from_slice(&fstring("MemoryEvent"));
+                out.extend_from_slice(&1u32.to_le_bytes());
+                out.extend_from_slice(&fstring("/Script/G1R"));
+                out.extend_from_slice(&0u32.to_le_bytes());
+                out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+                out.push(0);
+                out.extend_from_slice(&body);
+                out
+            };
+            let map = name_keyed_struct_map("LongTermMemoryByGlobalId", &[("Hero", memorized)]);
+            let mut p = fstring("/Script/Angelscript.GothicFinalDataGame");
+            p.push(0);
+            p.extend_from_slice(&map);
+            p.extend_from_slice(&fstring("None"));
+            p.extend_from_slice(&0u32.to_le_bytes());
+            p
+        };
+        let seed_compressed = b"seed".to_vec();
+        let stream = compressed_stream_with_one_chunk(&seed_compressed, private_payload.len());
+        fs::write(
+            &path,
+            build_gsav(2, &public_payload("Slot"), &stream, &[0, 0, 0, 0]),
+        )
+        .unwrap();
+        let backend = PrefixCodecBackend {
+            seed_compressed,
+            seed_uncompressed: private_payload,
+        };
+
+        let value =
+            query_progression(&path, &json!({ "section": "events" }), Some(&backend)).unwrap();
+        assert_eq!(value["total"], 1);
+        assert_eq!(value["characters"][0]["id"], "Hero");
+        assert_eq!(value["characters"][0]["eventCount"], 1);
+
+        let value = query_progression(
+            &path,
+            &json!({ "section": "events", "character": "Hero" }),
+            Some(&backend),
+        )
+        .unwrap();
+        assert_eq!(value["character"], "Hero");
+        assert_eq!(value["total"], 1);
+        assert_eq!(
+            value["arrayPath"],
+            json!(["LongTermMemoryByGlobalId", "{Hero}", "MemorizedEvents"])
+        );
+        let event = &value["events"][0];
+        assert_eq!(event["index"], 0);
+        assert_eq!(event["tags"], json!(["Memory.Quest.Started"]));
+        assert_eq!(event["timeSeconds"], 1234.5);
+        assert_eq!(event["affected"], "Hero");
+
+        // Tag query filter.
+        let filtered = query_progression(
+            &path,
+            &json!({ "section": "events", "character": "Hero", "query": "guild" }),
+            Some(&backend),
+        )
+        .unwrap();
+        assert_eq!(filtered["total"], 0);
+    }
+
+    #[test]
+    fn inspect_reports_structured_progression_overview() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-overview.sav");
+        let private_payload = quest_map_payload();
+        let seed_compressed = b"seed".to_vec();
+        let stream = compressed_stream_with_one_chunk(&seed_compressed, private_payload.len());
+        fs::write(
+            &path,
+            build_gsav(2, &public_payload("Slot"), &stream, &[0, 0, 0, 0]),
+        )
+        .unwrap();
+        let backend = PrefixCodecBackend {
+            seed_compressed,
+            seed_uncompressed: private_payload,
+        };
+
+        let value = inspect_save_with_codec_backend(&path, true, Some(&backend), None).unwrap();
+        let progression = &value["private"]["progression"];
+        assert_eq!(progression["status"], "ok");
+        assert_eq!(progression["questTotal"], 2);
+        assert_eq!(progression["questStates"]["Running"], 1);
+        assert_eq!(progression["questStates"]["Available"], 1);
+        // No knowledge/memory maps in this fixture.
+        assert_eq!(progression["knowledgeCharacters"], 0);
+        assert_eq!(progression["memoryCharacters"], 0);
+        assert!(
+            progression["writable"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("private.typed.setValue"))
+        );
+        // The old heuristic fields are gone.
+        assert!(progression.get("candidates").is_none());
+        assert!(progression.get("sections").is_none());
     }
 }
