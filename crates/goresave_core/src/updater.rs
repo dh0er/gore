@@ -20,7 +20,10 @@ static PENDING_UPDATE: Mutex<Option<UpdateInfo>> = Mutex::new(None);
 /// Runs Velopack startup hooks (install/update/uninstall callbacks). May exit
 /// the process, so the app must call this before any other work.
 pub fn velopack_startup() {
-    VelopackApp::build().run();
+    // Updates apply only through the user-confirmed "Restart to update" flow;
+    // Velopack's default would silently install a staged update on startup,
+    // and update_check surfaces such packages through the banner instead.
+    VelopackApp::build().set_auto_apply_on_startup(false).run();
 }
 
 /// None when the app is not Velopack-installed (dev run, portable zip).
