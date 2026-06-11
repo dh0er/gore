@@ -806,6 +806,84 @@ pub fn patch_string(
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContainerKind {
+    Array,
+    Set,
+}
+
+/// Byte layout of a Set/Array property's value: where the element-count field
+/// sits and the absolute byte range of every element. Computed by re-reading
+/// the container body, since the parsed tree does not record inline element
+/// offsets.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ContainerLayout {
+    pub kind: ContainerKind,
+    pub inner_type: String,
+    /// Absolute offset of the u32 element-count field.
+    pub count_offset: usize,
+    pub count: usize,
+    /// Absolute byte range of each element within the payload.
+    pub element_ranges: Vec<core::ops::Range<usize>>,
+}
+
+pub fn container_layout(
+    payload: &[u8],
+    property: &Property,
+) -> Result<ContainerLayout, CoreError> {
+    let kind = match property.type_name.as_str() {
+        "ArrayProperty" => ContainerKind::Array,
+        "SetProperty" => ContainerKind::Set,
+        other => {
+            return Err(CoreError::InvalidRequest(format!(
+                "container edits require an ArrayProperty or SetProperty target, got {other}"
+            )));
+        }
+    };
+    // Instanced-object arrays interleave full object streams; element-level
+    // splicing is not supported for them.
+    if matches!(property.value, PropertyValue::ObjectInstances(_)) {
+        return Err(CoreError::UnsupportedEdit(
+            "container edits do not support instanced-object arrays".to_string(),
+        ));
+    }
+    let inner = property
+        .descriptor
+        .inner
+        .as_deref()
+        .ok_or_else(|| CoreError::Parse("container property missing inner descriptor".into()))?;
+    let end = property
+        .value_offset
+        .checked_add(property.value_size)
+        .filter(|end| *end <= payload.len())
+        .ok_or_else(|| CoreError::Parse("container value out of bounds".to_string()))?;
+    let mut r = Reader::new(&payload[property.value_offset..end], property.value_offset);
+    if kind == ContainerKind::Set {
+        let _num_to_remove = r.u32()?;
+    }
+    let count_offset = r.abs_pos();
+    let count = r.u32()? as usize;
+    let mut element_ranges = Vec::with_capacity(count.min(1 << 16));
+    for _ in 0..count {
+        let start = r.abs_pos();
+        read_inline_value(&mut r, inner, 0)?;
+        element_ranges.push(start..r.abs_pos());
+    }
+    if r.remaining() != 0 {
+        return Err(CoreError::Parse(format!(
+            "container body left {} bytes after {count} elements",
+            r.remaining()
+        )));
+    }
+    Ok(ContainerLayout {
+        kind,
+        inner_type: inner.type_name.clone(),
+        count_offset,
+        count,
+        element_ranges,
+    })
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct PropertyCounts {
     pub total: usize,
@@ -2381,6 +2459,85 @@ mod tests {
         assert!(patch_scalar(&mut payload, &rank, ScalarValue::Byte(1)).is_err());
         // And the plain-byte form must reject a string patch.
         assert!(patch_string(&mut payload, &level, &[], "oops").is_err());
+    }
+
+    fn name_set_property(name: &str, values: &[&str]) -> Vec<u8> {
+        let mut body = 0u32.to_le_bytes().to_vec(); // num_to_remove
+        body.extend_from_slice(&(values.len() as u32).to_le_bytes());
+        for v in values {
+            body.extend_from_slice(&fstring(v));
+        }
+        let mut out = tag(name, "SetProperty");
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&fstring("NameProperty"));
+        out.extend_from_slice(&header(body.len() as u32, 0));
+        out.extend_from_slice(&body);
+        out
+    }
+
+    fn int_array_property(name: &str, values: &[i32]) -> Vec<u8> {
+        let mut body = (values.len() as u32).to_le_bytes().to_vec();
+        for v in values {
+            body.extend_from_slice(&v.to_le_bytes());
+        }
+        let mut out = tag(name, "ArrayProperty");
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&fstring("IntProperty"));
+        out.extend_from_slice(&header(body.len() as u32, 0));
+        out.extend_from_slice(&body);
+        out
+    }
+
+    #[test]
+    fn container_layout_reports_set_element_ranges() {
+        let payload = root(
+            "/Script/Test.Save",
+            &name_set_property("Knowledge", &["Voiceline_A", "ChoiceB"]),
+        );
+        let parsed = parse_private_root(&payload).unwrap();
+        let target = &parsed.properties[0];
+
+        let layout = container_layout(&payload, target).unwrap();
+        assert_eq!(layout.kind, ContainerKind::Set);
+        assert_eq!(layout.inner_type, "NameProperty");
+        assert_eq!(layout.count, 2);
+        // count field sits after the u32 num_to_remove
+        assert_eq!(layout.count_offset, target.value_offset + 4);
+        assert_eq!(layout.element_ranges.len(), 2);
+        // elements are FStrings: 4-byte length + chars + NUL
+        let first = &layout.element_ranges[0];
+        assert_eq!(first.start, target.value_offset + 8);
+        assert_eq!(first.len(), 4 + "Voiceline_A".len() + 1);
+        let second = &layout.element_ranges[1];
+        assert_eq!(second.start, first.end);
+        assert_eq!(second.end, target.value_offset + target.value_size);
+    }
+
+    #[test]
+    fn container_layout_reports_array_element_ranges() {
+        let payload = root("/Script/Test.Save", &int_array_property("Nums", &[7, 8, 9]));
+        let parsed = parse_private_root(&payload).unwrap();
+        let target = &parsed.properties[0];
+
+        let layout = container_layout(&payload, target).unwrap();
+        assert_eq!(layout.kind, ContainerKind::Array);
+        assert_eq!(layout.count, 3);
+        assert_eq!(layout.count_offset, target.value_offset);
+        assert_eq!(
+            layout.element_ranges,
+            vec![
+                target.value_offset + 4..target.value_offset + 8,
+                target.value_offset + 8..target.value_offset + 12,
+                target.value_offset + 12..target.value_offset + 16,
+            ]
+        );
+    }
+
+    #[test]
+    fn container_layout_rejects_non_container_targets() {
+        let payload = root("/Script/Test.Save", &int_property("m_X", 1));
+        let parsed = parse_private_root(&payload).unwrap();
+        assert!(container_layout(&payload, &parsed.properties[0]).is_err());
     }
 
     #[test]
