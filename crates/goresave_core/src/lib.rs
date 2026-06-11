@@ -3747,6 +3747,11 @@ fn apply_private_edits(
             "private.typed.setValue" => {
                 parse_private_typed_set_value_edit(edit).map(PrivateEdit::TypedSetValue)
             }
+            // Index-addressed edits (arrayRemove/arrayDuplicate) target indices
+            // that shift after each structural change within the same batch;
+            // callers must submit at most one structural array edit per write.
+            // Each edit re-parses the payload, so value-addressed ops
+            // (setAdd/setRemove) batch safely.
             "private.typed.setAdd"
             | "private.typed.setRemove"
             | "private.typed.arrayRemove"
