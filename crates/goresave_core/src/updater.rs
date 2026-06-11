@@ -36,6 +36,21 @@ pub fn update_check(_payload: &Value) -> Result<Value, CoreError> {
         *PENDING_UPDATE.lock().unwrap() = None;
         return Ok(json!({ "status": "disabled" }));
     };
+    // An update downloaded in an earlier run but not applied yet must surface
+    // without network access: prefer the locally staged package over the
+    // remote check. download_updates skips the download when the package file
+    // already exists, so the regular check -> download -> ready flow works
+    // offline for it.
+    if let Some(asset) = manager.get_update_pending_restart() {
+        let version = asset.Version.clone();
+        *PENDING_UPDATE.lock().unwrap() = Some(UpdateInfo {
+            TargetFullRelease: asset,
+            BaseRelease: None,
+            DeltasToTarget: Vec::new(),
+            IsDowngrade: false,
+        });
+        return Ok(json!({ "status": "updateAvailable", "version": version }));
+    }
     match manager.check_for_updates() {
         Ok(UpdateCheck::UpdateAvailable(info)) => {
             let version = info.TargetFullRelease.Version.clone();
