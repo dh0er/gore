@@ -27,9 +27,12 @@ auto-update.
 ### Releasing (maintainers)
 
 1. Set `version:` in `apps/goresave/pubspec.yaml` to the new `X.Y.Z`.
-2. Commit, then `git tag vX.Y.Z && git push origin vX.Y.Z`.
-3. The Release workflow builds the zip + Velopack packages and publishes the
-   GitHub release. The tag must match the pubspec version or the build fails.
+2. Add a `## [X.Y.Z] - YYYY-MM-DD` section to `CHANGELOG.md` — it becomes the
+   release notes.
+3. Commit, then `git tag vX.Y.Z && git push origin vX.Y.Z`.
+4. The Release workflow builds the zip + Velopack packages and publishes the
+   GitHub release. The tag must match the pubspec version and the changelog
+   section must exist, or the build fails.
 
 ## Project Layout
 
