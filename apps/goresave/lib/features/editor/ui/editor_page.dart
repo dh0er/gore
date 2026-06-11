@@ -141,21 +141,9 @@ class _SaveSidebar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Scope the list to the active profile so the list, the header total, and
-    // the profile-scoped Quick/Auto counts all agree in a multi-profile folder.
-    final activeProfileId = state.activeProfile?.profileId;
-    final saves = activeProfileId == null
-        ? state.saves
-        : state.saves
-              .where(
-                (s) =>
-                    // Keep this profile's saves, plus saves with unknown profile
-                    // metadata, and never hide the currently selected save.
-                    s.persistentProfileId == activeProfileId ||
-                    s.persistentProfileId == null ||
-                    s.path == state.selectedPath,
-              )
-              .toList();
+    // Use the notifier-computed visible saves so the list, header count, and
+    // Quick/Auto stats all agree.
+    final saves = state.visibleSaves;
     return DecoratedBox(
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surfaceContainerLow,
@@ -164,6 +152,7 @@ class _SaveSidebar extends StatelessWidget {
         children: [
           _ProfileHeader(
             profile: state.activeProfile,
+            profiles: state.profiles,
             saveCount: saves.length,
             notifier: notifier,
             isLoading: state.isLoading,
@@ -207,12 +196,14 @@ class _SaveSidebar extends StatelessWidget {
 class _ProfileHeader extends StatelessWidget {
   const _ProfileHeader({
     required this.profile,
+    required this.profiles,
     required this.saveCount,
     required this.notifier,
     required this.isLoading,
   });
 
   final ProfileSummary? profile;
+  final List<ProfileSummary> profiles;
   final int saveCount;
   final EditorNotifier notifier;
   final bool isLoading;
@@ -223,6 +214,7 @@ class _ProfileHeader extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final quickCount = profile?.quickSaveSlots.length ?? 0;
     final autoCount = profile?.autoSaveSlots.length ?? 0;
+    final multiProfile = profiles.length > 1;
     return Container(
       width: double.infinity,
       // Match the icon+text TabBar row in the workspace next door (72 tab
@@ -252,12 +244,20 @@ class _ProfileHeader extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  profile?.displayName ?? 'Profile',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: textTheme.titleMedium,
-                ),
+                if (multiProfile)
+                  _ProfileSwitcher(
+                    profile: profile,
+                    profiles: profiles,
+                    notifier: notifier,
+                    isLoading: isLoading,
+                  )
+                else
+                  Text(
+                    profile?.displayName ?? 'Profile',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: textTheme.titleMedium,
+                  ),
                 const SizedBox(height: 2),
                 Text(
                   '${_formatCount(saveCount, 'save')} | Quick $quickCount | Auto $autoCount',
@@ -310,6 +310,73 @@ class _ProfileHeader extends StatelessWidget {
       if (confirmed != true) return;
     }
     await notifier.refresh();
+  }
+}
+
+/// Profile name shown as a [PopupMenuButton] when multiple profiles exist.
+/// Selecting a profile calls [EditorNotifier.selectProfile].
+class _ProfileSwitcher extends StatelessWidget {
+  const _ProfileSwitcher({
+    required this.profile,
+    required this.profiles,
+    required this.notifier,
+    required this.isLoading,
+  });
+
+  final ProfileSummary? profile;
+  final List<ProfileSummary> profiles;
+  final EditorNotifier notifier;
+  final bool isLoading;
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    final scheme = Theme.of(context).colorScheme;
+    final currentId = profile?.profileId;
+    return PopupMenuButton<int>(
+      tooltip: 'Switch profile',
+      enabled: !isLoading,
+      onSelected: (id) => notifier.selectProfile(id),
+      itemBuilder: (context) => [
+        for (final p in profiles)
+          PopupMenuItem<int>(
+            value: p.profileId,
+            child: Row(
+              children: [
+                if (p.profileId == currentId)
+                  Icon(Icons.check, size: 18, color: scheme.primary)
+                else
+                  const SizedBox(width: 18),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    '${p.displayName} (${p.savedSlots.length} saves)',
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+          ),
+      ],
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Flexible(
+            child: Text(
+              profile?.displayName ?? 'Profile',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: textTheme.titleMedium,
+            ),
+          ),
+          Icon(
+            Icons.arrow_drop_down,
+            size: 18,
+            color: isLoading ? scheme.onSurfaceVariant : scheme.primary,
+          ),
+        ],
+      ),
+    );
   }
 }
 

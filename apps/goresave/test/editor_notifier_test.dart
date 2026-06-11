@@ -1034,6 +1034,219 @@ void main() {
       expect(notifier.state.pendingEdits.containsKey('x'), isTrue);
     },
   );
+
+  // ---------------------------------------------------------------------------
+  // Profile switcher (selectProfile)
+  // ---------------------------------------------------------------------------
+
+  test(
+    'selectProfile filters visibleSaves and moves selection to that profile',
+    () async {
+      // Two profiles: profile 0 has G1R-001, profile 1 has G1R-002.
+      final core = _RecordingCoreService(
+        scanData: {
+          'saves': [
+            {
+              'path': r'C:\tmp\saves\G1R-001.sav',
+              'slot': 'G1R-001',
+              'format': 'GSAV',
+              'fileSize': 100,
+              'sha1': 'a',
+              'status': 'ok',
+              'playerSaveName': 'Save A',
+              'persistentProfileId': 0,
+            },
+            {
+              'path': r'C:\tmp\saves\G1R-002.sav',
+              'slot': 'G1R-002',
+              'format': 'GSAV',
+              'fileSize': 100,
+              'sha1': 'b',
+              'status': 'ok',
+              'playerSaveName': 'Save B',
+              'persistentProfileId': 1,
+            },
+          ],
+          'profiles': [
+            {
+              'profileId': 0,
+              'profileName': '0',
+              'quickSaveSlots': <String>[],
+              'autoSaveSlots': <String>[],
+              'savedSlots': ['G1R-001'],
+            },
+            {
+              'profileId': 1,
+              'profileName': '1',
+              'quickSaveSlots': <String>[],
+              'autoSaveSlots': <String>[],
+              'savedSlots': ['G1R-002'],
+            },
+          ],
+          'activeProfileId': 0,
+        },
+      );
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await pumpEventQueue();
+
+      // Initial selection should be profile 0's save (first after sort).
+      // Both profiles exist so visibleSaves should only show profile 0 saves.
+      expect(notifier.state.profiles.length, 2);
+      expect(
+        notifier.state.visibleSaves.map((s) => s.slot),
+        contains('G1R-001'),
+      );
+      expect(
+        notifier.state.visibleSaves.map((s) => s.slot),
+        isNot(contains('G1R-002')),
+      );
+
+      // Switch to profile 1.
+      await notifier.selectProfile(1);
+
+      // visibleSaves should now only show profile 1's save.
+      expect(
+        notifier.state.visibleSaves.map((s) => s.slot),
+        contains('G1R-002'),
+      );
+      expect(
+        notifier.state.visibleSaves.map((s) => s.slot),
+        isNot(contains('G1R-001')),
+      );
+      // Selection moved to profile 1's save.
+      expect(notifier.state.selectedPath, r'C:\tmp\saves\G1R-002.sav');
+    },
+  );
+
+  test(
+    'selectProfile with pending edits is blocked and sets an error',
+    () async {
+      final core = _RecordingCoreService(
+        scanData: {
+          'saves': [
+            {
+              'path': r'C:\tmp\saves\G1R-001.sav',
+              'slot': 'G1R-001',
+              'format': 'GSAV',
+              'fileSize': 100,
+              'sha1': 'a',
+              'status': 'ok',
+              'playerSaveName': 'Save A',
+              'persistentProfileId': 0,
+            },
+            {
+              'path': r'C:\tmp\saves\G1R-002.sav',
+              'slot': 'G1R-002',
+              'format': 'GSAV',
+              'fileSize': 100,
+              'sha1': 'b',
+              'status': 'ok',
+              'playerSaveName': 'Save B',
+              'persistentProfileId': 1,
+            },
+          ],
+          'profiles': [
+            {
+              'profileId': 0,
+              'profileName': '0',
+              'quickSaveSlots': <String>[],
+              'autoSaveSlots': <String>[],
+              'savedSlots': ['G1R-001'],
+            },
+            {
+              'profileId': 1,
+              'profileName': '1',
+              'quickSaveSlots': <String>[],
+              'autoSaveSlots': <String>[],
+              'savedSlots': ['G1R-002'],
+            },
+          ],
+          'activeProfileId': 0,
+        },
+      );
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await pumpEventQueue();
+
+      notifier.setPendingEdit(
+        'publicName',
+        const PendingSaveEdit(
+          edits: [
+            {'path': 'public.m_PlayerSaveName', 'value': 'Draft'},
+          ],
+        ),
+      );
+
+      final profileBefore = notifier.state.selectedProfileId;
+      await notifier.selectProfile(1);
+
+      // Profile must not have changed.
+      expect(notifier.state.selectedProfileId, profileBefore);
+      // An error must be set.
+      expect(notifier.state.error, isNotNull);
+      expect(notifier.state.error, contains('unsaved changes'));
+    },
+  );
+
+  test(
+    'refresh keeps selectedProfileId when the profile still exists',
+    () async {
+      final core = _RecordingCoreService(
+        scanData: {
+          'saves': [
+            {
+              'path': r'C:\tmp\saves\G1R-001.sav',
+              'slot': 'G1R-001',
+              'format': 'GSAV',
+              'fileSize': 100,
+              'sha1': 'a',
+              'status': 'ok',
+              'playerSaveName': 'Save A',
+              'persistentProfileId': 0,
+            },
+            {
+              'path': r'C:\tmp\saves\G1R-002.sav',
+              'slot': 'G1R-002',
+              'format': 'GSAV',
+              'fileSize': 100,
+              'sha1': 'b',
+              'status': 'ok',
+              'playerSaveName': 'Save B',
+              'persistentProfileId': 1,
+            },
+          ],
+          'profiles': [
+            {
+              'profileId': 0,
+              'profileName': '0',
+              'quickSaveSlots': <String>[],
+              'autoSaveSlots': <String>[],
+              'savedSlots': ['G1R-001'],
+            },
+            {
+              'profileId': 1,
+              'profileName': '1',
+              'quickSaveSlots': <String>[],
+              'autoSaveSlots': <String>[],
+              'savedSlots': ['G1R-002'],
+            },
+          ],
+          'activeProfileId': 0,
+        },
+      );
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await pumpEventQueue();
+
+      // Select profile 1 explicitly.
+      await notifier.selectProfile(1);
+      expect(notifier.state.selectedProfileId, 1);
+
+      // Refresh — profile 1 still exists in scan data.
+      await notifier.refresh();
+
+      // selectedProfileId must be preserved.
+      expect(notifier.state.selectedProfileId, 1);
+    },
+  );
 }
 
 class _MemoryEditorSettingsStore implements EditorSettingsStore {

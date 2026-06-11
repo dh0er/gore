@@ -58,6 +58,7 @@ class EditorState {
     this.saves = const [],
     this.profiles = const [],
     this.activeProfileId,
+    this.selectedProfileId,
     this.backups = const [],
     this.companionBackups = const [],
     this.selectedPath,
@@ -77,6 +78,11 @@ class EditorState {
   final List<SaveSlot> saves;
   final List<ProfileSummary> profiles;
   final int? activeProfileId;
+
+  /// Explicitly selected profile id. Null means no explicit selection — use
+  /// [effectiveProfileId] for the resolved value.
+  final int? selectedProfileId;
+
   final List<BackupEntry> backups;
   final List<BackupEntry> companionBackups;
   final String? selectedPath;
@@ -124,12 +130,37 @@ class EditorState {
     return null;
   }
 
+  /// The profile id to use for filtering: the explicitly selected profile, or
+  /// fall back to the scan's active profile id.
+  int? get effectiveProfileId => selectedProfileId ?? activeProfileId;
+
+  /// Saves to show in the sidebar. When there are fewer than 2 profiles, or
+  /// no effective profile id, all saves are shown. Otherwise only saves whose
+  /// [SaveSlot.persistentProfileId] matches [effectiveProfileId] are shown
+  /// (saves with a null persistentProfileId stay visible in every profile —
+  /// they cannot be attributed). The currently selected save is always kept
+  /// visible so it is never silently removed from the list mid-session.
+  List<SaveSlot> get visibleSaves {
+    final eid = effectiveProfileId;
+    if (eid == null || profiles.length < 2) return saves;
+    return saves
+        .where(
+          (s) =>
+              s.persistentProfileId == eid ||
+              s.persistentProfileId == null ||
+              s.path == selectedPath,
+        )
+        .toList();
+  }
+
   ProfileSummary? get activeProfile {
-    // Prefer the selected save's own profile so a mixed-profile folder shows the
-    // profile that the selected slot belongs to, falling back to the scan's
-    // active profile id.
+    // Prefer the explicitly selected profile; fall back to the selected save's
+    // own profile so a mixed-profile folder shows the profile that the selected
+    // slot belongs to; finally fall back to the scan's active profile id.
     final targetProfileId =
-        selectedSave?.persistentProfileId ?? activeProfileId;
+        selectedProfileId ??
+        selectedSave?.persistentProfileId ??
+        activeProfileId;
     for (final profile in profiles) {
       if (profile.profileId == targetProfileId) return profile;
     }
@@ -146,6 +177,7 @@ class EditorState {
     List<SaveSlot>? saves,
     List<ProfileSummary>? profiles,
     Object? activeProfileId = _unchanged,
+    Object? selectedProfileId = _unchanged,
     List<BackupEntry>? backups,
     List<BackupEntry>? companionBackups,
     Object? selectedPath = _unchanged,
@@ -174,6 +206,9 @@ class EditorState {
       activeProfileId: identical(activeProfileId, _unchanged)
           ? this.activeProfileId
           : activeProfileId as int?,
+      selectedProfileId: identical(selectedProfileId, _unchanged)
+          ? this.selectedProfileId
+          : selectedProfileId as int?,
       backups: clearBackups ? const [] : backups ?? this.backups,
       companionBackups: clearBackups
           ? const []
@@ -303,6 +338,68 @@ class EditorNotifier extends StateNotifier<EditorState> {
   void dismissWriteMessage() {
     if (state.lastWriteMessage != null) {
       state = state.copyWith(clearWriteMessage: true);
+    }
+  }
+
+  /// Switch the active profile filter. Pass null to clear the explicit
+  /// selection (show all profiles).
+  ///
+  /// Blocked with an error when there are unsaved edits — switching profiles
+  /// changes which saves are visible and would potentially move selection away
+  /// from the save the edits target.
+  ///
+  /// If the currently selected save is not in the new visible set, the first
+  /// visible save is selected (triggering [_inspect]); if there are none,
+  /// the selection is cleared.
+  Future<void> selectProfile(int? profileId) async {
+    if (state.pendingEdits.isNotEmpty) {
+      state = state.copyWith(
+        error:
+            'Save or reset your unsaved changes first — switching profiles '
+            'would move away from the current save.',
+      );
+      return;
+    }
+
+    // Check whether the current selection belongs to the target profile before
+    // updating state. We avoid relying on visibleSaves here so that the "keep
+    // selected save visible" exemption cannot silently keep the old save in view
+    // and prevent the selection from moving.
+    final currentSave = state.selectedSave;
+    final selectionMatchesNewProfile =
+        profileId == null ||
+        state.profiles.length < 2 ||
+        currentSave == null ||
+        currentSave.persistentProfileId == null ||
+        currentSave.persistentProfileId == profileId;
+
+    state = state.copyWith(selectedProfileId: profileId);
+
+    if (selectionMatchesNewProfile) {
+      // Current selection is compatible with the new profile — stay put.
+      return;
+    }
+
+    // Current save does not belong to the new profile — move to the first
+    // save that does. Compute candidate list without the selectedPath exemption
+    // (we have already established the current save is the wrong profile).
+    final candidates = state.saves
+        .where(
+          (s) =>
+              s.persistentProfileId == profileId ||
+              s.persistentProfileId == null,
+        )
+        .toList();
+
+    if (candidates.isNotEmpty) {
+      await _inspect(candidates.first.path);
+    } else {
+      state = state.copyWith(
+        selectedPath: null,
+        clearInspection: true,
+        clearBackups: true,
+        clearPendingEdits: true,
+      );
     }
   }
 
@@ -458,6 +555,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
       profiles: const [],
       selectedPath: null,
       activeProfileId: null,
+      selectedProfileId: null,
       clearInspection: true,
       clearBackups: true,
     );
@@ -504,16 +602,36 @@ class EditorNotifier extends StateNotifier<EditorState> {
           .map((m) => ProfileSummary.fromJson(m.cast<String, Object?>()))
           .toList();
       final activeProfileId = (data?['activeProfileId'] as num?)?.toInt();
-      final selectedPath = saves.any((save) => save.path == state.selectedPath)
-          ? state.selectedPath
-          : (saves.isNotEmpty ? saves.first.path : null);
-      // Pending edits are cleared by _inspect once the fresh inspection
-      // actually lands (so a failed re-inspect keeps them retryable); only
-      // when nothing remains selected is there no inspect to do it.
-      state = state.copyWith(
+      // Keep the explicit profile selection if that profile still exists in
+      // the new scan result, otherwise reset it to null.
+      final profileIds = profiles.map((p) => p.profileId).toSet();
+      final keptSelectedProfileId =
+          (state.selectedProfileId != null &&
+              profileIds.contains(state.selectedProfileId))
+          ? state.selectedProfileId
+          : null;
+
+      // When the explicit selection was reset, fall back to any visible save;
+      // otherwise restrict to the still-valid profile's visible saves.
+      final newState = state.copyWith(
         saves: saves,
         profiles: profiles,
         activeProfileId: activeProfileId,
+        selectedProfileId: keptSelectedProfileId,
+      );
+      // Compute visible saves with the updated state fields to find a
+      // sensible first selection path when the folder or profile changed.
+      final visibleAfterRefresh = newState.visibleSaves;
+      final selectedPath =
+          visibleAfterRefresh.any((s) => s.path == state.selectedPath)
+          ? state.selectedPath
+          : (visibleAfterRefresh.isNotEmpty
+                ? visibleAfterRefresh.first.path
+                : null);
+      // Pending edits are cleared by _inspect once the fresh inspection
+      // actually lands (so a failed re-inspect keeps them retryable); only
+      // when nothing remains selected is there no inspect to do it.
+      state = newState.copyWith(
         selectedPath: selectedPath,
         clearInspection: selectedPath == null,
         clearBackups: selectedPath == null,
@@ -949,8 +1067,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
     if (savePath == null) return false;
     if (state.isLoading) {
       state = state.copyWith(
-        error:
-            'Another operation is in progress — try again when it finishes.',
+        error: 'Another operation is in progress — try again when it finishes.',
       );
       return false;
     }
