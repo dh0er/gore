@@ -2504,6 +2504,16 @@ fn query_progression(
         .map(|v| v as usize)
         .unwrap_or(0);
     let character = payload.get("character").and_then(Value::as_str);
+    let state_filter = payload
+        .get("state")
+        .and_then(Value::as_str)
+        .map(|s| s.trim().to_ascii_lowercase())
+        .filter(|s| !s.is_empty());
+    let group_filter = payload
+        .get("group")
+        .and_then(Value::as_str)
+        .map(|s| s.trim().to_ascii_lowercase())
+        .filter(|s| !s.is_empty());
 
     let data = fs::read(path)?;
     if !data.starts_with(b"GSAV") {
@@ -2516,7 +2526,14 @@ fn query_progression(
     let decoded = decoded_private_payload_cached(path, &data, &stream, backend)?;
     let root = properties::parse_private_root(&decoded)?;
     match section {
-        "quests" => progression_quests(&root, &query, offset, limit),
+        "quests" => progression_quests(
+            &root,
+            &query,
+            state_filter.as_deref(),
+            group_filter.as_deref(),
+            offset,
+            limit,
+        ),
         "knowledge" => progression_knowledge(&root, &query, character, offset, limit),
         "events" => progression_events(&root, &query, character, offset, limit),
         other => Err(CoreError::InvalidRequest(format!(
@@ -2556,9 +2573,29 @@ fn short_enum_label(value: &str) -> &str {
     value.rsplit("::").next().unwrap_or(value)
 }
 
+/// Parse the id, group, and name from a quest class path. The tail after
+/// the last '.' is the id; strip "Quest_" prefix, then split on the first
+/// '_' to get group and name. This is factored out so the filter and the
+/// page-entry renderer use identical logic and can never diverge.
+fn quest_id_group_name(class_path: &str) -> (String, String, String) {
+    let id = class_path
+        .rsplit('.')
+        .next()
+        .unwrap_or(class_path)
+        .to_string();
+    let trimmed = id.strip_prefix("Quest_").unwrap_or(&id);
+    let (group, name) = match trimmed.split_once('_') {
+        Some((g, n)) => (g.to_string(), n.to_string()),
+        None => (trimmed.to_string(), String::new()),
+    };
+    (id, group, name)
+}
+
 fn progression_quests(
     root: &properties::RootObject,
     query: &str,
+    state_filter: Option<&str>,
+    group_filter: Option<&str>,
     offset: usize,
     limit: usize,
 ) -> Result<Value, CoreError> {
@@ -2572,7 +2609,8 @@ fn progression_quests(
         ));
     };
     let mut state_counts = std::collections::BTreeMap::<String, usize>::new();
-    let mut matches: Vec<(String, Option<String>)> = Vec::new();
+    let mut group_counts = std::collections::BTreeMap::<String, usize>::new();
+    let mut matches: Vec<(String, String, String, String, Option<String>)> = Vec::new();
     for (key, value) in entries {
         let Some(class_path) = map_key_string(key) else {
             continue;
@@ -2586,11 +2624,29 @@ fn progression_quests(
             .map(short_enum_label)
             .unwrap_or("unknown")
             .to_string();
-        *state_counts.entry(label).or_default() += 1;
-        if !query.is_empty() && !class_path.to_ascii_lowercase().contains(&*query) {
+        *state_counts.entry(label.clone()).or_default() += 1;
+        // Compute group for every entry (used for groupCounts and group filter).
+        let (id, group, name) = quest_id_group_name(class_path);
+        *group_counts.entry(group.clone()).or_default() += 1;
+        // --- filters (applied after counts are updated) ---
+        if !query.is_empty() && !class_path.to_ascii_lowercase().contains(query) {
             continue;
         }
-        matches.push((class_path.to_string(), state));
+        if let Some(sf) = state_filter {
+            // Accept both short label ("running") and full enum form
+            // ("equeststate::running") — normalize via short_enum_label.
+            let short = short_enum_label(state.as_deref().unwrap_or("")).to_ascii_lowercase();
+            let full = state.as_deref().unwrap_or("").to_ascii_lowercase();
+            if short != sf && full != sf {
+                continue;
+            }
+        }
+        if let Some(gf) = group_filter {
+            if group.to_ascii_lowercase() != gf {
+                continue;
+            }
+        }
+        matches.push((class_path.to_string(), id, group, name, state));
     }
     matches.sort_by(|a, b| a.0.cmp(&b.0));
     let total = matches.len();
@@ -2598,17 +2654,7 @@ fn progression_quests(
         .into_iter()
         .skip(offset)
         .take(limit)
-        .map(|(class_path, state)| {
-            let id = class_path
-                .rsplit('.')
-                .next()
-                .unwrap_or(class_path.as_str())
-                .to_string();
-            let trimmed = id.strip_prefix("Quest_").unwrap_or(&id);
-            let (group, name) = match trimmed.split_once('_') {
-                Some((g, n)) => (g.to_string(), n.to_string()),
-                None => (trimmed.to_string(), String::new()),
-            };
+        .map(|(class_path, id, group, name, state)| {
             let mut state_path = base_path.clone();
             state_path.push(format!("{{{class_path}}}"));
             state_path.push("CurrentState".to_string());
@@ -2631,6 +2677,7 @@ fn progression_quests(
         "limit": limit,
         "count": quests.len(),
         "stateCounts": state_counts,
+        "groupCounts": group_counts,
         "quests": quests,
     }))
 }
@@ -8144,6 +8191,87 @@ mod tests {
         )
         .unwrap();
         assert_eq!(after["quests"][0]["currentState"], "EQuestState::Succeeded");
+    }
+
+    #[test]
+    fn query_progression_quests_state_and_group_filters() {
+        // Fixture: OldCamp_SLEEPER Running, BanditsCamp_BANDITSTRUST Available.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-filter.sav");
+        let private_payload = quest_map_payload();
+        let seed_compressed = b"seed".to_vec();
+        let stream = compressed_stream_with_one_chunk(&seed_compressed, private_payload.len());
+        fs::write(
+            &path,
+            build_gsav(2, &public_payload("Slot"), &stream, &[0, 0, 0, 0]),
+        )
+        .unwrap();
+        let backend = PrefixCodecBackend {
+            seed_compressed,
+            seed_uncompressed: private_payload,
+        };
+
+        // groupCounts is always over all entries regardless of filters.
+        let base = query_progression(&path, &json!({ "section": "quests" }), Some(&backend))
+            .unwrap();
+        assert_eq!(base["groupCounts"]["BanditsCamp"], 1);
+        assert_eq!(base["groupCounts"]["OldCamp"], 1);
+
+        // state:"Running" → 1 hit (SLEEPER).
+        let running =
+            query_progression(&path, &json!({ "section": "quests", "state": "Running" }), Some(&backend))
+                .unwrap();
+        assert_eq!(running["total"], 1);
+        assert_eq!(running["quests"][0]["name"], "SLEEPER");
+        // groupCounts still covers all entries.
+        assert_eq!(running["groupCounts"]["BanditsCamp"], 1);
+        assert_eq!(running["groupCounts"]["OldCamp"], 1);
+        // stateCounts still covers all entries.
+        assert_eq!(running["stateCounts"]["Running"], 1);
+        assert_eq!(running["stateCounts"]["Available"], 1);
+
+        // state:"EQuestState::Running" (full form) → same result.
+        let running_full = query_progression(
+            &path,
+            &json!({ "section": "quests", "state": "EQuestState::Running" }),
+            Some(&backend),
+        )
+        .unwrap();
+        assert_eq!(running_full["total"], 1);
+        assert_eq!(running_full["quests"][0]["name"], "SLEEPER");
+
+        // state:"running" (case-insensitive) → same result.
+        let running_lower = query_progression(
+            &path,
+            &json!({ "section": "quests", "state": "running" }),
+            Some(&backend),
+        )
+        .unwrap();
+        assert_eq!(running_lower["total"], 1);
+        assert_eq!(running_lower["quests"][0]["name"], "SLEEPER");
+
+        // group:"banditscamp" (case-insensitive) → 1 hit (BANDITSTRUST).
+        let by_group = query_progression(
+            &path,
+            &json!({ "section": "quests", "group": "banditscamp" }),
+            Some(&backend),
+        )
+        .unwrap();
+        assert_eq!(by_group["total"], 1);
+        assert_eq!(by_group["quests"][0]["name"], "BANDITSTRUST");
+
+        // Combined state+group with no match → 0 results, but counts stay full.
+        let no_match = query_progression(
+            &path,
+            &json!({ "section": "quests", "state": "Running", "group": "BanditsCamp" }),
+            Some(&backend),
+        )
+        .unwrap();
+        assert_eq!(no_match["total"], 0);
+        assert_eq!(no_match["stateCounts"]["Running"], 1);
+        assert_eq!(no_match["stateCounts"]["Available"], 1);
+        assert_eq!(no_match["groupCounts"]["BanditsCamp"], 1);
+        assert_eq!(no_match["groupCounts"]["OldCamp"], 1);
     }
 
     // ── Task 6 helpers ──────────────────────────────────────────────────────
