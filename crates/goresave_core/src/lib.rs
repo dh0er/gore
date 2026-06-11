@@ -3852,6 +3852,31 @@ fn apply_private_edits(
             ))),
         })
         .collect::<Result<Vec<_>, _>>()?;
+    // Index-addressed structural edits are interpreted against the array as
+    // it exists when that edit applies, so a second arrayRemove/arrayDuplicate
+    // in the same batch would silently target shifted indices. Reject the
+    // batch instead of guessing the caller's intent.
+    let structural_array_edits = edit_specs
+        .iter()
+        .filter(|edit| {
+            matches!(
+                edit,
+                PrivateEdit::TypedContainer(PrivateTypedContainerEdit {
+                    edit: properties::ContainerEdit::ArrayRemove(_)
+                        | properties::ContainerEdit::ArrayDuplicate(_),
+                    ..
+                })
+            )
+        })
+        .count();
+    if structural_array_edits > 1 {
+        return Err(CoreError::UnsupportedEdit(format!(
+            "a write may contain at most one structural array edit \
+             (arrayRemove/arrayDuplicate); got {structural_array_edits} — \
+             indices shift after each structural change, submit them as \
+             separate writes"
+        )));
+    }
     let mut private_payload = decompress_private_payload(data, &stream, backend)?;
     for edit in &edit_specs {
         apply_private_edit_to_payload(&mut private_payload, edit)?;
@@ -8095,6 +8120,88 @@ mod tests {
         assert_eq!(value["private"]["typedParse"]["status"], "ok");
         let strings = value["private"]["strings"].as_array().unwrap();
         assert!(strings.iter().any(|s| s == "ChoiceB"));
+    }
+
+    fn private_str_array_property(name: &str, values: &[&str]) -> Vec<u8> {
+        let mut body = (values.len() as u32).to_le_bytes().to_vec();
+        for v in values {
+            body.extend_from_slice(&fstring(v));
+        }
+        let mut out = fstring(name);
+        out.extend_from_slice(&fstring("ArrayProperty"));
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&fstring("StrProperty"));
+        out.extend_from_slice(&0u32.to_le_bytes()); // array_index
+        out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        out.push(0); // tag_flags
+        out.extend_from_slice(&body);
+        out
+    }
+
+    #[test]
+    fn write_save_rejects_multiple_structural_array_edits() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-001.sav");
+        let output_path = dir.path().join("G1R-001-multi.sav");
+        let private_payload = {
+            let mut p = fstring("/Script/Angelscript.GothicFinalDataGame");
+            p.push(0);
+            p.extend_from_slice(&private_str_array_property("Events", &["A", "B", "C"]));
+            p.extend_from_slice(&fstring("None"));
+            p.extend_from_slice(&0u32.to_le_bytes());
+            p
+        };
+        let seed_compressed = b"seed-compressed".to_vec();
+        let stream = compressed_stream_with_one_chunk(&seed_compressed, private_payload.len());
+        fs::write(
+            &path,
+            build_gsav(2, &public_payload("Slot A"), &stream, &[0, 0, 0, 0]),
+        )
+        .unwrap();
+        let backend = PrefixCodecBackend {
+            seed_compressed,
+            seed_uncompressed: private_payload,
+        };
+
+        // Two index-addressed structural edits in one batch are rejected: the
+        // second index would silently target the post-splice array.
+        let err = write_save_with_codec_backend(
+            &path,
+            &[
+                json!({
+                    "path": "private.typed.arrayRemove",
+                    "value": { "path": ["Events"], "index": 0 }
+                }),
+                json!({
+                    "path": "private.typed.arrayRemove",
+                    "value": { "path": ["Events"], "index": 1 }
+                }),
+            ],
+            false,
+            Some(&output_path),
+            Some(&backend),
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("at most one structural array edit"),
+            "unexpected error: {err}"
+        );
+        assert!(!output_path.exists(), "rejected write must not produce a file");
+
+        // A single structural edit (even alongside a value-addressed edit)
+        // still applies.
+        let response = write_save_with_codec_backend(
+            &path,
+            &[json!({
+                "path": "private.typed.arrayRemove",
+                "value": { "path": ["Events"], "index": 1 }
+            })],
+            false,
+            Some(&output_path),
+            Some(&backend),
+        )
+        .unwrap();
+        assert_eq!(response["editsApplied"], 1);
     }
 
     // ── Task 5 helpers ──────────────────────────────────────────────────────
