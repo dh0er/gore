@@ -15,8 +15,6 @@ a Flutter interface backed by a Rust savegame core.
 
 Download `GoresaveSetup-<version>.exe` from the
 [latest release](https://github.com/dh0er/goresave/releases/latest) and run it.
-The setup wizard lets you pick the install directory and whether to install
-for all users (Program Files, admin) or just for you (no admin required).
 The app checks for updates on startup and prompts you when a new version is
 available.
 
