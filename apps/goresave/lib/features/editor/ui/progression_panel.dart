@@ -749,7 +749,13 @@ class _KnowledgeDetailState extends State<_KnowledgeDetail> {
     }
   }
 
-  String _pendingKey(String character, String entry) => '$character\t$entry';
+  /// UE Names compare case-insensitively, so the entry part of the pending
+  /// key is folded to lower case: an add and a remove that differ only in
+  /// casing address the same logical entry and toggle instead of coexisting
+  /// as conflicting setAdd + setRemove ops. The queued edit itself keeps the
+  /// caller's original casing.
+  String _pendingKey(String character, String entry) =>
+      '$character\t${entry.toLowerCase()}';
 
   void _removeEntry(String entry) {
     // Same guard as _addEntry: never queue an edit with an unloaded path.
@@ -781,13 +787,10 @@ class _KnowledgeDetailState extends State<_KnowledgeDetail> {
       return;
     }
     final character = _selectedCharacter!;
+    // _pendingKey folds the entry to lower case, so this single lookup is
+    // already case-insensitive.
     final key = _pendingKey(character, trimmed);
-    // Already in pending adds/removes (case-insensitive on the entry part).
-    final pendingPrefix = '$character\t'.toLowerCase();
-    if (_pending.containsKey(key) ||
-        _pending.keys.any(
-          (k) => k.toLowerCase() == '$pendingPrefix$trimmedLower',
-        )) {
+    if (_pending.containsKey(key)) {
       setState(() => _addError = 'Already in pending changes.');
       return;
     }
