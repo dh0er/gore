@@ -738,6 +738,8 @@ class _KnowledgeDetailState extends State<_KnowledgeDetail> {
   String _pendingKey(String character, String entry) => '$character\t$entry';
 
   void _removeEntry(String entry) {
+    // Same guard as _addEntry: never queue an edit with an unloaded path.
+    if (_entries.setPath.isEmpty) return;
     final key = _pendingKey(_selectedCharacter!, entry);
     setState(() {
       if (_pending.containsKey(key)) {
@@ -768,12 +770,13 @@ class _KnowledgeDetailState extends State<_KnowledgeDetail> {
     final key = _pendingKey(character, trimmed);
     // Already in pending adds/removes (case-insensitive on the entry part).
     final pendingPrefix = '$character\t'.toLowerCase();
-    if (_pending.keys.any(
-      (k) => k.toLowerCase() == '$pendingPrefix$trimmedLower',
-    )) {
+    if (_pending.containsKey(key) ||
+        _pending.keys.any(
+          (k) => k.toLowerCase() == '$pendingPrefix$trimmedLower',
+        )) {
+      setState(() => _addError = 'Already in pending changes.');
       return;
     }
-    if (_pending.containsKey(key)) return;
 
     // Issue B: cross-page duplicate check via a server query.
     final checkCharacter = character;
