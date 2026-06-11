@@ -76,13 +76,35 @@ def read_version() -> str:
     return match.group(1) if match else "0.0.0"
 
 
-def dist(version: str) -> Path:
+def resolve_git_sha(override: str | None) -> str:
+    """Short commit SHA for the About dialog: flag > CI env > git > 'dev'."""
+    if override:
+        return override
+    env_sha = os.environ.get("GITHUB_SHA", "")
+    if env_sha:
+        return env_sha[:7]
+    probe = subprocess.run(
+        ["git", "rev-parse", "--short=7", "HEAD"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+    if probe.returncode == 0 and probe.stdout.strip():
+        return probe.stdout.strip()
+    return "dev"
+
+
+def dist(version: str, git_sha: str) -> Path:
     run("Build core (release)", [CARGO, "build", "--release", "-p", "goresave_core"])
     run(
         "Build codec host (release)",
         [CARGO, "build", "--release", "-p", "goresave_g1r_codec_host"],
     )
-    run("Flutter Windows release", [FLUTTER, "build", "windows", "--release"], cwd=APP)
+    run(
+        "Flutter Windows release",
+        [FLUTTER, "build", "windows", "--release", f"--dart-define=GIT_SHA={git_sha}"],
+        cwd=APP,
+    )
 
     if not RELEASE_DIR.exists():
         raise SystemExit(f"missing Flutter release output: {RELEASE_DIR}")
@@ -107,8 +129,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", nargs="?", choices=["dist"], default="dist")
     parser.add_argument("--version", help="Override version (default: from pubspec).")
+    parser.add_argument("--git-sha", help="Short commit SHA (default: env/git).")
     args = parser.parse_args()
-    dist(args.version or read_version())
+    dist(args.version or read_version(), resolve_git_sha(args.git_sha))
     return 0
 
 
