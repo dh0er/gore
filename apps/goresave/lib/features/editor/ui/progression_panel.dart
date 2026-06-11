@@ -611,6 +611,8 @@ class _KnowledgeDetailState extends State<_KnowledgeDetail> {
   String _activeCharQuery = '';
   // Used during the cross-page duplicate check in _addEntry.
   bool _checkingDuplicate = false;
+  // Error text shown beneath the add field (duplicate-check failure, etc.).
+  String? _addError;
 
   @override
   void initState() {
@@ -622,16 +624,23 @@ class _KnowledgeDetailState extends State<_KnowledgeDetail> {
   void didUpdateWidget(covariant _KnowledgeDetail oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.reloadKey != oldWidget.reloadKey) {
+      // Pending edits belong to the old save — always clear them.
       _pending.clear();
-      _selectedCharacter = null;
-      _entries = const KnowledgeEntriesPage();
-      _characterSearch.clear();
-      _activeCharQuery = '';
       // Invalidate both loaders so any in-flight call for the old reloadKey
       // is treated as stale and exits without touching flags.
       _charsEpoch++;
       _entriesEpoch++;
+      _characterSearch.clear();
+      _activeCharQuery = '';
       _loadCharacters(offset: 0);
+      // Issue 3 fix (consistency): preserve the previously selected character
+      // so the entries pane does not drop to null on save-triggered reloads.
+      // Pending edits are cleared above so we just re-load the entries fresh.
+      if (_selectedCharacter != null) {
+        _selectCharacter(_selectedCharacter!);
+      } else {
+        _entries = const KnowledgeEntriesPage();
+      }
     }
   }
 
@@ -671,6 +680,7 @@ class _KnowledgeDetailState extends State<_KnowledgeDetail> {
       _selectedCharacter = name;
       _loadingEntries = true;
       _entries = const KnowledgeEntriesPage();
+      _addError = null;
     });
     final page = await widget.notifier.loadKnowledgeEntries(
       name,
@@ -751,14 +761,30 @@ class _KnowledgeDetailState extends State<_KnowledgeDetail> {
     // Issue B: cross-page duplicate check via a server query.
     final checkCharacter = character;
     final checkEpoch = _entriesEpoch;
-    setState(() => _checkingDuplicate = true);
-    final checkPage = await widget.notifier.loadKnowledgeEntries(
-      checkCharacter,
-      query: trimmed,
-      limit: 50,
-    );
+    setState(() {
+      _checkingDuplicate = true;
+      _addError = null;
+    });
+    KnowledgeEntriesPage checkPage;
+    try {
+      checkPage = await widget.notifier.loadKnowledgeEntries(
+        checkCharacter,
+        query: trimmed,
+        limit: 50,
+      );
+    } finally {
+      // Issue 1 fix: clear the lock on every exit path (unmount, stale, error).
+      if (mounted) setState(() => _checkingDuplicate = false);
+    }
     if (!mounted || _selectedCharacter != checkCharacter || _entriesEpoch != checkEpoch) return;
-    setState(() => _checkingDuplicate = false);
+    // Issue 2 fix: a failed query must NOT fall through to a pending add.
+    if (checkPage.error != null) {
+      setState(() {
+        _addError =
+            'Duplicate check failed — try again: ${checkPage.error}';
+      });
+      return;
+    }
     // The core query is a lowercase-contains filter; verify exact equality.
     if (checkPage.entries.any((e) => e == trimmed)) return;
 
@@ -768,6 +794,7 @@ class _KnowledgeDetailState extends State<_KnowledgeDetail> {
         entry: trimmed,
       );
       _addController.clear();
+      _addError = null;
     });
     _pushPending();
   }
@@ -989,6 +1016,14 @@ class _KnowledgeDetailState extends State<_KnowledgeDetail> {
                                 style: TextStyle(color: scheme.error),
                               ),
                             ),
+                          if (_addError != null)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 4),
+                              child: Text(
+                                _addError!,
+                                style: TextStyle(color: scheme.error),
+                              ),
+                            ),
                           const SizedBox(height: 4),
                           _PaginationBar(
                             offset: _entries.offset,
@@ -1156,15 +1191,23 @@ class _EventsDetailState extends State<_EventsDetail> {
   void didUpdateWidget(covariant _EventsDetail oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.reloadKey != oldWidget.reloadKey) {
-      _selectedCharacter = null;
-      _events = const MemoryEventsPage();
-      _characterSearch.clear();
-      _activeCharQuery = '';
+      // Issue 3 fix: preserve the previously selected character so the right
+      // pane does not fall back to "Select a character" after an event edit.
       // Invalidate both loaders so any in-flight call for the old reloadKey
       // is treated as stale and exits without touching flags.
       _charsEpoch++;
       _eventsEpoch++;
+      _characterSearch.clear();
+      _activeCharQuery = '';
       _loadCharacters(offset: 0);
+      // If a character was selected, re-trigger its events load (page reset to
+      // 0 is fine). If it has since been deleted the existing error rendering
+      // will handle it.
+      if (_selectedCharacter != null) {
+        _selectCharacter(_selectedCharacter!);
+      } else {
+        _events = const MemoryEventsPage();
+      }
     }
   }
 
