@@ -19,12 +19,14 @@ String shortStateLabel(String state) {
   return idx < 0 ? state : state.substring(idx + 2);
 }
 
+/// Sidebar section entries for the Progression tab.
+enum _ProgSection { quests, knowledge, events }
+
 /// Progression tab: structured quests / dialog knowledge / memory events.
-/// Data loads lazily per card through the notifier's query_progression
-/// wrappers. [reloadKey] is the [SaveInspection] instance itself; identity
-/// comparison means every fresh inspection (even of the same file) clears
-/// local pending state and reloads, matching the inventory card semantics.
-class ProgressionPanel extends StatelessWidget {
+/// Full-height sidebar layout (no outer scroll). [reloadKey] is the
+/// [SaveInspection] instance itself; identity comparison means every fresh
+/// inspection clears local pending state and reloads.
+class ProgressionPanel extends StatefulWidget {
   const ProgressionPanel({
     super.key,
     required this.inspection,
@@ -37,9 +39,17 @@ class ProgressionPanel extends StatelessWidget {
   final bool editable;
 
   @override
+  State<ProgressionPanel> createState() => _ProgressionPanelState();
+}
+
+class _ProgressionPanelState extends State<ProgressionPanel> {
+  // Keep selected section across save-triggered reloads (identity comparison
+  // on reloadKey, not path comparison, so same pattern as hero_stats_card).
+  _ProgSection _selected = _ProgSection.quests;
+
+  @override
   Widget build(BuildContext context) {
-    final overview = inspection.privateProgression;
-    if (!inspection.privateDecoded) {
+    if (!widget.inspection.privateDecoded) {
       return const _MessagePane(
         icon: Icons.flag_outlined,
         title: 'Progression',
@@ -47,7 +57,7 @@ class ProgressionPanel extends StatelessWidget {
             'Progression data needs decoded private payload data from the G1R codec host.',
       );
     }
-    if (!overview.available) {
+    if (!widget.inspection.privateProgression.available) {
       return const _MessagePane(
         icon: Icons.flag_outlined,
         title: 'Progression',
@@ -56,97 +66,134 @@ class ProgressionPanel extends StatelessWidget {
             'verified typed parse.',
       );
     }
-    final reloadKey = inspection;
-    return ListView(
+
+    final reloadKey = widget.inspection;
+    final theme = Theme.of(context);
+
+    return Padding(
       padding: const EdgeInsets.all(20),
-      children: [
-        _OverviewCard(overview: overview),
-        const SizedBox(height: 16),
-        _QuestsCard(
-          notifier: notifier,
-          editable: editable,
-          reloadKey: reloadKey,
-        ),
-        const SizedBox(height: 16),
-        _KnowledgeCard(
-          notifier: notifier,
-          editable: editable,
-          reloadKey: reloadKey,
-        ),
-        const SizedBox(height: 16),
-        _EventsCard(
-          notifier: notifier,
-          editable: editable,
-          reloadKey: reloadKey,
-        ),
-      ],
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // Slim left sidebar
+          SizedBox(
+            width: 140,
+            child: Card(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _SidebarTile(
+                      icon: Icons.flag_outlined,
+                      label: 'Quests',
+                      selected: _selected == _ProgSection.quests,
+                      onTap: () =>
+                          setState(() => _selected = _ProgSection.quests),
+                    ),
+                    _SidebarTile(
+                      icon: Icons.school_outlined,
+                      label: 'Knowledge',
+                      selected: _selected == _ProgSection.knowledge,
+                      onTap: () =>
+                          setState(() => _selected = _ProgSection.knowledge),
+                    ),
+                    _SidebarTile(
+                      icon: Icons.history_outlined,
+                      label: 'Events',
+                      selected: _selected == _ProgSection.events,
+                      onTap: () =>
+                          setState(() => _selected = _ProgSection.events),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          // Detail area — fills remaining width and full height
+          Expanded(
+            child: switch (_selected) {
+              _ProgSection.quests => _QuestsDetail(
+                key: ValueKey(('quests', reloadKey)),
+                notifier: widget.notifier,
+                editable: widget.editable,
+                reloadKey: reloadKey,
+                theme: theme,
+              ),
+              _ProgSection.knowledge => _KnowledgeDetail(
+                key: ValueKey(('knowledge', reloadKey)),
+                notifier: widget.notifier,
+                editable: widget.editable,
+                reloadKey: reloadKey,
+                theme: theme,
+              ),
+              _ProgSection.events => _EventsDetail(
+                key: ValueKey(('events', reloadKey)),
+                notifier: widget.notifier,
+                editable: widget.editable,
+                reloadKey: reloadKey,
+                theme: theme,
+              ),
+            },
+          ),
+        ],
+      ),
     );
   }
 }
 
 // ---------------------------------------------------------------------------
-// Overview card (stateless)
+// Sidebar tile
 // ---------------------------------------------------------------------------
 
-class _OverviewCard extends StatelessWidget {
-  const _OverviewCard({required this.overview});
+class _SidebarTile extends StatelessWidget {
+  const _SidebarTile({
+    required this.icon,
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
 
-  final ProgressionOverview overview;
+  final IconData icon;
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    final states = overview.questStates;
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                const Icon(Icons.flag_outlined),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    'Progression summary',
-                    style: Theme.of(context).textTheme.titleMedium,
+    final scheme = Theme.of(context).colorScheme;
+    return Material(
+      color: selected ? scheme.secondaryContainer : Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 12),
+          child: Row(
+            children: [
+              Icon(
+                icon,
+                size: 18,
+                color: selected
+                    ? scheme.onSecondaryContainer
+                    : scheme.onSurfaceVariant,
+              ),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
+                    color: selected
+                        ? scheme.onSecondaryContainer
+                        : scheme.onSurface,
                   ),
+                  overflow: TextOverflow.ellipsis,
                 ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                _SummaryMetric(
-                  label: 'Quests total',
-                  value: overview.questTotal.toString(),
-                ),
-                for (final entry in states.entries)
-                  _SummaryMetric(
-                    label: entry.key,
-                    value: entry.value.toString(),
-                  ),
-                _SummaryMetric(
-                  label: 'Knowledge NPCs',
-                  value: overview.knowledgeCharacters.toString(),
-                ),
-                _SummaryMetric(
-                  label: 'Knowledge entries',
-                  value: overview.knowledgeEntries.toString(),
-                ),
-                _SummaryMetric(
-                  label: 'Memory characters',
-                  value: overview.memoryCharacters.toString(),
-                ),
-                _SummaryMetric(
-                  label: 'Memory events',
-                  value: overview.memoryEvents.toString(),
-                ),
-              ],
-            ),
-          ],
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -154,44 +201,153 @@ class _OverviewCard extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// Quests card (stateful, pending-edit pattern)
+// Shared pagination bar widget
 // ---------------------------------------------------------------------------
 
-class _QuestsCard extends StatefulWidget {
-  const _QuestsCard({
+class _PaginationBar extends StatelessWidget {
+  const _PaginationBar({
+    required this.offset,
+    required this.count,
+    required this.total,
+    required this.pageSize,
+    required this.busy,
+    required this.onPage,
+    required this.onPageSize,
+  });
+
+  static const _pageSizes = [25, 50, 100, 250, 500];
+
+  final int offset;
+  final int count;
+  final int total;
+  final int pageSize;
+  final bool busy;
+  final void Function(int newOffset) onPage;
+  final void Function(int newPageSize) onPageSize;
+
+  int get _pageIndex => pageSize == 0 ? 0 : offset ~/ pageSize;
+  int get _pageCount => total == 0 ? 1 : (total + pageSize - 1) ~/ pageSize;
+  bool get _hasPrevious => offset > 0;
+  bool get _hasNext => offset + count < total;
+
+  @override
+  Widget build(BuildContext context) {
+    if (total == 0) return const SizedBox.shrink();
+    final theme = Theme.of(context);
+    final muted = theme.textTheme.bodySmall?.copyWith(
+      color: theme.colorScheme.onSurfaceVariant,
+    );
+    final first = total == 0 ? 0 : offset + 1;
+    final last = offset + count;
+    final effectivePageSize = _pageSizes.contains(pageSize)
+        ? pageSize
+        : _pageSizes.reduce(
+            (a, b) => (a - pageSize).abs() < (b - pageSize).abs() ? a : b,
+          );
+    return Wrap(
+      crossAxisAlignment: WrapCrossAlignment.center,
+      spacing: 0,
+      runSpacing: 4,
+      children: [
+        IconButton(
+          tooltip: 'First page',
+          visualDensity: VisualDensity.compact,
+          icon: const Icon(Icons.first_page),
+          onPressed: busy || !_hasPrevious ? null : () => onPage(0),
+        ),
+        IconButton(
+          tooltip: 'Previous page',
+          visualDensity: VisualDensity.compact,
+          icon: const Icon(Icons.chevron_left),
+          onPressed: busy || !_hasPrevious
+              ? null
+              : () => onPage((_pageIndex - 1) * pageSize),
+        ),
+        IconButton(
+          tooltip: 'Next page',
+          visualDensity: VisualDensity.compact,
+          icon: const Icon(Icons.chevron_right),
+          onPressed: busy || !_hasNext
+              ? null
+              : () => onPage((_pageIndex + 1) * pageSize),
+        ),
+        IconButton(
+          tooltip: 'Last page',
+          visualDensity: VisualDensity.compact,
+          icon: const Icon(Icons.last_page),
+          onPressed: busy || !_hasNext
+              ? null
+              : () => onPage((_pageCount - 1) * pageSize),
+        ),
+        const SizedBox(width: 4),
+        Text('Page ${_pageIndex + 1} / $_pageCount', style: muted),
+        const SizedBox(width: 8),
+        Text('$first–$last of $total', style: muted),
+        const SizedBox(width: 8),
+        Text('Per page:', style: muted),
+        DropdownButton<int>(
+          value: effectivePageSize,
+          isDense: true,
+          underline: const SizedBox.shrink(),
+          onChanged: busy ? null : (v) => v != null ? onPageSize(v) : null,
+          items: [
+            for (final sz in _pageSizes)
+              DropdownMenuItem(value: sz, child: Text('$sz')),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Quests detail (stateful, pending-edit pattern)
+// ---------------------------------------------------------------------------
+
+class _QuestsDetail extends StatefulWidget {
+  const _QuestsDetail({
+    super.key,
     required this.notifier,
     required this.editable,
     required this.reloadKey,
+    required this.theme,
   });
 
   final EditorNotifier notifier;
   final bool editable;
   final Object reloadKey;
+  final ThemeData theme;
 
   @override
-  State<_QuestsCard> createState() => _QuestsCardState();
+  State<_QuestsDetail> createState() => _QuestsDetailState();
 }
 
-class _QuestsCardState extends State<_QuestsCard> {
+class _QuestsDetailState extends State<_QuestsDetail> {
+  static const _defaultPageSize = 50;
+
   final TextEditingController _search = TextEditingController();
   ProgressionQuestPage _page = const ProgressionQuestPage();
-  final List<ProgressionQuest> _quests = [];
   final Map<String, QuestStateChange> _pending = {};
   bool _loading = false;
+  bool _searching = false;
   int _reloadEpoch = 0;
+  int _pageSize = _defaultPageSize;
+  String _activeQuery = '';
 
   @override
   void initState() {
     super.initState();
-    _reload();
+    _reload(offset: 0);
   }
 
   @override
-  void didUpdateWidget(covariant _QuestsCard oldWidget) {
+  void didUpdateWidget(covariant _QuestsDetail oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.reloadKey != oldWidget.reloadKey) {
       _pending.clear();
-      _reload();
+      _search.clear();
+      _activeQuery = '';
+      _reload(offset: 0);
     }
   }
 
@@ -201,20 +357,31 @@ class _QuestsCardState extends State<_QuestsCard> {
     super.dispose();
   }
 
-  Future<void> _reload({bool append = false}) async {
+  Future<void> _reload({required int offset, bool newQuery = false}) async {
+    if (newQuery) _activeQuery = _search.text.trim();
     final epoch = ++_reloadEpoch;
-    setState(() => _loading = true);
+    setState(() {
+      _loading = true;
+      if (newQuery) _searching = true;
+    });
     final page = await widget.notifier.loadProgressionQuests(
-      query: _search.text.trim(),
-      offset: append ? _quests.length : 0,
+      query: _activeQuery,
+      offset: offset,
+      limit: _pageSize,
     );
     if (!mounted || epoch != _reloadEpoch) return;
     setState(() {
       _loading = false;
+      _searching = false;
       _page = page;
-      if (!append) _quests.clear();
-      _quests.addAll(page.quests);
     });
+  }
+
+  void _goToPage(int newOffset) => _reload(offset: newOffset);
+
+  void _setPageSize(int size) {
+    setState(() => _pageSize = size);
+    _reload(offset: 0);
   }
 
   void _pushPending() {
@@ -246,20 +413,22 @@ class _QuestsCardState extends State<_QuestsCard> {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = widget.theme.colorScheme;
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            // Header row
             Row(
               children: [
-                const Icon(Icons.flag_outlined),
+                Icon(Icons.flag_outlined, color: scheme.primary),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
                     'Quests',
-                    style: Theme.of(context).textTheme.titleMedium,
+                    style: widget.theme.textTheme.titleMedium,
                   ),
                 ),
                 if (widget.editable && _pending.isNotEmpty)
@@ -275,47 +444,56 @@ class _QuestsCardState extends State<_QuestsCard> {
                   ),
               ],
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 8),
+            // Search field with in-flight spinner
             TextField(
               controller: _search,
-              decoration: const InputDecoration(
+              decoration: InputDecoration(
                 labelText: 'Search quests',
-                prefixIcon: Icon(Icons.search),
+                prefixIcon: const Icon(Icons.search),
+                suffixIcon: _searching
+                    ? const Padding(
+                        padding: EdgeInsets.all(12),
+                        child: SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      )
+                    : IconButton(
+                        icon: const Icon(Icons.arrow_forward),
+                        onPressed: () => _reload(offset: 0, newQuery: true),
+                      ),
               ),
-              onSubmitted: (_) => _reload(),
+              onSubmitted: (_) => _reload(offset: 0, newQuery: true),
             ),
             if (_page.error != null) ...[
-              const SizedBox(height: 12),
-              Text(
-                _page.error!,
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
-              ),
+              const SizedBox(height: 8),
+              Text(_page.error!, style: TextStyle(color: scheme.error)),
             ],
             const SizedBox(height: 8),
-            SizedBox(
-              height: 360,
-              child: _loading && _quests.isEmpty
+            _PaginationBar(
+              offset: _page.offset,
+              count: _page.quests.length,
+              total: _page.total,
+              pageSize: _pageSize,
+              busy: _loading,
+              onPage: _goToPage,
+              onPageSize: _setPageSize,
+            ),
+            const SizedBox(height: 4),
+            // Quest list — the only scrollable, fills remaining height
+            Expanded(
+              child: _loading && _page.quests.isEmpty
                   ? const Center(child: CircularProgressIndicator())
                   : ListView.separated(
-                      itemCount: _quests.length + (_page.hasMore ? 1 : 0),
+                      itemCount: _page.quests.length,
                       separatorBuilder: (_, _) => const Divider(height: 1),
                       itemBuilder: (context, index) {
-                        if (index >= _quests.length) {
-                          return TextButton(
-                            onPressed: _loading
-                                ? null
-                                : () => _reload(append: true),
-                            child: Text(
-                              'Load more (${_quests.length} of ${_page.total})',
-                            ),
-                          );
-                        }
-                        final quest = _quests[index];
+                        final quest = _page.quests[index];
                         final pendingState = _pending[quest.questClass]?.state;
                         final effectiveState =
                             pendingState ?? quest.currentState;
-                        // Guard: only show dropdown if the current value is a
-                        // known questStates entry; otherwise fall back to text.
                         final inKnownStates =
                             effectiveState != null &&
                             questStates.contains(effectiveState);
@@ -359,25 +537,30 @@ class _QuestsCardState extends State<_QuestsCard> {
 }
 
 // ---------------------------------------------------------------------------
-// Knowledge card (stateful, pending-edit pattern)
+// Knowledge detail — two-pane: NPC list left, entries right
 // ---------------------------------------------------------------------------
 
-class _KnowledgeCard extends StatefulWidget {
-  const _KnowledgeCard({
+class _KnowledgeDetail extends StatefulWidget {
+  const _KnowledgeDetail({
+    super.key,
     required this.notifier,
     required this.editable,
     required this.reloadKey,
+    required this.theme,
   });
 
   final EditorNotifier notifier;
   final bool editable;
   final Object reloadKey;
+  final ThemeData theme;
 
   @override
-  State<_KnowledgeCard> createState() => _KnowledgeCardState();
+  State<_KnowledgeDetail> createState() => _KnowledgeDetailState();
 }
 
-class _KnowledgeCardState extends State<_KnowledgeCard> {
+class _KnowledgeDetailState extends State<_KnowledgeDetail> {
+  static const _defaultPageSize = 50;
+
   final TextEditingController _characterSearch = TextEditingController();
   KnowledgeCharactersPage _characters = const KnowledgeCharactersPage();
   String? _selectedCharacter;
@@ -385,24 +568,29 @@ class _KnowledgeCardState extends State<_KnowledgeCard> {
   final Map<String, KnowledgeEntryEdit> _pending = {};
   final TextEditingController _addController = TextEditingController();
   bool _loadingCharacters = false;
+  bool _searchingCharacters = false;
   bool _loadingEntries = false;
   int _reloadEpoch = 0;
+  int _charPageSize = _defaultPageSize;
+  int _entryPageSize = _defaultPageSize;
+  String _activeCharQuery = '';
 
   @override
   void initState() {
     super.initState();
-    _loadCharacters();
+    _loadCharacters(offset: 0);
   }
 
   @override
-  void didUpdateWidget(covariant _KnowledgeCard oldWidget) {
+  void didUpdateWidget(covariant _KnowledgeDetail oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.reloadKey != oldWidget.reloadKey) {
       _pending.clear();
       _selectedCharacter = null;
       _entries = const KnowledgeEntriesPage();
       _characterSearch.clear();
-      _loadCharacters();
+      _activeCharQuery = '';
+      _loadCharacters(offset: 0);
     }
   }
 
@@ -413,27 +601,26 @@ class _KnowledgeCardState extends State<_KnowledgeCard> {
     super.dispose();
   }
 
-  Future<void> _loadCharacters({bool append = false}) async {
+  Future<void> _loadCharacters({
+    required int offset,
+    bool newQuery = false,
+  }) async {
+    if (newQuery) _activeCharQuery = _characterSearch.text.trim();
     final epoch = ++_reloadEpoch;
-    setState(() => _loadingCharacters = true);
+    setState(() {
+      _loadingCharacters = true;
+      if (newQuery) _searchingCharacters = true;
+    });
     final page = await widget.notifier.loadKnowledgeCharacters(
-      query: _characterSearch.text.trim(),
-      offset: append ? _characters.characters.length : 0,
+      query: _activeCharQuery,
+      offset: offset,
+      limit: _charPageSize,
     );
     if (!mounted || epoch != _reloadEpoch) return;
     setState(() {
       _loadingCharacters = false;
-      if (!append) {
-        _characters = page;
-      } else {
-        _characters = KnowledgeCharactersPage(
-          characters: [..._characters.characters, ...page.characters],
-          total: page.total,
-          offset: page.offset,
-          limit: page.limit,
-          error: page.error,
-        );
-      }
+      _searchingCharacters = false;
+      _characters = page;
     });
   }
 
@@ -444,7 +631,11 @@ class _KnowledgeCardState extends State<_KnowledgeCard> {
       _loadingEntries = true;
       _entries = const KnowledgeEntriesPage();
     });
-    final page = await widget.notifier.loadKnowledgeEntries(name);
+    final page = await widget.notifier.loadKnowledgeEntries(
+      name,
+      offset: 0,
+      limit: _entryPageSize,
+    );
     if (!mounted || epoch != _reloadEpoch) return;
     setState(() {
       _loadingEntries = false;
@@ -452,28 +643,26 @@ class _KnowledgeCardState extends State<_KnowledgeCard> {
     });
   }
 
-  Future<void> _loadMoreEntries() async {
+  Future<void> _loadEntries({required int offset}) async {
     final character = _selectedCharacter;
     if (character == null) return;
     final epoch = ++_reloadEpoch;
     setState(() => _loadingEntries = true);
     final page = await widget.notifier.loadKnowledgeEntries(
       character,
-      offset: _entries.entries.length,
+      offset: offset,
+      limit: _entryPageSize,
     );
     if (!mounted || epoch != _reloadEpoch) return;
     setState(() {
       _loadingEntries = false;
-      _entries = KnowledgeEntriesPage(
-        character: page.character,
-        entries: [..._entries.entries, ...page.entries],
-        setPath: page.setPath,
-        total: page.total,
-        offset: page.offset,
-        limit: page.limit,
-        error: page.error,
-      );
+      _entries = page;
     });
+  }
+
+  void _setEntryPageSize(int size) {
+    setState(() => _entryPageSize = size);
+    _loadEntries(offset: 0);
   }
 
   void _pushPending() {
@@ -495,7 +684,6 @@ class _KnowledgeCardState extends State<_KnowledgeCard> {
     final key = _pendingKey(_selectedCharacter!, entry);
     setState(() {
       if (_pending.containsKey(key)) {
-        // Was a pending-add — undo it
         _pending.remove(key);
       } else {
         _pending[key] = KnowledgeEntryEdit.remove(
@@ -512,7 +700,7 @@ class _KnowledgeCardState extends State<_KnowledgeCard> {
     if (trimmed.isEmpty) return;
     if (_entries.entries.contains(trimmed)) return;
     final key = _pendingKey(_selectedCharacter!, trimmed);
-    if (_pending.containsKey(key)) return; // already pending
+    if (_pending.containsKey(key)) return;
     setState(() {
       _pending[key] = KnowledgeEntryEdit.add(
         setPath: _entries.setPath,
@@ -531,19 +719,18 @@ class _KnowledgeCardState extends State<_KnowledgeCard> {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
+    final scheme = widget.theme.colorScheme;
     final character = _selectedCharacter;
 
     // Compute sets for rendering — only include edits for the selected NPC.
-    // Keys are '$character\t$entry' so we filter by prefix.
     final removedEntries = <String>{};
     final addedEntries = <String>[];
     if (character != null) {
       final prefix = '$character\t';
-      for (final entry in _pending.entries) {
-        if (!entry.key.startsWith(prefix)) continue;
-        if (!entry.value.isAdd) removedEntries.add(entry.value.entry);
-        if (entry.value.isAdd) addedEntries.add(entry.value.entry);
+      for (final e in _pending.entries) {
+        if (!e.key.startsWith(prefix)) continue;
+        if (!e.value.isAdd) removedEntries.add(e.value.entry);
+        if (e.value.isAdd) addedEntries.add(e.value.entry);
       }
     }
 
@@ -551,16 +738,17 @@ class _KnowledgeCardState extends State<_KnowledgeCard> {
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            // Header
             Row(
               children: [
-                const Icon(Icons.chat_bubble_outline),
+                Icon(Icons.school_outlined, color: scheme.primary),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
                     'Dialog Knowledge',
-                    style: Theme.of(context).textTheme.titleMedium,
+                    style: widget.theme.textTheme.titleMedium,
                   ),
                 ),
                 if (widget.editable && _pending.isNotEmpty)
@@ -578,140 +766,245 @@ class _KnowledgeCardState extends State<_KnowledgeCard> {
                   ),
               ],
             ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _characterSearch,
-              decoration: const InputDecoration(
-                labelText: 'Search NPCs',
-                prefixIcon: Icon(Icons.search),
-              ),
-              onSubmitted: (_) => _loadCharacters(),
-            ),
-            if (_characters.error != null) ...[
-              const SizedBox(height: 8),
-              Text(_characters.error!, style: TextStyle(color: scheme.error)),
-            ],
             const SizedBox(height: 8),
-            // Character list (height-capped)
-            SizedBox(
-              height: 200,
-              child: _loadingCharacters && _characters.characters.isEmpty
-                  ? const Center(child: CircularProgressIndicator())
-                  : ListView.separated(
-                      itemCount:
-                          _characters.characters.length +
-                          (_characters.hasMore ? 1 : 0),
-                      separatorBuilder: (_, _) => const Divider(height: 1),
-                      itemBuilder: (context, index) {
-                        if (index >= _characters.characters.length) {
-                          return TextButton(
-                            onPressed: _loadingCharacters
-                                ? null
-                                : () => _loadCharacters(append: true),
-                            child: Text(
-                              'Load more (${_characters.characters.length}'
-                              ' of ${_characters.total})',
-                            ),
-                          );
-                        }
-                        final c = _characters.characters[index];
-                        final isSelected = c.name == character;
-                        return ListTile(
-                          dense: true,
-                          selected: isSelected,
-                          title: Text('${c.name} (${c.entryCount})'),
-                          onTap: () => _selectCharacter(c.name),
-                        );
-                      },
+            // Two-pane row: characters left, entries right
+            Expanded(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // Left pane: NPC search + pagination + list
+                  SizedBox(
+                    width: 280,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        TextField(
+                          controller: _characterSearch,
+                          decoration: InputDecoration(
+                            labelText: 'Search NPCs',
+                            isDense: true,
+                            prefixIcon: const Icon(Icons.search, size: 18),
+                            suffixIcon: _searchingCharacters
+                                ? const Padding(
+                                    padding: EdgeInsets.all(10),
+                                    child: SizedBox(
+                                      width: 16,
+                                      height: 16,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    ),
+                                  )
+                                : IconButton(
+                                    icon: const Icon(
+                                      Icons.arrow_forward,
+                                      size: 18,
+                                    ),
+                                    onPressed: () => _loadCharacters(
+                                      offset: 0,
+                                      newQuery: true,
+                                    ),
+                                  ),
+                          ),
+                          onSubmitted: (_) =>
+                              _loadCharacters(offset: 0, newQuery: true),
+                        ),
+                        if (_characters.error != null) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            _characters.error!,
+                            style: TextStyle(color: scheme.error, fontSize: 12),
+                          ),
+                        ],
+                        const SizedBox(height: 4),
+                        _PaginationBar(
+                          offset: _characters.offset,
+                          count: _characters.characters.length,
+                          total: _characters.total,
+                          pageSize: _charPageSize,
+                          busy: _loadingCharacters,
+                          onPage: (o) => _loadCharacters(offset: o),
+                          onPageSize: (s) {
+                            setState(() => _charPageSize = s);
+                            _loadCharacters(offset: 0);
+                          },
+                        ),
+                        const SizedBox(height: 4),
+                        Expanded(
+                          child:
+                              _loadingCharacters &&
+                                  _characters.characters.isEmpty
+                              ? const Center(child: CircularProgressIndicator())
+                              : ListView.separated(
+                                  itemCount: _characters.characters.length,
+                                  separatorBuilder: (_, _) =>
+                                      const Divider(height: 1),
+                                  itemBuilder: (context, index) {
+                                    final c = _characters.characters[index];
+                                    final isSelected = c.name == character;
+                                    return ListTile(
+                                      dense: true,
+                                      selected: isSelected,
+                                      title: Text(
+                                        '${c.name} (${c.entryCount})',
+                                      ),
+                                      onTap: () => _selectCharacter(c.name),
+                                    );
+                                  },
+                                ),
+                        ),
+                      ],
                     ),
-            ),
-            if (character != null) ...[
-              const SizedBox(height: 12),
-              Text(
-                'Entries for $character',
-                style: Theme.of(context).textTheme.labelLarge,
-              ),
-              const SizedBox(height: 8),
-              if (_entries.error != null)
-                Text(_entries.error!, style: TextStyle(color: scheme.error)),
-              if (_loadingEntries && _entries.entries.isEmpty)
-                const Center(child: CircularProgressIndicator())
-              else
-                Wrap(
-                  spacing: 6,
-                  runSpacing: 6,
-                  children: [
-                    // Existing entries
-                    for (final entry in _entries.entries)
-                      if (removedEntries.contains(entry))
-                        Chip(
-                          label: Text(
-                            entry,
-                            style: const TextStyle(
-                              decoration: TextDecoration.lineThrough,
+                  ),
+                  const SizedBox(width: 12),
+                  const VerticalDivider(width: 1),
+                  const SizedBox(width: 12),
+                  // Right pane: header + add field + pagination + entries list
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Text(
+                          character != null
+                              ? 'Entries — $character'
+                              : 'Select an NPC to see entries',
+                          style: widget.theme.textTheme.labelLarge,
+                        ),
+                        if (character != null) ...[
+                          const SizedBox(height: 6),
+                          if (widget.editable)
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: TextField(
+                                    controller: _addController,
+                                    decoration: const InputDecoration(
+                                      labelText: 'Add knowledge entry',
+                                      isDense: true,
+                                    ),
+                                    onSubmitted: _addEntry,
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                IconButton(
+                                  icon: const Icon(Icons.add),
+                                  tooltip: 'Add',
+                                  onPressed: () =>
+                                      _addEntry(_addController.text),
+                                ),
+                              ],
+                            ),
+                          if (_entries.error != null)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 4),
+                              child: Text(
+                                _entries.error!,
+                                style: TextStyle(color: scheme.error),
+                              ),
+                            ),
+                          const SizedBox(height: 4),
+                          _PaginationBar(
+                            offset: _entries.offset,
+                            count: _entries.entries.length,
+                            total: _entries.total,
+                            pageSize: _entryPageSize,
+                            busy: _loadingEntries,
+                            onPage: (o) => _loadEntries(offset: o),
+                            onPageSize: _setEntryPageSize,
+                          ),
+                          const SizedBox(height: 4),
+                          // Entries list — only scrollable in this pane
+                          Expanded(
+                            child: _loadingEntries && _entries.entries.isEmpty
+                                ? const Center(
+                                    child: CircularProgressIndicator(),
+                                  )
+                                : ListView.separated(
+                                    itemCount:
+                                        addedEntries.length +
+                                        _entries.entries.length,
+                                    separatorBuilder: (_, _) =>
+                                        const Divider(height: 1),
+                                    itemBuilder: (context, index) {
+                                      // Pending-add tiles at the top
+                                      if (index < addedEntries.length) {
+                                        final entry = addedEntries[index];
+                                        return ListTile(
+                                          dense: true,
+                                          tileColor: scheme.tertiaryContainer
+                                              .withValues(alpha: 0.4),
+                                          title: Text(
+                                            entry,
+                                            style: TextStyle(
+                                              color: scheme.onTertiaryContainer,
+                                            ),
+                                          ),
+                                          trailing: widget.editable
+                                              ? IconButton(
+                                                  icon: const Icon(
+                                                    Icons.undo,
+                                                    size: 18,
+                                                  ),
+                                                  tooltip: 'Undo add',
+                                                  onPressed: () =>
+                                                      _undoAdd(entry),
+                                                )
+                                              : null,
+                                        );
+                                      }
+                                      final entry = _entries
+                                          .entries[index - addedEntries.length];
+                                      final isRemoved = removedEntries.contains(
+                                        entry,
+                                      );
+                                      return ListTile(
+                                        dense: true,
+                                        title: Text(
+                                          entry,
+                                          style: isRemoved
+                                              ? const TextStyle(
+                                                  decoration: TextDecoration
+                                                      .lineThrough,
+                                                )
+                                              : null,
+                                        ),
+                                        trailing: widget.editable
+                                            ? IconButton(
+                                                icon: Icon(
+                                                  isRemoved
+                                                      ? Icons.undo
+                                                      : Icons.delete_outline,
+                                                  size: 18,
+                                                ),
+                                                tooltip: isRemoved
+                                                    ? 'Undo remove'
+                                                    : 'Remove entry',
+                                                onPressed: () =>
+                                                    _removeEntry(entry),
+                                              )
+                                            : null,
+                                      );
+                                    },
+                                  ),
+                          ),
+                        ],
+                        if (character == null)
+                          Expanded(
+                            child: Center(
+                              child: Text(
+                                'Select an NPC from the list',
+                                style: TextStyle(
+                                  color: scheme.onSurfaceVariant,
+                                ),
+                              ),
                             ),
                           ),
-                          deleteIcon: const Icon(Icons.undo, size: 16),
-                          onDeleted: widget.editable
-                              ? () => _removeEntry(entry)
-                              : null,
-                        )
-                      else
-                        Chip(
-                          label: Text(entry),
-                          onDeleted: widget.editable
-                              ? () => _removeEntry(entry)
-                              : null,
-                        ),
-                    // Pending adds
-                    for (final entry in addedEntries)
-                      Chip(
-                        backgroundColor: scheme.tertiaryContainer,
-                        label: Text(
-                          entry,
-                          style: TextStyle(color: scheme.onTertiaryContainer),
-                        ),
-                        deleteIcon: const Icon(Icons.undo, size: 16),
-                        onDeleted: widget.editable
-                            ? () => _undoAdd(entry)
-                            : null,
-                      ),
-                  ],
-                ),
-              if (_entries.hasMore) ...[
-                const SizedBox(height: 8),
-                TextButton(
-                  onPressed: _loadingEntries ? null : _loadMoreEntries,
-                  child: Text(
-                    'Load more (${_entries.entries.length}'
-                    ' of ${_entries.total})',
+                      ],
+                    ),
                   ),
-                ),
-              ],
-              if (widget.editable) ...[
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _addController,
-                        decoration: const InputDecoration(
-                          labelText: 'Add knowledge entry',
-                          isDense: true,
-                        ),
-                        onSubmitted: _addEntry,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    IconButton(
-                      icon: const Icon(Icons.add),
-                      tooltip: 'Add',
-                      onPressed: () => _addEntry(_addController.text),
-                    ),
-                  ],
-                ),
-              ],
-            ],
+                ],
+              ),
+            ),
           ],
         ),
       ),
@@ -720,47 +1013,57 @@ class _KnowledgeCardState extends State<_KnowledgeCard> {
 }
 
 // ---------------------------------------------------------------------------
-// Events card (stateful, immediate-write pattern)
+// Events detail — two-pane: character list left, events right
 // ---------------------------------------------------------------------------
 
-class _EventsCard extends StatefulWidget {
-  const _EventsCard({
+class _EventsDetail extends StatefulWidget {
+  const _EventsDetail({
+    super.key,
     required this.notifier,
     required this.editable,
     required this.reloadKey,
+    required this.theme,
   });
 
   final EditorNotifier notifier;
   final bool editable;
   final Object reloadKey;
+  final ThemeData theme;
 
   @override
-  State<_EventsCard> createState() => _EventsCardState();
+  State<_EventsDetail> createState() => _EventsDetailState();
 }
 
-class _EventsCardState extends State<_EventsCard> {
+class _EventsDetailState extends State<_EventsDetail> {
+  static const _defaultPageSize = 50;
+
   final TextEditingController _characterSearch = TextEditingController();
   MemoryCharactersPage _characters = const MemoryCharactersPage();
   String? _selectedCharacter;
   MemoryEventsPage _events = const MemoryEventsPage();
   bool _loadingCharacters = false;
+  bool _searchingCharacters = false;
   bool _loadingEvents = false;
   int _reloadEpoch = 0;
+  int _charPageSize = _defaultPageSize;
+  int _eventPageSize = _defaultPageSize;
+  String _activeCharQuery = '';
 
   @override
   void initState() {
     super.initState();
-    _loadCharacters();
+    _loadCharacters(offset: 0);
   }
 
   @override
-  void didUpdateWidget(covariant _EventsCard oldWidget) {
+  void didUpdateWidget(covariant _EventsDetail oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.reloadKey != oldWidget.reloadKey) {
       _selectedCharacter = null;
       _events = const MemoryEventsPage();
       _characterSearch.clear();
-      _loadCharacters();
+      _activeCharQuery = '';
+      _loadCharacters(offset: 0);
     }
   }
 
@@ -770,27 +1073,26 @@ class _EventsCardState extends State<_EventsCard> {
     super.dispose();
   }
 
-  Future<void> _loadCharacters({bool append = false}) async {
+  Future<void> _loadCharacters({
+    required int offset,
+    bool newQuery = false,
+  }) async {
+    if (newQuery) _activeCharQuery = _characterSearch.text.trim();
     final epoch = ++_reloadEpoch;
-    setState(() => _loadingCharacters = true);
+    setState(() {
+      _loadingCharacters = true;
+      if (newQuery) _searchingCharacters = true;
+    });
     final page = await widget.notifier.loadMemoryCharacters(
-      query: _characterSearch.text.trim(),
-      offset: append ? _characters.characters.length : 0,
+      query: _activeCharQuery,
+      offset: offset,
+      limit: _charPageSize,
     );
     if (!mounted || epoch != _reloadEpoch) return;
     setState(() {
       _loadingCharacters = false;
-      if (!append) {
-        _characters = page;
-      } else {
-        _characters = MemoryCharactersPage(
-          characters: [..._characters.characters, ...page.characters],
-          total: page.total,
-          offset: page.offset,
-          limit: page.limit,
-          error: page.error,
-        );
-      }
+      _searchingCharacters = false;
+      _characters = page;
     });
   }
 
@@ -801,7 +1103,11 @@ class _EventsCardState extends State<_EventsCard> {
       _loadingEvents = true;
       _events = const MemoryEventsPage(); // clear stale page immediately
     });
-    final page = await widget.notifier.loadMemoryEvents(id);
+    final page = await widget.notifier.loadMemoryEvents(
+      id,
+      offset: 0,
+      limit: _eventPageSize,
+    );
     if (!mounted || epoch != _reloadEpoch) return;
     setState(() {
       _loadingEvents = false;
@@ -809,28 +1115,26 @@ class _EventsCardState extends State<_EventsCard> {
     });
   }
 
-  Future<void> _loadMoreEvents() async {
+  Future<void> _loadEvents({required int offset}) async {
     final character = _selectedCharacter;
     if (character == null) return;
     final epoch = ++_reloadEpoch;
     setState(() => _loadingEvents = true);
     final page = await widget.notifier.loadMemoryEvents(
       character,
-      offset: _events.events.length,
+      offset: offset,
+      limit: _eventPageSize,
     );
     if (!mounted || epoch != _reloadEpoch) return;
     setState(() {
       _loadingEvents = false;
-      _events = MemoryEventsPage(
-        character: page.character,
-        events: [..._events.events, ...page.events],
-        arrayPath: page.arrayPath,
-        total: page.total,
-        offset: page.offset,
-        limit: page.limit,
-        error: page.error,
-      );
+      _events = page;
     });
+  }
+
+  void _setEventPageSize(int size) {
+    setState(() => _eventPageSize = size);
+    _loadEvents(offset: 0);
   }
 
   Future<void> _confirmAndApply(
@@ -860,172 +1164,257 @@ class _EventsCardState extends State<_EventsCard> {
     if (!mounted) return;
     await widget.notifier.applyMemoryEventEdit(edit);
     // On success the notifier refreshes inspection → reloadKey changes →
-    // didUpdateWidget fires and reloads this card automatically.
+    // didUpdateWidget fires and reloads this detail automatically.
   }
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
+    final scheme = widget.theme.colorScheme;
     final character = _selectedCharacter;
 
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            // Header
             Row(
               children: [
-                const Icon(Icons.memory_outlined),
+                Icon(Icons.history_outlined, color: scheme.primary),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
                     'Memory Events',
-                    style: Theme.of(context).textTheme.titleMedium,
+                    style: widget.theme.textTheme.titleMedium,
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _characterSearch,
-              decoration: const InputDecoration(
-                labelText: 'Search characters',
-                prefixIcon: Icon(Icons.search),
-              ),
-              onSubmitted: (_) => _loadCharacters(),
-            ),
-            if (_characters.error != null) ...[
-              const SizedBox(height: 8),
-              Text(_characters.error!, style: TextStyle(color: scheme.error)),
-            ],
             const SizedBox(height: 8),
-            // Character list (height-capped)
-            SizedBox(
-              height: 200,
-              child: _loadingCharacters && _characters.characters.isEmpty
-                  ? const Center(child: CircularProgressIndicator())
-                  : ListView.separated(
-                      itemCount:
-                          _characters.characters.length +
-                          (_characters.hasMore ? 1 : 0),
-                      separatorBuilder: (_, _) => const Divider(height: 1),
-                      itemBuilder: (context, index) {
-                        if (index >= _characters.characters.length) {
-                          return TextButton(
-                            onPressed: _loadingCharacters
-                                ? null
-                                : () => _loadCharacters(append: true),
-                            child: Text(
-                              'Load more (${_characters.characters.length}'
-                              ' of ${_characters.total})',
-                            ),
-                          );
-                        }
-                        final c = _characters.characters[index];
-                        final isSelected = c.id == character;
-                        return ListTile(
-                          dense: true,
-                          selected: isSelected,
-                          title: Text('${c.id} (${c.eventCount})'),
-                          onTap: () => _selectCharacter(c.id),
-                        );
-                      },
-                    ),
-            ),
-            if (character != null) ...[
-              const SizedBox(height: 12),
-              Text(
-                'Events for $character',
-                style: Theme.of(context).textTheme.labelLarge,
-              ),
-              const SizedBox(height: 8),
-              if (_events.error != null)
-                Text(_events.error!, style: TextStyle(color: scheme.error)),
-              SizedBox(
-                height: 360,
-                child: _loadingEvents && _events.events.isEmpty
-                    ? const Center(child: CircularProgressIndicator())
-                    : ListView.separated(
-                        itemCount:
-                            _events.events.length + (_events.hasMore ? 1 : 0),
-                        separatorBuilder: (_, _) => const Divider(height: 1),
-                        itemBuilder: (context, index) {
-                          if (index >= _events.events.length) {
-                            return TextButton(
-                              onPressed: _loadingEvents
-                                  ? null
-                                  : _loadMoreEvents,
-                              child: Text(
-                                'Load more (${_events.events.length} of ${_events.total})',
-                              ),
-                            );
-                          }
-                          final event = _events.events[index];
-                          final tagLabel = event.tags.isEmpty
-                              ? '(no tags)'
-                              : event.tags.join(', ');
-                          final timeStr = event.timeSeconds != null
-                              ? event.timeSeconds!.toStringAsFixed(0)
-                              : '?';
-                          final affected = event.affected ?? '';
-                          return ListTile(
-                            dense: true,
-                            title: SelectableText(tagLabel, maxLines: 1),
-                            subtitle: SelectableText(
-                              't=${timeStr}s  $affected',
-                              maxLines: 1,
-                            ),
-                            trailing: widget.editable
-                                ? Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      IconButton(
-                                        icon: const Icon(
-                                          Icons.delete_outline,
-                                          size: 20,
-                                        ),
-                                        tooltip: 'Remove event',
-                                        onPressed: _loadingEvents
-                                            ? null
-                                            : () => _confirmAndApply(
-                                                context,
-                                                MemoryEventEdit.remove(
-                                                  arrayPath: _events.arrayPath,
-                                                  index: event.index,
-                                                ),
-                                                'Remove memory event?',
-                                                'Remove this memory event? '
-                                                    'A backup is written first.',
-                                              ),
+            // Two-pane row: characters left, events right
+            Expanded(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // Left pane: character search + pagination + list
+                  SizedBox(
+                    width: 280,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        TextField(
+                          controller: _characterSearch,
+                          decoration: InputDecoration(
+                            labelText: 'Search characters',
+                            isDense: true,
+                            prefixIcon: const Icon(Icons.search, size: 18),
+                            suffixIcon: _searchingCharacters
+                                ? const Padding(
+                                    padding: EdgeInsets.all(10),
+                                    child: SizedBox(
+                                      width: 16,
+                                      height: 16,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
                                       ),
-                                      IconButton(
-                                        icon: const Icon(
-                                          Icons.copy_outlined,
-                                          size: 20,
-                                        ),
-                                        tooltip: 'Duplicate event',
-                                        onPressed: _loadingEvents
-                                            ? null
-                                            : () => _confirmAndApply(
-                                                context,
-                                                MemoryEventEdit.duplicate(
-                                                  arrayPath: _events.arrayPath,
-                                                  index: event.index,
-                                                ),
-                                                'Duplicate memory event?',
-                                                'Duplicate this memory event? '
-                                                    'A backup is written first.',
-                                              ),
-                                      ),
-                                    ],
+                                    ),
                                   )
-                                : null,
-                          );
-                        },
-                      ),
+                                : IconButton(
+                                    icon: const Icon(
+                                      Icons.arrow_forward,
+                                      size: 18,
+                                    ),
+                                    onPressed: () => _loadCharacters(
+                                      offset: 0,
+                                      newQuery: true,
+                                    ),
+                                  ),
+                          ),
+                          onSubmitted: (_) =>
+                              _loadCharacters(offset: 0, newQuery: true),
+                        ),
+                        if (_characters.error != null) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            _characters.error!,
+                            style: TextStyle(color: scheme.error, fontSize: 12),
+                          ),
+                        ],
+                        const SizedBox(height: 4),
+                        _PaginationBar(
+                          offset: _characters.offset,
+                          count: _characters.characters.length,
+                          total: _characters.total,
+                          pageSize: _charPageSize,
+                          busy: _loadingCharacters,
+                          onPage: (o) => _loadCharacters(offset: o),
+                          onPageSize: (s) {
+                            setState(() => _charPageSize = s);
+                            _loadCharacters(offset: 0);
+                          },
+                        ),
+                        const SizedBox(height: 4),
+                        Expanded(
+                          child:
+                              _loadingCharacters &&
+                                  _characters.characters.isEmpty
+                              ? const Center(child: CircularProgressIndicator())
+                              : ListView.separated(
+                                  itemCount: _characters.characters.length,
+                                  separatorBuilder: (_, _) =>
+                                      const Divider(height: 1),
+                                  itemBuilder: (context, index) {
+                                    final c = _characters.characters[index];
+                                    final isSelected = c.id == character;
+                                    return ListTile(
+                                      dense: true,
+                                      selected: isSelected,
+                                      title: Text('${c.id} (${c.eventCount})'),
+                                      onTap: () => _selectCharacter(c.id),
+                                    );
+                                  },
+                                ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  const VerticalDivider(width: 1),
+                  const SizedBox(width: 12),
+                  // Right pane: header + pagination + events list
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Text(
+                          character != null
+                              ? 'Events — $character'
+                              : 'Select a character to see events',
+                          style: widget.theme.textTheme.labelLarge,
+                        ),
+                        if (character != null) ...[
+                          if (_events.error != null)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 4),
+                              child: Text(
+                                _events.error!,
+                                style: TextStyle(color: scheme.error),
+                              ),
+                            ),
+                          const SizedBox(height: 4),
+                          _PaginationBar(
+                            offset: _events.offset,
+                            count: _events.events.length,
+                            total: _events.total,
+                            pageSize: _eventPageSize,
+                            busy: _loadingEvents,
+                            onPage: (o) => _loadEvents(offset: o),
+                            onPageSize: _setEventPageSize,
+                          ),
+                          const SizedBox(height: 4),
+                          // Events list — only scrollable in this pane
+                          Expanded(
+                            child: _loadingEvents && _events.events.isEmpty
+                                ? const Center(
+                                    child: CircularProgressIndicator(),
+                                  )
+                                : ListView.separated(
+                                    itemCount: _events.events.length,
+                                    separatorBuilder: (_, _) =>
+                                        const Divider(height: 1),
+                                    itemBuilder: (context, index) {
+                                      final event = _events.events[index];
+                                      final tagLabel = event.tags.isEmpty
+                                          ? '(no tags)'
+                                          : event.tags.join(', ');
+                                      final timeStr = event.timeSeconds != null
+                                          ? event.timeSeconds!.toStringAsFixed(
+                                              0,
+                                            )
+                                          : '?';
+                                      final affected = event.affected ?? '';
+                                      return ListTile(
+                                        dense: true,
+                                        title: SelectableText(
+                                          tagLabel,
+                                          maxLines: 1,
+                                        ),
+                                        subtitle: SelectableText(
+                                          't=${timeStr}s  $affected',
+                                          maxLines: 1,
+                                        ),
+                                        trailing: widget.editable
+                                            ? Row(
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: [
+                                                  IconButton(
+                                                    icon: const Icon(
+                                                      Icons.delete_outline,
+                                                      size: 20,
+                                                    ),
+                                                    tooltip: 'Remove event',
+                                                    onPressed: _loadingEvents
+                                                        ? null
+                                                        : () => _confirmAndApply(
+                                                            context,
+                                                            MemoryEventEdit.remove(
+                                                              arrayPath: _events
+                                                                  .arrayPath,
+                                                              index:
+                                                                  event.index,
+                                                            ),
+                                                            'Remove memory event?',
+                                                            'Remove this memory event? '
+                                                                'A backup is written first.',
+                                                          ),
+                                                  ),
+                                                  IconButton(
+                                                    icon: const Icon(
+                                                      Icons.copy_outlined,
+                                                      size: 20,
+                                                    ),
+                                                    tooltip: 'Duplicate event',
+                                                    onPressed: _loadingEvents
+                                                        ? null
+                                                        : () => _confirmAndApply(
+                                                            context,
+                                                            MemoryEventEdit.duplicate(
+                                                              arrayPath: _events
+                                                                  .arrayPath,
+                                                              index:
+                                                                  event.index,
+                                                            ),
+                                                            'Duplicate memory event?',
+                                                            'Duplicate this memory event? '
+                                                                'A backup is written first.',
+                                                          ),
+                                                  ),
+                                                ],
+                                              )
+                                            : null,
+                                      );
+                                    },
+                                  ),
+                          ),
+                        ],
+                        if (character == null)
+                          Expanded(
+                            child: Center(
+                              child: Text(
+                                'Select a character from the list',
+                                style: TextStyle(
+                                  color: scheme.onSurfaceVariant,
+                                ),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
               ),
-            ],
+            ),
           ],
         ),
       ),
@@ -1034,7 +1423,7 @@ class _EventsCardState extends State<_EventsCard> {
 }
 
 // ---------------------------------------------------------------------------
-// Local private helpers (duplicated from editor_page.dart)
+// _MessagePane (local helper, duplicated from editor_page.dart pattern)
 // ---------------------------------------------------------------------------
 
 class _MessagePane extends StatelessWidget {
@@ -1072,39 +1461,6 @@ class _MessagePane extends StatelessWidget {
             ),
           ),
         ),
-      ),
-    );
-  }
-}
-
-class _SummaryMetric extends StatelessWidget {
-  const _SummaryMetric({required this.label, required this.value});
-
-  final String label;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      width: 120,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            label,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: Theme.of(context).textTheme.labelSmall?.copyWith(
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
-            ),
-          ),
-          Text(
-            value,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: Theme.of(context).textTheme.bodyMedium,
-          ),
-        ],
       ),
     );
   }

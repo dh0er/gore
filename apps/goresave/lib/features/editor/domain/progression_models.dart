@@ -119,6 +119,10 @@ class ProgressionQuestPage {
   final String? error;
 
   bool get hasMore => offset + quests.length < total;
+  bool get hasNext => offset + quests.length < total;
+  bool get hasPrevious => offset > 0;
+  int get pageIndex => limit == 0 ? 0 : offset ~/ limit;
+  int get pageCount => total == 0 ? 1 : (total + limit - 1) ~/ limit;
 }
 
 class KnowledgeCharacter {
@@ -167,6 +171,10 @@ class KnowledgeCharactersPage {
   final String? error;
 
   bool get hasMore => offset + characters.length < total;
+  bool get hasNext => offset + characters.length < total;
+  bool get hasPrevious => offset > 0;
+  int get pageIndex => limit == 0 ? 0 : offset ~/ limit;
+  int get pageCount => total == 0 ? 1 : (total + limit - 1) ~/ limit;
 }
 
 class KnowledgeEntriesPage {
@@ -208,6 +216,10 @@ class KnowledgeEntriesPage {
   final String? error;
 
   bool get hasMore => offset + entries.length < total;
+  bool get hasNext => offset + entries.length < total;
+  bool get hasPrevious => offset > 0;
+  int get pageIndex => limit == 0 ? 0 : offset ~/ limit;
+  int get pageCount => total == 0 ? 1 : (total + limit - 1) ~/ limit;
 }
 
 class MemoryCharacter {
@@ -254,6 +266,10 @@ class MemoryCharactersPage {
   final String? error;
 
   bool get hasMore => offset + characters.length < total;
+  bool get hasNext => offset + characters.length < total;
+  bool get hasPrevious => offset > 0;
+  int get pageIndex => limit == 0 ? 0 : offset ~/ limit;
+  int get pageCount => total == 0 ? 1 : (total + limit - 1) ~/ limit;
 }
 
 class MemoryEvent {
@@ -338,6 +354,10 @@ class MemoryEventsPage {
   final String? error;
 
   bool get hasMore => offset + events.length < total;
+  bool get hasNext => offset + events.length < total;
+  bool get hasPrevious => offset > 0;
+  int get pageIndex => limit == 0 ? 0 : offset ~/ limit;
+  int get pageCount => total == 0 ? 1 : (total + limit - 1) ~/ limit;
 }
 
 /// Pending quest-state change → `private.typed.setValue`.
