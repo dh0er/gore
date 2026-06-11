@@ -1,6 +1,5 @@
 pub mod codec_backend;
 mod kraken;
-mod updater;
 pub mod properties;
 
 use base64::{Engine as _, engine::general_purpose};
@@ -491,9 +490,6 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
                 sync_persistent_data_list,
             )?)
         }
-        "update_check" => updater::update_check(&payload),
-        "update_download" => updater::update_download(&payload),
-        "update_apply_restart" => updater::update_apply_restart(&payload),
         other => Err(CoreError::InvalidRequest(format!(
             "unknown command {other:?}"
         ))),
@@ -5497,13 +5493,6 @@ pub extern "C" fn goresave_execute(request_json: *const c_char) -> *mut c_char {
         .to_string_lossy()
         .to_string();
     cstring_ptr(execute_json(&input))
-}
-
-/// Velopack startup hook. Call before any other FFI function; may exit the
-/// process when invoked as an install/update hook.
-#[unsafe(no_mangle)]
-pub extern "C" fn goresave_velopack_startup() {
-    updater::velopack_startup();
 }
 
 #[unsafe(no_mangle)]
