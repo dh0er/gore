@@ -83,12 +83,15 @@ def resolve_git_sha(override: str | None) -> str:
     env_sha = os.environ.get("GITHUB_SHA", "")
     if env_sha:
         return env_sha[:7]
-    probe = subprocess.run(
-        ["git", "rev-parse", "--short=7", "HEAD"],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        probe = subprocess.run(
+            ["git", "rev-parse", "--short=7", "HEAD"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return "dev"
     if probe.returncode == 0 and probe.stdout.strip():
         return probe.stdout.strip()
     return "dev"
