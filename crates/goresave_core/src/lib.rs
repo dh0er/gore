@@ -1510,12 +1510,19 @@ fn prepare_paired_persistent_data_list_restore(
 
     let companion_prefix = backup_file_prefix(&persistent_path)?;
     let mut companion_backup_path = None;
-    // Search the legacy parent directory first, then the goresave_backups subfolder.
+    // Paired backups share one suffix AND one directory (they are written in
+    // the same round). Search the selected slot backup's own directory first,
+    // so a companion in the other location with a colliding suffix cannot
+    // pair the slot and companion to different write rounds.
     let search_dirs: Vec<PathBuf> = {
-        let mut dirs = vec![parent.to_path_buf()];
-        let subfolder = parent.join("goresave_backups");
-        if subfolder.is_dir() {
-            dirs.push(subfolder);
+        let mut dirs = Vec::new();
+        if let Some(backup_dir) = slot_backup_path.parent() {
+            dirs.push(backup_dir.to_path_buf());
+        }
+        for fallback in [parent.to_path_buf(), parent.join("goresave_backups")] {
+            if !dirs.contains(&fallback) {
+                dirs.push(fallback);
+            }
         }
         dirs
     };

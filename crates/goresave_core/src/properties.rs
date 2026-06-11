@@ -982,9 +982,22 @@ fn set_string_elements(target: &Property) -> Option<&[PropertyValue]> {
     }
 }
 
-fn set_element_position(elements: &[PropertyValue], value: &str) -> Option<usize> {
+/// Locate a string element in a set. `fold_case` follows UE FName semantics:
+/// Name sets compare case-insensitively, Str sets hold regular strings where
+/// case-only variants are distinct values.
+fn set_element_position(
+    elements: &[PropertyValue],
+    value: &str,
+    fold_case: bool,
+) -> Option<usize> {
     elements.iter().position(|e| match e {
-        PropertyValue::Name(s) | PropertyValue::Str(s) => s == value,
+        PropertyValue::Name(s) | PropertyValue::Str(s) => {
+            if fold_case {
+                s.eq_ignore_ascii_case(value)
+            } else {
+                s == value
+            }
+        }
         _ => false,
     })
 }
@@ -1030,22 +1043,8 @@ pub fn patch_container(
             }
             let elements = set_string_elements(target)
                 .ok_or_else(|| CoreError::Parse("set value not parsed as a set".into()))?;
-            // UE FNames compare case-insensitively, so for Name sets a
-            // case-variant of an existing member would be an effective
-            // duplicate in the game. Str sets hold regular strings where
-            // case-only variants are distinct values.
-            let names_fold_case = layout.inner_type == "NameProperty";
-            let duplicate = elements.iter().any(|e| match e {
-                PropertyValue::Name(s) | PropertyValue::Str(s) => {
-                    if names_fold_case {
-                        s.eq_ignore_ascii_case(value)
-                    } else {
-                        s == value
-                    }
-                }
-                _ => false,
-            });
-            if duplicate {
+            let fold_case = layout.inner_type == "NameProperty";
+            if set_element_position(elements, value, fold_case).is_some() {
                 return Err(CoreError::InvalidRequest(format!(
                     "set already contains {value:?}"
                 )));
@@ -1057,7 +1056,8 @@ pub fn patch_container(
             require_kind(ContainerKind::Set, "setRemove")?;
             let elements = set_string_elements(target)
                 .ok_or_else(|| CoreError::Parse("set value not parsed as a set".into()))?;
-            let index = set_element_position(elements, value).ok_or_else(|| {
+            let fold_case = layout.inner_type == "NameProperty";
+            let index = set_element_position(elements, value, fold_case).ok_or_else(|| {
                 CoreError::Parse(format!("set does not contain {value:?}"))
             })?;
             let range = layout.element_ranges[index].clone();
@@ -2879,6 +2879,32 @@ mod tests {
             .is_err()
         );
         assert_eq!(payload, copy);
+    }
+
+    #[test]
+    fn patch_container_name_set_remove_folds_case() {
+        let mut payload = root(
+            "/Script/Test.Save",
+            &name_set_property("Knowledge", &["Voiceline_A", "ChoiceB"]),
+        );
+        let parsed = parse_private_root(&payload).unwrap();
+        let target = parsed.properties[0].clone();
+        // FName semantics: a case-variant removes the existing member.
+        patch_container(
+            &mut payload,
+            &target,
+            &[],
+            &ContainerEdit::SetRemove("VOICELINE_a".to_string()),
+        )
+        .unwrap();
+        let reparsed = parse_private_root(&payload).unwrap();
+        assert_eq!(
+            reparsed.properties[0].value,
+            PropertyValue::Set {
+                num_to_remove: 0,
+                elements: vec![PropertyValue::Name("ChoiceB".to_string())],
+            }
+        );
     }
 
     #[test]
