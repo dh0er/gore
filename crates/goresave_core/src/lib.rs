@@ -2608,9 +2608,18 @@ fn progression_quests(
             "QuestDataByClass is not a map".to_string(),
         ));
     };
-    let mut state_counts = std::collections::BTreeMap::<String, usize>::new();
-    let mut group_counts = std::collections::BTreeMap::<String, usize>::new();
-    let mut matches: Vec<(String, String, String, String, Option<String>)> = Vec::new();
+    // Collect all entries as tuples first, then do three filtered passes for
+    // faceted counts (each facet counts over every OTHER active filter but not
+    // its own) plus one pass for the quests list.
+    struct Entry {
+        class_path: String,
+        id: String,
+        group: String,
+        name: String,
+        state: Option<String>,
+        label: String,
+    }
+    let mut all: Vec<Entry> = Vec::new();
     for (key, value) in entries {
         let Some(class_path) = map_key_string(key) else {
             continue;
@@ -2624,47 +2633,79 @@ fn progression_quests(
             .map(short_enum_label)
             .unwrap_or("unknown")
             .to_string();
-        *state_counts.entry(label.clone()).or_default() += 1;
-        // Compute group for every entry (used for groupCounts and group filter).
         let (id, group, name) = quest_id_group_name(class_path);
-        *group_counts.entry(group.clone()).or_default() += 1;
-        // --- filters (applied after counts are updated) ---
-        if !query.is_empty() && !class_path.to_ascii_lowercase().contains(query) {
-            continue;
-        }
-        if let Some(sf) = state_filter {
-            // Accept both short label ("running") and full enum form
-            // ("equeststate::running") — normalize via short_enum_label.
-            let short = short_enum_label(state.as_deref().unwrap_or("")).to_ascii_lowercase();
-            let full = state.as_deref().unwrap_or("").to_ascii_lowercase();
-            if short != sf && full != sf {
-                continue;
-            }
-        }
-        if let Some(gf) = group_filter {
-            if group.to_ascii_lowercase() != gf {
-                continue;
-            }
-        }
-        matches.push((class_path.to_string(), id, group, name, state));
+        all.push(Entry {
+            class_path: class_path.to_string(),
+            id,
+            group,
+            name,
+            state,
+            label,
+        });
     }
-    matches.sort_by(|a, b| a.0.cmp(&b.0));
+
+    // Helper closures for each filter predicate.
+    let matches_query = |e: &Entry| -> bool {
+        query.is_empty() || e.class_path.to_ascii_lowercase().contains(query)
+    };
+    let matches_state = |e: &Entry| -> bool {
+        match state_filter {
+            None => true,
+            Some(sf) => {
+                // Accept short label ("Running") or full enum form ("EQuestState::Running"),
+                // both case-insensitive.
+                let short =
+                    short_enum_label(e.state.as_deref().unwrap_or("")).to_ascii_lowercase();
+                let full = e.state.as_deref().unwrap_or("").to_ascii_lowercase();
+                short == sf || full == sf
+            }
+        }
+    };
+    let matches_group = |e: &Entry| -> bool {
+        match group_filter {
+            None => true,
+            Some(gf) => e.group.to_ascii_lowercase() == gf,
+        }
+    };
+
+    // stateCounts: query + group filter, state filter NOT applied.
+    let mut state_counts = std::collections::BTreeMap::<String, usize>::new();
+    for e in &all {
+        if matches_query(e) && matches_group(e) {
+            *state_counts.entry(e.label.clone()).or_default() += 1;
+        }
+    }
+
+    // groupCounts: query + state filter, group filter NOT applied.
+    let mut group_counts = std::collections::BTreeMap::<String, usize>::new();
+    for e in &all {
+        if matches_query(e) && matches_state(e) {
+            *group_counts.entry(e.group.clone()).or_default() += 1;
+        }
+    }
+
+    // Quests list: all three filters, sorted by class_path.
+    let mut matches: Vec<&Entry> = all
+        .iter()
+        .filter(|e| matches_query(e) && matches_state(e) && matches_group(e))
+        .collect();
+    matches.sort_by(|a, b| a.class_path.cmp(&b.class_path));
     let total = matches.len();
     let quests = matches
         .into_iter()
         .skip(offset)
         .take(limit)
-        .map(|(class_path, id, group, name, state)| {
+        .map(|e| {
             let mut state_path = base_path.clone();
-            state_path.push(format!("{{{class_path}}}"));
+            state_path.push(format!("{{{}}}", e.class_path));
             state_path.push("CurrentState".to_string());
-            let writable = state.is_some();
+            let writable = e.state.is_some();
             json!({
-                "questClass": class_path,
-                "id": id,
-                "group": group,
-                "name": name,
-                "currentState": state,
+                "questClass": e.class_path,
+                "id": e.id,
+                "group": e.group,
+                "name": e.name,
+                "currentState": e.state,
                 "statePath": state_path,
                 "writable": writable,
             })
@@ -8211,22 +8252,26 @@ mod tests {
             seed_uncompressed: private_payload,
         };
 
-        // groupCounts is always over all entries regardless of filters.
+        // No filters: both facets cover all entries.
         let base = query_progression(&path, &json!({ "section": "quests" }), Some(&backend))
             .unwrap();
         assert_eq!(base["groupCounts"]["BanditsCamp"], 1);
         assert_eq!(base["groupCounts"]["OldCamp"], 1);
+        assert_eq!(base["stateCounts"]["Running"], 1);
+        assert_eq!(base["stateCounts"]["Available"], 1);
 
         // state:"Running" → 1 hit (SLEEPER).
+        // groupCounts respects query+state (not group), so only Running entries counted.
+        // stateCounts respects query+group (no group filter), so all entries counted.
         let running =
             query_progression(&path, &json!({ "section": "quests", "state": "Running" }), Some(&backend))
                 .unwrap();
         assert_eq!(running["total"], 1);
         assert_eq!(running["quests"][0]["name"], "SLEEPER");
-        // groupCounts still covers all entries.
-        assert_eq!(running["groupCounts"]["BanditsCamp"], 1);
+        // groupCounts: only Running entries → OldCamp=1, BanditsCamp absent.
         assert_eq!(running["groupCounts"]["OldCamp"], 1);
-        // stateCounts still covers all entries.
+        assert!(running["groupCounts"]["BanditsCamp"].is_null());
+        // stateCounts: no group filter applied → all entries.
         assert_eq!(running["stateCounts"]["Running"], 1);
         assert_eq!(running["stateCounts"]["Available"], 1);
 
@@ -8250,7 +8295,9 @@ mod tests {
         assert_eq!(running_lower["total"], 1);
         assert_eq!(running_lower["quests"][0]["name"], "SLEEPER");
 
-        // group:"banditscamp" (case-insensitive) → 1 hit (BANDITSTRUST).
+        // group:"banditscamp" → 1 hit (BANDITSTRUST).
+        // stateCounts respects query+group → only BanditsCamp entries → Available=1 only.
+        // groupCounts respects query+state (no state filter) → all entries.
         let by_group = query_progression(
             &path,
             &json!({ "section": "quests", "group": "banditscamp" }),
@@ -8259,8 +8306,14 @@ mod tests {
         .unwrap();
         assert_eq!(by_group["total"], 1);
         assert_eq!(by_group["quests"][0]["name"], "BANDITSTRUST");
+        assert_eq!(by_group["stateCounts"]["Available"], 1);
+        assert!(by_group["stateCounts"]["Running"].is_null());
+        assert_eq!(by_group["groupCounts"]["BanditsCamp"], 1);
+        assert_eq!(by_group["groupCounts"]["OldCamp"], 1);
 
-        // Combined state+group with no match → 0 results, but counts stay full.
+        // Combined state=Running + group=BanditsCamp → 0 results (Running quest is in OldCamp).
+        // stateCounts: query+group(BanditsCamp) → only BanditsCamp entry → Available=1.
+        // groupCounts: query+state(Running) → only Running entry → OldCamp=1.
         let no_match = query_progression(
             &path,
             &json!({ "section": "quests", "state": "Running", "group": "BanditsCamp" }),
@@ -8268,10 +8321,12 @@ mod tests {
         )
         .unwrap();
         assert_eq!(no_match["total"], 0);
-        assert_eq!(no_match["stateCounts"]["Running"], 1);
+        // stateCounts sees only BanditsCamp entries (Available).
         assert_eq!(no_match["stateCounts"]["Available"], 1);
-        assert_eq!(no_match["groupCounts"]["BanditsCamp"], 1);
+        assert!(no_match["stateCounts"]["Running"].is_null());
+        // groupCounts sees only Running entries (OldCamp).
         assert_eq!(no_match["groupCounts"]["OldCamp"], 1);
+        assert!(no_match["groupCounts"]["BanditsCamp"].is_null());
     }
 
     // ── Task 6 helpers ──────────────────────────────────────────────────────
