@@ -11,6 +11,12 @@ a Flutter interface backed by a Rust savegame core.
 - Almost all data can be changed by changing the value of the internal property. Only for experimental use.
 - Automatic backup creation.
 
+## Compatibility
+
+Tested with G1R-Win64-Shipping.exe version 5.4.3.0
+The tool uses this file to compress/decompress the savegames. 
+Future versions should be automatically supported, but not guaranteed. 
+
 ## Installation & Updates
 
 Download `GoresaveSetup-<version>.exe` from the
