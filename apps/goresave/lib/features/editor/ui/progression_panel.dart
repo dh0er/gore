@@ -758,13 +758,21 @@ class _KnowledgeDetailState extends State<_KnowledgeDetail> {
     final trimmed = entry.trim();
     if (trimmed.isEmpty) return;
     // Fast path: already on the current page.
-    if (_entries.entries.contains(trimmed)) {
+    // UE Names compare case-insensitively, so case-variants are duplicates.
+    final trimmedLower = trimmed.toLowerCase();
+    if (_entries.entries.any((e) => e.toLowerCase() == trimmedLower)) {
       setState(() => _addError = 'Already exists for this character.');
       return;
     }
     final character = _selectedCharacter!;
     final key = _pendingKey(character, trimmed);
-    // Already in pending adds/removes.
+    // Already in pending adds/removes (case-insensitive on the entry part).
+    final pendingPrefix = '$character\t'.toLowerCase();
+    if (_pending.keys.any(
+      (k) => k.toLowerCase() == '$pendingPrefix$trimmedLower',
+    )) {
+      return;
+    }
     if (_pending.containsKey(key)) return;
 
     // Issue B: cross-page duplicate check via a server query.
@@ -796,7 +804,7 @@ class _KnowledgeDetailState extends State<_KnowledgeDetail> {
           checkError = checkPage.error;
           break;
         }
-        if (checkPage.entries.any((e) => e == trimmed)) {
+        if (checkPage.entries.any((e) => e.toLowerCase() == trimmedLower)) {
           exists = true;
           break;
         }

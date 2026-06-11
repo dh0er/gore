@@ -1030,7 +1030,15 @@ pub fn patch_container(
             }
             let elements = set_string_elements(target)
                 .ok_or_else(|| CoreError::Parse("set value not parsed as a set".into()))?;
-            if set_element_position(elements, value).is_some() {
+            // UE FNames compare case-insensitively, so a case-variant of an
+            // existing member would be an effective duplicate in the game.
+            let duplicate = elements.iter().any(|e| match e {
+                PropertyValue::Name(s) | PropertyValue::Str(s) => {
+                    s.eq_ignore_ascii_case(value)
+                }
+                _ => false,
+            });
+            if duplicate {
                 return Err(CoreError::InvalidRequest(format!(
                     "set already contains {value:?}"
                 )));
@@ -2848,6 +2856,18 @@ mod tests {
                 &target,
                 &[],
                 &ContainerEdit::SetAdd("Voiceline_A".to_string()),
+            )
+            .is_err()
+        );
+        assert_eq!(payload, copy);
+
+        // UE FNames are case-insensitive: a case-variant is a duplicate too.
+        assert!(
+            patch_container(
+                &mut payload,
+                &target,
+                &[],
+                &ContainerEdit::SetAdd("VOICELINE_a".to_string()),
             )
             .is_err()
         );
