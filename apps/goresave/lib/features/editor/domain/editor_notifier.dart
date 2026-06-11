@@ -6,6 +6,7 @@ import 'package:goresave/features/editor/domain/editor_models.dart';
 import 'package:goresave/features/editor/domain/editor_settings_store.dart';
 import 'package:goresave/features/editor/domain/hero_attributes.dart';
 import 'package:goresave/features/editor/domain/pending_edits.dart';
+import 'package:goresave/features/editor/domain/progression_models.dart';
 import 'package:goresave/utils/default_paths.dart';
 import 'package:path/path.dart' as p;
 import 'package:state_notifier/state_notifier.dart';
@@ -809,6 +810,145 @@ class EditorNotifier extends StateNotifier<EditorState> {
       if (offset >= result.total || result.results.isEmpty) break;
     }
     return HeroAttributesResult(attributes: parseHeroAttributes(hits));
+  }
+
+  /// Run one progression section query. Returns the raw data map, or null
+  /// with [onError] called, so each typed loader below can build its own page
+  /// object with an inline error.
+  Future<Map<String, Object?>?> _queryProgression(
+    Map<String, Object?> params, {
+    required void Function(String message) onError,
+  }) async {
+    final path = state.selectedPath;
+    if (path == null) {
+      onError('No save selected.');
+      return null;
+    }
+    try {
+      final response = await _execute(
+        'query_progression',
+        payload: {'path': path, ...params, ..._codecPayload()},
+      );
+      if (response['ok'] != true) {
+        onError(_errorMessage(response));
+        return null;
+      }
+      return (response['data'] as Map).cast<String, Object?>();
+    } catch (error) {
+      onError('Progression query failed: $error');
+      return null;
+    }
+  }
+
+  Future<ProgressionQuestPage> loadProgressionQuests({
+    String query = '',
+    int offset = 0,
+    int limit = 100,
+  }) async {
+    String? error;
+    final data = await _queryProgression(
+      {'section': 'quests', 'query': query, 'offset': offset, 'limit': limit},
+      onError: (message) => error = message,
+    );
+    if (data == null) return ProgressionQuestPage(error: error);
+    return ProgressionQuestPage.fromJson(data);
+  }
+
+  Future<KnowledgeCharactersPage> loadKnowledgeCharacters({
+    String query = '',
+    int offset = 0,
+    int limit = 100,
+  }) async {
+    String? error;
+    final data = await _queryProgression(
+      {
+        'section': 'knowledge',
+        'query': query,
+        'offset': offset,
+        'limit': limit,
+      },
+      onError: (message) => error = message,
+    );
+    if (data == null) return KnowledgeCharactersPage(error: error);
+    return KnowledgeCharactersPage.fromJson(data);
+  }
+
+  Future<KnowledgeEntriesPage> loadKnowledgeEntries(
+    String character, {
+    String query = '',
+    int offset = 0,
+    int limit = 200,
+  }) async {
+    String? error;
+    final data = await _queryProgression(
+      {
+        'section': 'knowledge',
+        'character': character,
+        'query': query,
+        'offset': offset,
+        'limit': limit,
+      },
+      onError: (message) => error = message,
+    );
+    if (data == null) return KnowledgeEntriesPage(error: error);
+    return KnowledgeEntriesPage.fromJson(data);
+  }
+
+  Future<MemoryCharactersPage> loadMemoryCharacters({
+    String query = '',
+    int offset = 0,
+    int limit = 100,
+  }) async {
+    String? error;
+    final data = await _queryProgression(
+      {'section': 'events', 'query': query, 'offset': offset, 'limit': limit},
+      onError: (message) => error = message,
+    );
+    if (data == null) return MemoryCharactersPage(error: error);
+    return MemoryCharactersPage.fromJson(data);
+  }
+
+  Future<MemoryEventsPage> loadMemoryEvents(
+    String character, {
+    String query = '',
+    int offset = 0,
+    int limit = 100,
+  }) async {
+    String? error;
+    final data = await _queryProgression(
+      {
+        'section': 'events',
+        'character': character,
+        'query': query,
+        'offset': offset,
+        'limit': limit,
+      },
+      onError: (message) => error = message,
+    );
+    if (data == null) return MemoryEventsPage(error: error);
+    return MemoryEventsPage.fromJson(data);
+  }
+
+  /// Apply one structural progression edit (event remove/duplicate)
+  /// immediately, with backup. Index-addressed array edits must go one per
+  /// write round — indices shift after every structural change — so this is
+  /// intentionally not part of the pending-edit registry.
+  Future<bool> applyMemoryEventEdit(MemoryEventEdit edit) async {
+    final savePath = state.selectedPath;
+    if (savePath == null) return false;
+    if (state.isLoading) return false;
+    return _runWrite(
+      payload: {
+        'path': savePath,
+        'backup': true,
+        'edits': [edit.toEditJson()],
+        ..._codecPayload(),
+      },
+      message: (data) => _backupMessage(
+        edit.isRemove ? 'Memory event removed' : 'Memory event duplicated',
+        data,
+      ),
+    );
   }
 
   String _errorMessage(Map<String, Object?> response) {

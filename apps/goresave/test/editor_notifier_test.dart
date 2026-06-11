@@ -809,6 +809,73 @@ void main() {
       });
     },
   );
+
+  // ---------------------------------------------------------------------------
+  // Progression query methods (Task 9)
+  // ---------------------------------------------------------------------------
+
+  test('loadProgressionQuests queries the core and parses the page', () async {
+    final core = _RecordingCoreService(
+      progressionData: {
+        'section': 'quests',
+        'total': 1,
+        'offset': 0,
+        'limit': 100,
+        'count': 1,
+        'stateCounts': {'Running': 1},
+        'quests': [
+          {
+            'questClass': '/Script/Angelscript.Quest_X',
+            'id': 'Quest_X',
+            'group': 'X',
+            'name': '',
+            'currentState': 'EQuestState::Running',
+            'statePath': [
+              'QuestDataByClass',
+              '{/Script/Angelscript.Quest_X}',
+              'CurrentState',
+            ],
+            'writable': true,
+          },
+        ],
+      },
+    );
+    final notifier = EditorNotifier(
+      core,
+      saveDir: r'C:\tmp\saves',
+      codecHostPath: r'C:\tools\goresave_g1r_codec_host.exe',
+      gameExePath: r'C:\Games\G1R\G1R-Win64-Shipping.exe',
+    );
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+    final page = await notifier.loadProgressionQuests(query: 'x');
+
+    expect(page.error, isNull);
+    expect(page.quests.single.id, 'Quest_X');
+    final call = core.requests.singleWhere(
+      (r) => r.command == 'query_progression',
+    );
+    expect(call.payload['section'], 'quests');
+    expect(call.payload['query'], 'x');
+    expect(call.payload['path'], r'C:\tmp\saves\G1R-001.sav');
+  });
+
+  test('progression loaders surface core errors inline', () async {
+    // The default _RecordingCoreService returns ok:false for query_progression
+    // (no progressionData set), so the loader should surface the error inline.
+    final core = _RecordingCoreService();
+    final notifier = EditorNotifier(
+      core,
+      saveDir: r'C:\tmp\saves',
+      codecHostPath: r'C:\tools\goresave_g1r_codec_host.exe',
+      gameExePath: r'C:\Games\G1R\G1R-Win64-Shipping.exe',
+    );
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+    final page = await notifier.loadKnowledgeCharacters();
+
+    expect(page.error, isNotNull);
+  });
 }
 
 class _MemoryEditorSettingsStore implements EditorSettingsStore {
@@ -839,6 +906,7 @@ class _RecordingCoreService implements GoresaveCoreService {
     this.codecCanCompress = true,
     this.typedSearchData,
     this.typedSearchPages,
+    this.progressionData,
   }) : scanData = scanData ?? {'saves': <Object?>[]};
 
   final Map<String, Object?> scanData;
@@ -850,6 +918,11 @@ class _RecordingCoreService implements GoresaveCoreService {
   /// [typedSearchData]. The last page repeats if called more often.
   final List<Map<String, Object?>>? typedSearchPages;
   var _typedSearchCalls = 0;
+
+  /// Canned response data for query_progression. When null the command falls
+  /// through to the default unhandled-command error response.
+  final Map<String, Object?>? progressionData;
+
   final requests = <_RecordedRequest>[];
 
   @override
@@ -1007,6 +1080,14 @@ class _RecordingCoreService implements GoresaveCoreService {
             'adapter': 'g1r_binary_host',
             'message': 'G1R codec host is configured.',
           },
+        };
+      case 'query_progression':
+        if (progressionData != null) {
+          return {'ok': true, 'data': progressionData!};
+        }
+        return {
+          'ok': false,
+          'error': {'message': 'Unhandled command $command'},
         };
       default:
         return {
