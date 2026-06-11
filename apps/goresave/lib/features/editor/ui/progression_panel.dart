@@ -377,6 +377,7 @@ class _KnowledgeCard extends StatefulWidget {
 }
 
 class _KnowledgeCardState extends State<_KnowledgeCard> {
+  final TextEditingController _characterSearch = TextEditingController();
   KnowledgeCharactersPage _characters = const KnowledgeCharactersPage();
   String? _selectedCharacter;
   KnowledgeEntriesPage _entries = const KnowledgeEntriesPage();
@@ -399,24 +400,39 @@ class _KnowledgeCardState extends State<_KnowledgeCard> {
       _pending.clear();
       _selectedCharacter = null;
       _entries = const KnowledgeEntriesPage();
+      _characterSearch.clear();
       _loadCharacters();
     }
   }
 
   @override
   void dispose() {
+    _characterSearch.dispose();
     _addController.dispose();
     super.dispose();
   }
 
-  Future<void> _loadCharacters() async {
+  Future<void> _loadCharacters({bool append = false}) async {
     final epoch = ++_reloadEpoch;
     setState(() => _loadingCharacters = true);
-    final page = await widget.notifier.loadKnowledgeCharacters();
+    final page = await widget.notifier.loadKnowledgeCharacters(
+      query: _characterSearch.text.trim(),
+      offset: append ? _characters.characters.length : 0,
+    );
     if (!mounted || epoch != _reloadEpoch) return;
     setState(() {
       _loadingCharacters = false;
-      _characters = page;
+      if (!append) {
+        _characters = page;
+      } else {
+        _characters = KnowledgeCharactersPage(
+          characters: [..._characters.characters, ...page.characters],
+          total: page.total,
+          offset: page.offset,
+          limit: page.limit,
+          error: page.error,
+        );
+      }
     });
   }
 
@@ -425,12 +441,37 @@ class _KnowledgeCardState extends State<_KnowledgeCard> {
     setState(() {
       _selectedCharacter = name;
       _loadingEntries = true;
+      _entries = const KnowledgeEntriesPage();
     });
     final page = await widget.notifier.loadKnowledgeEntries(name);
     if (!mounted || epoch != _reloadEpoch) return;
     setState(() {
       _loadingEntries = false;
       _entries = page;
+    });
+  }
+
+  Future<void> _loadMoreEntries() async {
+    final character = _selectedCharacter;
+    if (character == null) return;
+    final epoch = ++_reloadEpoch;
+    setState(() => _loadingEntries = true);
+    final page = await widget.notifier.loadKnowledgeEntries(
+      character,
+      offset: _entries.entries.length,
+    );
+    if (!mounted || epoch != _reloadEpoch) return;
+    setState(() {
+      _loadingEntries = false;
+      _entries = KnowledgeEntriesPage(
+        character: page.character,
+        entries: [..._entries.entries, ...page.entries],
+        setPath: page.setPath,
+        total: page.total,
+        offset: page.offset,
+        limit: page.limit,
+        error: page.error,
+      );
     });
   }
 
@@ -534,19 +575,41 @@ class _KnowledgeCardState extends State<_KnowledgeCard> {
               ],
             ),
             const SizedBox(height: 12),
+            TextField(
+              controller: _characterSearch,
+              decoration: const InputDecoration(
+                labelText: 'Search NPCs',
+                prefixIcon: Icon(Icons.search),
+              ),
+              onSubmitted: (_) => _loadCharacters(),
+            ),
             if (_characters.error != null) ...[
-              Text(_characters.error!, style: TextStyle(color: scheme.error)),
               const SizedBox(height: 8),
+              Text(_characters.error!, style: TextStyle(color: scheme.error)),
             ],
+            const SizedBox(height: 8),
             // Character list (height-capped)
             SizedBox(
               height: 200,
-              child: _loadingCharacters
+              child: _loadingCharacters && _characters.characters.isEmpty
                   ? const Center(child: CircularProgressIndicator())
                   : ListView.separated(
-                      itemCount: _characters.characters.length,
+                      itemCount:
+                          _characters.characters.length +
+                          (_characters.hasMore ? 1 : 0),
                       separatorBuilder: (_, _) => const Divider(height: 1),
                       itemBuilder: (context, index) {
+                        if (index >= _characters.characters.length) {
+                          return TextButton(
+                            onPressed: _loadingCharacters
+                                ? null
+                                : () => _loadCharacters(append: true),
+                            child: Text(
+                              'Load more (${_characters.characters.length}'
+                              ' of ${_characters.total})',
+                            ),
+                          );
+                        }
                         final c = _characters.characters[index];
                         final isSelected = c.name == character;
                         return ListTile(
@@ -567,7 +630,7 @@ class _KnowledgeCardState extends State<_KnowledgeCard> {
               const SizedBox(height: 8),
               if (_entries.error != null)
                 Text(_entries.error!, style: TextStyle(color: scheme.error)),
-              if (_loadingEntries)
+              if (_loadingEntries && _entries.entries.isEmpty)
                 const Center(child: CircularProgressIndicator())
               else
                 Wrap(
@@ -611,6 +674,16 @@ class _KnowledgeCardState extends State<_KnowledgeCard> {
                       ),
                   ],
                 ),
+              if (_entries.hasMore) ...[
+                const SizedBox(height: 8),
+                TextButton(
+                  onPressed: _loadingEntries ? null : _loadMoreEntries,
+                  child: Text(
+                    'Load more (${_entries.entries.length}'
+                    ' of ${_entries.total})',
+                  ),
+                ),
+              ],
               if (widget.editable) ...[
                 const SizedBox(height: 12),
                 Row(
@@ -662,6 +735,7 @@ class _EventsCard extends StatefulWidget {
 }
 
 class _EventsCardState extends State<_EventsCard> {
+  final TextEditingController _characterSearch = TextEditingController();
   MemoryCharactersPage _characters = const MemoryCharactersPage();
   String? _selectedCharacter;
   MemoryEventsPage _events = const MemoryEventsPage();
@@ -681,18 +755,38 @@ class _EventsCardState extends State<_EventsCard> {
     if (widget.reloadKey != oldWidget.reloadKey) {
       _selectedCharacter = null;
       _events = const MemoryEventsPage();
+      _characterSearch.clear();
       _loadCharacters();
     }
   }
 
-  Future<void> _loadCharacters() async {
+  @override
+  void dispose() {
+    _characterSearch.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadCharacters({bool append = false}) async {
     final epoch = ++_reloadEpoch;
     setState(() => _loadingCharacters = true);
-    final page = await widget.notifier.loadMemoryCharacters();
+    final page = await widget.notifier.loadMemoryCharacters(
+      query: _characterSearch.text.trim(),
+      offset: append ? _characters.characters.length : 0,
+    );
     if (!mounted || epoch != _reloadEpoch) return;
     setState(() {
       _loadingCharacters = false;
-      _characters = page;
+      if (!append) {
+        _characters = page;
+      } else {
+        _characters = MemoryCharactersPage(
+          characters: [..._characters.characters, ...page.characters],
+          total: page.total,
+          offset: page.offset,
+          limit: page.limit,
+          error: page.error,
+        );
+      }
     });
   }
 
@@ -788,19 +882,41 @@ class _EventsCardState extends State<_EventsCard> {
               ],
             ),
             const SizedBox(height: 12),
+            TextField(
+              controller: _characterSearch,
+              decoration: const InputDecoration(
+                labelText: 'Search characters',
+                prefixIcon: Icon(Icons.search),
+              ),
+              onSubmitted: (_) => _loadCharacters(),
+            ),
             if (_characters.error != null) ...[
-              Text(_characters.error!, style: TextStyle(color: scheme.error)),
               const SizedBox(height: 8),
+              Text(_characters.error!, style: TextStyle(color: scheme.error)),
             ],
+            const SizedBox(height: 8),
             // Character list (height-capped)
             SizedBox(
               height: 200,
-              child: _loadingCharacters
+              child: _loadingCharacters && _characters.characters.isEmpty
                   ? const Center(child: CircularProgressIndicator())
                   : ListView.separated(
-                      itemCount: _characters.characters.length,
+                      itemCount:
+                          _characters.characters.length +
+                          (_characters.hasMore ? 1 : 0),
                       separatorBuilder: (_, _) => const Divider(height: 1),
                       itemBuilder: (context, index) {
+                        if (index >= _characters.characters.length) {
+                          return TextButton(
+                            onPressed: _loadingCharacters
+                                ? null
+                                : () => _loadCharacters(append: true),
+                            child: Text(
+                              'Load more (${_characters.characters.length}'
+                              ' of ${_characters.total})',
+                            ),
+                          );
+                        }
                         final c = _characters.characters[index];
                         final isSelected = c.id == character;
                         return ListTile(

@@ -65,9 +65,9 @@ class ProgressionQuest {
       name: json['name'] as String? ?? '',
       currentState: json['currentState'] as String?,
       statePath:
-          (json['statePath'] as List?)
-              ?.whereType<String>()
-              .toList(growable: false) ??
+          (json['statePath'] as List?)?.whereType<String>().toList(
+            growable: false,
+          ) ??
           const [],
       writable: json['writable'] as bool? ?? false,
     );
@@ -149,7 +149,9 @@ class KnowledgeCharactersPage {
       characters:
           (json['characters'] as List?)
               ?.whereType<Map>()
-              .map((e) => KnowledgeCharacter.fromJson(e.cast<String, Object?>()))
+              .map(
+                (e) => KnowledgeCharacter.fromJson(e.cast<String, Object?>()),
+              )
               .toList(growable: false) ??
           const [],
       total: (json['total'] as num?)?.toInt() ?? 0,
@@ -182,14 +184,14 @@ class KnowledgeEntriesPage {
     return KnowledgeEntriesPage(
       character: json['character'] as String? ?? '',
       entries:
-          (json['entries'] as List?)
-              ?.whereType<String>()
-              .toList(growable: false) ??
+          (json['entries'] as List?)?.whereType<String>().toList(
+            growable: false,
+          ) ??
           const [],
       setPath:
-          (json['setPath'] as List?)
-              ?.whereType<String>()
-              .toList(growable: false) ??
+          (json['setPath'] as List?)?.whereType<String>().toList(
+            growable: false,
+          ) ??
           const [],
       total: (json['total'] as num?)?.toInt() ?? 0,
       offset: (json['offset'] as num?)?.toInt() ?? 0,
@@ -250,6 +252,8 @@ class MemoryCharactersPage {
   final int offset;
   final int limit;
   final String? error;
+
+  bool get hasMore => offset + characters.length < total;
 }
 
 class MemoryEvent {
@@ -269,7 +273,9 @@ class MemoryEvent {
     return MemoryEvent(
       index: (json['index'] as num?)?.toInt() ?? 0,
       tags:
-          (json['tags'] as List?)?.whereType<String>().toList(growable: false) ??
+          (json['tags'] as List?)?.whereType<String>().toList(
+            growable: false,
+          ) ??
           const [],
       magnitude: (json['magnitude'] as num?)?.toDouble(),
       timeSeconds: (json['timeSeconds'] as num?)?.toDouble(),
@@ -313,9 +319,9 @@ class MemoryEventsPage {
               .toList(growable: false) ??
           const [],
       arrayPath:
-          (json['arrayPath'] as List?)
-              ?.whereType<String>()
-              .toList(growable: false) ??
+          (json['arrayPath'] as List?)?.whereType<String>().toList(
+            growable: false,
+          ) ??
           const [],
       total: (json['total'] as num?)?.toInt() ?? 0,
       offset: (json['offset'] as num?)?.toInt() ?? 0,
@@ -352,9 +358,9 @@ class QuestStateChange {
 /// Pending knowledge add/remove → `private.typed.setAdd` / `setRemove`.
 class KnowledgeEntryEdit {
   const KnowledgeEntryEdit.add({required this.setPath, required this.entry})
-      : isAdd = true;
+    : isAdd = true;
   const KnowledgeEntryEdit.remove({required this.setPath, required this.entry})
-      : isAdd = false;
+    : isAdd = false;
 
   final List<String> setPath;
   final String entry;
@@ -373,7 +379,7 @@ class KnowledgeEntryEdit {
 /// round (indices shift after each structural change).
 class MemoryEventEdit {
   const MemoryEventEdit.remove({required this.arrayPath, required this.index})
-      : isRemove = true;
+    : isRemove = true;
   const MemoryEventEdit.duplicate({
     required this.arrayPath,
     required this.index,

@@ -114,7 +114,8 @@ class EditorState {
     // Prefer the selected save's own profile so a mixed-profile folder shows the
     // profile that the selected slot belongs to, falling back to the scan's
     // active profile id.
-    final targetProfileId = selectedSave?.persistentProfileId ?? activeProfileId;
+    final targetProfileId =
+        selectedSave?.persistentProfileId ?? activeProfileId;
     for (final profile in profiles) {
       if (profile.profileId == targetProfileId) return profile;
     }
@@ -650,10 +651,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
 
   Future<void> checkCodec() async {
     try {
-      final response = await _execute(
-        'check_codec',
-        payload: _codecPayload(),
-      );
+      final response = await _execute('check_codec', payload: _codecPayload());
       if (response['ok'] != true) {
         // Use the dedicated codec error channel so a concurrent/later refresh
         // does not wipe this message, and drop the now-stale codec status so
@@ -846,10 +844,12 @@ class EditorNotifier extends StateNotifier<EditorState> {
     int limit = 100,
   }) async {
     String? error;
-    final data = await _queryProgression(
-      {'section': 'quests', 'query': query, 'offset': offset, 'limit': limit},
-      onError: (message) => error = message,
-    );
+    final data = await _queryProgression({
+      'section': 'quests',
+      'query': query,
+      'offset': offset,
+      'limit': limit,
+    }, onError: (message) => error = message);
     if (data == null) return ProgressionQuestPage(error: error);
     return ProgressionQuestPage.fromJson(data);
   }
@@ -860,15 +860,12 @@ class EditorNotifier extends StateNotifier<EditorState> {
     int limit = 100,
   }) async {
     String? error;
-    final data = await _queryProgression(
-      {
-        'section': 'knowledge',
-        'query': query,
-        'offset': offset,
-        'limit': limit,
-      },
-      onError: (message) => error = message,
-    );
+    final data = await _queryProgression({
+      'section': 'knowledge',
+      'query': query,
+      'offset': offset,
+      'limit': limit,
+    }, onError: (message) => error = message);
     if (data == null) return KnowledgeCharactersPage(error: error);
     return KnowledgeCharactersPage.fromJson(data);
   }
@@ -880,16 +877,13 @@ class EditorNotifier extends StateNotifier<EditorState> {
     int limit = 200,
   }) async {
     String? error;
-    final data = await _queryProgression(
-      {
-        'section': 'knowledge',
-        'character': character,
-        'query': query,
-        'offset': offset,
-        'limit': limit,
-      },
-      onError: (message) => error = message,
-    );
+    final data = await _queryProgression({
+      'section': 'knowledge',
+      'character': character,
+      'query': query,
+      'offset': offset,
+      'limit': limit,
+    }, onError: (message) => error = message);
     if (data == null) return KnowledgeEntriesPage(error: error);
     return KnowledgeEntriesPage.fromJson(data);
   }
@@ -900,10 +894,12 @@ class EditorNotifier extends StateNotifier<EditorState> {
     int limit = 100,
   }) async {
     String? error;
-    final data = await _queryProgression(
-      {'section': 'events', 'query': query, 'offset': offset, 'limit': limit},
-      onError: (message) => error = message,
-    );
+    final data = await _queryProgression({
+      'section': 'events',
+      'query': query,
+      'offset': offset,
+      'limit': limit,
+    }, onError: (message) => error = message);
     if (data == null) return MemoryCharactersPage(error: error);
     return MemoryCharactersPage.fromJson(data);
   }
@@ -915,16 +911,13 @@ class EditorNotifier extends StateNotifier<EditorState> {
     int limit = 100,
   }) async {
     String? error;
-    final data = await _queryProgression(
-      {
-        'section': 'events',
-        'character': character,
-        'query': query,
-        'offset': offset,
-        'limit': limit,
-      },
-      onError: (message) => error = message,
-    );
+    final data = await _queryProgression({
+      'section': 'events',
+      'character': character,
+      'query': query,
+      'offset': offset,
+      'limit': limit,
+    }, onError: (message) => error = message);
     if (data == null) return MemoryEventsPage(error: error);
     return MemoryEventsPage.fromJson(data);
   }
@@ -937,6 +930,15 @@ class EditorNotifier extends StateNotifier<EditorState> {
     final savePath = state.selectedPath;
     if (savePath == null) return false;
     if (state.isLoading) return false;
+    if (state.pendingEdits.isNotEmpty) {
+      state = state.copyWith(
+        error:
+            'Save or reset your unsaved changes first — removing or '
+            'duplicating a memory event writes the file immediately and '
+            'would discard them.',
+      );
+      return false;
+    }
     return _runWrite(
       payload: {
         'path': savePath,
@@ -966,10 +968,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
   }
 
   Future<_BackupSnapshot?> _loadBackups(String path, int seq) async {
-    final response = await _execute(
-      'list_backups',
-      payload: {'path': path},
-    );
+    final response = await _execute('list_backups', payload: {'path': path});
     // Only the latest load applies; a superseded load must not replace the
     // fresher list with its outdated result.
     if (seq != _loadSeq) return null;
