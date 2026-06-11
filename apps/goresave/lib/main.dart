@@ -2,9 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:goresave/features/app/ui/goresave_app.dart';
 import 'package:goresave/features/app/ui/window_chrome.dart';
+import 'package:goresave/features/editor/domain/core_service.dart';
 import 'package:window_manager/window_manager.dart';
 
 Future<void> main() async {
+  // Must run before anything else: Velopack hooks may exit the process.
+  velopackStartup();
   WidgetsFlutterBinding.ensureInitialized();
   if (windowChromeEnabled) {
     await windowManager.ensureInitialized();
