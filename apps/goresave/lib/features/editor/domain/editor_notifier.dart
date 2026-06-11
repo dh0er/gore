@@ -381,18 +381,23 @@ class EditorNotifier extends StateNotifier<EditorState> {
     }
 
     // Current save does not belong to the new profile — move to the first
-    // save that does. Compute candidate list without the selectedPath exemption
-    // (we have already established the current save is the wrong profile).
-    final candidates = state.saves
-        .where(
-          (s) =>
-              s.persistentProfileId == profileId ||
-              s.persistentProfileId == null,
-        )
-        .toList();
+    // save that does. Prefer saves attributed to the target profile; an
+    // unattributed (null persistentProfileId) save is only a fallback so it
+    // cannot shadow the profile's own saves in global sort order. The
+    // selectedPath exemption is intentionally absent (we have already
+    // established the current save is the wrong profile).
+    final attributed = state.saves.where(
+      (s) => s.persistentProfileId == profileId,
+    );
+    final unattributed = state.saves.where(
+      (s) => s.persistentProfileId == null,
+    );
+    final candidate = attributed.isNotEmpty
+        ? attributed.first
+        : (unattributed.isNotEmpty ? unattributed.first : null);
 
-    if (candidates.isNotEmpty) {
-      await _inspect(candidates.first.path);
+    if (candidate != null) {
+      await _inspect(candidate.path);
     } else {
       state = state.copyWith(
         selectedPath: null,
