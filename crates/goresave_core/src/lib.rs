@@ -2622,27 +2622,256 @@ fn progression_quests(
 }
 
 fn progression_knowledge(
-    _root: &properties::RootObject,
-    _query: &str,
-    _character: Option<&str>,
-    _offset: usize,
-    _limit: usize,
+    root: &properties::RootObject,
+    query: &str,
+    character: Option<&str>,
+    offset: usize,
+    limit: usize,
 ) -> Result<Value, CoreError> {
-    Err(CoreError::InvalidRequest(
-        "knowledge section not implemented yet".to_string(),
-    ))
+    let (base_path, map_prop) =
+        properties::find_property_by_name(root, "CharacterKnowledgeByUniqueName").ok_or_else(
+            || {
+                CoreError::Parse(
+                    "CharacterKnowledgeByUniqueName not found in the decoded payload".to_string(),
+                )
+            },
+        )?;
+    let properties::PropertyValue::Map { entries, .. } = &map_prop.value else {
+        return Err(CoreError::Parse(
+            "CharacterKnowledgeByUniqueName is not a map".to_string(),
+        ));
+    };
+    let knowledge_entries = |value: &properties::PropertyValue| -> Vec<String> {
+        match struct_member(value, "Knowledge") {
+            Some(properties::PropertyValue::Set { elements, .. }) => elements
+                .iter()
+                .filter_map(|e| match e {
+                    properties::PropertyValue::Name(s) | properties::PropertyValue::Str(s) => {
+                        Some(s.clone())
+                    }
+                    _ => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        }
+    };
+    match character {
+        None => {
+            let mut characters: Vec<(String, usize)> = entries
+                .iter()
+                .filter_map(|(key, value)| {
+                    let name = map_key_string(key)?;
+                    if !query.is_empty() && !name.to_ascii_lowercase().contains(query) {
+                        return None;
+                    }
+                    Some((name.to_string(), knowledge_entries(value).len()))
+                })
+                .collect();
+            characters.sort_by(|a, b| a.0.cmp(&b.0));
+            let total = characters.len();
+            let page = characters
+                .into_iter()
+                .skip(offset)
+                .take(limit)
+                .map(|(name, entry_count)| json!({ "name": name, "entryCount": entry_count }))
+                .collect::<Vec<_>>();
+            Ok(json!({
+                "section": "knowledge",
+                "total": total,
+                "offset": offset,
+                "limit": limit,
+                "count": page.len(),
+                "characters": page,
+            }))
+        }
+        Some(character) => {
+            let value = entries
+                .iter()
+                .find(|(key, _)| map_key_string(key) == Some(character))
+                .map(|(_, value)| value)
+                .ok_or_else(|| {
+                    CoreError::Parse(format!("character {character:?} has no knowledge entry"))
+                })?;
+            let mut all = knowledge_entries(value);
+            if !query.is_empty() {
+                all.retain(|e| e.to_ascii_lowercase().contains(query));
+            }
+            let total = all.len();
+            let page = all
+                .into_iter()
+                .skip(offset)
+                .take(limit)
+                .collect::<Vec<_>>();
+            let mut set_path = base_path.clone();
+            set_path.push(format!("{{{character}}}"));
+            set_path.push("Knowledge".to_string());
+            Ok(json!({
+                "section": "knowledge",
+                "character": character,
+                "total": total,
+                "offset": offset,
+                "limit": limit,
+                "count": page.len(),
+                "entries": page,
+                "setPath": set_path,
+            }))
+        }
+    }
 }
 
 fn progression_events(
-    _root: &properties::RootObject,
-    _query: &str,
-    _character: Option<&str>,
-    _offset: usize,
-    _limit: usize,
+    root: &properties::RootObject,
+    query: &str,
+    character: Option<&str>,
+    offset: usize,
+    limit: usize,
 ) -> Result<Value, CoreError> {
-    Err(CoreError::InvalidRequest(
-        "events section not implemented yet".to_string(),
-    ))
+    let (base_path, map_prop) =
+        properties::find_property_by_name(root, "LongTermMemoryByGlobalId").ok_or_else(|| {
+            CoreError::Parse(
+                "LongTermMemoryByGlobalId not found in the decoded payload".to_string(),
+            )
+        })?;
+    let properties::PropertyValue::Map { entries, .. } = &map_prop.value else {
+        return Err(CoreError::Parse(
+            "LongTermMemoryByGlobalId is not a map".to_string(),
+        ));
+    };
+    let memorized = |value: &properties::PropertyValue| -> Option<usize> {
+        match struct_member(value, "MemorizedEvents") {
+            Some(properties::PropertyValue::Array { elements }) => Some(elements.len()),
+            _ => None,
+        }
+    };
+    match character {
+        None => {
+            let mut characters: Vec<(String, usize)> = entries
+                .iter()
+                .filter_map(|(key, value)| {
+                    let id = map_key_string(key)?;
+                    if !query.is_empty() && !id.to_ascii_lowercase().contains(query) {
+                        return None;
+                    }
+                    Some((id.to_string(), memorized(value).unwrap_or(0)))
+                })
+                .collect();
+            characters.sort_by(|a, b| a.0.cmp(&b.0));
+            let total = characters.len();
+            let page = characters
+                .into_iter()
+                .skip(offset)
+                .take(limit)
+                .map(|(id, event_count)| json!({ "id": id, "eventCount": event_count }))
+                .collect::<Vec<_>>();
+            Ok(json!({
+                "section": "events",
+                "total": total,
+                "offset": offset,
+                "limit": limit,
+                "count": page.len(),
+                "characters": page,
+            }))
+        }
+        Some(character) => {
+            let value = entries
+                .iter()
+                .find(|(key, _)| map_key_string(key) == Some(character))
+                .map(|(_, value)| value)
+                .ok_or_else(|| {
+                    CoreError::Parse(format!("character {character:?} has no memory entry"))
+                })?;
+            let Some(properties::PropertyValue::Array { elements }) =
+                struct_member(value, "MemorizedEvents")
+            else {
+                return Err(CoreError::Parse(
+                    "MemorizedEvents missing or not an array".to_string(),
+                ));
+            };
+            let event_json = |index: usize, element: &properties::PropertyValue| -> Value {
+                let tags = match struct_member(element, "EventTags") {
+                    Some(properties::PropertyValue::Struct(
+                        properties::StructValue::GameplayTagContainer(tags),
+                    )) => tags.clone(),
+                    _ => Vec::new(),
+                };
+                let in_game_seconds = |name: &str| -> Option<f64> {
+                    match struct_member(element, name)
+                        .and_then(|t| struct_member(t, "TotalSeconds"))
+                    {
+                        Some(properties::PropertyValue::Double(v)) => Some(*v),
+                        _ => None,
+                    }
+                };
+                let name_member = |name: &str| -> Option<String> {
+                    match struct_member(element, name) {
+                        Some(properties::PropertyValue::Name(s)) => Some(s.clone()),
+                        _ => None,
+                    }
+                };
+                let soft_member = |name: &str| -> Option<String> {
+                    match struct_member(element, name) {
+                        Some(properties::PropertyValue::SoftObject(p))
+                            if !p.package_name.is_empty() && p.package_name != "None" =>
+                        {
+                            Some(p.package_name.clone())
+                        }
+                        _ => None,
+                    }
+                };
+                let magnitude = match struct_member(element, "Magnitude") {
+                    Some(properties::PropertyValue::Float(v)) => Some(f64::from(*v)),
+                    _ => None,
+                };
+                json!({
+                    "index": index,
+                    "tags": tags,
+                    "magnitude": magnitude,
+                    "timeSeconds": in_game_seconds("Time"),
+                    "durationSeconds": in_game_seconds("Duration"),
+                    "instigator": name_member("InstigatorGlobalId"),
+                    "affected": name_member("AffectedCharacterGlobalId"),
+                    "optionalClass1": soft_member("OptionalClass1"),
+                    "optionalClass2": soft_member("OptionalClass2"),
+                })
+            };
+            let matches_query = |event: &Value| -> bool {
+                if query.is_empty() {
+                    return true;
+                }
+                let hay = [
+                    event["tags"].to_string(),
+                    event["instigator"].to_string(),
+                    event["affected"].to_string(),
+                    event["optionalClass1"].to_string(),
+                    event["optionalClass2"].to_string(),
+                ]
+                .join(" ")
+                .to_ascii_lowercase();
+                hay.contains(query)
+            };
+            let all: Vec<Value> = elements
+                .iter()
+                .enumerate()
+                .map(|(index, element)| event_json(index, element))
+                .filter(|e| matches_query(e))
+                .collect();
+            let total = all.len();
+            let page = all.into_iter().skip(offset).take(limit).collect::<Vec<_>>();
+            let mut array_path = base_path.clone();
+            array_path.push(format!("{{{character}}}"));
+            array_path.push("MemorizedEvents".to_string());
+            Ok(json!({
+                "section": "events",
+                "character": character,
+                "total": total,
+                "offset": offset,
+                "limit": limit,
+                "count": page.len(),
+                "events": page,
+                "arrayPath": array_path,
+            }))
+        }
+    }
 }
 
 fn summarize_private_progression_payload(refs: &[FStringRef]) -> Value {
@@ -7950,5 +8179,248 @@ mod tests {
         )
         .unwrap();
         assert_eq!(after["quests"][0]["currentState"], "EQuestState::Succeeded");
+    }
+
+    // ── Task 6 helpers ──────────────────────────────────────────────────────
+
+    fn private_double_property(name: &str, value: f64) -> Vec<u8> {
+        let mut out = fstring(name);
+        out.extend_from_slice(&fstring("DoubleProperty"));
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&8u32.to_le_bytes());
+        out.push(0);
+        out.extend_from_slice(&value.to_le_bytes());
+        out
+    }
+
+    fn private_struct_property(name: &str, struct_type: &str, body: &[u8], flags: u8) -> Vec<u8> {
+        let mut out = fstring(name);
+        out.extend_from_slice(&fstring("StructProperty"));
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&fstring(struct_type));
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&fstring("/Script/G1R"));
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        out.push(flags);
+        out.extend_from_slice(body);
+        out
+    }
+
+    fn name_keyed_struct_map(map_name: &str, entries: &[(&str, Vec<u8>)]) -> Vec<u8> {
+        let mut map_body = 0u32.to_le_bytes().to_vec();
+        map_body.extend_from_slice(&(entries.len() as u32).to_le_bytes());
+        for (key, value_props) in entries {
+            map_body.extend_from_slice(&fstring(key));
+            map_body.extend_from_slice(value_props);
+            map_body.extend_from_slice(&fstring("None"));
+        }
+        let mut out = fstring(map_name);
+        out.extend_from_slice(&fstring("MapProperty"));
+        out.extend_from_slice(&2u32.to_le_bytes());
+        out.extend_from_slice(&fstring("NameProperty"));
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&fstring("StructProperty"));
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&fstring("KnowledgeSet"));
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&fstring("/Script/G1R"));
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&(map_body.len() as u32).to_le_bytes());
+        out.push(0);
+        out.extend_from_slice(&map_body);
+        out
+    }
+
+    #[test]
+    fn query_progression_knowledge_lists_characters_and_entries() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-knowledge.sav");
+        let private_payload = {
+            let diego = private_name_set_property(
+                "Knowledge",
+                &["Voiceline_info_diego_gamestart_11_00", "ChoiceDiegoGamestart"],
+            );
+            let xardas = private_name_set_property("Knowledge", &["Voiceline_xardas_intro"]);
+            let map = name_keyed_struct_map(
+                "CharacterKnowledgeByUniqueName",
+                &[("OC_STT_Diego", diego), ("NoneCamp_Xardas", xardas)],
+            );
+            let mut p = fstring("/Script/Angelscript.GothicFinalDataGame");
+            p.push(0);
+            p.extend_from_slice(&map);
+            p.extend_from_slice(&fstring("None"));
+            p.extend_from_slice(&0u32.to_le_bytes());
+            p
+        };
+        let seed_compressed = b"seed".to_vec();
+        let stream = compressed_stream_with_one_chunk(&seed_compressed, private_payload.len());
+        fs::write(
+            &path,
+            build_gsav(2, &public_payload("Slot"), &stream, &[0, 0, 0, 0]),
+        )
+        .unwrap();
+        let backend = PrefixCodecBackend {
+            seed_compressed,
+            seed_uncompressed: private_payload,
+        };
+
+        // Character list (no `character` param).
+        let value =
+            query_progression(&path, &json!({ "section": "knowledge" }), Some(&backend)).unwrap();
+        assert_eq!(value["total"], 2);
+        // Sorted by name: NoneCamp_Xardas before OC_STT_Diego.
+        assert_eq!(value["characters"][0]["name"], "NoneCamp_Xardas");
+        assert_eq!(value["characters"][0]["entryCount"], 1);
+        assert_eq!(value["characters"][1]["name"], "OC_STT_Diego");
+        assert_eq!(value["characters"][1]["entryCount"], 2);
+
+        // Entries for one character.
+        let value = query_progression(
+            &path,
+            &json!({ "section": "knowledge", "character": "OC_STT_Diego" }),
+            Some(&backend),
+        )
+        .unwrap();
+        assert_eq!(value["character"], "OC_STT_Diego");
+        assert_eq!(value["total"], 2);
+        assert_eq!(
+            value["setPath"],
+            json!([
+                "CharacterKnowledgeByUniqueName",
+                "{OC_STT_Diego}",
+                "Knowledge"
+            ])
+        );
+        let entries = value["entries"].as_array().unwrap();
+        assert!(entries.contains(&json!("ChoiceDiegoGamestart")));
+
+        // Query filter on entries.
+        let value = query_progression(
+            &path,
+            &json!({ "section": "knowledge", "character": "OC_STT_Diego", "query": "choice" }),
+            Some(&backend),
+        )
+        .unwrap();
+        assert_eq!(value["total"], 1);
+
+        // Unknown character errors.
+        assert!(
+            query_progression(
+                &path,
+                &json!({ "section": "knowledge", "character": "Nobody" }),
+                Some(&backend),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn query_progression_events_lists_characters_and_events() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-events.sav");
+        let private_payload = {
+            // One memory event struct: EventTags (native GameplayTagContainer)
+            // + Time (InGameTime property list) + AffectedCharacterGlobalId.
+            let event = {
+                let mut tags_body = 1u32.to_le_bytes().to_vec();
+                tags_body.extend_from_slice(&fstring("Memory.Quest.Started"));
+                let mut e = private_struct_property(
+                    "EventTags",
+                    "GameplayTagContainer",
+                    &tags_body,
+                    properties::TAG_FLAG_NATIVE_SERIALIZE,
+                );
+                let time_body = {
+                    let mut t = private_double_property("TotalSeconds", 1234.5);
+                    t.extend_from_slice(&fstring("None"));
+                    t
+                };
+                e.extend_from_slice(&private_struct_property(
+                    "Time", "InGameTime", &time_body, 0,
+                ));
+                let mut affected = fstring("AffectedCharacterGlobalId");
+                affected.extend_from_slice(&fstring("NameProperty"));
+                affected.extend_from_slice(&0u32.to_le_bytes());
+                let hero = fstring("Hero");
+                affected.extend_from_slice(&(hero.len() as u32).to_le_bytes());
+                affected.push(0);
+                affected.extend_from_slice(&hero);
+                e.extend_from_slice(&affected);
+                e
+            };
+            // MemorizedEvents: ArrayProperty of MemoryEvent structs (inline
+            // tagged property lists, "None"-terminated).
+            let memorized = {
+                let mut element = event.clone();
+                element.extend_from_slice(&fstring("None"));
+                let mut body = 1u32.to_le_bytes().to_vec();
+                body.extend_from_slice(&element);
+                let mut out = fstring("MemorizedEvents");
+                out.extend_from_slice(&fstring("ArrayProperty"));
+                out.extend_from_slice(&1u32.to_le_bytes());
+                out.extend_from_slice(&fstring("StructProperty"));
+                out.extend_from_slice(&1u32.to_le_bytes());
+                out.extend_from_slice(&fstring("MemoryEvent"));
+                out.extend_from_slice(&1u32.to_le_bytes());
+                out.extend_from_slice(&fstring("/Script/G1R"));
+                out.extend_from_slice(&0u32.to_le_bytes());
+                out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+                out.push(0);
+                out.extend_from_slice(&body);
+                out
+            };
+            let map = name_keyed_struct_map("LongTermMemoryByGlobalId", &[("Hero", memorized)]);
+            let mut p = fstring("/Script/Angelscript.GothicFinalDataGame");
+            p.push(0);
+            p.extend_from_slice(&map);
+            p.extend_from_slice(&fstring("None"));
+            p.extend_from_slice(&0u32.to_le_bytes());
+            p
+        };
+        let seed_compressed = b"seed".to_vec();
+        let stream = compressed_stream_with_one_chunk(&seed_compressed, private_payload.len());
+        fs::write(
+            &path,
+            build_gsav(2, &public_payload("Slot"), &stream, &[0, 0, 0, 0]),
+        )
+        .unwrap();
+        let backend = PrefixCodecBackend {
+            seed_compressed,
+            seed_uncompressed: private_payload,
+        };
+
+        let value =
+            query_progression(&path, &json!({ "section": "events" }), Some(&backend)).unwrap();
+        assert_eq!(value["total"], 1);
+        assert_eq!(value["characters"][0]["id"], "Hero");
+        assert_eq!(value["characters"][0]["eventCount"], 1);
+
+        let value = query_progression(
+            &path,
+            &json!({ "section": "events", "character": "Hero" }),
+            Some(&backend),
+        )
+        .unwrap();
+        assert_eq!(value["character"], "Hero");
+        assert_eq!(value["total"], 1);
+        assert_eq!(
+            value["arrayPath"],
+            json!(["LongTermMemoryByGlobalId", "{Hero}", "MemorizedEvents"])
+        );
+        let event = &value["events"][0];
+        assert_eq!(event["index"], 0);
+        assert_eq!(event["tags"], json!(["Memory.Quest.Started"]));
+        assert_eq!(event["timeSeconds"], 1234.5);
+        assert_eq!(event["affected"], "Hero");
+
+        // Tag query filter.
+        let filtered = query_progression(
+            &path,
+            &json!({ "section": "events", "character": "Hero", "query": "guild" }),
+            Some(&backend),
+        )
+        .unwrap();
+        assert_eq!(filtered["total"], 0);
     }
 }
