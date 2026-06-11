@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:goresave/features/app/domain/desktop_updater.dart';
 import 'package:goresave/features/app/domain/ui_settings.dart';
 import 'package:goresave/features/app/domain/window_state_persistence.dart';
 import 'package:goresave/features/app/ui/goresave_app.dart';
@@ -7,9 +8,8 @@ import 'package:goresave/features/app/ui/window_chrome.dart';
 import 'package:window_manager/window_manager.dart';
 
 Future<void> main() async {
-  // Velopack startup hooks run in the native Windows runner (main.cpp)
-  // before the Flutter engine starts.
   WidgetsFlutterBinding.ensureInitialized();
+  await initDesktopUpdater();
   if (windowChromeEnabled) {
     await windowManager.ensureInitialized();
     final settingsStore = JsonFileUiSettingsStore.defaultForPlatform();

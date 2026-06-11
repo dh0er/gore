@@ -33,6 +33,42 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.13.1"
+  auto_updater:
+    dependency: "direct main"
+    description:
+      path: "packages/auto_updater"
+      ref: swiftpm-support
+      resolved-ref: "56dc406f6e0f6ccf01d70d2fbc88f7ca1c3ebf9a"
+      url: "https://github.com/dh0er/auto_updater.git"
+    source: git
+    version: "1.0.1"
+  auto_updater_macos:
+    dependency: "direct overridden"
+    description:
+      path: "packages/auto_updater_macos"
+      ref: swiftpm-support
+      resolved-ref: "56dc406f6e0f6ccf01d70d2fbc88f7ca1c3ebf9a"
+      url: "https://github.com/dh0er/auto_updater.git"
+    source: git
+    version: "1.0.1"
+  auto_updater_platform_interface:
+    dependency: "direct overridden"
+    description:
+      path: "packages/auto_updater_platform_interface"
+      ref: swiftpm-support
+      resolved-ref: "56dc406f6e0f6ccf01d70d2fbc88f7ca1c3ebf9a"
+      url: "https://github.com/dh0er/auto_updater.git"
+    source: git
+    version: "1.0.1"
+  auto_updater_windows:
+    dependency: "direct overridden"
+    description:
+      path: "packages/auto_updater_windows"
+      ref: swiftpm-support
+      resolved-ref: "56dc406f6e0f6ccf01d70d2fbc88f7ca1c3ebf9a"
+      url: "https://github.com/dh0er/auto_updater.git"
+    source: git
+    version: "1.0.1"
   boolean_selector:
     dependency: transitive
     description:
