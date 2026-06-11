@@ -603,10 +603,14 @@ class _KnowledgeDetailState extends State<_KnowledgeDetail> {
   bool _loadingCharacters = false;
   bool _searchingCharacters = false;
   bool _loadingEntries = false;
-  int _reloadEpoch = 0;
+  // Per-loader epochs so a stale characters load never races an entries load.
+  int _charsEpoch = 0;
+  int _entriesEpoch = 0;
   int _charPageSize = _defaultPageSize;
   int _entryPageSize = _defaultPageSize;
   String _activeCharQuery = '';
+  // Used during the cross-page duplicate check in _addEntry.
+  bool _checkingDuplicate = false;
 
   @override
   void initState() {
@@ -623,6 +627,10 @@ class _KnowledgeDetailState extends State<_KnowledgeDetail> {
       _entries = const KnowledgeEntriesPage();
       _characterSearch.clear();
       _activeCharQuery = '';
+      // Invalidate both loaders so any in-flight call for the old reloadKey
+      // is treated as stale and exits without touching flags.
+      _charsEpoch++;
+      _entriesEpoch++;
       _loadCharacters(offset: 0);
     }
   }
@@ -639,7 +647,7 @@ class _KnowledgeDetailState extends State<_KnowledgeDetail> {
     bool newQuery = false,
   }) async {
     if (newQuery) _activeCharQuery = _characterSearch.text.trim();
-    final epoch = ++_reloadEpoch;
+    final epoch = ++_charsEpoch;
     setState(() {
       _loadingCharacters = true;
       if (newQuery) _searchingCharacters = true;
@@ -649,7 +657,7 @@ class _KnowledgeDetailState extends State<_KnowledgeDetail> {
       offset: offset,
       limit: _charPageSize,
     );
-    if (!mounted || epoch != _reloadEpoch) return;
+    if (!mounted || epoch != _charsEpoch) return;
     setState(() {
       _loadingCharacters = false;
       _searchingCharacters = false;
@@ -658,7 +666,7 @@ class _KnowledgeDetailState extends State<_KnowledgeDetail> {
   }
 
   Future<void> _selectCharacter(String name) async {
-    final epoch = ++_reloadEpoch;
+    final epoch = ++_entriesEpoch;
     setState(() {
       _selectedCharacter = name;
       _loadingEntries = true;
@@ -669,7 +677,7 @@ class _KnowledgeDetailState extends State<_KnowledgeDetail> {
       offset: 0,
       limit: _entryPageSize,
     );
-    if (!mounted || epoch != _reloadEpoch) return;
+    if (!mounted || epoch != _entriesEpoch) return;
     setState(() {
       _loadingEntries = false;
       _entries = page;
@@ -679,14 +687,14 @@ class _KnowledgeDetailState extends State<_KnowledgeDetail> {
   Future<void> _loadEntries({required int offset}) async {
     final character = _selectedCharacter;
     if (character == null) return;
-    final epoch = ++_reloadEpoch;
+    final epoch = ++_entriesEpoch;
     setState(() => _loadingEntries = true);
     final page = await widget.notifier.loadKnowledgeEntries(
       character,
       offset: offset,
       limit: _entryPageSize,
     );
-    if (!mounted || epoch != _reloadEpoch) return;
+    if (!mounted || epoch != _entriesEpoch) return;
     setState(() {
       _loadingEntries = false;
       _entries = page;
@@ -728,12 +736,32 @@ class _KnowledgeDetailState extends State<_KnowledgeDetail> {
     _pushPending();
   }
 
-  void _addEntry(String entry) {
+  Future<void> _addEntry(String entry) async {
+    // Issue C: defense-in-depth guard — setPath not yet loaded → reject.
+    if (_entries.setPath.isEmpty) return;
     final trimmed = entry.trim();
     if (trimmed.isEmpty) return;
+    // Fast path: already on the current page.
     if (_entries.entries.contains(trimmed)) return;
-    final key = _pendingKey(_selectedCharacter!, trimmed);
+    final character = _selectedCharacter!;
+    final key = _pendingKey(character, trimmed);
+    // Already in pending adds/removes.
     if (_pending.containsKey(key)) return;
+
+    // Issue B: cross-page duplicate check via a server query.
+    final checkCharacter = character;
+    final checkEpoch = _entriesEpoch;
+    setState(() => _checkingDuplicate = true);
+    final checkPage = await widget.notifier.loadKnowledgeEntries(
+      checkCharacter,
+      query: trimmed,
+      limit: 50,
+    );
+    if (!mounted || _selectedCharacter != checkCharacter || _entriesEpoch != checkEpoch) return;
+    setState(() => _checkingDuplicate = false);
+    // The core query is a lowercase-contains filter; verify exact equality.
+    if (checkPage.entries.any((e) => e == trimmed)) return;
+
     setState(() {
       _pending[key] = KnowledgeEntryEdit.add(
         setPath: _entries.setPath,
@@ -905,28 +933,54 @@ class _KnowledgeDetailState extends State<_KnowledgeDetail> {
                         ),
                         if (character != null) ...[
                           const SizedBox(height: 6),
-                          if (widget.editable)
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: TextField(
-                                    controller: _addController,
-                                    decoration: const InputDecoration(
-                                      labelText: 'Add knowledge entry',
-                                      isDense: true,
+                          if (widget.editable) ...[
+                            // Issue C: disabled while entries are loading or
+                            // the set path is not yet known.
+                            Builder(builder: (context) {
+                              final addDisabled =
+                                  _loadingEntries ||
+                                  _entries.setPath.isEmpty ||
+                                  _checkingDuplicate;
+                              return Row(
+                                children: [
+                                  Expanded(
+                                    child: TextField(
+                                      controller: _addController,
+                                      enabled: !addDisabled,
+                                      decoration: const InputDecoration(
+                                        labelText: 'Add knowledge entry',
+                                        isDense: true,
+                                      ),
+                                      onSubmitted: addDisabled
+                                          ? null
+                                          : (v) => _addEntry(v),
                                     ),
-                                    onSubmitted: _addEntry,
                                   ),
-                                ),
-                                const SizedBox(width: 8),
-                                IconButton(
-                                  icon: const Icon(Icons.add),
-                                  tooltip: 'Add',
-                                  onPressed: () =>
-                                      _addEntry(_addController.text),
-                                ),
-                              ],
-                            ),
+                                  const SizedBox(width: 8),
+                                  // Issue B: spinner during cross-page check.
+                                  _checkingDuplicate
+                                      ? const Padding(
+                                          padding: EdgeInsets.all(12),
+                                          child: SizedBox(
+                                            width: 16,
+                                            height: 16,
+                                            child: CircularProgressIndicator(
+                                              strokeWidth: 2,
+                                            ),
+                                          ),
+                                        )
+                                      : IconButton(
+                                          icon: const Icon(Icons.add),
+                                          tooltip: 'Add',
+                                          onPressed: addDisabled
+                                              ? null
+                                              : () =>
+                                                    _addEntry(_addController.text),
+                                        ),
+                                ],
+                              );
+                            }),
+                          ],
                           if (_entries.error != null)
                             Padding(
                               padding: const EdgeInsets.only(top: 4),
@@ -946,47 +1000,55 @@ class _KnowledgeDetailState extends State<_KnowledgeDetail> {
                             onPageSize: _setEntryPageSize,
                           ),
                           const SizedBox(height: 4),
-                          // Entries list — only scrollable in this pane
+                          // Issue E: pending adds in a separate labeled block
+                          // so the pagination bar unambiguously refers to the
+                          // saved entries below.
+                          if (addedEntries.isNotEmpty) ...[
+                            Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 4),
+                              child: Text(
+                                'Pending adds (${addedEntries.length})',
+                                style: widget.theme.textTheme.labelSmall
+                                    ?.copyWith(
+                                      color: scheme.onSurfaceVariant,
+                                    ),
+                              ),
+                            ),
+                            for (final entry in addedEntries)
+                              ListTile(
+                                dense: true,
+                                tileColor: scheme.tertiaryContainer.withValues(
+                                  alpha: 0.4,
+                                ),
+                                title: Text(
+                                  entry,
+                                  style: TextStyle(
+                                    color: scheme.onTertiaryContainer,
+                                  ),
+                                ),
+                                trailing: widget.editable
+                                    ? IconButton(
+                                        icon: const Icon(Icons.undo, size: 18),
+                                        tooltip: 'Undo add',
+                                        onPressed: () => _undoAdd(entry),
+                                      )
+                                    : null,
+                              ),
+                            const Divider(height: 8),
+                          ],
+                          // Saved entries list — the only scrollable in this
+                          // pane; pagination bar above refers only to this.
                           Expanded(
                             child: _loadingEntries && _entries.entries.isEmpty
                                 ? const Center(
                                     child: CircularProgressIndicator(),
                                   )
                                 : ListView.separated(
-                                    itemCount:
-                                        addedEntries.length +
-                                        _entries.entries.length,
+                                    itemCount: _entries.entries.length,
                                     separatorBuilder: (_, _) =>
                                         const Divider(height: 1),
                                     itemBuilder: (context, index) {
-                                      // Pending-add tiles at the top
-                                      if (index < addedEntries.length) {
-                                        final entry = addedEntries[index];
-                                        return ListTile(
-                                          dense: true,
-                                          tileColor: scheme.tertiaryContainer
-                                              .withValues(alpha: 0.4),
-                                          title: Text(
-                                            entry,
-                                            style: TextStyle(
-                                              color: scheme.onTertiaryContainer,
-                                            ),
-                                          ),
-                                          trailing: widget.editable
-                                              ? IconButton(
-                                                  icon: const Icon(
-                                                    Icons.undo,
-                                                    size: 18,
-                                                  ),
-                                                  tooltip: 'Undo add',
-                                                  onPressed: () =>
-                                                      _undoAdd(entry),
-                                                )
-                                              : null,
-                                        );
-                                      }
-                                      final entry = _entries
-                                          .entries[index - addedEntries.length];
+                                      final entry = _entries.entries[index];
                                       final isRemoved = removedEntries.contains(
                                         entry,
                                       );
@@ -1077,7 +1139,9 @@ class _EventsDetailState extends State<_EventsDetail> {
   bool _loadingCharacters = false;
   bool _searchingCharacters = false;
   bool _loadingEvents = false;
-  int _reloadEpoch = 0;
+  // Per-loader epochs so a stale characters load never races an events load.
+  int _charsEpoch = 0;
+  int _eventsEpoch = 0;
   int _charPageSize = _defaultPageSize;
   int _eventPageSize = _defaultPageSize;
   String _activeCharQuery = '';
@@ -1096,6 +1160,10 @@ class _EventsDetailState extends State<_EventsDetail> {
       _events = const MemoryEventsPage();
       _characterSearch.clear();
       _activeCharQuery = '';
+      // Invalidate both loaders so any in-flight call for the old reloadKey
+      // is treated as stale and exits without touching flags.
+      _charsEpoch++;
+      _eventsEpoch++;
       _loadCharacters(offset: 0);
     }
   }
@@ -1111,7 +1179,7 @@ class _EventsDetailState extends State<_EventsDetail> {
     bool newQuery = false,
   }) async {
     if (newQuery) _activeCharQuery = _characterSearch.text.trim();
-    final epoch = ++_reloadEpoch;
+    final epoch = ++_charsEpoch;
     setState(() {
       _loadingCharacters = true;
       if (newQuery) _searchingCharacters = true;
@@ -1121,7 +1189,7 @@ class _EventsDetailState extends State<_EventsDetail> {
       offset: offset,
       limit: _charPageSize,
     );
-    if (!mounted || epoch != _reloadEpoch) return;
+    if (!mounted || epoch != _charsEpoch) return;
     setState(() {
       _loadingCharacters = false;
       _searchingCharacters = false;
@@ -1130,7 +1198,7 @@ class _EventsDetailState extends State<_EventsDetail> {
   }
 
   Future<void> _selectCharacter(String id) async {
-    final epoch = ++_reloadEpoch;
+    final epoch = ++_eventsEpoch;
     setState(() {
       _selectedCharacter = id;
       _loadingEvents = true;
@@ -1141,7 +1209,7 @@ class _EventsDetailState extends State<_EventsDetail> {
       offset: 0,
       limit: _eventPageSize,
     );
-    if (!mounted || epoch != _reloadEpoch) return;
+    if (!mounted || epoch != _eventsEpoch) return;
     setState(() {
       _loadingEvents = false;
       _events = page;
@@ -1151,14 +1219,14 @@ class _EventsDetailState extends State<_EventsDetail> {
   Future<void> _loadEvents({required int offset}) async {
     final character = _selectedCharacter;
     if (character == null) return;
-    final epoch = ++_reloadEpoch;
+    final epoch = ++_eventsEpoch;
     setState(() => _loadingEvents = true);
     final page = await widget.notifier.loadMemoryEvents(
       character,
       offset: offset,
       limit: _eventPageSize,
     );
-    if (!mounted || epoch != _reloadEpoch) return;
+    if (!mounted || epoch != _eventsEpoch) return;
     setState(() {
       _loadingEvents = false;
       _events = page;

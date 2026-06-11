@@ -933,7 +933,13 @@ class EditorNotifier extends StateNotifier<EditorState> {
   Future<bool> applyMemoryEventEdit(MemoryEventEdit edit) async {
     final savePath = state.selectedPath;
     if (savePath == null) return false;
-    if (state.isLoading) return false;
+    if (state.isLoading) {
+      state = state.copyWith(
+        error:
+            'Another operation is in progress — try again when it finishes.',
+      );
+      return false;
+    }
     if (state.pendingEdits.isNotEmpty) {
       state = state.copyWith(
         error:

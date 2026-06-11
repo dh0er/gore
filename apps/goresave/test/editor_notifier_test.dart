@@ -943,6 +943,51 @@ void main() {
   });
 
   test(
+    'applyMemoryEventEdit is blocked and sets error when isLoading is true',
+    () async {
+      // Use a slow write to hold the notifier in isLoading state, then verify
+      // that a concurrent applyMemoryEventEdit sets a user-visible error.
+      final gate = Completer<void>();
+      final core = _SlowWriteCoreService(gate.future);
+      final notifier = EditorNotifier(
+        core,
+        saveDir: r'C:\tmp\saves',
+        codecHostPath: r'C:\tools\goresave_g1r_codec_host.exe',
+        gameExePath: r'C:\Games\G1R\G1R-Win64-Shipping.exe',
+      );
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+      notifier.setPendingEdit(
+        'x',
+        const PendingSaveEdit(
+          edits: [
+            {'path': 'public.m_PlayerSaveName', 'value': 'Slow'},
+          ],
+        ),
+      );
+
+      // Start a write that will stall — notifier is now isLoading.
+      final writeFuture = notifier.saveAllPending();
+      expect(notifier.state.isLoading, isTrue);
+
+      // applyMemoryEventEdit must refuse and set an error while loading.
+      final result = await notifier.applyMemoryEventEdit(
+        MemoryEventEdit.remove(arrayPath: const ['MemorizedEvents'], index: 0),
+      );
+
+      expect(result, isFalse);
+      expect(notifier.state.error, isNotNull);
+      expect(
+        notifier.state.error,
+        contains('Another operation is in progress'),
+      );
+
+      // Unblock the write so the test can cleanly complete.
+      gate.complete();
+      await writeFuture;
+    },
+  );
+
+  test(
     'applyMemoryEventEdit is blocked and sets error when pendingEdits is non-empty',
     () async {
       final core = _RecordingCoreService();
