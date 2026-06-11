@@ -123,35 +123,49 @@ class _ProgressionPanelState extends State<ProgressionPanel> {
             ),
           ),
           const SizedBox(width: 16),
-          // Detail area — fills remaining width and full height
+          // Detail area — fills remaining width and full height.
+          // Every section stays mounted (Offstage, same pattern as
+          // hero_stats_card): a detail's local `_pending` map backs entries in
+          // the global pending-edit registry, so disposing it on a section
+          // switch would hide queued edits that Save still writes. Keys are
+          // stable on purpose: a key derived from reloadKey would remount the
+          // detail on every fresh inspection, disposing state and bypassing
+          // the didUpdateWidget logic that preserves the selected character.
           Expanded(
-            // Keys are stable on purpose: a key derived from reloadKey would
-            // remount the detail on every fresh inspection, disposing state
-            // and bypassing the didUpdateWidget logic that preserves the
-            // selected character across save-triggered reloads.
-            child: switch (_selected) {
-              _ProgSection.quests => _QuestsDetail(
-                key: const ValueKey('quests'),
-                notifier: widget.notifier,
-                editable: widget.editable,
-                reloadKey: reloadKey,
-                theme: theme,
-              ),
-              _ProgSection.knowledge => _KnowledgeDetail(
-                key: const ValueKey('knowledge'),
-                notifier: widget.notifier,
-                editable: widget.editable,
-                reloadKey: reloadKey,
-                theme: theme,
-              ),
-              _ProgSection.events => _EventsDetail(
-                key: const ValueKey('events'),
-                notifier: widget.notifier,
-                editable: widget.editable,
-                reloadKey: reloadKey,
-                theme: theme,
-              ),
-            },
+            child: Stack(
+              children: [
+                Offstage(
+                  offstage: _selected != _ProgSection.quests,
+                  child: _QuestsDetail(
+                    key: const ValueKey('quests'),
+                    notifier: widget.notifier,
+                    editable: widget.editable,
+                    reloadKey: reloadKey,
+                    theme: theme,
+                  ),
+                ),
+                Offstage(
+                  offstage: _selected != _ProgSection.knowledge,
+                  child: _KnowledgeDetail(
+                    key: const ValueKey('knowledge'),
+                    notifier: widget.notifier,
+                    editable: widget.editable,
+                    reloadKey: reloadKey,
+                    theme: theme,
+                  ),
+                ),
+                Offstage(
+                  offstage: _selected != _ProgSection.events,
+                  child: _EventsDetail(
+                    key: const ValueKey('events'),
+                    notifier: widget.notifier,
+                    editable: widget.editable,
+                    reloadKey: reloadKey,
+                    theme: theme,
+                  ),
+                ),
+              ],
+            ),
           ),
         ],
       ),

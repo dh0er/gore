@@ -1064,7 +1064,10 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// intentionally not part of the pending-edit registry.
   Future<bool> applyMemoryEventEdit(MemoryEventEdit edit) async {
     final savePath = state.selectedPath;
-    if (savePath == null) return false;
+    if (savePath == null) {
+      state = state.copyWith(error: 'No save selected.');
+      return false;
+    }
     if (state.isLoading) {
       state = state.copyWith(
         error: 'Another operation is in progress — try again when it finishes.',
