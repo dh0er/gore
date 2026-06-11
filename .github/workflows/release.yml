@@ -25,7 +25,7 @@ jobs:
           }
           $version = $Matches[1]
           if ('${{ github.ref_type }}' -eq 'tag') {
-            $tag = '${{ github.ref_name }}'
+            $tag = $env:GITHUB_REF_NAME
             if ($tag -ne "v$version") {
               Write-Error "tag $tag does not match pubspec version $version"
               exit 1
