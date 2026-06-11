@@ -13,6 +13,7 @@ import 'package:goresave/features/editor/domain/pending_edits.dart';
 import 'package:goresave/providers/data_providers.dart';
 import 'package:intl/intl.dart';
 import 'hero_stats_card.dart';
+import 'progression_panel.dart';
 
 final _bytes = NumberFormat.decimalPattern();
 
@@ -592,9 +593,13 @@ class _EditorWorkspace extends StatelessWidget {
                     ),
                   ),
                   _KeepAliveTab(
-                    child: _ProgressionPanel(
+                    child: ProgressionPanel(
                       inspection: inspection,
                       notifier: notifier,
+                      editable:
+                          inspection.privateEditable &&
+                          inspection.privateTypedVerified &&
+                          state.codecCompressReady,
                     ),
                   ),
                   _KeepAliveTab(
@@ -1409,201 +1414,6 @@ class _InventoryPanel extends StatelessWidget {
   }
 }
 
-class _ProgressionPanel extends StatelessWidget {
-  const _ProgressionPanel({required this.inspection, required this.notifier});
-
-  final SaveInspection inspection;
-  final EditorNotifier notifier;
-
-  @override
-  Widget build(BuildContext context) {
-    if (!inspection.privateDecoded) {
-      return const _MessagePane(
-        icon: Icons.flag_outlined,
-        title: 'Progression',
-        body:
-            'Progression data needs decoded private payload data from the G1R codec host.',
-      );
-    }
-    return ListView(
-      padding: const EdgeInsets.all(20),
-      children: [
-        if (inspection.privateProgression.hasData)
-          _PrivateProgressionSummaryCard(
-            progression: inspection.privateProgression,
-          )
-        else
-          const _MessagePane(
-            icon: Icons.flag_outlined,
-            title: 'Progression',
-            body:
-                'No progression markers found in the decoded private payload.',
-          ),
-      ],
-    );
-  }
-}
-
-class _PrivateProgressionSummaryCard extends StatefulWidget {
-  const _PrivateProgressionSummaryCard({required this.progression});
-
-  final PrivateProgressionSummary progression;
-
-  @override
-  State<_PrivateProgressionSummaryCard> createState() =>
-      _PrivateProgressionSummaryCardState();
-}
-
-class _PrivateProgressionSummaryCardState
-    extends State<_PrivateProgressionSummaryCard> {
-  String _query = '';
-
-  @override
-  Widget build(BuildContext context) {
-    final progression = widget.progression;
-    final query = _query.trim().toLowerCase();
-    final candidates = progression.candidates
-        .where((value) => query.isEmpty || value.toLowerCase().contains(query))
-        .take(160)
-        .toList();
-    final candidateSet = candidates.toSet();
-    final tags = progression.gameplayTags
-        .where(
-          (value) =>
-              (query.isEmpty || value.toLowerCase().contains(query)) &&
-              !candidateSet.contains(value),
-        )
-        .take(160)
-        .toList();
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                const Icon(Icons.flag_outlined),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    'Progression summary',
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                _SummaryMetric(
-                  label: 'Candidates',
-                  value: progression.candidateCount.toString(),
-                ),
-                _SummaryMetric(
-                  label: 'Gameplay tags',
-                  value: progression.gameplayTags.length.toString(),
-                ),
-                _SummaryMetric(
-                  label: 'Sections',
-                  value: progression.sections.length.toString(),
-                ),
-                _SummaryMetric(
-                  label: 'Properties',
-                  value: progression.properties.length.toString(),
-                ),
-                _SummaryMetric(
-                  label: 'Scripts',
-                  value: progression.scriptPaths.length.toString(),
-                ),
-              ],
-            ),
-            if (progression.sections.isNotEmpty) ...[
-              const SizedBox(height: 16),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: progression.sections
-                    .map((value) => Chip(label: Text(value, maxLines: 1)))
-                    .toList(),
-              ),
-            ],
-            const SizedBox(height: 16),
-            TextField(
-              decoration: const InputDecoration(
-                labelText: 'Filter progression',
-                prefixIcon: Icon(Icons.search),
-              ),
-              onChanged: (value) => setState(() => _query = value),
-            ),
-            if (candidates.isNotEmpty) ...[
-              const SizedBox(height: 16),
-              Text(
-                'Progression markers',
-                style: Theme.of(context).textTheme.labelLarge,
-              ),
-              const SizedBox(height: 8),
-              _StringList(values: candidates, icon: Icons.flag_outlined),
-            ],
-            if (tags.isNotEmpty) ...[
-              const SizedBox(height: 16),
-              Text(
-                'Gameplay tags',
-                style: Theme.of(context).textTheme.labelLarge,
-              ),
-              const SizedBox(height: 8),
-              _StringList(values: tags, icon: Icons.sell_outlined),
-            ],
-            if (progression.scriptPaths.isNotEmpty) ...[
-              const SizedBox(height: 16),
-              Text(
-                'Progression scripts',
-                style: Theme.of(context).textTheme.labelLarge,
-              ),
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: progression.scriptPaths
-                    .take(8)
-                    .map((value) => Chip(label: Text(value, maxLines: 1)))
-                    .toList(),
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _StringList extends StatelessWidget {
-  const _StringList({required this.values, required this.icon});
-
-  final List<String> values;
-  final IconData icon;
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      height: 220,
-      child: ListView.separated(
-        itemCount: values.length,
-        separatorBuilder: (_, _) => const Divider(height: 1),
-        itemBuilder: (context, index) {
-          return ListTile(
-            dense: true,
-            leading: Icon(icon),
-            title: SelectableText(values[index], maxLines: 1),
-          );
-        },
-      ),
-    );
-  }
-}
-
 class _PrivateInventorySummaryCard extends StatefulWidget {
   const _PrivateInventorySummaryCard({
     required this.inventory,
@@ -2396,39 +2206,6 @@ String _formatAttributeValue(double? value) {
   // a lossy rounding (0.125 → 0.13) would silently corrupt untouched axes
   // the moment any sibling field changes. Round-trip or full precision.
   return double.tryParse(rounded) == value ? rounded : value.toString();
-}
-
-class _SummaryMetric extends StatelessWidget {
-  const _SummaryMetric({required this.label, required this.value});
-
-  final String label;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      width: 120,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            label,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: Theme.of(context).textTheme.labelSmall?.copyWith(
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
-            ),
-          ),
-          Text(
-            value,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: Theme.of(context).textTheme.bodyMedium,
-          ),
-        ],
-      ),
-    );
-  }
 }
 
 /// Generic typed property browser: search every property in the decoded

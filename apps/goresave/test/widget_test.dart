@@ -267,19 +267,22 @@ void main() {
     await tester.tap(find.widgetWithText(Tab, 'Progression'));
     await tester.pumpAndSettle();
 
+    // Overview card is visible with the structured data.
     expect(find.text('Progression summary'), findsOneWidget);
-    expect(find.text('Generated events'), findsOneWidget);
-    expect(find.text('Quest.Main.Chapter01'), findsOneWidget);
-    expect(find.text('Dialog.Diego.IntroDone'), findsOneWidget);
+    expect(find.text('Quests total'), findsOneWidget);
+    // Quests card loads and shows the fake quest name.
+    expect(find.text('SLEEPER'), findsOneWidget);
+    // Knowledge NPCs count chip is visible in the overview.
+    expect(find.text('Knowledge NPCs'), findsOneWidget);
 
+    // Search quests — filter is inside the Quests card's TextField.
     await tester.enterText(
-      find.widgetWithText(TextField, 'Filter progression'),
-      'dialog',
+      find.widgetWithText(TextField, 'Search quests'),
+      'sleeper',
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Dialog.Diego.IntroDone'), findsOneWidget);
-    expect(find.text('Quest.Main.Chapter01'), findsNothing);
+    expect(find.text('SLEEPER'), findsOneWidget);
 
     await tester.drag(find.byType(TabBar), const Offset(-500, 0));
     await tester.pumpAndSettle();
@@ -624,19 +627,24 @@ class _FakeCoreService implements GoresaveCoreService {
                 'writable': ['private.inventory.setItemCount'],
               },
               'progression': {
-                'candidateCount': 3,
-                'candidates': [
-                  'Quest.Main.Chapter01',
-                  'Dialog.Diego.IntroDone',
-                  'Knowledge.OldCamp.PathKnown',
+                'status': 'ok',
+                'questTotal': 3,
+                'questStates': {
+                  'Available': 1,
+                  'Running': 1,
+                  'Succeeded': 1,
+                },
+                'knowledgeCharacters': 2,
+                'knowledgeEntries': 5,
+                'memoryCharacters': 1,
+                'memoryEvents': 12,
+                'writable': [
+                  'private.typed.setValue',
+                  'private.typed.setAdd',
+                  'private.typed.setRemove',
+                  'private.typed.arrayRemove',
+                  'private.typed.arrayDuplicate',
                 ],
-                'gameplayTags': [
-                  'Quest.Main.Chapter01',
-                  'Dialog.Diego.IntroDone',
-                ],
-                'sections': ['Generated events', 'Memorized events'],
-                'scriptPaths': ['/Script/G1R.QuestSaveGameData'],
-                'properties': ['m_GeneratedEvents', 'm_MemorizedEvents'],
               },
             },
           },
@@ -704,6 +712,112 @@ class _FakeCoreService implements GoresaveCoreService {
             'path': payload['path'],
             'restoredFrom': payload['backupPath'],
             'backupPath': r'C:\tmp\saves\G1R-001.sav.bak.300',
+          },
+        };
+      case 'query_progression':
+        final section = payload['section'] as String? ?? 'quests';
+        if (section == 'quests') {
+          return {
+            'ok': true,
+            'data': {
+              'section': 'quests',
+              'total': 1,
+              'offset': 0,
+              'limit': 100,
+              'count': 1,
+              'stateCounts': {'Running': 1},
+              'quests': [
+                {
+                  'questClass': '/Script/Angelscript.Quest_OldCamp_SLEEPER',
+                  'id': 'Quest_OldCamp_SLEEPER',
+                  'group': 'OldCamp',
+                  'name': 'SLEEPER',
+                  'currentState': 'EQuestState::Running',
+                  'statePath': [
+                    'QuestDataByClass',
+                    '{/Script/Angelscript.Quest_OldCamp_SLEEPER}',
+                    'CurrentState',
+                  ],
+                  'writable': true,
+                },
+              ],
+            },
+          };
+        }
+        if (section == 'knowledge') {
+          final character = payload['character'] as String?;
+          if (character == null) {
+            return {
+              'ok': true,
+              'data': {
+                'section': 'knowledge',
+                'total': 1,
+                'offset': 0,
+                'limit': 100,
+                'count': 1,
+                'characters': [
+                  {'name': 'OC_STT_Diego', 'entryCount': 2},
+                ],
+              },
+            };
+          }
+          return {
+            'ok': true,
+            'data': {
+              'section': 'knowledge',
+              'character': character,
+              'total': 1,
+              'offset': 0,
+              'limit': 200,
+              'count': 1,
+              'entries': ['Voiceline_info_diego'],
+              'setPath': [
+                'CharacterKnowledgeByUniqueName',
+                '{$character}',
+                'Knowledge',
+              ],
+            },
+          };
+        }
+        // events section
+        final character = payload['character'] as String?;
+        if (character == null) {
+          return {
+            'ok': true,
+            'data': {
+              'section': 'events',
+              'total': 1,
+              'offset': 0,
+              'limit': 100,
+              'count': 1,
+              'characters': [
+                {'id': 'Hero', 'eventCount': 1},
+              ],
+            },
+          };
+        }
+        return {
+          'ok': true,
+          'data': {
+            'section': 'events',
+            'character': character,
+            'total': 1,
+            'offset': 0,
+            'limit': 100,
+            'count': 1,
+            'events': [
+              {
+                'index': 0,
+                'tags': ['Memory.Quest.Started'],
+                'timeSeconds': 100.0,
+                'affected': 'Hero',
+              },
+            ],
+            'arrayPath': [
+              'LongTermMemoryByGlobalId',
+              '{$character}',
+              'MemorizedEvents',
+            ],
           },
         };
       default:
