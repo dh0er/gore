@@ -1,7 +1,7 @@
 # Progression Tab v2 — Design
 
 Date: 2026-06-11
-Status: approved by user (chat), pending spec review
+Status: implemented (branch progression-tab-v2)
 
 ## Problem
 
