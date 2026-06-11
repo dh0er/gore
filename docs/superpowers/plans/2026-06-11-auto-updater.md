@@ -187,7 +187,10 @@ git commit -m "feat(build): inject GIT_SHA dart-define into Windows release buil
 - [ ] **Step 1: Add dependency**
 
 Run: `cargo add velopack -p goresave_core`
-Expected: latest `velopack` 0.0.x added to `crates/goresave_core/Cargo.toml`.
+Expected: latest `velopack` added to `crates/goresave_core/Cargo.toml`.
+(As built: velopack 1.2.0, whose API uses PascalCase fields like
+`info.TargetFullRelease.Version` instead of the snake_case shown in the
+snippets below — the snippets predate the 1.x release.)
 
 - [ ] **Step 2: Add CoreError variant**
 

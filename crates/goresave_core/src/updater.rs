@@ -68,6 +68,8 @@ pub fn update_apply_restart(_payload: &Value) -> Result<Value, CoreError> {
     manager
         .apply_updates_and_restart(&info)
         .map_err(|err| CoreError::Update(err.to_string()))?;
+    // On success Velopack exits this process before we get here; this response
+    // only ever reaches the caller if the restart could not be initiated.
     Ok(json!({ "applied": true }))
 }
 

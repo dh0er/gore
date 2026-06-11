@@ -50,8 +50,10 @@ jobs:
       - name: Build distribution
         run: python build.py dist
 
+      # Pinned to the velopack crate version in goresave_core so the CLI's
+      # feed format and the in-app client move together deliberately.
       - name: Install Velopack CLI
-        run: dotnet tool install -g vpk
+        run: dotnet tool install -g vpk --version 1.2.0
 
       # Pulls the previous release so vpk can build delta packages.
       # Fails harmlessly on the very first release.
@@ -72,6 +74,7 @@ jobs:
           --packTitle goresave
           --packAuthors dh0er
           --icon apps/goresave/windows/runner/resources/app_icon.ico
+          --noPortable
           --outputDir dist/velopack
 
       - name: Upload build artifact
