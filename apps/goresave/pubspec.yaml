@@ -1,7 +1,7 @@
 name: goresave
 description: "goresave: Gothic Remake Savegame-Editor"
 publish_to: "none"
-version: 0.1.0+1
+version: 0.1.0
 
 environment:
   sdk: ^3.12.0
