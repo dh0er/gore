@@ -2124,7 +2124,13 @@ fn inspect_private_payload(
             let typed_parse = summarize_typed_parse(&payload, preview);
             let mut writable = vec!["private.replaceFString"];
             if typed_parse["status"] == "ok" {
-                writable.push("private.typed.setValue");
+                writable.extend([
+                    "private.typed.setValue",
+                    "private.typed.setAdd",
+                    "private.typed.setRemove",
+                    "private.typed.arrayRemove",
+                    "private.typed.arrayDuplicate",
+                ]);
             }
             Ok(json!({
                 "status": if preview { "decoded_preview" } else { "decoded" },
@@ -3320,6 +3326,13 @@ fn apply_private_edits(
             "private.typed.setValue" => {
                 parse_private_typed_set_value_edit(edit).map(PrivateEdit::TypedSetValue)
             }
+            "private.typed.setAdd"
+            | "private.typed.setRemove"
+            | "private.typed.arrayRemove"
+            | "private.typed.arrayDuplicate" => {
+                parse_private_typed_container_edit(edit, edit.path.as_str())
+                    .map(PrivateEdit::TypedContainer)
+            }
             other => Err(CoreError::UnsupportedEdit(format!(
                 "{other} is not writable in this build"
             ))),
@@ -3397,6 +3410,7 @@ enum PrivateEdit {
     PlayerTransform(PrivatePlayerTransformEdit),
     InventoryItemCount(PrivateInventoryItemCountEdit),
     TypedSetValue(PrivateTypedSetValueEdit),
+    TypedContainer(PrivateTypedContainerEdit),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -3405,38 +3419,104 @@ struct PrivateTypedSetValueEdit {
     value: Value,
 }
 
-fn parse_private_typed_set_value_edit(edit: &Edit) -> Result<PrivateTypedSetValueEdit, CoreError> {
-    let value = edit.value.as_object().ok_or_else(|| {
-        CoreError::InvalidRequest("private.typed.setValue value must be an object".to_string())
-    })?;
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PrivateTypedContainerEdit {
+    path: Vec<properties::PathSeg>,
+    edit: properties::ContainerEdit,
+}
+
+fn parse_typed_edit_path(
+    op: &str,
+    value: &serde_json::Map<String, Value>,
+) -> Result<Vec<properties::PathSeg>, CoreError> {
     let segments = value
         .get("path")
         .and_then(Value::as_array)
         .ok_or_else(|| {
-            CoreError::InvalidRequest(
-                "private.typed.setValue requires value.path as an array of segments".to_string(),
-            )
+            CoreError::InvalidRequest(format!(
+                "{op} requires value.path as an array of segments"
+            ))
         })?
         .iter()
         .map(|segment| {
             segment.as_str().map(str::to_string).ok_or_else(|| {
-                CoreError::InvalidRequest(
-                    "private.typed.setValue path segments must be strings".to_string(),
-                )
+                CoreError::InvalidRequest(format!("{op} path segments must be strings"))
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
     if segments.is_empty() {
-        return Err(CoreError::InvalidRequest(
-            "private.typed.setValue requires a non-empty value.path".to_string(),
-        ));
+        return Err(CoreError::InvalidRequest(format!(
+            "{op} requires a non-empty value.path"
+        )));
     }
+    properties::parse_path(&segments)
+}
+
+fn parse_private_typed_set_value_edit(edit: &Edit) -> Result<PrivateTypedSetValueEdit, CoreError> {
+    let value = edit.value.as_object().ok_or_else(|| {
+        CoreError::InvalidRequest("private.typed.setValue value must be an object".to_string())
+    })?;
+    let path = parse_typed_edit_path("private.typed.setValue", value)?;
     let new_value = value.get("value").cloned().ok_or_else(|| {
         CoreError::InvalidRequest("private.typed.setValue requires value.value".to_string())
     })?;
     Ok(PrivateTypedSetValueEdit {
-        path: properties::parse_path(&segments)?,
+        path,
         value: new_value,
+    })
+}
+
+fn parse_private_typed_container_edit(
+    edit: &Edit,
+    op: &str,
+) -> Result<PrivateTypedContainerEdit, CoreError> {
+    let value = edit.value.as_object().ok_or_else(|| {
+        CoreError::InvalidRequest(format!("{op} value must be an object"))
+    })?;
+    let path = parse_typed_edit_path(op, value)?;
+    let container_edit = match op {
+        "private.typed.setAdd" | "private.typed.setRemove" => {
+            let element = value
+                .get("value")
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+                .ok_or_else(|| {
+                    CoreError::InvalidRequest(format!(
+                        "{op} requires a non-empty string value.value"
+                    ))
+                })?
+                .to_string();
+            if op == "private.typed.setAdd" {
+                properties::ContainerEdit::SetAdd(element)
+            } else {
+                properties::ContainerEdit::SetRemove(element)
+            }
+        }
+        "private.typed.arrayRemove" | "private.typed.arrayDuplicate" => {
+            let index = value
+                .get("index")
+                .and_then(Value::as_u64)
+                .and_then(|v| usize::try_from(v).ok())
+                .ok_or_else(|| {
+                    CoreError::InvalidRequest(format!(
+                        "{op} requires a non-negative integer value.index"
+                    ))
+                })?;
+            if op == "private.typed.arrayRemove" {
+                properties::ContainerEdit::ArrayRemove(index)
+            } else {
+                properties::ContainerEdit::ArrayDuplicate(index)
+            }
+        }
+        other => {
+            return Err(CoreError::UnsupportedEdit(format!(
+                "{other} is not a typed container edit"
+            )));
+        }
+    };
+    Ok(PrivateTypedContainerEdit {
+        path,
+        edit: container_edit,
     })
 }
 
@@ -3910,7 +3990,36 @@ fn apply_private_edit_to_payload(
         PrivateEdit::TypedSetValue(edit) => {
             apply_private_typed_set_value_edit_to_payload(payload, edit)
         }
+        PrivateEdit::TypedContainer(edit) => {
+            apply_private_typed_container_edit_to_payload(payload, edit)
+        }
     }
+}
+
+fn apply_private_typed_container_edit_to_payload(
+    payload: &mut Vec<u8>,
+    edit: &PrivateTypedContainerEdit,
+) -> Result<(), CoreError> {
+    let root = properties::parse_private_root(payload)?;
+    let resolved = properties::resolve_chain(&root.properties, &edit.path)?;
+    let target = resolved.target.clone();
+    // Length-changing patch: work on a scratch copy and prove with a strict
+    // re-parse that every size and count field was fixed up, so a bug cannot
+    // corrupt the caller's payload (or the save).
+    let mut patched = payload.clone();
+    properties::patch_container(
+        &mut patched,
+        &target,
+        &resolved.enclosing_size_fields,
+        &edit.edit,
+    )?;
+    properties::parse_private_root(&patched).map_err(|err| {
+        CoreError::Parse(format!(
+            "container patch produced an inconsistent payload: {err}"
+        ))
+    })?;
+    *payload = patched;
+    Ok(())
 }
 
 fn apply_private_fstring_edit_to_payload(
@@ -7386,5 +7495,120 @@ mod tests {
                 .unwrap()
                 .contains("io error")
         );
+    }
+
+    fn private_name_set_property(name: &str, values: &[&str]) -> Vec<u8> {
+        let mut body = 0u32.to_le_bytes().to_vec();
+        body.extend_from_slice(&(values.len() as u32).to_le_bytes());
+        for v in values {
+            body.extend_from_slice(&fstring(v));
+        }
+        let mut out = fstring(name);
+        out.extend_from_slice(&fstring("SetProperty"));
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&fstring("NameProperty"));
+        out.extend_from_slice(&0u32.to_le_bytes()); // array_index
+        out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        out.push(0); // tag_flags
+        out.extend_from_slice(&body);
+        out
+    }
+
+    #[test]
+    fn typed_container_edits_apply_and_validate() {
+        let mut payload = fstring("/Script/Test.Save");
+        payload.push(0);
+        payload.extend_from_slice(&private_name_set_property("Knowledge", &["A", "B"]));
+        payload.extend_from_slice(&fstring("None"));
+        payload.extend_from_slice(&0u32.to_le_bytes());
+
+        let edit = PrivateTypedContainerEdit {
+            path: properties::parse_path(&["Knowledge".to_string()]).unwrap(),
+            edit: properties::ContainerEdit::SetAdd("C".to_string()),
+        };
+        apply_private_typed_container_edit_to_payload(&mut payload, &edit).unwrap();
+        let edit = PrivateTypedContainerEdit {
+            path: properties::parse_path(&["Knowledge".to_string()]).unwrap(),
+            edit: properties::ContainerEdit::SetRemove("A".to_string()),
+        };
+        apply_private_typed_container_edit_to_payload(&mut payload, &edit).unwrap();
+
+        let root = properties::parse_private_root(&payload).unwrap();
+        assert_eq!(
+            root.properties[0].value,
+            properties::PropertyValue::Set {
+                num_to_remove: 0,
+                elements: vec![
+                    properties::PropertyValue::Name("B".to_string()),
+                    properties::PropertyValue::Name("C".to_string()),
+                ],
+            }
+        );
+
+        // Unknown path fails without mutation.
+        let copy = payload.clone();
+        let bad = PrivateTypedContainerEdit {
+            path: properties::parse_path(&["Nope".to_string()]).unwrap(),
+            edit: properties::ContainerEdit::SetAdd("X".to_string()),
+        };
+        assert!(apply_private_typed_container_edit_to_payload(&mut payload, &bad).is_err());
+        assert_eq!(payload, copy);
+    }
+
+    #[test]
+    fn write_save_applies_typed_container_edits() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-001.sav");
+        let output_path = dir.path().join("G1R-001-container.sav");
+        let private_payload = {
+            let mut p = fstring("/Script/Angelscript.GothicFinalDataGame");
+            p.push(0);
+            p.extend_from_slice(&private_name_set_property("Knowledge", &["Voiceline_A"]));
+            p.extend_from_slice(&fstring("None"));
+            p.extend_from_slice(&0u32.to_le_bytes());
+            p
+        };
+        let seed_compressed = b"seed-compressed".to_vec();
+        let stream = compressed_stream_with_one_chunk(&seed_compressed, private_payload.len());
+        fs::write(
+            &path,
+            build_gsav(2, &public_payload("Slot A"), &stream, &[0, 0, 0, 0]),
+        )
+        .unwrap();
+        let backend = PrefixCodecBackend {
+            seed_compressed,
+            seed_uncompressed: private_payload,
+        };
+
+        // The container ops must be advertised once the typed parse is ok.
+        let inspected = inspect_save_with_codec_backend(&path, true, Some(&backend), None).unwrap();
+        let writable = inspected["private"]["writable"].as_array().unwrap();
+        for op in [
+            "private.typed.setAdd",
+            "private.typed.setRemove",
+            "private.typed.arrayRemove",
+            "private.typed.arrayDuplicate",
+        ] {
+            assert!(writable.contains(&json!(op)), "missing writable {op}");
+        }
+
+        let response = write_save_with_codec_backend(
+            &path,
+            &[json!({
+                "path": "private.typed.setAdd",
+                "value": { "path": ["Knowledge"], "value": "ChoiceB" }
+            })],
+            false,
+            Some(&output_path),
+            Some(&backend),
+        )
+        .unwrap();
+        assert_eq!(response["editsApplied"], 1);
+
+        let value =
+            inspect_save_with_codec_backend(&output_path, true, Some(&backend), None).unwrap();
+        assert_eq!(value["private"]["typedParse"]["status"], "ok");
+        let strings = value["private"]["strings"].as_array().unwrap();
+        assert!(strings.iter().any(|s| s == "ChoiceB"));
     }
 }
