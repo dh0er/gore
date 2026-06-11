@@ -14,6 +14,23 @@ supported save metadata and structured views into parsed save data.
 - Configure optional local helper paths for advanced private payload support.
 - List and restore slot backups created by the editor.
 
+## Installation & Updates
+
+Download `Goresave-win-Setup.exe` from the
+[latest release](https://github.com/dh0er/goresave/releases/latest) and run it.
+The app checks GitHub Releases on startup, downloads updates in the background,
+and applies them when you click "Restart to update".
+
+A portable zip is also attached to each release; the portable build does not
+auto-update.
+
+### Releasing (maintainers)
+
+1. Set `version:` in `apps/goresave/pubspec.yaml` to the new `X.Y.Z`.
+2. Commit, then `git tag vX.Y.Z && git push origin vX.Y.Z`.
+3. The Release workflow builds the zip + Velopack packages and publishes the
+   GitHub release. The tag must match the pubspec version or the build fails.
+
 ## Project Layout
 
 - `apps/goresave`: Flutter Windows application.

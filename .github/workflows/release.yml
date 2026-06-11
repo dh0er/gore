@@ -14,6 +14,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Resolve and verify version
+        id: version
+        shell: pwsh
+        run: |
+          $pubspec = Get-Content apps/goresave/pubspec.yaml -Raw
+          if ($pubspec -notmatch '(?m)^version:\s*([0-9]+\.[0-9]+\.[0-9]+)\s*$') {
+            Write-Error 'pubspec.yaml version must be plain X.Y.Z (no build number)'
+            exit 1
+          }
+          $version = $Matches[1]
+          if ('${{ github.ref_type }}' -eq 'tag') {
+            $tag = '${{ github.ref_name }}'
+            if ($tag -ne "v$version") {
+              Write-Error "tag $tag does not match pubspec version $version"
+              exit 1
+            }
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
@@ -27,18 +46,49 @@ jobs:
           channel: stable
           cache: true
 
+      # GIT_SHA comes from the GITHUB_SHA env via build.py.
       - name: Build distribution
         run: python build.py dist
+
+      - name: Install Velopack CLI
+        run: dotnet tool install -g vpk
+
+      # Pulls the previous release so vpk can build delta packages.
+      # Fails harmlessly on the very first release.
+      - name: Download previous Velopack release
+        continue-on-error: true
+        run: >-
+          vpk download github
+          --repoUrl https://github.com/${{ github.repository }}
+          --outputDir dist/velopack
+
+      - name: Velopack pack
+        run: >-
+          vpk pack
+          --packId Goresave
+          --packVersion ${{ steps.version.outputs.version }}
+          --packDir apps/goresave/build/windows/x64/runner/Release
+          --mainExe goresave.exe
+          --packTitle goresave
+          --packAuthors dh0er
+          --icon apps/goresave/windows/runner/resources/app_icon.ico
+          --outputDir dist/velopack
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: goresave-windows-x64
-          path: dist/*.zip
+          path: |
+            dist/*.zip
+            dist/velopack/*
 
+      # releases.win.json + packages must be attached so that
+      # releases/latest/download/ serves the update feed.
       - name: Publish GitHub release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*.zip
+          files: |
+            dist/*.zip
+            dist/velopack/*
           generate_release_notes: true
