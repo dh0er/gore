@@ -884,6 +884,161 @@ pub fn container_layout(
     })
 }
 
+/// Structural container edit applied by `patch_container`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ContainerEdit {
+    /// Append a Name/Str element to a SetProperty (rejects duplicates).
+    SetAdd(String),
+    /// Remove a Name/Str element from a SetProperty by value.
+    SetRemove(String),
+    /// Remove an ArrayProperty element by index.
+    ArrayRemove(usize),
+    /// Duplicate an ArrayProperty element in place (copy inserted right after
+    /// the source element).
+    ArrayDuplicate(usize),
+}
+
+fn set_string_elements(target: &Property) -> Option<&[PropertyValue]> {
+    match &target.value {
+        PropertyValue::Set { elements, .. } => Some(elements),
+        _ => None,
+    }
+}
+
+fn set_element_position(elements: &[PropertyValue], value: &str) -> Option<usize> {
+    elements.iter().position(|e| match e {
+        PropertyValue::Name(s) | PropertyValue::Str(s) => s == value,
+        _ => false,
+    })
+}
+
+/// Apply a structural set/array edit to a resolved container property. The
+/// element count, the property's own tag size, and every enclosing size field
+/// (from [`resolve_chain`]) are adjusted by the byte delta; all writes are
+/// validated before the first mutation, so a failed patch leaves the payload
+/// untouched. Offsets recorded in the parsed tree are stale after a successful
+/// patch — re-parse before further edits.
+pub fn patch_container(
+    payload: &mut Vec<u8>,
+    target: &Property,
+    enclosing_size_fields: &[usize],
+    edit: &ContainerEdit,
+) -> Result<(), CoreError> {
+    let layout = container_layout(payload, target)?;
+    let require_kind = |wanted: ContainerKind, op: &str| {
+        if layout.kind == wanted {
+            Ok(())
+        } else {
+            Err(CoreError::InvalidRequest(format!(
+                "{op} requires a {wanted:?} target, got {:?}",
+                layout.kind
+            )))
+        }
+    };
+    // Each edit is one splice: either remove a byte range or insert bytes at a
+    // position. `count_delta` is +1 or -1.
+    let (remove_range, insert_at, insert_bytes, count_delta): (
+        Option<core::ops::Range<usize>>,
+        usize,
+        Vec<u8>,
+        i64,
+    ) = match edit {
+        ContainerEdit::SetAdd(value) => {
+            require_kind(ContainerKind::Set, "setAdd")?;
+            if !matches!(layout.inner_type.as_str(), "NameProperty" | "StrProperty") {
+                return Err(CoreError::UnsupportedEdit(format!(
+                    "setAdd supports Name/Str sets; this set holds {}",
+                    layout.inner_type
+                )));
+            }
+            let elements = set_string_elements(target)
+                .ok_or_else(|| CoreError::Parse("set value not parsed as a set".into()))?;
+            if set_element_position(elements, value).is_some() {
+                return Err(CoreError::InvalidRequest(format!(
+                    "set already contains {value:?}"
+                )));
+            }
+            let end = target.value_offset + target.value_size;
+            (None, end, encode_fstring_value(value), 1)
+        }
+        ContainerEdit::SetRemove(value) => {
+            require_kind(ContainerKind::Set, "setRemove")?;
+            let elements = set_string_elements(target)
+                .ok_or_else(|| CoreError::Parse("set value not parsed as a set".into()))?;
+            let index = set_element_position(elements, value).ok_or_else(|| {
+                CoreError::Parse(format!("set does not contain {value:?}"))
+            })?;
+            let range = layout.element_ranges[index].clone();
+            (Some(range.clone()), range.start, Vec::new(), -1)
+        }
+        ContainerEdit::ArrayRemove(index) => {
+            require_kind(ContainerKind::Array, "arrayRemove")?;
+            let range = layout.element_ranges.get(*index).cloned().ok_or_else(|| {
+                CoreError::InvalidRequest(format!(
+                    "array index {index} out of bounds ({} elements)",
+                    layout.count
+                ))
+            })?;
+            (Some(range.clone()), range.start, Vec::new(), -1)
+        }
+        ContainerEdit::ArrayDuplicate(index) => {
+            require_kind(ContainerKind::Array, "arrayDuplicate")?;
+            let range = layout.element_ranges.get(*index).cloned().ok_or_else(|| {
+                CoreError::InvalidRequest(format!(
+                    "array index {index} out of bounds ({} elements)",
+                    layout.count
+                ))
+            })?;
+            let bytes = payload[range.clone()].to_vec();
+            (None, range.end, bytes, 1)
+        }
+    };
+    let removed = remove_range.as_ref().map_or(0, |r| r.len());
+    let delta = insert_bytes.len() as i64 - removed as i64;
+    let new_count = u32::try_from(layout.count as i64 + count_delta)
+        .map_err(|_| CoreError::Parse("container count underflow".to_string()))?;
+    let new_size = u32::try_from(target.value_size as i64 + delta)
+        .map_err(|_| CoreError::Parse("container size would leave the u32 range".to_string()))?;
+
+    // Compute every size-field rewrite up front; mutate only once all are
+    // valid (same discipline as patch_string).
+    let mut writes = Vec::with_capacity(enclosing_size_fields.len() + 2);
+    if target.value_offset < 5 {
+        return Err(CoreError::Parse("container tag offset underflow".to_string()));
+    }
+    writes.push((target.size_field_offset(), new_size));
+    for &offset in enclosing_size_fields {
+        if offset + 4 > target.value_offset {
+            return Err(CoreError::Parse(format!(
+                "enclosing size field at 0x{offset:x} does not precede the patch target"
+            )));
+        }
+        let old = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap());
+        let updated = u32::try_from(i64::from(old) + delta).map_err(|_| {
+            CoreError::Parse(format!(
+                "enclosing size field at 0x{offset:x} would leave the u32 range"
+            ))
+        })?;
+        writes.push((offset, updated));
+    }
+    // The count field lives inside the value payload but always precedes the
+    // splice position (elements follow the count), so writing it before the
+    // splice is safe.
+    writes.push((layout.count_offset, new_count));
+    for (offset, value) in writes {
+        payload[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+    }
+    match remove_range {
+        Some(range) => {
+            payload.splice(range, core::iter::empty());
+        }
+        None => {
+            payload.splice(insert_at..insert_at, insert_bytes);
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct PropertyCounts {
     pub total: usize,
@@ -2538,6 +2693,197 @@ mod tests {
         let payload = root("/Script/Test.Save", &int_property("m_X", 1));
         let parsed = parse_private_root(&payload).unwrap();
         assert!(container_layout(&payload, &parsed.properties[0]).is_err());
+    }
+
+    fn struct_wrapping(name: &str, struct_type: &str, inner_props: &[u8]) -> Vec<u8> {
+        let mut body = inner_props.to_vec();
+        body.extend_from_slice(&fstring("None"));
+        let mut out = tag(name, "StructProperty");
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&fstring(struct_type));
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&fstring("/Script/Test"));
+        out.extend_from_slice(&header(body.len() as u32, 0));
+        out.extend_from_slice(&body);
+        out
+    }
+
+    fn resolve_set_target(payload: &[u8]) -> (RootObject, Vec<PathSeg>) {
+        let parsed = parse_private_root(payload).unwrap();
+        let path = parse_path(&[
+            "KnowledgeSet".to_string(),
+            "Knowledge".to_string(),
+        ])
+        .unwrap();
+        (parsed, path)
+    }
+
+    #[test]
+    fn patch_container_set_add_appends_and_fixes_sizes() {
+        let mut payload = root(
+            "/Script/Test.Save",
+            &struct_wrapping(
+                "KnowledgeSet",
+                "KnowledgeSet",
+                &name_set_property("Knowledge", &["Voiceline_A"]),
+            ),
+        );
+        let (parsed, path) = resolve_set_target(&payload);
+        let chain = resolve_chain(&parsed.properties, &path).unwrap();
+        let target = chain.target.clone();
+
+        patch_container(
+            &mut payload,
+            &target,
+            &chain.enclosing_size_fields,
+            &ContainerEdit::SetAdd("ChoiceB".to_string()),
+        )
+        .unwrap();
+
+        // Strict re-parse proves every size field (set tag + wrapping struct
+        // tag) was adjusted.
+        let reparsed = parse_private_root(&payload).unwrap();
+        let set = resolve(&reparsed.properties, &path).unwrap();
+        assert_eq!(
+            set.value,
+            PropertyValue::Set {
+                num_to_remove: 0,
+                elements: vec![
+                    PropertyValue::Name("Voiceline_A".to_string()),
+                    PropertyValue::Name("ChoiceB".to_string()),
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn patch_container_set_add_rejects_duplicates_without_mutation() {
+        let mut payload = root(
+            "/Script/Test.Save",
+            &name_set_property("Knowledge", &["Voiceline_A"]),
+        );
+        let parsed = parse_private_root(&payload).unwrap();
+        let target = parsed.properties[0].clone();
+        let copy = payload.clone();
+        assert!(
+            patch_container(
+                &mut payload,
+                &target,
+                &[],
+                &ContainerEdit::SetAdd("Voiceline_A".to_string()),
+            )
+            .is_err()
+        );
+        assert_eq!(payload, copy);
+    }
+
+    #[test]
+    fn patch_container_set_remove_splices_element_out() {
+        let mut payload = root(
+            "/Script/Test.Save",
+            &struct_wrapping(
+                "KnowledgeSet",
+                "KnowledgeSet",
+                &name_set_property("Knowledge", &["Voiceline_A", "ChoiceB", "Voiceline_C"]),
+            ),
+        );
+        let (parsed, path) = resolve_set_target(&payload);
+        let chain = resolve_chain(&parsed.properties, &path).unwrap();
+        let target = chain.target.clone();
+
+        patch_container(
+            &mut payload,
+            &target,
+            &chain.enclosing_size_fields,
+            &ContainerEdit::SetRemove("ChoiceB".to_string()),
+        )
+        .unwrap();
+
+        let reparsed = parse_private_root(&payload).unwrap();
+        let set = resolve(&reparsed.properties, &path).unwrap();
+        assert_eq!(
+            set.value,
+            PropertyValue::Set {
+                num_to_remove: 0,
+                elements: vec![
+                    PropertyValue::Name("Voiceline_A".to_string()),
+                    PropertyValue::Name("Voiceline_C".to_string()),
+                ],
+            }
+        );
+
+        // Removing a value that is not present fails without mutation.
+        let parsed = parse_private_root(&payload).unwrap();
+        let chain = resolve_chain(&parsed.properties, &path).unwrap();
+        let target = chain.target.clone();
+        let copy = payload.clone();
+        assert!(
+            patch_container(
+                &mut payload,
+                &target,
+                &chain.enclosing_size_fields,
+                &ContainerEdit::SetRemove("ChoiceB".to_string()),
+            )
+            .is_err()
+        );
+        assert_eq!(payload, copy);
+    }
+
+    #[test]
+    fn patch_container_array_remove_and_duplicate() {
+        let mut payload = root("/Script/Test.Save", &int_array_property("Nums", &[7, 8, 9]));
+        let parsed = parse_private_root(&payload).unwrap();
+        let target = parsed.properties[0].clone();
+
+        patch_container(&mut payload, &target, &[], &ContainerEdit::ArrayRemove(1)).unwrap();
+        let reparsed = parse_private_root(&payload).unwrap();
+        assert_eq!(
+            reparsed.properties[0].value,
+            PropertyValue::Array {
+                elements: vec![PropertyValue::Int(7), PropertyValue::Int(9)],
+            }
+        );
+
+        let target = reparsed.properties[0].clone();
+        patch_container(&mut payload, &target, &[], &ContainerEdit::ArrayDuplicate(0)).unwrap();
+        let reparsed = parse_private_root(&payload).unwrap();
+        assert_eq!(
+            reparsed.properties[0].value,
+            PropertyValue::Array {
+                elements: vec![
+                    PropertyValue::Int(7),
+                    PropertyValue::Int(7),
+                    PropertyValue::Int(9),
+                ],
+            }
+        );
+
+        // Out-of-bounds index fails without mutation.
+        let target = reparsed.properties[0].clone();
+        let copy = payload.clone();
+        assert!(
+            patch_container(&mut payload, &target, &[], &ContainerEdit::ArrayRemove(3)).is_err()
+        );
+        assert_eq!(payload, copy);
+    }
+
+    #[test]
+    fn patch_container_rejects_kind_mismatch() {
+        let mut payload = root("/Script/Test.Save", &int_array_property("Nums", &[7]));
+        let parsed = parse_private_root(&payload).unwrap();
+        let target = parsed.properties[0].clone();
+        // set ops on an array
+        assert!(
+            patch_container(&mut payload, &target, &[], &ContainerEdit::SetAdd("X".into()))
+                .is_err()
+        );
+        // array ops on a set
+        let mut payload = root("/Script/Test.Save", &name_set_property("S", &["A"]));
+        let parsed = parse_private_root(&payload).unwrap();
+        let target = parsed.properties[0].clone();
+        assert!(
+            patch_container(&mut payload, &target, &[], &ContainerEdit::ArrayRemove(0)).is_err()
+        );
     }
 
     #[test]
