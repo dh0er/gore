@@ -6,6 +6,16 @@ notes, so every release needs an entry.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Changed
+
+- New Windows installer (Inno Setup): the setup wizard now lets you choose
+  the install directory, including per-user installs without admin rights.
+- Auto-updates now use WinSparkle with signed update feeds. **Users of
+  v0.1.0 must download and run the new installer manually once** — the old
+  updater's feed is no longer published.
+
 ## [0.1.0] - 2026-06-11
 
 ### First Release
