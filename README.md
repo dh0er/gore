@@ -14,6 +14,7 @@ a Flutter interface backed by a Rust savegame core.
 ## Compatibility
 
 Tested with G1R-Win64-Shipping.exe version 5.4.3.0
+
 The tool uses this file to compress/decompress the savegames. 
 Future versions should be automatically supported, but not guaranteed. 
 
