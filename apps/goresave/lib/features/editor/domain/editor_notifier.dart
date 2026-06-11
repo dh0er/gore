@@ -132,7 +132,11 @@ class EditorState {
 
   /// The profile id to use for filtering: the explicitly selected profile, or
   /// fall back to the scan's active profile id.
-  int? get effectiveProfileId => selectedProfileId ?? activeProfileId;
+  /// One resolution shared by the header and the save-list filter, so they
+  /// can never disagree: explicit switcher choice first, then the selected
+  /// save's own profile, then the scan's active profile id.
+  int? get effectiveProfileId =>
+      selectedProfileId ?? selectedSave?.persistentProfileId ?? activeProfileId;
 
   /// Saves to show in the sidebar. When there are fewer than 2 profiles, or
   /// no effective profile id, all saves are shown. Otherwise only saves whose
@@ -154,13 +158,9 @@ class EditorState {
   }
 
   ProfileSummary? get activeProfile {
-    // Prefer the explicitly selected profile; fall back to the selected save's
-    // own profile so a mixed-profile folder shows the profile that the selected
-    // slot belongs to; finally fall back to the scan's active profile id.
-    final targetProfileId =
-        selectedProfileId ??
-        selectedSave?.persistentProfileId ??
-        activeProfileId;
+    // Same resolution as the save-list filter (effectiveProfileId), so the
+    // header always describes the profile whose saves are listed.
+    final targetProfileId = effectiveProfileId;
     for (final profile in profiles) {
       if (profile.profileId == targetProfileId) return profile;
     }
