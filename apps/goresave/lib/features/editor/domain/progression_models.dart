@@ -86,6 +86,7 @@ class ProgressionQuestPage {
   const ProgressionQuestPage({
     this.quests = const [],
     this.stateCounts = const {},
+    this.groupCounts = const {},
     this.total = 0,
     this.offset = 0,
     this.limit = 100,
@@ -97,6 +98,10 @@ class ProgressionQuestPage {
     (json['stateCounts'] as Map?)?.forEach((key, value) {
       if (key is String && value is num) counts[key] = value.toInt();
     });
+    final gCounts = <String, int>{};
+    (json['groupCounts'] as Map?)?.forEach((key, value) {
+      if (key is String && value is num) gCounts[key] = value.toInt();
+    });
     return ProgressionQuestPage(
       quests:
           (json['quests'] as List?)
@@ -105,6 +110,7 @@ class ProgressionQuestPage {
               .toList(growable: false) ??
           const [],
       stateCounts: counts,
+      groupCounts: gCounts,
       total: (json['total'] as num?)?.toInt() ?? 0,
       offset: (json['offset'] as num?)?.toInt() ?? 0,
       limit: (json['limit'] as num?)?.toInt() ?? 100,
@@ -113,6 +119,7 @@ class ProgressionQuestPage {
 
   final List<ProgressionQuest> quests;
   final Map<String, int> stateCounts;
+  final Map<String, int> groupCounts;
   final int total;
   final int offset;
   final int limit;

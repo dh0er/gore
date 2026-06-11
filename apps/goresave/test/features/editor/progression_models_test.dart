@@ -31,6 +31,7 @@ void main() {
       'offset': 0,
       'limit': 100,
       'stateCounts': {'Available': 1, 'Running': 1},
+      'groupCounts': {'BanditsCamp': 1, 'OldCamp': 1},
       'quests': [
         {
           'questClass': '/Script/Angelscript.Quest_OldCamp_SLEEPER',
@@ -52,6 +53,18 @@ void main() {
     expect(page.quests.single.currentState, 'EQuestState::Running');
     expect(page.quests.single.writable, isTrue);
     expect(page.quests.single.statePath, hasLength(3));
+    // groupCounts parsing.
+    expect(page.groupCounts['BanditsCamp'], 1);
+    expect(page.groupCounts['OldCamp'], 1);
+    // Defaults to empty when absent.
+    final noGroups = ProgressionQuestPage.fromJson({
+      'total': 0,
+      'offset': 0,
+      'limit': 100,
+      'stateCounts': <String, Object?>{},
+      'quests': <Object?>[],
+    });
+    expect(noGroups.groupCounts, isEmpty);
   });
 
   test('edit intents emit core edit json', () {
@@ -86,7 +99,11 @@ void main() {
     expect(remove.toEditJson()['path'], 'private.typed.setRemove');
 
     final removeEvent = MemoryEventEdit.remove(
-      arrayPath: const ['LongTermMemoryByGlobalId', '{Hero}', 'MemorizedEvents'],
+      arrayPath: const [
+        'LongTermMemoryByGlobalId',
+        '{Hero}',
+        'MemorizedEvents',
+      ],
       index: 4,
     );
     expect(removeEvent.toEditJson(), {
@@ -98,7 +115,11 @@ void main() {
     });
 
     final duplicate = MemoryEventEdit.duplicate(
-      arrayPath: const ['LongTermMemoryByGlobalId', '{Hero}', 'MemorizedEvents'],
+      arrayPath: const [
+        'LongTermMemoryByGlobalId',
+        '{Hero}',
+        'MemorizedEvents',
+      ],
       index: 4,
     );
     expect(duplicate.toEditJson()['path'], 'private.typed.arrayDuplicate');
@@ -121,7 +142,11 @@ void main() {
       'offset': 0,
       'limit': 200,
       'entries': ['A', 'B'],
-      'setPath': ['CharacterKnowledgeByUniqueName', '{OC_STT_Diego}', 'Knowledge'],
+      'setPath': [
+        'CharacterKnowledgeByUniqueName',
+        '{OC_STT_Diego}',
+        'Knowledge',
+      ],
     });
     expect(entries.entries, ['A', 'B']);
     expect(entries.setPath, hasLength(3));

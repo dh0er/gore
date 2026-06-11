@@ -842,6 +842,8 @@ class EditorNotifier extends StateNotifier<EditorState> {
     String query = '',
     int offset = 0,
     int limit = 100,
+    String? state,
+    String? group,
   }) async {
     String? error;
     final data = await _queryProgression({
@@ -849,6 +851,8 @@ class EditorNotifier extends StateNotifier<EditorState> {
       'query': query,
       'offset': offset,
       'limit': limit,
+      if (state != null && state.isNotEmpty) 'state': state,
+      if (group != null && group.isNotEmpty) 'group': group,
     }, onError: (message) => error = message);
     if (data == null) return ProgressionQuestPage(error: error);
     return ProgressionQuestPage.fromJson(data);

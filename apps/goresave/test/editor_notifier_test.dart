@@ -880,6 +880,51 @@ void main() {
     expect(call.payload['path'], r'C:\tmp\saves\G1R-001.sav');
   });
 
+  test(
+    'loadProgressionQuests passes state and group params to the core',
+    () async {
+      final core = _RecordingCoreService(
+        progressionData: {
+          'section': 'quests',
+          'total': 0,
+          'offset': 0,
+          'limit': 50,
+          'count': 0,
+          'stateCounts': <String, Object?>{},
+          'groupCounts': <String, Object?>{},
+          'quests': <Object?>[],
+        },
+      );
+      final notifier = EditorNotifier(
+        core,
+        saveDir: r'C:\tmp\saves',
+        codecHostPath: r'C:\tools\goresave_g1r_codec_host.exe',
+        gameExePath: r'C:\Games\G1R\G1R-Win64-Shipping.exe',
+      );
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+      await notifier.loadProgressionQuests(
+        state: 'Running',
+        group: 'OldCamp',
+        limit: 50,
+      );
+
+      final call = core.requests.lastWhere(
+        (r) => r.command == 'query_progression',
+      );
+      expect(call.payload['state'], 'Running');
+      expect(call.payload['group'], 'OldCamp');
+
+      // Null/empty filters must NOT appear in the payload.
+      await notifier.loadProgressionQuests(limit: 50);
+      final callNoFilter = core.requests.lastWhere(
+        (r) => r.command == 'query_progression',
+      );
+      expect(callNoFilter.payload.containsKey('state'), isFalse);
+      expect(callNoFilter.payload.containsKey('group'), isFalse);
+    },
+  );
+
   test('progression loaders surface core errors inline', () async {
     // The default _RecordingCoreService returns ok:false for query_progression
     // (no progressionData set), so the loader should surface the error inline.

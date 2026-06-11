@@ -14,6 +14,15 @@ const questStates = <String>[
   'EQuestState::Failed',
 ];
 
+/// Short state labels shown in filter chips, in display order.
+const _filterStateLabels = <String>[
+  'Available',
+  'Running',
+  'Succeeded',
+  'Failed',
+  'None',
+];
+
 String shortStateLabel(String state) {
   final idx = state.lastIndexOf('::');
   return idx < 0 ? state : state.substring(idx + 2);
@@ -333,6 +342,8 @@ class _QuestsDetailState extends State<_QuestsDetail> {
   int _reloadEpoch = 0;
   int _pageSize = _defaultPageSize;
   String _activeQuery = '';
+  String? _stateFilter;
+  String? _groupFilter;
 
   @override
   void initState() {
@@ -347,6 +358,8 @@ class _QuestsDetailState extends State<_QuestsDetail> {
       _pending.clear();
       _search.clear();
       _activeQuery = '';
+      _stateFilter = null;
+      _groupFilter = null;
       _reload(offset: 0);
     }
   }
@@ -368,6 +381,8 @@ class _QuestsDetailState extends State<_QuestsDetail> {
       query: _activeQuery,
       offset: offset,
       limit: _pageSize,
+      state: _stateFilter,
+      group: _groupFilter,
     );
     if (!mounted || epoch != _reloadEpoch) return;
     setState(() {
@@ -472,6 +487,23 @@ class _QuestsDetailState extends State<_QuestsDetail> {
               Text(_page.error!, style: TextStyle(color: scheme.error)),
             ],
             const SizedBox(height: 8),
+            // Filter row: status chips + group dropdown
+            _QuestFilterRow(
+              page: _page,
+              stateFilter: _stateFilter,
+              groupFilter: _groupFilter,
+              onStateChanged: (label) {
+                setState(() {
+                  _stateFilter = (_stateFilter == label) ? null : label;
+                });
+                _reload(offset: 0);
+              },
+              onGroupChanged: (group) {
+                setState(() => _groupFilter = group);
+                _reload(offset: 0);
+              },
+            ),
+            const SizedBox(height: 4),
             _PaginationBar(
               offset: _page.offset,
               count: _page.quests.length,
@@ -1418,6 +1450,71 @@ class _EventsDetailState extends State<_EventsDetail> {
           ],
         ),
       ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Quest filter row: status chips + group dropdown
+// ---------------------------------------------------------------------------
+
+class _QuestFilterRow extends StatelessWidget {
+  const _QuestFilterRow({
+    required this.page,
+    required this.stateFilter,
+    required this.groupFilter,
+    required this.onStateChanged,
+    required this.onGroupChanged,
+  });
+
+  final ProgressionQuestPage page;
+  final String? stateFilter;
+  final String? groupFilter;
+  final void Function(String label) onStateChanged;
+  final void Function(String? group) onGroupChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    // Status FilterChips — only show labels with count > 0.
+    final chips = [
+      for (final label in _filterStateLabels)
+        if ((page.stateCounts[label] ?? 0) > 0)
+          FilterChip(
+            label: Text('$label ${page.stateCounts[label]}'),
+            selected: stateFilter == label,
+            onSelected: (_) => onStateChanged(label),
+            visualDensity: VisualDensity.compact,
+          ),
+    ];
+
+    // Group dropdown entries sorted by name.
+    final sortedGroups = page.groupCounts.keys.toList()..sort();
+
+    return Wrap(
+      spacing: 6,
+      runSpacing: 4,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        ...chips,
+        DropdownButton<String?>(
+          value: groupFilter,
+          isDense: true,
+          underline: const SizedBox.shrink(),
+          hint: const Text('All groups'),
+          onChanged: onGroupChanged,
+          items: [
+            const DropdownMenuItem<String?>(
+              value: null,
+              child: Text('All groups'),
+            ),
+            for (final g in sortedGroups)
+              DropdownMenuItem<String?>(
+                value: g,
+                child: Text('$g (${page.groupCounts[g]})'),
+              ),
+          ],
+        ),
+      ],
     );
   }
 }
