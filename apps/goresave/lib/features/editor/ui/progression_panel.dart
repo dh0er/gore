@@ -875,13 +875,15 @@ class _KnowledgeDetailState extends State<_KnowledgeDetail> {
     final character = _selectedCharacter;
 
     // Compute sets for rendering — only include edits for the selected NPC.
+    // removedEntries holds lower-cased values to match the case-folded
+    // pending keys: lookups against displayed entries fold too.
     final removedEntries = <String>{};
     final addedEntries = <String>[];
     if (character != null) {
       final prefix = '$character\t';
       for (final e in _pending.entries) {
         if (!e.key.startsWith(prefix)) continue;
-        if (!e.value.isAdd) removedEntries.add(e.value.entry);
+        if (!e.value.isAdd) removedEntries.add(e.value.entry.toLowerCase());
         if (e.value.isAdd) addedEntries.add(e.value.entry);
       }
     }
@@ -1150,7 +1152,7 @@ class _KnowledgeDetailState extends State<_KnowledgeDetail> {
                                     itemBuilder: (context, index) {
                                       final entry = _entries.entries[index];
                                       final isRemoved = removedEntries.contains(
-                                        entry,
+                                        entry.toLowerCase(),
                                       );
                                       return ListTile(
                                         dense: true,
