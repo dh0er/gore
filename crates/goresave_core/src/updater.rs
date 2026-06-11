@@ -31,6 +31,9 @@ fn update_manager() -> Option<UpdateManager> {
 
 pub fn update_check(_payload: &Value) -> Result<Value, CoreError> {
     let Some(manager) = update_manager() else {
+        // A previously stored update must not survive a check that no longer
+        // reports one, or download/apply could act on a superseded package.
+        *PENDING_UPDATE.lock().unwrap() = None;
         return Ok(json!({ "status": "disabled" }));
     };
     match manager.check_for_updates() {
@@ -39,7 +42,10 @@ pub fn update_check(_payload: &Value) -> Result<Value, CoreError> {
             *PENDING_UPDATE.lock().unwrap() = Some(*info);
             Ok(json!({ "status": "updateAvailable", "version": version }))
         }
-        Ok(_) => Ok(json!({ "status": "upToDate" })),
+        Ok(_) => {
+            *PENDING_UPDATE.lock().unwrap() = None;
+            Ok(json!({ "status": "upToDate" }))
+        }
         Err(err) => Err(CoreError::Update(err.to_string())),
     }
 }
@@ -100,5 +106,18 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(&response).unwrap();
         assert_eq!(value["ok"], false);
         assert_eq!(value["error"]["code"], "UPDATE_ERROR");
+    }
+
+    // A check whose outcome is not "updateAvailable" must drop any previously
+    // stored update so download/apply cannot act on a superseded package.
+    // (Safe alongside the tests above: with the updater disabled they fail on
+    // the manager guard before ever reading PENDING_UPDATE.)
+    #[test]
+    fn update_check_clears_stale_pending_update() {
+        *super::PENDING_UPDATE.lock().unwrap() = Some(velopack::UpdateInfo::default());
+        let response = crate::execute_json(r#"{"command":"update_check","payload":{}}"#);
+        let value: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(value["data"]["status"], "disabled");
+        assert!(super::PENDING_UPDATE.lock().unwrap().is_none());
     }
 }

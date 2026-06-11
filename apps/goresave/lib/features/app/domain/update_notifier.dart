@@ -48,7 +48,12 @@ class UpdateNotifier extends StateNotifier<UpdateState> {
 
   Future<void> applyAndRestart() async {
     try {
-      await _core.execute('update_apply_restart');
+      // On success Velopack restarts the process, so this only returns on
+      // failure (ok: false) — the core reports errors without throwing.
+      final response = await _core.execute('update_apply_restart');
+      if (response['ok'] != true) {
+        debugPrint('goresave update apply failed: ${response['error']}');
+      }
     } catch (error) {
       debugPrint('goresave update apply failed: $error');
     }

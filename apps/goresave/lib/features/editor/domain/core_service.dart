@@ -10,26 +10,6 @@ typedef _ExecuteNative = Pointer<Utf8> Function(Pointer<Utf8>);
 typedef _ExecuteDart = Pointer<Utf8> Function(Pointer<Utf8>);
 typedef _FreeNative = Void Function(Pointer<Utf8>);
 typedef _FreeDart = void Function(Pointer<Utf8>);
-typedef _StartupNative = Void Function();
-typedef _StartupDart = void Function();
-
-/// Runs Velopack install/update hooks in the native core. Must be the very
-/// first call in main(): Velopack may exit the process during hook
-/// invocations. A missing DLL is fine (dev run without a built core).
-void velopackStartup() {
-  for (final candidate in _candidateLibraryPaths()) {
-    try {
-      final library = DynamicLibrary.open(candidate);
-      final startup = library.lookupFunction<_StartupNative, _StartupDart>(
-        'goresave_velopack_startup',
-      );
-      startup();
-      return;
-    } catch (_) {
-      continue;
-    }
-  }
-}
 
 abstract class GoresaveCoreService {
   bool get isAvailable;
