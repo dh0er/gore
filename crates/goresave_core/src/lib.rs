@@ -1210,18 +1210,45 @@ pub fn list_save_backups(path: &Path) -> Result<Vec<BackupListItem>, CoreError> 
     }
     let prefix = backup_file_prefix(path)?;
     let mut backups = Vec::new();
+
+    // Collect candidate (backup_path, file_name) pairs from both locations:
+    // 1. Legacy: files in the save's parent directory matching the prefix.
+    // 2. New: files in the goresave_backups subfolder matching the prefix.
+    let mut candidates: Vec<(PathBuf, String)> = Vec::new();
     for entry in fs::read_dir(parent)? {
         let entry = entry?;
-        let backup_path = entry.path();
-        let Some(file_name) = backup_path.file_name().and_then(|value| value.to_str()) else {
-            continue;
-        };
-        if !file_name.starts_with(&prefix) {
+        let p = entry.path();
+        if !p.is_file() {
             continue;
         }
+        let Some(file_name) = p.file_name().and_then(|v| v.to_str()).map(str::to_owned) else {
+            continue;
+        };
+        if file_name.starts_with(&prefix) {
+            candidates.push((p, file_name));
+        }
+    }
+    let subfolder = parent.join("goresave_backups");
+    if subfolder.is_dir() {
+        for entry in fs::read_dir(&subfolder)? {
+            let entry = entry?;
+            let p = entry.path();
+            if !p.is_file() {
+                continue;
+            }
+            let Some(file_name) = p.file_name().and_then(|v| v.to_str()).map(str::to_owned) else {
+                continue;
+            };
+            if file_name.starts_with(&prefix) {
+                candidates.push((p, file_name));
+            }
+        }
+    }
+
+    for (backup_path, file_name) in candidates {
         let data = fs::read(&backup_path)?;
-        let metadata = entry.metadata()?;
-        let created_epoch = parse_backup_epoch(file_name, &prefix);
+        let metadata = fs::metadata(&backup_path)?;
+        let created_epoch = parse_backup_epoch(&file_name, &prefix);
         let (status, player_save_name, slot_name) =
             match inspect_bytes(&data, Some(&backup_path), false) {
                 Ok(info) => {
@@ -1242,7 +1269,7 @@ pub fn list_save_backups(path: &Path) -> Result<Vec<BackupListItem>, CoreError> 
             };
         backups.push(BackupListItem {
             path: backup_path.display().to_string(),
-            file_name: file_name.to_string(),
+            file_name,
             file_size: metadata.len(),
             sha1: sha1_hex(&data),
             created_epoch,
@@ -1273,27 +1300,54 @@ fn list_persistent_data_list_backups_for_save(
     let persistent_path = parent.join("PersistentDataList.sav");
     let prefix = backup_file_prefix(&persistent_path)?;
     let mut backups = Vec::new();
+
+    // Collect candidate (backup_path, file_name) pairs from both locations:
+    // 1. Legacy: files in the save's parent directory matching the prefix.
+    // 2. New: files in the goresave_backups subfolder matching the prefix.
+    let mut candidates: Vec<(PathBuf, String)> = Vec::new();
     for entry in fs::read_dir(parent)? {
         let entry = entry?;
-        let backup_path = entry.path();
-        let Some(file_name) = backup_path.file_name().and_then(|value| value.to_str()) else {
-            continue;
-        };
-        if !file_name.starts_with(&prefix) {
+        let p = entry.path();
+        if !p.is_file() {
             continue;
         }
+        let Some(file_name) = p.file_name().and_then(|v| v.to_str()).map(str::to_owned) else {
+            continue;
+        };
+        if file_name.starts_with(&prefix) {
+            candidates.push((p, file_name));
+        }
+    }
+    let subfolder = parent.join("goresave_backups");
+    if subfolder.is_dir() {
+        for entry in fs::read_dir(&subfolder)? {
+            let entry = entry?;
+            let p = entry.path();
+            if !p.is_file() {
+                continue;
+            }
+            let Some(file_name) = p.file_name().and_then(|v| v.to_str()).map(str::to_owned) else {
+                continue;
+            };
+            if file_name.starts_with(&prefix) {
+                candidates.push((p, file_name));
+            }
+        }
+    }
+
+    for (backup_path, file_name) in candidates {
         let data = fs::read(&backup_path)?;
-        let metadata = entry.metadata()?;
-        let created_epoch = parse_backup_epoch(file_name, &prefix);
+        let metadata = fs::metadata(&backup_path)?;
+        let created_epoch = parse_backup_epoch(&file_name, &prefix);
         let (status, player_save_name, slot_name) =
             match inspect_bytes(&data, Some(&backup_path), false) {
                 Ok(_) => {
                     let persistent_slots = parse_persistent_slot_metadata(&data);
                     match persistent_slots.get(slot) {
-                        Some(metadata) => (
+                        Some(slot_meta) => (
                             "ok".to_string(),
-                            metadata.player_save_name.clone(),
-                            metadata
+                            slot_meta.player_save_name.clone(),
+                            slot_meta
                                 .slot_name
                                 .clone()
                                 .or_else(|| Some(slot.to_string())),
@@ -1309,7 +1363,7 @@ fn list_persistent_data_list_backups_for_save(
             };
         backups.push(BackupListItem {
             path: backup_path.display().to_string(),
-            file_name: file_name.to_string(),
+            file_name,
             file_size: metadata.len(),
             sha1: sha1_hex(&data),
             created_epoch,
@@ -1456,15 +1510,29 @@ fn prepare_paired_persistent_data_list_restore(
 
     let companion_prefix = backup_file_prefix(&persistent_path)?;
     let mut companion_backup_path = None;
-    for entry in fs::read_dir(parent)? {
-        let entry = entry?;
-        let candidate = entry.path();
-        let Some(name) = candidate.file_name().and_then(|value| value.to_str()) else {
+    // Search the legacy parent directory first, then the goresave_backups subfolder.
+    let search_dirs: Vec<PathBuf> = {
+        let mut dirs = vec![parent.to_path_buf()];
+        let subfolder = parent.join("goresave_backups");
+        if subfolder.is_dir() {
+            dirs.push(subfolder);
+        }
+        dirs
+    };
+    'outer: for search_dir in &search_dirs {
+        if !search_dir.is_dir() {
             continue;
-        };
-        if name.strip_prefix(&companion_prefix) == Some(slot_suffix) {
-            companion_backup_path = Some(candidate);
-            break;
+        }
+        for entry in fs::read_dir(search_dir)? {
+            let entry = entry?;
+            let candidate = entry.path();
+            let Some(name) = candidate.file_name().and_then(|value| value.to_str()) else {
+                continue;
+            };
+            if name.strip_prefix(&companion_prefix) == Some(slot_suffix) {
+                companion_backup_path = Some(candidate);
+                break 'outer;
+            }
         }
     }
     let Some(companion_backup_path) = companion_backup_path else {
@@ -1508,9 +1576,16 @@ fn ensure_backup_belongs_to_save(path: &Path, backup_path: &Path) -> Result<(), 
     }
     let save_parent = path.parent().unwrap_or_else(|| Path::new("."));
     let backup_parent = backup_path.parent().unwrap_or_else(|| Path::new("."));
-    if fs::canonicalize(save_parent)? != fs::canonicalize(backup_parent)? {
+    let canonical_save_parent = fs::canonicalize(save_parent)?;
+    let canonical_backup_parent = fs::canonicalize(backup_parent)?;
+    // Accept backups both in the save's parent directory (legacy) and in
+    // its goresave_backups subfolder (new layout).
+    let subfolder = canonical_save_parent.join("goresave_backups");
+    if canonical_backup_parent != canonical_save_parent
+        && canonical_backup_parent != subfolder
+    {
         return Err(CoreError::InvalidRequest(
-            "backupPath must be next to the selected save file".to_string(),
+            "backupPath must be next to the selected save file or in its goresave_backups subfolder".to_string(),
         ));
     }
     Ok(())
@@ -1549,6 +1624,30 @@ impl PendingReplace {
     }
 }
 
+/// Map an I/O error that occurred while renaming or replacing a live save file
+/// into a human-readable [`CoreError`] when the error indicates that another
+/// process holds the file open (Windows sharing/lock violation).
+///
+/// `context` is appended to the message for disambiguation (e.g. the file path
+/// or operation description). On non-Windows platforms or for unrelated errors
+/// the original error is wrapped unchanged.
+fn map_locked_file_error(err: std::io::Error, context: &str) -> CoreError {
+    let is_locked = match err.raw_os_error() {
+        // ERROR_SHARING_VIOLATION = 32, ERROR_LOCK_VIOLATION = 33
+        Some(32) | Some(33) => true,
+        _ => err.kind() == std::io::ErrorKind::PermissionDenied,
+    };
+    if is_locked {
+        CoreError::Io(format!(
+            "the save file is locked by another process \
+             (is the game running?) — close the game or its load screen, \
+             then retry: {err} ({context})"
+        ))
+    } else {
+        CoreError::Io(err.to_string())
+    }
+}
+
 /// Replace `target` with the staged file at `staged` without ever leaving
 /// `target` missing on failure. Windows `rename` cannot overwrite, so the
 /// current file is moved aside first; if renaming the staged file in fails, the
@@ -1556,7 +1655,7 @@ impl PendingReplace {
 /// [`PendingReplace`] must be either committed or rolled back.
 fn begin_replace(target: &Path, staged: &Path) -> Result<PendingReplace, CoreError> {
     if !target.exists() {
-        fs::rename(staged, target)?;
+        fs::rename(staged, target).map_err(|e| map_locked_file_error(e, &target.display().to_string()))?;
         return Ok(PendingReplace {
             target: target.to_path_buf(),
             aside: None,
@@ -1565,7 +1664,8 @@ fn begin_replace(target: &Path, staged: &Path) -> Result<PendingReplace, CoreErr
     let aside = target.with_extension("sav.replaced-goresave");
     // Clear any leftover aside from a previously interrupted write.
     let _ = fs::remove_file(&aside);
-    fs::rename(target, &aside)?;
+    fs::rename(target, &aside)
+        .map_err(|e| map_locked_file_error(e, &target.display().to_string()))?;
     match fs::rename(staged, target) {
         Ok(()) => Ok(PendingReplace {
             target: target.to_path_buf(),
@@ -1574,13 +1674,16 @@ fn begin_replace(target: &Path, staged: &Path) -> Result<PendingReplace, CoreErr
         Err(err) => {
             // Roll back so the target path is never left absent.
             let _ = fs::rename(&aside, target);
-            Err(err.into())
+            Err(map_locked_file_error(err, &target.display().to_string()))
         }
     }
 }
 
 fn create_backup_copy(path: &Path) -> Result<PathBuf, CoreError> {
     let backup_path = unique_backup_path(path);
+    if let Some(parent) = backup_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
     fs::copy(path, &backup_path)?;
     Ok(backup_path)
 }
@@ -1591,11 +1694,21 @@ fn unique_backup_path(path: &Path) -> PathBuf {
 }
 
 fn backup_path_with_suffix(path: &Path, suffix: &str) -> PathBuf {
-    path.with_extension(format!("sav.bak.{suffix}"))
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    parent
+        .join("goresave_backups")
+        .join(format!("{file_name}.bak.{suffix}"))
 }
 
 fn create_backup_with_suffix(path: &Path, suffix: &str) -> Result<PathBuf, CoreError> {
     let backup_path = backup_path_with_suffix(path, suffix);
+    if let Some(parent) = backup_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
     fs::copy(path, &backup_path)?;
     Ok(backup_path)
 }
@@ -6345,9 +6458,12 @@ mod tests {
     fn list_backups_returns_matching_save_backups_newest_first() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("G1R-001.sav");
-        let older = dir.path().join("G1R-001.sav.bak.100");
-        let newer = dir.path().join("G1R-001.sav.bak.200");
-        let unrelated = dir.path().join("G1R-002.sav.bak.300");
+        let subfolder = dir.path().join("goresave_backups");
+        fs::create_dir_all(&subfolder).unwrap();
+        let older = subfolder.join("G1R-001.sav.bak.100");
+        let newer = subfolder.join("G1R-001.sav.bak.200");
+        // Unrelated file in subfolder must not appear.
+        let unrelated = subfolder.join("G1R-002.sav.bak.300");
         fs::write(&path, minimal_gsav("Live")).unwrap();
         fs::write(&older, minimal_gsav("Older")).unwrap();
         fs::write(&newer, minimal_gsav("Newer")).unwrap();
@@ -6380,11 +6496,66 @@ mod tests {
     }
 
     #[test]
+    fn list_backups_includes_legacy_backups_next_to_save_alongside_subfolder_ones() {
+        // Legacy backups (placed directly in the save's parent dir) must still
+        // appear in list_save_backups alongside new subfolder backups.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-001.sav");
+        let subfolder = dir.path().join("goresave_backups");
+        fs::create_dir_all(&subfolder).unwrap();
+        // Legacy file next to the save.
+        let legacy = dir.path().join("G1R-001.sav.bak.50");
+        // New file in the subfolder.
+        let new_backup = subfolder.join("G1R-001.sav.bak.150");
+        fs::write(&path, minimal_gsav("Live")).unwrap();
+        fs::write(&legacy, minimal_gsav("Legacy")).unwrap();
+        fs::write(&new_backup, minimal_gsav("New")).unwrap();
+
+        let backups = list_save_backups(&path).unwrap();
+        assert_eq!(backups.len(), 2, "both legacy and subfolder backups expected");
+        // Newest-first: epoch 150 before epoch 50.
+        assert!(backups[0].path.contains("150"), "subfolder backup first");
+        assert!(backups[1].path.contains("50"), "legacy backup second");
+    }
+
+    #[test]
+    fn create_backup_copy_writes_two_consecutive_backups_to_subfolder() {
+        // Two consecutive backup writes must produce two distinct files, both
+        // located in the goresave_backups subfolder.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-001.sav");
+        fs::write(&path, minimal_gsav("Slot A")).unwrap();
+
+        // First backup — also triggers subfolder creation.
+        let b1 = create_backup_copy(&path).unwrap();
+        // Mutate the file so the second backup is distinct.
+        fs::write(&path, minimal_gsav("Slot B")).unwrap();
+        let b2 = create_backup_copy(&path).unwrap();
+
+        assert_ne!(b1, b2, "two backups must have distinct paths");
+        assert!(b1.exists(), "first backup file must exist");
+        assert!(b2.exists(), "second backup file must exist");
+
+        let subfolder = dir.path().join("goresave_backups");
+        assert!(
+            b1.starts_with(&subfolder),
+            "first backup must be in goresave_backups subfolder"
+        );
+        assert!(
+            b2.starts_with(&subfolder),
+            "second backup must be in goresave_backups subfolder"
+        );
+    }
+
+    #[test]
     fn list_backups_returns_persistent_data_list_companion_backups_for_selected_slot() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("G1R-001.sav");
-        let companion = dir.path().join("PersistentDataList.sav.bak.250");
-        let unrelated = dir.path().join("G1R-002.sav.bak.300");
+        let subfolder = dir.path().join("goresave_backups");
+        fs::create_dir_all(&subfolder).unwrap();
+        let companion = subfolder.join("PersistentDataList.sav.bak.250");
+        // Unrelated file in subfolder must not appear.
+        let unrelated = subfolder.join("G1R-002.sav.bak.300");
         fs::write(&path, minimal_gsav("Live")).unwrap();
         fs::write(
             &companion,
@@ -6437,7 +6608,9 @@ mod tests {
     fn restore_backup_validates_backup_and_preserves_current_save() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("G1R-001.sav");
-        let backup = dir.path().join("G1R-001.sav.bak.200");
+        let subfolder = dir.path().join("goresave_backups");
+        fs::create_dir_all(&subfolder).unwrap();
+        let backup = subfolder.join("G1R-001.sav.bak.200");
         fs::write(&path, minimal_gsav("Live")).unwrap();
         fs::write(&backup, minimal_gsav("Backup")).unwrap();
 
@@ -6457,6 +6630,11 @@ mod tests {
         );
         let current_backup = PathBuf::from(value["data"]["backupPath"].as_str().unwrap());
         assert!(current_backup.exists());
+        // The safety backup of "Live" must also be in the subfolder.
+        assert!(
+            current_backup.starts_with(&subfolder),
+            "safety backup must be written to goresave_backups subfolder"
+        );
         assert_eq!(
             inspect_save(&path, false).unwrap()["public"]["playerSaveName"],
             "Backup"
@@ -6471,9 +6649,11 @@ mod tests {
     fn restore_backup_also_restores_paired_persistent_data_list_backup() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("G1R-001.sav");
-        let slot_backup = dir.path().join("G1R-001.sav.bak.200");
+        let subfolder = dir.path().join("goresave_backups");
+        fs::create_dir_all(&subfolder).unwrap();
+        let slot_backup = subfolder.join("G1R-001.sav.bak.200");
         let persistent = dir.path().join("PersistentDataList.sav");
-        let persistent_backup = dir.path().join("PersistentDataList.sav.bak.200");
+        let persistent_backup = subfolder.join("PersistentDataList.sav.bak.200");
 
         fs::write(&path, minimal_gsav("Live")).unwrap();
         fs::write(&slot_backup, minimal_gsav("Backup")).unwrap();
@@ -6536,12 +6716,14 @@ mod tests {
     fn restore_backup_pairs_companion_by_full_suffix_within_same_second() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("G1R-001.sav");
+        let subfolder = dir.path().join("goresave_backups");
+        fs::create_dir_all(&subfolder).unwrap();
         // Two paired backups created in the same second: ".200" and ".200.1".
-        let slot_backup_first = dir.path().join("G1R-001.sav.bak.200");
-        let slot_backup_second = dir.path().join("G1R-001.sav.bak.200.1");
+        let slot_backup_first = subfolder.join("G1R-001.sav.bak.200");
+        let slot_backup_second = subfolder.join("G1R-001.sav.bak.200.1");
         let persistent = dir.path().join("PersistentDataList.sav");
-        let persistent_first = dir.path().join("PersistentDataList.sav.bak.200");
-        let persistent_second = dir.path().join("PersistentDataList.sav.bak.200.1");
+        let persistent_first = subfolder.join("PersistentDataList.sav.bak.200");
+        let persistent_second = subfolder.join("PersistentDataList.sav.bak.200.1");
 
         fs::write(&path, minimal_gsav("Live")).unwrap();
         fs::write(&slot_backup_first, minimal_gsav("First")).unwrap();
@@ -6573,7 +6755,9 @@ mod tests {
     fn restore_backup_flags_present_companion_left_unrestored() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("G1R-001.sav");
-        let slot_backup = dir.path().join("G1R-001.sav.bak.200");
+        let subfolder = dir.path().join("goresave_backups");
+        fs::create_dir_all(&subfolder).unwrap();
+        let slot_backup = subfolder.join("G1R-001.sav.bak.200");
         let persistent = dir.path().join("PersistentDataList.sav");
         // PersistentDataList exists but there is no .bak.200 companion for it.
         fs::write(&path, minimal_gsav("Live")).unwrap();
@@ -6600,7 +6784,9 @@ mod tests {
     fn restore_backup_rejects_mismatched_container_format() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("G1R-001.sav");
-        let backup = dir.path().join("G1R-001.sav.bak.200");
+        let subfolder = dir.path().join("goresave_backups");
+        fs::create_dir_all(&subfolder).unwrap();
+        let backup = subfolder.join("G1R-001.sav.bak.200");
         fs::write(&path, minimal_gsav("Live")).unwrap();
         // A GVAS sidecar misnamed as a slot backup must not replace the GSAV slot.
         fs::write(
@@ -6621,9 +6807,11 @@ mod tests {
     fn restore_backup_aborts_without_touching_slot_when_companion_invalid() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("G1R-001.sav");
-        let slot_backup = dir.path().join("G1R-001.sav.bak.200");
+        let subfolder = dir.path().join("goresave_backups");
+        fs::create_dir_all(&subfolder).unwrap();
+        let slot_backup = subfolder.join("G1R-001.sav.bak.200");
         let persistent = dir.path().join("PersistentDataList.sav");
-        let persistent_backup = dir.path().join("PersistentDataList.sav.bak.200");
+        let persistent_backup = subfolder.join("PersistentDataList.sav.bak.200");
 
         fs::write(&path, minimal_gsav("Live")).unwrap();
         fs::write(&slot_backup, minimal_gsav("Backup")).unwrap();
@@ -6640,6 +6828,31 @@ mod tests {
             "Live"
         );
         assert_eq!(fs::read(&persistent).unwrap(), b"GVAS-new-name");
+    }
+
+    #[test]
+    fn map_locked_file_error_produces_game_running_message_for_sharing_violation() {
+        // ERROR_SHARING_VIOLATION = 32 (Windows). The helper must produce a
+        // message that contains "is the game running" so the user knows the
+        // cause without a raw OS error code.
+        let io_err = std::io::Error::from_raw_os_error(32);
+        let core_err = map_locked_file_error(io_err, "G1R-001.sav");
+        let msg = core_err.to_string();
+        assert!(
+            msg.contains("is the game running"),
+            "message should mention game running, got: {msg}"
+        );
+
+        // ERROR_LOCK_VIOLATION = 33 must also trigger the friendly message.
+        let io_err_33 = std::io::Error::from_raw_os_error(33);
+        let core_err_33 = map_locked_file_error(io_err_33, "G1R-001.sav");
+        assert!(core_err_33.to_string().contains("is the game running"));
+
+        // An unrelated OS error (e.g. ENOENT = 2) must NOT produce the game-
+        // running message; it must propagate the original description.
+        let io_unrelated = std::io::Error::from_raw_os_error(2);
+        let core_unrelated = map_locked_file_error(io_unrelated, "G1R-001.sav");
+        assert!(!core_unrelated.to_string().contains("is the game running"));
     }
 
     #[test]
