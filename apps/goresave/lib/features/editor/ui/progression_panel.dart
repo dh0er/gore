@@ -84,14 +84,17 @@ class _ProgressionPanelState extends State<ProgressionPanel> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Slim left sidebar
+          // Left sidebar: same style as the Player tab (hero_stats_card).
           SizedBox(
-            width: 140,
-            child: Card(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 8),
+            width: 200,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: theme.colorScheme.surfaceContainerLow,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.symmetric(vertical: 6),
                 child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     _SidebarTile(
                       icon: Icons.flag_outlined,
@@ -119,7 +122,7 @@ class _ProgressionPanelState extends State<ProgressionPanel> {
               ),
             ),
           ),
-          const SizedBox(width: 12),
+          const SizedBox(width: 16),
           // Detail area — fills remaining width and full height
           Expanded(
             child: switch (_selected) {
@@ -172,36 +175,37 @@ class _SidebarTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Material(
-      color: selected ? scheme.secondaryContainer : Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 12),
-          child: Row(
-            children: [
-              Icon(
-                icon,
-                size: 18,
-                color: selected
-                    ? scheme.onSecondaryContainer
-                    : scheme.onSurfaceVariant,
-              ),
-              const SizedBox(width: 8),
-              Flexible(
-                child: Text(
-                  label,
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
-                    color: selected
-                        ? scheme.onSecondaryContainer
-                        : scheme.onSurface,
-                  ),
-                  overflow: TextOverflow.ellipsis,
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      child: Material(
+        color: selected ? scheme.primaryContainer : Colors.transparent,
+        borderRadius: BorderRadius.circular(8),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(8),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+            child: Row(
+              children: [
+                Icon(
+                  icon,
+                  size: 18,
+                  color: selected ? scheme.primary : scheme.onSurfaceVariant,
                 ),
-              ),
-            ],
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: selected ? scheme.primary : scheme.onSurface,
+                      fontWeight: selected ? FontWeight.w600 : null,
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
