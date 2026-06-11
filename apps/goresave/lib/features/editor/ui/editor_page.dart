@@ -275,11 +275,41 @@ class _ProfileHeader extends StatelessWidget {
             tooltip: 'Rescan save folder',
             visualDensity: VisualDensity.compact,
             iconSize: 20,
-            onPressed: isLoading ? null : notifier.refresh,
+            onPressed: isLoading ? null : () => _confirmRefresh(context),
           ),
         ],
       ),
     );
+  }
+
+  /// Rescanning re-inspects the selected slot, which clears the global
+  /// pending-edit registry — never silently discard unsaved drafts.
+  Future<void> _confirmRefresh(BuildContext context) async {
+    final pendingCount = notifier.pendingEditCount;
+    if (pendingCount > 0) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Discard unsaved changes?'),
+          content: Text(
+            'Rescanning reloads every save and discards your $pendingCount '
+            'unsaved change${pendingCount == 1 ? '' : 's'}.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('Discard and rescan'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true) return;
+    }
+    await notifier.refresh();
   }
 }
 
@@ -519,9 +549,7 @@ class _EditorWorkspace extends StatelessWidget {
                     child: FilledButton.icon(
                       icon: const Icon(Icons.save_outlined),
                       label: Text(
-                        pendingCount == 0
-                            ? 'Save'
-                            : 'Save ($pendingCount)',
+                        pendingCount == 0 ? 'Save' : 'Save ($pendingCount)',
                       ),
                       onPressed: pendingCount > 0 && !state.isLoading
                           ? notifier.saveAllPending
@@ -599,7 +627,8 @@ class _EditorWorkspace extends StatelessWidget {
                       // codec host to be compress-ready (auto-trusted or verified
                       // this session), not just decode-ready.
                       editable:
-                          inspection.privateEditable && state.codecCompressReady,
+                          inspection.privateEditable &&
+                          state.codecCompressReady,
                       lockedBody:
                           'Private player edits need a verified G1R codec host.',
                     ),
@@ -629,7 +658,8 @@ class _EditorWorkspace extends StatelessWidget {
                       // full private decode (not a preview) plus a compress-ready
                       // codec, matching the Player and Inventory gating.
                       editable:
-                          inspection.privateEditable && state.codecCompressReady,
+                          inspection.privateEditable &&
+                          state.codecCompressReady,
                     ),
                   ),
                   _KeepAliveTab(
@@ -777,9 +807,8 @@ class _OverviewInspectionJsonState extends State<_OverviewInspectionJson> {
                   IconButton(
                     tooltip: 'Copy',
                     icon: const Icon(Icons.copy),
-                    onPressed: () => Clipboard.setData(
-                      ClipboardData(text: _getJson()),
-                    ),
+                    onPressed: () =>
+                        Clipboard.setData(ClipboardData(text: _getJson())),
                   ),
                 ],
               ),
@@ -1291,10 +1320,7 @@ class _PrivatePanel extends StatelessWidget {
                       for (final edit in edits)
                         {
                           'path': 'private.typed.setValue',
-                          'value': {
-                            'path': edit.path,
-                            'value': edit.value,
-                          },
+                          'value': {'path': edit.path, 'value': edit.value},
                         },
                     ],
                   ),
@@ -1674,10 +1700,7 @@ class _InventoryItemCountEditorState extends State<_InventoryItemCountEditor> {
         controller: _controller,
         keyboardType: TextInputType.number,
         onChanged: _onCountTextChanged,
-        decoration: InputDecoration(
-          labelText: 'Count',
-          errorText: _error,
-        ),
+        decoration: InputDecoration(labelText: 'Count', errorText: _error),
       ),
     );
   }
@@ -1956,11 +1979,7 @@ class _PrivatePlayerTransformEditorState
           {
             'path': 'private.player.setTransform',
             'value': {
-              'location': {
-                'x': locationX,
-                'y': locationY,
-                'z': locationZ,
-              },
+              'location': {'x': locationX, 'y': locationY, 'z': locationZ},
               'rotation': {
                 'pitch': rotationPitch,
                 'yaw': rotationYaw,
@@ -2606,8 +2625,7 @@ class _TypedPropertyRowState extends State<_TypedPropertyRow> {
     // Re-seed when the reloadKey identity changes (e.g. after Reset/refresh
     // that produces a new inspection — same canonical value, draft must go).
     final newKey = widget.reloadKey;
-    final keyChanged =
-        newKey != null && !identical(newKey, _lastReloadKey);
+    final keyChanged = newKey != null && !identical(newKey, _lastReloadKey);
     if (keyChanged) {
       _lastReloadKey = newKey;
     }
