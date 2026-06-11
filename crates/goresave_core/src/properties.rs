@@ -1030,11 +1030,18 @@ pub fn patch_container(
             }
             let elements = set_string_elements(target)
                 .ok_or_else(|| CoreError::Parse("set value not parsed as a set".into()))?;
-            // UE FNames compare case-insensitively, so a case-variant of an
-            // existing member would be an effective duplicate in the game.
+            // UE FNames compare case-insensitively, so for Name sets a
+            // case-variant of an existing member would be an effective
+            // duplicate in the game. Str sets hold regular strings where
+            // case-only variants are distinct values.
+            let names_fold_case = layout.inner_type == "NameProperty";
             let duplicate = elements.iter().any(|e| match e {
                 PropertyValue::Name(s) | PropertyValue::Str(s) => {
-                    s.eq_ignore_ascii_case(value)
+                    if names_fold_case {
+                        s.eq_ignore_ascii_case(value)
+                    } else {
+                        s == value
+                    }
                 }
                 _ => false,
             });
@@ -2868,6 +2875,57 @@ mod tests {
                 &target,
                 &[],
                 &ContainerEdit::SetAdd("VOICELINE_a".to_string()),
+            )
+            .is_err()
+        );
+        assert_eq!(payload, copy);
+    }
+
+    #[test]
+    fn patch_container_str_set_add_keeps_case_sensitivity() {
+        // Str sets hold regular strings: case-only variants are distinct.
+        let mut body = 0u32.to_le_bytes().to_vec(); // num_to_remove
+        body.extend_from_slice(&1u32.to_le_bytes());
+        body.extend_from_slice(&fstring("foo"));
+        let mut props = tag("Tags", "SetProperty");
+        props.extend_from_slice(&1u32.to_le_bytes());
+        props.extend_from_slice(&fstring("StrProperty"));
+        props.extend_from_slice(&header(body.len() as u32, 0));
+        props.extend_from_slice(&body);
+        let mut payload = root("/Script/Test.Save", &props);
+
+        let parsed = parse_private_root(&payload).unwrap();
+        let target = parsed.properties[0].clone();
+        patch_container(
+            &mut payload,
+            &target,
+            &[],
+            &ContainerEdit::SetAdd("Foo".to_string()),
+        )
+        .unwrap();
+
+        let reparsed = parse_private_root(&payload).unwrap();
+        assert_eq!(
+            reparsed.properties[0].value,
+            PropertyValue::Set {
+                num_to_remove: 0,
+                elements: vec![
+                    PropertyValue::Str("foo".to_string()),
+                    PropertyValue::Str("Foo".to_string()),
+                ],
+            }
+        );
+
+        // Exact duplicates are still rejected.
+        let parsed = parse_private_root(&payload).unwrap();
+        let target = parsed.properties[0].clone();
+        let copy = payload.clone();
+        assert!(
+            patch_container(
+                &mut payload,
+                &target,
+                &[],
+                &ContainerEdit::SetAdd("Foo".to_string()),
             )
             .is_err()
         );
