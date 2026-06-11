@@ -2462,6 +2462,14 @@ class _AllDataPanelState extends State<_AllDataPanel> {
   // Tracks the inspection identity so _TypedPropertyRow can reset draft text
   // when a Reset/refresh produces a new inspection (same path, same values).
   Object? _inspectionReloadKey;
+  // Unsaved field text keyed by pending-registry key. Rows are disposed when
+  // search/pagination scrolls them out of the result page, but their pending
+  // edits stay registered globally — without this store a returning row would
+  // re-seed from the canonical value and hide an edit the Save button still
+  // writes. Lives alongside the pending registry: entries are added/removed in
+  // _updatePending and the whole map is dropped whenever pending is cleared
+  // centrally (new inspection identity).
+  final Map<String, String> _typedDrafts = {};
 
   @override
   void initState() {
@@ -2489,6 +2497,8 @@ class _AllDataPanelState extends State<_AllDataPanel> {
       // Invalidate any in-flight search for the previous save.
       _requestSeq++;
       _inspectionReloadKey = widget.inspection;
+      // Switching saves clears pending centrally; drop the drafts with it.
+      _typedDrafts.clear();
       setState(() {
         _result = null;
         _searching = false;
@@ -2504,6 +2514,8 @@ class _AllDataPanelState extends State<_AllDataPanel> {
       // shows the post-save values; also update the reloadKey so row fields
       // reseed their draft text to the canonical value.
       _inspectionReloadKey = widget.inspection;
+      // Save/restore/refresh cleared pending centrally; the drafts mirror it.
+      _typedDrafts.clear();
       if (widget.inspection.privateDecoded) {
         final currentOffset = _result?.offset ?? 0;
         WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -2670,6 +2682,7 @@ class _AllDataPanelState extends State<_AllDataPanel> {
           editable: widget.editable && hit.editable,
           notifier: widget.notifier,
           reloadKey: _inspectionReloadKey,
+          drafts: _typedDrafts,
         );
       },
     );
@@ -2751,12 +2764,18 @@ class _TypedPropertyRow extends StatefulWidget {
     required this.hit,
     required this.editable,
     required this.notifier,
+    required this.drafts,
     this.reloadKey,
   });
 
   final TypedPropertyHit hit;
   final bool editable;
   final EditorNotifier notifier;
+  // Panel-owned store of unsaved field text keyed by pending-registry key.
+  // Rows seed from it on creation and write through it on change, so an edit
+  // survives the row being disposed by search/pagination and stays visible
+  // (instead of becoming a hidden pending edit) when the row comes back.
+  final Map<String, String> drafts;
   // When provided, a change in identity forces a reseed of the field from the
   // canonical hit value (e.g. after a Reset that reverts to the same value).
   final Object? reloadKey;
@@ -2767,7 +2786,7 @@ class _TypedPropertyRow extends StatefulWidget {
 
 class _TypedPropertyRowState extends State<_TypedPropertyRow> {
   late final TextEditingController _controller = TextEditingController(
-    text: widget.hit.value,
+    text: widget.drafts[_pendingKey] ?? widget.hit.value,
   );
   // Unsaved bool toggle. The switch has no text controller to hold draft
   // state, so without this it would snap back to the canonical value on the
@@ -2779,6 +2798,10 @@ class _TypedPropertyRowState extends State<_TypedPropertyRow> {
   void initState() {
     super.initState();
     _lastReloadKey = widget.reloadKey;
+    final draft = widget.drafts[_pendingKey];
+    if (_isBool && draft != null) {
+      _boolDraft = draft == 'true';
+    }
   }
 
   @override
@@ -2801,6 +2824,9 @@ class _TypedPropertyRowState extends State<_TypedPropertyRow> {
             _controller.text != widget.hit.value)) {
       _controller.text = widget.hit.value;
       _boolDraft = null;
+      // The drafts map is plain panel state (not a provider), so unlike the
+      // pending registry it is safe to drop the stale entry here.
+      widget.drafts.remove(_pendingKey);
       // No registry mutation here: provider writes are illegal during the
       // build phase, and every flow that changes the canonical value
       // (save/restore/refresh) already cleared pending centrally.
@@ -2852,6 +2878,7 @@ class _TypedPropertyRowState extends State<_TypedPropertyRow> {
     final value = _coerce(text);
     if (value == null) {
       // Invalid / unparseable — don't contribute to pending.
+      widget.drafts.remove(_pendingKey);
       widget.notifier.clearPendingEdit(_pendingKey);
       return;
     }
@@ -2860,9 +2887,11 @@ class _TypedPropertyRowState extends State<_TypedPropertyRow> {
         (widget.hit.type != 'StrProperty' &&
             widget.hit.type != 'NameProperty' &&
             text.trim() == widget.hit.value.trim())) {
+      widget.drafts.remove(_pendingKey);
       widget.notifier.clearPendingEdit(_pendingKey);
       return;
     }
+    widget.drafts[_pendingKey] = text;
     widget.notifier.setPendingEdit(
       _pendingKey,
       PendingSaveEdit(
