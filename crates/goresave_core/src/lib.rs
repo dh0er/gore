@@ -408,6 +408,17 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
                 .map(|backend| backend as &dyn codec_backend::CodecBackend);
             search_typed_properties(&path, &payload, codec_backend)
         }
+        "query_progression" => {
+            let path = required_path(&payload)?;
+            let codec_backend = payload
+                .get("binaryHost")
+                .map(binary_host_backend_from_config)
+                .transpose()?;
+            let codec_backend = codec_backend
+                .as_ref()
+                .map(|backend| backend as &dyn codec_backend::CodecBackend);
+            query_progression(&path, &payload, codec_backend)
+        }
         "validate_roundtrip" => {
             let path = required_path(&payload)?;
             Ok(validate_roundtrip(&path)?)
@@ -2440,6 +2451,198 @@ fn search_typed_properties(
         "count": results.len(),
         "results": results,
     }))
+}
+
+/// Structured progression queries over the decoded private payload. Sections:
+/// "quests" (QuestDataByClass entries with setValue-addressable state paths),
+/// "knowledge" (per-NPC dialog knowledge sets), "events" (per-character
+/// memorized event arrays). Uses the shared decode cache like the typed
+/// property search.
+fn query_progression(
+    path: &Path,
+    payload: &Value,
+    backend: Option<&dyn codec_backend::CodecBackend>,
+) -> Result<Value, CoreError> {
+    let backend = backend.ok_or_else(|| {
+        CoreError::Codec(
+            "progression queries require a configured and verified G1R codec host".to_string(),
+        )
+    })?;
+    let section = payload
+        .get("section")
+        .and_then(Value::as_str)
+        .unwrap_or("quests");
+    let query = payload
+        .get("query")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    let limit = payload
+        .get("limit")
+        .and_then(Value::as_u64)
+        .map(|v| v as usize)
+        .unwrap_or(100)
+        .clamp(1, 1000);
+    let offset = payload
+        .get("offset")
+        .and_then(Value::as_u64)
+        .map(|v| v as usize)
+        .unwrap_or(0);
+    let character = payload.get("character").and_then(Value::as_str);
+
+    let data = fs::read(path)?;
+    if !data.starts_with(b"GSAV") {
+        return Err(CoreError::UnsupportedEdit(
+            "progression queries are only available for GSAV files".to_string(),
+        ));
+    }
+    let parts = split_gsav(&data)?;
+    let stream = parse_compressed_stream(&data, 13 + parts.public_payload.len())?;
+    let decoded = decoded_private_payload_cached(path, &data, &stream, backend)?;
+    let root = properties::parse_private_root(&decoded)?;
+    match section {
+        "quests" => progression_quests(&root, &query, offset, limit),
+        "knowledge" => progression_knowledge(&root, &query, character, offset, limit),
+        "events" => progression_events(&root, &query, character, offset, limit),
+        other => Err(CoreError::InvalidRequest(format!(
+            "unknown progression section {other:?}"
+        ))),
+    }
+}
+
+/// Property lookup inside a struct-valued map entry (tagged property list or
+/// InstancedStruct wrapper).
+fn struct_member<'a>(
+    value: &'a properties::PropertyValue,
+    name: &str,
+) -> Option<&'a properties::PropertyValue> {
+    let props = match value {
+        properties::PropertyValue::Struct(properties::StructValue::Properties(p)) => p,
+        properties::PropertyValue::Struct(properties::StructValue::Instanced(Some(i))) => {
+            &i.properties
+        }
+        _ => return None,
+    };
+    props.iter().find(|p| p.name == name).map(|p| &p.value)
+}
+
+fn map_key_string(key: &properties::PropertyValue) -> Option<&str> {
+    match key {
+        properties::PropertyValue::Str(s)
+        | properties::PropertyValue::Name(s)
+        | properties::PropertyValue::Enum(s)
+        | properties::PropertyValue::Object(s) => Some(s),
+        _ => None,
+    }
+}
+
+/// "EQuestState::Running" → "Running" for the overview/state-count labels.
+fn short_enum_label(value: &str) -> &str {
+    value.rsplit("::").next().unwrap_or(value)
+}
+
+fn progression_quests(
+    root: &properties::RootObject,
+    query: &str,
+    offset: usize,
+    limit: usize,
+) -> Result<Value, CoreError> {
+    let (base_path, map_prop) = properties::find_property_by_name(root, "QuestDataByClass")
+        .ok_or_else(|| {
+            CoreError::Parse("QuestDataByClass not found in the decoded payload".to_string())
+        })?;
+    let properties::PropertyValue::Map { entries, .. } = &map_prop.value else {
+        return Err(CoreError::Parse(
+            "QuestDataByClass is not a map".to_string(),
+        ));
+    };
+    let mut state_counts = std::collections::BTreeMap::<String, usize>::new();
+    let mut matches: Vec<(String, Option<String>)> = Vec::new();
+    for (key, value) in entries {
+        let Some(class_path) = map_key_string(key) else {
+            continue;
+        };
+        let state = struct_member(value, "CurrentState").and_then(|v| match v {
+            properties::PropertyValue::Enum(s) => Some(s.clone()),
+            _ => None,
+        });
+        let label = state
+            .as_deref()
+            .map(short_enum_label)
+            .unwrap_or("unknown")
+            .to_string();
+        *state_counts.entry(label).or_default() += 1;
+        if !query.is_empty() && !class_path.to_ascii_lowercase().contains(&*query) {
+            continue;
+        }
+        matches.push((class_path.to_string(), state));
+    }
+    matches.sort_by(|a, b| a.0.cmp(&b.0));
+    let total = matches.len();
+    let quests = matches
+        .into_iter()
+        .skip(offset)
+        .take(limit)
+        .map(|(class_path, state)| {
+            let id = class_path
+                .rsplit('.')
+                .next()
+                .unwrap_or(class_path.as_str())
+                .to_string();
+            let trimmed = id.strip_prefix("Quest_").unwrap_or(&id);
+            let (group, name) = match trimmed.split_once('_') {
+                Some((g, n)) => (g.to_string(), n.to_string()),
+                None => (trimmed.to_string(), String::new()),
+            };
+            let mut state_path = base_path.clone();
+            state_path.push(format!("{{{class_path}}}"));
+            state_path.push("CurrentState".to_string());
+            let writable = state.is_some();
+            json!({
+                "questClass": class_path,
+                "id": id,
+                "group": group,
+                "name": name,
+                "currentState": state,
+                "statePath": state_path,
+                "writable": writable,
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(json!({
+        "section": "quests",
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "count": quests.len(),
+        "stateCounts": state_counts,
+        "quests": quests,
+    }))
+}
+
+fn progression_knowledge(
+    _root: &properties::RootObject,
+    _query: &str,
+    _character: Option<&str>,
+    _offset: usize,
+    _limit: usize,
+) -> Result<Value, CoreError> {
+    Err(CoreError::InvalidRequest(
+        "knowledge section not implemented yet".to_string(),
+    ))
+}
+
+fn progression_events(
+    _root: &properties::RootObject,
+    _query: &str,
+    _character: Option<&str>,
+    _offset: usize,
+    _limit: usize,
+) -> Result<Value, CoreError> {
+    Err(CoreError::InvalidRequest(
+        "events section not implemented yet".to_string(),
+    ))
 }
 
 fn summarize_private_progression_payload(refs: &[FStringRef]) -> Value {
@@ -7610,5 +7813,142 @@ mod tests {
         assert_eq!(value["private"]["typedParse"]["status"], "ok");
         let strings = value["private"]["strings"].as_array().unwrap();
         assert!(strings.iter().any(|s| s == "ChoiceB"));
+    }
+
+    // ── Task 5 helpers ──────────────────────────────────────────────────────
+
+    fn private_enum_property(name: &str, enum_type: &str, label: &str) -> Vec<u8> {
+        let body = fstring(label);
+        let mut out = fstring(name);
+        out.extend_from_slice(&fstring("EnumProperty"));
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&fstring(enum_type));
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&fstring("/Script/G1R"));
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&fstring("ByteProperty"));
+        out.extend_from_slice(&0u32.to_le_bytes()); // array_index
+        out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        out.push(0); // tag_flags
+        out.extend_from_slice(&body);
+        out
+    }
+
+    fn quest_map_payload() -> Vec<u8> {
+        let quest_value = |state: &str| {
+            let mut v = private_enum_property("CurrentState", "EQuestState", state);
+            v.extend_from_slice(&fstring("None"));
+            v
+        };
+        let mut map_body = 0u32.to_le_bytes().to_vec(); // num_to_remove
+        map_body.extend_from_slice(&2u32.to_le_bytes()); // count
+        map_body.extend_from_slice(&fstring("/Script/Angelscript.Quest_OldCamp_SLEEPER"));
+        map_body.extend_from_slice(&quest_value("EQuestState::Running"));
+        map_body.extend_from_slice(&fstring("/Script/Angelscript.Quest_BanditsCamp_BANDITSTRUST"));
+        map_body.extend_from_slice(&quest_value("EQuestState::Available"));
+
+        let mut props = fstring("QuestDataByClass");
+        props.extend_from_slice(&fstring("MapProperty"));
+        props.extend_from_slice(&2u32.to_le_bytes());
+        props.extend_from_slice(&fstring("ObjectProperty"));
+        props.extend_from_slice(&0u32.to_le_bytes()); // key_flags
+        props.extend_from_slice(&fstring("StructProperty"));
+        props.extend_from_slice(&1u32.to_le_bytes());
+        props.extend_from_slice(&fstring("SingleQuestSaveGameData"));
+        props.extend_from_slice(&1u32.to_le_bytes());
+        props.extend_from_slice(&fstring("/Script/G1R"));
+        props.extend_from_slice(&0u32.to_le_bytes()); // array_index
+        props.extend_from_slice(&(map_body.len() as u32).to_le_bytes());
+        props.push(0); // tag_flags (struct map values are tagged property lists)
+        props.extend_from_slice(&map_body);
+
+        let mut p = fstring("/Script/Angelscript.GothicFinalDataGame");
+        p.push(0);
+        p.extend_from_slice(&props);
+        p.extend_from_slice(&fstring("None"));
+        p.extend_from_slice(&0u32.to_le_bytes());
+        p
+    }
+
+    #[test]
+    fn query_progression_lists_quests_with_state_paths() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-quests.sav");
+        let private_payload = quest_map_payload();
+        let seed_compressed = b"seed".to_vec();
+        let stream = compressed_stream_with_one_chunk(&seed_compressed, private_payload.len());
+        fs::write(
+            &path,
+            build_gsav(2, &public_payload("Slot"), &stream, &[0, 0, 0, 0]),
+        )
+        .unwrap();
+        let backend = PrefixCodecBackend {
+            seed_compressed,
+            seed_uncompressed: private_payload,
+        };
+
+        let value =
+            query_progression(&path, &json!({ "section": "quests" }), Some(&backend)).unwrap();
+        assert_eq!(value["section"], "quests");
+        assert_eq!(value["total"], 2);
+        assert_eq!(value["stateCounts"]["Running"], 1);
+        assert_eq!(value["stateCounts"]["Available"], 1);
+        // Sorted by class path: BanditsCamp before OldCamp.
+        let first = &value["quests"][0];
+        assert_eq!(
+            first["questClass"],
+            "/Script/Angelscript.Quest_BanditsCamp_BANDITSTRUST"
+        );
+        assert_eq!(first["id"], "Quest_BanditsCamp_BANDITSTRUST");
+        assert_eq!(first["group"], "BanditsCamp");
+        assert_eq!(first["name"], "BANDITSTRUST");
+        assert_eq!(first["currentState"], "EQuestState::Available");
+        assert_eq!(
+            first["statePath"],
+            json!([
+                "QuestDataByClass",
+                "{/Script/Angelscript.Quest_BanditsCamp_BANDITSTRUST}",
+                "CurrentState"
+            ])
+        );
+
+        // Query filter + paging.
+        let filtered = query_progression(
+            &path,
+            &json!({ "section": "quests", "query": "sleeper" }),
+            Some(&backend),
+        )
+        .unwrap();
+        assert_eq!(filtered["total"], 1);
+        assert_eq!(filtered["quests"][0]["name"], "SLEEPER");
+
+        // The statePath round-trips through the existing setValue write.
+        let output_path = dir.path().join("G1R-quests-out.sav");
+        let response = write_save_with_codec_backend(
+            &path,
+            &[json!({
+                "path": "private.typed.setValue",
+                "value": {
+                    "path": [
+                        "QuestDataByClass",
+                        "{/Script/Angelscript.Quest_BanditsCamp_BANDITSTRUST}",
+                        "CurrentState"
+                    ],
+                    "value": "EQuestState::Succeeded"
+                }
+            })],
+            false,
+            Some(&output_path),
+            Some(&backend),
+        )
+        .unwrap();
+        assert_eq!(response["editsApplied"], 1);
+        let after = query_progression(
+            &output_path,
+            &json!({ "section": "quests", "query": "banditstrust" }),
+            Some(&backend),
+        )
+        .unwrap();
+        assert_eq!(after["quests"][0]["currentState"], "EQuestState::Succeeded");
     }
 }
