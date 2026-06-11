@@ -294,6 +294,7 @@ class _PaginationBar extends StatelessWidget {
         Text('$first–$last of $total', style: muted),
         const SizedBox(width: 8),
         Text('Per page:', style: muted),
+        const SizedBox(width: 6),
         DropdownButton<int>(
           value: effectivePageSize,
           isDense: true,
@@ -338,7 +339,6 @@ class _QuestsDetailState extends State<_QuestsDetail> {
   ProgressionQuestPage _page = const ProgressionQuestPage();
   final Map<String, QuestStateChange> _pending = {};
   bool _loading = false;
-  bool _searching = false;
   int _reloadEpoch = 0;
   int _pageSize = _defaultPageSize;
   String _activeQuery = '';
@@ -373,10 +373,7 @@ class _QuestsDetailState extends State<_QuestsDetail> {
   Future<void> _reload({required int offset, bool newQuery = false}) async {
     if (newQuery) _activeQuery = _search.text.trim();
     final epoch = ++_reloadEpoch;
-    setState(() {
-      _loading = true;
-      if (newQuery) _searching = true;
-    });
+    setState(() => _loading = true);
     final page = await widget.notifier.loadProgressionQuests(
       query: _activeQuery,
       offset: offset,
@@ -387,7 +384,6 @@ class _QuestsDetailState extends State<_QuestsDetail> {
     if (!mounted || epoch != _reloadEpoch) return;
     setState(() {
       _loading = false;
-      _searching = false;
       _page = page;
     });
   }
@@ -466,7 +462,7 @@ class _QuestsDetailState extends State<_QuestsDetail> {
               decoration: InputDecoration(
                 labelText: 'Search quests',
                 prefixIcon: const Icon(Icons.search),
-                suffixIcon: _searching
+                suffixIcon: _loading
                     ? const Padding(
                         padding: EdgeInsets.all(12),
                         child: SizedBox(
@@ -492,6 +488,7 @@ class _QuestsDetailState extends State<_QuestsDetail> {
               page: _page,
               stateFilter: _stateFilter,
               groupFilter: _groupFilter,
+              busy: _loading,
               onStateChanged: (label) {
                 setState(() {
                   _stateFilter = (_stateFilter == label) ? null : label;
@@ -1463,6 +1460,7 @@ class _QuestFilterRow extends StatelessWidget {
     required this.page,
     required this.stateFilter,
     required this.groupFilter,
+    required this.busy,
     required this.onStateChanged,
     required this.onGroupChanged,
   });
@@ -1470,25 +1468,47 @@ class _QuestFilterRow extends StatelessWidget {
   final ProgressionQuestPage page;
   final String? stateFilter;
   final String? groupFilter;
+  final bool busy;
   final void Function(String label) onStateChanged;
   final void Function(String? group) onGroupChanged;
 
   @override
   Widget build(BuildContext context) {
-    // Status FilterChips — only show labels with count > 0.
+    // Status FilterChips — show labels with count > 0 OR currently selected
+    // (so a selected chip whose count dropped to 0 stays visible for deselect).
     final chips = [
       for (final label in _filterStateLabels)
-        if ((page.stateCounts[label] ?? 0) > 0)
+        if ((page.stateCounts[label] ?? 0) > 0 || stateFilter == label)
           FilterChip(
-            label: Text('$label ${page.stateCounts[label]}'),
+            label: Text(
+              stateFilter == label && (page.stateCounts[label] ?? 0) == 0
+                  ? '$label 0'
+                  : '$label ${page.stateCounts[label] ?? 0}',
+            ),
             selected: stateFilter == label,
-            onSelected: (_) => onStateChanged(label),
+            onSelected: busy ? null : (_) => onStateChanged(label),
             visualDensity: VisualDensity.compact,
           ),
     ];
 
     // Group dropdown entries sorted by name.
+    // Always include the currently selected group even if its count is now 0
+    // (prevents DropdownButton crash on value not in items).
     final sortedGroups = page.groupCounts.keys.toList()..sort();
+    final groupItems = <DropdownMenuItem<String?>>[
+      const DropdownMenuItem<String?>(value: null, child: Text('All groups')),
+      for (final g in sortedGroups)
+        DropdownMenuItem<String?>(
+          value: g,
+          child: Text('$g (${page.groupCounts[g]})'),
+        ),
+      // Ensure selected group is present even when its count is 0.
+      if (groupFilter != null && !page.groupCounts.containsKey(groupFilter))
+        DropdownMenuItem<String?>(
+          value: groupFilter,
+          child: Text('$groupFilter (0)'),
+        ),
+    ];
 
     return Wrap(
       spacing: 6,
@@ -1501,18 +1521,8 @@ class _QuestFilterRow extends StatelessWidget {
           isDense: true,
           underline: const SizedBox.shrink(),
           hint: const Text('All groups'),
-          onChanged: onGroupChanged,
-          items: [
-            const DropdownMenuItem<String?>(
-              value: null,
-              child: Text('All groups'),
-            ),
-            for (final g in sortedGroups)
-              DropdownMenuItem<String?>(
-                value: g,
-                child: Text('$g (${page.groupCounts[g]})'),
-              ),
-          ],
+          onChanged: busy ? null : onGroupChanged,
+          items: groupItems,
         ),
       ],
     );
