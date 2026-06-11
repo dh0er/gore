@@ -125,23 +125,27 @@ class _ProgressionPanelState extends State<ProgressionPanel> {
           const SizedBox(width: 16),
           // Detail area — fills remaining width and full height
           Expanded(
+            // Keys are stable on purpose: a key derived from reloadKey would
+            // remount the detail on every fresh inspection, disposing state
+            // and bypassing the didUpdateWidget logic that preserves the
+            // selected character across save-triggered reloads.
             child: switch (_selected) {
               _ProgSection.quests => _QuestsDetail(
-                key: ValueKey(('quests', reloadKey)),
+                key: const ValueKey('quests'),
                 notifier: widget.notifier,
                 editable: widget.editable,
                 reloadKey: reloadKey,
                 theme: theme,
               ),
               _ProgSection.knowledge => _KnowledgeDetail(
-                key: ValueKey(('knowledge', reloadKey)),
+                key: const ValueKey('knowledge'),
                 notifier: widget.notifier,
                 editable: widget.editable,
                 reloadKey: reloadKey,
                 theme: theme,
               ),
               _ProgSection.events => _EventsDetail(
-                key: ValueKey(('events', reloadKey)),
+                key: const ValueKey('events'),
                 notifier: widget.notifier,
                 editable: widget.editable,
                 reloadKey: reloadKey,
@@ -329,7 +333,7 @@ class _QuestsDetail extends StatefulWidget {
 
   final EditorNotifier notifier;
   final bool editable;
-  final Object reloadKey;
+  final SaveInspection reloadKey;
   final ThemeData theme;
 
   @override
@@ -584,7 +588,7 @@ class _KnowledgeDetail extends StatefulWidget {
 
   final EditorNotifier notifier;
   final bool editable;
-  final Object reloadKey;
+  final SaveInspection reloadKey;
   final ThemeData theme;
 
   @override
@@ -624,7 +628,7 @@ class _KnowledgeDetailState extends State<_KnowledgeDetail> {
   void didUpdateWidget(covariant _KnowledgeDetail oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.reloadKey != oldWidget.reloadKey) {
-      // Pending edits belong to the old save — always clear them.
+      // Pending edits belong to the old inspection — always clear them.
       _pending.clear();
       // Invalidate both loaders so any in-flight call for the old reloadKey
       // is treated as stale and exits without touching flags.
@@ -632,10 +636,12 @@ class _KnowledgeDetailState extends State<_KnowledgeDetail> {
       _entriesEpoch++;
       _characterSearch.clear();
       _activeCharQuery = '';
+      // A different save file means a different character set: drop the
+      // selection. A same-file refresh (post-save reload) preserves it.
+      if (widget.reloadKey.path != oldWidget.reloadKey.path) {
+        _selectedCharacter = null;
+      }
       _loadCharacters(offset: 0);
-      // Issue 3 fix (consistency): preserve the previously selected character
-      // so the entries pane does not drop to null on save-triggered reloads.
-      // Pending edits are cleared above so we just re-load the entries fresh.
       if (_selectedCharacter != null) {
         _selectCharacter(_selectedCharacter!);
       } else {
@@ -1188,7 +1194,7 @@ class _EventsDetail extends StatefulWidget {
 
   final EditorNotifier notifier;
   final bool editable;
-  final Object reloadKey;
+  final SaveInspection reloadKey;
   final ThemeData theme;
 
   @override
@@ -1222,17 +1228,21 @@ class _EventsDetailState extends State<_EventsDetail> {
   void didUpdateWidget(covariant _EventsDetail oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.reloadKey != oldWidget.reloadKey) {
-      // Issue 3 fix: preserve the previously selected character so the right
-      // pane does not fall back to "Select a character" after an event edit.
       // Invalidate both loaders so any in-flight call for the old reloadKey
       // is treated as stale and exits without touching flags.
       _charsEpoch++;
       _eventsEpoch++;
       _characterSearch.clear();
       _activeCharQuery = '';
+      // A different save file means a different character set: drop the
+      // selection. A same-file refresh (post-event-edit reload) preserves it
+      // so the right pane does not fall back to "Select a character".
+      if (widget.reloadKey.path != oldWidget.reloadKey.path) {
+        _selectedCharacter = null;
+      }
       _loadCharacters(offset: 0);
-      // If a character was selected, re-trigger its events load (page reset to
-      // 0 is fine). If it has since been deleted the existing error rendering
+      // Re-trigger the preserved character's events load (page reset to 0 is
+      // fine). If it has since been deleted the existing error rendering
       // will handle it.
       if (_selectedCharacter != null) {
         _selectCharacter(_selectedCharacter!);
