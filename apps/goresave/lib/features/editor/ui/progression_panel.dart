@@ -799,6 +799,7 @@ class _EventsCardState extends State<_EventsCard> {
     setState(() {
       _selectedCharacter = id;
       _loadingEvents = true;
+      _events = const MemoryEventsPage(); // clear stale page immediately
     });
     final page = await widget.notifier.loadMemoryEvents(id);
     if (!mounted || epoch != _reloadEpoch) return;
@@ -985,16 +986,18 @@ class _EventsCardState extends State<_EventsCard> {
                                           size: 20,
                                         ),
                                         tooltip: 'Remove event',
-                                        onPressed: () => _confirmAndApply(
-                                          context,
-                                          MemoryEventEdit.remove(
-                                            arrayPath: _events.arrayPath,
-                                            index: event.index,
-                                          ),
-                                          'Remove memory event?',
-                                          'Remove this memory event? '
-                                              'A backup is written first.',
-                                        ),
+                                        onPressed: _loadingEvents
+                                            ? null
+                                            : () => _confirmAndApply(
+                                                context,
+                                                MemoryEventEdit.remove(
+                                                  arrayPath: _events.arrayPath,
+                                                  index: event.index,
+                                                ),
+                                                'Remove memory event?',
+                                                'Remove this memory event? '
+                                                    'A backup is written first.',
+                                              ),
                                       ),
                                       IconButton(
                                         icon: const Icon(
@@ -1002,16 +1005,18 @@ class _EventsCardState extends State<_EventsCard> {
                                           size: 20,
                                         ),
                                         tooltip: 'Duplicate event',
-                                        onPressed: () => _confirmAndApply(
-                                          context,
-                                          MemoryEventEdit.duplicate(
-                                            arrayPath: _events.arrayPath,
-                                            index: event.index,
-                                          ),
-                                          'Duplicate memory event?',
-                                          'Duplicate this memory event? '
-                                              'A backup is written first.',
-                                        ),
+                                        onPressed: _loadingEvents
+                                            ? null
+                                            : () => _confirmAndApply(
+                                                context,
+                                                MemoryEventEdit.duplicate(
+                                                  arrayPath: _events.arrayPath,
+                                                  index: event.index,
+                                                ),
+                                                'Duplicate memory event?',
+                                                'Duplicate this memory event? '
+                                                    'A backup is written first.',
+                                              ),
                                       ),
                                     ],
                                   )
