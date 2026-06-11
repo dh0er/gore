@@ -28,6 +28,7 @@ DIST = ROOT / "dist"
 
 CORE_DLL = "goresave_core.dll"
 CODEC_HOST_EXE = "goresave_g1r_codec_host.exe"
+LICENSE_FILE = ROOT / "LICENSE"
 
 
 def _resolve_tool(env_var: str, names: list[str], fallback: Path) -> Path:
@@ -97,6 +98,15 @@ def resolve_git_sha(override: str | None) -> str:
     return "dev"
 
 
+def copy_license_to_bundle(release_dir: Path) -> Path:
+    if not LICENSE_FILE.exists():
+        raise SystemExit(f"missing license file: {LICENSE_FILE}")
+    destination = release_dir / "LICENSE"
+    shutil.copy2(LICENSE_FILE, destination)
+    print(f"copied LICENSE -> {destination}")
+    return destination
+
+
 def dist(version: str, git_sha: str) -> Path:
     run("Build core (release)", [CARGO, "build", "--release", "-p", "goresave_core"])
     run(
@@ -117,6 +127,8 @@ def dist(version: str, git_sha: str) -> Path:
             raise SystemExit(f"missing native artifact: {src}")
         shutil.copy2(src, RELEASE_DIR / name)
         print(f"copied {name} -> {RELEASE_DIR / name}")
+
+    copy_license_to_bundle(RELEASE_DIR)
 
     DIST.mkdir(exist_ok=True)
     base = DIST / f"goresave-{version}-windows-x64"

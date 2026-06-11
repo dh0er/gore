@@ -1,3 +1,4 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:goresave/features/app/ui/about_dialog.dart';
 import 'package:package_info_plus/package_info_plus.dart';
@@ -16,5 +17,15 @@ void main() {
 
   test('aboutVersionLabel is empty while package info loads', () {
     expect(aboutVersionLabel(null), '');
+  });
+
+  testWidgets('about dialog shows copyright and license notice', (tester) async {
+    await tester.pumpWidget(
+      const MaterialApp(home: Scaffold(body: GoresaveAboutDialog())),
+    );
+    await tester.pump();
+
+    expect(find.text(aboutCopyrightNotice), findsOneWidget);
+    expect(find.text(aboutLicenseNotice), findsOneWidget);
   });
 }

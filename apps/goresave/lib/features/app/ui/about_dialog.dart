@@ -6,6 +6,9 @@ const _githubUrl = 'https://github.com/dh0er/goresave';
 
 const String _gitSha = String.fromEnvironment('GIT_SHA', defaultValue: 'dev');
 
+const aboutCopyrightNotice = '© 2026 goresave contributors';
+const aboutLicenseNotice = 'Licensed under the MIT License.';
+
 String aboutVersionLabel(PackageInfo? info) =>
     info == null ? '' : 'Version ${info.version} ($_gitSha)';
 
@@ -57,6 +60,17 @@ class _GoresaveAboutDialogState extends State<GoresaveAboutDialog> {
                 icon: const Icon(Icons.open_in_new, size: 16),
                 label: const Text(_githubUrl),
                 onPressed: () => launchUrl(Uri.parse(_githubUrl)),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                aboutCopyrightNotice,
+                textAlign: TextAlign.center,
+                style: textTheme.bodySmall,
+              ),
+              Text(
+                aboutLicenseNotice,
+                textAlign: TextAlign.center,
+                style: textTheme.bodySmall,
               ),
               const SizedBox(height: 12),
               TextButton(

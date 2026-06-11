@@ -7,7 +7,12 @@ import 'package:flutter_riverpod/legacy.dart';
 import 'package:path/path.dart' as p;
 
 class UiSettings {
-  const UiSettings({this.themeMode = ThemeMode.light, this.uiScale = 1.0});
+  const UiSettings({
+    this.themeMode = ThemeMode.light,
+    this.uiScale = 1.0,
+    this.windowSize,
+    this.windowMaximized = false,
+  });
 
   factory UiSettings.fromJson(Map<String, Object?> json) {
     return UiSettings(
@@ -20,16 +25,33 @@ class UiSettings {
         final num value => UiScaleNotifier.clampScale(value.toDouble()),
         _ => 1.0,
       },
+      windowSize: switch ((json['windowWidth'], json['windowHeight'])) {
+        (final num width, final num height) when width > 0 && height > 0 =>
+          Size(width.toDouble(), height.toDouble()),
+        _ => null,
+      },
+      windowMaximized: json['windowMaximized'] == true,
     );
   }
 
   final ThemeMode themeMode;
   final double uiScale;
 
-  UiSettings copyWith({ThemeMode? themeMode, double? uiScale}) {
+  /// Last known window size in logical pixels; null until first persisted.
+  final Size? windowSize;
+  final bool windowMaximized;
+
+  UiSettings copyWith({
+    ThemeMode? themeMode,
+    double? uiScale,
+    Size? windowSize,
+    bool? windowMaximized,
+  }) {
     return UiSettings(
       themeMode: themeMode ?? this.themeMode,
       uiScale: uiScale ?? this.uiScale,
+      windowSize: windowSize ?? this.windowSize,
+      windowMaximized: windowMaximized ?? this.windowMaximized,
     );
   }
 
@@ -40,6 +62,11 @@ class UiSettings {
       ThemeMode.light => 'light',
     },
     'uiScale': uiScale,
+    if (windowSize case final size?) ...{
+      'windowWidth': size.width,
+      'windowHeight': size.height,
+    },
+    'windowMaximized': windowMaximized,
   };
 }
 

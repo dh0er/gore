@@ -8,13 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [0.1.0] - 2026-06-11
 
-### Added
+### First Release
 
-- Browse Gothic Remake save slots, inspect GSAV container metadata and
-  PersistentDataList details.
-- Edit supported save metadata with automatic backups and slot-name sync.
-- Overview, player, inventory, progression, and JSON views into parsed saves.
-- List and restore backups created by the editor.
-- Optional out-of-process helper for advanced private payload support.
-- Automatic updates: the installed app checks GitHub Releases on startup,
-  downloads new versions in the background, and applies them on restart.
+- Player: Edit stats, skills, location and much more
+- Inventory: Change count of existing items. Adding new items is not yet implemented.
+- Progression: Edit quest markers, NPC knowledge and events
+- Almost all data can be changed by changing the value of the internal property. Only for experimental use.
+- Automatic backup creation.
