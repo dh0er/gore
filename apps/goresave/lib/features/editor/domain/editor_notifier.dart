@@ -13,19 +13,33 @@ import 'package:state_notifier/state_notifier.dart';
 
 const _unchanged = Object();
 
-/// Sorts saves by file last-modified time, newest first. Saves whose file
-/// can't be stat'd (e.g. fake paths in tests) sink to the bottom rather than
-/// throwing, so a transient FS error never breaks the scan.
-void _sortByLastModifiedDesc(List<SaveSlot> saves) {
+/// Sorts saves by in-game playtime (highest first). Slots with null playtime
+/// sink to the bottom. Equal or both-null playtime falls back to file
+/// last-modified descending so the order is stable on files that lack
+/// persistent metadata — saves whose file can't be stat'd sink to the very
+/// bottom rather than throwing, so a transient FS error never breaks the scan.
+void _sortByPlaytimeDesc(List<SaveSlot> saves) {
   final mtime = <String, DateTime>{};
   for (final save in saves) {
     try {
       mtime[save.path] = File(save.path).lastModifiedSync();
     } catch (_) {
-      // Leave unset; treated as oldest below.
+      // Leave unset; treated as oldest in the mtime tie-break below.
     }
   }
   saves.sort((a, b) {
+    final pa = a.timePlayedSeconds;
+    final pb = b.timePlayedSeconds;
+    // Primary key: playtime descending; nulls sink to the bottom.
+    if (pa != null && pb != null) {
+      final cmp = pb.compareTo(pa);
+      if (cmp != 0) return cmp;
+    } else if (pa == null && pb != null) {
+      return 1;
+    } else if (pa != null && pb == null) {
+      return -1;
+    }
+    // Secondary key: last-modified descending (tie-break / no-metadata path).
     final ma = mtime[a.path];
     final mb = mtime[b.path];
     if (ma == null && mb == null) return 0;
@@ -483,7 +497,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
           .whereType<Map>()
           .map((m) => SaveSlot.fromJson(m.cast<String, Object?>()))
           .toList();
-      _sortByLastModifiedDesc(saves);
+      _sortByPlaytimeDesc(saves);
       final rawProfiles = (data?['profiles'] as List?) ?? const [];
       final profiles = rawProfiles
           .whereType<Map>()

@@ -162,7 +162,12 @@ class _SaveSidebar extends StatelessWidget {
       ),
       child: Column(
         children: [
-          _ProfileHeader(profile: state.activeProfile, saveCount: saves.length),
+          _ProfileHeader(
+            profile: state.activeProfile,
+            saveCount: saves.length,
+            notifier: notifier,
+            isLoading: state.isLoading,
+          ),
           Expanded(
             child: saves.isEmpty
                 ? const Center(
@@ -200,10 +205,17 @@ class _SaveSidebar extends StatelessWidget {
 }
 
 class _ProfileHeader extends StatelessWidget {
-  const _ProfileHeader({required this.profile, required this.saveCount});
+  const _ProfileHeader({
+    required this.profile,
+    required this.saveCount,
+    required this.notifier,
+    required this.isLoading,
+  });
 
   final ProfileSummary? profile;
   final int saveCount;
+  final EditorNotifier notifier;
+  final bool isLoading;
 
   @override
   Widget build(BuildContext context) {
@@ -217,7 +229,7 @@ class _ProfileHeader extends StatelessWidget {
       // height + 2 indicator weight = 74, measured) so the header's bottom
       // edge lines up with the tab bar's.
       height: 74,
-      padding: const EdgeInsets.symmetric(horizontal: 16),
+      padding: const EdgeInsets.only(left: 16, right: 4),
       alignment: Alignment.centerLeft,
       decoration: BoxDecoration(
         color: scheme.surfaceContainerLowest,
@@ -257,6 +269,13 @@ class _ProfileHeader extends StatelessWidget {
                 ),
               ],
             ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            tooltip: 'Rescan save folder',
+            visualDensity: VisualDensity.compact,
+            iconSize: 20,
+            onPressed: isLoading ? null : notifier.refresh,
           ),
         ],
       ),
