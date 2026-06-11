@@ -752,7 +752,10 @@ class _KnowledgeDetailState extends State<_KnowledgeDetail> {
     final trimmed = entry.trim();
     if (trimmed.isEmpty) return;
     // Fast path: already on the current page.
-    if (_entries.entries.contains(trimmed)) return;
+    if (_entries.entries.contains(trimmed)) {
+      setState(() => _addError = 'Already exists for this character.');
+      return;
+    }
     final character = _selectedCharacter!;
     final key = _pendingKey(character, trimmed);
     // Already in pending adds/removes.
@@ -765,28 +768,55 @@ class _KnowledgeDetailState extends State<_KnowledgeDetail> {
       _checkingDuplicate = true;
       _addError = null;
     });
-    KnowledgeEntriesPage checkPage;
+    // The core query is a lowercase-contains filter, so an exact match can
+    // sit on any page of the match set — page through ALL matches.
+    var exists = false;
+    String? checkError;
     try {
-      checkPage = await widget.notifier.loadKnowledgeEntries(
-        checkCharacter,
-        query: trimmed,
-        limit: 50,
-      );
+      var offset = 0;
+      while (true) {
+        final checkPage = await widget.notifier.loadKnowledgeEntries(
+          checkCharacter,
+          query: trimmed,
+          limit: 200,
+          offset: offset,
+        );
+        if (!mounted ||
+            _selectedCharacter != checkCharacter ||
+            _entriesEpoch != checkEpoch) {
+          return;
+        }
+        if (checkPage.error != null) {
+          checkError = checkPage.error;
+          break;
+        }
+        if (checkPage.entries.any((e) => e == trimmed)) {
+          exists = true;
+          break;
+        }
+        offset += checkPage.entries.length;
+        if (checkPage.entries.isEmpty || offset >= checkPage.total) break;
+      }
     } finally {
-      // Issue 1 fix: clear the lock on every exit path (unmount, stale, error).
+      // Clear the lock on every exit path (unmount, stale, error).
       if (mounted) setState(() => _checkingDuplicate = false);
     }
-    if (!mounted || _selectedCharacter != checkCharacter || _entriesEpoch != checkEpoch) return;
-    // Issue 2 fix: a failed query must NOT fall through to a pending add.
-    if (checkPage.error != null) {
+    if (!mounted ||
+        _selectedCharacter != checkCharacter ||
+        _entriesEpoch != checkEpoch) {
+      return;
+    }
+    // A failed query must NOT fall through to a pending add.
+    if (checkError != null) {
       setState(() {
-        _addError =
-            'Duplicate check failed — try again: ${checkPage.error}';
+        _addError = 'Duplicate check failed — try again: $checkError';
       });
       return;
     }
-    // The core query is a lowercase-contains filter; verify exact equality.
-    if (checkPage.entries.any((e) => e == trimmed)) return;
+    if (exists) {
+      setState(() => _addError = 'Already exists for this character.');
+      return;
+    }
 
     setState(() {
       _pending[key] = KnowledgeEntryEdit.add(
@@ -963,50 +993,53 @@ class _KnowledgeDetailState extends State<_KnowledgeDetail> {
                           if (widget.editable) ...[
                             // Issue C: disabled while entries are loading or
                             // the set path is not yet known.
-                            Builder(builder: (context) {
-                              final addDisabled =
-                                  _loadingEntries ||
-                                  _entries.setPath.isEmpty ||
-                                  _checkingDuplicate;
-                              return Row(
-                                children: [
-                                  Expanded(
-                                    child: TextField(
-                                      controller: _addController,
-                                      enabled: !addDisabled,
-                                      decoration: const InputDecoration(
-                                        labelText: 'Add knowledge entry',
-                                        isDense: true,
-                                      ),
-                                      onSubmitted: addDisabled
-                                          ? null
-                                          : (v) => _addEntry(v),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  // Issue B: spinner during cross-page check.
-                                  _checkingDuplicate
-                                      ? const Padding(
-                                          padding: EdgeInsets.all(12),
-                                          child: SizedBox(
-                                            width: 16,
-                                            height: 16,
-                                            child: CircularProgressIndicator(
-                                              strokeWidth: 2,
-                                            ),
-                                          ),
-                                        )
-                                      : IconButton(
-                                          icon: const Icon(Icons.add),
-                                          tooltip: 'Add',
-                                          onPressed: addDisabled
-                                              ? null
-                                              : () =>
-                                                    _addEntry(_addController.text),
+                            Builder(
+                              builder: (context) {
+                                final addDisabled =
+                                    _loadingEntries ||
+                                    _entries.setPath.isEmpty ||
+                                    _checkingDuplicate;
+                                return Row(
+                                  children: [
+                                    Expanded(
+                                      child: TextField(
+                                        controller: _addController,
+                                        enabled: !addDisabled,
+                                        decoration: const InputDecoration(
+                                          labelText: 'Add knowledge entry',
+                                          isDense: true,
                                         ),
-                                ],
-                              );
-                            }),
+                                        onSubmitted: addDisabled
+                                            ? null
+                                            : (v) => _addEntry(v),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    // Issue B: spinner during cross-page check.
+                                    _checkingDuplicate
+                                        ? const Padding(
+                                            padding: EdgeInsets.all(12),
+                                            child: SizedBox(
+                                              width: 16,
+                                              height: 16,
+                                              child: CircularProgressIndicator(
+                                                strokeWidth: 2,
+                                              ),
+                                            ),
+                                          )
+                                        : IconButton(
+                                            icon: const Icon(Icons.add),
+                                            tooltip: 'Add',
+                                            onPressed: addDisabled
+                                                ? null
+                                                : () => _addEntry(
+                                                    _addController.text,
+                                                  ),
+                                          ),
+                                  ],
+                                );
+                              },
+                            ),
                           ],
                           if (_entries.error != null)
                             Padding(
@@ -1044,9 +1077,7 @@ class _KnowledgeDetailState extends State<_KnowledgeDetail> {
                               child: Text(
                                 'Pending adds (${addedEntries.length})',
                                 style: widget.theme.textTheme.labelSmall
-                                    ?.copyWith(
-                                      color: scheme.onSurfaceVariant,
-                                    ),
+                                    ?.copyWith(color: scheme.onSurfaceVariant),
                               ),
                             ),
                             for (final entry in addedEntries)
