@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:goresave/features/app/domain/desktop_updater.dart';
@@ -9,7 +11,6 @@ import 'package:window_manager/window_manager.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await initDesktopUpdater();
   if (windowChromeEnabled) {
     await windowManager.ensureInitialized();
     final settingsStore = JsonFileUiSettingsStore.defaultForPlatform();
@@ -34,6 +35,14 @@ Future<void> main() async {
     );
   }
   runApp(const ProviderScope(child: GoresaveApp()));
+  // WinSparkle attaches its update UI to the main window, so initialize it
+  // only after the first frame; earlier init can show an unowned dialog.
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    final autoCheckEnabled = JsonFileUiSettingsStore.defaultForPlatform()
+        .read()
+        .autoUpdateCheck;
+    unawaited(initDesktopUpdater(autoCheckEnabled: autoCheckEnabled));
+  });
 }
 
 /// Forwards window_manager events to the persister so the window size and
