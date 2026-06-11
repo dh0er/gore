@@ -1,18 +1,15 @@
 # goresave
 
-`goresave` is a Windows desktop savegame editor for Gothic Remake. It provides
-a Flutter interface backed by a Rust savegame core, with backup-first writes for
-supported save metadata and structured views into parsed save data.
+`goresave` is a savegame editor for Gothic Remake. It provides
+a Flutter interface backed by a Rust savegame core.
 
 ## Features
 
-- Browse Gothic Remake save slots from a selected save directory.
-- Read GSAV container metadata and PersistentDataList slot details.
-- Edit supported public save metadata with automatic backup creation.
-- Synchronize edited slot names to the matching PersistentDataList entry.
-- Inspect parsed save data in overview, player, inventory, progression, and JSON views.
-- Configure optional local helper paths for advanced private payload support.
-- List and restore slot backups created by the editor.
+- Player: Edit stats, skills, location and much more
+- Inventory: Change count of existing items. Adding new items is not yet implemented.
+- Progression: Edit quest markers, NPC knowledge and events
+- Almost all data can be changed by changing the value of the internal property. Only for experimental use.
+- Automatic backup creation.
 
 ## Installation & Updates
 
@@ -23,25 +20,6 @@ and applies them when you click "Restart to update".
 
 A portable zip is also attached to each release; the portable build does not
 auto-update.
-
-### Releasing (maintainers)
-
-1. Set `version:` in `apps/goresave/pubspec.yaml` to the new `X.Y.Z`.
-2. Add a `## [X.Y.Z] - YYYY-MM-DD` section to `CHANGELOG.md` — it becomes the
-   release notes.
-3. Commit, then `git tag vX.Y.Z && git push origin vX.Y.Z`.
-4. The Release workflow builds the zip + Velopack packages and publishes the
-   GitHub release. The tag must match the pubspec version and the changelog
-   section must exist, or the build fails.
-
-## Project Layout
-
-- `apps/goresave`: Flutter Windows application.
-- `crates/goresave_core`: Rust save parsing, writing, backup, and FFI layer.
-- `crates/goresave_g1r_codec_host`: Optional out-of-process helper.
-- `fixtures`: Small test fixtures that are safe to commit.
-- `integration_test`: Manual integration test notes.
-- `tools`: Build and packaging helpers.
 
 ## Requirements
 
@@ -90,8 +68,7 @@ Release bundles expect `goresave_core.dll` and
 ## Safety
 
 `goresave` writes backups before modifying save files. Even so, keep your own
-copy of important saves before editing them. Do not commit personal save files;
-the repository only keeps small fixtures intended for tests.
+copy of important saves before editing them.
 
 ## License
 
