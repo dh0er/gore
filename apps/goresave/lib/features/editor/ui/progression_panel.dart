@@ -21,8 +21,9 @@ String shortStateLabel(String state) {
 
 /// Progression tab: structured quests / dialog knowledge / memory events.
 /// Data loads lazily per card through the notifier's query_progression
-/// wrappers. [reloadKey] identifies the inspected save (sha1); when it
-/// changes, cards drop local state and reload.
+/// wrappers. [reloadKey] is the [SaveInspection] instance itself; identity
+/// comparison means every fresh inspection (even of the same file) clears
+/// local pending state and reloads, matching the inventory card semantics.
 class ProgressionPanel extends StatelessWidget {
   const ProgressionPanel({
     super.key,
@@ -55,7 +56,7 @@ class ProgressionPanel extends StatelessWidget {
             'verified typed parse.',
       );
     }
-    final reloadKey = inspection.sha1;
+    final reloadKey = inspection;
     return ListView(
       padding: const EdgeInsets.all(20),
       children: [
@@ -533,13 +534,16 @@ class _KnowledgeCardState extends State<_KnowledgeCard> {
     final scheme = Theme.of(context).colorScheme;
     final character = _selectedCharacter;
 
-    // Compute sets for rendering
+    // Compute sets for rendering — only include edits for the selected NPC.
+    // Keys are '$character\t$entry' so we filter by prefix.
     final removedEntries = <String>{};
     final addedEntries = <String>[];
     if (character != null) {
-      for (final edit in _pending.values) {
-        if (!edit.isAdd) removedEntries.add(edit.entry);
-        if (edit.isAdd) addedEntries.add(edit.entry);
+      final prefix = '$character\t';
+      for (final entry in _pending.entries) {
+        if (!entry.key.startsWith(prefix)) continue;
+        if (!entry.value.isAdd) removedEntries.add(entry.value.entry);
+        if (entry.value.isAdd) addedEntries.add(entry.value.entry);
       }
     }
 
