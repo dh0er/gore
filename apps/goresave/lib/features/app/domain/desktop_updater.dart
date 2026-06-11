@@ -28,6 +28,33 @@ bool _isInnoInstalled() {
   }
 }
 
+/// WinSparkle's shutdown callback only asks the app to quit; nothing closes
+/// the process for us. Exiting here releases goresave.exe so the Inno
+/// installer launched by WinSparkle can replace it.
+class _UpdaterQuitListener with UpdaterListener {
+  @override
+  void onUpdaterError(UpdaterError? error) {
+    debugPrint('goresave updater error: $error');
+  }
+
+  @override
+  void onUpdaterCheckingForUpdate(Appcast? appcast) {}
+
+  @override
+  void onUpdaterUpdateAvailable(AppcastItem? appcastItem) {}
+
+  @override
+  void onUpdaterUpdateNotAvailable(UpdaterError? error) {}
+
+  @override
+  void onUpdaterUpdateDownloaded(AppcastItem? appcastItem) {}
+
+  @override
+  void onUpdaterBeforeQuitForUpdate(AppcastItem? appcastItem) {
+    exit(0);
+  }
+}
+
 /// Initializes WinSparkle-based auto-updates. Best-effort: failures are
 /// logged and never block startup. No-op outside Windows release builds
 /// (dev runs are not installed, so an update prompt would be wrong) and
@@ -37,6 +64,7 @@ Future<void> initDesktopUpdater() async {
     return;
   }
   try {
+    autoUpdater.addListener(_UpdaterQuitListener());
     await autoUpdater.setFeedURL(_appcastUrl);
     await autoUpdater.setScheduledCheckInterval(_checkIntervalSeconds);
     // Silent check on startup: WinSparkle shows its own dialog only when
