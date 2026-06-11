@@ -12,6 +12,7 @@ class UiSettings {
     this.uiScale = 1.0,
     this.windowSize,
     this.windowMaximized = false,
+    this.autoUpdateCheck = true,
   });
 
   factory UiSettings.fromJson(Map<String, Object?> json) {
@@ -31,6 +32,7 @@ class UiSettings {
         _ => null,
       },
       windowMaximized: json['windowMaximized'] == true,
+      autoUpdateCheck: json['autoUpdateCheck'] != false,
     );
   }
 
@@ -41,17 +43,22 @@ class UiSettings {
   final Size? windowSize;
   final bool windowMaximized;
 
+  /// Whether the app checks for updates automatically (on by default).
+  final bool autoUpdateCheck;
+
   UiSettings copyWith({
     ThemeMode? themeMode,
     double? uiScale,
     Size? windowSize,
     bool? windowMaximized,
+    bool? autoUpdateCheck,
   }) {
     return UiSettings(
       themeMode: themeMode ?? this.themeMode,
       uiScale: uiScale ?? this.uiScale,
       windowSize: windowSize ?? this.windowSize,
       windowMaximized: windowMaximized ?? this.windowMaximized,
+      autoUpdateCheck: autoUpdateCheck ?? this.autoUpdateCheck,
     );
   }
 
@@ -67,6 +74,7 @@ class UiSettings {
       'windowHeight': size.height,
     },
     'windowMaximized': windowMaximized,
+    'autoUpdateCheck': autoUpdateCheck,
   };
 }
 
@@ -155,6 +163,22 @@ class ThemeModeNotifier extends StateNotifier<ThemeMode> {
   void setThemeMode(ThemeMode themeMode) {
     state = themeMode;
     _store.write(_store.read().copyWith(themeMode: themeMode));
+  }
+}
+
+final autoUpdateCheckProvider =
+    StateNotifierProvider<AutoUpdateCheckNotifier, bool>((ref) {
+      return AutoUpdateCheckNotifier(ref.watch(uiSettingsStoreProvider));
+    });
+
+class AutoUpdateCheckNotifier extends StateNotifier<bool> {
+  AutoUpdateCheckNotifier(this._store) : super(_store.read().autoUpdateCheck);
+
+  final UiSettingsStore _store;
+
+  void set(bool enabled) {
+    state = enabled;
+    _store.write(_store.read().copyWith(autoUpdateCheck: enabled));
   }
 }
 

@@ -1,5 +1,8 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:goresave/features/app/domain/desktop_updater.dart';
 import 'package:goresave/features/app/domain/ui_settings.dart';
 import 'package:goresave/features/app/domain/window_state_persistence.dart';
 import 'package:goresave/features/app/ui/goresave_app.dart';
@@ -7,8 +10,6 @@ import 'package:goresave/features/app/ui/window_chrome.dart';
 import 'package:window_manager/window_manager.dart';
 
 Future<void> main() async {
-  // Velopack startup hooks run in the native Windows runner (main.cpp)
-  // before the Flutter engine starts.
   WidgetsFlutterBinding.ensureInitialized();
   if (windowChromeEnabled) {
     await windowManager.ensureInitialized();
@@ -34,6 +35,14 @@ Future<void> main() async {
     );
   }
   runApp(const ProviderScope(child: GoresaveApp()));
+  // WinSparkle attaches its update UI to the main window, so initialize it
+  // only after the first frame; earlier init can show an unowned dialog.
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    final autoCheckEnabled = JsonFileUiSettingsStore.defaultForPlatform()
+        .read()
+        .autoUpdateCheck;
+    unawaited(initDesktopUpdater(autoCheckEnabled: autoCheckEnabled));
+  });
 }
 
 /// Forwards window_manager events to the persister so the window size and

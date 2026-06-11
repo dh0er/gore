@@ -1,0 +1,54 @@
+; goresave Windows installer.
+; Compiled by CI:
+;   iscc /DAppVersion=<x.y.z> /DSourceDir=<abs path to Release dir> ^
+;        /DOutputDir=<abs path for the exe> installer\setup.iss
+; The wizard shows a directory page, so users pick any install location.
+; WinSparkle updates download this same installer and re-run it; Inno
+; remembers the previous location and updates in place.
+
+#ifndef AppVersion
+  #error "Pass /DAppVersion=x.y.z"
+#endif
+#ifndef SourceDir
+  #error "Pass /DSourceDir=<path to flutter Release dir>"
+#endif
+#ifndef OutputDir
+  #error "Pass /DOutputDir=<path for installer exe>"
+#endif
+
+[Setup]
+; Fixed GUID identifies the app across versions for in-place updates.
+AppId={{C7A35D8E-4B61-4E0D-9C0A-2F8B5D1E6A43}
+AppName=goresave
+AppVersion={#AppVersion}
+AppVerName=goresave {#AppVersion}
+AppPublisher=dh0er
+DefaultDirName={autopf}\goresave
+DefaultGroupName=goresave
+; Per-user installs work without elevation; the dialog lets the user pick
+; all-users (Program Files, admin) or current-user (no UAC prompt).
+PrivilegesRequired=lowest
+PrivilegesRequiredOverridesAllowed=dialog
+OutputDir={#OutputDir}
+OutputBaseFilename=GoresaveSetup-{#AppVersion}
+Compression=lzma
+SolidCompression=yes
+ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
+UninstallDisplayIcon={app}\goresave.exe
+WizardStyle=modern
+SetupIconFile=..\apps\goresave\windows\runner\resources\app_icon.ico
+LicenseFile=..\LICENSE
+
+[Files]
+Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+
+[Icons]
+Name: "{group}\goresave"; Filename: "{app}\goresave.exe"
+Name: "{autodesktop}\goresave"; Filename: "{app}\goresave.exe"; Tasks: desktopicon
+
+[Tasks]
+Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional icons:"
+
+[Run]
+Filename: "{app}\goresave.exe"; Description: "Launch goresave"; Flags: nowait postinstall skipifsilent

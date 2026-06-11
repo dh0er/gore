@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:goresave/features/app/domain/ui_settings.dart';
 import 'package:goresave/features/app/ui/about_dialog.dart';
 import 'package:goresave/features/app/ui/appearance_settings.dart';
+import 'package:goresave/features/app/ui/update_settings.dart';
 import 'package:goresave/features/app/ui/window_chrome.dart';
 import 'package:goresave/features/editor/domain/editor_notifier.dart';
 import 'package:goresave/features/editor/domain/editor_models.dart';
@@ -3119,6 +3120,8 @@ class _SettingsPanel extends StatelessWidget {
       padding: const EdgeInsets.all(20),
       children: [
         const AppearanceSettingsCard(),
+        const SizedBox(height: 16),
+        const UpdateSettingsCard(),
         const SizedBox(height: 16),
         Card(
           child: Padding(
