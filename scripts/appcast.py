@@ -33,7 +33,13 @@ REPO_DOWNLOAD_BASE = "https://github.com/dh0er/goresave/releases/download"
 
 
 def sign_dsa(installer: Path) -> str:
-    """Return the base64 DSA-SHA1 signature of *installer*."""
+    """Return the base64 DSA signature of *installer*.
+
+    WinSparkle's verifier expects the two-stage scheme of its bundled
+    sign_update.bat: the file's raw SHA-1 digest is piped into a second
+    SHA-1+DSA signing step (sign(SHA1(SHA1(file)))). Signing the file in
+    one pass produces signatures the embedded public key rejects.
+    """
     key_b64 = os.environ.get("WINSPARKLE_DSA_PRIV_KEY_B64")
     if not key_b64:
         sys.exit("WINSPARKLE_DSA_PRIV_KEY_B64 is not set; refusing to "
@@ -42,9 +48,15 @@ def sign_dsa(installer: Path) -> str:
     with tempfile.TemporaryDirectory() as tmp:
         key_path = Path(tmp) / "dsa_priv.pem"
         key_path.write_text(key_pem, encoding="utf-8")
+        digest = subprocess.run(
+            ["openssl", "dgst", "-sha1", "-binary"],
+            input=installer.read_bytes(),
+            capture_output=True,
+            check=True,
+        )
         result = subprocess.run(
-            ["openssl", "dgst", "-sha1", "-sign", str(key_path),
-             str(installer)],
+            ["openssl", "dgst", "-sha1", "-sign", str(key_path)],
+            input=digest.stdout,
             capture_output=True,
             check=True,
         )
