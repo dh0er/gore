@@ -4,6 +4,8 @@ import 'package:file_selector/file_selector.dart';
 import 'package:goresave/features/editor/domain/core_service.dart';
 import 'package:goresave/features/editor/domain/editor_models.dart';
 import 'package:goresave/features/editor/domain/editor_settings_store.dart';
+import 'package:goresave/features/editor/domain/hero_attributes.dart';
+import 'package:goresave/features/editor/domain/pending_edits.dart';
 import 'package:goresave/utils/default_paths.dart';
 import 'package:path/path.dart' as p;
 import 'package:state_notifier/state_notifier.dart';
@@ -50,6 +52,7 @@ class EditorState {
     this.error,
     this.codecError,
     this.lastWriteMessage,
+    this.pendingEdits = const {},
   });
 
   final String saveDir;
@@ -64,6 +67,12 @@ class EditorState {
   final String? selectedPath;
   final SaveInspection? inspection;
   final CodecStatus? codecStatus;
+
+  /// Pending (unsaved) savegame edits, keyed by editor surface
+  /// (e.g. 'publicName', 'heroStats', 'transform', 'attr:Health',
+  /// 'inventory', 'typed:&lt;joined path&gt;'). Cleared on save, refresh to a
+  /// different save, or selection change.
+  final Map<String, PendingSaveEdit> pendingEdits;
 
   /// True once the user ran a successful codec round-trip verification this
   /// session for an executable the probe could not auto-trust (a pattern-
@@ -88,6 +97,10 @@ class EditorState {
   /// save-directory refresh does not wipe a standing codec configuration error.
   final String? codecError;
   final String? lastWriteMessage;
+
+  /// Total number of edit objects across all pending keys.
+  int get pendingEditCount =>
+      pendingEdits.values.fold(0, (n, e) => n + e.edits.length);
 
   SaveSlot? get selectedSave {
     for (final save in saves) {
@@ -126,12 +139,14 @@ class EditorState {
     String? error,
     String? codecError,
     String? lastWriteMessage,
+    Map<String, PendingSaveEdit>? pendingEdits,
     bool clearInspection = false,
     bool clearBackups = false,
     bool clearError = false,
     bool clearCodecError = false,
     bool clearCodecStatus = false,
     bool clearWriteMessage = false,
+    bool clearPendingEdits = false,
   }) {
     return EditorState(
       saveDir: saveDir ?? this.saveDir,
@@ -158,6 +173,9 @@ class EditorState {
       lastWriteMessage: clearWriteMessage
           ? null
           : lastWriteMessage ?? this.lastWriteMessage,
+      pendingEdits: clearPendingEdits
+          ? const {}
+          : pendingEdits ?? this.pendingEdits,
     );
   }
 }
@@ -257,6 +275,9 @@ class EditorNotifier extends StateNotifier<EditorState> {
   bool get coreAvailable => _core.isAvailable;
   String get coreDescription => _core.description;
 
+  /// Convenience forwarder — prefer [EditorState.pendingEditCount].
+  int get pendingEditCount => state.pendingEditCount;
+
   /// Dismiss the current error banner.
   void dismissError() {
     if (state.error != null) state = state.copyWith(clearError: true);
@@ -279,6 +300,104 @@ class EditorNotifier extends StateNotifier<EditorState> {
     // Keep the queue alive regardless of this command's success/failure.
     _coreQueue = pending.then((_) {}, onError: (_) {});
     return pending;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Pending-edit registry
+  // ---------------------------------------------------------------------------
+
+  /// Upsert a pending edit for a given editor surface key.
+  void setPendingEdit(String key, PendingSaveEdit edit) {
+    final updated = Map<String, PendingSaveEdit>.from(state.pendingEdits);
+    updated[key] = edit;
+    state = state.copyWith(pendingEdits: updated);
+  }
+
+  /// Remove the pending edit for a given editor surface key.
+  void clearPendingEdit(String key) {
+    if (!state.pendingEdits.containsKey(key)) return;
+    final updated = Map<String, PendingSaveEdit>.from(state.pendingEdits);
+    updated.remove(key);
+    state = state.copyWith(pendingEdits: updated);
+  }
+
+  /// Clear all pending edits.
+  void clearAllPendingEdits() {
+    if (state.pendingEdits.isEmpty) return;
+    state = state.copyWith(clearPendingEdits: true);
+  }
+
+  /// Save all pending edits in one write_save call. No-op when empty.
+  /// Re-entry-safe: bails immediately if a load is already in flight.
+  /// Returns true on success (or when nothing to save), false on failure.
+  Future<bool> saveAllPending() async {
+    if (state.pendingEdits.isEmpty) return true;
+    if (state.isLoading) return false;
+    final savePath = state.selectedPath;
+    if (savePath == null) return false;
+
+    // Snapshot the keys in stable (sorted) order for determinism. We clear
+    // exactly these keys on success rather than using clearAllPendingEdits()
+    // so that an edit typed during the in-flight write (which lives only in
+    // widget-local text until onChanged fires again) isn't silently discarded
+    // by a subsequent refresh-clears-all; the refresh's central clear will
+    // wipe those mid-write registry entries anyway, but the snapshot-key
+    // path is the explicit safety net for any failed-then-refreshed scenarios.
+    final snapshotKeys = state.pendingEdits.keys.toList()..sort();
+    final allEdits = <Map<String, Object?>>[];
+    var syncPersistent = false;
+    for (final key in snapshotKeys) {
+      final entry = state.pendingEdits[key]!;
+      allEdits.addAll(entry.edits);
+      if (entry.syncPersistentDataList) syncPersistent = true;
+    }
+
+    // The same typed property can be edited from two surfaces at once (the
+    // Player tab's hero stats and the All data browser). Batching both would
+    // silently let sorted-key order pick the winner — refuse instead and let
+    // the user resolve the conflict.
+    final seenTypedPaths = <String>{};
+    for (final edit in allEdits) {
+      if (edit['path'] != 'private.typed.setValue') continue;
+      final value = edit['value'];
+      if (value is! Map) continue;
+      final path = (value['path'] as List?)?.join(' › ') ?? '';
+      if (!seenTypedPaths.add(path)) {
+        state = state.copyWith(
+          error:
+              'Conflicting unsaved edits target the same property '
+              '($path) from two tabs. Reset or revert one of them, '
+              'then save again.',
+        );
+        return false;
+      }
+    }
+
+    final n = allEdits.length;
+    final ok = await _runWrite(
+      payload: {
+        'path': savePath,
+        'backup': true,
+        if (syncPersistent) 'syncPersistentDataList': true,
+        'edits': allEdits,
+        ..._codecPayload(),
+      },
+      message: (data) => _backupMessage(
+        '$n change${n == 1 ? '' : 's'} saved with backup',
+        data,
+      ),
+    );
+    if (ok) {
+      // Clear exactly the snapshot keys. The _runWrite → refresh() call has
+      // already triggered a central clearAllPendingEdits() (refresh always
+      // clears all pending), so this is a belt-and-suspenders guard for the
+      // case where a mid-write keystroke registered a new key after the
+      // snapshot was taken but before refresh ran.
+      for (final key in snapshotKeys) {
+        clearPendingEdit(key);
+      }
+    }
+    return ok;
   }
 
   Future<void> chooseSaveDir() async {
@@ -372,6 +491,9 @@ class EditorNotifier extends StateNotifier<EditorState> {
       final selectedPath = saves.any((save) => save.path == state.selectedPath)
           ? state.selectedPath
           : (saves.isNotEmpty ? saves.first.path : null);
+      // Pending edits are cleared by _inspect once the fresh inspection
+      // actually lands (so a failed re-inspect keeps them retryable); only
+      // when nothing remains selected is there no inspect to do it.
       state = state.copyWith(
         saves: saves,
         profiles: profiles,
@@ -379,6 +501,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
         selectedPath: selectedPath,
         clearInspection: selectedPath == null,
         clearBackups: selectedPath == null,
+        clearPendingEdits: selectedPath == null,
       );
       if (selectedPath != null) {
         await _inspect(selectedPath);
@@ -411,6 +534,12 @@ class EditorNotifier extends StateNotifier<EditorState> {
       clearWriteMessage: clearWriteMessage,
       clearInspection: switchingSlot,
       clearBackups: switchingSlot,
+      // Slot switch: stale edits must never be written into a different
+      // file, so drop them immediately. Same-save re-inspects clear pending
+      // only once the fresh inspection lands (below) — if the inspect fails,
+      // fields still show the drafts and the registry must keep matching
+      // them so the user can retry the save.
+      clearPendingEdits: switchingSlot,
     );
     try {
       final payload = <String, Object?>{
@@ -434,7 +563,12 @@ class EditorNotifier extends StateNotifier<EditorState> {
       final data = (response['data'] as Map).cast<String, Object?>();
       // Apply the parsed inspection immediately so a later list_backups failure
       // does not drop the save metadata/private views that already loaded.
-      state = state.copyWith(inspection: SaveInspection.fromJson(data));
+      // The fresh inspection re-seeds every editor, so pending edits are
+      // discarded in the same state change — never earlier (see above).
+      state = state.copyWith(
+        inspection: SaveInspection.fromJson(data),
+        clearPendingEdits: true,
+      );
       final backupSnapshot = await _loadBackups(path, seq);
       if (backupSnapshot == null) return;
       state = state.copyWith(
@@ -498,6 +632,8 @@ class EditorNotifier extends StateNotifier<EditorState> {
       state = state.copyWith(lastWriteMessage: restoreMessage);
       // Rescan so the sidebar/profile summary reflect the rolled-back public
       // name and PersistentDataList metadata, not just the detail pane.
+      // refresh() also centrally clears all pending edits (avoids mutating
+      // the provider from widget lifecycle hooks).
       await refresh();
       // The restore itself succeeded on disk; if the follow-up rescan/inspection
       // failed, make clear the restore worked so the error is not misread as a
@@ -583,27 +719,6 @@ class EditorNotifier extends StateNotifier<EditorState> {
     });
   }
 
-  Future<void> validateSelected() async {
-    final path = state.selectedPath;
-    if (path == null) return;
-    await _withLoading(() async {
-      final response = await _execute(
-        'validate_roundtrip',
-        payload: {'path': path},
-      );
-      if (response['ok'] != true) {
-        state = state.copyWith(error: _errorMessage(response));
-        return;
-      }
-      final data = (response['data'] as Map).cast<String, Object?>();
-      state = state.copyWith(
-        lastWriteMessage: data['identical'] == true
-            ? 'Roundtrip validation passed'
-            : 'Roundtrip validation changed bytes',
-      );
-    });
-  }
-
   Future<void> validateCodecRoundtrip() async {
     final path = state.selectedPath;
     if (path == null) return;
@@ -622,141 +737,6 @@ class EditorNotifier extends StateNotifier<EditorState> {
             'Codec roundtrip passed: chunk ${data['chunkIndex']} recompressed to ${data['recompressedSize']} bytes',
       );
     });
-  }
-
-  Future<void> writePlayerSaveName(String value) async {
-    final path = state.selectedPath;
-    if (path == null) return;
-    await _runWrite(
-      payload: {
-        'path': path,
-        'backup': true,
-        'syncPersistentDataList': true,
-        'edits': [
-          {'path': 'public.m_PlayerSaveName', 'value': value},
-        ],
-      },
-      message: (data) => _backupMessage('Saved with backup', data),
-    );
-  }
-
-  Future<void> writePrivateFString({
-    required String oldValue,
-    required String newValue,
-  }) async {
-    final path = state.selectedPath;
-    if (path == null) return;
-    await _runWrite(
-      payload: {
-        'path': path,
-        'backup': true,
-        'edits': [
-          {
-            'path': 'private.replaceFString',
-            'value': {'oldValue': oldValue, 'newValue': newValue},
-          },
-        ],
-        ..._codecPayload(),
-      },
-      message: (data) =>
-          _backupMessage('Private payload saved with backup', data),
-    );
-  }
-
-  Future<void> writePrivatePlayerName(String value) async {
-    final path = state.selectedPath;
-    if (path == null) return;
-    await _runWrite(
-      payload: {
-        'path': path,
-        'backup': true,
-        'edits': [
-          {'path': 'private.player.setPlayerName', 'value': value},
-        ],
-        ..._codecPayload(),
-      },
-      message: (data) =>
-          _backupMessage('Private player name saved with backup', data),
-    );
-  }
-
-  Future<void> writePrivateProfileName(String value) async {
-    final path = state.selectedPath;
-    if (path == null) return;
-    await _runWrite(
-      payload: {
-        'path': path,
-        'backup': true,
-        'edits': [
-          {'path': 'private.profile.setProfileName', 'value': value},
-        ],
-        ..._codecPayload(),
-      },
-      message: (data) =>
-          _backupMessage('Private profile name saved with backup', data),
-    );
-  }
-
-  Future<void> writePlayerAttribute({
-    required String id,
-    required double baseValue,
-    required double currentValue,
-  }) async {
-    final path = state.selectedPath;
-    if (path == null) return;
-    await _runWrite(
-      payload: {
-        'path': path,
-        'backup': true,
-        'edits': [
-          {
-            'path': 'private.player.setAttribute',
-            'value': {
-              'id': id,
-              'baseValue': baseValue,
-              'currentValue': currentValue,
-            },
-          },
-        ],
-        ..._codecPayload(),
-      },
-      message: (data) =>
-          _backupMessage('Private player attribute saved with backup', data),
-    );
-  }
-
-  Future<void> writePlayerTransform({
-    required double locationX,
-    required double locationY,
-    required double locationZ,
-    required double rotationPitch,
-    required double rotationYaw,
-    required double rotationRoll,
-  }) async {
-    final path = state.selectedPath;
-    if (path == null) return;
-    await _runWrite(
-      payload: {
-        'path': path,
-        'backup': true,
-        'edits': [
-          {
-            'path': 'private.player.setTransform',
-            'value': {
-              'location': {'x': locationX, 'y': locationY, 'z': locationZ},
-              'rotation': {
-                'pitch': rotationPitch,
-                'yaw': rotationYaw,
-                'roll': rotationRoll,
-              },
-            },
-          },
-        ],
-        ..._codecPayload(),
-      },
-      message: (data) =>
-          _backupMessage('Private player transform saved with backup', data),
-    );
   }
 
   /// Search every typed property in the decoded private payload. The core
@@ -794,68 +774,41 @@ class EditorNotifier extends StateNotifier<EditorState> {
     }
   }
 
-  /// Layout-verified typed edit: set a fixed-size scalar (int/float/bool/
-  /// byte) or a string-valued property (Str/Name/Object/Enum and the
-  /// enum-as-byte form of ByteProperty) at a typed property path. String
-  /// edits may change the payload length; the core fixes up every enclosing
-  /// size field. Only offered by the core when the strict typed parse of the
-  /// save succeeded (`private.typed.setValue` in writable).
-  ///
-  /// Path segments: property name, `{mapKey}` for map entries, `[i]` for
-  /// container/object-array indices.
-  Future<bool> writeTypedValue({
-    required List<String> propertyPath,
-    required Object value,
-  }) async {
-    final savePath = state.selectedPath;
-    if (savePath == null) return false;
-    return _runWrite(
-      payload: {
-        'path': savePath,
-        'backup': true,
-        'edits': [
-          {
-            'path': 'private.typed.setValue',
-            'value': {'path': propertyPath, 'value': value},
-          },
-        ],
-        ..._codecPayload(),
-      },
-      message: (data) =>
-          _backupMessage('Typed value saved with backup', data),
-    );
-  }
+  /// Search query that returns exactly the hero attribute leaves: both terms
+  /// must appear in the display path, which only holds for entries under
+  /// AttributesByGlobalId/{Hero}.
+  static const heroAttributesQuery = 'AttributesByGlobalId {Hero}';
 
-  Future<void> writeInventoryItemCount({
-    required String id,
-    required String path,
-    required int count,
-  }) async {
-    await writeInventoryItemCounts([
-      InventoryItemCountChange(id: id, path: path, count: count),
-    ]);
-  }
-
-  Future<void> writeInventoryItemCounts(
-    List<InventoryItemCountChange> changes,
-  ) async {
-    if (changes.isEmpty) return;
-    final savePath = state.selectedPath;
-    if (savePath == null) return;
-    await _runWrite(
-      payload: {
-        'path': savePath,
-        'backup': true,
-        'edits': changes.map((change) => change.toEditJson()).toList(),
-        ..._codecPayload(),
-      },
-      message: (data) => changes.length == 1
-          ? _backupMessage('Inventory count saved with backup', data)
-          : _backupMessage(
-              '${changes.length} inventory counts saved with backup',
-              data,
-            ),
-    );
+  /// Load every hero gameplay attribute from the typed property tree. The
+  /// core caps each search page at 1000 hits, so page through the full match
+  /// set instead of trusting one request. The decode cache is already seeded
+  /// by inspect, so this does not pay a second full private-payload decode.
+  Future<HeroAttributesResult> loadHeroAttributes() async {
+    // Pin the save under load: searchTypedProperties always reads the
+    // current selection, so a save switch mid-pagination would silently
+    // merge pages from two different files into one stat list.
+    final loadPath = state.selectedPath;
+    final hits = <TypedPropertyHit>[];
+    var offset = 0;
+    while (true) {
+      final result = await searchTypedProperties(
+        heroAttributesQuery,
+        offset: offset,
+        limit: 1000,
+      );
+      if (state.selectedPath != loadPath) {
+        return const HeroAttributesResult(
+          error: 'Save selection changed while loading hero attributes.',
+        );
+      }
+      if (result.error != null) {
+        return HeroAttributesResult(error: result.error);
+      }
+      hits.addAll(result.results);
+      offset += result.results.length;
+      if (offset >= result.total || result.results.isEmpty) break;
+    }
+    return HeroAttributesResult(attributes: parseHeroAttributes(hits));
   }
 
   String _errorMessage(Map<String, Object?> response) {

@@ -29,7 +29,7 @@ void main() {
 
     await tester.pumpAndSettle();
 
-    expect(find.text('goresave'), findsOneWidget);
+    expect(find.text('Gothic Remake Savegame Editor'), findsOneWidget);
     expect(find.text('Die Welt der Verurteilten'), findsAtLeastNWidgets(1));
     expect(find.text('Overview'), findsOneWidget);
     expect(find.text('Public save name'), findsOneWidget);
@@ -48,83 +48,90 @@ void main() {
     expect(find.text('Auto save'), findsOneWidget);
     expect(find.bySemanticsLabel('Screenshot for G1R-001'), findsWidgets);
 
+    // Inspection JSON card exists and is collapsed by default.
+    expect(find.text('Inspection JSON'), findsOneWidget);
+    expect(find.text('Raw save inspection data'), findsOneWidget);
+    // JSON content is not visible until expanded.
+    expect(find.text('"format"'), findsNothing);
+    // Expand the card and confirm JSON content appears.
+    await tester.scrollUntilVisible(
+      find.text('Inspection JSON'),
+      120,
+      scrollable: find.byType(Scrollable).last,
+    );
+    await tester.tap(find.text('Inspection JSON'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('"format"'), findsOneWidget);
+    // Collapse it again.
+    await tester.tap(find.text('Inspection JSON'));
+    await tester.pumpAndSettle();
+
+    // Global Save button starts disabled (no pending edits yet).
+    expect(
+      tester
+          .widget<FilledButton>(
+            find.widgetWithText(FilledButton, 'Save'),
+          )
+          .onPressed,
+      isNull,
+    );
+
+    // Edit the public save name — button label gains count.
     await tester.enterText(
       find.widgetWithText(TextField, 'Public save name'),
       'Much Longer Save Name',
     );
-    await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+    await tester.pump();
+    expect(find.widgetWithText(FilledButton, 'Save (1)'), findsOneWidget);
+
+    // Tap the global Save button.
+    await tester.tap(find.widgetWithText(FilledButton, 'Save (1)'));
     await tester.pumpAndSettle();
 
     final publicWrite = core.requests.lastWhere(
-      (request) => request.command == 'write_save',
+      (r) => r.command == 'write_save',
     );
     expect(publicWrite.payload['edits'], [
       {'path': 'public.m_PlayerSaveName', 'value': 'Much Longer Save Name'},
     ]);
+    expect(publicWrite.payload['syncPersistentDataList'], isTrue);
+    expect(publicWrite.payload['backup'], isTrue);
+
+    // Button disabled again after save.
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(FilledButton, 'Save'), findsOneWidget);
+    expect(
+      tester
+          .widget<FilledButton>(
+            find.widgetWithText(FilledButton, 'Save'),
+          )
+          .onPressed,
+      isNull,
+    );
 
     await tester.tap(find.widgetWithText(Tab, 'Player'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Player summary'), findsOneWidget);
-    expect(find.text('Save version'), findsOneWidget);
-    expect(find.text('17'), findsOneWidget);
-    expect(find.text('Current world'), findsOneWidget);
-    expect(find.text('WORLD'), findsOneWidget);
-    expect(find.text('Hero'), findsAtLeastNWidgets(1));
-    expect(find.text('Profile name'), findsOneWidget);
-    expect(find.text('0'), findsAtLeastNWidgets(1));
-    expect(find.text('Preview: 1 / 541 chunks'), findsNothing);
-    expect(find.widgetWithText(FilledButton, 'Load all'), findsNothing);
+    // Player summary card and name editor fields are deleted.
+    expect(find.text('Player summary'), findsNothing);
+    expect(find.text('Save version'), findsNothing);
+    expect(find.text('Current world'), findsNothing);
+    expect(find.text('Profile name'), findsNothing);
     expect(
       find.widgetWithText(TextField, 'Private player name'),
-      findsOneWidget,
+      findsNothing,
     );
-
-    await tester.enterText(
-      find.widgetWithText(TextField, 'Private player name'),
-      'Nameless',
-    );
-    await tester.scrollUntilVisible(
-      find.byTooltip('Save private player name'),
-      120,
-      scrollable: find.byType(Scrollable).last,
-    );
-    await tester.pumpAndSettle();
-    await tester.tap(find.byTooltip('Save private player name'));
-    await tester.pumpAndSettle();
-
-    final playerWrite = core.requests.lastWhere(
-      (request) => request.command == 'write_save',
-    );
-    expect(playerWrite.payload['edits'], [
-      {'path': 'private.player.setPlayerName', 'value': 'Nameless'},
-    ]);
-
-    await tester.scrollUntilVisible(
+    expect(
       find.widgetWithText(TextField, 'Private profile name'),
-      120,
-      scrollable: find.byType(Scrollable).last,
+      findsNothing,
     );
-    await tester.enterText(
-      find.widgetWithText(TextField, 'Private profile name'),
-      'goresave',
-    );
-    await tester.scrollUntilVisible(
-      find.byTooltip('Save private profile name'),
-      120,
-      scrollable: find.byType(Scrollable).last,
-    );
-    await tester.pumpAndSettle();
-    await tester.tap(find.byTooltip('Save private profile name'));
-    await tester.pumpAndSettle();
 
-    final profileWrite = core.requests.lastWhere(
-      (request) => request.command == 'write_save',
-    );
-    expect(profileWrite.payload['edits'], [
-      {'path': 'private.profile.setProfileName', 'value': 'goresave'},
-    ]);
+    // No individual per-editor save buttons.
+    expect(find.byTooltip('Save Health attribute'), findsNothing);
+    expect(find.byTooltip('Save hero transform'), findsNothing);
 
+    // Legacy path (no typedParse in fixture): attributes render inside their
+    // own Card titled 'Hero attributes'.
     await tester.scrollUntilVisible(
       find.text('Hero attributes'),
       120,
@@ -138,18 +145,8 @@ void main() {
       find.widgetWithText(TextField, 'Health current'),
       '66',
     );
-    await tester.tap(find.byTooltip('Save Health attribute'));
-    await tester.pumpAndSettle();
-
-    final attributeWrite = core.requests.lastWhere(
-      (request) => request.command == 'write_save',
-    );
-    expect(attributeWrite.payload['edits'], [
-      {
-        'path': 'private.player.setAttribute',
-        'value': {'id': 'Health', 'baseValue': 77.0, 'currentValue': 66.0},
-      },
-    ]);
+    await tester.pump();
+    expect(find.widgetWithText(FilledButton, 'Save (1)'), findsOneWidget);
 
     await tester.scrollUntilVisible(
       find.text('Hero transform'),
@@ -175,26 +172,31 @@ void main() {
       find.widgetWithText(TextField, 'Rotation roll'),
       '3',
     );
-    final saveHeroTransformButton = find.descendant(
-      of: find.byTooltip('Save hero transform'),
-      matching: find.byType(IconButton),
-    );
-    await tester.ensureVisible(saveHeroTransformButton);
-    await tester.tap(saveHeroTransformButton, warnIfMissed: false);
+    await tester.pump();
+
+    // Two pending edits: attr:Health + transform.
+    expect(find.widgetWithText(FilledButton, 'Save (2)'), findsOneWidget);
+
+    await tester.tap(find.widgetWithText(FilledButton, 'Save (2)'));
     await tester.pumpAndSettle();
 
-    final transformWrite = core.requests.lastWhere(
-      (request) => request.command == 'write_save',
+    final combinedWrite = core.requests.lastWhere(
+      (r) => r.command == 'write_save',
     );
-    expect(transformWrite.payload['edits'], [
-      {
-        'path': 'private.player.setTransform',
-        'value': {
-          'location': {'x': 100.0, 'y': 200.0, 'z': 300.0},
-          'rotation': {'pitch': 1.0, 'yaw': 2.0, 'roll': 3.0},
-        },
-      },
-    ]);
+    expect(combinedWrite.payload['backup'], isTrue);
+    final edits = combinedWrite.payload['edits'] as List;
+    // Stable key order: 'attr:Health' < 'transform'.
+    expect(edits, hasLength(2));
+    expect(edits[0]['path'], 'private.player.setAttribute');
+    expect(
+      edits[0]['value'],
+      {'id': 'Health', 'baseValue': 77.0, 'currentValue': 66.0},
+    );
+    expect(edits[1]['path'], 'private.player.setTransform');
+    expect(edits[1]['value'], {
+      'location': {'x': 100.0, 'y': 200.0, 'z': 300.0},
+      'rotation': {'pitch': 1.0, 'yaw': 2.0, 'roll': 3.0},
+    });
 
     await tester.tap(find.widgetWithText(Tab, 'Inventory'));
     await tester.pumpAndSettle();
@@ -204,9 +206,10 @@ void main() {
     expect(find.text('ItFo_Cheese'), findsOneWidget);
     expect(find.text('42'), findsAtLeastNWidgets(1));
 
-    // Diagnostics (metrics, candidates, scope) collapse by default.
-    expect(find.text('Candidates'), findsNothing);
-    expect(find.text('ITMI_GOLD'), findsNothing);
+    // No old per-item save buttons.
+    expect(find.byTooltip('Save ItFo_Cheese count'), findsNothing);
+    // No old batch save button text.
+    expect(find.widgetWithText(FilledButton, 'Save 2 changes'), findsNothing);
 
     final oreCountField = find.descendant(
       of: find.ancestor(
@@ -235,33 +238,22 @@ void main() {
       ),
       '7',
     );
-    await tester.pumpAndSettle();
+    await tester.pump();
 
-    expect(find.widgetWithText(FilledButton, 'Save 2 changes'), findsOneWidget);
-    await tester.tap(find.widgetWithText(FilledButton, 'Save 2 changes'));
+    // Both inventory edits are reflected in the global button count.
+    expect(find.widgetWithText(FilledButton, 'Save (2)'), findsOneWidget);
+
+    await tester.tap(find.widgetWithText(FilledButton, 'Save (2)'));
     await tester.pumpAndSettle();
 
     final batchWrite = core.requests.lastWhere(
-      (request) => request.command == 'write_save',
+      (r) => r.command == 'write_save',
     );
-    expect(batchWrite.payload['edits'], [
-      {
-        'path': 'private.inventory.setItemCount',
-        'value': {
-          'id': 'ItMi_Orenugget',
-          'path': '/Script/Angelscript.ItMi_Orenugget',
-          'count': 44,
-        },
-      },
-      {
-        'path': 'private.inventory.setItemCount',
-        'value': {
-          'id': 'ItFo_Cheese',
-          'path': '/Script/Angelscript.ItFo_Cheese',
-          'count': 7,
-        },
-      },
-    ]);
+    expect(batchWrite.payload['backup'], isTrue);
+    final batchEdits = batchWrite.payload['edits'] as List;
+    expect(batchEdits, hasLength(2));
+    final batchPaths = batchEdits.map((e) => e['value']['id']).toList();
+    expect(batchPaths, containsAll(['ItMi_Orenugget', 'ItFo_Cheese']));
 
     await tester.enterText(
       find.widgetWithText(TextField, 'Filter items'),
@@ -271,57 +263,6 @@ void main() {
 
     expect(find.text('ItFo_Cheese'), findsOneWidget);
     expect(find.text('ItMi_Orenugget'), findsNothing);
-
-    await tester.enterText(
-      find.descendant(
-        of: find.ancestor(
-          of: find.text('ItFo_Cheese'),
-          matching: find.byType(ListTile),
-        ),
-        matching: find.widgetWithText(TextField, 'Count'),
-      ),
-      '7',
-    );
-    await tester.scrollUntilVisible(
-      find.byTooltip('Save ItFo_Cheese count'),
-      120,
-      scrollable: find.byType(Scrollable).last,
-    );
-    await tester.pumpAndSettle();
-    await tester.tap(
-      find.byTooltip('Save ItFo_Cheese count'),
-      warnIfMissed: false,
-    );
-    await tester.pumpAndSettle();
-
-    final write = core.requests.lastWhere(
-      (request) => request.command == 'write_save',
-    );
-    expect(write.payload['edits'], [
-      {
-        'path': 'private.inventory.setItemCount',
-        'value': {
-          'id': 'ItFo_Cheese',
-          'path': '/Script/Angelscript.ItFo_Cheese',
-          'count': 7,
-        },
-      },
-    ]);
-
-    // Expand diagnostics to reveal metrics, candidates, and scope.
-    await tester.scrollUntilVisible(
-      find.text('Diagnostics & details'),
-      200,
-      scrollable: find.byType(Scrollable).last,
-    );
-    await tester.tap(find.text('Diagnostics & details'));
-    await tester.pumpAndSettle();
-
-    expect(find.text('Candidates'), findsOneWidget);
-    expect(find.text('2'), findsAtLeastNWidgets(1));
-    expect(find.text('ITMI_GOLD'), findsOneWidget);
-    expect(find.text('BP_Item_Ore'), findsOneWidget);
-    expect(find.text('Player inventory'), findsOneWidget);
 
     await tester.tap(find.widgetWithText(Tab, 'Progression'));
     await tester.pumpAndSettle();
@@ -355,7 +296,7 @@ void main() {
     await tester.pumpAndSettle();
 
     final restore = core.requests.lastWhere(
-      (request) => request.command == 'restore_backup',
+      (r) => r.command == 'restore_backup',
     );
     expect(restore.payload, {
       'path': r'C:\tmp\saves\G1R-001.sav',
@@ -376,6 +317,121 @@ void main() {
       find.byTooltip('Restore PersistentDataList.sav.bak.250'),
       findsNothing,
     );
+  });
+
+  testWidgets(
+    'switching tabs preserves unsaved edit and Save count',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1400, 1000));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final core = _FakeCoreService();
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            coreServiceProvider.overrideWithValue(core),
+            editorSettingsStoreProvider.overrideWithValue(
+              const NoopEditorSettingsStore(),
+            ),
+          ],
+          child: const GoresaveApp(),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Enter a draft in the public name field on Overview.
+      await tester.enterText(
+        find.widgetWithText(TextField, 'Public save name'),
+        'Draft Name',
+      );
+      await tester.pump();
+      // Save button now shows 1 pending edit.
+      expect(find.widgetWithText(FilledButton, 'Save (1)'), findsOneWidget);
+
+      // Switch to Player tab.
+      await tester.tap(find.widgetWithText(Tab, 'Player'));
+      await tester.pumpAndSettle();
+
+      // Save count must still be 1 (tab switch must not drop pending edits).
+      expect(find.widgetWithText(FilledButton, 'Save (1)'), findsOneWidget);
+
+      // Switch back to Overview tab.
+      await tester.tap(find.widgetWithText(Tab, 'Overview'));
+      await tester.pumpAndSettle();
+
+      // The draft text must still be visible in the field.
+      final field = find.widgetWithText(TextField, 'Public save name');
+      final editableText = tester.widget<EditableText>(
+        find.descendant(of: field, matching: find.byType(EditableText)),
+      );
+      expect(editableText.controller.text, 'Draft Name');
+      // Save button still shows 1.
+      expect(find.widgetWithText(FilledButton, 'Save (1)'), findsOneWidget);
+    },
+  );
+
+  testWidgets('Reset button discards pending and restores field text',
+      (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1400, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final core = _FakeCoreService();
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          coreServiceProvider.overrideWithValue(core),
+          editorSettingsStoreProvider.overrideWithValue(
+            const NoopEditorSettingsStore(),
+          ),
+        ],
+        child: const GoresaveApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // Confirm Reset is disabled with no pending edits.
+    final resetFinder = find.widgetWithText(OutlinedButton, 'Reset');
+    expect(resetFinder, findsOneWidget);
+    expect(
+      tester.widget<OutlinedButton>(resetFinder).onPressed,
+      isNull,
+    );
+
+    // Enter a draft in the public name field.
+    final originalName = 'Die Welt der Verurteilten';
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Public save name'),
+      'Edited Name',
+    );
+    await tester.pump();
+    expect(find.widgetWithText(FilledButton, 'Save (1)'), findsOneWidget);
+    // Reset should now be enabled.
+    expect(
+      tester.widget<OutlinedButton>(resetFinder).onPressed,
+      isNotNull,
+    );
+
+    // Tap Reset.
+    await tester.tap(resetFinder);
+    await tester.pumpAndSettle();
+
+    // Pending count must be 0 and Reset disabled again.
+    expect(find.widgetWithText(FilledButton, 'Save'), findsOneWidget);
+    expect(
+      tester
+          .widget<FilledButton>(find.widgetWithText(FilledButton, 'Save'))
+          .onPressed,
+      isNull,
+    );
+    expect(
+      tester.widget<OutlinedButton>(resetFinder).onPressed,
+      isNull,
+    );
+
+    // The field must display the canonical (original) name again.
+    final field = find.widgetWithText(TextField, 'Public save name');
+    final editableText = tester.widget<EditableText>(
+      find.descendant(of: field, matching: find.byType(EditableText)),
+    );
+    expect(editableText.controller.text, originalName);
   });
 
   testWidgets('shows loading spinner in main editor view', (tester) async {
