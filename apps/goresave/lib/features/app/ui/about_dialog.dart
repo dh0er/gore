@@ -4,6 +4,11 @@ import 'package:url_launcher/url_launcher.dart';
 
 const _githubUrl = 'https://github.com/dh0er/goresave';
 
+const String _gitSha = String.fromEnvironment('GIT_SHA', defaultValue: 'dev');
+
+String aboutVersionLabel(PackageInfo? info) =>
+    info == null ? '' : 'Version ${info.version} ($_gitSha)';
+
 class GoresaveAboutDialog extends StatefulWidget {
   const GoresaveAboutDialog({super.key});
 
@@ -37,10 +42,7 @@ class _GoresaveAboutDialogState extends State<GoresaveAboutDialog> {
               FutureBuilder<PackageInfo>(
                 future: _packageInfo,
                 builder: (context, snapshot) {
-                  final info = snapshot.data;
-                  final version = info == null
-                      ? ''
-                      : 'Version ${info.version} (Build ${info.buildNumber})';
+                  final version = aboutVersionLabel(snapshot.data);
                   return Text(version, style: textTheme.bodySmall);
                 },
               ),

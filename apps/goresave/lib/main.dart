@@ -5,6 +5,8 @@ import 'package:goresave/features/app/ui/window_chrome.dart';
 import 'package:window_manager/window_manager.dart';
 
 Future<void> main() async {
+  // Velopack startup hooks run in the native Windows runner (main.cpp)
+  // before the Flutter engine starts.
   WidgetsFlutterBinding.ensureInitialized();
   if (windowChromeEnabled) {
     await windowManager.ensureInitialized();
