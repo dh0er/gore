@@ -2131,8 +2131,16 @@ fn inspect_private_payload(
                 .collect::<Vec<_>>();
             let player = summarize_private_player_payload(&payload, &refs);
             let inventory = summarize_private_inventory_payload(&payload, &refs);
-            let progression = summarize_private_progression_payload(&refs);
-            let typed_parse = summarize_typed_parse(&payload, preview);
+            let typed_result = if preview {
+                None
+            } else {
+                Some(properties::parse_private_root(&payload))
+            };
+            let typed_parse = summarize_typed_parse_result(&payload, typed_result.as_ref());
+            let typed_ok = typed_parse["status"] == "ok";
+            let progression = summarize_private_progression_overview(
+                typed_result.as_ref().and_then(|r| r.as_ref().ok()).filter(|_| typed_ok),
+            );
             let mut writable = vec!["private.replaceFString"];
             if typed_parse["status"] == "ok" {
                 writable.extend([
@@ -2306,14 +2314,20 @@ fn summarize_private_inventory_payload(payload: &[u8], refs: &[FStringRef]) -> V
 /// edits; for now it surfaces whether the proven UE property grammar fully
 /// accounts for this save's bytes. Skipped for previews (truncated payloads
 /// cannot parse to completion).
-fn summarize_typed_parse(payload: &[u8], preview: bool) -> Value {
-    if preview {
+///
+/// `result` is `None` when the parse was skipped (preview mode); `Some(&Ok(...))`
+/// or `Some(&Err(...))` when parsing was attempted.
+fn summarize_typed_parse_result(
+    payload: &[u8],
+    result: Option<&Result<properties::RootObject, CoreError>>,
+) -> Value {
+    let Some(result) = result else {
         return json!({
             "status": "skipped_preview",
             "message": "Typed parse needs the full decoded payload.",
         });
-    }
-    match properties::parse_private_root(payload) {
+    };
+    match result {
         Ok(root) => {
             let counts = properties::count_properties(&root.properties);
             json!({
@@ -2874,48 +2888,75 @@ fn progression_events(
     }
 }
 
-fn summarize_private_progression_payload(refs: &[FStringRef]) -> Value {
-    let script_paths = unique_strings(
-        refs.iter()
-            .map(|r| r.value.as_str())
-            .filter(|value| value.starts_with("/Script/") && looks_progression_text(value)),
-        80,
-    );
-    let properties = unique_strings(
-        refs.iter()
-            .map(|r| r.value.as_str())
-            .filter(|value| value.starts_with("m_") && looks_progression_text(value)),
-        120,
-    );
-    let candidates = unique_strings(
-        refs.iter()
-            .map(|r| r.value.as_str())
-            .filter(|value| looks_progression_candidate(value)),
-        240,
-    );
-    let gameplay_tags = unique_strings(
-        candidates
-            .iter()
-            .map(String::as_str)
-            .filter(|value| looks_gameplay_tag_candidate(value)),
-        240,
-    );
-    let sections = unique_strings(
-        properties
-            .iter()
-            .filter_map(|property| progression_section_label(property)),
-        80,
-    );
+/// Structured progression overview for the inspect response: quest counts by
+/// state plus knowledge/memory totals. `root` is Some only when the strict
+/// typed parse succeeded on a full (non-preview) decode.
+fn summarize_private_progression_overview(root: Option<&properties::RootObject>) -> Value {
+    let Some(root) = root else {
+        return json!({ "status": "unavailable", "writable": [] });
+    };
+    let mut quest_total = 0usize;
+    let mut quest_states = std::collections::BTreeMap::<String, usize>::new();
+    if let Some((_, prop)) = properties::find_property_by_name(root, "QuestDataByClass") {
+        if let properties::PropertyValue::Map { entries, .. } = &prop.value {
+            quest_total = entries.len();
+            for (_, value) in entries {
+                let label = match struct_member(value, "CurrentState") {
+                    Some(properties::PropertyValue::Enum(s)) => short_enum_label(s).to_string(),
+                    _ => "unknown".to_string(),
+                };
+                *quest_states.entry(label).or_default() += 1;
+            }
+        }
+    }
+    let mut knowledge_characters = 0usize;
+    let mut knowledge_entries = 0usize;
+    if let Some((_, prop)) =
+        properties::find_property_by_name(root, "CharacterKnowledgeByUniqueName")
+    {
+        if let properties::PropertyValue::Map { entries, .. } = &prop.value {
+            knowledge_characters = entries.len();
+            for (_, value) in entries {
+                if let Some(properties::PropertyValue::Set { elements, .. }) =
+                    struct_member(value, "Knowledge")
+                {
+                    knowledge_entries += elements.len();
+                }
+            }
+        }
+    }
+    let mut memory_characters = 0usize;
+    let mut memory_events = 0usize;
+    if let Some((_, prop)) = properties::find_property_by_name(root, "LongTermMemoryByGlobalId") {
+        if let properties::PropertyValue::Map { entries, .. } = &prop.value {
+            memory_characters = entries.len();
+            for (_, value) in entries {
+                if let Some(properties::PropertyValue::Array { elements }) =
+                    struct_member(value, "MemorizedEvents")
+                {
+                    memory_events += elements.len();
+                }
+            }
+        }
+    }
     json!({
-        "candidateCount": candidates.len(),
-        "candidates": candidates,
-        "gameplayTags": gameplay_tags,
-        "sections": sections,
-        "scriptPaths": script_paths,
-        "properties": properties,
-        "writable": [],
+        "status": "ok",
+        "questTotal": quest_total,
+        "questStates": quest_states,
+        "knowledgeCharacters": knowledge_characters,
+        "knowledgeEntries": knowledge_entries,
+        "memoryCharacters": memory_characters,
+        "memoryEvents": memory_events,
+        "writable": [
+            "private.typed.setValue",
+            "private.typed.setAdd",
+            "private.typed.setRemove",
+            "private.typed.arrayRemove",
+            "private.typed.arrayDuplicate",
+        ],
     })
 }
+
 
 fn summarize_private_inventory_items(
     payload: &[u8],
@@ -3102,58 +3143,6 @@ fn looks_inventory_candidate(value: &str) -> bool {
         return true;
     }
     lower.contains("/items/") || lower.contains("bp_item_") || lower.contains("inventoryitem")
-}
-
-fn looks_progression_candidate(value: &str) -> bool {
-    if value.starts_with("m_") || value.starts_with("/Script/") || is_property_type_name(value) {
-        return false;
-    }
-    if matches!(
-        value,
-        "GameplayTag" | "GameplayTagContainer" | "TagName" | "None"
-    ) {
-        return false;
-    }
-    looks_progression_text(value) && value.contains('.')
-}
-
-fn looks_gameplay_tag_candidate(value: &str) -> bool {
-    value.contains('.')
-        && !value.starts_with('/')
-        && !value.starts_with("m_")
-        && looks_progression_text(value)
-}
-
-fn looks_progression_text(value: &str) -> bool {
-    contains_any_ci(
-        value,
-        &[
-            "quest",
-            "dialog",
-            "knowledge",
-            "event",
-            "chapter",
-            "guild",
-            "faction",
-            "mission",
-            "journal",
-            "progress",
-            "gameplaytag",
-        ],
-    )
-}
-
-fn progression_section_label(property: &str) -> Option<&'static str> {
-    match property {
-        "m_GeneratedEvents" | "GeneratedEvents" => Some("Generated events"),
-        "m_MemorizedEvents" | "MemorizedEvents" => Some("Memorized events"),
-        "m_ActiveQuestTags" | "ActiveQuestTags" => Some("Active quest tags"),
-        "m_ActiveQuests" | "ActiveQuests" => Some("Active quests"),
-        "m_CompletedQuests" | "CompletedQuests" => Some("Completed quests"),
-        "m_QuestLog" | "QuestLog" => Some("Quest log"),
-        "m_Knowledge" | "Knowledge" => Some("Knowledge"),
-        _ => None,
-    }
 }
 
 fn contains_any_ci(value: &str, needles: &[&str]) -> bool {
@@ -5290,8 +5279,8 @@ mod tests {
 
     #[test]
     fn summarize_typed_parse_reports_status() {
-        // skipped for previews
-        let skipped = summarize_typed_parse(&[], true);
+        // skipped for previews (result = None)
+        let skipped = summarize_typed_parse_result(&[], None);
         assert_eq!(skipped["status"], "skipped_preview");
 
         // ok for a valid minimal root object
@@ -5305,13 +5294,15 @@ mod tests {
         payload.extend_from_slice(&7i32.to_le_bytes());
         payload.extend_from_slice(&fstring("None"));
         payload.extend_from_slice(&0u32.to_le_bytes()); // footer
-        let ok = summarize_typed_parse(&payload, false);
+        let parse_ok = properties::parse_private_root(&payload);
+        let ok = summarize_typed_parse_result(&payload, Some(&parse_ok));
         assert_eq!(ok["status"], "ok");
         assert_eq!(ok["propertyCount"], 1);
         assert_eq!(ok["consumed"], payload.len());
 
         // failed for garbage
-        let bad = summarize_typed_parse(&[1, 2, 3, 4, 5, 6], false);
+        let parse_bad = properties::parse_private_root(&[1, 2, 3, 4, 5, 6]);
+        let bad = summarize_typed_parse_result(&[1, 2, 3, 4, 5, 6], Some(&parse_bad));
         assert_eq!(bad["status"], "failed");
     }
 
@@ -7640,20 +7631,16 @@ mod tests {
     }
 
     #[test]
-    fn inspect_save_reports_private_progression_summary() {
+    fn inspect_save_reports_progression_overview_unavailable_on_bad_payload() {
+        // When the private payload cannot be typed-parsed the overview reports
+        // "unavailable" rather than returning the deleted heuristic shape.
         let dir = tempdir().unwrap();
         let path = dir.path().join("G1R-001.sav");
+        // Raw fstrings are not a valid typed payload — the typed parse will fail.
         let private_payload = [
             fstring("/Script/G1R.QuestSaveGameData"),
             fstring("m_GeneratedEvents"),
-            fstring("m_MemorizedEvents"),
-            fstring("m_ActiveQuestTags"),
-            fstring("GameplayTag"),
-            fstring("TagName"),
             fstring("Quest.Main.Chapter01"),
-            fstring("Dialog.Diego.IntroDone"),
-            fstring("Knowledge.OldCamp.PathKnown"),
-            fstring("m_ItemCount"),
         ]
         .concat();
         let seed_compressed = b"seed-compressed".to_vec();
@@ -7670,39 +7657,12 @@ mod tests {
 
         let value = inspect_save_with_codec_backend(&path, true, Some(&backend), None).unwrap();
 
-        assert_eq!(value["private"]["progression"]["candidateCount"], 3);
-        assert_eq!(
-            value["private"]["progression"]["candidates"],
-            json!([
-                "Quest.Main.Chapter01",
-                "Dialog.Diego.IntroDone",
-                "Knowledge.OldCamp.PathKnown"
-            ])
-        );
-        assert_eq!(
-            value["private"]["progression"]["properties"],
-            json!([
-                "m_GeneratedEvents",
-                "m_MemorizedEvents",
-                "m_ActiveQuestTags"
-            ])
-        );
-        assert_eq!(
-            value["private"]["progression"]["scriptPaths"],
-            json!(["/Script/G1R.QuestSaveGameData"])
-        );
-        assert_eq!(
-            value["private"]["progression"]["sections"],
-            json!(["Generated events", "Memorized events", "Active quest tags"])
-        );
-        assert_eq!(
-            value["private"]["progression"]["gameplayTags"],
-            json!([
-                "Quest.Main.Chapter01",
-                "Dialog.Diego.IntroDone",
-                "Knowledge.OldCamp.PathKnown"
-            ])
-        );
+        // Typed parse fails on garbage → overview is unavailable.
+        assert_eq!(value["private"]["progression"]["status"], "unavailable");
+        // Old heuristic fields must not appear.
+        assert!(value["private"]["progression"].get("candidates").is_none());
+        assert!(value["private"]["progression"].get("sections").is_none());
+        assert!(value["private"]["progression"].get("gameplayTags").is_none());
     }
 
     #[test]
@@ -8422,5 +8382,42 @@ mod tests {
         )
         .unwrap();
         assert_eq!(filtered["total"], 0);
+    }
+
+    #[test]
+    fn inspect_reports_structured_progression_overview() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-overview.sav");
+        let private_payload = quest_map_payload();
+        let seed_compressed = b"seed".to_vec();
+        let stream = compressed_stream_with_one_chunk(&seed_compressed, private_payload.len());
+        fs::write(
+            &path,
+            build_gsav(2, &public_payload("Slot"), &stream, &[0, 0, 0, 0]),
+        )
+        .unwrap();
+        let backend = PrefixCodecBackend {
+            seed_compressed,
+            seed_uncompressed: private_payload,
+        };
+
+        let value = inspect_save_with_codec_backend(&path, true, Some(&backend), None).unwrap();
+        let progression = &value["private"]["progression"];
+        assert_eq!(progression["status"], "ok");
+        assert_eq!(progression["questTotal"], 2);
+        assert_eq!(progression["questStates"]["Running"], 1);
+        assert_eq!(progression["questStates"]["Available"], 1);
+        // No knowledge/memory maps in this fixture.
+        assert_eq!(progression["knowledgeCharacters"], 0);
+        assert_eq!(progression["memoryCharacters"], 0);
+        assert!(
+            progression["writable"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("private.typed.setValue"))
+        );
+        // The old heuristic fields are gone.
+        assert!(progression.get("candidates").is_none());
+        assert!(progression.get("sections").is_none());
     }
 }
