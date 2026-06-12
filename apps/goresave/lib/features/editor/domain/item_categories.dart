@@ -1,3 +1,5 @@
+import 'package:goresave/features/editor/domain/editor_models.dart';
+
 /// Item categories for Gothic 1 Remake inventory items, derived from the
 /// Angelscript class-name prefix (e.g. `ItMi_Orenugget` -> misc).
 ///
@@ -56,4 +58,30 @@ String itemDisplayNameFromId(String id) {
   }
   final cleaned = name.replaceAll('_', ' ').trim();
   return cleaned.isEmpty ? id : cleaned;
+}
+
+class InventoryItemGroup {
+  const InventoryItemGroup({required this.category, required this.items});
+
+  final ItemCategory category;
+  final List<PrivateInventoryItem> items;
+}
+
+/// Groups items by category. Groups appear in [ItemCategory] declaration
+/// order, empty groups are omitted, items are sorted by id within a group.
+List<InventoryItemGroup> groupInventoryItems(
+  List<PrivateInventoryItem> items,
+) {
+  final byCategory = <ItemCategory, List<PrivateInventoryItem>>{};
+  for (final item in items) {
+    byCategory.putIfAbsent(itemCategoryFromId(item.id), () => []).add(item);
+  }
+  return [
+    for (final category in ItemCategory.values)
+      if (byCategory.containsKey(category))
+        InventoryItemGroup(
+          category: category,
+          items: byCategory[category]!..sort((a, b) => a.id.compareTo(b.id)),
+        ),
+  ];
 }
