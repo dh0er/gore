@@ -12,15 +12,26 @@ list of all items in the game.
 
 ## Background (current code)
 
-- Inventory items live in the private GSAV payload as **instanced objects**
-  (ObjectInstances) inside the `m_Items` array of the `m_Inventory`
-  StructProperty. Each stack carries `m_ItemDefinition` (ObjectProperty, an
-  asset path FString such as `/Script/Angelscript.ItMi_Orenugget`) and
-  `m_ItemCount` (IntProperty).
-- The typed parser (`properties::parse_private_root`) parses `m_Inventory`
-  fully, including the byte range of every object instance, but container
-  edits explicitly reject ObjectInstances arrays
-  (`crates/goresave_core/src/lib.rs:922`).
+- Inventory items live in the private GSAV payload as **plain struct array
+  elements** (verified 2026-06-12 against three real decompressed payloads
+  in `work/decompressed/`; an earlier draft of this spec wrongly assumed
+  ObjectInstances). Addressable path:
+  `m_GenericData{PlayersSavedData}.m_SavedPlayers[0].m_Inventory` →
+  StructProperty `ReplicatedInventoryMap` with parallel arrays `m_Keys`
+  (Enum `EInventoryTypes`, 14 entries) and `m_Values.Items`
+  (Array<Struct `ContainerVirtualData`>). Player items are in the container
+  whose key is `EInventoryTypes::MainContainer` (index 6 in observed saves;
+  match by enum value, not index). Its `m_Slots` is a plain
+  `ArrayProperty<StructProperty ItemVirtualData>`; each slot has `m_Id`
+  (IntProperty, sequential per container — the uniqueness field),
+  `m_InventoryType` (Enum), `m_SlotData` (Struct ItemSlot with
+  `m_ItemDefinition` ObjectProperty asset path + `m_ItemCount` Int), and
+  `m_Payload` (Struct ItemPayload, empty for ordinary stacks). FastArray
+  replication ints are all -1 in saves.
+- The typed parser (`properties::parse_private_root`) parses this fully;
+  `resolve_chain` + `container_layout` already work on `m_Slots` (plain
+  array — the ObjectInstances rejection at `crates/goresave_core/src/lib.rs:922`
+  is never hit for inventory).
 - The inventory summary shown in the UI is produced by an FString scan
   (`summarize_private_inventory_items`, `crates/goresave_core/src/lib.rs:3172`)
   bounded by `inventory_item_region` (`lib.rs:3221`).
@@ -99,27 +110,33 @@ list of all items in the game.
 
 Edit JSON: `{"path": "private.inventory.addItem", "value": {"path": "/Script/Angelscript.ItMi_X", "count": n}}`
 
-Algorithm:
+Algorithm (uses existing typed machinery only — no new properties.rs API):
 
 1. Require typed parse status `ok`; otherwise the op is not advertised in the
    `writable` list and the edit is rejected.
-2. Reject if an item with the same definition path already exists in the
-   player inventory region (UI prevents this too).
-3. Pick a template instance from `m_Items` (item stacks are assumed to be a
-   uniform stack object type — verification point V1).
-4. Duplicate the template instance bytes; bump the ObjectInstances element
-   count and patch the array size field plus every enclosing size field
-   (mechanics ported from `ArrayDuplicate`).
-5. In the duplicate: replace the `m_ItemDefinition` path (length-changing —
-   fix instance-internal size fields via parser offsets, like
-   `patch_string`), set `m_ItemCount`, and make the instance name unique if
-   instances carry named suffixes (verification point V2).
-6. Re-parse the payload after the edit (as existing container edits do,
-   `lib.rs:4678`); on any failure the write is aborted and nothing is
-   written. Backup-first like all writes.
-7. Counts as a structural edit: at most one `addItem` per write batch, and
+2. Locate the MainContainer: the `m_Inventory` entry whose `m_Keys` value is
+   `EInventoryTypes::MainContainer` (match by enum value, not array index).
+3. Reject if any slot's `m_ItemDefinition` already equals the target path
+   (UI prevents this too).
+4. Template: last `m_Slots` element of the MainContainer; empty container →
+   error ("no template slot").
+5. Duplicate the template slot via the existing `ArrayDuplicate` mechanics
+   (splice, element count, size field, enclosing size-field chain), re-parse.
+6. In the duplicate: `patch_string` its `m_ItemDefinition` to the target
+   path (length-changing, fixes enclosing sizes), `patch_scalar` its
+   `m_ItemCount` to the requested count and its `m_Id` to max existing id
+   + 1 in that container. Verify the duplicated `m_Payload` is empty (it is
+   for ordinary stacks; non-empty template payload → error rather than
+   cloning item-specific state).
+7. Re-parse the payload after the edit; on any failure the write is aborted
+   and nothing is written. Backup-first like all writes.
+8. Counts as a structural edit: at most one `addItem` per write batch, and
    not combinable with `arrayRemove`/`arrayDuplicate` in the same batch
    (indices/offsets shift).
+
+Open question for the in-game verification (Phase 1): does the game accept
+appended slots with FastArray ReplicationID -1? (All saved slots carry -1,
+which suggests yes.)
 
 Error cases: item already present; empty inventory (no template instance);
 typed parse not ok; unknown/invalid path format; count < 1.
@@ -154,11 +171,11 @@ typed parse not ok; unknown/invalid path format; count < 1.
 
 ## Risks
 
-- **R1 (V1):** item stack instances are not homogeneous (e.g. weapons carry
-  extra state) → template choice must be validated against a real save; if
-  heterogeneous, restrict the template to a known-simple stack type.
-- **R2 (V2):** instance names must be unique within the save → rename the
-  duplicate (numeric suffix) if instances are named.
+- **R1:** a template slot may carry item-specific state in `m_Payload` →
+  the op errors when the template payload is non-empty instead of cloning
+  state; ordinary stacks have empty payloads (verified in 3 real saves).
+- **R2:** slot `m_Id` must be unique per container → the duplicate gets
+  max existing id + 1.
 - **R3:** the game references stacks externally elsewhere in the save →
   in-game load test required before shipping.
 - **R4:** prefix list incomplete → verify against the dump; the catalog

@@ -641,11 +641,22 @@ struct PrivateInventoryAddItemEdit {
 - Modify: `crates/goresave_core/src/lib.rs`, `crates/goresave_core/src/properties.rs`
 - Test: fixture-based tests next to existing inventory/container-edit tests (check `fixtures/` and existing tests around `properties.rs:3029` for the fixture-building pattern; reuse the same synthetic-payload builders)
 
-**Read first:** `properties.rs:1569-1597` (ObjectInstances parsing — instance
-byte ranges), `properties.rs:1076-1128` (`ArrayDuplicate` — splice + count +
-size-chain fixups), `properties.rs:862-882` (`patch_string` — length-changing
-string patch with enclosing size fixups), `lib.rs:922` (ObjectInstances
-rejection in `patch_container`).
+**CORRECTED 2026-06-12 after real-payload verification** (three decompressed
+payloads in `work/decompressed/` parsed byte-exact): inventory is NOT
+ObjectInstances. Real structure:
+`m_GenericData{PlayersSavedData}.m_SavedPlayers[0].m_Inventory` →
+`m_Keys` (Enum EInventoryTypes ×14) parallel to `m_Values.Items`
+(Array<Struct ContainerVirtualData> ×14); player items = container with key
+`EInventoryTypes::MainContainer`; its `m_Slots` is a plain
+ArrayProperty<StructProperty ItemVirtualData> with per-slot `m_Id` (Int,
+sequential), `m_InventoryType` (Enum), `m_SlotData{m_ItemDefinition,
+m_ItemCount}`, `m_Payload` (empty for ordinary stacks). `resolve_chain` +
+`container_layout` already work on `m_Slots`; ArrayDuplicate + patch_string +
+patch_scalar cover all mechanics — NO new properties.rs API.
+
+**Read first:** `properties.rs` `ArrayDuplicate` mechanics + caller
+re-parse validation in lib.rs (`apply_private_typed_container_edit_to_payload`),
+`patch_string`, `patch_scalar`, `resolve_chain`/`container_layout`.
 
 - [ ] **Step 1: Write failing tests** (synthetic payload with an
   ObjectInstances `m_Items` array of two item instances, built with the same
@@ -662,29 +673,23 @@ rejection in `patch_container`).
 
 Algorithm (each sub-step validated against the parsed tree, abort on any miss):
 1. `properties::parse_private_root(payload)` must be `Ok`; locate the
-   `m_Inventory` StructProperty and its `m_Items` ObjectInstances array via
-   the parsed tree (extend `properties.rs` with a resolver that returns the
-   array's count-field offset, size-field chain, and per-instance byte
-   ranges — the same data `ArrayDuplicate` uses, exposed for ObjectInstances).
-2. Scan instances for an existing `m_ItemDefinition` equal to the target
-   path → error if found.
-3. Template choice: first instance whose definition id starts with `ItMi_`,
-   else first instance (assumption verified in Task 8; revisit if the
-   in-game test fails).
-4. Splice a copy of the template instance bytes immediately after the
-   template; bump the ObjectInstances element count; add the byte delta to
-   the array size field and every enclosing size field (port of
-   `ArrayDuplicate`, `properties.rs:1090-1128`).
-5. Inside the new instance: patch the `m_ItemDefinition` FString to the
-   target path (length-changing — fix the instance-internal size fields the
-   same way `patch_string` does), set `m_ItemCount` to the requested count.
-   If instances carry a serialized unique name, append/replace a numeric
-   suffix to make it unique (determine while implementing against the
-   fixture + real save; if no name field exists, skip).
-6. Re-parse the modified payload with `parse_private_root`; require `Ok` and
-   require the new item to appear in `summarize_private_inventory_items`
-   with the requested count; otherwise return an error (write is then
-   aborted upstream, nothing is persisted).
+   MainContainer: iterate `m_Inventory.m_Keys`, find the index whose enum
+   value is `EInventoryTypes::MainContainer`, take `m_Values.Items[that]`.
+2. Scan that container's `m_Slots` for an existing
+   `m_SlotData.m_ItemDefinition` equal to the target path → error
+   containing "already" if found.
+3. Template: LAST `m_Slots` element; empty container → error containing
+   "no template". Template `m_Payload` non-empty → error (don't clone
+   item-specific state).
+4. Duplicate the template slot via existing `ArrayDuplicate` mechanics
+   (`patch_container` path works — m_Slots is a plain struct array);
+   re-parse.
+5. In the duplicate: `patch_string` `m_SlotData.m_ItemDefinition` to the
+   target path; `patch_scalar` `m_SlotData.m_ItemCount` to the requested
+   count and `m_Id` to (max existing id in container) + 1.
+6. Re-parse with `parse_private_root`; require `Ok` and require the new
+   item to appear in the inventory summary scan with the requested count;
+   otherwise error (write aborted upstream, nothing persisted).
 
 - [ ] **Step 4: Run — expect PASS, plus full `cargo test -p goresave_core`**
 
