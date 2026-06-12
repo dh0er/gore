@@ -9655,6 +9655,7 @@ mod tests {
     #[test]
     fn add_item_requires_template_slot() {
         let mut payload = typed_inventory_private_payload(&[], &[]);
+        let before = payload.clone();
         let edit = PrivateInventoryAddItemEdit {
             path: "/Script/Angelscript.ItMi_Sulfur".to_string(),
             count: 1,
@@ -9664,6 +9665,7 @@ mod tests {
             err.to_string().contains("no template"),
             "unexpected error: {err}"
         );
+        assert_eq!(payload, before, "failed edit must not mutate the payload");
     }
 
     #[test]
