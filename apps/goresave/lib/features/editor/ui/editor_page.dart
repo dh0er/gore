@@ -10,6 +10,7 @@ import 'package:goresave/features/app/ui/update_settings.dart';
 import 'package:goresave/features/app/ui/window_chrome.dart';
 import 'package:goresave/features/editor/domain/editor_notifier.dart';
 import 'package:goresave/features/editor/domain/editor_models.dart';
+import 'package:goresave/features/editor/domain/item_categories.dart';
 import 'package:goresave/features/editor/domain/pending_edits.dart';
 import 'package:goresave/providers/data_providers.dart';
 import 'package:intl/intl.dart';
@@ -1547,6 +1548,7 @@ class _PrivateInventorySummaryCardState
     extends State<_PrivateInventorySummaryCard> {
   String _query = '';
   final Map<String, InventoryItemCountChange> _pendingCountChanges = {};
+  final Set<ItemCategory> _collapsed = {};
 
   @override
   void didUpdateWidget(covariant _PrivateInventorySummaryCard oldWidget) {
@@ -1586,6 +1588,14 @@ class _PrivateInventorySummaryCardState
         })
         .take(80)
         .toList();
+    final groups = groupInventoryItems(items);
+    final rows = <_InventoryRow>[
+      for (final group in groups) ...[
+        _InventoryHeaderRow(group),
+        if (!_collapsed.contains(group.category))
+          ...group.items.map(_InventoryItemRow.new),
+      ],
+    ];
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -1637,11 +1647,31 @@ class _PrivateInventorySummaryCardState
               ),
               const SizedBox(height: 8),
               Expanded(
-                child: ListView.separated(
-                  itemCount: items.length,
-                  separatorBuilder: (_, _) => const Divider(height: 1),
+                child: ListView.builder(
+                  itemCount: rows.length,
                   itemBuilder: (context, index) {
-                    final item = items[index];
+                    final row = rows[index];
+                    if (row is _InventoryHeaderRow) {
+                      final group = row.group;
+                      return ListTile(
+                        dense: true,
+                        onTap: () => setState(() {
+                          if (!_collapsed.remove(group.category)) {
+                            _collapsed.add(group.category);
+                          }
+                        }),
+                        leading: Icon(
+                          _collapsed.contains(group.category)
+                              ? Icons.chevron_right
+                              : Icons.expand_more,
+                        ),
+                        title: Text(
+                          '${group.category.label} (${group.items.length})',
+                          style: Theme.of(context).textTheme.labelLarge,
+                        ),
+                      );
+                    }
+                    final item = (row as _InventoryItemRow).item;
                     return ListTile(
                       dense: true,
                       leading: const Icon(Icons.category_outlined),
@@ -1690,6 +1720,18 @@ class _PrivateInventorySummaryCardState
     });
     _pushInventoryPending();
   }
+}
+
+abstract class _InventoryRow {}
+
+class _InventoryHeaderRow implements _InventoryRow {
+  _InventoryHeaderRow(this.group);
+  final InventoryItemGroup group;
+}
+
+class _InventoryItemRow implements _InventoryRow {
+  _InventoryItemRow(this.item);
+  final PrivateInventoryItem item;
 }
 
 class _InventoryItemCountEditor extends StatefulWidget {
