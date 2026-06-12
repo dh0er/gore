@@ -2272,6 +2272,7 @@ fn inspect_private_payload(
                     "private.typed.setRemove",
                     "private.typed.arrayRemove",
                     "private.typed.arrayDuplicate",
+                    "private.inventory.addItem",
                 ]);
             }
             Ok(json!({
@@ -2416,7 +2417,7 @@ fn summarize_private_inventory_payload(payload: &[u8], refs: &[FStringRef]) -> V
     let (items, item_stack_count, item_scope) =
         summarize_private_inventory_items(payload, refs, 200);
     let writable = if item_scope == "player_inventory_region" && item_stack_count > 0 {
-        vec!["private.inventory.setItemCount"]
+        vec!["private.inventory.setItemCount", "private.inventory.addItem"]
     } else {
         Vec::new()
     };
@@ -3164,6 +3165,7 @@ fn summarize_private_progression_overview(root: Option<&properties::RootObject>)
             "private.typed.setRemove",
             "private.typed.arrayRemove",
             "private.typed.arrayDuplicate",
+            "private.inventory.addItem",
         ],
     })
 }
@@ -3955,6 +3957,9 @@ fn apply_private_edits(
             "private.inventory.setItemCount" => {
                 parse_private_inventory_item_count_edit(edit).map(PrivateEdit::InventoryItemCount)
             }
+            "private.inventory.addItem" => {
+                parse_private_inventory_add_item_edit(edit).map(PrivateEdit::InventoryAddItem)
+            }
             "private.typed.setValue" => {
                 parse_private_typed_set_value_edit(edit).map(PrivateEdit::TypedSetValue)
             }
@@ -3975,10 +3980,10 @@ fn apply_private_edits(
             ))),
         })
         .collect::<Result<Vec<_>, _>>()?;
-    // Index-addressed structural edits are interpreted against the array as
-    // it exists when that edit applies, so a second arrayRemove/arrayDuplicate
-    // in the same batch would silently target shifted indices. Reject the
-    // batch instead of guessing the caller's intent.
+    // Structural edits (arrayRemove, arrayDuplicate, addItem) change the
+    // length of array or set data; a second such edit in the same batch
+    // would silently target shifted offsets/indices.  Reject the batch
+    // instead of guessing the caller's intent.
     let structural_array_edits = edit_specs
         .iter()
         .filter(|edit| {
@@ -3988,14 +3993,14 @@ fn apply_private_edits(
                     edit: properties::ContainerEdit::ArrayRemove(_)
                         | properties::ContainerEdit::ArrayDuplicate(_),
                     ..
-                })
+                }) | PrivateEdit::InventoryAddItem(_)
             )
         })
         .count();
     if structural_array_edits > 1 {
         return Err(CoreError::UnsupportedEdit(format!(
             "a write may contain at most one structural array edit \
-             (arrayRemove/arrayDuplicate); got {structural_array_edits} — \
+             (arrayRemove/arrayDuplicate/addItem); got {structural_array_edits} — \
              indices shift after each structural change, submit them as \
              separate writes"
         )));
@@ -4063,6 +4068,12 @@ struct PrivateInventoryItemCountEdit {
     count: i32,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PrivateInventoryAddItemEdit {
+    path: String,
+    count: i32,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 enum PrivateEdit {
     FString(PrivateFStringEdit),
@@ -4071,6 +4082,7 @@ enum PrivateEdit {
     PlayerAttribute(PrivatePlayerAttributeEdit),
     PlayerTransform(PrivatePlayerTransformEdit),
     InventoryItemCount(PrivateInventoryItemCountEdit),
+    InventoryAddItem(PrivateInventoryAddItemEdit),
     TypedSetValue(PrivateTypedSetValueEdit),
     TypedContainer(PrivateTypedContainerEdit),
 }
@@ -4544,6 +4556,44 @@ fn parse_private_inventory_item_count_edit(
     })
 }
 
+fn parse_private_inventory_add_item_edit(
+    edit: &Edit,
+) -> Result<PrivateInventoryAddItemEdit, CoreError> {
+    let value = edit.value.as_object().ok_or_else(|| {
+        CoreError::InvalidRequest(
+            "private.inventory.addItem value must be an object".to_string(),
+        )
+    })?;
+    let path = value
+        .get("path")
+        .and_then(Value::as_str)
+        .filter(|v| !v.trim().is_empty())
+        .ok_or_else(|| {
+            CoreError::InvalidRequest(
+                "private.inventory.addItem requires a non-empty string value.path".to_string(),
+            )
+        })?;
+    if !looks_item_definition_path(path) {
+        return Err(CoreError::InvalidRequest(format!(
+            "private.inventory.addItem value.path does not look like an item definition path: {path:?}"
+        )));
+    }
+    let count = value.get("count").and_then(Value::as_i64).ok_or_else(|| {
+        CoreError::InvalidRequest(
+            "private.inventory.addItem requires integer value.count".to_string(),
+        )
+    })?;
+    if count < 1 || count > i32::MAX as i64 {
+        return Err(CoreError::InvalidRequest(
+            "private.inventory.addItem value.count must be a positive i32 (>= 1)".to_string(),
+        ));
+    }
+    Ok(PrivateInventoryAddItemEdit {
+        path: path.to_owned(),
+        count: count as i32,
+    })
+}
+
 fn decompress_private_payload(
     data: &[u8],
     stream: &CompressedStream,
@@ -4649,6 +4699,9 @@ fn apply_private_edit_to_payload(
         PrivateEdit::InventoryItemCount(edit) => {
             apply_private_inventory_item_count_edit_to_payload(payload, edit)
         }
+        PrivateEdit::InventoryAddItem(_) => Err(CoreError::UnsupportedEdit(
+            "private.inventory.addItem payload mechanics not implemented yet".to_string(),
+        )),
         PrivateEdit::TypedSetValue(edit) => {
             apply_private_typed_set_value_edit_to_payload(payload, edit)
         }
@@ -8051,7 +8104,7 @@ mod tests {
         assert_eq!(value["private"]["inventory"]["itemStackCount"], 1);
         assert_eq!(
             value["private"]["inventory"]["writable"],
-            json!(["private.inventory.setItemCount"])
+            json!(["private.inventory.setItemCount", "private.inventory.addItem"])
         );
         assert_eq!(
             value["private"]["inventory"]["items"],
@@ -8937,5 +8990,289 @@ mod tests {
         // The old heuristic fields are gone.
         assert!(progression.get("candidates").is_none());
         assert!(progression.get("sections").is_none());
+    }
+
+    // ── private.inventory.addItem parse tests ───────────────────────────────
+
+    /// Build a minimal inventory private payload with one item at a valid
+    /// player-inventory-region path, so that the save can be accepted by the
+    /// codec backend.  Used by the structural-limit tests (5 and 6) which need
+    /// a real save file on disk.
+    fn inventory_payload_for_add_item_tests() -> Vec<u8> {
+        [
+            fstring("m_ItemDefinition"),
+            fstring("ObjectProperty"),
+            fstring("/Script/Angelscript.ItMi_Orenugget"),
+            int_property("m_ItemCount", 1),
+            fstring("m_MapOfAttachedItems"),
+            fstring("MapProperty"),
+        ]
+        .concat()
+    }
+
+    #[test]
+    fn parse_private_inventory_add_item_valid() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-001.sav");
+        let output_path = dir.path().join("G1R-001-out.sav");
+        let private_payload = inventory_payload_for_add_item_tests();
+        let seed_compressed = b"seed-add".to_vec();
+        let stream = compressed_stream_with_one_chunk(&seed_compressed, private_payload.len());
+        fs::write(
+            &path,
+            build_gsav(2, &public_payload("Slot A"), &stream, &[0, 0, 0, 0]),
+        )
+        .unwrap();
+        let backend = PrefixCodecBackend {
+            seed_compressed,
+            seed_uncompressed: private_payload,
+        };
+
+        // Valid addItem edit must be parsed and dispatched; the apply stub will
+        // return UnsupportedEdit — that's expected until Task 7.
+        let err = write_save_with_codec_backend(
+            &path,
+            &[json!({
+                "path": "private.inventory.addItem",
+                "value": {
+                    "path": "/Script/Angelscript.ItMi_Orenugget",
+                    "count": 5
+                }
+            })],
+            false,
+            Some(&output_path),
+            Some(&backend),
+        )
+        .unwrap_err();
+        // Must fail with UnsupportedEdit from the stub, NOT InvalidRequest from
+        // parsing (which means the struct was built correctly).
+        assert!(
+            matches!(err, CoreError::UnsupportedEdit(_)),
+            "expected UnsupportedEdit stub error, got: {err}"
+        );
+        assert!(
+            err.to_string().contains("not implemented"),
+            "unexpected error message: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_private_inventory_add_item_rejects_count_zero() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-001.sav");
+        let private_payload = inventory_payload_for_add_item_tests();
+        let seed_compressed = b"seed-add0".to_vec();
+        let stream = compressed_stream_with_one_chunk(&seed_compressed, private_payload.len());
+        fs::write(
+            &path,
+            build_gsav(2, &public_payload("Slot A"), &stream, &[0, 0, 0, 0]),
+        )
+        .unwrap();
+        let backend = PrefixCodecBackend {
+            seed_compressed,
+            seed_uncompressed: private_payload,
+        };
+
+        let err = write_save_with_codec_backend(
+            &path,
+            &[json!({
+                "path": "private.inventory.addItem",
+                "value": {
+                    "path": "/Script/Angelscript.ItMi_Orenugget",
+                    "count": 0
+                }
+            })],
+            false,
+            None,
+            Some(&backend),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, CoreError::InvalidRequest(_)),
+            "expected InvalidRequest for count 0, got: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_private_inventory_add_item_rejects_missing_count() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-001.sav");
+        let private_payload = inventory_payload_for_add_item_tests();
+        let seed_compressed = b"seed-nocount".to_vec();
+        let stream = compressed_stream_with_one_chunk(&seed_compressed, private_payload.len());
+        fs::write(
+            &path,
+            build_gsav(2, &public_payload("Slot A"), &stream, &[0, 0, 0, 0]),
+        )
+        .unwrap();
+        let backend = PrefixCodecBackend {
+            seed_compressed,
+            seed_uncompressed: private_payload,
+        };
+
+        let err = write_save_with_codec_backend(
+            &path,
+            &[json!({
+                "path": "private.inventory.addItem",
+                "value": {
+                    "path": "/Script/Angelscript.ItMi_Orenugget"
+                }
+            })],
+            false,
+            None,
+            Some(&backend),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, CoreError::InvalidRequest(_)),
+            "expected InvalidRequest for missing count, got: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_private_inventory_add_item_rejects_invalid_path() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-001.sav");
+        let private_payload = inventory_payload_for_add_item_tests();
+        let seed_compressed = b"seed-badpath".to_vec();
+        let stream = compressed_stream_with_one_chunk(&seed_compressed, private_payload.len());
+        fs::write(
+            &path,
+            build_gsav(2, &public_payload("Slot A"), &stream, &[0, 0, 0, 0]),
+        )
+        .unwrap();
+        let backend = PrefixCodecBackend {
+            seed_compressed,
+            seed_uncompressed: private_payload,
+        };
+
+        let err = write_save_with_codec_backend(
+            &path,
+            &[json!({
+                "path": "private.inventory.addItem",
+                "value": {
+                    "path": "not_a_path",
+                    "count": 5
+                }
+            })],
+            false,
+            None,
+            Some(&backend),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, CoreError::InvalidRequest(_)),
+            "expected InvalidRequest for invalid item path, got: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_private_inventory_add_item_rejects_two_in_batch() {
+        // Two addItem edits in one batch must be rejected as structural edits
+        // (array-length changes) for the same reason as two arrayDuplicate ops.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-001.sav");
+        let private_payload = inventory_payload_for_add_item_tests();
+        let seed_compressed = b"seed-2add".to_vec();
+        let stream = compressed_stream_with_one_chunk(&seed_compressed, private_payload.len());
+        fs::write(
+            &path,
+            build_gsav(2, &public_payload("Slot A"), &stream, &[0, 0, 0, 0]),
+        )
+        .unwrap();
+        let backend = PrefixCodecBackend {
+            seed_compressed,
+            seed_uncompressed: private_payload,
+        };
+
+        let err = write_save_with_codec_backend(
+            &path,
+            &[
+                json!({
+                    "path": "private.inventory.addItem",
+                    "value": {
+                        "path": "/Script/Angelscript.ItMi_Orenugget",
+                        "count": 1
+                    }
+                }),
+                json!({
+                    "path": "private.inventory.addItem",
+                    "value": {
+                        "path": "/Script/Angelscript.ItAt_Lurker_01",
+                        "count": 2
+                    }
+                }),
+            ],
+            false,
+            None,
+            Some(&backend),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, CoreError::UnsupportedEdit(_)),
+            "expected UnsupportedEdit for two addItem in batch, got: {err}"
+        );
+        assert!(
+            err.to_string().contains("at most one structural array edit"),
+            "unexpected error message: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_private_inventory_add_item_rejects_mixed_with_array_duplicate() {
+        // One addItem + one arrayDuplicate counts as two structural edits and
+        // must be rejected.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-001.sav");
+        // Need a payload that also has a typed str-array for arrayDuplicate to
+        // parse cleanly; reuse private_str_array_property helper.
+        let private_payload = {
+            let mut p = fstring("/Script/Angelscript.GothicFinalDataGame");
+            p.push(0);
+            p.extend_from_slice(&private_str_array_property("Events", &["A"]));
+            p.extend_from_slice(&fstring("None"));
+            p.extend_from_slice(&0u32.to_le_bytes());
+            p
+        };
+        let seed_compressed = b"seed-mixed".to_vec();
+        let stream = compressed_stream_with_one_chunk(&seed_compressed, private_payload.len());
+        fs::write(
+            &path,
+            build_gsav(2, &public_payload("Slot A"), &stream, &[0, 0, 0, 0]),
+        )
+        .unwrap();
+        let backend = PrefixCodecBackend {
+            seed_compressed,
+            seed_uncompressed: private_payload,
+        };
+
+        let err = write_save_with_codec_backend(
+            &path,
+            &[
+                json!({
+                    "path": "private.inventory.addItem",
+                    "value": {
+                        "path": "/Script/Angelscript.ItMi_Orenugget",
+                        "count": 1
+                    }
+                }),
+                json!({
+                    "path": "private.typed.arrayDuplicate",
+                    "value": { "path": ["Events"], "index": 0 }
+                }),
+            ],
+            false,
+            None,
+            Some(&backend),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, CoreError::UnsupportedEdit(_)),
+            "expected UnsupportedEdit for addItem + arrayDuplicate, got: {err}"
+        );
+        assert!(
+            err.to_string().contains("at most one structural array edit"),
+            "unexpected error message: {err}"
+        );
     }
 }
