@@ -82,12 +82,14 @@ list of all items in the game.
   | `ItAr_Scroll_` | — | spell scroll |
   | `ItWr_` | 138 | writing (books/letters) |
   | `ItMi_` | 133 | misc |
-  | `ItAt_` | 105 | animal trophy |
+  | `ItAt_Amulet_` | 22 | amulet |
+  | `ItAt_Ring_` | 25 | ring |
+  | `ItAt_` (rest) | 58 | animal trophy |
   | `ItFo_` | 87 | food & potions |
   | `ItMs_` | 45 | mission/special |
   | `ItKe_` | 34 | key |
   | `ItRw_` | 30 | ranged weapon |
-  | `ItAm_` | 2 | amulet |
+  | `ItAm_` | 2 | ammunition (`ItAm_Arrow`/`ItAm_Bolt`) |
 
 - Excluded: `ItemAnimConfig_*`, `ItemSpawnManagerConfig_*`,
   `ItemCollisionFX`, `ItemVisualWorldTargetConfig` (config classes),

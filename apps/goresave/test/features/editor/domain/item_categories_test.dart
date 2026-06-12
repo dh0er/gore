@@ -17,7 +17,10 @@ void main() {
     expect(itemCategoryFromId('ItKeyDefault'), ItemCategory.key);
     expect(itemCategoryFromId('ItChestKey01'), ItemCategory.key);
     expect(itemCategoryFromId('ItDoorKey01'), ItemCategory.key);
-    expect(itemCategoryFromId('ItAm_Amulet_01'), ItemCategory.amulet);
+    expect(itemCategoryFromId('ItAm_Arrow'), ItemCategory.ammunition);
+    expect(itemCategoryFromId('ItAm_Bolt'), ItemCategory.ammunition);
+    expect(itemCategoryFromId('ItAt_Amulet_OfDeath'), ItemCategory.amulet);
+    expect(itemCategoryFromId('ItAt_Ring_OfLife'), ItemCategory.ring);
   });
 
   test('unknown ids map to other', () {

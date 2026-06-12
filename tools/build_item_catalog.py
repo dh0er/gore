@@ -21,15 +21,18 @@ CLASS_RE = re.compile(r"ASClass /Script/Angelscript\.(It[A-Za-z0-9_]+)")
 CATEGORY_BY_PREFIX = [
     ("ItMw_", "melee_weapon"),
     ("ItRw_", "ranged_weapon"),
+    # ItAm_ is ammunition (ItAm_Arrow/ItAm_Bolt); amulets live under ItAt_.
+    ("ItAm_", "ammunition"),
     ("ItAr_Rune_", "rune"),
     ("ItAr_Scroll_", "scroll"),
     ("ItFo_", "food"),
     ("ItMi_", "misc"),
+    ("ItAt_Amulet_", "amulet"),
+    ("ItAt_Ring_", "ring"),
     ("ItAt_", "trophy"),
     ("ItWr_", "writing"),
     ("ItMs_", "mission"),
     ("ItKe_", "key"),
-    ("ItAm_", "amulet"),
 ]
 
 # Non-inventory classes that match the It* scan.

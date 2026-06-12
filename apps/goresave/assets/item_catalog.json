@@ -1,11 +1,11 @@
 [
   {
-    "category": "amulet",
+    "category": "ammunition",
     "id": "ItAm_Arrow",
     "path": "/Script/Angelscript.ItAm_Arrow"
   },
   {
-    "category": "amulet",
+    "category": "ammunition",
     "id": "ItAm_Bolt",
     "path": "/Script/Angelscript.ItAm_Bolt"
   },
@@ -365,112 +365,112 @@
     "path": "/Script/Angelscript.ItAr_Scroll_TransformWolf"
   },
   {
-    "category": "trophy",
+    "category": "amulet",
     "id": "ItAt_Amulet_Brotherhood",
     "path": "/Script/Angelscript.ItAt_Amulet_Brotherhood"
   },
   {
-    "category": "trophy",
+    "category": "amulet",
     "id": "ItAt_Amulet_Dexterity_01",
     "path": "/Script/Angelscript.ItAt_Amulet_Dexterity_01"
   },
   {
-    "category": "trophy",
+    "category": "amulet",
     "id": "ItAt_Amulet_Dexterity_02",
     "path": "/Script/Angelscript.ItAt_Amulet_Dexterity_02"
   },
   {
-    "category": "trophy",
+    "category": "amulet",
     "id": "ItAt_Amulet_Enlight",
     "path": "/Script/Angelscript.ItAt_Amulet_Enlight"
   },
   {
-    "category": "trophy",
+    "category": "amulet",
     "id": "ItAt_Amulet_Fire",
     "path": "/Script/Angelscript.ItAt_Amulet_Fire"
   },
   {
-    "category": "trophy",
+    "category": "amulet",
     "id": "ItAt_Amulet_Innos",
     "path": "/Script/Angelscript.ItAt_Amulet_Innos"
   },
   {
-    "category": "trophy",
+    "category": "amulet",
     "id": "ItAt_Amulet_Life",
     "path": "/Script/Angelscript.ItAt_Amulet_Life"
   },
   {
-    "category": "trophy",
+    "category": "amulet",
     "id": "ItAt_Amulet_Magic_01",
     "path": "/Script/Angelscript.ItAt_Amulet_Magic_01"
   },
   {
-    "category": "trophy",
+    "category": "amulet",
     "id": "ItAt_Amulet_Magic_02",
     "path": "/Script/Angelscript.ItAt_Amulet_Magic_02"
   },
   {
-    "category": "trophy",
+    "category": "amulet",
     "id": "ItAt_Amulet_Magicfire",
     "path": "/Script/Angelscript.ItAt_Amulet_Magicfire"
   },
   {
-    "category": "trophy",
+    "category": "amulet",
     "id": "ItAt_Amulet_Neks",
     "path": "/Script/Angelscript.ItAt_Amulet_Neks"
   },
   {
-    "category": "trophy",
+    "category": "amulet",
     "id": "ItAt_Amulet_Orc",
     "path": "/Script/Angelscript.ItAt_Amulet_Orc"
   },
   {
-    "category": "trophy",
+    "category": "amulet",
     "id": "ItAt_Amulet_OrcMummy",
     "path": "/Script/Angelscript.ItAt_Amulet_OrcMummy"
   },
   {
-    "category": "trophy",
+    "category": "amulet",
     "id": "ItAt_Amulet_Power",
     "path": "/Script/Angelscript.ItAt_Amulet_Power"
   },
   {
-    "category": "trophy",
+    "category": "amulet",
     "id": "ItAt_Amulet_Projectile",
     "path": "/Script/Angelscript.ItAt_Amulet_Projectile"
   },
   {
-    "category": "trophy",
+    "category": "amulet",
     "id": "ItAt_Amulet_Protection",
     "path": "/Script/Angelscript.ItAt_Amulet_Protection"
   },
   {
-    "category": "trophy",
+    "category": "amulet",
     "id": "ItAt_Amulet_Ranged",
     "path": "/Script/Angelscript.ItAt_Amulet_Ranged"
   },
   {
-    "category": "trophy",
+    "category": "amulet",
     "id": "ItAt_Amulet_Strong_01",
     "path": "/Script/Angelscript.ItAt_Amulet_Strong_01"
   },
   {
-    "category": "trophy",
+    "category": "amulet",
     "id": "ItAt_Amulet_Strong_02",
     "path": "/Script/Angelscript.ItAt_Amulet_Strong_02"
   },
   {
-    "category": "trophy",
+    "category": "amulet",
     "id": "ItAt_Amulet_Ulu_Talisman",
     "path": "/Script/Angelscript.ItAt_Amulet_Ulu_Talisman"
   },
   {
-    "category": "trophy",
+    "category": "amulet",
     "id": "ItAt_Amulet_Water",
     "path": "/Script/Angelscript.ItAt_Amulet_Water"
   },
   {
-    "category": "trophy",
+    "category": "amulet",
     "id": "ItAt_Amulet_Weapon",
     "path": "/Script/Angelscript.ItAt_Amulet_Weapon"
   },
@@ -650,127 +650,127 @@
     "path": "/Script/Angelscript.ItAt_Razor_02"
   },
   {
-    "category": "trophy",
+    "category": "ring",
     "id": "ItAt_Ring_Enlight",
     "path": "/Script/Angelscript.ItAt_Ring_Enlight"
   },
   {
-    "category": "trophy",
+    "category": "ring",
     "id": "ItAt_Ring_Fire_01",
     "path": "/Script/Angelscript.ItAt_Ring_Fire_01"
   },
   {
-    "category": "trophy",
+    "category": "ring",
     "id": "ItAt_Ring_Fire_02",
     "path": "/Script/Angelscript.ItAt_Ring_Fire_02"
   },
   {
-    "category": "trophy",
+    "category": "ring",
     "id": "ItAt_Ring_Life_01",
     "path": "/Script/Angelscript.ItAt_Ring_Life_01"
   },
   {
-    "category": "trophy",
+    "category": "ring",
     "id": "ItAt_Ring_Life_02",
     "path": "/Script/Angelscript.ItAt_Ring_Life_02"
   },
   {
-    "category": "trophy",
+    "category": "ring",
     "id": "ItAt_Ring_Magic_01",
     "path": "/Script/Angelscript.ItAt_Ring_Magic_01"
   },
   {
-    "category": "trophy",
+    "category": "ring",
     "id": "ItAt_Ring_Magic_02",
     "path": "/Script/Angelscript.ItAt_Ring_Magic_02"
   },
   {
-    "category": "trophy",
+    "category": "ring",
     "id": "ItAt_Ring_Magic_03",
     "path": "/Script/Angelscript.ItAt_Ring_Magic_03"
   },
   {
-    "category": "trophy",
+    "category": "ring",
     "id": "ItAt_Ring_Magicfire_01",
     "path": "/Script/Angelscript.ItAt_Ring_Magicfire_01"
   },
   {
-    "category": "trophy",
+    "category": "ring",
     "id": "ItAt_Ring_Magicfire_02",
     "path": "/Script/Angelscript.ItAt_Ring_Magicfire_02"
   },
   {
-    "category": "trophy",
+    "category": "ring",
     "id": "ItAt_Ring_Mordrag",
     "path": "/Script/Angelscript.ItAt_Ring_Mordrag"
   },
   {
-    "category": "trophy",
+    "category": "ring",
     "id": "ItAt_Ring_Power",
     "path": "/Script/Angelscript.ItAt_Ring_Power"
   },
   {
-    "category": "trophy",
+    "category": "ring",
     "id": "ItAt_Ring_Projectile_01",
     "path": "/Script/Angelscript.ItAt_Ring_Projectile_01"
   },
   {
-    "category": "trophy",
+    "category": "ring",
     "id": "ItAt_Ring_Projectile_02",
     "path": "/Script/Angelscript.ItAt_Ring_Projectile_02"
   },
   {
-    "category": "trophy",
+    "category": "ring",
     "id": "ItAt_Ring_Ranged_01",
     "path": "/Script/Angelscript.ItAt_Ring_Ranged_01"
   },
   {
-    "category": "trophy",
+    "category": "ring",
     "id": "ItAt_Ring_Ranged_02",
     "path": "/Script/Angelscript.ItAt_Ring_Ranged_02"
   },
   {
-    "category": "trophy",
+    "category": "ring",
     "id": "ItAt_Ring_Scatty",
     "path": "/Script/Angelscript.ItAt_Ring_Scatty"
   },
   {
-    "category": "trophy",
+    "category": "ring",
     "id": "ItAt_Ring_Skill_01",
     "path": "/Script/Angelscript.ItAt_Ring_Skill_01"
   },
   {
-    "category": "trophy",
+    "category": "ring",
     "id": "ItAt_Ring_Skill_02",
     "path": "/Script/Angelscript.ItAt_Ring_Skill_02"
   },
   {
-    "category": "trophy",
+    "category": "ring",
     "id": "ItAt_Ring_Strong_01",
     "path": "/Script/Angelscript.ItAt_Ring_Strong_01"
   },
   {
-    "category": "trophy",
+    "category": "ring",
     "id": "ItAt_Ring_Strong_02",
     "path": "/Script/Angelscript.ItAt_Ring_Strong_02"
   },
   {
-    "category": "trophy",
+    "category": "ring",
     "id": "ItAt_Ring_Total_01",
     "path": "/Script/Angelscript.ItAt_Ring_Total_01"
   },
   {
-    "category": "trophy",
+    "category": "ring",
     "id": "ItAt_Ring_Total_02",
     "path": "/Script/Angelscript.ItAt_Ring_Total_02"
   },
   {
-    "category": "trophy",
+    "category": "ring",
     "id": "ItAt_Ring_Weapon_01",
     "path": "/Script/Angelscript.ItAt_Ring_Weapon_01"
   },
   {
-    "category": "trophy",
+    "category": "ring",
     "id": "ItAt_Ring_Weapon_02",
     "path": "/Script/Angelscript.ItAt_Ring_Weapon_02"
   },

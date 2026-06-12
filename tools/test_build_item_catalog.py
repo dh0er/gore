@@ -14,6 +14,10 @@ FIXTURE = """\
 [0000025A88701907] ASClass /Script/Angelscript.ItKeyDefault [n: 1] [c: 2] [or: 3]
 [0000025A88701908] ASClass /Script/Angelscript.ItIg_Worldsplitter [n: 1] [c: 2] [or: 3]
 [0000025A88701909] ASClass /Script/Angelscript.SomethingElse [n: 1] [c: 2] [or: 3]
+[0000025A8870190A] ASClass /Script/Angelscript.ItAm_Arrow [n: 1] [c: 2] [or: 3]
+[0000025A8870190B] ASClass /Script/Angelscript.ItAt_Amulet_OfDeath [n: 1] [c: 2] [or: 3]
+[0000025A8870190C] ASClass /Script/Angelscript.ItAt_Ring_OfLife [n: 1] [c: 2] [or: 3]
+[0000025A8870190D] ASClass /Script/Angelscript.ItAt_Wolf_Fur [n: 1] [c: 2] [or: 3]
 """
 
 
@@ -35,6 +39,10 @@ def test_build_catalog_filters_and_categorizes():
     assert by_id["ItAr_Scroll_Charm"]["category"] == "scroll"
     assert by_id["ItKeyDefault"]["category"] == "key"
     assert by_id["ItIg_Worldsplitter"]["category"] == "special"
+    assert by_id["ItAm_Arrow"]["category"] == "ammunition"
+    assert by_id["ItAt_Amulet_OfDeath"]["category"] == "amulet"
+    assert by_id["ItAt_Ring_OfLife"]["category"] == "ring"
+    assert by_id["ItAt_Wolf_Fur"]["category"] == "trophy"
     # excluded entirely:
     assert "ItAr_Rune_FireBall_Base" not in by_id  # _Base suffix
     assert "ItemAnimConfig_Meatbug" not in by_id   # config class

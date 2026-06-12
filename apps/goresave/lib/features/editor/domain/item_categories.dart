@@ -8,15 +8,17 @@ import 'package:goresave/features/editor/domain/editor_models.dart';
 enum ItemCategory {
   meleeWeapon('Melee weapons'),
   rangedWeapon('Ranged weapons'),
+  ammunition('Ammunition'),
   rune('Runes'),
   scroll('Spell scrolls'),
   food('Food & potions'),
   misc('Miscellaneous'),
+  amulet('Amulets'),
+  ring('Rings'),
   trophy('Animal trophies'),
   writing('Writings'),
   mission('Mission items'),
   key('Keys'),
-  amulet('Amulets'),
   other('Other');
 
   const ItemCategory(this.label);
@@ -27,10 +29,14 @@ enum ItemCategory {
 ItemCategory itemCategoryFromId(String id) {
   if (id.startsWith('ItMw_')) return ItemCategory.meleeWeapon;
   if (id.startsWith('ItRw_')) return ItemCategory.rangedWeapon;
+  // ItAm_ is ammunition (ItAm_Arrow/ItAm_Bolt); amulets live under ItAt_.
+  if (id.startsWith('ItAm_')) return ItemCategory.ammunition;
   if (id.startsWith('ItAr_Rune_')) return ItemCategory.rune;
   if (id.startsWith('ItAr_Scroll_')) return ItemCategory.scroll;
   if (id.startsWith('ItFo_')) return ItemCategory.food;
   if (id.startsWith('ItMi_')) return ItemCategory.misc;
+  if (id.startsWith('ItAt_Amulet_')) return ItemCategory.amulet;
+  if (id.startsWith('ItAt_Ring_')) return ItemCategory.ring;
   if (id.startsWith('ItAt_')) return ItemCategory.trophy;
   if (id.startsWith('ItWr_')) return ItemCategory.writing;
   if (id.startsWith('ItMs_')) return ItemCategory.mission;
@@ -40,7 +46,6 @@ ItemCategory itemCategoryFromId(String id) {
       id.startsWith('ItDoorKey')) {
     return ItemCategory.key;
   }
-  if (id.startsWith('ItAm_')) return ItemCategory.amulet;
   return ItemCategory.other;
 }
 
