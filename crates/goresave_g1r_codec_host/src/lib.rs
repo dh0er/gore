@@ -31,6 +31,21 @@ const MAX_CODEC_COMPRESSED_OUTPUT_SIZE: usize = MAX_CODEC_UNCOMPRESSED_SIZE + 0x
 const MAX_RUNTIME_REPEAT_COUNT: usize = 100;
 const OODLE_COMPRESSOR_KRAKEN: i32 = 8;
 const RUNTIME_SELFTEST_WORKER_TIMEOUT: Duration = Duration::from_secs(5);
+// Work commands (compress/decompress and their _many variants) re-read and map
+// the full game executable per worker run and process real payloads, so their
+// timeout must absorb cold disk reads, antivirus scans, and slow CPUs that the
+// tiny selftest sample never hits.
+const RUNTIME_WORK_WORKER_BASE_TIMEOUT: Duration = Duration::from_secs(60);
+const RUNTIME_WORK_WORKER_MAX_TIMEOUT: Duration = Duration::from_secs(600);
+const RUNTIME_WORK_WORKER_SECS_PER_MIB: u64 = 1;
+
+fn runtime_work_worker_timeout(total_payload_bytes: usize) -> Duration {
+    let payload_mib = (total_payload_bytes as u64).div_ceil(1024 * 1024);
+    let scaled_secs = payload_mib
+        .saturating_mul(RUNTIME_WORK_WORKER_SECS_PER_MIB)
+        .saturating_add(RUNTIME_WORK_WORKER_BASE_TIMEOUT.as_secs());
+    Duration::from_secs(scaled_secs).min(RUNTIME_WORK_WORKER_MAX_TIMEOUT)
+}
 #[cfg(windows)]
 const RUNTIME_WORKER_JOB_MEMORY_LIMIT_BYTES: usize = 1024 * 1024 * 1024;
 #[cfg(windows)]
@@ -2037,7 +2052,7 @@ fn decompress_with_runtime_worker(
     };
     let mut report = run_runtime_selftest_worker_with_request(
         runtime_worker_path,
-        RUNTIME_SELFTEST_WORKER_TIMEOUT,
+        runtime_work_worker_timeout(request.input.len().saturating_add(request.expected_size)),
         &[],
         &worker_request,
     );
@@ -2111,9 +2126,14 @@ fn decompress_many_with_runtime_worker(
         compress_sample: None,
         compress_samples: Vec::new(),
     };
+    let total_payload_bytes = request.chunks.iter().fold(0usize, |total, chunk| {
+        total
+            .saturating_add(chunk.input.len())
+            .saturating_add(chunk.expected_size)
+    });
     let mut report = run_runtime_selftest_worker_with_request(
         runtime_worker_path,
-        RUNTIME_SELFTEST_WORKER_TIMEOUT,
+        runtime_work_worker_timeout(total_payload_bytes),
         &[],
         &worker_request,
     );
@@ -2211,7 +2231,7 @@ fn compress_with_runtime_worker(
     };
     let mut report = run_runtime_selftest_worker_with_request(
         runtime_worker_path,
-        RUNTIME_SELFTEST_WORKER_TIMEOUT,
+        runtime_work_worker_timeout(request.input.len()),
         &[],
         &worker_request,
     );
@@ -2288,9 +2308,12 @@ fn compress_many_with_runtime_worker(
         compress_sample: Some(first_sample),
         compress_samples: samples,
     };
+    let total_payload_bytes = request.chunks.iter().fold(0usize, |total, chunk| {
+        total.saturating_add(chunk.input.len())
+    });
     let mut report = run_runtime_selftest_worker_with_request(
         runtime_worker_path,
-        RUNTIME_SELFTEST_WORKER_TIMEOUT,
+        runtime_work_worker_timeout(total_payload_bytes),
         &[],
         &worker_request,
     );
@@ -3701,6 +3724,42 @@ mod runtime_worker_job_tests {
             info.process_memory_limit,
             RUNTIME_WORKER_JOB_MEMORY_LIMIT_BYTES
         );
+    }
+}
+
+#[cfg(test)]
+mod runtime_work_timeout_tests {
+    use super::*;
+
+    #[test]
+    fn work_timeout_starts_at_base_for_empty_input() {
+        assert_eq!(runtime_work_worker_timeout(0), Duration::from_secs(60));
+    }
+
+    #[test]
+    fn work_timeout_scales_per_mebibyte_of_payload() {
+        assert_eq!(
+            runtime_work_worker_timeout(100 * 1024 * 1024),
+            Duration::from_secs(160)
+        );
+    }
+
+    #[test]
+    fn work_timeout_rounds_partial_mebibytes_up() {
+        assert_eq!(runtime_work_worker_timeout(1), Duration::from_secs(61));
+    }
+
+    #[test]
+    fn work_timeout_is_capped() {
+        assert_eq!(
+            runtime_work_worker_timeout(usize::MAX),
+            Duration::from_secs(600)
+        );
+    }
+
+    #[test]
+    fn work_timeout_always_exceeds_selftest_timeout() {
+        assert!(runtime_work_worker_timeout(0) > RUNTIME_SELFTEST_WORKER_TIMEOUT);
     }
 }
 
