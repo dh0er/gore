@@ -6,6 +6,14 @@ notes, so every release needs an entry.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.1.1] - 2026-06-12
+
+### Fixed
+
+- Saving no longer fails with a codec timeout error on slower machines. The
+  codec worker timeout now scales with save size (60s base + 1s per MiB)
+  instead of the fixed 5 seconds that the quick selftest uses.
+
 ## [0.1.0] - 2026-06-11
 
 ### First Release
