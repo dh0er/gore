@@ -1527,6 +1527,9 @@ class _InventoryPanel extends StatelessWidget {
         canAddItem:
             inspection.privateEditable &&
             canCompress &&
+            // addItem edits the typed property tree, so require a verified
+            // typed parse in addition to the advertised op.
+            inspection.privateTypedVerified &&
             inspection.privateInventory.writable.contains(
               'private.inventory.addItem',
             ),
