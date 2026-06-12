@@ -624,6 +624,20 @@ class InventoryItemCountChange {
   }
 }
 
+class InventoryItemAdd {
+  const InventoryItemAdd({required this.path, required this.count});
+
+  final String path;
+  final int count;
+
+  Map<String, Object?> toEditJson() {
+    return {
+      'path': 'private.inventory.addItem',
+      'value': {'path': path, 'count': count},
+    };
+  }
+}
+
 class BackupEntry {
   const BackupEntry({
     required this.path,

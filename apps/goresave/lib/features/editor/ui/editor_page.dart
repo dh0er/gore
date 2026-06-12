@@ -14,6 +14,7 @@ import 'package:goresave/features/editor/domain/item_categories.dart';
 import 'package:goresave/features/editor/domain/pending_edits.dart';
 import 'package:goresave/providers/data_providers.dart';
 import 'package:intl/intl.dart';
+import 'add_inventory_item_dialog.dart';
 import 'hero_stats_card.dart';
 import 'progression_panel.dart';
 
@@ -1523,6 +1524,12 @@ class _InventoryPanel extends StatelessWidget {
             inspection.privateInventory.writable.contains(
               'private.inventory.setItemCount',
             ),
+        canAddItem:
+            inspection.privateEditable &&
+            canCompress &&
+            inspection.privateInventory.writable.contains(
+              'private.inventory.addItem',
+            ),
       ),
     );
   }
@@ -1533,11 +1540,13 @@ class _PrivateInventorySummaryCard extends StatefulWidget {
     required this.inventory,
     required this.notifier,
     this.editable = true,
+    this.canAddItem = false,
   });
 
   final PrivateInventorySummary inventory;
   final EditorNotifier notifier;
   final bool editable;
+  final bool canAddItem;
 
   @override
   State<_PrivateInventorySummaryCard> createState() =>
@@ -1549,6 +1558,7 @@ class _PrivateInventorySummaryCardState
   String _query = '';
   final Map<String, InventoryItemCountChange> _pendingCountChanges = {};
   final Set<ItemCategory> _collapsed = {};
+  InventoryItemAdd? _pendingAdd;
 
   @override
   void didUpdateWidget(covariant _PrivateInventorySummaryCard oldWidget) {
@@ -1558,21 +1568,38 @@ class _PrivateInventorySummaryCardState
       // centrally clears 'inventory' in refresh() (event-handler context),
       // so mutating the provider here would throw during build.
       _pendingCountChanges.clear();
+      _pendingAdd = null;
     }
   }
 
   void _pushInventoryPending() {
-    if (_pendingCountChanges.isEmpty) {
+    final countEdits =
+        _pendingCountChanges.values.map((c) => c.toEditJson()).toList();
+    final addEdit = _pendingAdd?.toEditJson();
+    final allEdits = [
+      ...countEdits,
+      ?addEdit,
+    ];
+    if (allEdits.isEmpty) {
       widget.notifier.clearPendingEdit('inventory');
     } else {
       widget.notifier.setPendingEdit(
         'inventory',
-        PendingSaveEdit(
-          edits: _pendingCountChanges.values
-              .map((c) => c.toEditJson())
-              .toList(),
-        ),
+        PendingSaveEdit(edits: allEdits),
       );
+    }
+  }
+
+  Future<void> _openAddDialog() async {
+    final result = await showDialog<InventoryItemAdd>(
+      context: context,
+      builder: (_) => AddInventoryItemDialog(
+        existingItems: widget.inventory.items,
+      ),
+    );
+    if (result != null) {
+      setState(() => _pendingAdd = result);
+      _pushInventoryPending();
     }
   }
 
@@ -1596,6 +1623,9 @@ class _PrivateInventorySummaryCardState
           ...group.items.map(_InventoryItemRow.new),
       ],
     ];
+    final hasPendingAdd = _pendingAdd != null;
+    final hasPendingChanges = _pendingCountChanges.isNotEmpty || hasPendingAdd;
+
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -1612,6 +1642,19 @@ class _PrivateInventorySummaryCardState
                     style: Theme.of(context).textTheme.titleMedium,
                   ),
                 ),
+                if (widget.canAddItem) ...[
+                  const SizedBox(width: 8),
+                  Tooltip(
+                    message: hasPendingAdd
+                        ? 'Save pending changes first — one new item per save'
+                        : 'Add item to inventory',
+                    child: FilledButton.icon(
+                      icon: const Icon(Icons.add, size: 18),
+                      label: const Text('Add item'),
+                      onPressed: hasPendingAdd ? null : _openAddDialog,
+                    ),
+                  ),
+                ],
               ],
             ),
             if (items.isNotEmpty) ...[
@@ -1621,7 +1664,7 @@ class _PrivateInventorySummaryCardState
                 style: Theme.of(context).textTheme.labelLarge,
               ),
               const SizedBox(height: 8),
-              if (widget.editable && _pendingCountChanges.isNotEmpty) ...[
+              if (widget.editable && hasPendingChanges) ...[
                 Row(
                   children: [
                     Tooltip(
@@ -1629,12 +1672,25 @@ class _PrivateInventorySummaryCardState
                       child: IconButton(
                         icon: const Icon(Icons.undo_outlined),
                         onPressed: () {
-                          setState(_pendingCountChanges.clear);
+                          setState(() {
+                            _pendingCountChanges.clear();
+                            _pendingAdd = null;
+                          });
                           widget.notifier.clearPendingEdit('inventory');
                         },
                       ),
                     ),
                   ],
+                ),
+                const SizedBox(height: 8),
+              ],
+              if (hasPendingAdd) ...[
+                _PendingAddRow(
+                  add: _pendingAdd!,
+                  onRemove: () {
+                    setState(() => _pendingAdd = null);
+                    _pushInventoryPending();
+                  },
                 ),
                 const SizedBox(height: 8),
               ],
@@ -1719,6 +1775,51 @@ class _PrivateInventorySummaryCardState
       }
     });
     _pushInventoryPending();
+  }
+}
+
+/// A highlighted row shown when there is a pending add-item action awaiting
+/// save.  Displays the item id (derived from path) and count, plus a remove
+/// button.
+class _PendingAddRow extends StatelessWidget {
+  const _PendingAddRow({required this.add, required this.onRemove});
+
+  final InventoryItemAdd add;
+  final VoidCallback onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    // Derive a human-readable id fragment from the path for display.
+    final displayName = add.path.contains('.')
+        ? add.path.split('.').last
+        : add.path.split('/').last;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: scheme.primaryContainer,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: scheme.primary.withValues(alpha: 0.4)),
+      ),
+      child: ListTile(
+        dense: true,
+        leading: Icon(Icons.add_circle_outline, color: scheme.primary),
+        title: Text(
+          displayName,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(color: scheme.onPrimaryContainer),
+        ),
+        subtitle: Text(
+          '×${add.count} — pending (not yet saved)',
+          style: TextStyle(color: scheme.onPrimaryContainer.withValues(alpha: 0.8)),
+        ),
+        trailing: IconButton(
+          icon: const Icon(Icons.close),
+          tooltip: 'Remove pending add',
+          onPressed: onRemove,
+        ),
+      ),
+    );
   }
 }
 

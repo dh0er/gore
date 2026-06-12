@@ -418,6 +418,17 @@ void main() {
     expect(backup.canRestore, isTrue);
   });
 
+  test('InventoryItemAdd produces correct addItem JSON', () {
+    const add = InventoryItemAdd(
+      path: '/Script/Angelscript.ItMi_Orenugget',
+      count: 5,
+    );
+    expect(add.toEditJson(), {
+      'path': 'private.inventory.addItem',
+      'value': {'path': '/Script/Angelscript.ItMi_Orenugget', 'count': 5},
+    });
+  });
+
   test('BackupEntry reads companion scope and disables direct restore', () {
     final backup = BackupEntry.fromJson({
       'path': r'C:\saves\PersistentDataList.sav.bak.250',
