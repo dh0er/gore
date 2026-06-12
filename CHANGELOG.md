@@ -6,6 +6,18 @@ notes, so every release needs an entry.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.1.2] - 2026-06-12
+
+### Fixed
+
+- The G1R binary codec host now recognizes the 1.0.1 game patch
+  (`G1R-Win64-Shipping.exe`). The patch shifted the embedded Oodle
+  compress/decompress/dispatch functions, so the host fell back to pattern
+  resolution and reported the executable as unsupported, disabling
+  compression. Added a verified known profile (`g1r-99E4AF08`) with the new
+  codec RVAs; compress and decompress were live round-trip tested against the
+  patched executable.
+
 ## [0.1.1] - 2026-06-12
 
 ### Fixed

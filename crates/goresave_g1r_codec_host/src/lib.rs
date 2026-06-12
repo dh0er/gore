@@ -110,6 +110,41 @@ const G1R_543_PROFILE_JSON: &str = r#"{
   }
 }"#;
 
+const G1R_544_PROFILE_JSON: &str = r#"{
+  "name": "g1r-99E4AF08",
+  "exeSha256": "77f3d48ccde47756a6fa94b4b031f0ad58e2b57dcba93451415a5ed1af03f4ab",
+  "fileSize": 171482112,
+  "peTimestamp": "0x99E4AF08",
+  "imageBase": "0x140000000",
+  "rvAs": {
+    "oodleLzCompress": "0x6F487A0",
+    "oodleLzDecompress": "0x6F49080",
+    "compressorDispatch": "0x6F475E0"
+  },
+  "fingerprints": {
+    "compressPrologueSha256": "e2086f8489f6560e4e2a9406ac369119afe3ac57647f7ee47ad6ba917df5bd86",
+    "decompressPrologueSha256": "99110e2ae7b1fc67863e184e2b3a71e91606bac50df813cd2d7ea36611da56d9",
+    "dispatchPrologueSha256": "719563ba74c752feb0351ff9cf96d856c3f51c0125a221b8d7facf0ebe6b5c11"
+  },
+  "patterns": {
+    "compressAnchors": [
+      {
+        "name": "oodle_lz_compress_wrapper_shape",
+        "nearStrings": ["oo2::OodleLZ_Compress", "Reduced profile only supports Kraken"],
+        "requiredCalls": ["compressor_dispatch"],
+        "minMatchedBytes": 48
+      }
+    ],
+    "decompressAnchors": [
+      {
+        "name": "oodle_lz_decompress_wrapper_shape",
+        "nearStrings": ["oo2::OodleLZ_Decompress"],
+        "minMatchedBytes": 48
+      }
+    ]
+  }
+}"#;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorCode {
     InvalidProfile,
@@ -1645,7 +1680,10 @@ pub fn parse_profile_json(input: &str) -> Result<VersionProfile, HostError> {
 }
 
 pub fn builtin_profiles() -> Vec<VersionProfile> {
-    vec![parse_profile_json(G1R_543_PROFILE_JSON).expect("built-in G1R profile must be valid")]
+    vec![
+        parse_profile_json(G1R_543_PROFILE_JSON).expect("built-in G1R profile must be valid"),
+        parse_profile_json(G1R_544_PROFILE_JSON).expect("built-in G1R profile must be valid"),
+    ]
 }
 
 pub fn probe_exe(
