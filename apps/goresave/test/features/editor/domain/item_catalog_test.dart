@@ -15,8 +15,9 @@ void main() {
   });
 
   testWidgets('loads bundled asset', (tester) async {
-    final catalog = await ItemCatalog.loadBundled();
+    // rootBundle does real async I/O; run outside the fake-async test zone.
+    final catalog = (await tester.runAsync(ItemCatalog.loadBundled))!;
     expect(catalog.entries.length, greaterThan(500));
     expect(catalog.entries.any((e) => e.id == 'ItMi_Orenugget'), isTrue);
-  }, timeout: Timeout.factor(10), skip: false);
+  });
 }
