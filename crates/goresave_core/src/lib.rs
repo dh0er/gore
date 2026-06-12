@@ -9275,4 +9275,75 @@ mod tests {
             "unexpected error message: {err}"
         );
     }
+
+    #[test]
+    fn parse_private_inventory_add_item_rejects_negative_count() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-001.sav");
+        let private_payload = inventory_payload_for_add_item_tests();
+        let seed_compressed = b"seed-negcount".to_vec();
+        let stream = compressed_stream_with_one_chunk(&seed_compressed, private_payload.len());
+        fs::write(
+            &path,
+            build_gsav(2, &public_payload("Slot A"), &stream, &[0, 0, 0, 0]),
+        )
+        .unwrap();
+        let backend = PrefixCodecBackend {
+            seed_compressed,
+            seed_uncompressed: private_payload,
+        };
+
+        let err = write_save_with_codec_backend(
+            &path,
+            &[json!({
+                "path": "private.inventory.addItem",
+                "value": {
+                    "path": "/Script/Angelscript.ItMi_Orenugget",
+                    "count": -1
+                }
+            })],
+            false,
+            None,
+            Some(&backend),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, CoreError::InvalidRequest(_)),
+            "expected InvalidRequest for count -1, got: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_private_inventory_add_item_rejects_non_object_value() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-001.sav");
+        let private_payload = inventory_payload_for_add_item_tests();
+        let seed_compressed = b"seed-strval".to_vec();
+        let stream = compressed_stream_with_one_chunk(&seed_compressed, private_payload.len());
+        fs::write(
+            &path,
+            build_gsav(2, &public_payload("Slot A"), &stream, &[0, 0, 0, 0]),
+        )
+        .unwrap();
+        let backend = PrefixCodecBackend {
+            seed_compressed,
+            seed_uncompressed: private_payload,
+        };
+
+        let err = write_save_with_codec_backend(
+            &path,
+            &[json!({
+                "path": "private.inventory.addItem",
+                "value": "not_an_object"
+            })],
+            false,
+            None,
+            Some(&backend),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, CoreError::InvalidRequest(_)),
+            "expected InvalidRequest for non-object value, got: {err}"
+        );
+    }
 }
