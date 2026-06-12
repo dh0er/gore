@@ -35,6 +35,10 @@ class _AddInventoryItemDialogState extends State<AddInventoryItemDialog> {
   final TextEditingController _countController =
       TextEditingController(text: '1');
   String? _countError;
+  // Created once: a fresh future per build would reset the FutureBuilder
+  // (spinner flash) on every setState.
+  late final Future<ItemCatalog> _catalogFuture =
+      widget.catalogOverride ?? ItemCatalog.loadBundled();
 
   @override
   void dispose() {
@@ -66,7 +70,6 @@ class _AddInventoryItemDialogState extends State<AddInventoryItemDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final future = widget.catalogOverride ?? ItemCatalog.loadBundled();
     return AlertDialog(
       title: const Text('Add item'),
       contentPadding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
@@ -74,7 +77,7 @@ class _AddInventoryItemDialogState extends State<AddInventoryItemDialog> {
         width: 480,
         height: 520,
         child: FutureBuilder<ItemCatalog>(
-          future: future,
+          future: _catalogFuture,
           builder: (context, snapshot) {
             if (snapshot.connectionState != ConnectionState.done) {
               return const Center(child: CircularProgressIndicator());
