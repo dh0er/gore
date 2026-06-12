@@ -6,6 +6,17 @@ notes, so every release needs an entry.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Unreleased
+
+### Added
+
+- Inventory items are now grouped into collapsible categories (weapons, runes,
+  scrolls, food, trophies, writings, mission items, keys, amulets, and other).
+- Users can add items not yet in the save via a searchable picker, fed by a
+  bundled item catalog of 798 Gothic 1 Remake item IDs.
+- New core operation `private.inventory.addItem` for adding items to inventory.
+  All edits are validated before write, with automatic backup creation.
+
 ## [0.1.1] - 2026-06-12
 
 ### Fixed
