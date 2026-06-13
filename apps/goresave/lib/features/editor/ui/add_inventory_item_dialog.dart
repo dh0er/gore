@@ -3,18 +3,18 @@ import 'package:flutter/services.dart';
 import 'package:goresave/features/editor/domain/editor_models.dart';
 import 'package:goresave/features/editor/domain/item_catalog.dart';
 import 'package:goresave/features/editor/domain/item_categories.dart';
-
-/// Maximum number of catalog entries shown after filtering to keep the dialog
-/// responsive.
-const int _kMaxDisplayedEntries = 100;
+import 'package:goresave/features/editor/ui/sidebar_tile.dart';
 
 /// Dialog that lets the user pick an item from the bundled catalog and specify
 /// a count to add to the inventory.
 ///
-/// Returns [InventoryItemAdd] on confirmation, null on cancel.
+/// Returns [InventoryItemAdd] on confirmation, null on cancel. Items already in
+/// the inventory are excluded. The full catalog is browsable via a category
+/// sidebar; the search box filters across all categories.
 ///
 /// [catalogOverride] is an optional future that provides a fake catalog for
-/// widget tests; production callers leave it null to use [ItemCatalog.loadBundled].
+/// widget tests; production callers leave it null to use
+/// [ItemCatalog.loadBundled].
 class AddInventoryItemDialog extends StatefulWidget {
   const AddInventoryItemDialog({
     super.key,
@@ -29,9 +29,13 @@ class AddInventoryItemDialog extends StatefulWidget {
   State<AddInventoryItemDialog> createState() => _AddInventoryItemDialogState();
 }
 
+typedef _CatalogGroup = ({ItemCategory category, List<ItemCatalogEntry> entries});
+
 class _AddInventoryItemDialogState extends State<AddInventoryItemDialog> {
   String _query = '';
+  ItemCategory? _selectedCategory;
   ItemCatalogEntry? _selected;
+  final TextEditingController _searchController = TextEditingController();
   final TextEditingController _countController =
       TextEditingController(text: '1');
   String? _countError;
@@ -42,13 +46,13 @@ class _AddInventoryItemDialogState extends State<AddInventoryItemDialog> {
 
   @override
   void dispose() {
+    _searchController.dispose();
     _countController.dispose();
     super.dispose();
   }
 
   void _onCountChanged(String value) {
-    final trimmed = value.trim();
-    final parsed = int.tryParse(trimmed);
+    final parsed = int.tryParse(value.trim());
     setState(() {
       _countError = (parsed == null || parsed < 1) ? 'Must be ≥ 1' : null;
     });
@@ -68,13 +72,25 @@ class _AddInventoryItemDialogState extends State<AddInventoryItemDialog> {
     Navigator.of(context).pop(InventoryItemAdd(path: entry.path, count: parsed));
   }
 
+  List<_CatalogGroup> _group(List<ItemCatalogEntry> entries) {
+    final byCategory = <ItemCategory, List<ItemCatalogEntry>>{};
+    for (final entry in entries) {
+      byCategory.putIfAbsent(itemCategoryFromId(entry.id), () => []).add(entry);
+    }
+    return [
+      for (final cat in ItemCategory.values)
+        if (byCategory.containsKey(cat)) (category: cat, entries: byCategory[cat]!),
+    ];
+  }
+
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return AlertDialog(
       title: const Text('Add item'),
       contentPadding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
       content: SizedBox(
-        width: 480,
+        width: 720,
         height: 520,
         child: FutureBuilder<ItemCatalog>(
           future: _catalogFuture,
@@ -83,41 +99,48 @@ class _AddInventoryItemDialogState extends State<AddInventoryItemDialog> {
               return const Center(child: CircularProgressIndicator());
             }
             if (snapshot.hasError) {
-              return Center(child: Text('Failed to load catalog: ${snapshot.error}'));
+              return Center(
+                child: Text('Failed to load catalog: ${snapshot.error}'),
+              );
             }
             final catalog = snapshot.data!;
-            // Paths of items already in the inventory.
             final existingPaths = {
               for (final item in widget.existingItems) item.path,
             };
-            final query = _query.trim().toLowerCase();
-            final filtered = catalog.entries
+            final available = catalog.entries
                 .where((e) => !existingPaths.contains(e.path))
-                .where((e) {
-                  if (query.isEmpty) return true;
-                  return e.id.toLowerCase().contains(query) ||
-                      e.path.toLowerCase().contains(query);
-                })
-                .take(_kMaxDisplayedEntries)
                 .toList();
+            final groups = _group(available);
 
-            // Group by category.
-            final byCategory = <ItemCategory, List<ItemCatalogEntry>>{};
-            for (final entry in filtered) {
-              byCategory
-                  .putIfAbsent(itemCategoryFromId(entry.id), () => [])
-                  .add(entry);
+            // Resolve the selected category (fall back to first available).
+            var selectedCat = _selectedCategory;
+            if (groups.every((g) => g.category != selectedCat)) {
+              selectedCat = groups.isEmpty ? null : groups.first.category;
             }
-            final groups = [
-              for (final cat in ItemCategory.values)
-                if (byCategory.containsKey(cat))
-                  (category: cat, entries: byCategory[cat]!),
-            ];
+
+            // Right-pane entries: a non-empty query searches the whole catalog;
+            // an empty query shows the selected category.
+            final query = _query.trim().toLowerCase();
+            final searching = query.isNotEmpty;
+            final List<ItemCatalogEntry> shown;
+            if (searching) {
+              shown = available.where((e) {
+                return e.id.toLowerCase().contains(query) ||
+                    e.path.toLowerCase().contains(query);
+              }).toList();
+            } else {
+              shown = groups
+                      .where((g) => g.category == selectedCat)
+                      .firstOrNull
+                      ?.entries ??
+                  const [];
+            }
 
             return Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 TextField(
+                  controller: _searchController,
                   decoration: const InputDecoration(
                     labelText: 'Search items',
                     prefixIcon: Icon(Icons.search),
@@ -125,22 +148,20 @@ class _AddInventoryItemDialogState extends State<AddInventoryItemDialog> {
                   ),
                   onChanged: (v) => setState(() {
                     _query = v;
-                    // Deselect if no longer visible.
-                    if (_selected != null &&
-                        !filtered.contains(_selected)) {
+                    if (_selected != null && !shownContains(_selected!, v)) {
+                      // Deselect if the selection scrolls out of the result set.
                       _selected = null;
                     }
                   }),
                 ),
                 const SizedBox(height: 8),
                 if (_selected != null) ...[
-                  // Count field + selection summary.
                   Row(
                     children: [
                       Expanded(
                         child: Text(
                           itemDisplayNameFromId(_selected!.id),
-                          style: Theme.of(context).textTheme.bodyMedium,
+                          style: theme.textTheme.bodyMedium,
                           overflow: TextOverflow.ellipsis,
                         ),
                       ),
@@ -166,13 +187,52 @@ class _AddInventoryItemDialogState extends State<AddInventoryItemDialog> {
                   const SizedBox(height: 8),
                 ],
                 Expanded(
-                  child: filtered.isEmpty
-                      ? const Center(child: Text('No items match'))
-                      : ListView.builder(
-                          itemCount: _listItemCount(groups),
-                          itemBuilder: (context, index) {
-                            return _buildListItem(context, groups, index);
-                          },
+                  child: groups.isEmpty
+                      ? const Center(child: Text('No items available to add'))
+                      : Row(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            SizedBox(
+                              width: 200,
+                              child: DecoratedBox(
+                                decoration: BoxDecoration(
+                                  color: theme.colorScheme.surfaceContainerLow,
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: SingleChildScrollView(
+                                  padding:
+                                      const EdgeInsets.symmetric(vertical: 6),
+                                  child: Column(
+                                    children: [
+                                      for (final g in groups)
+                                        SidebarTile(
+                                          icon: iconForItemCategory(g.category),
+                                          label:
+                                              '${g.category.label} (${g.entries.length})',
+                                          selected:
+                                              !searching && g.category == selectedCat,
+                                          onTap: () => setState(() {
+                                            _selectedCategory = g.category;
+                                            _query = '';
+                                            _searchController.clear();
+                                          }),
+                                        ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 16),
+                            Expanded(
+                              child: shown.isEmpty
+                                  ? const Center(child: Text('No items match'))
+                                  : ListView.builder(
+                                      itemCount: shown.length,
+                                      itemBuilder: (context, index) =>
+                                          _entryTile(theme, shown[index]),
+                                    ),
+                            ),
+                          ],
                         ),
                 ),
               ],
@@ -193,63 +253,30 @@ class _AddInventoryItemDialogState extends State<AddInventoryItemDialog> {
     );
   }
 
-  int _listItemCount(
-    List<({ItemCategory category, List<ItemCatalogEntry> entries})> groups,
-  ) {
-    int count = 0;
-    for (final g in groups) {
-      count += 1 + g.entries.length; // header + entries
-    }
-    return count;
+  /// Whether [entry] would still be visible for the given raw query string.
+  bool shownContains(ItemCatalogEntry entry, String rawQuery) {
+    final q = rawQuery.trim().toLowerCase();
+    if (q.isEmpty) return itemCategoryFromId(entry.id) == _selectedCategory;
+    return entry.id.toLowerCase().contains(q) ||
+        entry.path.toLowerCase().contains(q);
   }
 
-  Widget _buildListItem(
-    BuildContext context,
-    List<({ItemCategory category, List<ItemCatalogEntry> entries})> groups,
-    int index,
-  ) {
-    // Flatten groups into header + entry rows.
-    int offset = 0;
-    for (final g in groups) {
-      if (index == offset) {
-        // Header row.
-        return ListTile(
-          dense: true,
-          title: Text(
-            '${g.category.label} (${g.entries.length})',
-            style: Theme.of(context).textTheme.labelLarge,
-          ),
-        );
-      }
-      offset += 1;
-      final localIndex = index - offset;
-      if (localIndex < g.entries.length) {
-        final entry = g.entries[localIndex];
-        final isSelected = _selected == entry;
-        final scheme = Theme.of(context).colorScheme;
-        return ListTile(
-          dense: true,
-          selected: isSelected,
-          selectedTileColor: scheme.primaryContainer,
-          leading: const Icon(Icons.category_outlined),
-          title: Text(
-            itemDisplayNameFromId(entry.id),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
-          subtitle: Text(
-            entry.id,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
-          onTap: () => setState(() {
-            _selected = isSelected ? null : entry;
-          }),
-        );
-      }
-      offset += g.entries.length;
-    }
-    // Should not happen.
-    return const SizedBox.shrink();
+  Widget _entryTile(ThemeData theme, ItemCatalogEntry entry) {
+    final isSelected = _selected == entry;
+    return ListTile(
+      dense: true,
+      selected: isSelected,
+      selectedTileColor: theme.colorScheme.primaryContainer,
+      leading: Icon(iconForItemCategory(itemCategoryFromId(entry.id))),
+      title: Text(
+        itemDisplayNameFromId(entry.id),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
+      subtitle: Text(entry.id, maxLines: 1, overflow: TextOverflow.ellipsis),
+      onTap: () => setState(() {
+        _selected = isSelected ? null : entry;
+      }),
+    );
   }
 }

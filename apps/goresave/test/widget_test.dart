@@ -195,15 +195,36 @@ void main() {
     await tester.tap(find.widgetWithText(Tab, 'Inventory'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Observed item stacks'), findsOneWidget);
-    expect(find.text('ItMi_Orenugget'), findsOneWidget);
+    // Stacks are grouped by category in a sidebar; Food is selected first
+    // (it precedes Miscellaneous in category order), so Cheese is visible and
+    // the misc Ore stack lives behind its own category tile.
+    expect(find.text('Food & potions (1)'), findsOneWidget);
+    expect(find.text('Miscellaneous (1)'), findsOneWidget);
     expect(find.text('ItFo_Cheese'), findsOneWidget);
-    expect(find.text('42'), findsAtLeastNWidgets(1));
 
     // No old per-item save buttons.
     expect(find.byTooltip('Save ItFo_Cheese count'), findsNothing);
     // No old batch save button text.
     expect(find.widgetWithText(FilledButton, 'Save 2 changes'), findsNothing);
+
+    // Edit the visible Cheese stack.
+    await tester.enterText(
+      find.descendant(
+        of: find.ancestor(
+          of: find.text('ItFo_Cheese'),
+          matching: find.byType(ListTile),
+        ),
+        matching: find.widgetWithText(TextField, 'Count'),
+      ),
+      '7',
+    );
+    await tester.pump();
+
+    // Switch to the Miscellaneous category to reach the Ore stack.
+    await tester.tap(find.text('Miscellaneous (1)'));
+    await tester.pumpAndSettle();
+    expect(find.text('ItMi_Orenugget'), findsOneWidget);
+    expect(find.text('42'), findsAtLeastNWidgets(1));
 
     final oreCountField = find.descendant(
       of: find.ancestor(
@@ -222,19 +243,8 @@ void main() {
       const TextSelection.collapsed(offset: 2),
     );
 
-    await tester.enterText(
-      find.descendant(
-        of: find.ancestor(
-          of: find.text('ItFo_Cheese'),
-          matching: find.byType(ListTile),
-        ),
-        matching: find.widgetWithText(TextField, 'Count'),
-      ),
-      '7',
-    );
-    await tester.pump();
-
-    // Both inventory edits are reflected in the global button count.
+    // Both inventory edits (one per category) survive the category switch and
+    // are reflected in the global button count.
     expect(find.widgetWithText(FilledButton, 'Save (2)'), findsOneWidget);
 
     await tester.tap(find.widgetWithText(FilledButton, 'Save (2)'));

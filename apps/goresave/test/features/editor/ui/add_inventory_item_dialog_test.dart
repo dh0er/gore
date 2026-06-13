@@ -83,7 +83,7 @@ Widget _wrap({
 // ---------------------------------------------------------------------------
 
 void main() {
-  testWidgets('renders grouped catalog entries; excluded entry not shown',
+  testWidgets('sidebar lists categories; selecting one shows its items',
       (tester) async {
     await tester.pumpWidget(
       _wrap(existingItems: [_ownedItem]),
@@ -91,18 +91,23 @@ void main() {
     // Wait for dialog to open and FutureBuilder to resolve.
     await tester.pumpAndSettle();
 
-    // Catalog entries present (by display-name text).
+    // Category tiles present in the sidebar (label + count from the catalog,
+    // already-owned misc item excluded so misc count is 2).
+    expect(find.text('Melee weapons (1)'), findsOneWidget);
+    expect(find.text('Food & potions (1)'), findsOneWidget);
+    expect(find.text('Miscellaneous (2)'), findsOneWidget);
+
+    // Default selection is the first category (Melee weapons) → only its
+    // item is shown in the detail pane.
+    expect(find.text('Sword 01'), findsOneWidget);
+    expect(find.text('Orenugget'), findsNothing);
+
+    // Selecting Miscellaneous reveals both misc items, excluding the owned one.
+    await tester.tap(find.text('Miscellaneous (2)'));
+    await tester.pumpAndSettle();
     expect(find.text('Orenugget'), findsOneWidget);
     expect(find.text('Sulfur'), findsOneWidget);
-    expect(find.text('Bread'), findsOneWidget);
-
-    // Already-owned item is excluded.
     expect(find.text('AlreadyOwned'), findsNothing);
-
-    // Category headers present (label from ItemCategory.label).
-    expect(find.text('Miscellaneous (2)'), findsOneWidget); // 2 misc after exclusion
-    expect(find.text('Food & potions (1)'), findsOneWidget);
-    expect(find.text('Melee weapons (1)'), findsOneWidget);
   });
 
   testWidgets('search filters entries by id substring', (tester) async {
@@ -169,8 +174,9 @@ void main() {
     await tester.pumpWidget(_wrap(existingItems: []));
     await tester.pumpAndSettle();
 
-    // Select an item — use Bread (Food category) which appears near the top.
-    await tester.ensureVisible(find.text('Bread'));
+    // Search to bring Bread into the flat result list, then select it.
+    await tester.enterText(find.byType(TextField).first, 'bread');
+    await tester.pump();
     await tester.tap(find.text('Bread'));
     await tester.pump();
 

@@ -11,6 +11,7 @@ import 'package:goresave/features/app/ui/window_chrome.dart';
 import 'package:goresave/features/editor/domain/editor_notifier.dart';
 import 'package:goresave/features/editor/domain/editor_models.dart';
 import 'package:goresave/features/editor/domain/item_categories.dart';
+import 'package:goresave/features/editor/ui/sidebar_tile.dart';
 import 'package:goresave/features/editor/domain/pending_edits.dart';
 import 'package:goresave/providers/data_providers.dart';
 import 'package:intl/intl.dart';
@@ -1560,7 +1561,7 @@ class _PrivateInventorySummaryCardState
     extends State<_PrivateInventorySummaryCard> {
   String _query = '';
   final Map<String, InventoryItemCountChange> _pendingCountChanges = {};
-  final Set<ItemCategory> _collapsed = {};
+  ItemCategory? _selectedCategory;
   InventoryItemAdd? _pendingAdd;
 
   @override
@@ -1608,24 +1609,26 @@ class _PrivateInventorySummaryCardState
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     final inventory = widget.inventory;
     final query = _query.trim().toLowerCase();
-    final items = inventory.items
-        .where((item) {
-          if (query.isEmpty) return true;
-          return item.id.toLowerCase().contains(query) ||
-              item.path.toLowerCase().contains(query);
-        })
-        .take(80)
-        .toList();
+    final items = inventory.items.where((item) {
+      if (query.isEmpty) return true;
+      return item.id.toLowerCase().contains(query) ||
+          item.path.toLowerCase().contains(query);
+    }).toList();
     final groups = groupInventoryItems(items);
-    final rows = <_InventoryRow>[
-      for (final group in groups) ...[
-        _InventoryHeaderRow(group),
-        if (!_collapsed.contains(group.category))
-          ...group.items.map(_InventoryItemRow.new),
-      ],
-    ];
+
+    // Keep the current category selected if it still has items, else fall
+    // back to the first available group.
+    var selected = _selectedCategory;
+    if (groups.every((g) => g.category != selected)) {
+      selected = groups.isEmpty ? null : groups.first.category;
+    }
+    final selectedGroup =
+        groups.where((g) => g.category == selected).firstOrNull;
+
+    final hasItems = inventory.items.isNotEmpty;
     final hasPendingAdd = _pendingAdd != null;
     final hasPendingChanges = _pendingCountChanges.isNotEmpty || hasPendingAdd;
 
@@ -1642,9 +1645,24 @@ class _PrivateInventorySummaryCardState
                 Expanded(
                   child: Text(
                     'Inventory',
-                    style: Theme.of(context).textTheme.titleMedium,
+                    style: theme.textTheme.titleMedium,
                   ),
                 ),
+                if (widget.editable && hasPendingChanges) ...[
+                  Tooltip(
+                    message: 'Reset inventory changes',
+                    child: IconButton(
+                      icon: const Icon(Icons.undo_outlined),
+                      onPressed: () {
+                        setState(() {
+                          _pendingCountChanges.clear();
+                          _pendingAdd = null;
+                        });
+                        widget.notifier.clearPendingEdit('inventory');
+                      },
+                    ),
+                  ),
+                ],
                 if (widget.canAddItem) ...[
                   const SizedBox(width: 8),
                   Tooltip(
@@ -1660,43 +1678,18 @@ class _PrivateInventorySummaryCardState
                 ],
               ],
             ),
-            if (items.isNotEmpty) ...[
-              const SizedBox(height: 16),
-              Text(
-                'Observed item stacks',
-                style: Theme.of(context).textTheme.labelLarge,
+            if (hasPendingAdd) ...[
+              const SizedBox(height: 12),
+              _PendingAddRow(
+                add: _pendingAdd!,
+                onRemove: () {
+                  setState(() => _pendingAdd = null);
+                  _pushInventoryPending();
+                },
               ),
-              const SizedBox(height: 8),
-              if (widget.editable && hasPendingChanges) ...[
-                Row(
-                  children: [
-                    Tooltip(
-                      message: 'Reset inventory changes',
-                      child: IconButton(
-                        icon: const Icon(Icons.undo_outlined),
-                        onPressed: () {
-                          setState(() {
-                            _pendingCountChanges.clear();
-                            _pendingAdd = null;
-                          });
-                          widget.notifier.clearPendingEdit('inventory');
-                        },
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-              ],
-              if (hasPendingAdd) ...[
-                _PendingAddRow(
-                  add: _pendingAdd!,
-                  onRemove: () {
-                    setState(() => _pendingAdd = null);
-                    _pushInventoryPending();
-                  },
-                ),
-                const SizedBox(height: 8),
-              ],
+            ],
+            if (hasItems) ...[
+              const SizedBox(height: 12),
               TextField(
                 decoration: const InputDecoration(
                   labelText: 'Filter items',
@@ -1704,59 +1697,98 @@ class _PrivateInventorySummaryCardState
                 ),
                 onChanged: (value) => setState(() => _query = value),
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 12),
               Expanded(
-                child: ListView.builder(
-                  itemCount: rows.length,
-                  itemBuilder: (context, index) {
-                    final row = rows[index];
-                    if (row is _InventoryHeaderRow) {
-                      final group = row.group;
-                      return ListTile(
-                        dense: true,
-                        onTap: () => setState(() {
-                          if (!_collapsed.remove(group.category)) {
-                            _collapsed.add(group.category);
-                          }
-                        }),
-                        leading: Icon(
-                          _collapsed.contains(group.category)
-                              ? Icons.chevron_right
-                              : Icons.expand_more,
+                child: groups.isEmpty
+                    ? Center(
+                        child: Text(
+                          'No items match "$_query".',
+                          style: theme.textTheme.bodyMedium,
                         ),
-                        title: Text(
-                          '${group.category.label} (${group.items.length})',
-                          style: Theme.of(context).textTheme.labelLarge,
-                        ),
-                      );
-                    }
-                    final item = (row as _InventoryItemRow).item;
-                    return ListTile(
-                      dense: true,
-                      leading: const Icon(Icons.category_outlined),
-                      title: SelectableText(
-                        item.id.isEmpty ? item.path : item.id,
-                        maxLines: 1,
-                      ),
-                      subtitle: item.path.isEmpty
-                          ? null
-                          : SelectableText(item.path, maxLines: 1),
-                      trailing: widget.editable
-                          ? _InventoryItemCountEditor(
-                              item: item,
-                              pendingCount:
-                                  _pendingCountChanges[_inventoryItemKey(item)]
-                                      ?.count,
-                              onPendingCountChanged: (change) =>
-                                  _setPendingCountChange(item, change),
-                            )
-                          : Text(
-                              '×${item.count ?? '?'}',
-                              style: Theme.of(context).textTheme.bodyMedium,
+                      )
+                    : Row(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          SizedBox(
+                            width: 200,
+                            child: DecoratedBox(
+                              decoration: BoxDecoration(
+                                color: theme.colorScheme.surfaceContainerLow,
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: SingleChildScrollView(
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 6),
+                                child: Column(
+                                  children: [
+                                    for (final group in groups)
+                                      SidebarTile(
+                                        icon: iconForItemCategory(
+                                          group.category,
+                                        ),
+                                        label:
+                                            '${group.category.label} (${group.items.length})',
+                                        selected: group.category == selected,
+                                        onTap: () => setState(
+                                          () => _selectedCategory =
+                                              group.category,
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                              ),
                             ),
-                    );
-                  },
-                ),
+                          ),
+                          const SizedBox(width: 16),
+                          Expanded(
+                            child: selectedGroup == null
+                                ? const SizedBox.shrink()
+                                : ListView.builder(
+                                    itemCount: selectedGroup.items.length,
+                                    itemBuilder: (context, index) {
+                                      final item = selectedGroup.items[index];
+                                      return ListTile(
+                                        dense: true,
+                                        leading: const Icon(
+                                          Icons.category_outlined,
+                                        ),
+                                        title: SelectableText(
+                                          item.id.isEmpty ? item.path : item.id,
+                                          maxLines: 1,
+                                        ),
+                                        subtitle: item.path.isEmpty
+                                            ? null
+                                            : SelectableText(
+                                                item.path,
+                                                maxLines: 1,
+                                              ),
+                                        trailing: widget.editable
+                                            ? _InventoryItemCountEditor(
+                                                item: item,
+                                                pendingCount:
+                                                    _pendingCountChanges[
+                                                            _inventoryItemKey(
+                                                              item,
+                                                            )]
+                                                        ?.count,
+                                                onPendingCountChanged:
+                                                    (change) =>
+                                                        _setPendingCountChange(
+                                                          item,
+                                                          change,
+                                                        ),
+                                              )
+                                            : Text(
+                                                '×${item.count ?? '?'}',
+                                                style:
+                                                    theme.textTheme.bodyMedium,
+                                              ),
+                                      );
+                                    },
+                                  ),
+                          ),
+                        ],
+                      ),
               ),
             ],
           ],
@@ -1824,18 +1856,6 @@ class _PendingAddRow extends StatelessWidget {
       ),
     );
   }
-}
-
-abstract class _InventoryRow {}
-
-class _InventoryHeaderRow implements _InventoryRow {
-  _InventoryHeaderRow(this.group);
-  final InventoryItemGroup group;
-}
-
-class _InventoryItemRow implements _InventoryRow {
-  _InventoryItemRow(this.item);
-  final PrivateInventoryItem item;
 }
 
 class _InventoryItemCountEditor extends StatefulWidget {
