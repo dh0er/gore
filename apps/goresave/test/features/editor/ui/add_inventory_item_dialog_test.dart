@@ -110,6 +110,36 @@ void main() {
     expect(find.text('AlreadyOwned'), findsNothing);
   });
 
+  testWidgets('clearing search keeps the selection and reveals its category',
+      (tester) async {
+    await tester.pumpWidget(_wrap(existingItems: []));
+    await tester.pumpAndSettle();
+
+    // Search for and select Sulfur (misc), which is not the default category.
+    await tester.enterText(find.byType(TextField).first, 'sulfur');
+    await tester.pump();
+    await tester.tap(find.text('Sulfur'));
+    await tester.pump();
+    // Selection summary visible (search + count fields).
+    expect(find.byType(TextField), findsNWidgets(2));
+
+    // Clear the search: selection must survive, and its category becomes
+    // active so the item stays on screen.
+    await tester.enterText(find.byType(TextField).first, '');
+    await tester.pump();
+
+    expect(find.byType(TextField), findsNWidgets(2));
+    // 'Sulfur' shows twice now: the selection summary and the revealed
+    // misc-category list tile.
+    expect(find.text('Sulfur'), findsNWidgets(2));
+    final addButton = find.widgetWithText(FilledButton, 'Add');
+    expect(
+      tester.widget<FilledButton>(addButton).onPressed,
+      isNotNull,
+      reason: 'Selection (and thus Add) must survive clearing the search',
+    );
+  });
+
   testWidgets('search filters entries by id substring', (tester) async {
     await tester.pumpWidget(_wrap(existingItems: []));
     await tester.pumpAndSettle();

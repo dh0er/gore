@@ -148,8 +148,18 @@ class _AddInventoryItemDialogState extends State<AddInventoryItemDialog> {
                   ),
                   onChanged: (v) => setState(() {
                     _query = v;
-                    if (_selected != null && !shownContains(_selected!, v)) {
-                      // Deselect if the selection scrolls out of the result set.
+                    final q = v.trim().toLowerCase();
+                    if (q.isEmpty) {
+                      // Reverting to category browsing: reveal the selected
+                      // item's category so the selection stays visible instead
+                      // of being silently dropped.
+                      if (_selected != null) {
+                        _selectedCategory = itemCategoryFromId(_selected!.id);
+                      }
+                    } else if (_selected != null &&
+                        !(_selected!.id.toLowerCase().contains(q) ||
+                            _selected!.path.toLowerCase().contains(q))) {
+                      // A search that no longer matches the selection drops it.
                       _selected = null;
                     }
                   }),
@@ -253,13 +263,6 @@ class _AddInventoryItemDialogState extends State<AddInventoryItemDialog> {
     );
   }
 
-  /// Whether [entry] would still be visible for the given raw query string.
-  bool shownContains(ItemCatalogEntry entry, String rawQuery) {
-    final q = rawQuery.trim().toLowerCase();
-    if (q.isEmpty) return itemCategoryFromId(entry.id) == _selectedCategory;
-    return entry.id.toLowerCase().contains(q) ||
-        entry.path.toLowerCase().contains(q);
-  }
 
   Widget _entryTile(ThemeData theme, ItemCatalogEntry entry) {
     final isSelected = _selected == entry;
