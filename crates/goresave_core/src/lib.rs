@@ -4589,9 +4589,14 @@ fn parse_private_inventory_add_item_edit(
                 "private.inventory.addItem requires a non-empty string value.path".to_string(),
             )
         })?;
-    if !looks_item_definition_path(path) {
+    // addItem WRITES this string into m_ItemDefinition (an ObjectProperty), so
+    // a bare inventory id (which looks_item_definition_path accepts for
+    // matching existing items) would produce an unresolvable object reference.
+    // Require a fully-qualified script asset path, as the bundled catalog uses.
+    if !path.starts_with("/Script/") || !path.contains('.') {
         return Err(CoreError::InvalidRequest(format!(
-            "private.inventory.addItem value.path does not look like an item definition path: {path:?}"
+            "private.inventory.addItem value.path must be a full asset path \
+             (e.g. /Script/Angelscript.ItMi_Orenugget), got {path:?}"
         )));
     }
     let count = value.get("count").and_then(Value::as_i64).ok_or_else(|| {
@@ -5106,17 +5111,33 @@ fn apply_private_inventory_remove_item_to_payload(
     };
 
     // 2. Find the slot whose m_SlotData.m_ItemDefinition matches the path.
-    //    Items are unique in the MainContainer, but if several somehow match we
-    //    remove the FIRST — a subsequent write can clean up any remainder.
-    let index = slots
+    //    Items are unique in the MainContainer (addItem rejects duplicates and
+    //    the game stacks identical items), but if several somehow match we
+    //    refuse rather than silently delete an arbitrary one — the caller only
+    //    addresses by path, so an ambiguous match cannot be disambiguated.
+    let matches: Vec<usize> = slots
         .iter()
-        .position(|slot| slot_item_definition(slot) == Some(edit.path.as_str()))
-        .ok_or_else(|| {
-            CoreError::InvalidRequest(format!(
+        .enumerate()
+        .filter(|(_, slot)| slot_item_definition(slot) == Some(edit.path.as_str()))
+        .map(|(idx, _)| idx)
+        .collect();
+    let index = match matches.as_slice() {
+        [] => {
+            return Err(CoreError::InvalidRequest(format!(
                 "the player inventory does not contain {}",
                 edit.path
-            ))
-        })?;
+            )));
+        }
+        [only] => *only,
+        _ => {
+            return Err(CoreError::InvalidRequest(format!(
+                "the MainContainer has multiple slots for {} ({} matches); \
+                 cannot disambiguate by path alone",
+                edit.path,
+                matches.len()
+            )));
+        }
+    };
 
     // 3. Remove the slot on a scratch copy (size chains fixed up by
     //    patch_container; a failed patch leaves the original untouched).
@@ -10070,6 +10091,46 @@ mod tests {
     }
 
     #[test]
+    fn parse_private_inventory_add_item_rejects_bare_id_path() {
+        // A bare inventory id (no /Script/ prefix) is accepted by the matcher
+        // heuristic but must be rejected for addItem, which writes the string
+        // into m_ItemDefinition and would otherwise yield an unresolvable ref.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-001.sav");
+        let private_payload = inventory_payload_for_add_item_tests();
+        let seed_compressed = b"seed-bareid".to_vec();
+        let stream = compressed_stream_with_one_chunk(&seed_compressed, private_payload.len());
+        fs::write(
+            &path,
+            build_gsav(2, &public_payload("Slot A"), &stream, &[0, 0, 0, 0]),
+        )
+        .unwrap();
+        let backend = PrefixCodecBackend {
+            seed_compressed,
+            seed_uncompressed: private_payload,
+        };
+
+        let err = write_save_with_codec_backend(
+            &path,
+            &[json!({
+                "path": "private.inventory.addItem",
+                "value": {
+                    "path": "ItMi_Orenugget",
+                    "count": 5
+                }
+            })],
+            false,
+            None,
+            Some(&backend),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, CoreError::InvalidRequest(_)),
+            "expected InvalidRequest for bare-id item path, got: {err}"
+        );
+    }
+
+    #[test]
     fn parse_private_inventory_add_item_rejects_two_in_batch() {
         // Two addItem edits in one batch must be rejected as structural edits
         // (array-length changes) for the same reason as two arrayDuplicate ops.
@@ -10392,6 +10453,41 @@ mod tests {
             "unexpected error: {err}"
         );
         assert_eq!(payload, before, "failed edit must not mutate the payload");
+    }
+
+    #[test]
+    fn remove_item_rejects_ambiguous_duplicate_paths() {
+        // Two MainContainer slots with the same item path cannot be told apart
+        // by path alone, so removeItem must refuse rather than delete one at
+        // random. (This shouldn't arise normally — addItem rejects duplicates.)
+        let dup_main = vec![
+            inv_item_slot(
+                0,
+                INV_MAIN_LABEL,
+                "/Script/Angelscript.ItMi_Orenugget",
+                3,
+                &inv_empty_payload_map(),
+            ),
+            inv_item_slot(
+                1,
+                INV_MAIN_LABEL,
+                "/Script/Angelscript.ItMi_Orenugget",
+                5,
+                &inv_empty_payload_map(),
+            ),
+        ];
+        let mut payload = typed_inventory_private_payload(&[], &dup_main);
+        let before = payload.clone();
+        let edit = PrivateInventoryRemoveItemEdit {
+            path: "/Script/Angelscript.ItMi_Orenugget".to_string(),
+        };
+        let err =
+            apply_private_inventory_remove_item_to_payload(&mut payload, &edit).unwrap_err();
+        assert!(
+            err.to_string().contains("multiple slots"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(payload, before, "ambiguous removal must not mutate payload");
     }
 
     #[test]
