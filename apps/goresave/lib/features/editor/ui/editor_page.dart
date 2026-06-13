@@ -1611,15 +1611,21 @@ class _PrivateInventorySummaryCardState
       ),
     );
     if (result != null) {
-      setState(() => _pendingAdd = result);
+      setState(() {
+        _pendingAdd = result;
+        // Keep the one-structural-edit-per-save invariant unconditionally.
+        _pendingRemovePath = null;
+      });
       _pushInventoryPending();
     }
   }
 
   void _queueRemove(PrivateInventoryItem item) {
     setState(() {
-      // A removal supersedes any pending count change on the same item.
+      // A removal supersedes any pending count change on the same item, and is
+      // mutually exclusive with a pending add (one structural edit per save).
       _pendingCountChanges.remove(_inventoryItemKey(item));
+      _pendingAdd = null;
       _pendingRemovePath = item.path;
     });
     _pushInventoryPending();
