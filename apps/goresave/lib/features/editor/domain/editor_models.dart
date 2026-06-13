@@ -590,6 +590,7 @@ class PrivateInventoryItem {
     required this.id,
     required this.path,
     this.count,
+    this.removable = false,
   });
 
   factory PrivateInventoryItem.fromJson(Map<Object?, Object?> json) {
@@ -597,12 +598,16 @@ class PrivateInventoryItem {
       id: json['id'] as String? ?? '',
       path: json['path'] as String? ?? '',
       count: (json['count'] as num?)?.toInt(),
+      removable: json['removable'] as bool? ?? false,
     );
   }
 
   final String id;
   final String path;
   final int? count;
+  // True only for rows in the player's MainContainer, which the core's
+  // removeItem op can delete. Rows from other containers are not removable.
+  final bool removable;
 }
 
 class InventoryItemCountChange {

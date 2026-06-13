@@ -1902,7 +1902,7 @@ class _PrivateInventorySummaryCardState
           onPendingCountChanged: (change) =>
               _setPendingCountChange(item, change),
         ),
-        if (canRemove && item.path.isNotEmpty) ...[
+        if (canRemove && item.path.isNotEmpty && item.removable) ...[
           const SizedBox(width: 4),
           Tooltip(
             message: removeBlocked

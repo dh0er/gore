@@ -2253,12 +2253,18 @@ fn inspect_private_payload(
                 .take(200)
                 .collect::<Vec<_>>();
             let player = summarize_private_player_payload(&payload, &refs);
-            let inventory = summarize_private_inventory_payload(&payload, &refs);
             let typed_result = if preview {
                 None
             } else {
                 Some(properties::parse_private_root(&payload))
             };
+            let main_item_paths = typed_result
+                .as_ref()
+                .and_then(|r| r.as_ref().ok())
+                .map(main_container_item_paths)
+                .unwrap_or_default();
+            let inventory =
+                summarize_private_inventory_payload(&payload, &refs, &main_item_paths);
             let typed_parse = summarize_typed_parse_result(&payload, typed_result.as_ref());
             let typed_ok = typed_parse["status"] == "ok";
             let progression = summarize_private_progression_overview(
@@ -2395,7 +2401,11 @@ fn private_player_writable_edits(payload: &[u8], refs: &[FStringRef]) -> Vec<&'s
     writable
 }
 
-fn summarize_private_inventory_payload(payload: &[u8], refs: &[FStringRef]) -> Value {
+fn summarize_private_inventory_payload(
+    payload: &[u8],
+    refs: &[FStringRef],
+    main_item_paths: &std::collections::HashSet<String>,
+) -> Value {
     let script_paths = unique_strings(
         refs.iter().map(|r| r.value.as_str()).filter(|value| {
             value.starts_with("/Script/") && contains_any_ci(value, &["inventory", "item"])
@@ -2415,17 +2425,25 @@ fn summarize_private_inventory_payload(payload: &[u8], refs: &[FStringRef]) -> V
             .filter(|value| looks_inventory_candidate(value)),
         200,
     );
-    let (items, item_stack_count, item_scope) =
+    let (mut items, item_stack_count, item_scope) =
         summarize_private_inventory_items(payload, refs, 200);
-    let writable = if item_scope == "player_inventory_region" && item_stack_count > 0 {
-        vec![
-            "private.inventory.setItemCount",
-            "private.inventory.addItem",
-            "private.inventory.removeItem",
-        ]
-    } else {
-        Vec::new()
-    };
+    // Mark which rows live in the MainContainer: addItem/removeItem only touch
+    // that container, so rows from other containers (e.g. Quickslots) must not
+    // offer a delete button that the core would reject.
+    for item in &mut items {
+        let path = item["path"].as_str().unwrap_or("");
+        item["removable"] = json!(!path.is_empty() && main_item_paths.contains(path));
+    }
+    // setItemCount patches in place anywhere in the region; addItem/removeItem
+    // are structural MainContainer edits and need a resolvable MainContainer.
+    let mut writable = Vec::new();
+    if item_scope == "player_inventory_region" && item_stack_count > 0 {
+        writable.push("private.inventory.setItemCount");
+        if !main_item_paths.is_empty() {
+            writable.push("private.inventory.addItem");
+            writable.push("private.inventory.removeItem");
+        }
+    }
     json!({
         "candidateCount": candidates.len(),
         "candidates": candidates,
@@ -4838,6 +4856,65 @@ fn slot_id(slot: &properties::PropertyValue) -> Option<i32> {
     }
 }
 
+/// The `m_SlotData.m_ItemCount` of an ItemVirtualData slot.
+fn slot_item_count(slot: &properties::PropertyValue) -> Option<i32> {
+    let slot_data = struct_element_property(slot, "m_SlotData")?;
+    let props = match &slot_data.value {
+        properties::PropertyValue::Struct(properties::StructValue::Properties(props)) => props,
+        _ => return None,
+    };
+    props
+        .iter()
+        .find(|p| p.name == "m_ItemCount")
+        .and_then(|p| match &p.value {
+            properties::PropertyValue::Int(v) => Some(*v),
+            _ => None,
+        })
+}
+
+/// Asset paths of the items in the player's MainContainer. addItem and
+/// removeItem only operate on this container, so the inventory summary marks
+/// which rows are actually add/removable. Returns an empty set when the typed
+/// tree has no resolvable MainContainer (so structural ops are not offered).
+fn main_container_item_paths(root: &properties::RootObject) -> std::collections::HashSet<String> {
+    let mut out = std::collections::HashSet::new();
+    let Some((inventory_path, _)) = properties::find_property_by_name(root, "m_Inventory") else {
+        return out;
+    };
+    let resolve_child = |suffix: &[&str]| -> Option<properties::PropertyValue> {
+        let mut segs = inventory_path.clone();
+        segs.extend(suffix.iter().map(|s| s.to_string()));
+        let parsed = properties::parse_path(&segs).ok()?;
+        properties::resolve(&root.properties, &parsed)
+            .ok()
+            .map(|prop| prop.value.clone())
+    };
+    let Some(properties::PropertyValue::Array { elements: keys }) = resolve_child(&["m_Keys"])
+    else {
+        return out;
+    };
+    let Some(main_index) = keys.iter().position(|element| {
+        matches!(element, properties::PropertyValue::Enum(label)
+            if label == MAIN_CONTAINER_ENUM_LABEL)
+    }) else {
+        return out;
+    };
+    let main_segment = format!("[{main_index}]");
+    let Some(properties::PropertyValue::Array { elements: slots }) =
+        resolve_child(&["m_Values", "Items", &main_segment, "m_Slots"])
+    else {
+        return out;
+    };
+    for slot in &slots {
+        if let Some(path) = slot_item_definition(slot) {
+            if !path.is_empty() {
+                out.insert(path.to_string());
+            }
+        }
+    }
+    out
+}
+
 /// True when any container value (map/array/set/instanced objects) reachable
 /// under `value` holds at least one element — i.e. a template's m_Payload
 /// carries item-specific state that must not be cloned onto a new item.
@@ -5030,22 +5107,33 @@ fn apply_private_inventory_add_item_to_payload(
         )?;
     }
 
-    // 5. Final proof: strict re-parse AND the new item must surface in the
-    //    inventory summary scan with the requested count.
-    properties::parse_private_root(&patched).map_err(|err| {
+    // 5. Final proof: strict re-parse AND the new slot must exist in the
+    //    MainContainer itself with the requested path and count. A global
+    //    region scan would be satisfied by the same item already living in a
+    //    different container (e.g. Quickslots), so a no-op add could be wrongly
+    //    committed — verify against the edited MainContainer m_Slots only.
+    let reparsed = properties::parse_private_root(&patched).map_err(|err| {
         CoreError::Parse(format!(
             "inventory addItem produced an inconsistent payload: {err}"
         ))
     })?;
-    let refs = scan_fstrings(&patched, 0);
-    let (items, _total, scope) = summarize_private_inventory_items(&patched, &refs, usize::MAX);
-    let appeared = scope == "player_inventory_region"
-        && items
-            .iter()
-            .any(|item| item["path"] == edit.path.as_str() && item["count"] == edit.count);
+    let patched_slots_segs = child_segments(&slots_suffix)?;
+    let patched_slots = properties::resolve(&reparsed.properties, &patched_slots_segs)?;
+    let properties::PropertyValue::Array {
+        elements: patched_slot_elems,
+    } = &patched_slots.value
+    else {
+        return Err(CoreError::Parse(
+            "MainContainer m_Slots is not a plain slot array after add".to_string(),
+        ));
+    };
+    let appeared = patched_slot_elems.iter().any(|slot| {
+        slot_item_definition(slot) == Some(edit.path.as_str())
+            && slot_item_count(slot) == Some(edit.count)
+    });
     if !appeared {
         return Err(CoreError::Validation(format!(
-            "added item {} (count {}) did not appear in the inventory summary scan; \
+            "added item {} (count {}) did not appear in the MainContainer after the edit; \
              aborting the write",
             edit.path, edit.count
         )));
@@ -7762,11 +7850,13 @@ mod tests {
                     "id": "ItMi_Orenugget",
                     "path": "/Script/Angelscript.ItMi_Orenugget",
                     "count": 99,
+                    "removable": false,
                 },
                 {
                     "id": "ItFo_Cheese",
                     "path": "/Script/Angelscript.ItFo_Cheese",
                     "count": 1,
+                    "removable": false,
                 }
             ])
         );
@@ -8466,6 +8556,7 @@ mod tests {
                 "id": "ItMi_Orenugget",
                 "path": "/Script/Angelscript.ItMi_Orenugget",
                 "count": 42,
+                "removable": false,
             })
         );
     }
@@ -8548,13 +8639,13 @@ mod tests {
             "player_inventory_region"
         );
         assert_eq!(value["private"]["inventory"]["itemStackCount"], 1);
+        // This synthetic payload is detected by the FString region scan but is
+        // not a complete typed property tree, so the MainContainer cannot be
+        // resolved: only the in-place setItemCount edit is offered, and no row
+        // is marked removable (addItem/removeItem need a typed MainContainer).
         assert_eq!(
             value["private"]["inventory"]["writable"],
-            json!([
-                "private.inventory.setItemCount",
-                "private.inventory.addItem",
-                "private.inventory.removeItem"
-            ])
+            json!(["private.inventory.setItemCount"])
         );
         assert_eq!(
             value["private"]["inventory"]["items"],
@@ -8562,6 +8653,7 @@ mod tests {
                 "id": "ItMi_Orenugget",
                 "path": "/Script/Angelscript.ItMi_Orenugget",
                 "count": 23,
+                "removable": false,
             }])
         );
     }
@@ -9929,6 +10021,64 @@ mod tests {
         assert_eq!(
             inv_resolve(&root, &def_path).value,
             properties::PropertyValue::Object("/Script/Angelscript.ItMi_Sulfur".to_string())
+        );
+    }
+
+    #[test]
+    fn inspect_marks_only_main_container_items_removable() {
+        // An item living only in another container (e.g. Quickslots) shows in
+        // the region scan but is not in the MainContainer, so it must be marked
+        // removable: false (its delete button is hidden), while MainContainer
+        // rows are removable: true.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-001.sav");
+        let other_slots = vec![inv_item_slot(
+            0,
+            INV_OTHER_LABEL,
+            "/Script/Angelscript.ItMi_Sulfur",
+            1,
+            &inv_empty_payload_map(),
+        )];
+        let private_payload =
+            typed_inventory_private_payload(&other_slots, &default_main_slots());
+        let seed_compressed = b"seed-removable".to_vec();
+        let stream = compressed_stream_with_one_chunk(&seed_compressed, private_payload.len());
+        fs::write(
+            &path,
+            build_gsav(2, &public_payload("Slot A"), &stream, &[0, 0, 0, 0]),
+        )
+        .unwrap();
+        let backend = PrefixCodecBackend {
+            seed_compressed,
+            seed_uncompressed: private_payload,
+        };
+
+        let value = inspect_save_with_codec_backend(&path, true, Some(&backend), None).unwrap();
+        let inv = &value["private"]["inventory"];
+        assert_eq!(
+            inv["writable"],
+            json!([
+                "private.inventory.setItemCount",
+                "private.inventory.addItem",
+                "private.inventory.removeItem"
+            ])
+        );
+        let items = inv["items"].as_array().expect("items array");
+        let removable_for = |path: &str| -> Option<bool> {
+            items
+                .iter()
+                .find(|it| it["path"] == path)
+                .map(|it| it["removable"].as_bool().unwrap_or(false))
+        };
+        assert_eq!(
+            removable_for("/Script/Angelscript.ItMi_Orenugget"),
+            Some(true)
+        );
+        assert_eq!(removable_for("/Script/Angelscript.ItFo_Apple"), Some(true));
+        assert_eq!(
+            removable_for("/Script/Angelscript.ItMi_Sulfur"),
+            Some(false),
+            "an item only in the other container must not be removable"
         );
     }
 

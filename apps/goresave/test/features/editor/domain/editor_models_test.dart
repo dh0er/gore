@@ -275,6 +275,12 @@ void main() {
               'id': 'ItMi_Orenugget',
               'path': '/Script/Angelscript.ItMi_Orenugget',
               'count': 42,
+              'removable': true,
+            },
+            {
+              'id': 'ItMi_Sulfur',
+              'path': '/Script/Angelscript.ItMi_Sulfur',
+              'count': 1,
             },
           ],
           'scriptPaths': ['/Script/G1R.InventorySaveGameData'],
@@ -291,12 +297,15 @@ void main() {
     ]);
     expect(inspection.privateInventory.itemStackCount, 1);
     expect(inspection.privateInventory.itemScope, 'player_inventory_region');
-    expect(inspection.privateInventory.items.single.id, 'ItMi_Orenugget');
+    expect(inspection.privateInventory.items.first.id, 'ItMi_Orenugget');
     expect(
-      inspection.privateInventory.items.single.path,
+      inspection.privateInventory.items.first.path,
       '/Script/Angelscript.ItMi_Orenugget',
     );
-    expect(inspection.privateInventory.items.single.count, 42);
+    expect(inspection.privateInventory.items.first.count, 42);
+    // removable reflects MainContainer membership; absent → defaults false.
+    expect(inspection.privateInventory.items.first.removable, isTrue);
+    expect(inspection.privateInventory.items.last.removable, isFalse);
     expect(inspection.privateInventory.scriptPaths, [
       '/Script/G1R.InventorySaveGameData',
     ]);
