@@ -2258,14 +2258,14 @@ fn inspect_private_payload(
             } else {
                 Some(properties::parse_private_root(&payload))
             };
-            let main_container_paths = typed_result
+            let main_container = typed_result
                 .as_ref()
                 .and_then(|r| r.as_ref().ok())
-                .and_then(main_container_item_paths);
+                .and_then(main_container_summary);
             let inventory = summarize_private_inventory_payload(
                 &payload,
                 &refs,
-                main_container_paths.as_ref(),
+                main_container.as_ref(),
             );
             let typed_parse = summarize_typed_parse_result(&payload, typed_result.as_ref());
             let typed_ok = typed_parse["status"] == "ok";
@@ -2406,7 +2406,7 @@ fn private_player_writable_edits(payload: &[u8], refs: &[FStringRef]) -> Vec<&'s
 fn summarize_private_inventory_payload(
     payload: &[u8],
     refs: &[FStringRef],
-    main_container_paths: Option<&std::collections::HashSet<String>>,
+    main_container: Option<&MainContainerSummary>,
 ) -> Value {
     let script_paths = unique_strings(
         refs.iter().map(|r| r.value.as_str()).filter(|value| {
@@ -2429,26 +2429,27 @@ fn summarize_private_inventory_payload(
     );
     let (mut items, item_stack_count, item_scope) =
         summarize_private_inventory_items(payload, refs, 200);
-    // Mark which rows live in the MainContainer: addItem/removeItem only touch
-    // that container, so rows from other containers (e.g. Quickslots) must not
-    // offer a delete button that the core would reject.
+    // Mark which rows can be deleted. removeItem addresses by path, so only a
+    // path that occurs exactly once across the whole inventory is safe — a row
+    // sharing its path with another container's stack must not offer delete, or
+    // it could drop the wrong stack.
     for item in &mut items {
         let path = item["path"].as_str().unwrap_or("");
         item["removable"] = json!(
             !path.is_empty()
-                && main_container_paths.is_some_and(|paths| paths.contains(path))
+                && main_container.is_some_and(|mc| mc.removable_paths.contains(path))
         );
     }
     // setItemCount patches in place anywhere in the region. addItem/removeItem
     // are structural MainContainer edits: addItem needs only a resolvable
     // MainContainer (it can seed an empty one from another container), while
-    // removeItem needs at least one MainContainer item to delete.
+    // removeItem needs at least one safely-removable MainContainer item.
     let mut writable = Vec::new();
     if item_scope == "player_inventory_region" && item_stack_count > 0 {
         writable.push("private.inventory.setItemCount");
-        if let Some(paths) = main_container_paths {
+        if let Some(mc) = main_container {
             writable.push("private.inventory.addItem");
-            if !paths.is_empty() {
+            if !mc.removable_paths.is_empty() {
                 writable.push("private.inventory.removeItem");
             }
         }
@@ -2456,8 +2457,9 @@ fn summarize_private_inventory_payload(
     // The complete set of MainContainer item paths (from the typed tree, not
     // the capped summary scan) so the add dialog can exclude already-owned
     // items even when the displayed list is truncated.
-    let mut main_paths: Vec<&String> =
-        main_container_paths.map(|p| p.iter().collect()).unwrap_or_default();
+    let mut main_paths: Vec<&String> = main_container
+        .map(|mc| mc.all_paths.iter().collect())
+        .unwrap_or_default();
     main_paths.sort();
     json!({
         "candidateCount": candidates.len(),
@@ -4888,15 +4890,24 @@ fn slot_item_count(slot: &properties::PropertyValue) -> Option<i32> {
         })
 }
 
-/// Asset paths of the items in the player's MainContainer. addItem and
-/// removeItem only operate on this container, so the inventory summary marks
-/// which rows are actually add/removable. Returns `None` when the typed tree
-/// has no resolvable MainContainer (structural ops are then not offered);
-/// `Some(set)` when it resolves — the set is empty for an empty MainContainer,
-/// which addItem can still seed from another container.
-fn main_container_item_paths(
-    root: &properties::RootObject,
-) -> Option<std::collections::HashSet<String>> {
+/// MainContainer membership derived from the typed inventory tree.
+struct MainContainerSummary {
+    /// Every item path held in the MainContainer (used to exclude already-owned
+    /// items from the add picker — addItem rejects any MainContainer duplicate).
+    all_paths: std::collections::HashSet<String>,
+    /// MainContainer paths that occur exactly once across the WHOLE inventory.
+    /// Only these are safe to remove by path: removeItem addresses by path, so a
+    /// path that also appears in another container (or twice in MainContainer)
+    /// could delete the wrong stack. Such paths are not marked removable.
+    removable_paths: std::collections::HashSet<String>,
+}
+
+/// Summarize the player's MainContainer. addItem and removeItem only operate on
+/// this container. Returns `None` when the typed tree has no resolvable
+/// MainContainer (structural ops are then not offered); `Some` when it resolves
+/// — `all_paths` is empty for an empty MainContainer, which addItem can still
+/// seed from another container.
+fn main_container_summary(root: &properties::RootObject) -> Option<MainContainerSummary> {
     let (inventory_path, _) = properties::find_property_by_name(root, "m_Inventory")?;
     let resolve_child = |suffix: &[&str]| -> Option<properties::PropertyValue> {
         let mut segs = inventory_path.clone();
@@ -4913,21 +4924,51 @@ fn main_container_item_paths(
         matches!(element, properties::PropertyValue::Enum(label)
             if label == MAIN_CONTAINER_ENUM_LABEL)
     })?;
+    // Resolve the MainContainer's m_Slots (must exist for a valid result).
     let main_segment = format!("[{main_index}]");
-    let properties::PropertyValue::Array { elements: slots } =
+    let properties::PropertyValue::Array { elements: main_slots } =
         resolve_child(&["m_Values", "Items", &main_segment, "m_Slots"])?
     else {
         return None;
     };
-    let mut out = std::collections::HashSet::new();
-    for slot in &slots {
-        if let Some(path) = slot_item_definition(slot) {
-            if !path.is_empty() {
-                out.insert(path.to_string());
+    // Count every item path across ALL containers to detect cross-container and
+    // intra-container duplicates.
+    let mut global_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    if let Some(properties::PropertyValue::Array { elements: containers }) =
+        resolve_child(&["m_Values", "Items"])
+    {
+        for index in 0..containers.len() {
+            let segment = format!("[{index}]");
+            if let Some(properties::PropertyValue::Array { elements: slots }) =
+                resolve_child(&["m_Values", "Items", &segment, "m_Slots"])
+            {
+                for slot in &slots {
+                    if let Some(path) = slot_item_definition(slot) {
+                        if !path.is_empty() {
+                            *global_counts.entry(path.to_string()).or_default() += 1;
+                        }
+                    }
+                }
             }
         }
     }
-    Some(out)
+    let mut all_paths = std::collections::HashSet::new();
+    let mut removable_paths = std::collections::HashSet::new();
+    for slot in &main_slots {
+        if let Some(path) = slot_item_definition(slot) {
+            if path.is_empty() {
+                continue;
+            }
+            all_paths.insert(path.to_string());
+            if global_counts.get(path) == Some(&1) {
+                removable_paths.insert(path.to_string());
+            }
+        }
+    }
+    Some(MainContainerSummary {
+        all_paths,
+        removable_paths,
+    })
 }
 
 /// True when any container value (map/array/set/instanced objects) reachable
@@ -10197,13 +10238,25 @@ mod tests {
         // rows are removable: true.
         let dir = tempdir().unwrap();
         let path = dir.path().join("G1R-001.sav");
-        let other_slots = vec![inv_item_slot(
-            0,
-            INV_OTHER_LABEL,
-            "/Script/Angelscript.ItMi_Sulfur",
-            1,
-            &inv_empty_payload_map(),
-        )];
+        // Sulfur lives only in the other container. Apple lives in BOTH the
+        // other container and the MainContainer, so its path collides and must
+        // not be removable (removeItem by path could drop the wrong stack).
+        let other_slots = vec![
+            inv_item_slot(
+                0,
+                INV_OTHER_LABEL,
+                "/Script/Angelscript.ItMi_Sulfur",
+                1,
+                &inv_empty_payload_map(),
+            ),
+            inv_item_slot(
+                1,
+                INV_OTHER_LABEL,
+                "/Script/Angelscript.ItFo_Apple",
+                1,
+                &inv_empty_payload_map(),
+            ),
+        ];
         let private_payload =
             typed_inventory_private_payload(&other_slots, &default_main_slots());
         let seed_compressed = b"seed-removable".to_vec();
@@ -10235,11 +10288,14 @@ mod tests {
                 .find(|it| it["path"] == path)
                 .map(|it| it["removable"].as_bool().unwrap_or(false))
         };
+        // Orenugget is unique to the MainContainer → removable.
         assert_eq!(
             removable_for("/Script/Angelscript.ItMi_Orenugget"),
             Some(true)
         );
-        assert_eq!(removable_for("/Script/Angelscript.ItFo_Apple"), Some(true));
+        // Apple collides across containers → not removable.
+        assert_eq!(removable_for("/Script/Angelscript.ItFo_Apple"), Some(false));
+        // Sulfur is only in the other container → not removable.
         assert_eq!(
             removable_for("/Script/Angelscript.ItMi_Sulfur"),
             Some(false),
