@@ -2273,6 +2273,7 @@ fn inspect_private_payload(
                     "private.typed.arrayRemove",
                     "private.typed.arrayDuplicate",
                     "private.inventory.addItem",
+                    "private.inventory.removeItem",
                 ]);
             }
             Ok(json!({
@@ -2417,7 +2418,11 @@ fn summarize_private_inventory_payload(payload: &[u8], refs: &[FStringRef]) -> V
     let (items, item_stack_count, item_scope) =
         summarize_private_inventory_items(payload, refs, 200);
     let writable = if item_scope == "player_inventory_region" && item_stack_count > 0 {
-        vec!["private.inventory.setItemCount", "private.inventory.addItem"]
+        vec![
+            "private.inventory.setItemCount",
+            "private.inventory.addItem",
+            "private.inventory.removeItem",
+        ]
     } else {
         Vec::new()
     };
@@ -3166,6 +3171,7 @@ fn summarize_private_progression_overview(root: Option<&properties::RootObject>)
             "private.typed.arrayRemove",
             "private.typed.arrayDuplicate",
             "private.inventory.addItem",
+            "private.inventory.removeItem",
         ],
     })
 }
@@ -3960,6 +3966,9 @@ fn apply_private_edits(
             "private.inventory.addItem" => {
                 parse_private_inventory_add_item_edit(edit).map(PrivateEdit::InventoryAddItem)
             }
+            "private.inventory.removeItem" => {
+                parse_private_inventory_remove_item_edit(edit).map(PrivateEdit::InventoryRemoveItem)
+            }
             "private.typed.setValue" => {
                 parse_private_typed_set_value_edit(edit).map(PrivateEdit::TypedSetValue)
             }
@@ -3980,8 +3989,8 @@ fn apply_private_edits(
             ))),
         })
         .collect::<Result<Vec<_>, _>>()?;
-    // Structural edits (arrayRemove, arrayDuplicate, addItem) change the
-    // length of array or set data; a second such edit in the same batch
+    // Structural edits (arrayRemove, arrayDuplicate, addItem, removeItem) change
+    // the length of array or set data; a second such edit in the same batch
     // would silently target shifted offsets/indices.  Reject the batch
     // instead of guessing the caller's intent.
     let structural_array_edits = edit_specs
@@ -3994,13 +4003,14 @@ fn apply_private_edits(
                         | properties::ContainerEdit::ArrayDuplicate(_),
                     ..
                 }) | PrivateEdit::InventoryAddItem(_)
+                    | PrivateEdit::InventoryRemoveItem(_)
             )
         })
         .count();
     if structural_array_edits > 1 {
         return Err(CoreError::UnsupportedEdit(format!(
             "a write may contain at most one structural array edit \
-             (arrayRemove/arrayDuplicate/addItem); got {structural_array_edits} — \
+             (arrayRemove/arrayDuplicate/addItem/removeItem); got {structural_array_edits} — \
              indices shift after each structural change, submit them as \
              separate writes"
         )));
@@ -4074,6 +4084,11 @@ struct PrivateInventoryAddItemEdit {
     count: i32,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PrivateInventoryRemoveItemEdit {
+    path: String,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 enum PrivateEdit {
     FString(PrivateFStringEdit),
@@ -4083,6 +4098,7 @@ enum PrivateEdit {
     PlayerTransform(PrivatePlayerTransformEdit),
     InventoryItemCount(PrivateInventoryItemCountEdit),
     InventoryAddItem(PrivateInventoryAddItemEdit),
+    InventoryRemoveItem(PrivateInventoryRemoveItemEdit),
     TypedSetValue(PrivateTypedSetValueEdit),
     TypedContainer(PrivateTypedContainerEdit),
 }
@@ -4594,6 +4610,33 @@ fn parse_private_inventory_add_item_edit(
     })
 }
 
+fn parse_private_inventory_remove_item_edit(
+    edit: &Edit,
+) -> Result<PrivateInventoryRemoveItemEdit, CoreError> {
+    let value = edit.value.as_object().ok_or_else(|| {
+        CoreError::InvalidRequest(
+            "private.inventory.removeItem value must be an object".to_string(),
+        )
+    })?;
+    let path = value
+        .get("path")
+        .and_then(Value::as_str)
+        .filter(|v| !v.trim().is_empty())
+        .ok_or_else(|| {
+            CoreError::InvalidRequest(
+                "private.inventory.removeItem requires a non-empty string value.path".to_string(),
+            )
+        })?;
+    if !looks_item_definition_path(path) {
+        return Err(CoreError::InvalidRequest(format!(
+            "private.inventory.removeItem value.path does not look like an item definition path: {path:?}"
+        )));
+    }
+    Ok(PrivateInventoryRemoveItemEdit {
+        path: path.to_owned(),
+    })
+}
+
 fn decompress_private_payload(
     data: &[u8],
     stream: &CompressedStream,
@@ -4701,6 +4744,9 @@ fn apply_private_edit_to_payload(
         }
         PrivateEdit::InventoryAddItem(edit) => {
             apply_private_inventory_add_item_to_payload(payload, edit)
+        }
+        PrivateEdit::InventoryRemoveItem(edit) => {
+            apply_private_inventory_remove_item_to_payload(payload, edit)
         }
         PrivateEdit::TypedSetValue(edit) => {
             apply_private_typed_set_value_edit_to_payload(payload, edit)
@@ -4997,6 +5043,109 @@ fn apply_private_inventory_add_item_to_payload(
             "added item {} (count {}) did not appear in the inventory summary scan; \
              aborting the write",
             edit.path, edit.count
+        )));
+    }
+    *payload = patched;
+    Ok(())
+}
+
+fn apply_private_inventory_remove_item_to_payload(
+    payload: &mut Vec<u8>,
+    edit: &PrivateInventoryRemoveItemEdit,
+) -> Result<(), CoreError> {
+    // 1. Typed parse + locate the MainContainer m_Slots (mirrors addItem).
+    let root = properties::parse_private_root(payload).map_err(|err| {
+        CoreError::Parse(format!(
+            "private.inventory.removeItem requires a typed-parsable private payload: {err}"
+        ))
+    })?;
+    let (inventory_path, _) =
+        properties::find_property_by_name(&root, "m_Inventory").ok_or_else(|| {
+            CoreError::Parse(
+                "private payload has no m_Inventory property; cannot remove an item".to_string(),
+            )
+        })?;
+    let child_segments = |suffix: &[String]| -> Result<Vec<properties::PathSeg>, CoreError> {
+        let mut segments = inventory_path.clone();
+        segments.extend_from_slice(suffix);
+        properties::parse_path(&segments)
+    };
+    let keys_segs = child_segments(&["m_Keys".to_string()])?;
+    let keys = properties::resolve(&root.properties, &keys_segs)?;
+    let properties::PropertyValue::Array {
+        elements: key_elements,
+    } = &keys.value
+    else {
+        return Err(CoreError::Parse(
+            "m_Inventory.m_Keys is not a plain enum array".to_string(),
+        ));
+    };
+    let main_index = key_elements
+        .iter()
+        .position(|element| {
+            matches!(element, properties::PropertyValue::Enum(label)
+                if label == MAIN_CONTAINER_ENUM_LABEL)
+        })
+        .ok_or_else(|| {
+            CoreError::Parse(format!(
+                "m_Inventory.m_Keys has no {MAIN_CONTAINER_ENUM_LABEL} entry"
+            ))
+        })?;
+    let slots_suffix = vec![
+        "m_Values".to_string(),
+        "Items".to_string(),
+        format!("[{main_index}]"),
+        "m_Slots".to_string(),
+    ];
+    let slots_segs = child_segments(&slots_suffix)?;
+    let chain = properties::resolve_chain(&root.properties, &slots_segs)?;
+    let properties::PropertyValue::Array { elements: slots } = &chain.target.value else {
+        return Err(CoreError::Parse(
+            "MainContainer m_Slots is not a plain slot array".to_string(),
+        ));
+    };
+
+    // 2. Find the slot whose m_SlotData.m_ItemDefinition matches the path.
+    //    Items are unique in the MainContainer, but if several somehow match we
+    //    remove the FIRST — a subsequent write can clean up any remainder.
+    let index = slots
+        .iter()
+        .position(|slot| slot_item_definition(slot) == Some(edit.path.as_str()))
+        .ok_or_else(|| {
+            CoreError::InvalidRequest(format!(
+                "the player inventory does not contain {}",
+                edit.path
+            ))
+        })?;
+
+    // 3. Remove the slot on a scratch copy (size chains fixed up by
+    //    patch_container; a failed patch leaves the original untouched).
+    let mut patched = payload.clone();
+    properties::patch_container(
+        &mut patched,
+        chain.target,
+        &chain.enclosing_size_fields,
+        &properties::ContainerEdit::ArrayRemove(index),
+    )?;
+
+    // 4. Final proof: strict re-parse AND the item must no longer surface in
+    //    the player-inventory-region summary scan.
+    properties::parse_private_root(&patched).map_err(|err| {
+        CoreError::Parse(format!(
+            "inventory removeItem produced an inconsistent payload: {err}"
+        ))
+    })?;
+    let refs = scan_fstrings(&patched, 0);
+    let (items, _total, scope) = summarize_private_inventory_items(&patched, &refs, usize::MAX);
+    let still_present = scope == "player_inventory_region"
+        && items
+            .iter()
+            .any(|item| item["path"] == edit.path.as_str());
+    if still_present {
+        return Err(CoreError::Validation(format!(
+            "removed item {} still appeared in the inventory summary scan; \
+             aborting the write",
+            edit.path
         )));
     }
     *payload = patched;
@@ -8370,7 +8519,11 @@ mod tests {
         assert_eq!(value["private"]["inventory"]["itemStackCount"], 1);
         assert_eq!(
             value["private"]["inventory"]["writable"],
-            json!(["private.inventory.setItemCount", "private.inventory.addItem"])
+            json!([
+                "private.inventory.setItemCount",
+                "private.inventory.addItem",
+                "private.inventory.removeItem"
+            ])
         );
         assert_eq!(
             value["private"]["inventory"]["items"],
@@ -10084,6 +10237,265 @@ mod tests {
         assert!(
             matches!(err, CoreError::InvalidRequest(_)),
             "expected InvalidRequest for non-object value, got: {err}"
+        );
+    }
+
+    // ── private.inventory.removeItem tests ──────────────────────────────────
+
+    #[test]
+    fn parse_private_inventory_remove_item_accepts_valid_path() {
+        let edit = Edit {
+            path: "private.inventory.removeItem".to_string(),
+            value: json!({ "path": "/Script/Angelscript.ItMi_Orenugget" }),
+        };
+        let parsed = parse_private_inventory_remove_item_edit(&edit).unwrap();
+        assert_eq!(
+            parsed,
+            PrivateInventoryRemoveItemEdit {
+                path: "/Script/Angelscript.ItMi_Orenugget".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn parse_private_inventory_remove_item_rejects_non_object_value() {
+        let edit = Edit {
+            path: "private.inventory.removeItem".to_string(),
+            value: json!("not_an_object"),
+        };
+        let err = parse_private_inventory_remove_item_edit(&edit).unwrap_err();
+        assert!(
+            matches!(err, CoreError::InvalidRequest(_)),
+            "expected InvalidRequest for non-object value, got: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_private_inventory_remove_item_rejects_invalid_path() {
+        let edit = Edit {
+            path: "private.inventory.removeItem".to_string(),
+            value: json!({ "path": "not_a_path" }),
+        };
+        let err = parse_private_inventory_remove_item_edit(&edit).unwrap_err();
+        assert!(
+            matches!(err, CoreError::InvalidRequest(_)),
+            "expected InvalidRequest for invalid item path, got: {err}"
+        );
+    }
+
+    #[test]
+    fn remove_item_deletes_matching_slot_from_main_container() {
+        // Two slots; removing Orenugget must leave Apple intact and shrink the
+        // MainContainer slot count by one.
+        let mut payload = typed_inventory_private_payload(&[], &default_main_slots());
+        assert_eq!(inv_slot_count(&payload, 1), 2);
+        let edit = PrivateInventoryRemoveItemEdit {
+            path: "/Script/Angelscript.ItMi_Orenugget".to_string(),
+        };
+        apply_private_inventory_remove_item_to_payload(&mut payload, &edit).unwrap();
+
+        // Strict re-parse and slot count decreased by one.
+        assert_eq!(inv_slot_count(&payload, 1), 1);
+        let root = properties::parse_private_root(&payload).unwrap();
+        // The surviving slot is the OTHER item (Apple).
+        let prefix = inv_slots_prefix(1);
+        let mut def_path: Vec<&str> = prefix.iter().map(String::as_str).collect();
+        def_path.extend_from_slice(&["[0]", "m_SlotData", "m_ItemDefinition"]);
+        let definition = inv_resolve(&root, &def_path);
+        assert_eq!(
+            definition.value,
+            properties::PropertyValue::Object("/Script/Angelscript.ItFo_Apple".to_string())
+        );
+
+        // The inventory summary scan no longer lists the removed item, but does
+        // still list the survivor.
+        let refs = scan_fstrings(&payload, 0);
+        let (items, _total, scope) = summarize_private_inventory_items(&payload, &refs, 200);
+        assert_eq!(scope, "player_inventory_region");
+        assert!(
+            !items
+                .iter()
+                .any(|item| item["path"] == "/Script/Angelscript.ItMi_Orenugget"),
+            "removed item still present in summary: {items:?}"
+        );
+        assert!(
+            items
+                .iter()
+                .any(|item| item["path"] == "/Script/Angelscript.ItFo_Apple"),
+            "survivor missing from summary: {items:?}"
+        );
+    }
+
+    #[test]
+    fn remove_item_rejects_path_not_present() {
+        let mut payload = typed_inventory_private_payload(&[], &default_main_slots());
+        let before = payload.clone();
+        let edit = PrivateInventoryRemoveItemEdit {
+            path: "/Script/Angelscript.ItMi_Sulfur".to_string(),
+        };
+        let err =
+            apply_private_inventory_remove_item_to_payload(&mut payload, &edit).unwrap_err();
+        assert!(
+            err.to_string().contains("does not contain"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(payload, before, "failed edit must not mutate the payload");
+    }
+
+    #[test]
+    fn remove_item_rejects_untyped_payload() {
+        let mut payload = inventory_payload_for_add_item_tests();
+        let before = payload.clone();
+        let edit = PrivateInventoryRemoveItemEdit {
+            path: "/Script/Angelscript.ItMi_Orenugget".to_string(),
+        };
+        let err =
+            apply_private_inventory_remove_item_to_payload(&mut payload, &edit).unwrap_err();
+        assert!(
+            matches!(err, CoreError::Parse(_)),
+            "expected Parse error for untyped payload, got: {err}"
+        );
+        assert_eq!(payload, before);
+    }
+
+    #[test]
+    fn write_save_applies_inventory_remove_item() {
+        // End to end: write_save parses the edit, applies it to the typed
+        // payload, recompresses, and the output save's inventory summary no
+        // longer contains the removed item.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-001.sav");
+        let output_path = dir.path().join("G1R-001-out.sav");
+        let private_payload = typed_inventory_private_payload(&[], &default_main_slots());
+        let seed_compressed = b"seed-remove".to_vec();
+        let stream = compressed_stream_with_one_chunk(&seed_compressed, private_payload.len());
+        fs::write(
+            &path,
+            build_gsav(2, &public_payload("Slot A"), &stream, &[0, 0, 0, 0]),
+        )
+        .unwrap();
+        let backend = PrefixCodecBackend {
+            seed_compressed,
+            seed_uncompressed: private_payload,
+        };
+
+        let response = write_save_with_codec_backend(
+            &path,
+            &[json!({
+                "path": "private.inventory.removeItem",
+                "value": { "path": "/Script/Angelscript.ItMi_Orenugget" }
+            })],
+            false,
+            Some(&output_path),
+            Some(&backend),
+        )
+        .unwrap();
+        assert_eq!(response["editsApplied"], 1);
+
+        let value =
+            inspect_save_with_codec_backend(&output_path, true, Some(&backend), None).unwrap();
+        let items = value["private"]["inventory"]["items"].as_array().unwrap();
+        assert!(
+            !items
+                .iter()
+                .any(|item| item["path"] == "/Script/Angelscript.ItMi_Orenugget"),
+            "output save inventory still has removed item: {items:?}"
+        );
+        assert!(
+            items
+                .iter()
+                .any(|item| item["path"] == "/Script/Angelscript.ItFo_Apple"),
+            "output save inventory missing survivor: {items:?}"
+        );
+    }
+
+    #[test]
+    fn parse_private_inventory_remove_item_rejects_two_in_batch() {
+        // Two removeItem edits in one batch are two structural edits.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-001.sav");
+        let private_payload = typed_inventory_private_payload(&[], &default_main_slots());
+        let seed_compressed = b"seed-2remove".to_vec();
+        let stream = compressed_stream_with_one_chunk(&seed_compressed, private_payload.len());
+        fs::write(
+            &path,
+            build_gsav(2, &public_payload("Slot A"), &stream, &[0, 0, 0, 0]),
+        )
+        .unwrap();
+        let backend = PrefixCodecBackend {
+            seed_compressed,
+            seed_uncompressed: private_payload,
+        };
+
+        let err = write_save_with_codec_backend(
+            &path,
+            &[
+                json!({
+                    "path": "private.inventory.removeItem",
+                    "value": { "path": "/Script/Angelscript.ItMi_Orenugget" }
+                }),
+                json!({
+                    "path": "private.inventory.removeItem",
+                    "value": { "path": "/Script/Angelscript.ItFo_Apple" }
+                }),
+            ],
+            false,
+            None,
+            Some(&backend),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, CoreError::UnsupportedEdit(_)),
+            "expected UnsupportedEdit for two removeItem in batch, got: {err}"
+        );
+        assert!(
+            err.to_string().contains("at most one structural array edit"),
+            "unexpected error message: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_private_inventory_remove_item_rejects_mixed_with_add_item() {
+        // addItem + removeItem in one batch counts as two structural edits.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-001.sav");
+        let private_payload = typed_inventory_private_payload(&[], &default_main_slots());
+        let seed_compressed = b"seed-mixed-rm".to_vec();
+        let stream = compressed_stream_with_one_chunk(&seed_compressed, private_payload.len());
+        fs::write(
+            &path,
+            build_gsav(2, &public_payload("Slot A"), &stream, &[0, 0, 0, 0]),
+        )
+        .unwrap();
+        let backend = PrefixCodecBackend {
+            seed_compressed,
+            seed_uncompressed: private_payload,
+        };
+
+        let err = write_save_with_codec_backend(
+            &path,
+            &[
+                json!({
+                    "path": "private.inventory.addItem",
+                    "value": { "path": "/Script/Angelscript.ItMi_Sulfur", "count": 1 }
+                }),
+                json!({
+                    "path": "private.inventory.removeItem",
+                    "value": { "path": "/Script/Angelscript.ItMi_Orenugget" }
+                }),
+            ],
+            false,
+            None,
+            Some(&backend),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, CoreError::UnsupportedEdit(_)),
+            "expected UnsupportedEdit for addItem + removeItem, got: {err}"
+        );
+        assert!(
+            err.to_string().contains("at most one structural array edit"),
+            "unexpected error message: {err}"
         );
     }
 }
