@@ -1525,14 +1525,23 @@ class _InventoryPanel extends StatelessWidget {
             inspection.privateInventory.writable.contains(
               'private.inventory.setItemCount',
             ),
+        // addItem/removeItem edit the typed property tree, so both require a
+        // verified typed parse plus their own advertised op. They are gated
+        // independently: the core can expose one without the other (e.g.
+        // removeItem with no clean template for adds).
         canAddItem:
             inspection.privateEditable &&
             canCompress &&
-            // addItem edits the typed property tree, so require a verified
-            // typed parse in addition to the advertised op.
             inspection.privateTypedVerified &&
             inspection.privateInventory.writable.contains(
               'private.inventory.addItem',
+            ),
+        canRemoveItem:
+            inspection.privateEditable &&
+            canCompress &&
+            inspection.privateTypedVerified &&
+            inspection.privateInventory.writable.contains(
+              'private.inventory.removeItem',
             ),
       ),
     );
@@ -1545,12 +1554,14 @@ class _PrivateInventorySummaryCard extends StatefulWidget {
     required this.notifier,
     this.editable = true,
     this.canAddItem = false,
+    this.canRemoveItem = false,
   });
 
   final PrivateInventorySummary inventory;
   final EditorNotifier notifier;
   final bool editable;
   final bool canAddItem;
+  final bool canRemoveItem;
 
   @override
   State<_PrivateInventorySummaryCard> createState() =>
@@ -1684,8 +1695,7 @@ class _PrivateInventorySummaryCardState
     final hasPendingRemove = _pendingRemovePath != null;
     final hasPendingChanges =
         _pendingCountChanges.isNotEmpty || hasPendingAdd || hasPendingRemove;
-    final canRemove = widget.canAddItem &&
-        inventory.writable.contains('private.inventory.removeItem');
+    final canRemove = widget.canRemoveItem;
 
     return Card(
       child: Padding(
