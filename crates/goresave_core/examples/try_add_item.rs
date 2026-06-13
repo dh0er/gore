@@ -1,6 +1,7 @@
-//! Round-trip probe: add an inventory item to a save copy, then re-inspect.
+//! Round-trip probe: add or remove an inventory item on a save copy, then
+//! re-inspect.
 //!
-//! Usage: try_add_item <save.sav> <codec_host.exe> <game.exe> <item_path> <count>
+//! Usage: try_add_item <save.sav> <codec_host.exe> <game.exe> <item_path> <count> [add|remove]
 
 use goresave_core::execute_json;
 use serde_json::{json, Value};
@@ -8,21 +9,28 @@ use serde_json::{json, Value};
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 6 {
-        eprintln!("usage: try_add_item <save.sav> <codec_host.exe> <game.exe> <item_path> <count>");
+        eprintln!(
+            "usage: try_add_item <save.sav> <codec_host.exe> <game.exe> <item_path> <count> [add|remove]"
+        );
         std::process::exit(2);
     }
     let host = json!({ "helperPath": args[2], "exePath": args[3] });
     let count: i64 = args[5].parse().expect("count");
+    let op = args.get(6).map(String::as_str).unwrap_or("add");
+    let edit = if op == "remove" {
+        json!({ "path": "private.inventory.removeItem",
+                "value": { "path": args[4] } })
+    } else {
+        json!({ "path": "private.inventory.addItem",
+                "value": { "path": args[4], "count": count } })
+    };
 
     let write = json!({
         "command": "write_save",
         "payload": {
             "path": args[1],
             "backup": false,
-            "edits": [
-                { "path": "private.inventory.addItem",
-                  "value": { "path": args[4], "count": count } }
-            ],
+            "edits": [edit],
             "binaryHost": host,
         }
     });
