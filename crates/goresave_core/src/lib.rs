@@ -2448,7 +2448,11 @@ fn summarize_private_inventory_payload(
     if item_scope == "player_inventory_region" && item_stack_count > 0 {
         writable.push("private.inventory.setItemCount");
         if let Some(mc) = main_container {
-            writable.push("private.inventory.addItem");
+            // addItem clones a clean template slot; only offer it when one
+            // exists somewhere in the inventory.
+            if mc.has_clean_template {
+                writable.push("private.inventory.addItem");
+            }
             if !mc.removable_paths.is_empty() {
                 writable.push("private.inventory.removeItem");
             }
@@ -4900,6 +4904,10 @@ struct MainContainerSummary {
     /// path that also appears in another container (or twice in MainContainer)
     /// could delete the wrong stack. Such paths are not marked removable.
     removable_paths: std::collections::HashSet<String>,
+    /// Whether any container holds a clean (state-free m_Payload) slot that
+    /// addItem can use as a template. Without one, addItem cannot succeed, so it
+    /// must not be advertised.
+    has_clean_template: bool,
 }
 
 /// Summarize the player's MainContainer. addItem and removeItem only operate on
@@ -4932,8 +4940,10 @@ fn main_container_summary(root: &properties::RootObject) -> Option<MainContainer
         return None;
     };
     // Count every item path across ALL containers to detect cross-container and
-    // intra-container duplicates.
+    // intra-container duplicates, and note whether any clean template slot
+    // exists (one whose m_Payload carries no item-specific state).
     let mut global_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut has_clean_template = false;
     if let Some(properties::PropertyValue::Array { elements: containers }) =
         resolve_child(&["m_Values", "Items"])
     {
@@ -4943,6 +4953,11 @@ fn main_container_summary(root: &properties::RootObject) -> Option<MainContainer
                 resolve_child(&["m_Values", "Items", &segment, "m_Slots"])
             {
                 for slot in &slots {
+                    if !struct_element_property(slot, "m_Payload")
+                        .is_some_and(|p| property_value_has_container_data(&p.value))
+                    {
+                        has_clean_template = true;
+                    }
                     if let Some(path) = slot_item_definition(slot) {
                         if !path.is_empty() {
                             *global_counts.entry(path.to_string()).or_default() += 1;
@@ -4968,6 +4983,7 @@ fn main_container_summary(root: &properties::RootObject) -> Option<MainContainer
     Some(MainContainerSummary {
         all_paths,
         removable_paths,
+        has_clean_template,
     })
 }
 
@@ -5064,31 +5080,26 @@ fn apply_private_inventory_add_item_to_payload(
             edit.path
         )));
     }
-    // Choose how to create the new slot. With a non-empty MainContainer we
-    // duplicate its last slot (its m_InventoryType is already MainContainer).
-    // When the MainContainer is empty there is no slot to clone, so we borrow a
-    // template slot's bytes from another container and append them, then fix
+    // Choose the template. Prefer a clean (state-free m_Payload) MainContainer
+    // slot and duplicate it in place — its m_InventoryType is already
+    // MainContainer. If no MainContainer slot is clean (including an empty
+    // MainContainer), borrow a clean slot's bytes from another container and fix
     // m_InventoryType to MainContainer below.
-    let (container_edit, new_index, new_id, needs_type_patch) = if let Some(template) =
-        slots.last()
+    let is_clean = |slot: &properties::PropertyValue| {
+        !struct_element_property(slot, "m_Payload")
+            .is_some_and(|p| property_value_has_container_data(&p.value))
+    };
+    let max_id = slots.iter().filter_map(slot_id).max().unwrap_or(-1);
+    let new_id = max_id.checked_add(1).ok_or_else(|| {
+        CoreError::Parse("inventory slot ids exhausted (m_Id overflow)".to_string())
+    })?;
+    let (container_edit, new_index, needs_type_patch) = if let Some(source) =
+        slots.iter().rposition(|slot| is_clean(slot))
     {
-        if struct_element_property(template, "m_Payload")
-            .is_some_and(|payload_prop| property_value_has_container_data(&payload_prop.value))
-        {
-            return Err(CoreError::UnsupportedEdit(
-                "the template slot's m_Payload carries item-specific state; \
-                 refusing to clone it onto a new item"
-                    .to_string(),
-            ));
-        }
-        let max_id = slots.iter().filter_map(slot_id).max().unwrap_or(-1);
-        let new_id = max_id.checked_add(1).ok_or_else(|| {
-            CoreError::Parse("inventory slot ids exhausted (m_Id overflow)".to_string())
-        })?;
+        // ArrayDuplicate inserts the copy right after the source slot.
         (
-            properties::ContainerEdit::ArrayDuplicate(slots.len() - 1),
-            slots.len(),
-            new_id,
+            properties::ContainerEdit::ArrayDuplicate(source),
+            source + 1,
             false,
         )
     } else {
@@ -5096,16 +5107,16 @@ fn apply_private_inventory_add_item_to_payload(
             donor_slot_template_bytes(payload, &root, &inventory_path, main_index)?.ok_or_else(
                 || {
                     CoreError::UnsupportedEdit(
-                        "the entire inventory is empty (no container has a slot to use as a \
-                         template); cannot synthesize a new item slot from scratch"
+                        "no inventory container has a clean (state-free) slot to use as a \
+                         template; cannot synthesize a new item slot"
                             .to_string(),
                     )
                 },
             )?;
+        // ArrayInsertBytes appends to the end of the MainContainer.
         (
             properties::ContainerEdit::ArrayInsertBytes(template_bytes),
-            0,
-            0,
+            slots.len(),
             true,
         )
     };
@@ -10099,7 +10110,7 @@ mod tests {
         };
         let err = apply_private_inventory_add_item_to_payload(&mut payload, &edit).unwrap_err();
         assert!(
-            err.to_string().contains("entire inventory is empty"),
+            err.to_string().contains("clean"),
             "unexpected error: {err}"
         );
         assert_eq!(payload, before, "failed edit must not mutate the payload");
@@ -10205,9 +10216,10 @@ mod tests {
     }
 
     #[test]
-    fn add_item_rejects_template_with_nonempty_payload() {
-        // The template (last slot) carries item-specific state in m_Payload;
-        // cloning it onto a fresh item must be refused.
+    fn add_item_uses_clean_slot_when_last_is_stateful() {
+        // The last MainContainer slot carries item-specific state, but an
+        // earlier slot is clean: addItem must clone the clean slot rather than
+        // refusing.
         let main_slots = vec![
             inv_item_slot(
                 0,
@@ -10227,13 +10239,42 @@ mod tests {
         let mut payload = typed_inventory_private_payload(&[], &main_slots);
         let edit = PrivateInventoryAddItemEdit {
             path: "/Script/Angelscript.ItMi_Sulfur".to_string(),
+            count: 4,
+        };
+        apply_private_inventory_add_item_to_payload(&mut payload, &edit).unwrap();
+        assert_eq!(inv_slot_count(&payload, 1), 3);
+        // The new item exists in the MainContainer with the requested count.
+        let refs = scan_fstrings(&payload, 0);
+        let (items, _t, _s) = summarize_private_inventory_items(&payload, &refs, usize::MAX);
+        assert!(items.iter().any(|it| it["path"]
+            == "/Script/Angelscript.ItMi_Sulfur"
+            && it["count"] == 4));
+    }
+
+    #[test]
+    fn add_item_rejects_when_no_clean_template_anywhere() {
+        // Every slot in every container carries item-specific state, so there
+        // is no clean template to clone.
+        let stateful = |id, path| {
+            inv_item_slot(id, INV_MAIN_LABEL, path, 1, &inv_nonempty_payload_map())
+        };
+        let other = vec![inv_item_slot(
+            9,
+            INV_OTHER_LABEL,
+            "/Script/Angelscript.ItMw_Axe",
+            1,
+            &inv_nonempty_payload_map(),
+        )];
+        let main = vec![stateful(0, "/Script/Angelscript.ItMw_Sword")];
+        let mut payload = typed_inventory_private_payload(&other, &main);
+        let before = payload.clone();
+        let edit = PrivateInventoryAddItemEdit {
+            path: "/Script/Angelscript.ItMi_Sulfur".to_string(),
             count: 1,
         };
         let err = apply_private_inventory_add_item_to_payload(&mut payload, &edit).unwrap_err();
-        assert!(
-            err.to_string().contains("m_Payload"),
-            "unexpected error: {err}"
-        );
+        assert!(err.to_string().contains("clean"), "unexpected error: {err}");
+        assert_eq!(payload, before);
     }
 
     #[test]
