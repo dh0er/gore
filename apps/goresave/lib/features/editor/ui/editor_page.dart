@@ -1642,6 +1642,14 @@ class _PrivateInventorySummaryCardState
     final inventory = widget.inventory;
     final query = _query.trim().toLowerCase();
     final items = inventory.items.where((item) {
+      // A pending removal hides the item from the list (it is represented by
+      // the pending card above), mirroring how a pending add is not yet in the
+      // list either.
+      if (_pendingRemovePath != null &&
+          item.path.isNotEmpty &&
+          item.path == _pendingRemovePath) {
+        return false;
+      }
       if (query.isEmpty) return true;
       return item.id.toLowerCase().contains(query) ||
           item.path.toLowerCase().contains(query);
@@ -1718,12 +1726,27 @@ class _PrivateInventorySummaryCardState
             ),
             if (hasPendingAdd) ...[
               const SizedBox(height: 12),
-              _PendingAddRow(
-                add: _pendingAdd!,
-                onRemove: () {
+              _PendingStructuralRow(
+                tone: _PendingTone.add,
+                icon: Icons.add_circle_outline,
+                title: _itemDisplayFromPath(_pendingAdd!.path),
+                subtitle: '×${_pendingAdd!.count} — pending add (not yet saved)',
+                cancelTooltip: 'Cancel pending add',
+                onCancel: () {
                   setState(() => _pendingAdd = null);
                   _pushInventoryPending();
                 },
+              ),
+            ],
+            if (hasPendingRemove) ...[
+              const SizedBox(height: 12),
+              _PendingStructuralRow(
+                tone: _PendingTone.remove,
+                icon: Icons.delete_outline,
+                title: _itemDisplayFromPath(_pendingRemovePath!),
+                subtitle: 'pending removal (not yet saved)',
+                cancelTooltip: 'Cancel pending removal',
+                onCancel: _undoRemove,
               ),
             ],
             if (hasItems) ...[
@@ -1785,32 +1808,15 @@ class _PrivateInventorySummaryCardState
                                     itemCount: selectedGroup.items.length,
                                     itemBuilder: (context, index) {
                                       final item = selectedGroup.items[index];
-                                      final pendingRemoved =
-                                          hasPendingRemove &&
-                                          item.path == _pendingRemovePath &&
-                                          item.path.isNotEmpty;
                                       return ListTile(
                                         dense: true,
-                                        leading: Icon(
-                                          pendingRemoved
-                                              ? Icons.delete_outline
-                                              : Icons.category_outlined,
-                                          color: pendingRemoved
-                                              ? theme.colorScheme.error
-                                              : null,
+                                        leading: const Icon(
+                                          Icons.category_outlined,
                                         ),
                                         title: Text(
                                           item.id.isEmpty ? item.path : item.id,
                                           maxLines: 1,
                                           overflow: TextOverflow.ellipsis,
-                                          style: pendingRemoved
-                                              ? TextStyle(
-                                                  decoration: TextDecoration
-                                                      .lineThrough,
-                                                  color: theme.colorScheme
-                                                      .onSurfaceVariant,
-                                                )
-                                              : null,
                                         ),
                                         subtitle: item.path.isEmpty
                                             ? null
@@ -1822,7 +1828,6 @@ class _PrivateInventorySummaryCardState
                                         trailing: _inventoryItemTrailing(
                                           theme,
                                           item,
-                                          pendingRemoved: pendingRemoved,
                                           canRemove: canRemove,
                                           removeBlocked:
                                               hasPendingAdd || hasPendingRemove,
@@ -1856,31 +1861,13 @@ class _PrivateInventorySummaryCardState
     _pushInventoryPending();
   }
 
-  /// Trailing widget for an inventory row: count editor + a delete button, or,
-  /// when this row is queued for removal, an "undo remove" affordance.
+  /// Trailing widget for an inventory row: count editor + a delete button.
   Widget _inventoryItemTrailing(
     ThemeData theme,
     PrivateInventoryItem item, {
-    required bool pendingRemoved,
     required bool canRemove,
     required bool removeBlocked,
   }) {
-    if (pendingRemoved) {
-      return Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text('Will be removed', style: theme.textTheme.bodySmall),
-          const SizedBox(width: 4),
-          Tooltip(
-            message: 'Undo removal',
-            child: IconButton(
-              icon: const Icon(Icons.undo_outlined),
-              onPressed: _undoRemove,
-            ),
-          ),
-        ],
-      );
-    }
     if (!widget.editable) {
       return Text(
         '×${item.count ?? '?'}',
@@ -1915,45 +1902,65 @@ class _PrivateInventorySummaryCardState
   }
 }
 
-/// A highlighted row shown when there is a pending add-item action awaiting
-/// save.  Displays the item id (derived from path) and count, plus a remove
-/// button.
-class _PendingAddRow extends StatelessWidget {
-  const _PendingAddRow({required this.add, required this.onRemove});
+/// Tone of a pending structural-edit card: an add (primary) or a remove
+/// (error).
+enum _PendingTone { add, remove }
 
-  final InventoryItemAdd add;
-  final VoidCallback onRemove;
+/// A human-readable id fragment derived from an item asset path.
+String _itemDisplayFromPath(String path) =>
+    path.contains('.') ? path.split('.').last : path.split('/').last;
+
+/// A highlighted card shown when there is a pending structural inventory edit
+/// (add or remove) awaiting save. Mirrors how a not-yet-saved item is
+/// represented for both directions: the affected item is not shown inline, only
+/// here, with a cancel button.
+class _PendingStructuralRow extends StatelessWidget {
+  const _PendingStructuralRow({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onCancel,
+    required this.cancelTooltip,
+    required this.tone,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback onCancel;
+  final String cancelTooltip;
+  final _PendingTone tone;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    // Derive a human-readable id fragment from the path for display.
-    final displayName = add.path.contains('.')
-        ? add.path.split('.').last
-        : add.path.split('/').last;
+    final isAdd = tone == _PendingTone.add;
+    final bg = isAdd ? scheme.primaryContainer : scheme.errorContainer;
+    final fg = isAdd ? scheme.onPrimaryContainer : scheme.onErrorContainer;
+    final accent = isAdd ? scheme.primary : scheme.error;
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: scheme.primaryContainer,
+        color: bg,
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: scheme.primary.withValues(alpha: 0.4)),
+        border: Border.all(color: accent.withValues(alpha: 0.4)),
       ),
       child: ListTile(
         dense: true,
-        leading: Icon(Icons.add_circle_outline, color: scheme.primary),
+        leading: Icon(icon, color: accent),
         title: Text(
-          displayName,
+          title,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: TextStyle(color: scheme.onPrimaryContainer),
+          style: TextStyle(color: fg),
         ),
         subtitle: Text(
-          '×${add.count} — pending (not yet saved)',
-          style: TextStyle(color: scheme.onPrimaryContainer.withValues(alpha: 0.8)),
+          subtitle,
+          style: TextStyle(color: fg.withValues(alpha: 0.8)),
         ),
         trailing: IconButton(
           icon: const Icon(Icons.close),
-          tooltip: 'Remove pending add',
-          onPressed: onRemove,
+          tooltip: cancelTooltip,
+          onPressed: onCancel,
         ),
       ),
     );
