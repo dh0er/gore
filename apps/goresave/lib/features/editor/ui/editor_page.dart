@@ -1614,7 +1614,7 @@ class _PrivateInventorySummaryCardState
     final result = await showDialog<InventoryItemAdd>(
       context: context,
       builder: (_) => AddInventoryItemDialog(
-        existingItems: widget.inventory.items,
+        excludePaths: widget.inventory.mainContainerPaths.toSet(),
       ),
     );
     if (result != null) {

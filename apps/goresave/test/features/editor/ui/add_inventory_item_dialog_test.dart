@@ -22,23 +22,19 @@ const _fakeCatalogJson = '''
 
 ItemCatalog _fakeCatalog() => ItemCatalog.fromJsonString(_fakeCatalogJson);
 
-/// An item that the player already owns, used to verify it is excluded from
-/// the picker list.
-const _ownedItem = PrivateInventoryItem(
-  id: 'ItMi_AlreadyOwned',
-  path: '/Script/Angelscript.ItMi_AlreadyOwned',
-  count: 1,
-);
+/// Path of an item the player already owns in the MainContainer, used to
+/// verify it is excluded from the picker list.
+const _ownedPath = '/Script/Angelscript.ItMi_AlreadyOwned';
 
 /// Wraps the dialog in a host that captures the pop result, so tests can
 /// assert on the returned [InventoryItemAdd].
 class _DialogHost extends StatefulWidget {
   const _DialogHost({
-    required this.existingItems,
+    required this.excludePaths,
     required this.onResult,
   });
 
-  final List<PrivateInventoryItem> existingItems;
+  final Set<String> excludePaths;
   final void Function(InventoryItemAdd?) onResult;
 
   @override
@@ -53,7 +49,7 @@ class _DialogHostState extends State<_DialogHost> {
       showDialog<InventoryItemAdd>(
         context: context,
         builder: (_) => AddInventoryItemDialog(
-          existingItems: widget.existingItems,
+          excludePaths: widget.excludePaths,
           catalogOverride: Future.value(_fakeCatalog()),
         ),
       ).then(widget.onResult);
@@ -65,13 +61,13 @@ class _DialogHostState extends State<_DialogHost> {
 }
 
 Widget _wrap({
-  required List<PrivateInventoryItem> existingItems,
+  required Set<String> excludePaths,
   void Function(InventoryItemAdd?)? onResult,
 }) {
   return MaterialApp(
     home: Scaffold(
       body: _DialogHost(
-        existingItems: existingItems,
+        excludePaths: excludePaths,
         onResult: onResult ?? (_) {},
       ),
     ),
@@ -86,7 +82,7 @@ void main() {
   testWidgets('sidebar lists categories; selecting one shows its items',
       (tester) async {
     await tester.pumpWidget(
-      _wrap(existingItems: [_ownedItem]),
+      _wrap(excludePaths: {_ownedPath}),
     );
     // Wait for dialog to open and FutureBuilder to resolve.
     await tester.pumpAndSettle();
@@ -112,7 +108,7 @@ void main() {
 
   testWidgets('clearing search keeps the selection and reveals its category',
       (tester) async {
-    await tester.pumpWidget(_wrap(existingItems: []));
+    await tester.pumpWidget(_wrap(excludePaths: const {}));
     await tester.pumpAndSettle();
 
     // Search for and select Sulfur (misc), which is not the default category.
@@ -141,7 +137,7 @@ void main() {
   });
 
   testWidgets('search filters entries by id substring', (tester) async {
-    await tester.pumpWidget(_wrap(existingItems: []));
+    await tester.pumpWidget(_wrap(excludePaths: const {}));
     await tester.pumpAndSettle();
 
     // Type 'sulfur' in the search field.
@@ -159,7 +155,7 @@ void main() {
     InventoryItemAdd? result;
     await tester.pumpWidget(
       _wrap(
-        existingItems: [],
+        excludePaths: const {},
         onResult: (r) => result = r,
       ),
     );
@@ -201,7 +197,7 @@ void main() {
   });
 
   testWidgets('invalid count disables the Add button', (tester) async {
-    await tester.pumpWidget(_wrap(existingItems: []));
+    await tester.pumpWidget(_wrap(excludePaths: const {}));
     await tester.pumpAndSettle();
 
     // Search to bring Bread into the flat result list, then select it.

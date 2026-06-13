@@ -536,6 +536,7 @@ class PrivateInventorySummary {
     this.itemStackCount = 0,
     this.itemScope,
     this.items = const [],
+    this.mainContainerPaths = const [],
     this.scriptPaths = const [],
     this.properties = const [],
     this.writable = const [],
@@ -555,6 +556,11 @@ class PrivateInventorySummary {
               .toList() ??
           const [],
       itemScope: json?['itemScope'] as String?,
+      mainContainerPaths:
+          (json?['mainContainerPaths'] as List?)
+              ?.whereType<String>()
+              .toList() ??
+          const [],
       scriptPaths:
           (json?['scriptPaths'] as List?)?.whereType<String>().toList() ??
           const [],
@@ -572,6 +578,9 @@ class PrivateInventorySummary {
   final int itemStackCount;
   final String? itemScope;
   final List<PrivateInventoryItem> items;
+  // Complete set of MainContainer item paths (uncapped), used to exclude
+  // already-owned items from the add picker even when [items] is truncated.
+  final List<String> mainContainerPaths;
   final List<String> scriptPaths;
   final List<String> properties;
   final List<String> writable;

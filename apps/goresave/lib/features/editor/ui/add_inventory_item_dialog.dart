@@ -18,11 +18,15 @@ import 'package:goresave/features/editor/ui/sidebar_tile.dart';
 class AddInventoryItemDialog extends StatefulWidget {
   const AddInventoryItemDialog({
     super.key,
-    required this.existingItems,
+    required this.excludePaths,
     this.catalogOverride,
   });
 
-  final List<PrivateInventoryItem> existingItems;
+  /// Item asset paths to exclude from the picker — the complete set of
+  /// MainContainer items (addItem rejects paths already there). Sourced from
+  /// the uncapped MainContainer path list, so it is correct even when the
+  /// inventory list is truncated.
+  final Set<String> excludePaths;
   final Future<ItemCatalog>? catalogOverride;
 
   @override
@@ -104,11 +108,8 @@ class _AddInventoryItemDialogState extends State<AddInventoryItemDialog> {
               );
             }
             final catalog = snapshot.data!;
-            final existingPaths = {
-              for (final item in widget.existingItems) item.path,
-            };
             final available = catalog.entries
-                .where((e) => !existingPaths.contains(e.path))
+                .where((e) => !widget.excludePaths.contains(e.path))
                 .toList();
             final groups = _group(available);
 

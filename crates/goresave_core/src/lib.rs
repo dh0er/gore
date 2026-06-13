@@ -2258,13 +2258,15 @@ fn inspect_private_payload(
             } else {
                 Some(properties::parse_private_root(&payload))
             };
-            let main_item_paths = typed_result
+            let main_container_paths = typed_result
                 .as_ref()
                 .and_then(|r| r.as_ref().ok())
-                .map(main_container_item_paths)
-                .unwrap_or_default();
-            let inventory =
-                summarize_private_inventory_payload(&payload, &refs, &main_item_paths);
+                .and_then(main_container_item_paths);
+            let inventory = summarize_private_inventory_payload(
+                &payload,
+                &refs,
+                main_container_paths.as_ref(),
+            );
             let typed_parse = summarize_typed_parse_result(&payload, typed_result.as_ref());
             let typed_ok = typed_parse["status"] == "ok";
             let progression = summarize_private_progression_overview(
@@ -2404,7 +2406,7 @@ fn private_player_writable_edits(payload: &[u8], refs: &[FStringRef]) -> Vec<&'s
 fn summarize_private_inventory_payload(
     payload: &[u8],
     refs: &[FStringRef],
-    main_item_paths: &std::collections::HashSet<String>,
+    main_container_paths: Option<&std::collections::HashSet<String>>,
 ) -> Value {
     let script_paths = unique_strings(
         refs.iter().map(|r| r.value.as_str()).filter(|value| {
@@ -2432,24 +2434,38 @@ fn summarize_private_inventory_payload(
     // offer a delete button that the core would reject.
     for item in &mut items {
         let path = item["path"].as_str().unwrap_or("");
-        item["removable"] = json!(!path.is_empty() && main_item_paths.contains(path));
+        item["removable"] = json!(
+            !path.is_empty()
+                && main_container_paths.is_some_and(|paths| paths.contains(path))
+        );
     }
-    // setItemCount patches in place anywhere in the region; addItem/removeItem
-    // are structural MainContainer edits and need a resolvable MainContainer.
+    // setItemCount patches in place anywhere in the region. addItem/removeItem
+    // are structural MainContainer edits: addItem needs only a resolvable
+    // MainContainer (it can seed an empty one from another container), while
+    // removeItem needs at least one MainContainer item to delete.
     let mut writable = Vec::new();
     if item_scope == "player_inventory_region" && item_stack_count > 0 {
         writable.push("private.inventory.setItemCount");
-        if !main_item_paths.is_empty() {
+        if let Some(paths) = main_container_paths {
             writable.push("private.inventory.addItem");
-            writable.push("private.inventory.removeItem");
+            if !paths.is_empty() {
+                writable.push("private.inventory.removeItem");
+            }
         }
     }
+    // The complete set of MainContainer item paths (from the typed tree, not
+    // the capped summary scan) so the add dialog can exclude already-owned
+    // items even when the displayed list is truncated.
+    let mut main_paths: Vec<&String> =
+        main_container_paths.map(|p| p.iter().collect()).unwrap_or_default();
+    main_paths.sort();
     json!({
         "candidateCount": candidates.len(),
         "candidates": candidates,
         "itemStackCount": item_stack_count,
         "itemScope": item_scope,
         "items": items,
+        "mainContainerPaths": main_paths,
         "scriptPaths": script_paths,
         "properties": properties,
         "writable": writable,
@@ -4874,13 +4890,14 @@ fn slot_item_count(slot: &properties::PropertyValue) -> Option<i32> {
 
 /// Asset paths of the items in the player's MainContainer. addItem and
 /// removeItem only operate on this container, so the inventory summary marks
-/// which rows are actually add/removable. Returns an empty set when the typed
-/// tree has no resolvable MainContainer (so structural ops are not offered).
-fn main_container_item_paths(root: &properties::RootObject) -> std::collections::HashSet<String> {
-    let mut out = std::collections::HashSet::new();
-    let Some((inventory_path, _)) = properties::find_property_by_name(root, "m_Inventory") else {
-        return out;
-    };
+/// which rows are actually add/removable. Returns `None` when the typed tree
+/// has no resolvable MainContainer (structural ops are then not offered);
+/// `Some(set)` when it resolves — the set is empty for an empty MainContainer,
+/// which addItem can still seed from another container.
+fn main_container_item_paths(
+    root: &properties::RootObject,
+) -> Option<std::collections::HashSet<String>> {
+    let (inventory_path, _) = properties::find_property_by_name(root, "m_Inventory")?;
     let resolve_child = |suffix: &[&str]| -> Option<properties::PropertyValue> {
         let mut segs = inventory_path.clone();
         segs.extend(suffix.iter().map(|s| s.to_string()));
@@ -4889,22 +4906,20 @@ fn main_container_item_paths(root: &properties::RootObject) -> std::collections:
             .ok()
             .map(|prop| prop.value.clone())
     };
-    let Some(properties::PropertyValue::Array { elements: keys }) = resolve_child(&["m_Keys"])
-    else {
-        return out;
+    let properties::PropertyValue::Array { elements: keys } = resolve_child(&["m_Keys"])? else {
+        return None;
     };
-    let Some(main_index) = keys.iter().position(|element| {
+    let main_index = keys.iter().position(|element| {
         matches!(element, properties::PropertyValue::Enum(label)
             if label == MAIN_CONTAINER_ENUM_LABEL)
-    }) else {
-        return out;
-    };
+    })?;
     let main_segment = format!("[{main_index}]");
-    let Some(properties::PropertyValue::Array { elements: slots }) =
-        resolve_child(&["m_Values", "Items", &main_segment, "m_Slots"])
+    let properties::PropertyValue::Array { elements: slots } =
+        resolve_child(&["m_Values", "Items", &main_segment, "m_Slots"])?
     else {
-        return out;
+        return None;
     };
+    let mut out = std::collections::HashSet::new();
     for slot in &slots {
         if let Some(path) = slot_item_definition(slot) {
             if !path.is_empty() {
@@ -4912,7 +4927,7 @@ fn main_container_item_paths(root: &properties::RootObject) -> std::collections:
             }
         }
     }
-    out
+    Some(out)
 }
 
 /// True when any container value (map/array/set/instanced objects) reachable
@@ -5008,37 +5023,60 @@ fn apply_private_inventory_add_item_to_payload(
             edit.path
         )));
     }
-    let Some(template) = slots.last() else {
-        return Err(CoreError::UnsupportedEdit(
-            "MainContainer has no template slot (m_Slots is empty); \
-             cannot synthesize a new item slot from scratch"
-                .to_string(),
-        ));
-    };
-    if struct_element_property(template, "m_Payload")
-        .is_some_and(|payload_prop| property_value_has_container_data(&payload_prop.value))
+    // Choose how to create the new slot. With a non-empty MainContainer we
+    // duplicate its last slot (its m_InventoryType is already MainContainer).
+    // When the MainContainer is empty there is no slot to clone, so we borrow a
+    // template slot's bytes from another container and append them, then fix
+    // m_InventoryType to MainContainer below.
+    let (container_edit, new_index, new_id, needs_type_patch) = if let Some(template) =
+        slots.last()
     {
-        return Err(CoreError::UnsupportedEdit(
-            "the template slot's m_Payload carries item-specific state; \
-             refusing to clone it onto a new item"
-                .to_string(),
-        ));
-    }
-    let max_id = slots.iter().filter_map(slot_id).max().unwrap_or(-1);
-    let new_id = max_id.checked_add(1).ok_or_else(|| {
-        CoreError::Parse("inventory slot ids exhausted (m_Id overflow)".to_string())
-    })?;
-    let template_index = slots.len() - 1;
-    let new_index = slots.len();
+        if struct_element_property(template, "m_Payload")
+            .is_some_and(|payload_prop| property_value_has_container_data(&payload_prop.value))
+        {
+            return Err(CoreError::UnsupportedEdit(
+                "the template slot's m_Payload carries item-specific state; \
+                 refusing to clone it onto a new item"
+                    .to_string(),
+            ));
+        }
+        let max_id = slots.iter().filter_map(slot_id).max().unwrap_or(-1);
+        let new_id = max_id.checked_add(1).ok_or_else(|| {
+            CoreError::Parse("inventory slot ids exhausted (m_Id overflow)".to_string())
+        })?;
+        (
+            properties::ContainerEdit::ArrayDuplicate(slots.len() - 1),
+            slots.len(),
+            new_id,
+            false,
+        )
+    } else {
+        let template_bytes =
+            donor_slot_template_bytes(payload, &root, &inventory_path, main_index)?.ok_or_else(
+                || {
+                    CoreError::UnsupportedEdit(
+                        "the entire inventory is empty (no container has a slot to use as a \
+                         template); cannot synthesize a new item slot from scratch"
+                            .to_string(),
+                    )
+                },
+            )?;
+        (
+            properties::ContainerEdit::ArrayInsertBytes(template_bytes),
+            0,
+            0,
+            true,
+        )
+    };
 
-    // 3. Duplicate the template slot on a scratch copy (size chains fixed up
-    //    by patch_container; failed patches leave the original untouched).
+    // 3. Apply the structural edit on a scratch copy (size chains fixed up by
+    //    patch_container; failed patches leave the original untouched).
     let mut patched = payload.clone();
     properties::patch_container(
         &mut patched,
         chain.target,
         &chain.enclosing_size_fields,
-        &properties::ContainerEdit::ArrayDuplicate(template_index),
+        &container_edit,
     )?;
 
     // 4. Retarget the duplicate: definition path first (length-changing, so
@@ -5070,6 +5108,33 @@ fn apply_private_inventory_add_item_to_payload(
             definition_chain.target,
             &definition_chain.enclosing_size_fields,
             &edit.path,
+        )?;
+    }
+    if needs_type_patch {
+        // A borrowed template carries the donor container's m_InventoryType;
+        // fix it to MainContainer (length-changing, so re-resolve and patch on
+        // its own before the fixed-size scalar writes below).
+        let reparsed = properties::parse_private_root(&patched).map_err(|err| {
+            CoreError::Parse(format!(
+                "inventory item definition patch produced an inconsistent payload: {err}"
+            ))
+        })?;
+        let type_segs = child_segments(&{
+            let mut suffix = slots_suffix.clone();
+            suffix.extend([slot_segment.clone(), "m_InventoryType".to_string()]);
+            suffix
+        })?;
+        let type_chain = properties::resolve_chain(&reparsed.properties, &type_segs)
+            .map_err(|err| {
+                CoreError::Parse(format!(
+                    "synthesized inventory slot is missing m_InventoryType: {err}"
+                ))
+            })?;
+        properties::patch_string(
+            &mut patched,
+            type_chain.target,
+            &type_chain.enclosing_size_fields,
+            MAIN_CONTAINER_ENUM_LABEL,
         )?;
     }
     {
@@ -5142,6 +5207,66 @@ fn apply_private_inventory_add_item_to_payload(
     Ok(())
 }
 
+/// Raw bytes of a template item slot borrowed from a non-Main inventory
+/// container, used to seed an empty MainContainer. Returns the last slot of the
+/// first other container that has one with an empty m_Payload, or None when no
+/// container has a usable slot. The caller fixes the borrowed slot's
+/// m_InventoryType to MainContainer.
+fn donor_slot_template_bytes(
+    payload: &[u8],
+    root: &properties::RootObject,
+    inventory_path: &[String],
+    main_index: usize,
+) -> Result<Option<Vec<u8>>, CoreError> {
+    let child = |suffix: &[String]| -> Result<Vec<properties::PathSeg>, CoreError> {
+        let mut segments = inventory_path.to_vec();
+        segments.extend_from_slice(suffix);
+        properties::parse_path(&segments)
+    };
+    let items_segs = child(&["m_Values".to_string(), "Items".to_string()])?;
+    let items = properties::resolve(&root.properties, &items_segs)?;
+    let properties::PropertyValue::Array {
+        elements: containers,
+    } = &items.value
+    else {
+        return Ok(None);
+    };
+    for index in 0..containers.len() {
+        if index == main_index {
+            continue;
+        }
+        let slots_segs = child(&[
+            "m_Values".to_string(),
+            "Items".to_string(),
+            format!("[{index}]"),
+            "m_Slots".to_string(),
+        ])?;
+        let Ok(slots_prop) = properties::resolve(&root.properties, &slots_segs) else {
+            continue;
+        };
+        let properties::PropertyValue::Array {
+            elements: donor_slots,
+        } = &slots_prop.value
+        else {
+            continue;
+        };
+        let Some(last) = donor_slots.last() else {
+            continue;
+        };
+        // Don't clone item-specific state from the donor's payload.
+        if struct_element_property(last, "m_Payload")
+            .is_some_and(|p| property_value_has_container_data(&p.value))
+        {
+            continue;
+        }
+        let layout = properties::container_layout(payload, slots_prop)?;
+        if let Some(range) = layout.element_ranges.last() {
+            return Ok(Some(payload[range.clone()].to_vec()));
+        }
+    }
+    Ok(None)
+}
+
 fn apply_private_inventory_remove_item_to_payload(
     payload: &mut Vec<u8>,
     edit: &PrivateInventoryRemoveItemEdit,
@@ -5199,33 +5324,20 @@ fn apply_private_inventory_remove_item_to_payload(
     };
 
     // 2. Find the slot whose m_SlotData.m_ItemDefinition matches the path.
-    //    Items are unique in the MainContainer (addItem rejects duplicates and
-    //    the game stacks identical items), but if several somehow match we
-    //    refuse rather than silently delete an arbitrary one — the caller only
-    //    addresses by path, so an ambiguous match cannot be disambiguated.
-    let matches: Vec<usize> = slots
+    //    Real saves do contain a few same-path slots (e.g. two of a
+    //    non-stacking item), which the summary surfaces as indistinguishable
+    //    rows (same id/path). We remove the first match: refusing would leave
+    //    those items permanently undeletable, and the rows are interchangeable
+    //    from the UI's perspective.
+    let index = slots
         .iter()
-        .enumerate()
-        .filter(|(_, slot)| slot_item_definition(slot) == Some(edit.path.as_str()))
-        .map(|(idx, _)| idx)
-        .collect();
-    let index = match matches.as_slice() {
-        [] => {
-            return Err(CoreError::InvalidRequest(format!(
+        .position(|slot| slot_item_definition(slot) == Some(edit.path.as_str()))
+        .ok_or_else(|| {
+            CoreError::InvalidRequest(format!(
                 "the player inventory does not contain {}",
                 edit.path
-            )));
-        }
-        [only] => *only,
-        _ => {
-            return Err(CoreError::InvalidRequest(format!(
-                "the MainContainer has multiple slots for {} ({} matches); \
-                 cannot disambiguate by path alone",
-                edit.path,
-                matches.len()
-            )));
-        }
-    };
+            ))
+        })?;
 
     // 3. Remove the slot on a scratch copy (size chains fixed up by
     //    patch_container; a failed patch leaves the original untouched).
@@ -5257,13 +5369,21 @@ fn apply_private_inventory_remove_item_to_payload(
             "MainContainer m_Slots is not a plain slot array after removal".to_string(),
         ));
     };
-    let still_present = patched_slot_elems
-        .iter()
-        .any(|slot| slot_item_definition(slot) == Some(edit.path.as_str()));
-    if still_present {
+    // Exactly one matching slot must be gone. (Some saves hold duplicate-path
+    // slots, so the path may still be present afterwards — only require the
+    // count to drop by one.)
+    let match_count = |elems: &[properties::PropertyValue]| {
+        elems
+            .iter()
+            .filter(|slot| slot_item_definition(slot) == Some(edit.path.as_str()))
+            .count()
+    };
+    let before = match_count(slots);
+    let after = match_count(patched_slot_elems);
+    if after != before - 1 {
         return Err(CoreError::Validation(format!(
-            "removed item {} still present in the MainContainer after removal; \
-             aborting the write",
+            "removeItem for {} changed the MainContainer match count from {before} to {after}; \
+             expected exactly one fewer — aborting the write",
             edit.path
         )));
     }
@@ -9929,7 +10049,8 @@ mod tests {
     }
 
     #[test]
-    fn add_item_requires_template_slot() {
+    fn add_item_rejects_when_entire_inventory_empty() {
+        // No container has a slot, so there is no template to borrow.
         let mut payload = typed_inventory_private_payload(&[], &[]);
         let before = payload.clone();
         let edit = PrivateInventoryAddItemEdit {
@@ -9938,10 +10059,54 @@ mod tests {
         };
         let err = apply_private_inventory_add_item_to_payload(&mut payload, &edit).unwrap_err();
         assert!(
-            err.to_string().contains("no template"),
+            err.to_string().contains("entire inventory is empty"),
             "unexpected error: {err}"
         );
         assert_eq!(payload, before, "failed edit must not mutate the payload");
+    }
+
+    #[test]
+    fn add_item_seeds_empty_main_container_from_another_container() {
+        // MainContainer is empty but Quickslots has a slot: addItem borrows it
+        // as a template, appends to MainContainer, and fixes m_InventoryType.
+        let other_slots = vec![inv_item_slot(
+            5,
+            INV_OTHER_LABEL,
+            "/Script/Angelscript.ItMi_Sulfur",
+            1,
+            &inv_empty_payload_map(),
+        )];
+        let mut payload = typed_inventory_private_payload(&other_slots, &[]);
+        assert_eq!(inv_slot_count(&payload, 1), 0, "MainContainer starts empty");
+        let edit = PrivateInventoryAddItemEdit {
+            path: "/Script/Angelscript.ItMi_Orenugget".to_string(),
+            count: 9,
+        };
+        apply_private_inventory_add_item_to_payload(&mut payload, &edit).unwrap();
+
+        // MainContainer now has the new item; the donor container is untouched.
+        assert_eq!(inv_slot_count(&payload, 1), 1);
+        assert_eq!(inv_slot_count(&payload, 0), 1);
+        let root = properties::parse_private_root(&payload).unwrap();
+        let prefix = inv_slots_prefix(1);
+        let resolve_main = |leaf: &[&str]| {
+            let mut p: Vec<&str> = prefix.iter().map(String::as_str).collect();
+            p.extend_from_slice(leaf);
+            inv_resolve(&root, &p).value.clone()
+        };
+        assert_eq!(
+            resolve_main(&["[0]", "m_SlotData", "m_ItemDefinition"]),
+            properties::PropertyValue::Object("/Script/Angelscript.ItMi_Orenugget".to_string())
+        );
+        assert_eq!(
+            resolve_main(&["[0]", "m_SlotData", "m_ItemCount"]),
+            properties::PropertyValue::Int(9)
+        );
+        // m_InventoryType was retargeted from Quickslots to MainContainer.
+        assert_eq!(
+            resolve_main(&["[0]", "m_InventoryType"]),
+            properties::PropertyValue::Enum(INV_MAIN_LABEL.to_string())
+        );
     }
 
     #[test]
@@ -10606,10 +10771,10 @@ mod tests {
     }
 
     #[test]
-    fn remove_item_rejects_ambiguous_duplicate_paths() {
-        // Two MainContainer slots with the same item path cannot be told apart
-        // by path alone, so removeItem must refuse rather than delete one at
-        // random. (This shouldn't arise normally — addItem rejects duplicates.)
+    fn remove_item_removes_first_of_duplicate_paths() {
+        // Real saves contain a few same-path slots; removing must delete the
+        // first match (leaving one) rather than refusing — refusing would make
+        // such items permanently undeletable.
         let dup_main = vec![
             inv_item_slot(
                 0,
@@ -10627,17 +10792,20 @@ mod tests {
             ),
         ];
         let mut payload = typed_inventory_private_payload(&[], &dup_main);
-        let before = payload.clone();
         let edit = PrivateInventoryRemoveItemEdit {
             path: "/Script/Angelscript.ItMi_Orenugget".to_string(),
         };
-        let err =
-            apply_private_inventory_remove_item_to_payload(&mut payload, &edit).unwrap_err();
-        assert!(
-            err.to_string().contains("multiple slots"),
-            "unexpected error: {err}"
+        apply_private_inventory_remove_item_to_payload(&mut payload, &edit).unwrap();
+        // One Orenugget slot remains.
+        assert_eq!(inv_slot_count(&payload, 1), 1);
+        let root = properties::parse_private_root(&payload).unwrap();
+        let prefix = inv_slots_prefix(1);
+        let mut def: Vec<&str> = prefix.iter().map(String::as_str).collect();
+        def.extend_from_slice(&["[0]", "m_SlotData", "m_ItemDefinition"]);
+        assert_eq!(
+            inv_resolve(&root, &def).value,
+            properties::PropertyValue::Object("/Script/Angelscript.ItMi_Orenugget".to_string())
         );
-        assert_eq!(payload, before, "ambiguous removal must not mutate payload");
     }
 
     #[test]
