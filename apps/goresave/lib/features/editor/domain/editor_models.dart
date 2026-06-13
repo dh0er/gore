@@ -638,6 +638,19 @@ class InventoryItemAdd {
   }
 }
 
+class InventoryItemRemove {
+  const InventoryItemRemove({required this.path});
+
+  final String path;
+
+  Map<String, Object?> toEditJson() {
+    return {
+      'path': 'private.inventory.removeItem',
+      'value': {'path': path},
+    };
+  }
+}
+
 class BackupEntry {
   const BackupEntry({
     required this.path,

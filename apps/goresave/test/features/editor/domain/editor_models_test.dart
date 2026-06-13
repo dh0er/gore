@@ -429,6 +429,16 @@ void main() {
     });
   });
 
+  test('InventoryItemRemove produces correct removeItem JSON', () {
+    const remove = InventoryItemRemove(
+      path: '/Script/Angelscript.ItMi_Orenugget',
+    );
+    expect(remove.toEditJson(), {
+      'path': 'private.inventory.removeItem',
+      'value': {'path': '/Script/Angelscript.ItMi_Orenugget'},
+    });
+  });
+
   test('BackupEntry reads companion scope and disables direct restore', () {
     final backup = BackupEntry.fromJson({
       'path': r'C:\saves\PersistentDataList.sav.bak.250',

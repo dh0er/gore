@@ -1563,6 +1563,10 @@ class _PrivateInventorySummaryCardState
   final Map<String, InventoryItemCountChange> _pendingCountChanges = {};
   ItemCategory? _selectedCategory;
   InventoryItemAdd? _pendingAdd;
+  // Path of the item queued for removal. addItem and removeItem are both
+  // structural edits, so at most one of _pendingAdd / _pendingRemovePath is
+  // ever set (the core allows one structural inventory edit per write).
+  String? _pendingRemovePath;
 
   @override
   void didUpdateWidget(covariant _PrivateInventorySummaryCard oldWidget) {
@@ -1573,6 +1577,7 @@ class _PrivateInventorySummaryCardState
       // so mutating the provider here would throw during build.
       _pendingCountChanges.clear();
       _pendingAdd = null;
+      _pendingRemovePath = null;
     }
   }
 
@@ -1580,9 +1585,13 @@ class _PrivateInventorySummaryCardState
     final countEdits =
         _pendingCountChanges.values.map((c) => c.toEditJson()).toList();
     final addEdit = _pendingAdd?.toEditJson();
+    final removeEdit = _pendingRemovePath != null
+        ? InventoryItemRemove(path: _pendingRemovePath!).toEditJson()
+        : null;
     final allEdits = [
       ...countEdits,
       ?addEdit,
+      ?removeEdit,
     ];
     if (allEdits.isEmpty) {
       widget.notifier.clearPendingEdit('inventory');
@@ -1605,6 +1614,20 @@ class _PrivateInventorySummaryCardState
       setState(() => _pendingAdd = result);
       _pushInventoryPending();
     }
+  }
+
+  void _queueRemove(PrivateInventoryItem item) {
+    setState(() {
+      // A removal supersedes any pending count change on the same item.
+      _pendingCountChanges.remove(_inventoryItemKey(item));
+      _pendingRemovePath = item.path;
+    });
+    _pushInventoryPending();
+  }
+
+  void _undoRemove() {
+    setState(() => _pendingRemovePath = null);
+    _pushInventoryPending();
   }
 
   @override
@@ -1630,7 +1653,11 @@ class _PrivateInventorySummaryCardState
 
     final hasItems = inventory.items.isNotEmpty;
     final hasPendingAdd = _pendingAdd != null;
-    final hasPendingChanges = _pendingCountChanges.isNotEmpty || hasPendingAdd;
+    final hasPendingRemove = _pendingRemovePath != null;
+    final hasPendingChanges =
+        _pendingCountChanges.isNotEmpty || hasPendingAdd || hasPendingRemove;
+    final canRemove = widget.canAddItem &&
+        inventory.writable.contains('private.inventory.removeItem');
 
     return Card(
       child: Padding(
@@ -1657,6 +1684,7 @@ class _PrivateInventorySummaryCardState
                         setState(() {
                           _pendingCountChanges.clear();
                           _pendingAdd = null;
+                          _pendingRemovePath = null;
                         });
                         widget.notifier.clearPendingEdit('inventory');
                       },
@@ -1668,11 +1696,15 @@ class _PrivateInventorySummaryCardState
                   Tooltip(
                     message: hasPendingAdd
                         ? 'Save pending changes first — one new item per save'
-                        : 'Add item to inventory',
+                        : hasPendingRemove
+                            ? 'Save the pending removal first — one structural change per save'
+                            : 'Add item to inventory',
                     child: FilledButton.icon(
                       icon: const Icon(Icons.add, size: 18),
                       label: const Text('Add item'),
-                      onPressed: hasPendingAdd ? null : _openAddDialog,
+                      onPressed: (hasPendingAdd || hasPendingRemove)
+                          ? null
+                          : _openAddDialog,
                     ),
                   ),
                 ],
@@ -1747,42 +1779,48 @@ class _PrivateInventorySummaryCardState
                                     itemCount: selectedGroup.items.length,
                                     itemBuilder: (context, index) {
                                       final item = selectedGroup.items[index];
+                                      final pendingRemoved =
+                                          hasPendingRemove &&
+                                          item.path == _pendingRemovePath &&
+                                          item.path.isNotEmpty;
                                       return ListTile(
                                         dense: true,
-                                        leading: const Icon(
-                                          Icons.category_outlined,
+                                        leading: Icon(
+                                          pendingRemoved
+                                              ? Icons.delete_outline
+                                              : Icons.category_outlined,
+                                          color: pendingRemoved
+                                              ? theme.colorScheme.error
+                                              : null,
                                         ),
-                                        title: SelectableText(
+                                        title: Text(
                                           item.id.isEmpty ? item.path : item.id,
                                           maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: pendingRemoved
+                                              ? TextStyle(
+                                                  decoration: TextDecoration
+                                                      .lineThrough,
+                                                  color: theme.colorScheme
+                                                      .onSurfaceVariant,
+                                                )
+                                              : null,
                                         ),
                                         subtitle: item.path.isEmpty
                                             ? null
-                                            : SelectableText(
+                                            : Text(
                                                 item.path,
                                                 maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
                                               ),
-                                        trailing: widget.editable
-                                            ? _InventoryItemCountEditor(
-                                                item: item,
-                                                pendingCount:
-                                                    _pendingCountChanges[
-                                                            _inventoryItemKey(
-                                                              item,
-                                                            )]
-                                                        ?.count,
-                                                onPendingCountChanged:
-                                                    (change) =>
-                                                        _setPendingCountChange(
-                                                          item,
-                                                          change,
-                                                        ),
-                                              )
-                                            : Text(
-                                                '×${item.count ?? '?'}',
-                                                style:
-                                                    theme.textTheme.bodyMedium,
-                                              ),
+                                        trailing: _inventoryItemTrailing(
+                                          theme,
+                                          item,
+                                          pendingRemoved: pendingRemoved,
+                                          canRemove: canRemove,
+                                          removeBlocked:
+                                              hasPendingAdd || hasPendingRemove,
+                                        ),
                                       );
                                     },
                                   ),
@@ -1810,6 +1848,64 @@ class _PrivateInventorySummaryCardState
       }
     });
     _pushInventoryPending();
+  }
+
+  /// Trailing widget for an inventory row: count editor + a delete button, or,
+  /// when this row is queued for removal, an "undo remove" affordance.
+  Widget _inventoryItemTrailing(
+    ThemeData theme,
+    PrivateInventoryItem item, {
+    required bool pendingRemoved,
+    required bool canRemove,
+    required bool removeBlocked,
+  }) {
+    if (pendingRemoved) {
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text('Will be removed', style: theme.textTheme.bodySmall),
+          const SizedBox(width: 4),
+          Tooltip(
+            message: 'Undo removal',
+            child: IconButton(
+              icon: const Icon(Icons.undo_outlined),
+              onPressed: _undoRemove,
+            ),
+          ),
+        ],
+      );
+    }
+    if (!widget.editable) {
+      return Text(
+        '×${item.count ?? '?'}',
+        style: theme.textTheme.bodyMedium,
+      );
+    }
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _InventoryItemCountEditor(
+          item: item,
+          pendingCount: _pendingCountChanges[_inventoryItemKey(item)]?.count,
+          onPendingCountChanged: (change) =>
+              _setPendingCountChange(item, change),
+        ),
+        if (canRemove && item.path.isNotEmpty) ...[
+          const SizedBox(width: 4),
+          Tooltip(
+            message: removeBlocked
+                ? 'Save the pending structural change first — '
+                    'one add or remove per save'
+                : 'Remove item from inventory',
+            child: IconButton(
+              icon: const Icon(Icons.delete_outline),
+              onPressed:
+                  removeBlocked ? null : () => _queueRemove(item),
+            ),
+          ),
+        ],
+      ],
+    );
   }
 }
 
@@ -1947,8 +2043,10 @@ class _InventoryItemCountEditorState extends State<_InventoryItemCountEditor> {
       return;
     }
     final parsed = int.tryParse(trimmed);
-    if (parsed == null || parsed < 0) {
-      setState(() => _error = 'Invalid');
+    if (parsed == null || parsed < 1) {
+      // Min 1: a count of 0 would leave a ghost slot (invisible in-game but
+      // still in the save). Use the remove button to delete an item.
+      setState(() => _error = 'Min 1');
       widget.onPendingCountChanged(null);
       return;
     }
