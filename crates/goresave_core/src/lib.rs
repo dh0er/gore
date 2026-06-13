@@ -5291,17 +5291,16 @@ fn donor_slot_template_bytes(
         else {
             continue;
         };
-        let Some(last) = donor_slots.last() else {
+        // Find any slot with an empty m_Payload (don't clone item-specific
+        // state) — not just the last one, which may be stateful.
+        let Some(donor_index) = donor_slots.iter().position(|slot| {
+            !struct_element_property(slot, "m_Payload")
+                .is_some_and(|p| property_value_has_container_data(&p.value))
+        }) else {
             continue;
         };
-        // Don't clone item-specific state from the donor's payload.
-        if struct_element_property(last, "m_Payload")
-            .is_some_and(|p| property_value_has_container_data(&p.value))
-        {
-            continue;
-        }
         let layout = properties::container_layout(payload, slots_prop)?;
-        if let Some(range) = layout.element_ranges.last() {
+        if let Some(range) = layout.element_ranges.get(donor_index) {
             return Ok(Some(payload[range.clone()].to_vec()));
         }
     }
@@ -10147,6 +10146,44 @@ mod tests {
         assert_eq!(
             resolve_main(&["[0]", "m_InventoryType"]),
             properties::PropertyValue::Enum(INV_MAIN_LABEL.to_string())
+        );
+    }
+
+    #[test]
+    fn add_item_seeds_empty_main_from_non_last_donor_slot() {
+        // The donor container's LAST slot is stateful (non-empty m_Payload);
+        // an earlier slot is clean. addItem must use the clean earlier slot
+        // rather than skipping the whole container.
+        let other_slots = vec![
+            inv_item_slot(
+                5,
+                INV_OTHER_LABEL,
+                "/Script/Angelscript.ItMi_Sulfur",
+                1,
+                &inv_empty_payload_map(),
+            ),
+            inv_item_slot(
+                6,
+                INV_OTHER_LABEL,
+                "/Script/Angelscript.ItMw_Sword",
+                1,
+                &inv_nonempty_payload_map(),
+            ),
+        ];
+        let mut payload = typed_inventory_private_payload(&other_slots, &[]);
+        let edit = PrivateInventoryAddItemEdit {
+            path: "/Script/Angelscript.ItMi_Orenugget".to_string(),
+            count: 2,
+        };
+        apply_private_inventory_add_item_to_payload(&mut payload, &edit).unwrap();
+        assert_eq!(inv_slot_count(&payload, 1), 1);
+        let root = properties::parse_private_root(&payload).unwrap();
+        let prefix = inv_slots_prefix(1);
+        let mut def: Vec<&str> = prefix.iter().map(String::as_str).collect();
+        def.extend_from_slice(&["[0]", "m_SlotData", "m_ItemDefinition"]);
+        assert_eq!(
+            inv_resolve(&root, &def).value,
+            properties::PropertyValue::Object("/Script/Angelscript.ItMi_Orenugget".to_string())
         );
     }
 
