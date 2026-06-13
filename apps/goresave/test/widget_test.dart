@@ -207,6 +207,22 @@ void main() {
     // No old batch save button text.
     expect(find.widgetWithText(FilledButton, 'Save 2 changes'), findsNothing);
 
+    // Searching matches across all categories, not just the selected one: the
+    // misc Ore stack surfaces even though Food is the active category.
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Filter items'),
+      'orenugget',
+    );
+    await tester.pump();
+    expect(find.text('ItMi_Orenugget'), findsOneWidget);
+    expect(find.text('ItFo_Cheese'), findsNothing);
+    // Clear the filter to resume category browsing.
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Filter items'),
+      '',
+    );
+    await tester.pump();
+
     // Edit the visible Cheese stack.
     await tester.enterText(
       find.descendant(

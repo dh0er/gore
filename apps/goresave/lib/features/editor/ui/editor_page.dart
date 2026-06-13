@@ -1560,6 +1560,7 @@ class _PrivateInventorySummaryCard extends StatefulWidget {
 class _PrivateInventorySummaryCardState
     extends State<_PrivateInventorySummaryCard> {
   String _query = '';
+  final TextEditingController _searchController = TextEditingController();
   final Map<String, InventoryItemCountChange> _pendingCountChanges = {};
   ItemCategory? _selectedCategory;
   InventoryItemAdd? _pendingAdd;
@@ -1567,6 +1568,12 @@ class _PrivateInventorySummaryCardState
   // structural edits, so at most one of _pendingAdd / _pendingRemovePath is
   // ever set (the core allows one structural inventory edit per write).
   String? _pendingRemovePath;
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
 
   @override
   void didUpdateWidget(covariant _PrivateInventorySummaryCard oldWidget) {
@@ -1665,6 +1672,13 @@ class _PrivateInventorySummaryCardState
     final selectedGroup =
         groups.where((g) => g.category == selected).firstOrNull;
 
+    // An active search shows matches across all categories as a flat list;
+    // an empty query browses by the selected category.
+    final searching = query.isNotEmpty;
+    final shownItems = searching
+        ? items
+        : (selectedGroup?.items ?? const <PrivateInventoryItem>[]);
+
     final hasItems = inventory.items.isNotEmpty;
     final hasPendingAdd = _pendingAdd != null;
     final hasPendingRemove = _pendingRemovePath != null;
@@ -1752,6 +1766,7 @@ class _PrivateInventorySummaryCardState
             if (hasItems) ...[
               const SizedBox(height: 12),
               TextField(
+                controller: _searchController,
                 decoration: const InputDecoration(
                   labelText: 'Filter items',
                   prefixIcon: Icon(Icons.search),
@@ -1789,11 +1804,15 @@ class _PrivateInventorySummaryCardState
                                         ),
                                         label:
                                             '${group.category.label} (${group.items.length})',
-                                        selected: group.category == selected,
-                                        onTap: () => setState(
-                                          () => _selectedCategory =
-                                              group.category,
-                                        ),
+                                        selected: !searching &&
+                                            group.category == selected,
+                                        onTap: () => setState(() {
+                                          _selectedCategory = group.category;
+                                          // Leave search mode so the chosen
+                                          // category's items are shown.
+                                          _query = '';
+                                          _searchController.clear();
+                                        }),
                                       ),
                                   ],
                                 ),
@@ -1802,12 +1821,12 @@ class _PrivateInventorySummaryCardState
                           ),
                           const SizedBox(width: 16),
                           Expanded(
-                            child: selectedGroup == null
+                            child: shownItems.isEmpty
                                 ? const SizedBox.shrink()
                                 : ListView.builder(
-                                    itemCount: selectedGroup.items.length,
+                                    itemCount: shownItems.length,
                                     itemBuilder: (context, index) {
-                                      final item = selectedGroup.items[index];
+                                      final item = shownItems[index];
                                       return ListTile(
                                         dense: true,
                                         leading: const Icon(
