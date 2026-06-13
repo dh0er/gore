@@ -13,7 +13,7 @@ a Flutter interface backed by a Rust savegame core.
 
 ## Compatibility
 
-Tested with Game version CL168781.
+Tested with Steam game version CL168781. Other versions probably don't work.
 
 ## Installation & Updates
 
