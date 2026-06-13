@@ -5128,22 +5128,32 @@ fn apply_private_inventory_remove_item_to_payload(
         &properties::ContainerEdit::ArrayRemove(index),
     )?;
 
-    // 4. Final proof: strict re-parse AND the item must no longer surface in
-    //    the player-inventory-region summary scan.
-    properties::parse_private_root(&patched).map_err(|err| {
+    // 4. Final proof: strict re-parse, and the targeted slot must be gone from
+    //    the MainContainer specifically. The same item path may legitimately
+    //    still exist in another container (e.g. Quickslots), so a global
+    //    player-inventory-region scan would wrongly abort the write — verify
+    //    against the edited MainContainer m_Slots only.
+    let reparsed = properties::parse_private_root(&patched).map_err(|err| {
         CoreError::Parse(format!(
             "inventory removeItem produced an inconsistent payload: {err}"
         ))
     })?;
-    let refs = scan_fstrings(&patched, 0);
-    let (items, _total, scope) = summarize_private_inventory_items(&patched, &refs, usize::MAX);
-    let still_present = scope == "player_inventory_region"
-        && items
-            .iter()
-            .any(|item| item["path"] == edit.path.as_str());
+    let patched_slots_segs = child_segments(&slots_suffix)?;
+    let patched_slots = properties::resolve(&reparsed.properties, &patched_slots_segs)?;
+    let properties::PropertyValue::Array {
+        elements: patched_slot_elems,
+    } = &patched_slots.value
+    else {
+        return Err(CoreError::Parse(
+            "MainContainer m_Slots is not a plain slot array after removal".to_string(),
+        ));
+    };
+    let still_present = patched_slot_elems
+        .iter()
+        .any(|slot| slot_item_definition(slot) == Some(edit.path.as_str()));
     if still_present {
         return Err(CoreError::Validation(format!(
-            "removed item {} still appeared in the inventory summary scan; \
+            "removed item {} still present in the MainContainer after removal; \
              aborting the write",
             edit.path
         )));
@@ -10323,6 +10333,48 @@ mod tests {
                 .iter()
                 .any(|item| item["path"] == "/Script/Angelscript.ItFo_Apple"),
             "survivor missing from summary: {items:?}"
+        );
+    }
+
+    #[test]
+    fn remove_item_succeeds_when_path_also_in_other_container() {
+        // The same item path in another container (e.g. Quickslots) must not
+        // block removing it from the MainContainer: the post-check verifies the
+        // MainContainer slot is gone, not global absence across all containers.
+        let other_slots = vec![inv_item_slot(
+            0,
+            INV_OTHER_LABEL,
+            "/Script/Angelscript.ItMi_Orenugget",
+            1,
+            &inv_empty_payload_map(),
+        )];
+        let mut payload = typed_inventory_private_payload(&other_slots, &default_main_slots());
+        assert_eq!(inv_slot_count(&payload, 0), 1);
+        assert_eq!(inv_slot_count(&payload, 1), 2);
+        let edit = PrivateInventoryRemoveItemEdit {
+            path: "/Script/Angelscript.ItMi_Orenugget".to_string(),
+        };
+        apply_private_inventory_remove_item_to_payload(&mut payload, &edit).unwrap();
+
+        // MainContainer shrank; the other container's copy is untouched.
+        assert_eq!(inv_slot_count(&payload, 1), 1);
+        assert_eq!(inv_slot_count(&payload, 0), 1);
+        let root = properties::parse_private_root(&payload).unwrap();
+        let main_prefix = inv_slots_prefix(1);
+        let mut main_def: Vec<&str> = main_prefix.iter().map(String::as_str).collect();
+        main_def.extend_from_slice(&["[0]", "m_SlotData", "m_ItemDefinition"]);
+        assert_eq!(
+            inv_resolve(&root, &main_def).value,
+            properties::PropertyValue::Object("/Script/Angelscript.ItFo_Apple".to_string()),
+            "MainContainer should retain only Apple after removing Orenugget"
+        );
+        let other_prefix = inv_slots_prefix(0);
+        let mut other_def: Vec<&str> = other_prefix.iter().map(String::as_str).collect();
+        other_def.extend_from_slice(&["[0]", "m_SlotData", "m_ItemDefinition"]);
+        assert_eq!(
+            inv_resolve(&root, &other_def).value,
+            properties::PropertyValue::Object("/Script/Angelscript.ItMi_Orenugget".to_string()),
+            "the other container's Orenugget must be left intact"
         );
     }
 
