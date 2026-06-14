@@ -94,6 +94,20 @@ class _DifficultyCardState extends State<DifficultyCard> {
         : (widget.inspection.difficulty?.permadeath ?? false);
   }
 
+  /// The SAVED (on-disk) sub-level for a field, normalised to a UI label and
+  /// independent of any pending draft. Used to decide whether a candidate
+  /// matches what is actually on disk — never read the pending draft here, or
+  /// reverting/propagation toggles could clear a still-divergent Custom edit.
+  String _storedLevel(String field) {
+    final stored = widget.inspection.difficulty;
+    final label = switch (field) {
+      'combat' => stored?.combatLabel,
+      'resources' => stored?.resourcesLabel,
+      _ => stored?.progressionLabel,
+    };
+    return _normalizeLevel(label, _storedPreset);
+  }
+
   // --- Displayed values: pending edit when present, else stored ----------
 
   String get _preset {
@@ -197,16 +211,21 @@ class _DifficultyCardState extends State<DifficultyCard> {
         (alsoProfile ?? _alsoProfile) && widget.profile != null;
     final nextAllSaves = (allSaves ?? _allSaves) && widget.profile != null;
 
-    // Does this match the stored value with no propagation? Then there is no
-    // pending work — clear it. Sub-levels only matter on Custom.
+    // Does this match the SAVED (on-disk) value with no propagation? Then there
+    // is no pending work — clear it. The comparison must be against the stored
+    // difficulty, NOT the pending draft: comparing Custom sub-levels via
+    // `_customLevel` (which reads the draft) would let a propagation toggle (or
+    // any later `_apply`) clear `pendingDifficulty` while the sub-levels still
+    // differ from disk, silently dropping the unsaved level change. Sub-levels
+    // only matter on Custom.
     final matchesStored =
         nextPreset == _storedPreset &&
         nextFlow == _storedFlow &&
         nextPerma == _storedPerma &&
         (nextPreset != 'Custom' ||
-            (nextCombat == _customLevel('combat') &&
-                nextResources == _customLevel('resources') &&
-                nextProgression == _customLevel('progression')));
+            (nextCombat == _storedLevel('combat') &&
+                nextResources == _storedLevel('resources') &&
+                nextProgression == _storedLevel('progression')));
 
     if (matchesStored && !nextAlsoProfile && !nextAllSaves) {
       widget.notifier.clearPendingDifficulty();

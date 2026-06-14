@@ -224,6 +224,64 @@ void main() {
   );
 
   testWidgets(
+    'Custom: a changed sub-level stays pending across a later _apply '
+    '(propagation toggle) — compared against STORED, not the draft',
+    (tester) async {
+      await pumpCard(tester, profile: profile);
+
+      // Stored Custom combat is Hard. Change it to Novice → a real edit.
+      // Target the Combat picker's SegmentedButton (the Row that holds the
+      // 'Combat' label).
+      final combatRow = find.ancestor(
+        of: find.text('Combat'),
+        matching: find.byType(Row),
+      );
+      final combatNovice = find.descendant(
+        of: combatRow,
+        matching: find.text('Novice'),
+      );
+      await tester.tap(combatNovice);
+      await tester.pumpAndSettle();
+      expect(notifier.state.pendingDifficulty, isNotNull);
+      expect(notifier.state.pendingDifficulty!.difficulty['combat'], 'Novice');
+
+      // Now toggle a propagation box ON then OFF. Each fires _apply. With the
+      // bug, the second toggle would compare the changed combat against the
+      // PENDING DRAFT (also Novice) → match → wrongly clear, dropping the
+      // unsaved sub-level change. The fix compares against STORED (Hard).
+      await tester.tap(find.text('Also update the profile'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Also update the profile'));
+      await tester.pumpAndSettle();
+
+      // The combat sub-level still differs from stored → still pending.
+      expect(
+        notifier.state.pendingDifficulty,
+        isNotNull,
+        reason: 'a sub-level differing from STORED must keep the edit pending',
+      );
+      expect(notifier.state.pendingDifficulty!.difficulty['combat'], 'Novice');
+      expect(notifier.state.pendingDifficulty!.alsoProfile, isFalse);
+
+      // Reverting combat back to STORED (Hard) with no propagation clears it.
+      final combatHard = find.descendant(
+        of: find.ancestor(
+          of: find.text('Combat'),
+          matching: find.byType(Row),
+        ),
+        matching: find.text('Hard'),
+      );
+      await tester.tap(combatHard);
+      await tester.pumpAndSettle();
+      expect(
+        notifier.state.pendingDifficulty,
+        isNull,
+        reason: 'all sub-levels back to STORED + no propagation → cleared',
+      );
+    },
+  );
+
+  testWidgets(
     'propagation-only: ticking a box registers a pending edit (no field change)',
     (tester) async {
       await pumpCard(tester, profile: profile);

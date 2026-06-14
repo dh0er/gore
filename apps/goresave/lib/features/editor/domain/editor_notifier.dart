@@ -662,6 +662,14 @@ class EditorNotifier extends StateNotifier<EditorState> {
         : _buildDifficultyPayload(difficultyEdit);
 
     final n = allEdits.length;
+    // Outcome tracking. The two core commands write the same .sav independently,
+    // so there is no atomic cross-command rollback: if write_save commits but
+    // write_difficulty then fails, the slot bytes are ALREADY on disk. We must
+    // therefore converge editor state with disk (no divergence) rather than
+    // pretend nothing happened — see the convergence block after the writes.
+    var slotEditsCommitted = false; // write_save succeeded (or no slot edits)
+    var difficultyCommitted = false; // write_difficulty succeeded
+    String? difficultyError; // set when write_difficulty failed after a slot commit
     var ok = false;
     await _withLoading(() async {
       final messages = <String>[];
@@ -679,6 +687,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
           },
         );
         if (response['ok'] != true) {
+          // write_save failed: nothing committed. Keep ALL pending edits.
           state = state.copyWith(error: _errorMessage(response));
           return;
         }
@@ -687,6 +696,9 @@ class EditorNotifier extends StateNotifier<EditorState> {
           _backupMessage('$n change${n == 1 ? '' : 's'} saved with backup', data),
         );
       }
+      // Either there were no slot edits, or write_save succeeded — the slot
+      // edits in the snapshot are now on disk.
+      slotEditsCommitted = true;
 
       // 2) Difficulty (write_difficulty), if pending. Each write re-reads the
       // file, so running it after the slot write is safe.
@@ -696,40 +708,73 @@ class EditorNotifier extends StateNotifier<EditorState> {
           payload: difficultyPayload,
         );
         if (response['ok'] != true) {
-          state = state.copyWith(error: _errorMessage(response));
-          return;
+          // The slot edits are already committed to disk, but the difficulty
+          // write failed. Record the error and fall through to refresh +
+          // converge: we must NOT keep the committed slot edits pending.
+          difficultyError = _errorMessage(response);
+        } else {
+          difficultyCommitted = true;
+          final data = (response['data'] as Map).cast<String, Object?>();
+          final targetsList = (difficultyPayload['targets'] as Map);
+          final saveTargets = (targetsList['saves'] as List?)?.length ?? 1;
+          final profileTarget = targetsList.containsKey('profile') ? 1 : 0;
+          final written =
+              (data['targetsWritten'] as num?)?.toInt() ??
+              (saveTargets + profileTarget);
+          messages.add(
+            written == 0
+                ? 'No difficulty changes to write'
+                : 'Difficulty written to $written '
+                      'target${written == 1 ? '' : 's'} (backup created)',
+          );
         }
-        final data = (response['data'] as Map).cast<String, Object?>();
-        final targetsList = (difficultyPayload['targets'] as Map);
-        final saveTargets = (targetsList['saves'] as List?)?.length ?? 1;
-        final profileTarget = targetsList.containsKey('profile') ? 1 : 0;
-        final written =
-            (data['targetsWritten'] as num?)?.toInt() ??
-            (saveTargets + profileTarget);
-        messages.add(
-          written == 0
-              ? 'No difficulty changes to write'
-              : 'Difficulty written to $written '
-                    'target${written == 1 ? '' : 's'} (backup created)',
-        );
       }
 
-      // Both writes accepted — report and refresh ONCE.
-      state = state.copyWith(lastWriteMessage: messages.join('; '));
+      // Report the slot/difficulty messages that did land, then refresh ONCE so
+      // the re-inspect reflects exactly what is on disk. The error (if any) is
+      // re-applied after refresh, since refresh clears it.
+      if (messages.isNotEmpty) {
+        state = state.copyWith(lastWriteMessage: messages.join('; '));
+      }
       await refresh();
-      ok = true;
+      // Overall success only when nothing failed.
+      ok = difficultyError == null;
     });
 
-    if (ok) {
-      // Clear exactly the snapshot keys plus the difficulty edit. The
-      // _withLoading → refresh() call has already triggered a central
-      // clearPendingEdits (refresh always clears all pending), so this is a
-      // belt-and-suspenders guard for the case where a mid-write keystroke
-      // registered a new key after the snapshot was taken but before refresh ran.
+    // Converge editor state with disk. After this returns, the pending set
+    // reflects exactly what is NOT yet on disk.
+    if (slotEditsCommitted) {
+      // The snapshot slot edits ARE on disk now — clear them regardless of the
+      // difficulty outcome. Leaving them pending is the divergence bug (the
+      // editor would still think on-disk changes are unsaved, and a retry would
+      // double-apply). refresh()'s _inspect already clears all pending on a
+      // successful re-inspect, but a failed re-inspect keeps them — so clear the
+      // committed keys explicitly here to guarantee convergence either way.
       for (final key in snapshotKeys) {
         clearPendingEdit(key);
       }
-      clearPendingDifficulty();
+      if (difficultyCommitted) {
+        // Difficulty is on disk too — nothing left pending for it.
+        clearPendingDifficulty();
+      } else if (difficultyError != null) {
+        // Slot edits landed but difficulty did NOT. Keep ONLY the difficulty
+        // edit pending so the user can retry just the difficulty, and surface a
+        // clear, honest error. Re-assert the pending difficulty in case the
+        // post-write refresh re-seeded/cleared it.
+        if (difficultyEdit != null) {
+          state = state.copyWith(pendingDifficulty: difficultyEdit);
+        }
+        // Only claim the slot changes were saved when there actually were any —
+        // a difficulty-only save that fails has nothing committed to report.
+        state = state.copyWith(
+          error: allEdits.isEmpty
+              ? 'Difficulty failed: $difficultyError'
+              : 'Slot changes saved, but difficulty failed: $difficultyError',
+        );
+      } else {
+        // No difficulty edit was pending — slot-only save. Nothing else to do.
+        clearPendingDifficulty();
+      }
     }
     return ok;
   }

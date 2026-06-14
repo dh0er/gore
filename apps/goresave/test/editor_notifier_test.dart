@@ -522,6 +522,59 @@ void main() {
   );
 
   test(
+    'partial commit converges: write_save succeeds, write_difficulty fails — '
+    'slot edits cleared (committed), difficulty kept, honest error',
+    () async {
+      final core = _FailingDifficultyWriteCoreService(
+        scanData: difficultyScanData(),
+      );
+      final notifier = difficultyNotifier(core);
+      await pumpEventQueue();
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+      notifier.setPendingEdit(
+        'publicName',
+        const PendingSaveEdit(
+          edits: [
+            {'path': 'public.m_PlayerSaveName', 'value': 'Renamed'},
+          ],
+        ),
+      );
+      const pendingDifficulty = PendingDifficulty(
+        difficulty: {'preset': 'Hard', 'flowHelper': false, 'permadeath': true},
+      );
+      notifier.setPendingDifficulty(pendingDifficulty);
+
+      final ok = await notifier.saveAllPending();
+
+      expect(ok, isFalse, reason: 'overall save failed (difficulty did not land)');
+      // write_save ran (and succeeded) before the failing write_difficulty.
+      final writeCommands = core.requests
+          .map((r) => r.command)
+          .where((c) => c == 'write_save' || c == 'write_difficulty')
+          .toList();
+      expect(writeCommands, ['write_save', 'write_difficulty']);
+      // The committed slot edits are now on disk — they MUST NOT stay pending
+      // (that would be the divergence bug + a double-apply on retry).
+      expect(
+        notifier.state.pendingEdits.containsKey('publicName'),
+        isFalse,
+        reason: 'committed slot edits cleared regardless of difficulty outcome',
+      );
+      // The difficulty did NOT land — keep ONLY it pending so the user can
+      // retry just the difficulty.
+      expect(notifier.state.pendingDifficulty, isNotNull);
+      expect(notifier.state.pendingDifficulty, pendingDifficulty);
+      // Honest, specific error surfaced.
+      expect(
+        notifier.state.error,
+        contains('Slot changes saved, but difficulty failed'),
+      );
+      expect(notifier.state.error, contains('difficulty write failed'));
+    },
+  );
+
+  test(
     'global Reset (refresh) clears a pending difficulty edit',
     () async {
       final core = _RecordingCoreService(scanData: difficultyScanData());
@@ -1797,6 +1850,30 @@ class _FailingWriteCoreService extends _RecordingCoreService {
       return {
         'ok': false,
         'error': {'message': 'write failed'},
+      };
+    }
+    return super.execute(command, payload: payload);
+  }
+}
+
+/// write_save succeeds, but write_difficulty always fails — used to exercise
+/// the partial-commit convergence path (slot edits land on disk, difficulty
+/// does not).
+class _FailingDifficultyWriteCoreService extends _RecordingCoreService {
+  _FailingDifficultyWriteCoreService({super.scanData});
+
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    if (command == 'write_difficulty') {
+      requests.add(
+        _RecordedRequest(command, Map<String, Object?>.from(payload)),
+      );
+      return {
+        'ok': false,
+        'error': {'message': 'difficulty write failed'},
       };
     }
     return super.execute(command, payload: payload);
