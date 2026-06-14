@@ -484,6 +484,69 @@ void main() {
 
     expect(find.bySemanticsLabel('Loading editor data'), findsNothing);
   });
+
+  testWidgets(
+      'non-removable inventory item shows a disabled trash button with an '
+      'explanatory tooltip', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1400, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final core = _RemovableInventoryCoreService();
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          coreServiceProvider.overrideWithValue(core),
+          editorSettingsStoreProvider.overrideWithValue(
+            const NoopEditorSettingsStore(),
+          ),
+        ],
+        child: const GoresaveApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.widgetWithText(Tab, 'Inventory'));
+    await tester.pumpAndSettle();
+
+    // Food is the first category, so the non-removable Cheese stack is visible.
+    final cheeseRow = find.ancestor(
+      of: find.text('ItFo_Cheese'),
+      matching: find.byType(ListTile),
+    );
+    expect(cheeseRow, findsOneWidget);
+    // The trash button renders even though the item is non-removable, but it is
+    // disabled and explains why via its tooltip.
+    final cheeseDeleteTooltip = find.descendant(
+      of: cheeseRow,
+      matching: find.byTooltip(
+        "Can't delete: this item is likely equipped or "
+        'assigned to a hotkey slot',
+      ),
+    );
+    expect(cheeseDeleteTooltip, findsOneWidget);
+    final cheeseDelete = tester.widget<IconButton>(
+      find.descendant(of: cheeseDeleteTooltip, matching: find.byType(IconButton)),
+    );
+    expect(cheeseDelete.onPressed, isNull);
+
+    // Switch to the removable Orenugget stack: its trash button is enabled with
+    // the standard remove tooltip.
+    await tester.tap(find.text('Miscellaneous (1)'));
+    await tester.pumpAndSettle();
+
+    final oreRow = find.ancestor(
+      of: find.text('ItMi_Orenugget'),
+      matching: find.byType(ListTile),
+    );
+    final oreDeleteTooltip = find.descendant(
+      of: oreRow,
+      matching: find.byTooltip('Remove item from inventory'),
+    );
+    expect(oreDeleteTooltip, findsOneWidget);
+    final oreDelete = tester.widget<IconButton>(
+      find.descendant(of: oreDeleteTooltip, matching: find.byType(IconButton)),
+    );
+    expect(oreDelete.onPressed, isNotNull);
+  });
 }
 
 class _RecordedRequest {
@@ -846,6 +909,41 @@ class _FakeCoreService implements GoresaveCoreService {
           'error': {'message': 'Unhandled fake command $command'},
         };
     }
+  }
+}
+
+/// A fake core that enables the inventory remove (trash) UI: it verifies the
+/// typed parse, advertises `private.inventory.removeItem`, and marks the
+/// Orenugget stack removable while the Cheese stack is NOT removable (its asset
+/// path occurs in more than one container — e.g. also equipped / in a
+/// quickslot — so the core can't unambiguously remove it).
+class _RemovableInventoryCoreService extends _FakeCoreService {
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    final result = await super.execute(command, payload: payload);
+    if (command != 'inspect_save') return result;
+    final data = (result['data'] as Map).cast<String, Object?>();
+    final private = (data['private'] as Map).cast<String, Object?>();
+    // Mark the typed parse verified so addItem/removeItem are gated open.
+    private['typedParse'] = {'status': 'ok', 'propertyCount': 1, 'maxDepth': 1};
+    final inventory = (private['inventory'] as Map).cast<String, Object?>();
+    inventory['writable'] = const [
+      'private.inventory.setItemCount',
+      'private.inventory.removeItem',
+    ];
+    final items = (inventory['items'] as List)
+        .map((e) => (e as Map).cast<String, Object?>())
+        .toList();
+    for (final item in items) {
+      // Orenugget is uniquely in the MainContainer → removable; Cheese also
+      // lives in another container → not removable (trash disabled).
+      item['removable'] = item['id'] == 'ItMi_Orenugget';
+    }
+    inventory['items'] = items;
+    return result;
   }
 }
 

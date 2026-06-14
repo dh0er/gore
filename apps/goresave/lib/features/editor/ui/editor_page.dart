@@ -1961,17 +1961,26 @@ class _PrivateInventorySummaryCardState
             '×${item.count ?? '?'}',
             style: theme.textTheme.bodyMedium,
           ),
-        if (canRemove && item.path.isNotEmpty && item.removable) ...[
+        if (canRemove && item.path.isNotEmpty) ...[
           const SizedBox(width: 4),
           Tooltip(
-            message: removeBlocked
+            message: !item.removable
+                ? "Can't delete: this item is likely equipped or "
+                    'assigned to a hotkey slot'
+                : removeBlocked
                 ? 'Save or reset your pending inventory changes first — '
                     'an add or remove must be saved on its own'
                 : 'Remove item from inventory',
             child: IconButton(
               icon: const Icon(Icons.delete_outline),
-              onPressed:
-                  removeBlocked ? null : () => _queueRemove(item),
+              // A non-removable item shows the trash icon disabled (its asset
+              // path occurs in more than one container — e.g. also equipped or
+              // in a quickslot — so the core can't unambiguously remove it). A
+              // removable item is disabled only while a structural/count edit
+              // is pending; otherwise it queues the remove.
+              onPressed: (!item.removable || removeBlocked)
+                  ? null
+                  : () => _queueRemove(item),
             ),
           ),
         ],
