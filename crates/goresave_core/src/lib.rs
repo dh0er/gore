@@ -2283,9 +2283,7 @@ fn apply_save_difficulty(payload: &mut Vec<u8>, req: &DifficultyRequest) -> Resu
     if let Some(perma) = req.resolved_permadeath() {
         let refs = scan_fstrings(payload, 0);
         let end = refs.len();
-        if find_ref_in_range(&refs, 0, end, "m_PermanentDeath").is_some() {
-            write_bool_property_in_range(payload, &refs, 0, end, "m_PermanentDeath", perma)?;
-        }
+        write_permadeath_in_range(payload, &refs, 0, end, perma)?;
     }
     if let Some(flow) = req.flow_helper {
         let refs = scan_fstrings(payload, 0);
@@ -2352,16 +2350,22 @@ fn write_profile_difficulty(
             )?;
         }
     }
-    for (name, val) in [
-        ("m_PermanentDeath", req.resolved_permadeath()),
-        ("m_FakeSloppyCombos", req.flow_helper),
-    ] {
-        let Some(v) = val else { continue };
+    // Permadeath: write to whichever spelling (m_PermanentDeath / m_PermaDeath)
+    // is present in the profile range. Re-scan + re-locate first (earlier splices
+    // shift offsets), exactly like the per-field pattern below.
+    if let Some(perma) = req.resolved_permadeath() {
         let refs = scan_fstrings(data, 0);
         let (s, e) = profile_range_by_id(&refs, profile_id, data)
             .ok_or_else(|| CoreError::Validation(format!("profile {profile_id} not found")))?;
-        if find_ref_in_range(&refs, s, e, name).is_some() {
-            write_bool_property_in_range(data, &refs, s, e, name, v)?;
+        write_permadeath_in_range(data, &refs, s, e, perma)?;
+    }
+    // Flow helper (no alternate spelling).
+    if let Some(flow) = req.flow_helper {
+        let refs = scan_fstrings(data, 0);
+        let (s, e) = profile_range_by_id(&refs, profile_id, data)
+            .ok_or_else(|| CoreError::Validation(format!("profile {profile_id} not found")))?;
+        if find_ref_in_range(&refs, s, e, "m_FakeSloppyCombos").is_some() {
+            write_bool_property_in_range(data, &refs, s, e, "m_FakeSloppyCombos", flow)?;
         }
     }
     Ok(())
@@ -2429,6 +2433,29 @@ fn write_bool_property_in_range(
         .get_mut(offset)
         .ok_or_else(|| CoreError::Parse(format!("bool value for {name} is out of range")))? =
         if value { 1 } else { 0 };
+    Ok(())
+}
+
+/// Permadeath may be stored under either spelling depending on save version.
+/// The read path falls back from `m_PermanentDeath` to `m_PermaDeath`
+/// (see `parse_profile_summaries`); the write path mirrors that here.
+const PERMADEATH_NAMES: [&str; 2] = ["m_PermanentDeath", "m_PermaDeath"];
+
+/// Write `value` to whichever permadeath spelling is present in `[s, e)`.
+/// If neither is present, skip silently (matches the existing absent-field
+/// behavior at both write sites).
+fn write_permadeath_in_range(
+    payload: &mut [u8],
+    refs: &[FStringRef],
+    s: usize,
+    e: usize,
+    value: bool,
+) -> Result<(), CoreError> {
+    for name in PERMADEATH_NAMES {
+        if find_ref_in_range(refs, s, e, name).is_some() {
+            return write_bool_property_in_range(payload, refs, s, e, name, value);
+        }
+    }
     Ok(())
 }
 
@@ -7046,6 +7073,55 @@ mod tests {
             .any(|p| p.ends_with("DifficultyPreset_Custom")));
         assert!(presets.iter().any(|p| p.ends_with("DifficultyPreset_Hard")));
         assert!(!presets.iter().any(|p| p.ends_with("DifficultyPreset_Easy")));
+    }
+
+    #[test]
+    fn write_profile_difficulty_writes_permadeath_under_alternate_spelling() {
+        // A 2-profile buffer where the TARGET profile (id 1) stores permadeath
+        // under the alternate spelling `m_PermaDeath` (the read parser already
+        // supports this fallback; the write path must mirror it).
+        let mut data = b"GVAS".to_vec();
+        data.extend_from_slice(&fstring("m_Profiles"));
+        // profile 0 (untouched)
+        data.extend_from_slice(&fstring("m_ProfileName"));
+        data.extend_from_slice(&fstring("m_ProfileId"));
+        data.extend_from_slice(&fstring("IntProperty"));
+        data.extend_from_slice(&[0u8; 4]);
+        data.extend_from_slice(&4u32.to_le_bytes());
+        data.push(0);
+        data.extend_from_slice(&0i32.to_le_bytes());
+        // profile 1 (target) — permadeath stored as `m_PermaDeath`, currently true.
+        data.extend_from_slice(&fstring("m_ProfileName"));
+        data.extend_from_slice(&fstring("m_ProfileId"));
+        data.extend_from_slice(&fstring("IntProperty"));
+        data.extend_from_slice(&[0u8; 4]);
+        data.extend_from_slice(&4u32.to_le_bytes());
+        data.push(0);
+        data.extend_from_slice(&1i32.to_le_bytes());
+        data.extend_from_slice(&fstring("m_PermaDeath"));
+        data.extend_from_slice(&fstring("BoolProperty"));
+        data.extend_from_slice(&[0u8; 8]);
+        data.push(1); // currently on
+        data.extend_from_slice(&fstring("SavedDataVersion"));
+
+        // Novice forces permadeath off (resolved_permadeath() => Some(false)).
+        let req = DifficultyRequest {
+            preset: "Novice".into(),
+            combat: None,
+            resources: None,
+            progression: None,
+            flow_helper: None,
+            permadeath: Some(true),
+        };
+        write_profile_difficulty(&mut data, 1, &req).unwrap();
+
+        let refs = scan_fstrings(&data, 0);
+        let (s, e) = profile_range_by_id(&refs, 1, &data).unwrap();
+        assert_eq!(
+            read_bool_property_in_range(&data, &refs, s, e, "m_PermaDeath"),
+            Some(false),
+            "Novice-forced permadeath-off must be written even under the m_PermaDeath spelling",
+        );
     }
 
     #[test]
