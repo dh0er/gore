@@ -2247,6 +2247,76 @@ fn apply_save_difficulty(payload: &mut Vec<u8>, req: &DifficultyRequest) -> Resu
     Ok(())
 }
 
+fn profile_range_by_id(refs: &[FStringRef], profile_id: i32, payload: &[u8]) -> Option<(usize, usize)> {
+    let profiles_idx = refs.iter().position(|r| r.value == "m_Profiles")?;
+    let profiles_end = refs
+        .iter()
+        .enumerate()
+        .skip(profiles_idx + 1)
+        .find(|(_, r)| r.value == "SavedDataVersion")
+        .map(|(i, _)| i)
+        .unwrap_or(refs.len());
+    let starts: Vec<usize> = refs
+        .iter()
+        .enumerate()
+        .take(profiles_end)
+        .skip(profiles_idx + 1)
+        .filter_map(|(i, r)| (r.value == "m_ProfileName").then_some(i))
+        .collect();
+    for (ord, &start) in starts.iter().enumerate() {
+        let end = starts.get(ord + 1).copied().unwrap_or(profiles_end);
+        let id = read_i32_property_in_range(payload, refs, start, end, "m_ProfileId")
+            .unwrap_or(ord as i32);
+        if id == profile_id {
+            return Some((start, end));
+        }
+    }
+    None
+}
+
+fn write_profile_difficulty(
+    data: &mut Vec<u8>,
+    profile_id: i32,
+    req: &DifficultyRequest,
+) -> Result<(), CoreError> {
+    if !data.starts_with(b"GVAS") {
+        return Err(CoreError::Parse(
+            "PersistentDataList.sav is not a GVAS file".into(),
+        ));
+    }
+    // Apply field-by-field, re-locating the profile range after each splice
+    // (reuses the same resolution helpers as apply_save_difficulty for consistency).
+    for (name, class) in req.class_edits()? {
+        let refs = scan_fstrings(data, 0);
+        let (s, e) = profile_range_by_id(&refs, profile_id, data)
+            .ok_or_else(|| CoreError::Validation(format!("profile {profile_id} not found")))?;
+        // Skip silently if a field is absent in this profile range.
+        if find_ref_in_range(&refs, s, e, name).is_some() {
+            replace_class_or_str_property_in_range(
+                data,
+                &refs,
+                s,
+                e,
+                name,
+                &format!("{ANGELSCRIPT}{class}"),
+            )?;
+        }
+    }
+    for (name, val) in [
+        ("m_PermanentDeath", req.resolved_permadeath()),
+        ("m_FakeSloppyCombos", req.flow_helper),
+    ] {
+        let Some(v) = val else { continue };
+        let refs = scan_fstrings(data, 0);
+        let (s, e) = profile_range_by_id(&refs, profile_id, data)
+            .ok_or_else(|| CoreError::Validation(format!("profile {profile_id} not found")))?;
+        if find_ref_in_range(&refs, s, e, name).is_some() {
+            write_bool_property_in_range(data, &refs, s, e, name, v)?;
+        }
+    }
+    Ok(())
+}
+
 fn read_i32_after_property(payload: &[u8], refs: &[FStringRef], name: &str) -> Option<i32> {
     let name_idx = refs.iter().position(|r| r.value == name)?;
     read_i32_property_at(payload, refs, name_idx)
@@ -6710,6 +6780,63 @@ mod tests {
             read_bool_property_in_range(&payload, &refs2, 0, refs2.len(), "m_PermanentDeath"),
             Some(true),
         );
+    }
+
+    #[test]
+    fn write_profile_difficulty_targets_only_the_named_profile() {
+        let mut data = b"GVAS".to_vec();
+        data.extend_from_slice(&fstring("m_Profiles"));
+        // profile 0
+        data.extend_from_slice(&fstring("m_ProfileName"));
+        data.extend_from_slice(&fstring("m_ProfileId"));
+        data.extend_from_slice(&fstring("IntProperty"));
+        data.extend_from_slice(&[0u8; 4]);
+        data.extend_from_slice(&4u32.to_le_bytes());
+        data.push(0);
+        data.extend_from_slice(&0i32.to_le_bytes());
+        data.extend_from_slice(&fstring("m_difficultyPreset"));
+        data.extend_from_slice(&fstring("ClassProperty"));
+        data.extend_from_slice(&[0u8; 4]);
+        data.extend_from_slice(&0u32.to_le_bytes());
+        data.push(0);
+        data.extend_from_slice(&fstring("/Script/Angelscript.DifficultyPreset_Custom"));
+        // profile 1
+        data.extend_from_slice(&fstring("m_ProfileName"));
+        data.extend_from_slice(&fstring("m_ProfileId"));
+        data.extend_from_slice(&fstring("IntProperty"));
+        data.extend_from_slice(&[0u8; 4]);
+        data.extend_from_slice(&4u32.to_le_bytes());
+        data.push(0);
+        data.extend_from_slice(&1i32.to_le_bytes());
+        data.extend_from_slice(&fstring("m_difficultyPreset"));
+        data.extend_from_slice(&fstring("ClassProperty"));
+        data.extend_from_slice(&[0u8; 4]);
+        data.extend_from_slice(&0u32.to_le_bytes());
+        data.push(0);
+        data.extend_from_slice(&fstring("/Script/Angelscript.DifficultyPreset_Easy"));
+        data.extend_from_slice(&fstring("SavedDataVersion"));
+
+        let req = DifficultyRequest {
+            preset: "Hard".into(),
+            combat: None,
+            resources: None,
+            progression: None,
+            flow_helper: None,
+            permadeath: None,
+        };
+        write_profile_difficulty(&mut data, 1, &req).unwrap();
+
+        let refs = scan_fstrings(&data, 0);
+        let presets: Vec<_> = refs
+            .iter()
+            .filter(|r| r.value.contains("DifficultyPreset_"))
+            .map(|r| r.value.clone())
+            .collect();
+        assert!(presets
+            .iter()
+            .any(|p| p.ends_with("DifficultyPreset_Custom")));
+        assert!(presets.iter().any(|p| p.ends_with("DifficultyPreset_Hard")));
+        assert!(!presets.iter().any(|p| p.ends_with("DifficultyPreset_Easy")));
     }
 
     #[test]
