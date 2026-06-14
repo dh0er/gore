@@ -2180,6 +2180,32 @@ fn read_bool_property_in_range(
     read_bool_property_at(payload, refs, name_idx)
 }
 
+fn write_bool_property_in_range(
+    payload: &mut [u8],
+    refs: &[FStringRef],
+    start_idx: usize,
+    end_idx: usize,
+    name: &str,
+    value: bool,
+) -> Result<(), CoreError> {
+    let name_idx = find_ref_in_range(refs, start_idx, end_idx, name)
+        .ok_or_else(|| CoreError::Parse(format!("property {name} was not found")))?;
+    let type_ref = refs
+        .get(name_idx + 1)
+        .ok_or_else(|| CoreError::Parse(format!("type for {name} was not found")))?;
+    if type_ref.value != "BoolProperty" {
+        return Err(CoreError::Parse(format!(
+            "property {name} is not a BoolProperty"
+        )));
+    }
+    let offset = type_ref.len_offset + type_ref.total_len + 8;
+    *payload
+        .get_mut(offset)
+        .ok_or_else(|| CoreError::Parse(format!("bool value for {name} is out of range")))? =
+        if value { 1 } else { 0 };
+    Ok(())
+}
+
 fn find_ref_in_range(
     refs: &[FStringRef],
     start_idx: usize,
@@ -6527,6 +6553,25 @@ mod tests {
         out.extend_from_slice(value.as_bytes());
         out.push(0);
         out
+    }
+
+    #[test]
+    fn write_bool_property_in_range_flips_value_byte() {
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&fstring("m_PermanentDeath"));
+        payload.extend_from_slice(&fstring("BoolProperty"));
+        payload.extend_from_slice(&[0u8; 8]);
+        payload.push(0); // value byte
+
+        let refs = scan_fstrings(&payload, 0);
+        write_bool_property_in_range(&mut payload, &refs, 0, refs.len(), "m_PermanentDeath", true)
+            .unwrap();
+
+        let refs2 = scan_fstrings(&payload, 0);
+        assert_eq!(
+            read_bool_property_in_range(&payload, &refs2, 0, refs2.len(), "m_PermanentDeath"),
+            Some(true),
+        );
     }
 
     #[test]
