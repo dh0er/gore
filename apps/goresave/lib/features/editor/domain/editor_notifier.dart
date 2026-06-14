@@ -1344,7 +1344,11 @@ class EditorNotifier extends StateNotifier<EditorState> {
       );
       return false;
     }
-    if (state.pendingEdits.isNotEmpty) {
+    // Guard on hasUnsavedEdits (pendingEdits OR a pending difficulty), matching
+    // selectProfile/refresh: removing or duplicating a memory event writes the
+    // file immediately and its success path re-seeds the editors, which would
+    // silently discard a pending difficulty edit just as it would pending edits.
+    if (state.hasUnsavedEdits) {
       state = state.copyWith(
         error:
             'Save or reset your unsaved changes first — removing or '

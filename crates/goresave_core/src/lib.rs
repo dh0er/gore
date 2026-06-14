@@ -1737,6 +1737,32 @@ fn create_backup_copy(path: &Path) -> Result<PathBuf, CoreError> {
     Ok(backup_path)
 }
 
+/// Back up `path` with a suffix that is free on disk for this file AND not in
+/// `avoid`. Used when backing up several independent files in one round: each
+/// file gets a distinct suffix so the paired-restore heuristic
+/// ([`prepare_paired_persistent_data_list_restore`]) never auto-couples them,
+/// even when their names differ (a per-file existence check alone would not
+/// stop two differently-named files from sharing the same timestamp suffix).
+fn create_unique_backup_avoiding(path: &Path, avoid: &[String]) -> Result<PathBuf, CoreError> {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let mut suffix = format!("{timestamp}");
+    let mut attempt = 0u32;
+    while avoid.iter().any(|s| s == &suffix)
+        || backup_path_with_suffix(path, &suffix).exists()
+    {
+        attempt += 1;
+        suffix = format!("{timestamp}.{attempt}");
+        if attempt >= 1_000_000 {
+            suffix = format!("{timestamp}.overflow");
+            break;
+        }
+    }
+    create_backup_with_suffix(path, &suffix)
+}
+
 fn unique_backup_path(path: &Path) -> PathBuf {
     let suffix = shared_backup_suffix(std::slice::from_ref(&path));
     backup_path_with_suffix(path, &suffix)
@@ -6697,14 +6723,25 @@ fn write_difficulty_internal(
     let changed: Vec<&DifficultyWritePlan> =
         plans.iter().filter(|p| p.original != p.edited).collect();
 
-    // Back up every changed target under ONE shared suffix BEFORE writing
-    // anything, so a restore can pair save + profile by suffix.
+    // Back up every changed target with its OWN unique suffix BEFORE writing
+    // anything. Difficulty edits to separate files (slot saves, profile) are
+    // logically independent and must each restore on their own — they must NOT
+    // be coupled by a shared suffix, or prepare_paired_persistent_data_list_restore
+    // would auto-roll-back the profile when a single slot is restored.
     if backup {
-        let paths: Vec<&Path> = changed.iter().map(|p| p.path.as_path()).collect();
-        if !paths.is_empty() {
-            let suffix = shared_backup_suffix(&paths);
-            for p in &changed {
-                create_backup_with_suffix(&p.path, &suffix)?;
+        // Track the suffixes already chosen in this batch so two files with
+        // different names (e.g. G1R-001.sav and PersistentDataList.sav) never
+        // land on the same suffix — create_backup_copy only checks its own
+        // file's backup path for collisions, not its siblings'.
+        let mut used_suffixes: Vec<String> = Vec::new();
+        for p in &changed {
+            let backup_path = create_unique_backup_avoiding(&p.path, &used_suffixes)?;
+            if let Some(name) = backup_path.file_name().and_then(|n| n.to_str()) {
+                if let Ok(prefix) = backup_file_prefix(&p.path) {
+                    if let Some(suffix) = name.strip_prefix(&prefix) {
+                        used_suffixes.push(suffix.to_string());
+                    }
+                }
             }
         }
     }
@@ -7202,7 +7239,7 @@ mod tests {
     }
 
     #[test]
-    fn write_difficulty_internal_writes_save_and_profile_under_one_backup_suffix() {
+    fn write_difficulty_internal_writes_save_and_profile_under_distinct_backup_suffixes() {
         let dir = tempdir().unwrap();
         let save_path = dir.path().join("G1R-001.sav");
         let profile_path = dir.path().join("PersistentDataList.sav");
@@ -7276,7 +7313,10 @@ mod tests {
         assert!(presets.iter().any(|p| p.ends_with("DifficultyPreset_Hard")));
         assert!(!presets.iter().any(|p| p.ends_with("DifficultyPreset_Easy")));
 
-        // Both targets were backed up under ONE shared suffix.
+        // Each target was backed up under its OWN distinct suffix, so the
+        // paired-restore heuristic (prepare_paired_persistent_data_list_restore,
+        // which matches when the companion's suffix equals the slot's suffix)
+        // does NOT auto-couple a single slot restore to the profile rollback.
         let backups = dir.path().join("goresave_backups");
         let mut save_suffix = None;
         let mut profile_suffix = None;
@@ -7290,7 +7330,24 @@ mod tests {
         }
         let save_suffix = save_suffix.expect("save backup created");
         let profile_suffix = profile_suffix.expect("profile backup created");
-        assert_eq!(save_suffix, profile_suffix, "shared backup suffix");
+        assert_ne!(
+            save_suffix, profile_suffix,
+            "save and profile backups must have DISTINCT suffixes so a single \
+             slot restore is not coupled to the profile rollback",
+        );
+
+        // Confirm the suffixes really would not pair: the slot suffix must not
+        // match the companion-prefixed name (the exact check restore performs).
+        assert_ne!(
+            format!("PersistentDataList.sav.bak.{save_suffix}"),
+            format!("PersistentDataList.sav.bak.{profile_suffix}"),
+        );
+        let pdl_backup = backups.join(format!("PersistentDataList.sav.bak.{save_suffix}"));
+        assert!(
+            !pdl_backup.exists(),
+            "no PersistentDataList backup shares the slot's suffix, so \
+             prepare_paired_persistent_data_list_restore finds no companion to pair",
+        );
     }
 
     #[test]

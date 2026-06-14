@@ -1390,6 +1390,52 @@ void main() {
     },
   );
 
+  test(
+    'applyMemoryEventEdit is blocked and preserves a pending difficulty edit',
+    () async {
+      final core = _RecordingCoreService();
+      final notifier = EditorNotifier(
+        core,
+        saveDir: r'C:\tmp\saves',
+        codecHostPath: r'C:\tools\goresave_g1r_codec_host.exe',
+        gameExePath: r'C:\Games\G1R\G1R-Win64-Shipping.exe',
+      );
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+      // Seed an unsaved difficulty edit (lives in pendingDifficulty, NOT
+      // pendingEdits) — a memory-event write would otherwise refresh and
+      // silently discard it.
+      notifier.setPendingDifficulty(
+        const PendingDifficulty(
+          difficulty: {
+            'preset': 'Hard',
+            'flowHelper': false,
+            'permadeath': true,
+          },
+        ),
+      );
+      expect(notifier.state.hasUnsavedEdits, isTrue);
+
+      final writesBefore = core.requests
+          .where((r) => r.command == 'write_save')
+          .length;
+
+      final result = await notifier.applyMemoryEventEdit(
+        MemoryEventEdit.remove(arrayPath: const ['MemorizedEvents'], index: 0),
+      );
+
+      expect(result, isFalse);
+      expect(notifier.state.error, isNotNull);
+      // No write_save must have been issued.
+      final writesAfter = core.requests
+          .where((r) => r.command == 'write_save')
+          .length;
+      expect(writesAfter, writesBefore);
+      // The pending difficulty edit must still be intact (not silently dropped).
+      expect(notifier.state.pendingDifficulty, isNotNull);
+    },
+  );
+
   // ---------------------------------------------------------------------------
   // Profile switcher (selectProfile)
   // ---------------------------------------------------------------------------
