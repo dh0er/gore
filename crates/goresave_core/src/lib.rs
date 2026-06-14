@@ -514,7 +514,16 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
                 .unwrap_or(true);
             // Difficulty is profile-only now; PersistentDataList.sav is a plain
             // GVAS file with no compressed stream, so no codec host is needed.
-            let targets = payload.get("targets").cloned().unwrap_or(Value::Null);
+            // Accept BOTH the in-tree `targets: { profile }` wrapper and the
+            // top-level `profile: { path, profileId }` shape documented in the
+            // spec, so direct/API callers following the docs work too.
+            let targets = match payload.get("targets") {
+                Some(t) if !t.is_null() => t.clone(),
+                _ => match payload.get("profile") {
+                    Some(profile) if !profile.is_null() => json!({ "profile": profile }),
+                    _ => Value::Null,
+                },
+            };
             Ok(write_difficulty_internal(&req, &targets, backup)?)
         }
         other => Err(CoreError::InvalidRequest(format!(
@@ -7199,6 +7208,38 @@ mod tests {
         assert!(presets.iter().any(|p| p.ends_with("DifficultyPreset_Hard")));
         assert!(!presets.iter().any(|p| p.ends_with("DifficultyPreset_Easy")));
         assert!(dir.path().join("goresave_backups").exists());
+    }
+
+    #[test]
+    fn write_difficulty_accepts_top_level_profile_shape() {
+        // The spec documents `profile: { path, profileId }` at the top level of
+        // the payload (no `targets` wrapper). execute_json_inner must accept it
+        // so direct/API callers following the docs can write profile difficulty.
+        let dir = tempdir().unwrap();
+        let profile_path = dir.path().join("PersistentDataList.sav");
+        fs::write(&profile_path, difficulty_persistent_profiles()).unwrap();
+
+        let input = json!({
+            "command": "write_difficulty",
+            "payload": {
+                "difficulty": { "preset": "Hard" },
+                "profile": {
+                    "path": profile_path.display().to_string(),
+                    "profileId": 1,
+                },
+                "backup": true,
+            }
+        })
+        .to_string();
+
+        let response = execute_json_inner(&input).unwrap();
+        assert_eq!(response["targetsWritten"], 1);
+        let written = fs::read(&profile_path).unwrap();
+        assert!(
+            scan_fstrings(&written, 0)
+                .into_iter()
+                .any(|r| r.value.ends_with("DifficultyPreset_Hard")),
+        );
     }
 
     #[test]

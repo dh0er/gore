@@ -75,6 +75,12 @@ class ProfileDifficultyChip extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final hasProfile = profile != null;
+    // A profile carries editable difficulty when it has ANY difficulty field —
+    // even if the stored preset class is unrecognised (e.g. a new preset after a
+    // game update): the dialog can still repair it. Only a profile synthesized
+    // without difficulty data (no `m_Profiles` entry to patch) is non-editable,
+    // where a write would dead-end (fails, or targetsWritten: 0).
+    final hasDifficulty = hasProfile && profile!.difficulty.hasAnyValue;
     final preset = hasProfile
         ? _normalizePreset(profile!.difficulty.presetLabel)
         : _unknownPreset;
@@ -82,12 +88,10 @@ class ProfileDifficultyChip extends StatelessWidget {
     final color = known ? _presetColor(preset) : _presetColor(_unknownPreset);
     final label = known
         ? preset
-        : (hasProfile ? 'No difficulty' : 'No profile');
-    // Only a profile whose difficulty actually resolved is editable. A profile
-    // synthesized from slots (or a scan that found no difficulty fields) has no
-    // `m_Profiles` entry to patch, so a write would dead-end (fails, or
-    // targetsWritten: 0). Gate on a resolved preset, not just a profile object.
-    final enabled = hasProfile && known && !isLoading;
+        : (hasDifficulty
+              ? 'Difficulty'
+              : (hasProfile ? 'No difficulty' : 'No profile'));
+    final enabled = hasDifficulty && !isLoading;
 
     final chip = AnimatedContainer(
       duration: const Duration(milliseconds: 120),
@@ -140,7 +144,7 @@ class ProfileDifficultyChip extends StatelessWidget {
     return Tooltip(
       message: !hasProfile
           ? 'No profile selected'
-          : (known
+          : (hasDifficulty
                 ? 'Edit difficulty for this profile'
                 : 'This profile has no editable difficulty'),
       child: Material(
