@@ -406,6 +406,10 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// Convenience forwarder — prefer [EditorState.pendingEditCount].
   int get pendingEditCount => state.pendingEditCount;
 
+  /// The current error message, if any. Lets a modal (e.g. the difficulty
+  /// dialog) read a just-failed write's error without reaching into `state`.
+  String? get lastError => state.error;
+
   /// Dismiss the current error banner.
   void dismissError() {
     if (state.error != null) state = state.copyWith(clearError: true);

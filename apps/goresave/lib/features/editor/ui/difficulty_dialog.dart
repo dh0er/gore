@@ -193,6 +193,11 @@ class _DifficultyDialogState extends State<DifficultyDialog> {
   late String _progression;
   bool _saving = false;
 
+  /// The last write error, surfaced INSIDE the dialog. The workspace error
+  /// banner sits behind the modal, so without this the user gets no feedback on
+  /// a failed Save.
+  String? _error;
+
   DifficultySettings get _stored => widget.profile.difficulty;
 
   @override
@@ -249,7 +254,10 @@ class _DifficultyDialogState extends State<DifficultyDialog> {
   }
 
   Future<void> _save() async {
-    setState(() => _saving = true);
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
     final ok = await widget.notifier.writeProfileDifficulty(
       profileId: widget.profile.profileId,
       difficulty: _buildDifficulty(),
@@ -258,9 +266,15 @@ class _DifficultyDialogState extends State<DifficultyDialog> {
     if (ok) {
       Navigator.of(context).pop();
     } else {
-      // The notifier set state.error; keep the dialog open so the user can
-      // retry or cancel.
-      setState(() => _saving = false);
+      // Surface the failure INSIDE the dialog — the workspace banner is hidden
+      // behind the modal. Capture the notifier's error and clear it there so it
+      // is shown in one place; keep the dialog open to retry or cancel.
+      final message = widget.notifier.lastError ?? 'Saving difficulty failed.';
+      widget.notifier.dismissError();
+      setState(() {
+        _saving = false;
+        _error = message;
+      });
     }
   }
 
@@ -380,6 +394,34 @@ class _DifficultyDialogState extends State<DifficultyDialog> {
                   ],
                 ),
               ),
+              if (_error != null) ...[
+                const SizedBox(height: 12),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: scheme.errorContainer,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.error_outline,
+                        size: 18,
+                        color: scheme.onErrorContainer,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          _error!,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: scheme.onErrorContainer,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
             ],
           ),
         ),
