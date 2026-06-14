@@ -816,6 +816,8 @@ class _OverviewPanel extends StatelessWidget {
       children: [
         _HeaderCard(inspection: inspection, save: selectedSave),
         const SizedBox(height: 16),
+        _DifficultyCard(inspection: inspection),
+        const SizedBox(height: 16),
         _MetadataEditor(inspection: inspection, notifier: notifier),
         const SizedBox(height: 16),
         _OverviewDiagnostics(inspection: inspection),
@@ -977,6 +979,51 @@ class _OverviewDiagnosticsState extends State<_OverviewDiagnostics> {
                     ),
                   ),
                 ],
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _DifficultyCard extends StatefulWidget {
+  const _DifficultyCard({required this.inspection});
+  final SaveInspection inspection;
+  @override
+  State<_DifficultyCard> createState() => _DifficultyCardState();
+}
+
+class _DifficultyCardState extends State<_DifficultyCard> {
+  bool _expanded = false;
+  @override
+  Widget build(BuildContext context) {
+    final d = widget.inspection.difficulty;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _CollapsibleCardHeader(
+              icon: Icons.local_fire_department_outlined,
+              title: 'Difficulty',
+              subtitle: d?.presetLabel ?? 'Unknown',
+              expanded: _expanded,
+              onToggle: () => setState(() => _expanded = !_expanded),
+            ),
+            if (_expanded && d != null) ...[
+              const SizedBox(height: 8),
+              _MetricGrid(
+                metrics: {
+                  'Preset': d.presetLabel,
+                  'Close Combat Flow Helper': d.flowHelper == true ? 'On' : 'Off',
+                  'Permadeath': d.permadeath == true ? 'On' : 'Off',
+                  'Combat': d.combatLabel,
+                  'Resources': d.resourcesLabel,
+                  'Progression': d.progressionLabel,
+                },
               ),
             ],
           ],
