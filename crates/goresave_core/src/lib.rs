@@ -4899,6 +4899,51 @@ fn apply_private_typed_container_edit_to_payload(
 /// always be looked up by value, never hardcoded.
 const MAIN_CONTAINER_ENUM_LABEL: &str = "EInventoryTypes::MainContainer";
 
+/// `m_PlayerID` of the controlled player among `m_SavedPlayers`. A save may hold
+/// several saved players (party members); inventory edits target this one — the
+/// same anchor the transform/attribute editors use.
+const PLAYER_PARTY_ID: &str = "Party ID 0";
+
+/// Addressable path to the controlled player's `m_Inventory`: the `m_Inventory`
+/// of the `m_SavedPlayers` entry whose `m_PlayerID` is [`PLAYER_PARTY_ID`].
+///
+/// Falls back to `None` when no such entry is found (e.g. minimal test
+/// fixtures); callers then use the first `m_Inventory` in the tree. This avoids
+/// editing another saved player's inventory when the controlled player is not
+/// the first `m_SavedPlayers` element.
+fn player_inventory_path(root: &properties::RootObject) -> Option<Vec<String>> {
+    let (saved_players_path, saved_players) =
+        properties::find_property_by_name(root, "m_SavedPlayers")?;
+    let properties::PropertyValue::Array { elements } = &saved_players.value else {
+        return None;
+    };
+    for (index, element) in elements.iter().enumerate() {
+        let Some(props) = struct_element_properties(element) else {
+            continue;
+        };
+        let is_player = props.iter().any(|p| {
+            p.name == "m_PlayerID"
+                && matches!(&p.value, properties::PropertyValue::Str(s) if s == PLAYER_PARTY_ID)
+        });
+        if !is_player || !props.iter().any(|p| p.name == "m_Inventory") {
+            continue;
+        }
+        let mut path = saved_players_path.clone();
+        path.push(format!("[{index}]"));
+        path.push("m_Inventory".to_string());
+        return Some(path);
+    }
+    None
+}
+
+/// The controlled player's `m_Inventory` path, falling back to the first
+/// `m_Inventory` anywhere in the tree (synthetic fixtures without a
+/// `m_SavedPlayers`/`Party ID 0` structure).
+fn resolve_inventory_path(root: &properties::RootObject) -> Option<Vec<String>> {
+    player_inventory_path(root)
+        .or_else(|| properties::find_property_by_name(root, "m_Inventory").map(|(path, _)| path))
+}
+
 /// Inner property list of a slot/container element parsed from a plain
 /// Array<StructProperty> (each element is a tagged property list).
 fn struct_element_properties(
@@ -4983,7 +5028,7 @@ struct MainContainerSummary {
 /// — `all_paths` is empty for an empty MainContainer, which addItem can still
 /// seed from another container.
 fn main_container_summary(root: &properties::RootObject) -> Option<MainContainerSummary> {
-    let (inventory_path, _) = properties::find_property_by_name(root, "m_Inventory")?;
+    let inventory_path = resolve_inventory_path(root)?;
     let resolve_child = |suffix: &[&str]| -> Option<properties::PropertyValue> {
         let mut segs = inventory_path.clone();
         segs.extend(suffix.iter().map(|s| s.to_string()));
@@ -5095,12 +5140,11 @@ fn apply_private_inventory_add_item_to_payload(
             "private.inventory.addItem requires a typed-parsable private payload: {err}"
         ))
     })?;
-    let (inventory_path, _) =
-        properties::find_property_by_name(&root, "m_Inventory").ok_or_else(|| {
-            CoreError::Parse(
-                "private payload has no m_Inventory property; cannot add an item".to_string(),
-            )
-        })?;
+    let inventory_path = resolve_inventory_path(&root).ok_or_else(|| {
+        CoreError::Parse(
+            "private payload has no m_Inventory property; cannot add an item".to_string(),
+        )
+    })?;
     let child_segments = |suffix: &[String]| -> Result<Vec<properties::PathSeg>, CoreError> {
         let mut segments = inventory_path.clone();
         segments.extend_from_slice(suffix);
@@ -5400,12 +5444,11 @@ fn apply_private_inventory_remove_item_to_payload(
             "private.inventory.removeItem requires a typed-parsable private payload: {err}"
         ))
     })?;
-    let (inventory_path, _) =
-        properties::find_property_by_name(&root, "m_Inventory").ok_or_else(|| {
-            CoreError::Parse(
-                "private payload has no m_Inventory property; cannot remove an item".to_string(),
-            )
-        })?;
+    let inventory_path = resolve_inventory_path(&root).ok_or_else(|| {
+        CoreError::Parse(
+            "private payload has no m_Inventory property; cannot remove an item".to_string(),
+        )
+    })?;
     let child_segments = |suffix: &[String]| -> Result<Vec<properties::PathSeg>, CoreError> {
         let mut segments = inventory_path.clone();
         segments.extend_from_slice(suffix);
@@ -10042,6 +10085,81 @@ mod tests {
         p.extend_from_slice(&fstring("None"));
         p.extend_from_slice(&0u32.to_le_bytes()); // footer
         p
+    }
+
+    /// A single-MainContainer m_Inventory struct holding one item, as a child
+    /// property of a saved-player entry.
+    fn inventory_struct_with_item(item_path: &str) -> Vec<u8> {
+        let main_slots = vec![inv_item_slot(
+            0,
+            INV_MAIN_LABEL,
+            item_path,
+            1,
+            &inv_empty_payload_map(),
+        )];
+        let keys = inv_enum_array_property("m_Keys", &[INV_MAIN_LABEL]);
+        let items = inv_struct_array_property(
+            "Items",
+            "ContainerVirtualData",
+            &[inv_container(INV_MAIN_LABEL, &main_slots)],
+        );
+        let values = inv_struct_property("m_Values", "ContainerVirtualDataArray", &items);
+        let mut inventory_props = keys;
+        inventory_props.extend_from_slice(&values);
+        inv_struct_property("m_Inventory", "ReplicatedInventoryMap", &inventory_props)
+    }
+
+    /// Private payload with two saved players. The controlled player (Party
+    /// ID 0) is the SECOND m_SavedPlayers element, so a first-match lookup would
+    /// wrongly target the first (Party ID 1) player's inventory.
+    fn two_saved_players_private_payload(party1_item: &str, party0_item: &str) -> Vec<u8> {
+        let mut player1 = str_property("m_PlayerID", "Party ID 1");
+        player1.extend_from_slice(&inventory_struct_with_item(party1_item));
+        let mut player0 = str_property("m_PlayerID", "Party ID 0");
+        player0.extend_from_slice(&inventory_struct_with_item(party0_item));
+
+        let saved_players =
+            inv_struct_array_property("m_SavedPlayers", "PlayerSavedData", &[player1, player0]);
+        let mut instanced_body = saved_players;
+        instanced_body.extend_from_slice(&fstring("None"));
+        let mut instanced = fstring("/Script/Angelscript.PlayersSavedData");
+        instanced.extend_from_slice(&(instanced_body.len() as u32).to_le_bytes());
+        instanced.extend_from_slice(&instanced_body);
+
+        let mut map_body = 0u32.to_le_bytes().to_vec(); // num_to_remove
+        map_body.extend_from_slice(&1u32.to_le_bytes()); // count
+        map_body.extend_from_slice(&fstring("PlayersSavedData"));
+        map_body.extend_from_slice(&instanced);
+        let mut map_descriptor = 2u32.to_le_bytes().to_vec();
+        map_descriptor.extend_from_slice(&fstring("NameProperty"));
+        map_descriptor.extend_from_slice(&0u32.to_le_bytes()); // key_flags
+        map_descriptor.extend_from_slice(&fstring("StructProperty"));
+        map_descriptor.extend_from_slice(&inv_struct_descriptor("InstancedStruct"));
+        let generic = inv_tagged("m_GenericData", "MapProperty", &map_descriptor, 0, &map_body);
+
+        let mut p = fstring("/Script/Angelscript.GothicFinalDataGame");
+        p.push(0);
+        p.extend_from_slice(&generic);
+        p.extend_from_slice(&fstring("None"));
+        p.extend_from_slice(&0u32.to_le_bytes()); // footer
+        p
+    }
+
+    #[test]
+    fn main_container_summary_targets_controlled_player_not_first() {
+        let party1_item = "/Script/Angelscript.ItMi_Sulfur";
+        let party0_item = "/Script/Angelscript.ItMi_Orenugget";
+        let payload = two_saved_players_private_payload(party1_item, party0_item);
+        let root = properties::parse_private_root(&payload).unwrap();
+        let summary = main_container_summary(&root).expect("player inventory resolves");
+        assert!(
+            summary.all_paths.contains(party0_item),
+            "summary must target the Party ID 0 player's inventory"
+        );
+        assert!(
+            !summary.all_paths.contains(party1_item),
+            "summary must NOT target the first (Party ID 1) player's inventory"
+        );
     }
 
     /// MainContainer with two ordinary items: ItMi_Orenugget (id 0, count 3)
