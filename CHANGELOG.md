@@ -6,10 +6,11 @@ notes, so every release needs an entry.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## Unreleased
+## [0.2.0] - 2026-06-14
 
 ### Added
 
+- The difficulty level of a save can now be changed.
 - The inventory view is organized by a category sidebar (weapons, ammunition,
   runes, scrolls, food, misc, amulets, rings, trophies, writings, mission
   items, keys, and other), matching the Player and Progression tabs.
