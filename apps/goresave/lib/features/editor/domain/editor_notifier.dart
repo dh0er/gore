@@ -366,6 +366,53 @@ class EditorNotifier extends StateNotifier<EditorState> {
     return ok;
   }
 
+  /// Write difficulty into the active profile's `PersistentDataList.sav`.
+  ///
+  /// This is the ONLY difficulty write the app performs: the profile copy is
+  /// the authoritative, profile-wide value — editing a save's own copy has no
+  /// in-game effect, so the per-save write path was removed. The change applies
+  /// to every save in the profile. [difficulty] is the same map shape the core's
+  /// `write_difficulty` expects (`preset`, optional `combat`/`resources`/
+  /// `progression`, `flowHelper`, `permadeath`). No codec host is needed —
+  /// `PersistentDataList.sav` is a plain GVAS file with no compressed stream.
+  /// Returns true on success; on failure sets `state.error` and returns false.
+  Future<bool> writeProfileDifficulty({
+    required int profileId,
+    required Map<String, Object?> difficulty,
+  }) {
+    final dir = state.saveDir;
+    if (dir.isEmpty) {
+      state = state.copyWith(error: 'No save folder selected.');
+      return Future.value(false);
+    }
+    // `dir` carries the on-disk style of the save folder (Windows-style for
+    // these saves even on a POSIX host). Pick a path Context matching that style
+    // so join() stays correct on any host — see _buildDifficultyPayload.
+    final isWindowsStyle =
+        dir.contains('\\') || RegExp(r'^[A-Za-z]:').hasMatch(dir);
+    final ctx = isWindowsStyle ? p.Context(style: p.Style.windows) : p.posix;
+    final payload = <String, Object?>{
+      'difficulty': difficulty,
+      'targets': {
+        'profile': {
+          'path': ctx.join(dir, 'PersistentDataList.sav'),
+          'profileId': profileId,
+        },
+      },
+      'backup': true,
+    };
+    return _runWrite(
+      command: 'write_difficulty',
+      payload: payload,
+      message: (data) {
+        final written = (data['targetsWritten'] as num?)?.toInt() ?? 0;
+        return written == 0
+            ? 'No difficulty changes to write'
+            : 'Difficulty written to the profile (backup created)';
+      },
+    );
+  }
+
   /// Resolve the `write_difficulty` targets for [edit] against the current
   /// state, binding propagation to the EDITED SAVE's profile (not the sidebar's
   /// filter profile). Returns the assembled command payload, or null when there

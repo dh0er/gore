@@ -16,7 +16,7 @@ import 'package:goresave/features/editor/domain/pending_edits.dart';
 import 'package:goresave/providers/data_providers.dart';
 import 'package:intl/intl.dart';
 import 'add_inventory_item_dialog.dart';
-import 'difficulty_card.dart';
+import 'difficulty_dialog.dart';
 import 'hero_stats_card.dart';
 import 'progression_panel.dart';
 
@@ -263,14 +263,14 @@ class _ProfileHeader extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                     style: textTheme.titleMedium,
                   ),
-                const SizedBox(height: 2),
-                Text(
-                  '${_formatCount(saveCount, 'save')} | Quick $quickCount | Auto $autoCount',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: textTheme.bodySmall?.copyWith(
-                    color: scheme.onSurfaceVariant,
-                  ),
+                const SizedBox(height: 4),
+                ProfileDifficultyChip(
+                  profile: profile,
+                  notifier: notifier,
+                  isLoading: isLoading,
+                  countsTooltip:
+                      '${_formatCount(saveCount, 'save')}  ·  '
+                      'Quick $quickCount  ·  Auto $autoCount',
                 ),
               ],
             ),
@@ -522,10 +522,6 @@ String _saveSlotSubtitle(SaveSlot save) {
   final timePlayed = _formatDurationSeconds(save.timePlayedSeconds);
   if (timePlayed != '-') {
     parts.add(timePlayed);
-  }
-  final difficulty = save.difficulty?.presetLabel;
-  if (difficulty != null && difficulty != '-') {
-    parts.add(difficulty);
   }
   return parts.join(' | ');
 }
@@ -824,15 +820,6 @@ class _OverviewPanel extends StatelessWidget {
         const SizedBox(height: 16),
         _MetadataEditor(inspection: inspection, notifier: notifier),
         const SizedBox(height: 16),
-        DifficultyCard(
-          inspection: inspection,
-          notifier: notifier,
-          // Propagation binds to the EDITED SAVE's profile, not the sidebar's
-          // effective filter profile (which can differ).
-          profile: state.editedSaveProfile,
-          canCompress: state.codecCompressReady,
-        ),
-        const SizedBox(height: 16),
         _OverviewDiagnostics(inspection: inspection),
         const SizedBox(height: 16),
         _OverviewInspectionJson(inspection: inspection),
@@ -950,9 +937,6 @@ class _OverviewDiagnosticsState extends State<_OverviewDiagnostics> {
                         'Slot': inspection.slot ?? '-',
                         if (inspection.chapterId != null)
                           'Chapter': inspection.chapterId.toString(),
-                        if (inspection.difficulty?.presetLabel != null &&
-                            inspection.difficulty!.presetLabel != '-')
-                          'Difficulty': inspection.difficulty!.presetLabel,
                         if (inspection.timePlayedSeconds != null)
                           'Time played': _formatDurationSeconds(
                             inspection.timePlayedSeconds,
@@ -1080,12 +1064,6 @@ class _HeaderCard extends StatelessWidget {
                                 label: _formatDurationSeconds(
                                   inspection.timePlayedSeconds,
                                 ),
-                              ),
-                            if (inspection.difficulty?.presetLabel != null &&
-                                inspection.difficulty!.presetLabel != '-')
-                              _InfoPill(
-                                icon: Icons.local_fire_department_outlined,
-                                label: inspection.difficulty!.presetLabel,
                               ),
                           ];
                           if (pills.isEmpty) return const SizedBox.shrink();

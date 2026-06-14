@@ -163,6 +163,18 @@ class ProfileSummary {
     if (name == null || name.isEmpty) return 'Profile $profileId';
     return name == profileId.toString() ? 'Profile $name' : name;
   }
+
+  /// The profile's difficulty, mapped into the same [DifficultySettings] shape
+  /// the editor uses. This is the authoritative, profile-wide difficulty — the
+  /// only difficulty the app reads or writes.
+  DifficultySettings get difficulty => DifficultySettings(
+    preset: difficultyPreset,
+    combat: customCombatSettings,
+    resources: customResourcesSettings,
+    progression: customProgressionSettings,
+    flowHelper: fakeSloppyCombos,
+    permadeath: permanentDeath,
+  );
 }
 
 /// Maps a difficulty class short-name suffix to its UI label.
