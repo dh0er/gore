@@ -19,9 +19,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Items can be removed from the inventory with a per-row delete button. Item
   counts are clamped to a minimum of 1; deleting an item removes its slot
   rather than leaving a count-0 ghost.
-- New core operations `private.inventory.addItem` and
-  `private.inventory.removeItem`. All edits are validated before write, with
-  automatic backup creation.
 
 ## [0.1.2] - 2026-06-12
 
