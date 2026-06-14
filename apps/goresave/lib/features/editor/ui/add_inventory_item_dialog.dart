@@ -36,6 +36,10 @@ class AddInventoryItemDialog extends StatefulWidget {
 typedef _CatalogGroup = ({ItemCategory category, List<ItemCatalogEntry> entries});
 
 class _AddInventoryItemDialogState extends State<AddInventoryItemDialog> {
+  // The core rejects addItem counts above i32::MAX (saving would fail with an
+  // invalid-request error), so the dialog mirrors that upper bound.
+  static const int _maxCount = 2147483647; // i32::MAX
+
   String _query = '';
   ItemCategory? _selectedCategory;
   ItemCatalogEntry? _selected;
@@ -58,21 +62,27 @@ class _AddInventoryItemDialogState extends State<AddInventoryItemDialog> {
   void _onCountChanged(String value) {
     final parsed = int.tryParse(value.trim());
     setState(() {
-      _countError = (parsed == null || parsed < 1) ? 'Must be ≥ 1' : null;
+      if (parsed == null || parsed < 1) {
+        _countError = 'Must be ≥ 1';
+      } else if (parsed > _maxCount) {
+        _countError = 'Must be ≤ $_maxCount';
+      } else {
+        _countError = null;
+      }
     });
   }
 
   bool get _canAdd {
     if (_selected == null) return false;
     final parsed = int.tryParse(_countController.text.trim());
-    return parsed != null && parsed >= 1;
+    return parsed != null && parsed >= 1 && parsed <= _maxCount;
   }
 
   void _confirm() {
     final entry = _selected;
     if (entry == null) return;
     final parsed = int.tryParse(_countController.text.trim());
-    if (parsed == null || parsed < 1) return;
+    if (parsed == null || parsed < 1 || parsed > _maxCount) return;
     Navigator.of(context).pop(InventoryItemAdd(path: entry.path, count: parsed));
   }
 

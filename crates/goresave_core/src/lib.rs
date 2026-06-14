@@ -3204,14 +3204,16 @@ fn summarize_private_progression_overview(root: Option<&properties::RootObject>)
         "knowledgeEntries": knowledge_entries,
         "memoryCharacters": memory_characters,
         "memoryEvents": memory_events,
+        // Inventory edit ops (addItem/removeItem) are intentionally excluded:
+        // they are not progression edits, and their availability is gated per
+        // save (clean template / removable item). The inventory summary computes
+        // the correctly gated writable list for those.
         "writable": [
             "private.typed.setValue",
             "private.typed.setAdd",
             "private.typed.setRemove",
             "private.typed.arrayRemove",
             "private.typed.arrayDuplicate",
-            "private.inventory.addItem",
-            "private.inventory.removeItem",
         ],
     })
 }
