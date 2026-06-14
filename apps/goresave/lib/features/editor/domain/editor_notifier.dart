@@ -294,16 +294,19 @@ class EditorNotifier extends StateNotifier<EditorState> {
     }
   }
 
-  /// Run a `write_save` request as a tracked load, then rescan on success.
-  /// Returns true only when the core accepted the write; a rejected write sets
-  /// `state.error` and returns false so callers can skip success-only follow-ups.
+  /// Run a write request (`write_save` by default) as a tracked load, then
+  /// rescan on success. Returns true only when the core accepted the write; a
+  /// rejected write sets `state.error` and returns false so callers can skip
+  /// success-only follow-ups. The post-success `refresh()` rescans saves AND
+  /// profiles, so difficulty writes targeting the profile are reflected too.
   Future<bool> _runWrite({
     required Map<String, Object?> payload,
     required String Function(Map<String, Object?> data) message,
+    String command = 'write_save',
   }) async {
     var ok = false;
     await _withLoading(() async {
-      final response = await _execute('write_save', payload: payload);
+      final response = await _execute(command, payload: payload);
       if (response['ok'] != true) {
         state = state.copyWith(error: _errorMessage(response));
         return;
@@ -314,6 +317,43 @@ class EditorNotifier extends StateNotifier<EditorState> {
       ok = true;
     });
     return ok;
+  }
+
+  /// Write a difficulty configuration to the given save files and, optionally,
+  /// the profile's `PersistentDataList.sav`. Dispatched through [_runWrite] so
+  /// the overlay shows, errors surface, and a successful write rescans saves +
+  /// profiles (so the sidebar difficulty badge and the card both update).
+  ///
+  /// The `binaryHost` codec host is attached exactly as the `write_save` path
+  /// does (via [_codecPayload]) — the private-payload edit on save targets
+  /// requires the codec host, and the core errors without it.
+  Future<bool> writeDifficulty({
+    required Map<String, Object?> difficulty,
+    required List<String> savePaths,
+    ({String path, int profileId})? profile,
+  }) async {
+    final targets = <String, Object?>{
+      'saves': savePaths,
+      if (profile != null)
+        'profile': {'path': profile.path, 'profileId': profile.profileId},
+    };
+    final n = savePaths.length + (profile != null ? 1 : 0);
+    return _runWrite(
+      command: 'write_difficulty',
+      payload: {
+        'difficulty': difficulty,
+        'targets': targets,
+        'backup': true,
+        ..._codecPayload(),
+      },
+      // The core returns { targetsWritten, paths } (no backup-path fields), so
+      // report the count directly rather than via _backupMessage.
+      message: (data) {
+        final written = (data['targetsWritten'] as num?)?.toInt() ?? n;
+        return 'Difficulty written to $written '
+            'target${written == 1 ? '' : 's'} (backup created)';
+      },
+    );
   }
 
   /// Serializes all core calls. The native layer runs each command in its own
