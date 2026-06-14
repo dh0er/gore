@@ -10,9 +10,12 @@ import 'package:goresave/features/app/ui/update_settings.dart';
 import 'package:goresave/features/app/ui/window_chrome.dart';
 import 'package:goresave/features/editor/domain/editor_notifier.dart';
 import 'package:goresave/features/editor/domain/editor_models.dart';
+import 'package:goresave/features/editor/domain/item_categories.dart';
+import 'package:goresave/features/editor/ui/sidebar_tile.dart';
 import 'package:goresave/features/editor/domain/pending_edits.dart';
 import 'package:goresave/providers/data_providers.dart';
 import 'package:intl/intl.dart';
+import 'add_inventory_item_dialog.dart';
 import 'hero_stats_card.dart';
 import 'progression_panel.dart';
 
@@ -1496,32 +1499,50 @@ class _InventoryPanel extends StatelessWidget {
             'Inventory editing needs decoded private payload data from the G1R codec host.',
       );
     }
+    // Inventory writes recompress the payload too, so require a
+    // compress-capable codec host in addition to a full decode.
+    // The core only allows count edits in a detected player
+    // inventory region, advertised via writable; gate on it so other
+    // scopes don't show editors whose saves fail in the core.
+    final writable = inspection.privateInventory.writable;
+    final editable =
+        inspection.privateEditable &&
+        canCompress &&
+        writable.contains('private.inventory.setItemCount');
+    // addItem/removeItem edit the typed property tree, so both require a
+    // verified typed parse plus their own advertised op. They are gated
+    // independently: the core can expose one without the other (e.g.
+    // removeItem with no clean template for adds), and addItem can be valid even
+    // when the FString scan found no stacks (empty/unscanned MainContainer).
+    final canAddItem =
+        inspection.privateEditable &&
+        canCompress &&
+        inspection.privateTypedVerified &&
+        writable.contains('private.inventory.addItem');
+    final canRemoveItem =
+        inspection.privateEditable &&
+        canCompress &&
+        inspection.privateTypedVerified &&
+        writable.contains('private.inventory.removeItem');
+
     final hasItems = inspection.privateInventory.hasData;
-    if (!hasItems) {
-      // Decoded fine, just nothing recognised — say so instead of leaving
-      // the tab blank.
+    if (!hasItems && !canAddItem && !canRemoveItem) {
+      // Decoded fine, nothing recognised and nothing addable — say so instead
+      // of leaving the tab blank.
       return const _MessagePane(
         icon: Icons.inventory_2_outlined,
         title: 'Inventory',
         body: 'No item stacks found in the decoded private payload.',
       );
     }
-    // Inventory writes recompress the payload too, so require a
-    // compress-capable codec host in addition to a full decode.
-    // The core only allows count edits in a detected player
-    // inventory region, advertised via writable; gate on it so other
-    // scopes don't show editors whose saves fail in the core.
     return Padding(
       padding: const EdgeInsets.all(20),
       child: _PrivateInventorySummaryCard(
         inventory: inspection.privateInventory,
         notifier: notifier,
-        editable:
-            inspection.privateEditable &&
-            canCompress &&
-            inspection.privateInventory.writable.contains(
-              'private.inventory.setItemCount',
-            ),
+        editable: editable,
+        canAddItem: canAddItem,
+        canRemoveItem: canRemoveItem,
       ),
     );
   }
@@ -1532,11 +1553,15 @@ class _PrivateInventorySummaryCard extends StatefulWidget {
     required this.inventory,
     required this.notifier,
     this.editable = true,
+    this.canAddItem = false,
+    this.canRemoveItem = false,
   });
 
   final PrivateInventorySummary inventory;
   final EditorNotifier notifier;
   final bool editable;
+  final bool canAddItem;
+  final bool canRemoveItem;
 
   @override
   State<_PrivateInventorySummaryCard> createState() =>
@@ -1546,7 +1571,20 @@ class _PrivateInventorySummaryCard extends StatefulWidget {
 class _PrivateInventorySummaryCardState
     extends State<_PrivateInventorySummaryCard> {
   String _query = '';
+  final TextEditingController _searchController = TextEditingController();
   final Map<String, InventoryItemCountChange> _pendingCountChanges = {};
+  ItemCategory? _selectedCategory;
+  InventoryItemAdd? _pendingAdd;
+  // Path of the item queued for removal. addItem and removeItem are both
+  // structural edits, so at most one of _pendingAdd / _pendingRemovePath is
+  // ever set (the core allows one structural inventory edit per write).
+  String? _pendingRemovePath;
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
 
   @override
   void didUpdateWidget(covariant _PrivateInventorySummaryCard oldWidget) {
@@ -1556,36 +1594,124 @@ class _PrivateInventorySummaryCardState
       // centrally clears 'inventory' in refresh() (event-handler context),
       // so mutating the provider here would throw during build.
       _pendingCountChanges.clear();
+      _pendingAdd = null;
+      _pendingRemovePath = null;
     }
   }
 
   void _pushInventoryPending() {
-    if (_pendingCountChanges.isEmpty) {
+    final countEdits =
+        _pendingCountChanges.values.map((c) => c.toEditJson()).toList();
+    final addEdit = _pendingAdd?.toEditJson();
+    final removeEdit = _pendingRemovePath != null
+        ? InventoryItemRemove(path: _pendingRemovePath!).toEditJson()
+        : null;
+    final allEdits = [
+      ...countEdits,
+      ?addEdit,
+      ?removeEdit,
+    ];
+    if (allEdits.isEmpty) {
       widget.notifier.clearPendingEdit('inventory');
     } else {
       widget.notifier.setPendingEdit(
         'inventory',
-        PendingSaveEdit(
-          edits: _pendingCountChanges.values
-              .map((c) => c.toEditJson())
-              .toList(),
-        ),
+        PendingSaveEdit(edits: allEdits),
       );
     }
   }
 
+  Future<void> _openAddDialog() async {
+    // Scope the dialog to the save it was opened for. If the user switches to a
+    // different save while the dialog is open, the awaited result is stale — its
+    // excludePaths and target belong to the old save, so applying it would queue
+    // the add against the wrong save. Key on the selected save path, not the
+    // inventory object identity: re-inspecting the SAME save allocates a fresh
+    // summary instance with identical contents, and that result must still apply.
+    final dialogSavePath = widget.notifier.state.selectedPath;
+    final result = await showDialog<InventoryItemAdd>(
+      context: context,
+      builder: (_) => AddInventoryItemDialog(
+        excludePaths: widget.inventory.mainContainerPaths.toSet(),
+      ),
+    );
+    if (result == null) return;
+    if (!mounted || widget.notifier.state.selectedPath != dialogSavePath) return;
+    setState(() {
+      _pendingAdd = result;
+      // Keep the one-structural-edit-per-save invariant unconditionally.
+      _pendingRemovePath = null;
+    });
+    _pushInventoryPending();
+  }
+
+  void _queueRemove(PrivateInventoryItem item) {
+    setState(() {
+      // A removal supersedes any pending count change on the same item, and is
+      // mutually exclusive with a pending add (one structural edit per save).
+      _pendingCountChanges.remove(_inventoryItemKey(item));
+      _pendingAdd = null;
+      _pendingRemovePath = item.path;
+    });
+    _pushInventoryPending();
+  }
+
+  void _undoRemove() {
+    setState(() => _pendingRemovePath = null);
+    _pushInventoryPending();
+  }
+
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     final inventory = widget.inventory;
     final query = _query.trim().toLowerCase();
-    final items = inventory.items
-        .where((item) {
-          if (query.isEmpty) return true;
-          return item.id.toLowerCase().contains(query) ||
-              item.path.toLowerCase().contains(query);
-        })
-        .take(80)
-        .toList();
+    final items = inventory.items.where((item) {
+      // A pending removal hides the item from the list (it is represented by
+      // the pending card above), mirroring how a pending add is not yet in the
+      // list either.
+      if (_pendingRemovePath != null &&
+          item.path.isNotEmpty &&
+          item.path == _pendingRemovePath) {
+        return false;
+      }
+      if (query.isEmpty) return true;
+      return item.id.toLowerCase().contains(query) ||
+          item.path.toLowerCase().contains(query);
+    }).toList();
+    final groups = groupInventoryItems(items);
+
+    // Keep the current category selected if it still has items, else fall
+    // back to the first available group.
+    var selected = _selectedCategory;
+    if (groups.every((g) => g.category != selected)) {
+      selected = groups.isEmpty ? null : groups.first.category;
+    }
+    final selectedGroup =
+        groups.where((g) => g.category == selected).firstOrNull;
+
+    // An active search shows matches across all categories as a flat list;
+    // an empty query browses by the selected category.
+    final searching = query.isNotEmpty;
+    final shownItems = searching
+        ? items
+        : (selectedGroup?.items ?? const <PrivateInventoryItem>[]);
+
+    final hasItems = inventory.items.isNotEmpty;
+    final hasPendingAdd = _pendingAdd != null;
+    final hasPendingRemove = _pendingRemovePath != null;
+    final hasPendingCount = _pendingCountChanges.isNotEmpty;
+    final hasPendingChanges =
+        hasPendingCount || hasPendingAdd || hasPendingRemove;
+    final canRemove = widget.canRemoveItem;
+    // A structural edit (add/remove) must be saved on its own (the core/notifier
+    // reject a batch that mixes it with count edits), so structural edits and
+    // count edits are kept mutually exclusive in the UI: a structural edit is
+    // blocked while counts are pending, and count editing is blocked while a
+    // structural edit is pending.
+    final structuralBlocked = hasPendingAdd || hasPendingRemove || hasPendingCount;
+    final countEditable = widget.editable && !hasPendingAdd && !hasPendingRemove;
+
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -1599,75 +1725,169 @@ class _PrivateInventorySummaryCardState
                 Expanded(
                   child: Text(
                     'Inventory',
-                    style: Theme.of(context).textTheme.titleMedium,
+                    style: theme.textTheme.titleMedium,
                   ),
                 ),
+                if (widget.editable && hasPendingChanges) ...[
+                  Tooltip(
+                    message: 'Reset inventory changes',
+                    child: IconButton(
+                      icon: const Icon(Icons.undo_outlined),
+                      onPressed: () {
+                        setState(() {
+                          _pendingCountChanges.clear();
+                          _pendingAdd = null;
+                          _pendingRemovePath = null;
+                        });
+                        widget.notifier.clearPendingEdit('inventory');
+                      },
+                    ),
+                  ),
+                ],
+                if (widget.canAddItem) ...[
+                  const SizedBox(width: 8),
+                  Tooltip(
+                    message: hasPendingAdd
+                        ? 'Save pending changes first — one new item per save'
+                        : hasPendingRemove
+                            ? 'Save the pending removal first — one structural change per save'
+                            : hasPendingCount
+                                ? 'Save or reset pending count changes first — a structural edit must be saved on its own'
+                                : 'Add item to inventory',
+                    child: FilledButton.icon(
+                      icon: const Icon(Icons.add, size: 18),
+                      label: const Text('Add item'),
+                      onPressed: structuralBlocked ? null : _openAddDialog,
+                    ),
+                  ),
+                ],
               ],
             ),
-            if (items.isNotEmpty) ...[
-              const SizedBox(height: 16),
-              Text(
-                'Observed item stacks',
-                style: Theme.of(context).textTheme.labelLarge,
+            if (hasPendingAdd) ...[
+              const SizedBox(height: 12),
+              _PendingStructuralRow(
+                tone: _PendingTone.add,
+                icon: Icons.add_circle_outline,
+                title: _itemDisplayFromPath(_pendingAdd!.path),
+                subtitle: '×${_pendingAdd!.count} — pending add (not yet saved)',
+                cancelTooltip: 'Cancel pending add',
+                onCancel: () {
+                  setState(() => _pendingAdd = null);
+                  _pushInventoryPending();
+                },
               ),
-              const SizedBox(height: 8),
-              if (widget.editable && _pendingCountChanges.isNotEmpty) ...[
-                Row(
-                  children: [
-                    Tooltip(
-                      message: 'Reset inventory changes',
-                      child: IconButton(
-                        icon: const Icon(Icons.undo_outlined),
-                        onPressed: () {
-                          setState(_pendingCountChanges.clear);
-                          widget.notifier.clearPendingEdit('inventory');
-                        },
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-              ],
+            ],
+            if (hasPendingRemove) ...[
+              const SizedBox(height: 12),
+              _PendingStructuralRow(
+                tone: _PendingTone.remove,
+                icon: Icons.delete_outline,
+                title: _itemDisplayFromPath(_pendingRemovePath!),
+                subtitle: 'pending removal (not yet saved)',
+                cancelTooltip: 'Cancel pending removal',
+                onCancel: _undoRemove,
+              ),
+            ],
+            if (hasItems) ...[
+              const SizedBox(height: 12),
               TextField(
+                controller: _searchController,
                 decoration: const InputDecoration(
                   labelText: 'Filter items',
                   prefixIcon: Icon(Icons.search),
                 ),
                 onChanged: (value) => setState(() => _query = value),
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 12),
               Expanded(
-                child: ListView.separated(
-                  itemCount: items.length,
-                  separatorBuilder: (_, _) => const Divider(height: 1),
-                  itemBuilder: (context, index) {
-                    final item = items[index];
-                    return ListTile(
-                      dense: true,
-                      leading: const Icon(Icons.category_outlined),
-                      title: SelectableText(
-                        item.id.isEmpty ? item.path : item.id,
-                        maxLines: 1,
-                      ),
-                      subtitle: item.path.isEmpty
-                          ? null
-                          : SelectableText(item.path, maxLines: 1),
-                      trailing: widget.editable
-                          ? _InventoryItemCountEditor(
-                              item: item,
-                              pendingCount:
-                                  _pendingCountChanges[_inventoryItemKey(item)]
-                                      ?.count,
-                              onPendingCountChanged: (change) =>
-                                  _setPendingCountChange(item, change),
-                            )
-                          : Text(
-                              '×${item.count ?? '?'}',
-                              style: Theme.of(context).textTheme.bodyMedium,
+                child: groups.isEmpty
+                    ? Center(
+                        child: Text(
+                          // An empty query with no rows means a pending removal
+                          // hid the last item(s) — not a filter miss, so don't
+                          // claim "no items match".
+                          searching
+                              ? 'No items match "$_query".'
+                              : 'The pending removal hides every item — '
+                                  'save to apply it.',
+                          style: theme.textTheme.bodyMedium,
+                        ),
+                      )
+                    : Row(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          SizedBox(
+                            width: 200,
+                            child: DecoratedBox(
+                              decoration: BoxDecoration(
+                                color: theme.colorScheme.surfaceContainerLow,
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: SingleChildScrollView(
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 6),
+                                child: Column(
+                                  children: [
+                                    for (final group in groups)
+                                      SidebarTile(
+                                        icon: iconForItemCategory(
+                                          group.category,
+                                        ),
+                                        label:
+                                            '${group.category.label} (${group.items.length})',
+                                        selected: !searching &&
+                                            group.category == selected,
+                                        onTap: () => setState(() {
+                                          _selectedCategory = group.category;
+                                          // Leave search mode so the chosen
+                                          // category's items are shown.
+                                          _query = '';
+                                          _searchController.clear();
+                                        }),
+                                      ),
+                                  ],
+                                ),
+                              ),
                             ),
-                    );
-                  },
-                ),
+                          ),
+                          const SizedBox(width: 16),
+                          Expanded(
+                            child: shownItems.isEmpty
+                                ? const SizedBox.shrink()
+                                : ListView.builder(
+                                    itemCount: shownItems.length,
+                                    itemBuilder: (context, index) {
+                                      final item = shownItems[index];
+                                      return ListTile(
+                                        dense: true,
+                                        leading: const Icon(
+                                          Icons.category_outlined,
+                                        ),
+                                        title: Text(
+                                          item.id.isEmpty ? item.path : item.id,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                        subtitle: item.path.isEmpty
+                                            ? null
+                                            : Text(
+                                                item.path,
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                              ),
+                                        trailing: _inventoryItemTrailing(
+                                          theme,
+                                          item,
+                                          canRemove: canRemove,
+                                          countEditable: countEditable,
+                                          removeBlocked: structuralBlocked,
+                                        ),
+                                      );
+                                    },
+                                  ),
+                          ),
+                        ],
+                      ),
               ),
             ],
           ],
@@ -1689,6 +1909,116 @@ class _PrivateInventorySummaryCardState
       }
     });
     _pushInventoryPending();
+  }
+
+  /// Trailing widget for an inventory row: count editor + a delete button.
+  Widget _inventoryItemTrailing(
+    ThemeData theme,
+    PrivateInventoryItem item, {
+    required bool canRemove,
+    required bool countEditable,
+    required bool removeBlocked,
+  }) {
+    // The count editor shows only when count editing is currently allowed (the
+    // inventory is count-editable AND no structural edit is pending). A
+    // remove-only inventory, or one with a pending structural edit, shows the
+    // count as plain text but the delete action may still apply.
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (countEditable)
+          _InventoryItemCountEditor(
+            item: item,
+            pendingCount: _pendingCountChanges[_inventoryItemKey(item)]?.count,
+            onPendingCountChanged: (change) =>
+                _setPendingCountChange(item, change),
+          )
+        else
+          Text(
+            '×${item.count ?? '?'}',
+            style: theme.textTheme.bodyMedium,
+          ),
+        if (canRemove && item.path.isNotEmpty && item.removable) ...[
+          const SizedBox(width: 4),
+          Tooltip(
+            message: removeBlocked
+                ? 'Save or reset your pending inventory changes first — '
+                    'an add or remove must be saved on its own'
+                : 'Remove item from inventory',
+            child: IconButton(
+              icon: const Icon(Icons.delete_outline),
+              onPressed:
+                  removeBlocked ? null : () => _queueRemove(item),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+/// Tone of a pending structural-edit card: an add (primary) or a remove
+/// (error).
+enum _PendingTone { add, remove }
+
+/// A human-readable id fragment derived from an item asset path.
+String _itemDisplayFromPath(String path) =>
+    path.contains('.') ? path.split('.').last : path.split('/').last;
+
+/// A highlighted card shown when there is a pending structural inventory edit
+/// (add or remove) awaiting save. Mirrors how a not-yet-saved item is
+/// represented for both directions: the affected item is not shown inline, only
+/// here, with a cancel button.
+class _PendingStructuralRow extends StatelessWidget {
+  const _PendingStructuralRow({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onCancel,
+    required this.cancelTooltip,
+    required this.tone,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback onCancel;
+  final String cancelTooltip;
+  final _PendingTone tone;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final isAdd = tone == _PendingTone.add;
+    final bg = isAdd ? scheme.primaryContainer : scheme.errorContainer;
+    final fg = isAdd ? scheme.onPrimaryContainer : scheme.onErrorContainer;
+    final accent = isAdd ? scheme.primary : scheme.error;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: accent.withValues(alpha: 0.4)),
+      ),
+      child: ListTile(
+        dense: true,
+        leading: Icon(icon, color: accent),
+        title: Text(
+          title,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(color: fg),
+        ),
+        subtitle: Text(
+          subtitle,
+          style: TextStyle(color: fg.withValues(alpha: 0.8)),
+        ),
+        trailing: IconButton(
+          icon: const Icon(Icons.close),
+          tooltip: cancelTooltip,
+          onPressed: onCancel,
+        ),
+      ),
+    );
   }
 }
 
@@ -1781,8 +2111,10 @@ class _InventoryItemCountEditorState extends State<_InventoryItemCountEditor> {
       return;
     }
     final parsed = int.tryParse(trimmed);
-    if (parsed == null || parsed < 0) {
-      setState(() => _error = 'Invalid');
+    if (parsed == null || parsed < 1) {
+      // Min 1: a count of 0 would leave a ghost slot (invisible in-game but
+      // still in the save). Use the remove button to delete an item.
+      setState(() => _error = 'Min 1');
       widget.onPendingCountChanged(null);
       return;
     }

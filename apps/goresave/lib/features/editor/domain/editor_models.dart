@@ -536,6 +536,7 @@ class PrivateInventorySummary {
     this.itemStackCount = 0,
     this.itemScope,
     this.items = const [],
+    this.mainContainerPaths = const [],
     this.scriptPaths = const [],
     this.properties = const [],
     this.writable = const [],
@@ -555,6 +556,11 @@ class PrivateInventorySummary {
               .toList() ??
           const [],
       itemScope: json?['itemScope'] as String?,
+      mainContainerPaths:
+          (json?['mainContainerPaths'] as List?)
+              ?.whereType<String>()
+              .toList() ??
+          const [],
       scriptPaths:
           (json?['scriptPaths'] as List?)?.whereType<String>().toList() ??
           const [],
@@ -572,6 +578,9 @@ class PrivateInventorySummary {
   final int itemStackCount;
   final String? itemScope;
   final List<PrivateInventoryItem> items;
+  // Complete set of MainContainer item paths (uncapped), used to exclude
+  // already-owned items from the add picker even when [items] is truncated.
+  final List<String> mainContainerPaths;
   final List<String> scriptPaths;
   final List<String> properties;
   final List<String> writable;
@@ -590,6 +599,7 @@ class PrivateInventoryItem {
     required this.id,
     required this.path,
     this.count,
+    this.removable = false,
   });
 
   factory PrivateInventoryItem.fromJson(Map<Object?, Object?> json) {
@@ -597,12 +607,16 @@ class PrivateInventoryItem {
       id: json['id'] as String? ?? '',
       path: json['path'] as String? ?? '',
       count: (json['count'] as num?)?.toInt(),
+      removable: json['removable'] as bool? ?? false,
     );
   }
 
   final String id;
   final String path;
   final int? count;
+  // True only for rows in the player's MainContainer, which the core's
+  // removeItem op can delete. Rows from other containers are not removable.
+  final bool removable;
 }
 
 class InventoryItemCountChange {
@@ -620,6 +634,33 @@ class InventoryItemCountChange {
     return {
       'path': 'private.inventory.setItemCount',
       'value': {'id': id, 'path': path, 'count': count},
+    };
+  }
+}
+
+class InventoryItemAdd {
+  const InventoryItemAdd({required this.path, required this.count});
+
+  final String path;
+  final int count;
+
+  Map<String, Object?> toEditJson() {
+    return {
+      'path': 'private.inventory.addItem',
+      'value': {'path': path, 'count': count},
+    };
+  }
+}
+
+class InventoryItemRemove {
+  const InventoryItemRemove({required this.path});
+
+  final String path;
+
+  Map<String, Object?> toEditJson() {
+    return {
+      'path': 'private.inventory.removeItem',
+      'value': {'path': path},
     };
   }
 }

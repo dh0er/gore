@@ -973,6 +973,11 @@ pub enum ContainerEdit {
     /// Duplicate an ArrayProperty element in place (copy inserted right after
     /// the source element).
     ArrayDuplicate(usize),
+    /// Append raw element bytes to an ArrayProperty (works on an empty array).
+    /// The bytes must be a single, schema-valid element for this array's inner
+    /// type; the caller is responsible for that (it is validated by the
+    /// re-parse the caller performs afterwards).
+    ArrayInsertBytes(Vec<u8>),
 }
 
 fn set_string_elements(target: &Property) -> Option<&[PropertyValue]> {
@@ -1083,6 +1088,13 @@ pub fn patch_container(
             })?;
             let bytes = payload[range.clone()].to_vec();
             (None, range.end, bytes, 1)
+        }
+        ContainerEdit::ArrayInsertBytes(bytes) => {
+            require_kind(ContainerKind::Array, "arrayInsertBytes")?;
+            // Append after the last element; for an empty array this is the end
+            // of the value (right after the count u32).
+            let end = target.value_offset + target.value_size;
+            (None, end, bytes.clone(), 1)
         }
     };
     let removed = remove_range.as_ref().map_or(0, |r| r.len());

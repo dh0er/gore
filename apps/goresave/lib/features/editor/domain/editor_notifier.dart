@@ -491,6 +491,27 @@ class EditorNotifier extends StateNotifier<EditorState> {
       }
     }
 
+    // A structural inventory edit (addItem/removeItem) splices the MainContainer
+    // slot array and shifts every byte after the splice point. The core applies
+    // a batch in one write round, so ANY other edit in the same write is unsafe:
+    // a typed edit re-resolves a now-shifted array index, and an in-place
+    // setItemCount patches byte offsets that the splice invalidates. Require a
+    // structural inventory edit to be the only edit in the write.
+    final hasStructuralInventory = allEdits.any(
+      (edit) =>
+          edit['path'] == 'private.inventory.addItem' ||
+          edit['path'] == 'private.inventory.removeItem',
+    );
+    if (hasStructuralInventory && allEdits.length > 1) {
+      state = state.copyWith(
+        error:
+            'An inventory add or remove shifts item indices, so it must be '
+            'saved on its own. Save or reset your other unsaved changes first, '
+            'then save the inventory change.',
+      );
+      return false;
+    }
+
     final n = allEdits.length;
     final ok = await _runWrite(
       payload: {
