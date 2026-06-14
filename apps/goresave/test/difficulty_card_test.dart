@@ -3,14 +3,13 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:goresave/features/editor/domain/core_service.dart';
 import 'package:goresave/features/editor/domain/editor_models.dart';
 import 'package:goresave/features/editor/domain/editor_notifier.dart';
-import 'package:goresave/features/editor/domain/pending_edits.dart';
 import 'package:goresave/features/editor/ui/difficulty_card.dart';
 
 /// Minimal core stub: every command resolves to an empty ok response so the
 /// EditorNotifier constructor (which fires refresh + checkCodec) settles
 /// without errors. The Difficulty card never issues a write in this test — it
-/// only reads notifier.state and calls setDifficultyDirty — so no command
-/// needs real data.
+/// only reads notifier.state and registers/clears the pending difficulty edit —
+/// so no command needs real data.
 class _StubCoreService implements GoresaveCoreService {
   @override
   bool get isAvailable => true;
@@ -53,6 +52,13 @@ SwitchListTile _switchByTitle(WidgetTester tester, String title) {
       .firstWhere((s) => (s.title as Text).data == title);
 }
 
+/// The preset SegmentedButton is the only one carrying a 'Custom' segment.
+Finder _presetPicker() => find.byWidgetPredicate(
+  (w) =>
+      w is SegmentedButton<String> &&
+      w.segments.any((s) => (s.label as Text).data == 'Custom'),
+);
+
 void main() {
   late EditorNotifier notifier;
 
@@ -69,6 +75,7 @@ void main() {
     WidgetTester tester, {
     ProfileSummary? profile,
     SaveInspection? inspection,
+    bool canCompress = true,
   }) async {
     await tester.binding.setSurfaceSize(const Size(900, 1200));
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -80,61 +87,54 @@ void main() {
               inspection: inspection ?? _customInspection(),
               notifier: notifier,
               profile: profile,
-              canCompress: true,
+              canCompress: canCompress,
             ),
           ),
         ),
       ),
     );
     await tester.pumpAndSettle();
-    // The card opens collapsed; expand it to reveal the editing form.
-    await tester.tap(find.text('Difficulty'));
-    await tester.pumpAndSettle();
-  }
-
-  /// Resolve the Save FilledButton (the only FilledButton containing 'Save').
-  FilledButton saveButton(WidgetTester tester) {
-    final finder = find.ancestor(
-      of: find.text('Save'),
-      matching: find.byType(FilledButton),
-    );
-    return tester.widget<FilledButton>(finder);
-  }
-
-  /// Tap the 'Also update the profile' checkbox tile.
-  Future<void> tickAlsoProfile(WidgetTester tester) async {
-    await tester.tap(find.text('Also update the profile'));
-    await tester.pumpAndSettle();
+    // The card now opens EXPANDED by default — no need to tap to reveal it.
   }
 
   const profile = ProfileSummary(profileId: 1, profileName: 'Nameless Hero');
+
+  testWidgets('the card is expanded by default (form visible on load)', (
+    tester,
+  ) async {
+    await pumpCard(tester);
+    // The preset selector (and its 'Custom' segment) is visible without any tap.
+    expect(_presetPicker(), findsOneWidget);
+    expect(find.text('Combat'), findsOneWidget);
+  });
+
+  testWidgets('the card has no own Save/Reset buttons', (tester) async {
+    await pumpCard(tester, profile: profile);
+    // No card-local Save/Reset (those live on the global toolbar now).
+    expect(find.widgetWithText(FilledButton, 'Save'), findsNothing);
+    expect(find.widgetWithText(OutlinedButton, 'Reset'), findsNothing);
+  });
 
   testWidgets(
     'Custom preset enables Permadeath and all three level pickers',
     (tester) async {
       await pumpCard(tester);
 
-      // Custom-preset save seeds Custom: pickers and Permadeath are editable.
       expect(_switchByTitle(tester, 'Permadeath').onChanged, isNotNull);
       for (final label in ['Combat', 'Resources', 'Progression']) {
         expect(find.text(label), findsOneWidget);
       }
-      // The three level pickers are the SegmentedButtons whose options are
-      // exactly Novice/Gothic/Hard (no 'Custom' segment). There are three of
-      // them and all are enabled.
       final levelPickers = tester
           .widgetList<SegmentedButton<String>>(
             find.byType(SegmentedButton<String>),
           )
-          .where((b) => b.segments.every((s) => (s.label as Text).data != 'Custom'))
+          .where(
+            (b) => b.segments.every((s) => (s.label as Text).data != 'Custom'),
+          )
           .toList();
       expect(levelPickers, hasLength(3));
       for (final picker in levelPickers) {
-        expect(
-          picker.onSelectionChanged,
-          isNotNull,
-          reason: 'Custom preset must enable every level picker',
-        );
+        expect(picker.onSelectionChanged, isNotNull);
       }
     },
   );
@@ -144,42 +144,28 @@ void main() {
     (tester) async {
       await pumpCard(tester);
 
-      // Switch the preset to Novice. The preset picker is the only
-      // SegmentedButton that carries a 'Custom' segment, so it is uniquely
-      // addressable; tap its 'Novice' option (a 'Novice' label also exists in
-      // the level pickers, hence the scoped finder).
-      final presetPicker = find.byWidgetPredicate(
-        (w) =>
-            w is SegmentedButton<String> &&
-            w.segments.any((s) => (s.label as Text).data == 'Custom'),
-      );
       await tester.tap(
-        find.descendant(of: presetPicker, matching: find.text('Novice')),
+        find.descendant(of: _presetPicker(), matching: find.text('Novice')),
       );
       await tester.pumpAndSettle();
 
-      // Permadeath is disabled and forced off on Novice.
       final perma = _switchByTitle(tester, 'Permadeath');
       expect(perma.onChanged, isNull, reason: 'Novice disables Permadeath');
       expect(perma.value, isFalse, reason: 'Novice forces Permadeath off');
 
-      // Every level picker is now locked.
       final levelPickers = tester
           .widgetList<SegmentedButton<String>>(
             find.byType(SegmentedButton<String>),
           )
-          .where((b) => b.segments.every((s) => (s.label as Text).data != 'Custom'))
+          .where(
+            (b) => b.segments.every((s) => (s.label as Text).data != 'Custom'),
+          )
           .toList();
       expect(levelPickers, hasLength(3));
       for (final picker in levelPickers) {
-        expect(
-          picker.onSelectionChanged,
-          isNull,
-          reason: 'Novice must disable every level picker',
-        );
+        expect(picker.onSelectionChanged, isNull);
       }
 
-      // Flow Helper stays enabled regardless of preset.
       expect(
         _switchByTitle(tester, 'Close Combat Flow Helper').onChanged,
         isNotNull,
@@ -188,97 +174,108 @@ void main() {
   );
 
   testWidgets(
-    'propagation-only: ticking a box enables Save and marks dirty (Report #5)',
+    'changing a control registers a pending difficulty edit the GLOBAL count '
+    'reflects',
     (tester) async {
       await pumpCard(tester, profile: profile);
 
-      // No field changed yet → Save disabled, not dirty.
-      expect(saveButton(tester).onPressed, isNull);
-      expect(notifier.state.difficultyDirty, isFalse);
+      // Nothing pending initially.
+      expect(notifier.state.pendingDifficulty, isNull);
+      expect(notifier.state.pendingEditCount, 0);
 
-      // Tick "Also update the profile" without changing any field.
-      await tickAlsoProfile(tester);
+      // Switch preset Custom → Novice: a real difficulty change.
+      await tester.tap(
+        find.descendant(of: _presetPicker(), matching: find.text('Novice')),
+      );
+      await tester.pumpAndSettle();
 
-      // Save is now enabled for the propagation-only write, and the dirty
-      // signal flips so the unsaved-edits guard would prompt.
-      expect(
-        saveButton(tester).onPressed,
-        isNotNull,
-        reason: 'A ticked propagation box is work — Save must enable',
+      // A pending difficulty edit is now registered and the GLOBAL count/badge
+      // reflect it.
+      expect(notifier.state.pendingDifficulty, isNotNull);
+      expect(notifier.state.pendingEditCount, 1);
+      expect(notifier.state.hasUnsavedEdits, isTrue);
+      expect(notifier.state.pendingDifficulty!.difficulty['preset'], 'Novice');
+      // The card shows the 'Unsaved' badge.
+      expect(find.text('Unsaved'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'reverting a control back to the stored value clears the pending edit',
+    (tester) async {
+      await pumpCard(tester, profile: profile);
+
+      // Stored flowHelper is true. Toggle it off (pending), then back on.
+      final flowFinder = find.ancestor(
+        of: find.text('Close Combat Flow Helper'),
+        matching: find.byType(SwitchListTile),
       );
-      expect(
-        notifier.state.difficultyDirty,
-        isTrue,
-        reason: 'A propagation-only intent must register as unsaved work',
-      );
+      await tester.tap(flowFinder);
+      await tester.pumpAndSettle();
+      expect(notifier.state.pendingDifficulty, isNotNull);
+
+      await tester.tap(flowFinder);
+      await tester.pumpAndSettle();
+      // Back at the stored value with no propagation → no pending work.
+      expect(notifier.state.pendingDifficulty, isNull);
+      expect(notifier.state.pendingEditCount, 0);
+      expect(find.text('Unsaved'), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'propagation-only: ticking a box registers a pending edit (no field change)',
+    (tester) async {
+      await pumpCard(tester, profile: profile);
+
+      expect(notifier.state.pendingDifficulty, isNull);
+
+      await tester.tap(find.text('Also update the profile'));
+      await tester.pumpAndSettle();
+
+      // A ticked propagation box is work even without a field change.
+      expect(notifier.state.pendingDifficulty, isNotNull);
+      expect(notifier.state.pendingDifficulty!.alsoProfile, isTrue);
       expect(notifier.state.hasUnsavedEdits, isTrue);
     },
   );
 
   testWidgets(
-    'difficulty Save is blocked while unrelated pending edits exist (Report #2)',
+    'no resolvable profile disables both propagation checkboxes',
     (tester) async {
-      // Register an unrelated pending edit before pumping the card.
-      notifier.setPendingEdit(
-        'publicName',
-        const PendingSaveEdit(
-          edits: [
-            {'path': 'public.name.set', 'value': 'Renamed'},
-          ],
-        ),
-      );
-      await pumpCard(tester, profile: profile);
+      // profile == null models a save with no resolvable profile.
+      await pumpCard(tester, profile: null);
 
-      // Make a real difficulty change so the only thing keeping Save disabled
-      // is the blocking pending edit.
-      await tester.tap(
-        find.descendant(
-          of: find.byWidgetPredicate(
-            (w) =>
-                w is SegmentedButton<String> &&
-                w.segments.any((s) => (s.label as Text).data == 'Custom'),
-          ),
-          matching: find.text('Hard'),
-        ),
+      final boxes = tester.widgetList<CheckboxListTile>(
+        find.byType(CheckboxListTile),
       );
-      await tester.pumpAndSettle();
-
-      expect(
-        saveButton(tester).onPressed,
-        isNull,
-        reason: 'Difficulty Save must be blocked while other edits are pending',
-      );
-      // The blocking hint is shown.
-      expect(
-        find.textContaining('Save or reset your other pending changes first'),
-        findsOneWidget,
-      );
+      expect(boxes, hasLength(2));
+      for (final box in boxes) {
+        expect(
+          box.onChanged,
+          isNull,
+          reason: 'Cannot propagate without a resolved profile',
+        );
+      }
     },
   );
 
   testWidgets(
-    'dirty difficulty draft survives an incidental same-save re-inspect '
-    '(Report #1 / behavior B)',
+    'a global Reset (pendingDifficulty cleared) makes the card show stored '
+    'values again',
     (tester) async {
       await pumpCard(tester, profile: profile);
 
-      // Make the draft dirty: switch preset Custom → Novice.
+      // Make the draft Novice.
       await tester.tap(
-        find.descendant(
-          of: find.byWidgetPredicate(
-            (w) =>
-                w is SegmentedButton<String> &&
-                w.segments.any((s) => (s.label as Text).data == 'Custom'),
-          ),
-          matching: find.text('Novice'),
-        ),
+        find.descendant(of: _presetPicker(), matching: find.text('Novice')),
       );
       await tester.pumpAndSettle();
-      expect(notifier.state.difficultyDirty, isTrue);
+      expect(notifier.state.pendingDifficulty, isNotNull);
 
-      // Simulate an incidental re-inspect of the SAME save: a brand-new
-      // SaveInspection instance with the same path lands in the widget tree.
-      // (The notifier preserves difficultyDirty for a same-save re-inspect.)
+      // Simulate the global Reset clearing the pending difficulty, then a
+      // parent rebuild of the card (same save).
+      notifier.clearPendingDifficulty();
       await tester.pumpWidget(
         MaterialApp(
           home: Scaffold(
@@ -295,118 +292,33 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      // Draft must still be Novice (preserved), and still marked unsaved.
+      // The card renders the stored Custom preset again.
       final presetPicker = tester.widget<SegmentedButton<String>>(
-        find.byWidgetPredicate(
-          (w) =>
-              w is SegmentedButton<String> &&
-              w.segments.any((s) => (s.label as Text).data == 'Custom'),
-        ),
+        _presetPicker(),
       );
-      expect(
-        presetPicker.selected,
-        {'Novice'},
-        reason: 'A dirty draft must survive a same-save re-inspect',
-      );
-      expect(notifier.state.difficultyDirty, isTrue);
+      expect(presetPicker.selected, {'Custom'});
+      expect(find.text('Unsaved'), findsNothing);
     },
   );
 
   testWidgets(
-    'stale difficultyDirty is cleared when a re-seed lands on a no-work draft '
-    '(Report #1 — stuck guard)',
+    'a non-blocking codec hint shows when an edit is pending but the codec is '
+    'not compress-ready',
     (tester) async {
-      await pumpCard(tester, profile: profile);
+      await pumpCard(tester, profile: profile, canCompress: false);
 
-      // Drive the notifier flag dirty directly, leaving the local draft at its
-      // freshly-seeded (no-work) state. This models the regression: the flag is
-      // set but the card has nothing to save, so the "Unsaved" badge is hidden
-      // yet the profile-switch / rescan guards stay wedged.
-      notifier.setDifficultyDirty(true);
-      expect(notifier.state.difficultyDirty, isTrue);
+      // No hint until there is pending work.
+      expect(find.textContaining('verified G1R codec host'), findsNothing);
 
-      // A re-inspect of the SAME save lands (new instance, same path). Because
-      // the draft has no work, didUpdateWidget re-seeds and must schedule a
-      // clear of the stale flag after the frame.
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: SingleChildScrollView(
-              child: DifficultyCard(
-                inspection: _customInspection(),
-                notifier: notifier,
-                profile: profile,
-                canCompress: true,
-              ),
-            ),
-          ),
-        ),
-      );
-      await tester.pumpAndSettle();
-
-      // The post-frame callback has run: the stale flag is cleared, so
-      // hasUnsavedEdits reflects reality and the guards are no longer stuck.
-      expect(
-        notifier.state.difficultyDirty,
-        isFalse,
-        reason: 'A re-seed to a no-work draft must clear the stale dirty flag',
-      );
-      expect(notifier.state.hasUnsavedEdits, isFalse);
-    },
-  );
-
-  testWidgets(
-    'draft re-seeds when the notifier clears difficultyDirty (discard path)',
-    (tester) async {
-      await pumpCard(tester, profile: profile);
-
-      // Make the draft dirty.
       await tester.tap(
-        find.descendant(
-          of: find.byWidgetPredicate(
-            (w) =>
-                w is SegmentedButton<String> &&
-                w.segments.any((s) => (s.label as Text).data == 'Custom'),
-          ),
-          matching: find.text('Novice'),
-        ),
-      );
-      await tester.pumpAndSettle();
-      expect(notifier.state.difficultyDirty, isTrue);
-
-      // The discard-and-rescan path clears the dirty signal before refresh.
-      // The real app rebuilds the card when notifier state changes; simulate
-      // that parent rebuild by re-pumping the same widget (same save path).
-      notifier.setDifficultyDirty(false);
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: SingleChildScrollView(
-              child: DifficultyCard(
-                inspection: _customInspection(),
-                notifier: notifier,
-                profile: profile,
-                canCompress: true,
-              ),
-            ),
-          ),
-        ),
+        find.descendant(of: _presetPicker(), matching: find.text('Novice')),
       );
       await tester.pumpAndSettle();
 
-      // The card re-seeds to the stored Custom preset.
-      final presetPicker = tester.widget<SegmentedButton<String>>(
-        find.byWidgetPredicate(
-          (w) =>
-              w is SegmentedButton<String> &&
-              w.segments.any((s) => (s.label as Text).data == 'Custom'),
-        ),
-      );
-      expect(
-        presetPicker.selected,
-        {'Custom'},
-        reason: 'Clearing difficultyDirty must re-seed the draft to stored',
-      );
+      // The hint appears, but the controls remain enabled — the global Save
+      // surfaces the actual error; the card no longer gates.
+      expect(find.textContaining('verified G1R codec host'), findsOneWidget);
+      expect(notifier.state.pendingDifficulty, isNotNull);
     },
   );
 }

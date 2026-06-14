@@ -41,6 +41,11 @@ void main() {
 
     // Format/save-kind details live in the collapsed diagnostics card.
     expect(find.text('Format'), findsNothing);
+    // The Difficulty card now opens expanded by default, pushing the diagnostics
+    // card down. Collapse it so the compact Overview lays out as before and the
+    // diagnostics card is reachable.
+    await tester.tap(find.text('Difficulty'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Diagnostics & details'));
     await tester.pumpAndSettle();
     expect(find.text('Format'), findsOneWidget);

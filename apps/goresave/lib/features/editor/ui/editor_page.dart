@@ -288,23 +288,21 @@ class _ProfileHeader extends StatelessWidget {
   }
 
   /// Rescanning re-inspects the selected slot, which clears the global
-  /// pending-edit registry AND would re-seed the Difficulty card — never
-  /// silently discard unsaved drafts. Guard on the same `hasUnsavedEdits`
-  /// signal the profile-switch guard uses (pending registry edits OR a dirty
-  /// difficulty draft), not just the pending count.
+  /// pending-edit registry (including any pending difficulty edit) and re-seeds
+  /// every editor — never silently discard unsaved changes. Guard on the same
+  /// `hasUnsavedEdits` signal the profile-switch guard uses (pending registry
+  /// edits OR a pending difficulty edit).
   Future<void> _confirmRefresh(BuildContext context) async {
     if (notifier.state.hasUnsavedEdits) {
       final pendingCount = notifier.pendingEditCount;
-      final detail = pendingCount > 0
-          ? 'Rescanning reloads every save and discards your $pendingCount '
-                'unsaved change${pendingCount == 1 ? '' : 's'}.'
-          : 'Rescanning reloads every save and discards your unsaved '
-                'difficulty changes.';
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
           title: const Text('Discard unsaved changes?'),
-          content: Text(detail),
+          content: Text(
+            'Rescanning reloads every save and discards your $pendingCount '
+            'unsaved change${pendingCount == 1 ? '' : 's'}.',
+          ),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(context).pop(false),
@@ -318,11 +316,8 @@ class _ProfileHeader extends StatelessWidget {
         ),
       );
       if (confirmed != true) return;
-      // The user chose to discard. Clear the difficulty draft signal so the
-      // card re-seeds to the stored value on the upcoming re-inspect (the
-      // notifier otherwise preserves a dirty draft across a same-save
-      // re-inspect). Pending registry edits are cleared by the refresh itself.
-      notifier.setDifficultyDirty(false);
+      // The user chose to discard. refresh() centrally clears all pending edits
+      // (registry + the pending difficulty edit) and re-seeds the editors.
     }
     await notifier.refresh();
   }
@@ -827,14 +822,16 @@ class _OverviewPanel extends StatelessWidget {
       children: [
         _HeaderCard(inspection: inspection, save: state.selectedSave),
         const SizedBox(height: 16),
+        _MetadataEditor(inspection: inspection, notifier: notifier),
+        const SizedBox(height: 16),
         DifficultyCard(
           inspection: inspection,
           notifier: notifier,
-          profile: state.activeProfile,
+          // Propagation binds to the EDITED SAVE's profile, not the sidebar's
+          // effective filter profile (which can differ).
+          profile: state.editedSaveProfile,
           canCompress: state.codecCompressReady,
         ),
-        const SizedBox(height: 16),
-        _MetadataEditor(inspection: inspection, notifier: notifier),
         const SizedBox(height: 16),
         _OverviewDiagnostics(inspection: inspection),
         const SizedBox(height: 16),
@@ -1945,6 +1942,12 @@ class _PrivateInventorySummaryCardState
     // count as plain text but the delete action may still apply.
     return Row(
       mainAxisSize: MainAxisSize.min,
+      // Top-align so the count field's error line ('Min 1') has room to render
+      // below the field without growing the row or shoving the delete button —
+      // the field reserves constant vertical space for that line (see
+      // _InventoryItemCountEditor.helperText), and the delete button sits at the
+      // top next to the field, not vertically centred against the taller field.
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         if (countEditable)
           _InventoryItemCountEditor(
@@ -2113,12 +2116,20 @@ class _InventoryItemCountEditorState extends State<_InventoryItemCountEditor> {
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      width: 120,
+      width: 132,
       child: TextField(
         controller: _controller,
         keyboardType: TextInputType.number,
         onChanged: _onCountTextChanged,
-        decoration: InputDecoration(labelText: 'Count', errorText: _error),
+        decoration: InputDecoration(
+          labelText: 'Count',
+          errorText: _error,
+          // Reserve a constant line below the field with a blank helper so that
+          // showing the 'Min 1' error swaps in place of the helper rather than
+          // adding a new line — the field height stays stable, so it never
+          // grows inside the trailing Row when the user types 0.
+          helperText: ' ',
+        ),
       ),
     );
   }

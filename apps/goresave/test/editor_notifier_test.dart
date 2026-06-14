@@ -353,6 +353,265 @@ void main() {
     expect(countAfter, countBefore);
   });
 
+  // ---------------------------------------------------------------------------
+  // Pending difficulty edit folded into the global Save/Reset flow
+  // ---------------------------------------------------------------------------
+
+  /// A scan with one save attributed to profile 7, so selectedSave and
+  /// editedSaveProfile resolve.
+  Map<String, Object?> difficultyScanData() => {
+    'saves': [
+      {
+        'path': r'C:\tmp\saves\G1R-001.sav',
+        'slot': 'G1R-001',
+        'format': 'GSAV',
+        'fileSize': 100,
+        'sha1': 'a',
+        'status': 'ok',
+        'playerSaveName': 'Save A',
+        'persistentProfileId': 7,
+      },
+      {
+        'path': r'C:\tmp\saves\G1R-002.sav',
+        'slot': 'G1R-002',
+        'format': 'GSAV',
+        'fileSize': 100,
+        'sha1': 'b',
+        'status': 'ok',
+        'playerSaveName': 'Save B',
+        'persistentProfileId': 7,
+      },
+    ],
+    'profiles': [
+      {
+        'profileId': 7,
+        'profileName': 'Nameless Hero',
+        'quickSaveSlots': <String>[],
+        'autoSaveSlots': <String>[],
+        'savedSlots': ['G1R-001', 'G1R-002'],
+      },
+    ],
+    'activeProfileId': 7,
+  };
+
+  EditorNotifier difficultyNotifier(_RecordingCoreService core) {
+    return EditorNotifier(
+      core,
+      saveDir: r'C:\tmp\saves',
+      codecHostPath: r'C:\tools\goresave_g1r_codec_host.exe',
+      gameExePath: r'C:\Games\G1R\G1R-Win64-Shipping.exe',
+    );
+  }
+
+  test(
+    'pending difficulty edit counts in pendingEditCount/hasUnsavedEdits and '
+    'enables the global Save',
+    () async {
+      final core = _RecordingCoreService(scanData: difficultyScanData());
+      final notifier = difficultyNotifier(core);
+      await pumpEventQueue();
+
+      expect(notifier.state.pendingEditCount, 0);
+      expect(notifier.state.hasUnsavedEdits, isFalse);
+
+      notifier.setPendingDifficulty(
+        const PendingDifficulty(
+          difficulty: {
+            'preset': 'Hard',
+            'flowHelper': false,
+            'permadeath': true,
+          },
+        ),
+      );
+
+      // The global badge counts the difficulty edit as one unsaved change.
+      expect(notifier.state.pendingEditCount, 1);
+      expect(notifier.state.hasUnsavedEdits, isTrue);
+    },
+  );
+
+  test(
+    'global saveAllPending dispatches write_difficulty and clears the edit',
+    () async {
+      final core = _RecordingCoreService(scanData: difficultyScanData());
+      final notifier = difficultyNotifier(core);
+      await pumpEventQueue();
+      // Select the first save so it is the edited save.
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+      notifier.setPendingDifficulty(
+        const PendingDifficulty(
+          difficulty: {
+            'preset': 'Hard',
+            'flowHelper': false,
+            'permadeath': true,
+          },
+        ),
+      );
+
+      final ok = await notifier.saveAllPending();
+
+      expect(ok, isTrue);
+      final writes = core.requests
+          .where((r) => r.command == 'write_difficulty')
+          .toList();
+      expect(writes, hasLength(1), reason: 'exactly one write_difficulty');
+      final payload = writes.single.payload;
+      expect(payload['difficulty'], {
+        'preset': 'Hard',
+        'flowHelper': false,
+        'permadeath': true,
+      });
+      // Only the current save targeted (no propagation), profile not written.
+      final targets = payload['targets'] as Map;
+      expect(targets['saves'], [r'C:\tmp\saves\G1R-001.sav']);
+      expect(targets.containsKey('profile'), isFalse);
+      expect(payload['backup'], isTrue);
+      // Codec host attached (private-payload edit).
+      expect(payload['binaryHost'], isNotNull);
+      // Edit cleared after success.
+      expect(notifier.state.pendingDifficulty, isNull);
+      expect(notifier.state.hasUnsavedEdits, isFalse);
+    },
+  );
+
+  test(
+    'global saveAllPending performs BOTH write_save and write_difficulty with '
+    'a single refresh',
+    () async {
+      final core = _RecordingCoreService(scanData: difficultyScanData());
+      final notifier = difficultyNotifier(core);
+      await pumpEventQueue();
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+      final scansBefore = core.requests
+          .where((r) => r.command == 'scan_save_dir')
+          .length;
+
+      notifier.setPendingEdit(
+        'publicName',
+        const PendingSaveEdit(
+          edits: [
+            {'path': 'public.m_PlayerSaveName', 'value': 'Renamed'},
+          ],
+        ),
+      );
+      notifier.setPendingDifficulty(
+        const PendingDifficulty(
+          difficulty: {'preset': 'Gothic', 'flowHelper': true, 'permadeath': false},
+        ),
+      );
+
+      final ok = await notifier.saveAllPending();
+
+      expect(ok, isTrue);
+      // Both core writes issued, write_save before write_difficulty.
+      final writeCommands = core.requests
+          .map((r) => r.command)
+          .where((c) => c == 'write_save' || c == 'write_difficulty')
+          .toList();
+      expect(writeCommands, ['write_save', 'write_difficulty']);
+      // Exactly ONE refresh (scan_save_dir) at the end.
+      final scansAfter = core.requests
+          .where((r) => r.command == 'scan_save_dir')
+          .length;
+      expect(scansAfter - scansBefore, 1, reason: 'refresh runs once');
+      // Everything cleared.
+      expect(notifier.state.pendingEdits, isEmpty);
+      expect(notifier.state.pendingDifficulty, isNull);
+    },
+  );
+
+  test(
+    'global Reset (refresh) clears a pending difficulty edit',
+    () async {
+      final core = _RecordingCoreService(scanData: difficultyScanData());
+      final notifier = difficultyNotifier(core);
+      await pumpEventQueue();
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+      notifier.setPendingDifficulty(
+        const PendingDifficulty(
+          difficulty: {'preset': 'Hard', 'flowHelper': false, 'permadeath': true},
+        ),
+      );
+      expect(notifier.state.pendingDifficulty, isNotNull);
+
+      // Global Reset re-scans/re-inspects, which clears all pending edits.
+      await notifier.refresh();
+
+      expect(notifier.state.pendingDifficulty, isNull);
+      expect(notifier.state.hasUnsavedEdits, isFalse);
+    },
+  );
+
+  test(
+    'difficulty propagation binds to the EDITED SAVE profile (allSaves + '
+    'profile targets resolved from selectedSave)',
+    () async {
+      final core = _RecordingCoreService(scanData: difficultyScanData());
+      final notifier = difficultyNotifier(core);
+      await pumpEventQueue();
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+      notifier.setPendingDifficulty(
+        const PendingDifficulty(
+          difficulty: {'preset': 'Hard', 'flowHelper': false, 'permadeath': true},
+          alsoProfile: true,
+          allSaves: true,
+        ),
+      );
+
+      final ok = await notifier.saveAllPending();
+      expect(ok, isTrue);
+
+      final write = core.requests.lastWhere(
+        (r) => r.command == 'write_difficulty',
+      );
+      final targets = write.payload['targets'] as Map;
+      // allSaves → every save of profile 7 (both G1R-001 and G1R-002).
+      expect(
+        (targets['saves'] as List).toSet(),
+        {r'C:\tmp\saves\G1R-001.sav', r'C:\tmp\saves\G1R-002.sav'},
+      );
+      // alsoProfile → PersistentDataList.sav next to the current save, profile 7.
+      final profileTarget = targets['profile'] as Map;
+      expect(profileTarget['path'], r'C:\tmp\saves\PersistentDataList.sav');
+      expect(profileTarget['profileId'], 7);
+    },
+  );
+
+  test(
+    'global saveAllPending surfaces the codec error when difficulty is pending '
+    'but the codec is not compress-ready',
+    () async {
+      final core = _RecordingCoreService(
+        scanData: difficultyScanData(),
+        codecCanCompress: false,
+      );
+      final notifier = difficultyNotifier(core);
+      await pumpEventQueue();
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+      notifier.setPendingDifficulty(
+        const PendingDifficulty(
+          difficulty: {'preset': 'Hard', 'flowHelper': false, 'permadeath': true},
+        ),
+      );
+
+      final ok = await notifier.saveAllPending();
+
+      expect(ok, isFalse);
+      expect(notifier.state.error, contains('verified G1R codec host'));
+      // No write was issued.
+      expect(
+        core.requests.where((r) => r.command == 'write_difficulty'),
+        isEmpty,
+      );
+      // The pending edit is kept so the user can verify the codec and retry.
+      expect(notifier.state.pendingDifficulty, isNotNull);
+    },
+  );
+
   test('saveAllPending keeps pending edits on failure', () async {
     final core = _FailingWriteCoreService();
     final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
@@ -1449,6 +1708,17 @@ class _RecordingCoreService implements GoresaveCoreService {
                   r'C:\tmp\saves\PersistentDataList.sav.bak.2',
               'persistentBytesChanged': true,
             },
+          },
+        };
+      case 'write_difficulty':
+        final targets = (payload['targets'] as Map?) ?? const {};
+        final saveCount = (targets['saves'] as List?)?.length ?? 0;
+        final profileCount = targets.containsKey('profile') ? 1 : 0;
+        return {
+          'ok': true,
+          'data': {
+            'targetsWritten': saveCount + profileCount,
+            'paths': targets['saves'],
           },
         };
       case 'search_typed_properties':

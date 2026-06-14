@@ -69,7 +69,7 @@ class EditorState {
     this.codecError,
     this.lastWriteMessage,
     this.pendingEdits = const {},
-    this.difficultyDirty = false,
+    this.pendingDifficulty,
   });
 
   final String saveDir;
@@ -96,18 +96,21 @@ class EditorState {
   /// different save, or selection change.
   final Map<String, PendingSaveEdit> pendingEdits;
 
-  /// True when the Difficulty card holds an unsaved draft that differs from the
-  /// selected save's stored difficulty. The Difficulty card manages its draft in
-  /// widget-local state (it is not part of the [pendingEdits] registry, since a
-  /// difficulty write is its own multi-target command), so this flag is the
-  /// signal the profile-switch guard uses to refuse switching mid-edit. Cleared
-  /// on a successful difficulty write and whenever a new inspection lands.
-  final bool difficultyDirty;
+  /// The pending (unsaved) difficulty edit, or null when difficulty is at the
+  /// selected save's stored value with no propagation requested. It is held as
+  /// a typed field rather than in [pendingEdits] because a difficulty write is
+  /// its own multi-target `write_difficulty` command (not a `write_save` edit
+  /// object). It participates in [hasUnsavedEdits], [pendingEditCount] (so the
+  /// global "Unsaved (N)" badge counts it and Save enables), the global
+  /// [saveAllPending], and the global Reset. Cleared on a save switch, refresh,
+  /// and whenever the user reverts the controls back to the stored value.
+  final PendingDifficulty? pendingDifficulty;
 
   /// True when there are any unsaved edits anywhere — pending registry edits or
-  /// a dirty difficulty draft. The profile-switch guard blocks on this so a
-  /// difficulty draft is protected exactly like a pending field edit.
-  bool get hasUnsavedEdits => pendingEdits.isNotEmpty || difficultyDirty;
+  /// a pending difficulty edit. The profile-switch guard blocks on this so a
+  /// difficulty edit is protected exactly like a pending field edit.
+  bool get hasUnsavedEdits =>
+      pendingEdits.isNotEmpty || pendingDifficulty != null;
 
   /// True once the user ran a successful codec round-trip verification this
   /// session for an executable the probe could not auto-trust (a pattern-
@@ -133,9 +136,12 @@ class EditorState {
   final String? codecError;
   final String? lastWriteMessage;
 
-  /// Total number of edit objects across all pending keys.
+  /// Total number of edit objects across all pending keys, plus the pending
+  /// difficulty edit (counted as one) so the global "Unsaved (N)" badge and the
+  /// Save/Reset buttons reflect a pending difficulty just like any field edit.
   int get pendingEditCount =>
-      pendingEdits.values.fold(0, (n, e) => n + e.edits.length);
+      pendingEdits.values.fold(0, (n, e) => n + e.edits.length) +
+      (pendingDifficulty != null ? 1 : 0);
 
   SaveSlot? get selectedSave {
     for (final save in saves) {
@@ -183,6 +189,21 @@ class EditorState {
     return null;
   }
 
+  /// The profile of the SAVE currently under edit (the inspected/selected save),
+  /// resolved from its `persistentProfileId`. This is what difficulty
+  /// propagation must bind to — distinct from [activeProfile], which describes
+  /// the sidebar's effective filter profile and can differ from the edited
+  /// save's own profile. Null when the selected save has no profile id or no
+  /// matching profile exists (propagation is then disabled).
+  ProfileSummary? get editedSaveProfile {
+    final profileId = selectedSave?.persistentProfileId;
+    if (profileId == null) return null;
+    for (final profile in profiles) {
+      if (profile.profileId == profileId) return profile;
+    }
+    return null;
+  }
+
   EditorState copyWith({
     String? saveDir,
     String? codecHostPath,
@@ -202,7 +223,7 @@ class EditorState {
     String? codecError,
     String? lastWriteMessage,
     Map<String, PendingSaveEdit>? pendingEdits,
-    bool? difficultyDirty,
+    Object? pendingDifficulty = _unchanged,
     bool clearInspection = false,
     bool clearBackups = false,
     bool clearError = false,
@@ -242,7 +263,15 @@ class EditorState {
       pendingEdits: clearPendingEdits
           ? const {}
           : pendingEdits ?? this.pendingEdits,
-      difficultyDirty: difficultyDirty ?? this.difficultyDirty,
+      // A pending difficulty edit is cleared on the same events that clear the
+      // pending-edit registry (slot switch, refresh, fresh inspection landing),
+      // so honour clearPendingEdits for it too. Otherwise apply the explicit
+      // value (passing null clears it; the _unchanged sentinel keeps it).
+      pendingDifficulty: clearPendingEdits
+          ? null
+          : (identical(pendingDifficulty, _unchanged)
+                ? this.pendingDifficulty
+                : pendingDifficulty as PendingDifficulty?),
     );
   }
 }
@@ -310,11 +339,13 @@ class EditorNotifier extends StateNotifier<EditorState> {
     }
   }
 
-  /// Run a write request (`write_save` by default) as a tracked load, then
-  /// rescan on success. Returns true only when the core accepted the write; a
-  /// rejected write sets `state.error` and returns false so callers can skip
-  /// success-only follow-ups. The post-success `refresh()` rescans saves AND
-  /// profiles, so difficulty writes targeting the profile are reflected too.
+  /// Run a single write request (`write_save` by default) as a tracked load,
+  /// then rescan on success. Returns true only when the core accepted the
+  /// write; a rejected write sets `state.error` and returns false so callers
+  /// can skip success-only follow-ups. The post-success `refresh()` rescans
+  /// saves AND profiles. Used by [restoreBackup] and [applyMemoryEventEdit];
+  /// the global [saveAllPending] orchestrates its writes inline so it can do a
+  /// slot write_save and a write_difficulty with a single trailing refresh.
   Future<bool> _runWrite({
     required Map<String, Object?> payload,
     required String Function(Map<String, Object?> data) message,
@@ -335,48 +366,67 @@ class EditorNotifier extends StateNotifier<EditorState> {
     return ok;
   }
 
-  /// Write a difficulty configuration to the given save files and, optionally,
-  /// the profile's `PersistentDataList.sav`. Dispatched through [_runWrite] so
-  /// the overlay shows, errors surface, and a successful write rescans saves +
-  /// profiles (so the sidebar difficulty badge and the card both update).
+  /// Resolve the `write_difficulty` targets for [edit] against the current
+  /// state, binding propagation to the EDITED SAVE's profile (not the sidebar's
+  /// filter profile). Returns the assembled command payload, or null when there
+  /// is no selected save to target.
+  ///
+  /// - The current save is always a target.
+  /// - `allSaves`: every save whose `persistentProfileId` matches the edited
+  ///   save's profile id (current save always included).
+  /// - `alsoProfile`: the profile's `PersistentDataList.sav`
+  ///   (`dirname(currentSavePath)/PersistentDataList.sav`) with that profile id.
   ///
   /// The `binaryHost` codec host is attached exactly as the `write_save` path
   /// does (via [_codecPayload]) — the private-payload edit on save targets
   /// requires the codec host, and the core errors without it.
-  Future<bool> writeDifficulty({
-    required Map<String, Object?> difficulty,
-    required List<String> savePaths,
-    ({String path, int profileId})? profile,
-  }) async {
+  Map<String, Object?>? _buildDifficultyPayload(PendingDifficulty edit) {
+    final path = state.selectedPath;
+    if (path == null) return null;
+
+    // The profile of the SAVE under edit (not state.activeProfile, which is the
+    // sidebar's effective filter profile and can differ). Resolve it from the
+    // selected save's persistentProfileId.
+    final editedProfileId = state.selectedSave?.persistentProfileId;
+    ProfileSummary? editedProfile;
+    if (editedProfileId != null) {
+      for (final profile in state.profiles) {
+        if (profile.profileId == editedProfileId) {
+          editedProfile = profile;
+          break;
+        }
+      }
+    }
+
+    final savePaths = <String>[path];
+    if (edit.allSaves && editedProfile != null) {
+      savePaths
+        ..clear()
+        ..addAll(
+          state.saves
+              .where((s) => s.persistentProfileId == editedProfile!.profileId)
+              .map((s) => s.path),
+        );
+      // The current save is always a target, even if its persistentProfileId is
+      // null or mismatched.
+      if (!savePaths.contains(path)) savePaths.add(path);
+    }
+
     final targets = <String, Object?>{
       'saves': savePaths,
-      if (profile != null)
-        'profile': {'path': profile.path, 'profileId': profile.profileId},
+      if (edit.alsoProfile && editedProfile != null)
+        'profile': {
+          'path': p.join(p.dirname(path), 'PersistentDataList.sav'),
+          'profileId': editedProfile.profileId,
+        },
     };
-    final n = savePaths.length + (profile != null ? 1 : 0);
-    final ok = await _runWrite(
-      command: 'write_difficulty',
-      payload: {
-        'difficulty': difficulty,
-        'targets': targets,
-        'backup': true,
-        ..._codecPayload(),
-      },
-      // The core returns { targetsWritten, paths } (no backup-path fields), so
-      // report the count directly rather than via _backupMessage.
-      message: (data) {
-        final written = (data['targetsWritten'] as num?)?.toInt() ?? n;
-        if (written == 0) return 'No difficulty changes to write';
-        return 'Difficulty written to $written '
-            'target${written == 1 ? '' : 's'} (backup created)';
-      },
-    );
-    // On success the draft now matches what was written. The post-success
-    // refresh()/_inspect already clears difficultyDirty when the fresh
-    // inspection lands, but clear it explicitly too so the flag drops even if
-    // that re-inspect were to fail (the write itself succeeded on disk).
-    if (ok) setDifficultyDirty(false);
-    return ok;
+
+    return {
+      'difficulty': edit.difficulty,
+      'targets': targets,
+      'backup': true,
+      ..._codecPayload(),
+    };
   }
 
   /// Serializes all core calls. The native layer runs each command in its own
@@ -502,25 +552,37 @@ class EditorNotifier extends StateNotifier<EditorState> {
     state = state.copyWith(pendingEdits: updated);
   }
 
-  /// Set whether the Difficulty card holds an unsaved draft. Called by the card
-  /// as its draft becomes dirty/clean and on save/reset. Drives the
-  /// profile-switch guard via [EditorState.hasUnsavedEdits].
-  void setDifficultyDirty(bool dirty) {
-    if (state.difficultyDirty == dirty) return;
-    state = state.copyWith(difficultyDirty: dirty);
+  /// Upsert the pending difficulty edit. Called by the Difficulty card as its
+  /// controls change (or a propagation box is ticked). Participates in
+  /// [EditorState.hasUnsavedEdits], [EditorState.pendingEditCount] (so the
+  /// global Save/Reset reflect it), and is written by [saveAllPending].
+  void setPendingDifficulty(PendingDifficulty edit) {
+    state = state.copyWith(pendingDifficulty: edit);
   }
 
-  /// Clear all pending edits.
+  /// Clear the pending difficulty edit (e.g. the card reverts to the stored
+  /// value with no propagation requested).
+  void clearPendingDifficulty() {
+    if (state.pendingDifficulty == null) return;
+    state = state.copyWith(pendingDifficulty: null);
+  }
+
+  /// Clear all pending edits (registry and the pending difficulty edit).
   void clearAllPendingEdits() {
-    if (state.pendingEdits.isEmpty) return;
+    if (state.pendingEdits.isEmpty && state.pendingDifficulty == null) return;
     state = state.copyWith(clearPendingEdits: true);
   }
 
-  /// Save all pending edits in one write_save call. No-op when empty.
+  /// Save all pending edits: the slot edits in one `write_save` and the pending
+  /// difficulty edit in one `write_difficulty`. When both exist, both core
+  /// writes run sequentially against the current save's `.sav` (each re-reads
+  /// the file, so order is safe — slot write_save first, then write_difficulty),
+  /// then the state refreshes ONCE at the end. No-op when nothing is pending.
   /// Re-entry-safe: bails immediately if a load is already in flight.
   /// Returns true on success (or when nothing to save), false on failure.
   Future<bool> saveAllPending() async {
-    if (state.pendingEdits.isEmpty) return true;
+    final difficultyEdit = state.pendingDifficulty;
+    if (state.pendingEdits.isEmpty && difficultyEdit == null) return true;
     if (state.isLoading) return false;
     final savePath = state.selectedPath;
     if (savePath == null) return false;
@@ -583,29 +645,91 @@ class EditorNotifier extends StateNotifier<EditorState> {
       return false;
     }
 
+    // Difficulty rewrites the private payload of each target save, so it needs
+    // a compress-ready codec — surface the same error the other private writes
+    // use rather than silently skipping it.
+    if (difficultyEdit != null && !state.codecCompressReady) {
+      state = state.copyWith(
+        error:
+            'Saving difficulty needs a verified G1R codec host '
+            '(it rewrites the private payload of each targeted save).',
+      );
+      return false;
+    }
+
+    final difficultyPayload = difficultyEdit == null
+        ? null
+        : _buildDifficultyPayload(difficultyEdit);
+
     final n = allEdits.length;
-    final ok = await _runWrite(
-      payload: {
-        'path': savePath,
-        'backup': true,
-        if (syncPersistent) 'syncPersistentDataList': true,
-        'edits': allEdits,
-        ..._codecPayload(),
-      },
-      message: (data) => _backupMessage(
-        '$n change${n == 1 ? '' : 's'} saved with backup',
-        data,
-      ),
-    );
+    var ok = false;
+    await _withLoading(() async {
+      final messages = <String>[];
+
+      // 1) Slot edits (write_save), if any.
+      if (allEdits.isNotEmpty) {
+        final response = await _execute(
+          'write_save',
+          payload: {
+            'path': savePath,
+            'backup': true,
+            if (syncPersistent) 'syncPersistentDataList': true,
+            'edits': allEdits,
+            ..._codecPayload(),
+          },
+        );
+        if (response['ok'] != true) {
+          state = state.copyWith(error: _errorMessage(response));
+          return;
+        }
+        final data = (response['data'] as Map).cast<String, Object?>();
+        messages.add(
+          _backupMessage('$n change${n == 1 ? '' : 's'} saved with backup', data),
+        );
+      }
+
+      // 2) Difficulty (write_difficulty), if pending. Each write re-reads the
+      // file, so running it after the slot write is safe.
+      if (difficultyPayload != null) {
+        final response = await _execute(
+          'write_difficulty',
+          payload: difficultyPayload,
+        );
+        if (response['ok'] != true) {
+          state = state.copyWith(error: _errorMessage(response));
+          return;
+        }
+        final data = (response['data'] as Map).cast<String, Object?>();
+        final targetsList = (difficultyPayload['targets'] as Map);
+        final saveTargets = (targetsList['saves'] as List?)?.length ?? 1;
+        final profileTarget = targetsList.containsKey('profile') ? 1 : 0;
+        final written =
+            (data['targetsWritten'] as num?)?.toInt() ??
+            (saveTargets + profileTarget);
+        messages.add(
+          written == 0
+              ? 'No difficulty changes to write'
+              : 'Difficulty written to $written '
+                    'target${written == 1 ? '' : 's'} (backup created)',
+        );
+      }
+
+      // Both writes accepted — report and refresh ONCE.
+      state = state.copyWith(lastWriteMessage: messages.join('; '));
+      await refresh();
+      ok = true;
+    });
+
     if (ok) {
-      // Clear exactly the snapshot keys. The _runWrite → refresh() call has
-      // already triggered a central clearAllPendingEdits() (refresh always
-      // clears all pending), so this is a belt-and-suspenders guard for the
-      // case where a mid-write keystroke registered a new key after the
-      // snapshot was taken but before refresh ran.
+      // Clear exactly the snapshot keys plus the difficulty edit. The
+      // _withLoading → refresh() call has already triggered a central
+      // clearPendingEdits (refresh always clears all pending), so this is a
+      // belt-and-suspenders guard for the case where a mid-write keystroke
+      // registered a new key after the snapshot was taken but before refresh ran.
       for (final key in snapshotKeys) {
         clearPendingEdit(key);
       }
+      clearPendingDifficulty();
     }
     return ok;
   }
@@ -733,9 +857,6 @@ class EditorNotifier extends StateNotifier<EditorState> {
         clearInspection: selectedPath == null,
         clearBackups: selectedPath == null,
         clearPendingEdits: selectedPath == null,
-        // Nothing selected → no card → no draft. When a save remains selected,
-        // the follow-up _inspect clears this when the fresh inspection lands.
-        difficultyDirty: selectedPath == null ? false : null,
       );
       if (selectedPath != null) {
         await _inspect(selectedPath);
@@ -774,10 +895,6 @@ class EditorNotifier extends StateNotifier<EditorState> {
       // fields still show the drafts and the registry must keep matching
       // them so the user can retry the save.
       clearPendingEdits: switchingSlot,
-      // Same rationale for the difficulty draft: a slot switch must not carry
-      // a draft into a different save. A same-save re-inspect clears it when
-      // the fresh inspection lands (below).
-      difficultyDirty: switchingSlot ? false : null,
     );
     try {
       final payload = <String, Object?>{
@@ -805,13 +922,11 @@ class EditorNotifier extends StateNotifier<EditorState> {
       // discarded in the same state change — never earlier (see above).
       state = state.copyWith(
         inspection: SaveInspection.fromJson(data),
+        // The fresh inspection re-seeds every editor, so discard all pending
+        // edits — including any pending difficulty edit, which clearPendingEdits
+        // also clears. The card re-seeds its controls from the new inspection's
+        // stored difficulty.
         clearPendingEdits: true,
-        // A slot switch must not carry a difficulty draft into a different
-        // save, so drop it. A same-save re-inspect (e.g. a confirmed rescan, or
-        // an incidental refresh after a hero/inventory save) must PRESERVE a
-        // dirty draft — the card re-seeds itself only when the save identity
-        // changes — so leave the flag untouched here.
-        difficultyDirty: switchingSlot ? false : null,
       );
       final backupSnapshot = await _loadBackups(path, seq);
       if (backupSnapshot == null) return;

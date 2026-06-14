@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:goresave/features/editor/domain/editor_models.dart';
 import 'package:goresave/features/editor/domain/editor_notifier.dart';
-import 'package:path/path.dart' as p;
+import 'package:goresave/features/editor/domain/pending_edits.dart';
 
 /// The four difficulty presets, in the order the in-game screen lists them.
 /// These are the exact label strings the core maps back to its class names
@@ -27,9 +27,18 @@ String _impliedLevelForPreset(String preset) {
 }
 
 /// Editable difficulty form mirroring the in-game difficulty screen, bound to
-/// the selected save's stored difficulty. Writes through
-/// [EditorNotifier.writeDifficulty] with optional propagation to the profile
-/// and to all of the profile's saves (always with a backup).
+/// the selected save's stored difficulty.
+///
+/// Difficulty is a normal **pending edit**: changing a control registers (or
+/// updates) a [PendingDifficulty] on the notifier; reverting to the stored
+/// value with no propagation box ticked clears it. It is saved by the GLOBAL
+/// toolbar Save (`saveAllPending` dispatches `write_difficulty`) and discarded
+/// by the GLOBAL Reset — exactly like hero/inventory/metadata edits. The card
+/// therefore has no own Save/Reset buttons.
+///
+/// The displayed control values come from `pendingDifficulty ?? stored`, so a
+/// global Reset (which clears `pendingDifficulty`) makes the card show the
+/// saved values again, and switching saves re-seeds correctly.
 ///
 /// Difficulty is stored redundantly: in each save (gameplay-relevant), and in
 /// the profile's `PersistentDataList.sav` (the new-game menu default). Editing
@@ -47,14 +56,18 @@ class DifficultyCard extends StatefulWidget {
   final SaveInspection inspection;
   final EditorNotifier notifier;
 
-  /// The effective profile (`EditorState.activeProfile`). Null when no profile
-  /// is resolved — the propagation checkboxes are then disabled because there
-  /// is no profile to write to.
+  /// The profile of the SAVE under edit (resolved from the selected save's
+  /// `persistentProfileId`). Null when the edited save has no resolvable profile
+  /// — the propagation checkboxes are then disabled because there is no profile
+  /// to write to. NOTE: this is the edited save's profile, NOT the sidebar's
+  /// effective filter profile.
   final ProfileSummary? profile;
 
   /// Whether the codec host is compress-ready. Difficulty lives in the private
   /// payload of each targeted save, so writing it recompresses the payload and
   /// requires a verified/trusted codec — same gate as the other private edits.
+  /// The card no longer blocks on this (the global Save surfaces the codec
+  /// error); it is kept for a non-blocking hint.
   final bool canCompress;
 
   @override
@@ -62,212 +75,161 @@ class DifficultyCard extends StatefulWidget {
 }
 
 class _DifficultyCardState extends State<DifficultyCard> {
-  // Collapsed by default so the Overview panel opens to the same compact
-  // layout as before — the editing form (and its own Reset/Save buttons)
-  // appears only when the user expands the card.
-  bool _expanded = false;
+  // Expanded by default so the editing form is visible on load.
+  bool _expanded = true;
 
-  // Draft state — label strings ('Novice'/'Gothic'/'Hard'/'Custom').
-  late String _preset;
-  late String _combat;
-  late String _resources;
-  late String _progression;
-  late bool _flow;
-  late bool _perma;
+  EditorState get _state => widget.notifier.state;
 
-  // Propagation checkboxes (default OFF).
-  bool _alsoProfile = false;
-  bool _allSaves = false;
+  PendingDifficulty? get _pending => _state.pendingDifficulty;
 
-  // Identity of the save the draft was seeded from (the inspection path), so we
-  // re-seed only when a DIFFERENT save lands — not on every incidental
-  // re-inspect of the same save. A null path (no save) is its own identity.
-  Object? _seededFromPath;
+  // --- Stored (saved) values, normalised to UI labels --------------------
 
-  bool _saving = false;
+  String get _storedPreset => _normalizePreset(widget.inspection.difficulty?.presetLabel);
 
-  @override
-  void initState() {
-    super.initState();
-    _seed();
+  bool get _storedFlow => widget.inspection.difficulty?.flowHelper ?? false;
+
+  bool get _storedPerma {
+    return _storedPreset == 'Novice'
+        ? false
+        : (widget.inspection.difficulty?.permadeath ?? false);
   }
 
-  @override
-  void didUpdateWidget(covariant DifficultyCard oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    // Re-seed only when a DIFFERENT save lands (path changed), when the current
-    // draft has no unsaved work, OR when the notifier reports the difficulty is
-    // no longer dirty. The notifier is the source of truth for "keep this
-    // draft": it preserves difficultyDirty across an incidental re-inspect of
-    // the SAME save (e.g. a toolbar Save of hero edits) so the draft survives,
-    // but clears it on a genuine save switch, after a successful difficulty
-    // write, and when the user confirms a discard-and-rescan — in which case we
-    // re-seed to the stored value. We must NOT call setDifficultyDirty from
-    // here (it would mutate the provider during build/didUpdateWidget).
-    final samePath = widget.inspection.path == _seededFromPath;
-    final notifierDirty = widget.notifier.state.difficultyDirty;
-    if (!samePath || !_hasWork || !notifierDirty) {
-      _seed();
-      // If the re-seed lands on a draft with no work but the notifier flag is
-      // still set, the flag is now stale (the card shows no "Unsaved" state),
-      // and it would wedge the profile-switch / rescan guards until restart.
-      // Clear it safely AFTER this frame — mutating the provider during
-      // build/didUpdateWidget is not allowed. Only clear when there is genuinely
-      // no work, so a still-dirty same-save draft is never silently dropped.
-      if (!_hasWork && widget.notifier.state.difficultyDirty) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted && !_hasWork) widget.notifier.setDifficultyDirty(false);
-        });
-      }
+  // --- Displayed values: pending edit when present, else stored ----------
+
+  String get _preset {
+    final d = _pending?.difficulty;
+    if (d == null) return _storedPreset;
+    // The card stores 'preset' as a UI label ('Novice'/'Gothic'/'Hard'/
+    // 'Custom') — exactly what the core's write_difficulty expects.
+    return _normalizePreset(d['preset'] as String?);
+  }
+
+  bool get _flow {
+    final d = _pending?.difficulty;
+    if (d == null) return _storedFlow;
+    return (d['flowHelper'] as bool?) ?? false;
+  }
+
+  bool get _perma {
+    final d = _pending?.difficulty;
+    if (d == null) return _storedPerma;
+    if (_preset == 'Novice') return false;
+    return (d['permadeath'] as bool?) ?? false;
+  }
+
+  /// Sub-level for a Custom picker. When a pending Custom edit exists, read its
+  /// stored level; otherwise fall back to the saved value normalised against
+  /// the preset.
+  String _customLevel(String field) {
+    final d = _pending?.difficulty;
+    if (d != null && d[field] is String) {
+      return _normalizeLevel(d[field] as String, 'Custom');
     }
+    final stored = widget.inspection.difficulty;
+    final label = switch (field) {
+      'combat' => stored?.combatLabel,
+      'resources' => stored?.resourcesLabel,
+      _ => stored?.progressionLabel,
+    };
+    return _normalizeLevel(label, _storedPreset);
   }
 
-  /// Seed (or reset) the draft from the stored difficulty. Falls back to a
-  /// Gothic baseline when the save has no difficulty block at all.
-  void _seed() {
-    final d = widget.inspection.difficulty;
-    final preset = _normalizePreset(d?.presetLabel);
-    setState(() {
-      _seededFromPath = widget.inspection.path;
-      _preset = preset;
-      _combat = _normalizeLevel(d?.combatLabel, preset);
-      _resources = _normalizeLevel(d?.resourcesLabel, preset);
-      _progression = _normalizeLevel(d?.progressionLabel, preset);
-      _flow = d?.flowHelper ?? false;
-      // Novice forces permadeath off; otherwise honour the stored value.
-      _perma = preset == 'Novice' ? false : (d?.permadeath ?? false);
-      _alsoProfile = false;
-      _allSaves = false;
-    });
-  }
+  bool get _alsoProfile => _pending?.alsoProfile ?? false;
+  bool get _allSaves => _pending?.allSaves ?? false;
 
-  String _normalizePreset(String? label) {
-    return _presets.contains(label) ? label! : 'Gothic';
-  }
+  // --- Label/normalisation helpers ---------------------------------------
+
+  String _normalizePreset(String? label) =>
+      _presets.contains(label) ? label! : 'Gothic';
 
   String _normalizeLevel(String? label, String preset) {
     if (_levels.contains(label)) return label!;
-    // No usable stored sub-level: derive from the preset so locked pickers show
-    // a sensible value.
     return preset == 'Custom' ? 'Gothic' : _impliedLevelForPreset(preset);
   }
 
   /// The level a picker should DISPLAY: the draft value when Custom (pickers
   /// editable), otherwise the level implied by the preset (pickers locked).
-  String _displayedLevel(String draftLevel) {
-    return _preset == 'Custom' ? draftLevel : _impliedLevelForPreset(_preset);
+  String _displayedLevel(String field) {
+    return _preset == 'Custom'
+        ? _customLevel(field)
+        : _impliedLevelForPreset(_preset);
   }
 
-  /// Effective permadeath for dirty-comparison and save: forced off on Novice.
-  bool get _effectivePerma => _preset == 'Novice' ? false : _perma;
+  // --- Pending-edit registration -----------------------------------------
 
-  /// Whether the draft differs from the stored value (drives Save/Reset).
-  bool get _dirty {
-    final d = widget.inspection.difficulty;
-    final storedPreset = _normalizePreset(d?.presetLabel);
-    if (_preset != storedPreset) return true;
-    if (_flow != (d?.flowHelper ?? false)) return true;
-    final storedPerma = storedPreset == 'Novice'
-        ? false
-        : (d?.permadeath ?? false);
-    if (_effectivePerma != storedPerma) return true;
-    // Sub-levels only matter when Custom — for the other presets the level is
-    // fully implied by the preset, so a stored sub-level mismatch is not a
-    // user-visible difference.
-    if (_preset == 'Custom') {
-      if (_combat != _normalizeLevel(d?.combatLabel, storedPreset)) return true;
-      if (_resources != _normalizeLevel(d?.resourcesLabel, storedPreset)) {
-        return true;
-      }
-      if (_progression != _normalizeLevel(d?.progressionLabel, storedPreset)) {
-        return true;
-      }
+  /// Recompute the pending difficulty from a candidate set of control values
+  /// and the current propagation flags, then either register it or — when it
+  /// matches the stored value AND no propagation box is ticked — clear it.
+  void _apply({
+    String? preset,
+    bool? flow,
+    bool? perma,
+    String? combat,
+    String? resources,
+    String? progression,
+    bool? alsoProfile,
+    bool? allSaves,
+  }) {
+    final nextPreset = preset ?? _preset;
+    // Novice forces permadeath off; otherwise carry the explicit toggle or the
+    // current displayed value.
+    final nextPerma = nextPreset == 'Novice' ? false : (perma ?? _perma);
+    final nextFlow = flow ?? _flow;
+
+    // Custom sub-levels: only meaningful (and editable) on Custom. When leaving
+    // Custom, snap them to the implied preset level so a later return to Custom
+    // starts coherent.
+    final String nextCombat;
+    final String nextResources;
+    final String nextProgression;
+    if (nextPreset == 'Custom') {
+      nextCombat = combat ?? _customLevel('combat');
+      nextResources = resources ?? _customLevel('resources');
+      nextProgression = progression ?? _customLevel('progression');
+    } else {
+      final implied = _impliedLevelForPreset(nextPreset);
+      nextCombat = implied;
+      nextResources = implied;
+      nextProgression = implied;
     }
-    return false;
-  }
 
-  /// True when there is work to save: a changed field OR a ticked propagation
-  /// box (the user may want to push the current, unchanged difficulty to the
-  /// profile / other saves). Drives Save enablement and the unsaved-edits guard.
-  bool get _hasWork => _dirty || _alsoProfile || _allSaves;
+    final nextAlsoProfile =
+        (alsoProfile ?? _alsoProfile) && widget.profile != null;
+    final nextAllSaves = (allSaves ?? _allSaves) && widget.profile != null;
 
-  void _syncDirty() {
-    // Report "has work" (not just field-dirty) so the profile-switch /
-    // rescan guard also protects a propagation-only intent.
-    widget.notifier.setDifficultyDirty(_hasWork);
-  }
+    // Does this match the stored value with no propagation? Then there is no
+    // pending work — clear it. Sub-levels only matter on Custom.
+    final matchesStored =
+        nextPreset == _storedPreset &&
+        nextFlow == _storedFlow &&
+        nextPerma == _storedPerma &&
+        (nextPreset != 'Custom' ||
+            (nextCombat == _customLevel('combat') &&
+                nextResources == _customLevel('resources') &&
+                nextProgression == _customLevel('progression')));
 
-  void _onPresetChanged(String preset) {
-    setState(() {
-      _preset = preset;
-      if (preset == 'Novice') _perma = false;
-      // Leaving Custom: snap the displayed sub-levels to the preset so the
-      // locked pickers reflect it. Entering Custom keeps the current values as
-      // the editable starting point.
-      if (preset != 'Custom') {
-        final implied = _impliedLevelForPreset(preset);
-        _combat = implied;
-        _resources = implied;
-        _progression = implied;
-      }
-    });
-    _syncDirty();
-  }
-
-  void _reset() {
-    _seed();
-    widget.notifier.setDifficultyDirty(false);
-  }
-
-  Future<void> _save() async {
-    final path = widget.inspection.path;
-    if (path == null) return;
-    final profile = widget.profile;
-
-    final savePaths = <String>[path];
-    if (_allSaves && profile != null) {
-      savePaths
-        ..clear()
-        ..addAll(
-          widget.notifier.state.saves
-              .where((s) => s.persistentProfileId == profile.profileId)
-              .map((s) => s.path),
-        );
-      // Ensure the current save is included even if its persistentProfileId is
-      // null or mismatched.
-      if (!savePaths.contains(path)) savePaths.add(path);
+    if (matchesStored && !nextAlsoProfile && !nextAllSaves) {
+      widget.notifier.clearPendingDifficulty();
+      setState(() {});
+      return;
     }
 
     final difficulty = <String, Object?>{
-      'preset': _preset,
-      if (_preset == 'Custom') 'combat': _combat,
-      if (_preset == 'Custom') 'resources': _resources,
-      if (_preset == 'Custom') 'progression': _progression,
-      'flowHelper': _flow,
-      'permadeath': _effectivePerma,
+      'preset': nextPreset,
+      if (nextPreset == 'Custom') 'combat': nextCombat,
+      if (nextPreset == 'Custom') 'resources': nextResources,
+      if (nextPreset == 'Custom') 'progression': nextProgression,
+      'flowHelper': nextFlow,
+      'permadeath': nextPerma,
     };
-
-    final ({String path, int profileId})? target =
-        (_alsoProfile && profile != null)
-        ? (path: _persistentDataListPath(path), profileId: profile.profileId)
-        : null;
-
-    setState(() => _saving = true);
-    try {
-      await widget.notifier.writeDifficulty(
+    widget.notifier.setPendingDifficulty(
+      PendingDifficulty(
         difficulty: difficulty,
-        savePaths: savePaths,
-        profile: target,
-      );
-    } finally {
-      if (mounted) setState(() => _saving = false);
-    }
-  }
-
-  /// The profile's `PersistentDataList.sav` lives next to the save files, in
-  /// the same directory. Derive it from the current save's directory.
-  String _persistentDataListPath(String savePath) {
-    return p.join(p.dirname(savePath), 'PersistentDataList.sav');
+        alsoProfile: nextAlsoProfile,
+        allSaves: nextAllSaves,
+      ),
+    );
+    setState(() {});
   }
 
   @override
@@ -275,28 +237,13 @@ class _DifficultyCardState extends State<DifficultyCard> {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
     final hasProfile = widget.profile != null;
-    final hasWork = _hasWork;
-    // A difficulty write does a full re-inspect that re-seeds every editor and
-    // clears the pending-edit registry, which would silently discard unrelated
-    // unsaved hero/inventory/metadata edits. Mirror the app's "mutually
-    // exclusive edits" pattern (see structural inventory edits): block the
-    // Difficulty save while other pending edits exist, with a clear hint.
-    final blockingPending = widget.notifier.state.pendingEditCount > 0;
-    // Difficulty is a private-payload edit on every targeted save, so writing
-    // needs a compress-ready codec — disable Save with a hint otherwise,
-    // matching the other private editors.
+    final hasWork = _pending != null;
     final canWrite = widget.canCompress;
-    // Save is enabled for a changed field OR a propagation-only intent (ticking
-    // a box to push the current difficulty to the profile / all saves).
-    final canSave = hasWork &&
-        canWrite &&
-        !blockingPending &&
-        !_saving &&
-        !widget.notifier.state.isLoading;
+    final busy = _state.isLoading;
 
-    final presetEnabled = !_saving;
-    final permaEnabled = _preset != 'Novice' && !_saving;
-    final levelsEnabled = _preset == 'Custom' && !_saving;
+    final presetEnabled = !busy;
+    final permaEnabled = _preset != 'Novice' && !busy;
+    final levelsEnabled = _preset == 'Custom' && !busy;
 
     return Card(
       child: Padding(
@@ -357,7 +304,7 @@ class _DifficultyCardState extends State<DifficultyCard> {
                 selected: {_preset},
                 showSelectedIcon: false,
                 onSelectionChanged: presetEnabled
-                    ? (selection) => _onPresetChanged(selection.first)
+                    ? (selection) => _apply(preset: selection.first)
                     : null,
               ),
               const SizedBox(height: 8),
@@ -367,12 +314,9 @@ class _DifficultyCardState extends State<DifficultyCard> {
                 dense: true,
                 title: const Text('Close Combat Flow Helper'),
                 value: _flow,
-                onChanged: _saving
+                onChanged: busy
                     ? null
-                    : (value) {
-                        setState(() => _flow = value);
-                        _syncDirty();
-                      },
+                    : (value) => _apply(flow: value),
               ),
               SwitchListTile(
                 contentPadding: EdgeInsets.zero,
@@ -381,44 +325,32 @@ class _DifficultyCardState extends State<DifficultyCard> {
                 subtitle: _preset == 'Novice'
                     ? const Text('Not available on Novice')
                     : null,
-                value: _effectivePerma,
+                value: _perma,
                 onChanged: permaEnabled
-                    ? (value) {
-                        setState(() => _perma = value);
-                        _syncDirty();
-                      }
+                    ? (value) => _apply(perma: value)
                     : null,
               ),
               const SizedBox(height: 8),
               // Level pickers.
               _LevelPicker(
                 label: 'Combat',
-                value: _displayedLevel(_combat),
+                value: _displayedLevel('combat'),
                 enabled: levelsEnabled,
-                onChanged: (value) {
-                  setState(() => _combat = value);
-                  _syncDirty();
-                },
+                onChanged: (value) => _apply(combat: value),
               ),
               const SizedBox(height: 8),
               _LevelPicker(
                 label: 'Resources',
-                value: _displayedLevel(_resources),
+                value: _displayedLevel('resources'),
                 enabled: levelsEnabled,
-                onChanged: (value) {
-                  setState(() => _resources = value);
-                  _syncDirty();
-                },
+                onChanged: (value) => _apply(resources: value),
               ),
               const SizedBox(height: 8),
               _LevelPicker(
                 label: 'Progression',
-                value: _displayedLevel(_progression),
+                value: _displayedLevel('progression'),
                 enabled: levelsEnabled,
-                onChanged: (value) {
-                  setState(() => _progression = value);
-                  _syncDirty();
-                },
+                onChanged: (value) => _apply(progression: value),
               ),
               const SizedBox(height: 16),
               // Explanation.
@@ -432,12 +364,13 @@ class _DifficultyCardState extends State<DifficultyCard> {
                   'Difficulty is stored in this save (gameplay-relevant), in the '
                   'profile (the new-game menu default), and separately in every '
                   'other save. Editing here changes only the current save unless '
-                  'you tick the options below.',
+                  'you tick the options below. Use the toolbar Save to write your '
+                  'changes.',
                   style: theme.textTheme.bodySmall,
                 ),
               ),
               const SizedBox(height: 8),
-              // Propagation checkboxes.
+              // Propagation checkboxes (bound to the EDITED SAVE's profile).
               CheckboxListTile(
                 contentPadding: EdgeInsets.zero,
                 dense: true,
@@ -447,11 +380,8 @@ class _DifficultyCardState extends State<DifficultyCard> {
                     ? null
                     : const Text('No resolved profile to update'),
                 value: _alsoProfile,
-                onChanged: hasProfile && !_saving
-                    ? (value) {
-                        setState(() => _alsoProfile = value ?? false);
-                        _syncDirty();
-                      }
+                onChanged: hasProfile && !busy
+                    ? (value) => _apply(alsoProfile: value ?? false)
                     : null,
               ),
               CheckboxListTile(
@@ -463,17 +393,13 @@ class _DifficultyCardState extends State<DifficultyCard> {
                     ? null
                     : const Text('No resolved profile to apply to'),
                 value: _allSaves,
-                onChanged: hasProfile && !_saving
-                    ? (value) {
-                        setState(() => _allSaves = value ?? false);
-                        _syncDirty();
-                      }
+                onChanged: hasProfile && !busy
+                    ? (value) => _apply(allSaves: value ?? false)
                     : null,
               ),
-              const SizedBox(height: 12),
-              if (!canWrite)
+              if (hasWork && !canWrite)
                 Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
+                  padding: const EdgeInsets.only(top: 8),
                   child: Text(
                     'Saving difficulty needs a verified G1R codec host '
                     '(it rewrites the private payload of each targeted save).',
@@ -482,33 +408,6 @@ class _DifficultyCardState extends State<DifficultyCard> {
                     ),
                   ),
                 ),
-              if (canWrite && blockingPending)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: Text(
-                    'Save or reset your other pending changes first — a '
-                    'difficulty save reloads the file and would discard them.',
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: scheme.error,
-                    ),
-                  ),
-                ),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  OutlinedButton.icon(
-                    icon: const Icon(Icons.undo),
-                    label: const Text('Reset'),
-                    onPressed: hasWork && !_saving ? _reset : null,
-                  ),
-                  const SizedBox(width: 8),
-                  FilledButton.icon(
-                    icon: const Icon(Icons.save_outlined),
-                    label: const Text('Save'),
-                    onPressed: canSave ? _save : null,
-                  ),
-                ],
-              ),
             ],
           ],
         ),
