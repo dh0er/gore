@@ -366,6 +366,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
       // report the count directly rather than via _backupMessage.
       message: (data) {
         final written = (data['targetsWritten'] as num?)?.toInt() ?? n;
+        if (written == 0) return 'No difficulty changes to write';
         return 'Difficulty written to $written '
             'target${written == 1 ? '' : 's'} (backup created)';
       },

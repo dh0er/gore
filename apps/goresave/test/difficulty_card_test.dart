@@ -313,6 +313,49 @@ void main() {
   );
 
   testWidgets(
+    'stale difficultyDirty is cleared when a re-seed lands on a no-work draft '
+    '(Report #1 — stuck guard)',
+    (tester) async {
+      await pumpCard(tester, profile: profile);
+
+      // Drive the notifier flag dirty directly, leaving the local draft at its
+      // freshly-seeded (no-work) state. This models the regression: the flag is
+      // set but the card has nothing to save, so the "Unsaved" badge is hidden
+      // yet the profile-switch / rescan guards stay wedged.
+      notifier.setDifficultyDirty(true);
+      expect(notifier.state.difficultyDirty, isTrue);
+
+      // A re-inspect of the SAME save lands (new instance, same path). Because
+      // the draft has no work, didUpdateWidget re-seeds and must schedule a
+      // clear of the stale flag after the frame.
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SingleChildScrollView(
+              child: DifficultyCard(
+                inspection: _customInspection(),
+                notifier: notifier,
+                profile: profile,
+                canCompress: true,
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // The post-frame callback has run: the stale flag is cleared, so
+      // hasUnsavedEdits reflects reality and the guards are no longer stuck.
+      expect(
+        notifier.state.difficultyDirty,
+        isFalse,
+        reason: 'A re-seed to a no-work draft must clear the stale dirty flag',
+      );
+      expect(notifier.state.hasUnsavedEdits, isFalse);
+    },
+  );
+
+  testWidgets(
     'draft re-seeds when the notifier clears difficultyDirty (discard path)',
     (tester) async {
       await pumpCard(tester, profile: profile);

@@ -108,6 +108,17 @@ class _DifficultyCardState extends State<DifficultyCard> {
     final notifierDirty = widget.notifier.state.difficultyDirty;
     if (!samePath || !_hasWork || !notifierDirty) {
       _seed();
+      // If the re-seed lands on a draft with no work but the notifier flag is
+      // still set, the flag is now stale (the card shows no "Unsaved" state),
+      // and it would wedge the profile-switch / rescan guards until restart.
+      // Clear it safely AFTER this frame — mutating the provider during
+      // build/didUpdateWidget is not allowed. Only clear when there is genuinely
+      // no work, so a still-dirty same-save draft is never silently dropped.
+      if (!_hasWork && widget.notifier.state.difficultyDirty) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && !_hasWork) widget.notifier.setDifficultyDirty(false);
+        });
+      }
     }
   }
 
