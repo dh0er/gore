@@ -1435,8 +1435,12 @@ fn restore_backup(path: &Path, backup_path: &Path) -> Result<Value, CoreError> {
     // inspect_bytes' GVAS branch only checks the magic and scans strings. Before
     // overwriting the live PersistentDataList.sav with a profile backup, require
     // it to STRICTLY parse as a profile (m_Profiles, consumes to EOF) so a
-    // truncated/manual GVAS backup can never replace a valid profile file.
-    if backup_data.starts_with(b"GVAS") {
+    // truncated/manual backup can never replace a valid profile file. Gate on
+    // the TARGET being the profile file so an unrelated (non-profile) GVAS save
+    // backup — which has no m_Profiles — stays restorable.
+    let target_is_profile =
+        path.file_name().and_then(|n| n.to_str()) == Some("PersistentDataList.sav");
+    if target_is_profile {
         parse_profile_file(&backup_data).map_err(|err| {
             CoreError::Validation(format!(
                 "backup is not a valid PersistentDataList profile file: {err}"
