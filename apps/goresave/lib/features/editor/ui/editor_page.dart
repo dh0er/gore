@@ -1788,7 +1788,13 @@ class _PrivateInventorySummaryCardState
                 child: groups.isEmpty
                     ? Center(
                         child: Text(
-                          'No items match "$_query".',
+                          // An empty query with no rows means a pending removal
+                          // hid the last item(s) — not a filter miss, so don't
+                          // claim "no items match".
+                          searching
+                              ? 'No items match "$_query".'
+                              : 'The pending removal hides every item — '
+                                  'save to apply it.',
                           style: theme.textTheme.bodyMedium,
                         ),
                       )
