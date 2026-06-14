@@ -344,8 +344,15 @@ class EditorNotifier extends StateNotifier<EditorState> {
   }) {
     // Re-entry guard: bail if a load is already in flight (a rescan or another
     // write), so this write + refresh cannot interleave editor-state updates
-    // with that work — mirrors saveAllPending / applyMemoryEventEdit.
-    if (state.isLoading) return Future.value(false);
+    // with that work — mirrors saveAllPending / applyMemoryEventEdit. Set an
+    // explicit error so the dialog explains why rather than showing a generic
+    // failure.
+    if (state.isLoading) {
+      state = state.copyWith(
+        error: 'Another operation is in progress. Try again in a moment.',
+      );
+      return Future.value(false);
+    }
     // Refuse while slot edits are pending: this write runs _runWrite -> refresh,
     // and the same-save _inspect clears the pending registry — silently
     // discarding those drafts even though no write_save ran for them. Make the
@@ -882,6 +889,18 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// PersistentDataList.sav that sits alongside the selected save (the same
   /// directory the slot lives in), not the selected slot itself.
   Future<void> restoreCompanionBackup(String backupPath) async {
+    // Restoring the PDL runs refresh(), which clears the pending slot-edit
+    // registry. Those drafts are unrelated to the profile file, so block the
+    // restore while they are unsaved (mirrors the profile difficulty write)
+    // rather than silently discarding them.
+    if (state.hasUnsavedEdits) {
+      state = state.copyWith(
+        error:
+            'You have unsaved save edits. Save or reset them before restoring '
+            'a profile backup.',
+      );
+      return;
+    }
     final selected = state.selectedPath;
     if (selected == null) return;
     // The save paths carry the on-disk style of the save folder (Windows-style
