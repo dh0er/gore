@@ -457,6 +457,49 @@ void main() {
     },
   );
 
+  test(
+    'saveAllPending refuses a structural inventory edit batched with typed edits',
+    () async {
+      final core = _RecordingCoreService();
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+      notifier.setPendingEdit(
+        'inventory',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.inventory.removeItem',
+              'value': {'path': '/Script/Angelscript.ItMi_Orenugget'},
+            },
+          ],
+        ),
+      );
+      notifier.setPendingEdit(
+        'typed:m_GenericData {X} BaseValue',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.typed.setValue',
+              'value': {
+                'path': ['m_GenericData', '{X}', 'BaseValue'],
+                'value': 1.0,
+              },
+            },
+          ],
+        ),
+      );
+
+      final ok = await notifier.saveAllPending();
+
+      expect(ok, isFalse);
+      expect(notifier.state.error, contains('saved on its own'));
+      expect(core.requests.where((r) => r.command == 'write_save'), isEmpty);
+      // Both pending entries survive so the user can save them separately.
+      expect(notifier.state.pendingEdits.length, 2);
+    },
+  );
+
   test('failed same-save re-inspect keeps pending edits retryable', () async {
     final core = _FailingSecondInspectCoreService();
     final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');

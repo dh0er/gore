@@ -4903,10 +4903,13 @@ struct MainContainerSummary {
     /// Every item path held in the MainContainer (used to exclude already-owned
     /// items from the add picker — addItem rejects any MainContainer duplicate).
     all_paths: std::collections::HashSet<String>,
-    /// MainContainer paths that can be removed — every non-empty path held in
-    /// the MainContainer. removeItem deletes the first MainContainer slot
-    /// matching the path; cross-container and intra-MainContainer duplicates are
-    /// handled safely (interchangeable rows), so all such paths are removable.
+    /// MainContainer paths safe to remove by path: those held in the
+    /// MainContainer and in NO other container. removeItem deletes the first
+    /// MainContainer slot matching the path — fine for a path repeated only
+    /// within MainContainer (interchangeable rows), but a path that also lives
+    /// in another container can't be addressed per-row by path, so it is not
+    /// marked removable (the other container's scan row would delete the wrong
+    /// stack).
     removable_paths: std::collections::HashSet<String>,
     /// Whether any container holds a clean (state-free m_Payload) slot that
     /// addItem can use as a template. Without one, addItem cannot succeed, so it
@@ -4943,9 +4946,10 @@ fn main_container_summary(root: &properties::RootObject) -> Option<MainContainer
     else {
         return None;
     };
-    // Scan every container for a clean template slot (one whose m_Payload
-    // carries no item-specific state); addItem clones it.
+    // Scan every container for a clean template slot (addItem clones it), and
+    // collect the paths held in containers OTHER than the MainContainer.
     let mut has_clean_template = false;
+    let mut other_container_paths = std::collections::HashSet::new();
     if let Some(properties::PropertyValue::Array { elements: containers }) =
         resolve_child(&["m_Values", "Items"])
     {
@@ -4960,14 +4964,23 @@ fn main_container_summary(root: &properties::RootObject) -> Option<MainContainer
                     {
                         has_clean_template = true;
                     }
+                    if index != main_index {
+                        if let Some(path) = slot_item_definition(slot) {
+                            if !path.is_empty() {
+                                other_container_paths.insert(path.to_string());
+                            }
+                        }
+                    }
                 }
             }
         }
     }
-    // Every non-empty MainContainer path is removable: removeItem operates on the
-    // MainContainer only and deletes the first slot matching the path, so a path
-    // shared with another container (or repeated within MainContainer) is still
-    // safe — the duplicate rows are interchangeable from the UI's perspective.
+    // A MainContainer path is removable when it is NOT also held in another
+    // container. removeItem deletes the first MainContainer slot matching the
+    // path; for a path repeated only within the MainContainer the rows are
+    // interchangeable (safe), but a path that also appears in another container
+    // (e.g. an equipped/quickslot copy) can't be addressed per-row by path, so
+    // the FString scan row for the other container must not be marked removable.
     let mut all_paths = std::collections::HashSet::new();
     let mut removable_paths = std::collections::HashSet::new();
     for slot in &main_slots {
@@ -4976,7 +4989,9 @@ fn main_container_summary(root: &properties::RootObject) -> Option<MainContainer
                 continue;
             }
             all_paths.insert(path.to_string());
-            removable_paths.insert(path.to_string());
+            if !other_container_paths.contains(path) {
+                removable_paths.insert(path.to_string());
+            }
         }
     }
     Some(MainContainerSummary {
@@ -10316,9 +10331,9 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = dir.path().join("G1R-001.sav");
         // Sulfur lives only in the other container. Apple lives in BOTH the
-        // other container and the MainContainer; removeItem only touches the
-        // MainContainer (deleting the first matching slot there), so the
-        // cross-container collision is still safely removable.
+        // other container and the MainContainer; its path collides, so the
+        // other container's scan row can't be addressed per-row by path and
+        // Apple must not be marked removable.
         let other_slots = vec![
             inv_item_slot(
                 0,
@@ -10371,14 +10386,81 @@ mod tests {
             removable_for("/Script/Angelscript.ItMi_Orenugget"),
             Some(true)
         );
-        // Apple collides across containers but is in the MainContainer →
-        // removable (removeItem deletes the first MainContainer slot).
-        assert_eq!(removable_for("/Script/Angelscript.ItFo_Apple"), Some(true));
+        // Apple collides across containers → not removable (the other
+        // container's row can't be addressed per-row by path).
+        assert_eq!(removable_for("/Script/Angelscript.ItFo_Apple"), Some(false));
         // Sulfur is only in the other container → not removable.
         assert_eq!(
             removable_for("/Script/Angelscript.ItMi_Sulfur"),
             Some(false),
             "an item only in the other container must not be removable"
+        );
+    }
+
+    #[test]
+    fn inspect_marks_intra_main_container_duplicate_removable() {
+        // Two MainContainer slots of the same item (a real non-stacking case),
+        // with that path in NO other container. removeItem deletes the first
+        // MainContainer slot and the rows are interchangeable, so the duplicate
+        // path must be removable.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-dup.sav");
+        let other_slots = vec![inv_item_slot(
+            0,
+            INV_OTHER_LABEL,
+            "/Script/Angelscript.ItMi_Sulfur",
+            1,
+            &inv_empty_payload_map(),
+        )];
+        let main_slots = vec![
+            inv_item_slot(
+                0,
+                INV_MAIN_LABEL,
+                "/Script/Angelscript.ItMi_Orenugget",
+                3,
+                &inv_empty_payload_map(),
+            ),
+            inv_item_slot(
+                1,
+                INV_MAIN_LABEL,
+                "/Script/Angelscript.ItMi_Orenugget",
+                5,
+                &inv_empty_payload_map(),
+            ),
+        ];
+        let private_payload = typed_inventory_private_payload(&other_slots, &main_slots);
+        let seed_compressed = b"seed-dup".to_vec();
+        let stream = compressed_stream_with_one_chunk(&seed_compressed, private_payload.len());
+        fs::write(
+            &path,
+            build_gsav(2, &public_payload("Slot A"), &stream, &[0, 0, 0, 0]),
+        )
+        .unwrap();
+        let backend = PrefixCodecBackend {
+            seed_compressed,
+            seed_uncompressed: private_payload,
+        };
+
+        let value = inspect_save_with_codec_backend(&path, true, Some(&backend), None).unwrap();
+        let inv = &value["private"]["inventory"];
+        assert!(
+            inv["writable"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("private.inventory.removeItem")),
+            "a duplicated MainContainer item must be removable"
+        );
+        let orenugget_rows: Vec<bool> = inv["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|it| it["path"] == "/Script/Angelscript.ItMi_Orenugget")
+            .map(|it| it["removable"].as_bool().unwrap_or(false))
+            .collect();
+        assert_eq!(
+            orenugget_rows,
+            vec![true, true],
+            "both duplicate MainContainer rows must be removable"
         );
     }
 
