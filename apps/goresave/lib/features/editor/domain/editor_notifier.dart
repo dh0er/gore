@@ -805,9 +805,12 @@ class EditorNotifier extends StateNotifier<EditorState> {
       state = state.copyWith(
         inspection: SaveInspection.fromJson(data),
         clearPendingEdits: true,
-        // A fresh inspection re-seeds the Difficulty card from the stored
-        // value, so any prior draft is no longer dirty.
-        difficultyDirty: false,
+        // A slot switch must not carry a difficulty draft into a different
+        // save, so drop it. A same-save re-inspect (e.g. a confirmed rescan, or
+        // an incidental refresh after a hero/inventory save) must PRESERVE a
+        // dirty draft — the card re-seeds itself only when the save identity
+        // changes — so leave the flag untouched here.
+        difficultyDirty: switchingSlot ? false : null,
       );
       final backupSnapshot = await _loadBackups(path, seq);
       if (backupSnapshot == null) return;

@@ -288,18 +288,23 @@ class _ProfileHeader extends StatelessWidget {
   }
 
   /// Rescanning re-inspects the selected slot, which clears the global
-  /// pending-edit registry — never silently discard unsaved drafts.
+  /// pending-edit registry AND would re-seed the Difficulty card — never
+  /// silently discard unsaved drafts. Guard on the same `hasUnsavedEdits`
+  /// signal the profile-switch guard uses (pending registry edits OR a dirty
+  /// difficulty draft), not just the pending count.
   Future<void> _confirmRefresh(BuildContext context) async {
-    final pendingCount = notifier.pendingEditCount;
-    if (pendingCount > 0) {
+    if (notifier.state.hasUnsavedEdits) {
+      final pendingCount = notifier.pendingEditCount;
+      final detail = pendingCount > 0
+          ? 'Rescanning reloads every save and discards your $pendingCount '
+                'unsaved change${pendingCount == 1 ? '' : 's'}.'
+          : 'Rescanning reloads every save and discards your unsaved '
+                'difficulty changes.';
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
           title: const Text('Discard unsaved changes?'),
-          content: Text(
-            'Rescanning reloads every save and discards your $pendingCount '
-            'unsaved change${pendingCount == 1 ? '' : 's'}.',
-          ),
+          content: Text(detail),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(context).pop(false),
@@ -313,6 +318,11 @@ class _ProfileHeader extends StatelessWidget {
         ),
       );
       if (confirmed != true) return;
+      // The user chose to discard. Clear the difficulty draft signal so the
+      // card re-seeds to the stored value on the upcoming re-inspect (the
+      // notifier otherwise preserves a dirty draft across a same-save
+      // re-inspect). Pending registry edits are cleared by the refresh itself.
+      notifier.setDifficultyDirty(false);
     }
     await notifier.refresh();
   }

@@ -79,9 +79,10 @@ class _DifficultyCardState extends State<DifficultyCard> {
   bool _alsoProfile = false;
   bool _allSaves = false;
 
-  // Identity of the inspection the draft was seeded from, so we re-seed only
-  // when a new inspection actually lands (not on every rebuild).
-  Object? _seededFrom;
+  // Identity of the save the draft was seeded from (the inspection path), so we
+  // re-seed only when a DIFFERENT save lands — not on every incidental
+  // re-inspect of the same save. A null path (no save) is its own identity.
+  Object? _seededFromPath;
 
   bool _saving = false;
 
@@ -94,11 +95,18 @@ class _DifficultyCardState extends State<DifficultyCard> {
   @override
   void didUpdateWidget(covariant DifficultyCard oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // A new SaveInspection instance (refresh / save / slot switch) re-seeds the
-    // draft from the stored value. The notifier centrally clears difficultyDirty
-    // when the fresh inspection lands, so we must NOT call setDifficultyDirty
-    // from here (it would mutate the provider during build).
-    if (!identical(widget.inspection, _seededFrom)) {
+    // Re-seed only when a DIFFERENT save lands (path changed), when the current
+    // draft has no unsaved work, OR when the notifier reports the difficulty is
+    // no longer dirty. The notifier is the source of truth for "keep this
+    // draft": it preserves difficultyDirty across an incidental re-inspect of
+    // the SAME save (e.g. a toolbar Save of hero edits) so the draft survives,
+    // but clears it on a genuine save switch, after a successful difficulty
+    // write, and when the user confirms a discard-and-rescan — in which case we
+    // re-seed to the stored value. We must NOT call setDifficultyDirty from
+    // here (it would mutate the provider during build/didUpdateWidget).
+    final samePath = widget.inspection.path == _seededFromPath;
+    final notifierDirty = widget.notifier.state.difficultyDirty;
+    if (!samePath || !_hasWork || !notifierDirty) {
       _seed();
     }
   }
@@ -109,7 +117,7 @@ class _DifficultyCardState extends State<DifficultyCard> {
     final d = widget.inspection.difficulty;
     final preset = _normalizePreset(d?.presetLabel);
     setState(() {
-      _seededFrom = widget.inspection;
+      _seededFromPath = widget.inspection.path;
       _preset = preset;
       _combat = _normalizeLevel(d?.combatLabel, preset);
       _resources = _normalizeLevel(d?.resourcesLabel, preset);
@@ -167,8 +175,15 @@ class _DifficultyCardState extends State<DifficultyCard> {
     return false;
   }
 
+  /// True when there is work to save: a changed field OR a ticked propagation
+  /// box (the user may want to push the current, unchanged difficulty to the
+  /// profile / other saves). Drives Save enablement and the unsaved-edits guard.
+  bool get _hasWork => _dirty || _alsoProfile || _allSaves;
+
   void _syncDirty() {
-    widget.notifier.setDifficultyDirty(_dirty);
+    // Report "has work" (not just field-dirty) so the profile-switch /
+    // rescan guard also protects a propagation-only intent.
+    widget.notifier.setDifficultyDirty(_hasWork);
   }
 
   void _onPresetChanged(String preset) {
@@ -249,12 +264,24 @@ class _DifficultyCardState extends State<DifficultyCard> {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
     final hasProfile = widget.profile != null;
-    final dirty = _dirty;
+    final hasWork = _hasWork;
+    // A difficulty write does a full re-inspect that re-seeds every editor and
+    // clears the pending-edit registry, which would silently discard unrelated
+    // unsaved hero/inventory/metadata edits. Mirror the app's "mutually
+    // exclusive edits" pattern (see structural inventory edits): block the
+    // Difficulty save while other pending edits exist, with a clear hint.
+    final blockingPending = widget.notifier.state.pendingEditCount > 0;
     // Difficulty is a private-payload edit on every targeted save, so writing
     // needs a compress-ready codec — disable Save with a hint otherwise,
     // matching the other private editors.
     final canWrite = widget.canCompress;
-    final canSave = dirty && canWrite && !_saving && !widget.notifier.state.isLoading;
+    // Save is enabled for a changed field OR a propagation-only intent (ticking
+    // a box to push the current difficulty to the profile / all saves).
+    final canSave = hasWork &&
+        canWrite &&
+        !blockingPending &&
+        !_saving &&
+        !widget.notifier.state.isLoading;
 
     final presetEnabled = !_saving;
     final permaEnabled = _preset != 'Novice' && !_saving;
@@ -291,7 +318,7 @@ class _DifficultyCardState extends State<DifficultyCard> {
                         ],
                       ),
                     ),
-                    if (dirty)
+                    if (hasWork)
                       Padding(
                         padding: const EdgeInsets.only(right: 8),
                         child: Text(
@@ -410,7 +437,10 @@ class _DifficultyCardState extends State<DifficultyCard> {
                     : const Text('No resolved profile to update'),
                 value: _alsoProfile,
                 onChanged: hasProfile && !_saving
-                    ? (value) => setState(() => _alsoProfile = value ?? false)
+                    ? (value) {
+                        setState(() => _alsoProfile = value ?? false);
+                        _syncDirty();
+                      }
                     : null,
               ),
               CheckboxListTile(
@@ -423,7 +453,10 @@ class _DifficultyCardState extends State<DifficultyCard> {
                     : const Text('No resolved profile to apply to'),
                 value: _allSaves,
                 onChanged: hasProfile && !_saving
-                    ? (value) => setState(() => _allSaves = value ?? false)
+                    ? (value) {
+                        setState(() => _allSaves = value ?? false);
+                        _syncDirty();
+                      }
                     : null,
               ),
               const SizedBox(height: 12),
@@ -438,13 +471,24 @@ class _DifficultyCardState extends State<DifficultyCard> {
                     ),
                   ),
                 ),
+              if (canWrite && blockingPending)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Text(
+                    'Save or reset your other pending changes first — a '
+                    'difficulty save reloads the file and would discard them.',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: scheme.error,
+                    ),
+                  ),
+                ),
               Row(
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
                   OutlinedButton.icon(
                     icon: const Icon(Icons.undo),
                     label: const Text('Reset'),
-                    onPressed: dirty && !_saving ? _reset : null,
+                    onPressed: hasWork && !_saving ? _reset : null,
                   ),
                   const SizedBox(width: 8),
                   FilledButton.icon(
