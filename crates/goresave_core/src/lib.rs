@@ -1384,21 +1384,26 @@ fn list_persistent_data_list_backups_for_save(
             match inspect_bytes(&data, Some(&backup_path), false) {
                 Ok(_) => {
                     let persistent_slots = parse_persistent_slot_metadata(&data);
-                    match persistent_slots.get(slot) {
-                        Some(slot_meta) => (
-                            "ok".to_string(),
-                            slot_meta.player_save_name.clone(),
-                            slot_meta
-                                .slot_name
-                                .clone()
-                                .or_else(|| Some(slot.to_string())),
-                        ),
-                        None => (
-                            "selected slot metadata missing".to_string(),
-                            None,
-                            Some(slot.to_string()),
-                        ),
-                    }
+                    let slot_meta = persistent_slots.get(slot);
+                    let player_save_name =
+                        slot_meta.and_then(|m| m.player_save_name.clone());
+                    let slot_name = slot_meta
+                        .and_then(|m| m.slot_name.clone())
+                        .unwrap_or_else(|| slot.to_string());
+                    // inspect_bytes' GVAS branch only checks the magic and scans
+                    // strings, so require a STRICT profile parse before reporting
+                    // a restorable "ok": a truncated/manual backup that still
+                    // contains the slot strings must not enable the Restore
+                    // action (which would overwrite the live profile with corrupt
+                    // bytes). Metadata is still surfaced for display.
+                    let status = if parse_profile_file(&data).is_err() {
+                        "invalid PersistentDataList structure".to_string()
+                    } else if slot_meta.is_none() {
+                        "selected slot metadata missing".to_string()
+                    } else {
+                        "ok".to_string()
+                    };
+                    (status, player_save_name, Some(slot_name))
                 }
                 Err(err) => (err.to_string(), None, Some(slot.to_string())),
             };
@@ -1426,6 +1431,18 @@ fn restore_backup(path: &Path, backup_path: &Path) -> Result<Value, CoreError> {
     ensure_backup_belongs_to_save(path, backup_path)?;
     let backup_data = fs::read(backup_path)?;
     inspect_bytes(&backup_data, Some(backup_path), false)?;
+
+    // inspect_bytes' GVAS branch only checks the magic and scans strings. Before
+    // overwriting the live PersistentDataList.sav with a profile backup, require
+    // it to STRICTLY parse as a profile (m_Profiles, consumes to EOF) so a
+    // truncated/manual GVAS backup can never replace a valid profile file.
+    if backup_data.starts_with(b"GVAS") {
+        parse_profile_file(&backup_data).map_err(|err| {
+            CoreError::Validation(format!(
+                "backup is not a valid PersistentDataList profile file: {err}"
+            ))
+        })?;
+    }
 
     let original = fs::read(path)?;
     inspect_bytes(&original, Some(path), false)?;
@@ -8478,7 +8495,15 @@ mod tests {
             "PersistentDataList.sav.bak.250"
         );
         assert_eq!(companion_backups[0]["createdEpoch"], 250);
-        assert_eq!(companion_backups[0]["status"], "ok");
+        // The slot metadata is surfaced for display from the string scan. The
+        // status reflects STRICT profile validation: this fixture is a flat
+        // string-scan soup (not a byte-accurate typed GVAS), so the strict parse
+        // flags it — a real, byte-accurate profile backup reports "ok" and is
+        // restorable (covered by restore_backup_restores_..._directly).
+        assert_eq!(
+            companion_backups[0]["status"],
+            "invalid PersistentDataList structure"
+        );
         assert_eq!(companion_backups[0]["slotName"], "G1R-001");
         assert_eq!(
             companion_backups[0]["playerSaveName"],
@@ -8578,6 +8603,28 @@ mod tests {
             .collect();
         assert!(presets.iter().any(|p| p.ends_with("DifficultyPreset_Easy")));
         assert!(!presets.iter().any(|p| p.ends_with("DifficultyPreset_Hard")));
+    }
+
+    #[test]
+    fn restore_backup_rejects_invalid_persistent_data_list_backup() {
+        // A GVAS backup that passes the weak magic/string inspection but is not
+        // a valid profile (no m_Profiles) must NOT overwrite the live profile.
+        let dir = tempdir().unwrap();
+        let pdl = dir.path().join("PersistentDataList.sav");
+        let subfolder = dir.path().join("goresave_backups");
+        fs::create_dir_all(&subfolder).unwrap();
+        let backup = subfolder.join("PersistentDataList.sav.bak.200");
+
+        let live = difficulty_persistent_profiles();
+        fs::write(&pdl, &live).unwrap();
+        let mut bad = b"GVAS".to_vec();
+        bad.extend_from_slice(&[0u8; 24]);
+        bad.extend_from_slice(&fstring("None")); // GVAS magic but no m_Profiles
+        fs::write(&backup, &bad).unwrap();
+
+        assert!(restore_backup(&pdl, &backup).is_err());
+        // The live profile is untouched.
+        assert_eq!(fs::read(&pdl).unwrap(), live);
     }
 
     #[test]
