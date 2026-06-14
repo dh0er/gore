@@ -2440,22 +2440,24 @@ fn summarize_private_inventory_payload(
                 && main_container.is_some_and(|mc| mc.removable_paths.contains(path))
         );
     }
-    // setItemCount patches in place anywhere in the region. addItem/removeItem
-    // are structural MainContainer edits: addItem needs only a resolvable
-    // MainContainer (it can seed an empty one from another container), while
-    // removeItem needs at least one safely-removable MainContainer item.
+    // setItemCount patches an existing scanned stack in place, so it depends on
+    // the FString scan finding at least one stack in the player region.
+    // addItem/removeItem are structural edits on the *typed* MainContainer and
+    // are independent of the scan: a save can have a resolvable MainContainer
+    // (with a clean template and/or removable items) while the FString scan
+    // reports zero stacks, and the core can still perform the structural edit.
     let mut writable = Vec::new();
     if item_scope == "player_inventory_region" && item_stack_count > 0 {
         writable.push("private.inventory.setItemCount");
-        if let Some(mc) = main_container {
-            // addItem clones a clean template slot; only offer it when one
-            // exists somewhere in the inventory.
-            if mc.has_clean_template {
-                writable.push("private.inventory.addItem");
-            }
-            if !mc.removable_paths.is_empty() {
-                writable.push("private.inventory.removeItem");
-            }
+    }
+    if let Some(mc) = main_container {
+        // addItem clones a clean template slot; only offer it when one exists
+        // somewhere in the inventory.
+        if mc.has_clean_template {
+            writable.push("private.inventory.addItem");
+        }
+        if !mc.removable_paths.is_empty() {
+            writable.push("private.inventory.removeItem");
         }
     }
     // The complete set of MainContainer item paths (from the typed tree, not
@@ -4901,10 +4903,10 @@ struct MainContainerSummary {
     /// Every item path held in the MainContainer (used to exclude already-owned
     /// items from the add picker — addItem rejects any MainContainer duplicate).
     all_paths: std::collections::HashSet<String>,
-    /// MainContainer paths that occur exactly once across the WHOLE inventory.
-    /// Only these are safe to remove by path: removeItem addresses by path, so a
-    /// path that also appears in another container (or twice in MainContainer)
-    /// could delete the wrong stack. Such paths are not marked removable.
+    /// MainContainer paths that can be removed — every non-empty path held in
+    /// the MainContainer. removeItem deletes the first MainContainer slot
+    /// matching the path; cross-container and intra-MainContainer duplicates are
+    /// handled safely (interchangeable rows), so all such paths are removable.
     removable_paths: std::collections::HashSet<String>,
     /// Whether any container holds a clean (state-free m_Payload) slot that
     /// addItem can use as a template. Without one, addItem cannot succeed, so it
@@ -4941,10 +4943,8 @@ fn main_container_summary(root: &properties::RootObject) -> Option<MainContainer
     else {
         return None;
     };
-    // Count every item path across ALL containers to detect cross-container and
-    // intra-container duplicates, and note whether any clean template slot
-    // exists (one whose m_Payload carries no item-specific state).
-    let mut global_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    // Scan every container for a clean template slot (one whose m_Payload
+    // carries no item-specific state); addItem clones it.
     let mut has_clean_template = false;
     if let Some(properties::PropertyValue::Array { elements: containers }) =
         resolve_child(&["m_Values", "Items"])
@@ -4960,15 +4960,14 @@ fn main_container_summary(root: &properties::RootObject) -> Option<MainContainer
                     {
                         has_clean_template = true;
                     }
-                    if let Some(path) = slot_item_definition(slot) {
-                        if !path.is_empty() {
-                            *global_counts.entry(path.to_string()).or_default() += 1;
-                        }
-                    }
                 }
             }
         }
     }
+    // Every non-empty MainContainer path is removable: removeItem operates on the
+    // MainContainer only and deletes the first slot matching the path, so a path
+    // shared with another container (or repeated within MainContainer) is still
+    // safe — the duplicate rows are interchangeable from the UI's perspective.
     let mut all_paths = std::collections::HashSet::new();
     let mut removable_paths = std::collections::HashSet::new();
     for slot in &main_slots {
@@ -4977,9 +4976,7 @@ fn main_container_summary(root: &properties::RootObject) -> Option<MainContainer
                 continue;
             }
             all_paths.insert(path.to_string());
-            if global_counts.get(path) == Some(&1) {
-                removable_paths.insert(path.to_string());
-            }
+            removable_paths.insert(path.to_string());
         }
     }
     Some(MainContainerSummary {
@@ -10319,8 +10316,9 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = dir.path().join("G1R-001.sav");
         // Sulfur lives only in the other container. Apple lives in BOTH the
-        // other container and the MainContainer, so its path collides and must
-        // not be removable (removeItem by path could drop the wrong stack).
+        // other container and the MainContainer; removeItem only touches the
+        // MainContainer (deleting the first matching slot there), so the
+        // cross-container collision is still safely removable.
         let other_slots = vec![
             inv_item_slot(
                 0,
@@ -10373,8 +10371,9 @@ mod tests {
             removable_for("/Script/Angelscript.ItMi_Orenugget"),
             Some(true)
         );
-        // Apple collides across containers → not removable.
-        assert_eq!(removable_for("/Script/Angelscript.ItFo_Apple"), Some(false));
+        // Apple collides across containers but is in the MainContainer →
+        // removable (removeItem deletes the first MainContainer slot).
+        assert_eq!(removable_for("/Script/Angelscript.ItFo_Apple"), Some(true));
         // Sulfur is only in the other container → not removable.
         assert_eq!(
             removable_for("/Script/Angelscript.ItMi_Sulfur"),
