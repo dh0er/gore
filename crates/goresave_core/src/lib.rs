@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha1::{Digest, Sha1};
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::ffi::{CStr, CString, c_char};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -6685,10 +6686,26 @@ fn write_difficulty_internal(
     let mut plans: Vec<DifficultyWritePlan> = Vec::new();
 
     if let Some(saves) = targets.get("saves").and_then(Value::as_array) {
+        // Dedup save paths up front: the staging/replace loop reuses each
+        // target's *.tmp-goresave (and *.replaced-goresave aside) path, so two
+        // plans for the SAME file would collide — the first begin_replace
+        // consumes the temp file, the second moves the just-replaced target
+        // aside (clobbering the first aside) then fails because the temp is
+        // gone, and rollback can leave the save MISSING. Keep the first
+        // occurrence; silently drop later duplicates (the Dart caller may
+        // legitimately include the current save in an "all saves" set).
+        let mut seen: HashSet<PathBuf> = HashSet::new();
         for save in saves {
             let path = PathBuf::from(save.as_str().ok_or_else(|| {
                 CoreError::InvalidRequest("targets.saves entries must be strings".to_string())
             })?);
+            // Normalize via canonicalize when possible so the same file
+            // referenced two ways (e.g. relative vs absolute) is also caught;
+            // fall back to the raw path when the file can't be canonicalized.
+            let key = fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+            if !seen.insert(key) {
+                continue;
+            }
             let original = fs::read(&path)?;
             // Edit the PUBLIC payload first, then route the PRIVATE difficulty
             // edit through the same codec-backed path write_save uses. The
@@ -7425,6 +7442,81 @@ mod tests {
             !pdl_backup.exists(),
             "no PersistentDataList backup shares the slot's suffix, so \
              prepare_paired_persistent_data_list_restore finds no companion to pair",
+        );
+    }
+
+    #[test]
+    fn write_difficulty_internal_dedups_duplicate_save_targets() {
+        // Regression: if targets.saves lists the SAME path twice, the old code
+        // built two plans for one file. Staging reused the same *.tmp-goresave
+        // and begin_replace ran twice on the same target: the first consumed the
+        // temp file, the second moved the (already-replaced) target aside —
+        // removing the first replace's aside — then FAILED because the temp file
+        // was gone, and rollback could leave the save file MISSING. Dedup must
+        // keep exactly one plan per save path so the write succeeds and the file
+        // is never lost.
+        let dir = tempdir().unwrap();
+        let save_path = dir.path().join("G1R-001.sav");
+
+        let private_payload = difficulty_private_payload();
+        let seed_compressed = b"seed-compressed".to_vec();
+        let stream = compressed_stream_with_one_chunk(&seed_compressed, private_payload.len());
+        let original_bytes =
+            build_gsav(2, &difficulty_public_payload(), &stream, &[0, 0, 0, 0]);
+        fs::write(&save_path, &original_bytes).unwrap();
+        let backend = PrefixCodecBackend {
+            seed_compressed,
+            seed_uncompressed: private_payload,
+        };
+
+        let req = DifficultyRequest {
+            preset: "Hard".into(),
+            combat: None,
+            resources: None,
+            progression: None,
+            flow_helper: None,
+            permadeath: None,
+        };
+        // Same save path listed TWICE.
+        let path_str = save_path.display().to_string();
+        let targets = json!({
+            "saves": [path_str.clone(), path_str],
+        });
+
+        let response =
+            write_difficulty_internal(&req, &targets, true, Some(&backend)).unwrap();
+        // Exactly one target written despite the duplicate entry.
+        assert_eq!(response["targetsWritten"], 1);
+
+        // The save still exists and was edited to Hard (NOT lost to rollback).
+        assert!(save_path.exists(), "save file must not be lost");
+        let written_save = fs::read(&save_path).unwrap();
+        let d = difficulty_for_gsav_bytes(&written_save).unwrap();
+        assert_eq!(d.preset.as_deref(), Some("DifficultyPreset_Hard"));
+        assert_ne!(written_save, original_bytes, "save must reflect the edit");
+
+        // Only one backup/replace happened: a single backup for this path, and
+        // no leftover staging artifacts (tmp / replaced-aside) that a second,
+        // colliding replace would have orphaned.
+        let backups = dir.path().join("goresave_backups");
+        let backup_count = fs::read_dir(&backups)
+            .unwrap()
+            .filter(|e| {
+                e.as_ref()
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("G1R-001.sav.bak.")
+            })
+            .count();
+        assert_eq!(backup_count, 1, "exactly one backup for the deduped path");
+        assert!(
+            !save_path.with_extension("sav.tmp-goresave").exists(),
+            "no leftover staging temp file",
+        );
+        assert!(
+            !save_path.with_extension("sav.replaced-goresave").exists(),
+            "no leftover moved-aside original",
         );
     }
 
