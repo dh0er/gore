@@ -2266,63 +2266,232 @@ impl DifficultyRequest {
     }
 }
 
-fn apply_save_difficulty(payload: &mut Vec<u8>, req: &DifficultyRequest) -> Result<(), CoreError> {
-    // Class properties: re-scan before each splice (lengths shift).
-    for (name, class) in req.class_edits()? {
-        let refs = scan_fstrings(payload, 0);
-        let end = refs.len();
-        if find_ref_in_range(&refs, 0, end, name).is_some() {
-            replace_class_or_str_property_in_range(
-                payload,
-                &refs,
-                0,
-                end,
-                name,
-                &format!("{ANGELSCRIPT}{class}"),
-            )?;
+/// Parse the typed property tree of a difficulty-bearing GVAS payload, handling
+/// BOTH framings the difficulty editor touches:
+///   * the save's decoded PRIVATE payload (`SaveDataPayload`) and the
+///     PersistentDataList are full GVAS objects (`class` + flag + props +
+///     footer) — `parse_private_root`;
+///   * the save's uncompressed PUBLIC payload (`SaveGamePublicData`) begins
+///     directly at the first property (`CustomPayload`) with no object header —
+///     `parse_property_list_root`.
+/// The object parse is tried first; on failure the bare-list parse is tried.
+/// Either way the returned tree carries absolute offsets, so `resolve_chain` /
+/// `patch_string` / `patch_scalar` apply unchanged. `consumed` is checked
+/// against the payload length so a structurally broken payload still errors.
+fn parse_save_tree(payload: &[u8]) -> Result<properties::RootObject, CoreError> {
+    match properties::parse_private_root(payload) {
+        Ok(root) => Ok(root),
+        Err(object_err) => {
+            let root = properties::parse_property_list_root(payload).map_err(|list_err| {
+                CoreError::Parse(format!(
+                    "payload parses neither as a GVAS object ({object_err}) nor as a bare \
+                     property list ({list_err})"
+                ))
+            })?;
+            if root.consumed != payload.len() {
+                return Err(CoreError::Parse(format!(
+                    "bare property list left {} trailing bytes",
+                    payload.len() - root.consumed
+                )));
+            }
+            Ok(root)
         }
     }
-    // Bools: guard each write so an absent property is skipped, not errored.
+}
+
+/// Build the `Vec<PathSeg>` to the FIRST property named `name` anywhere in the
+/// parsed tree (difficulty property names are unique), then resolve it to a
+/// [`properties::ResolvedChain`]. The chain carries the absolute offsets of
+/// every enclosing GVAS size field (ancestor tag sizes + InstancedStruct
+/// `data_size`), which a length-changing patch must fix up so the strict
+/// deserializer (the game) does not misalign. Returns `None` when the property
+/// is absent — callers skip such fields cleanly.
+fn difficulty_chain<'a>(
+    root: &'a properties::RootObject,
+    name: &str,
+) -> Result<Option<properties::ResolvedChain<'a>>, CoreError> {
+    let Some((path, _)) = properties::find_property_by_name(root, name) else {
+        return Ok(None);
+    };
+    let segs = properties::parse_path(&path)?;
+    properties::resolve_chain(&root.properties, &segs).map(Some)
+}
+
+/// Patch a single string-valued difficulty field (an asset-path
+/// Class/Object/Str property) by name, with full enclosing-size propagation.
+/// Skips silently when the property is absent. Returns `true` when a patch was
+/// applied (so the caller knows it must re-parse before the next edit).
+fn patch_difficulty_string(
+    payload: &mut Vec<u8>,
+    name: &str,
+    new_value: &str,
+) -> Result<bool, CoreError> {
+    let root = parse_save_tree(payload)?;
+    let Some(chain) = difficulty_chain(&root, name)? else {
+        return Ok(false);
+    };
+    let target = chain.target.clone();
+    let enclosing = chain.enclosing_size_fields.clone();
+    drop(root);
+    properties::patch_string(payload, &target, &enclosing, new_value)?;
+    Ok(true)
+}
+
+/// Patch a single BoolProperty difficulty field by name (sets/clears the 0x10
+/// tag bit). Bool patches are fixed-size, but we still re-parse per call for a
+/// fresh, valid offset. Skips silently when the property is absent.
+fn patch_difficulty_bool(
+    payload: &mut Vec<u8>,
+    name: &str,
+    value: bool,
+) -> Result<(), CoreError> {
+    let root = parse_save_tree(payload)?;
+    let Some(chain) = difficulty_chain(&root, name)? else {
+        return Ok(());
+    };
+    let target = chain.target.clone();
+    drop(root);
+    properties::patch_scalar(
+        payload.as_mut_slice(),
+        &target,
+        properties::ScalarValue::Bool(value),
+    )
+}
+
+fn apply_save_difficulty(payload: &mut Vec<u8>, req: &DifficultyRequest) -> Result<(), CoreError> {
+    // Asset-path properties (preset + the three sub-settings) are
+    // length-changing: a typed patch rewrites the FString value AND every
+    // enclosing size field (the Map tag size and the InstancedStruct data_size
+    // that wrap CustomPayload). RE-PARSE between patches — each successful
+    // patch invalidates all recorded offsets.
+    for (name, class) in req.class_edits()? {
+        patch_difficulty_string(payload, name, &format!("{ANGELSCRIPT}{class}"))?;
+    }
+    // Permadeath (alternate spellings) and the flow helper are BoolProperties:
+    // the value is the tag's 0x10 bit, patched in place via patch_scalar.
     if let Some(perma) = req.resolved_permadeath() {
-        let refs = scan_fstrings(payload, 0);
-        let end = refs.len();
-        write_permadeath_in_range(payload, &refs, 0, end, perma)?;
+        write_permadeath_typed(payload, perma)?;
     }
     if let Some(flow) = req.flow_helper {
-        let refs = scan_fstrings(payload, 0);
-        let end = refs.len();
-        if find_ref_in_range(&refs, 0, end, "m_FakeSloppyCombos").is_some() {
-            write_bool_property_in_range(payload, &refs, 0, end, "m_FakeSloppyCombos", flow)?;
+        patch_difficulty_bool(payload, "m_FakeSloppyCombos", flow)?;
+    }
+    // Validation gate (applies to BOTH the save's public payload and its decoded
+    // private payload, which are each a single-record GVAS): the edited bytes
+    // must strictly re-parse and consume the whole buffer, or we abort. This is
+    // the guard that prevents shipping a save the game refuses to load.
+    validate_typed_reparse(payload, "save difficulty edit")?;
+    Ok(())
+}
+
+/// Write `value` to whichever permadeath spelling exists in the tree
+/// (`m_PermanentDeath` / `m_PermaDeath`); skip silently if neither is present.
+fn write_permadeath_typed(payload: &mut Vec<u8>, value: bool) -> Result<(), CoreError> {
+    for name in PERMADEATH_NAMES {
+        let present = {
+            let root = parse_save_tree(payload)?;
+            difficulty_chain(&root, name)?.is_some()
+        };
+        if present {
+            return patch_difficulty_bool(payload, name, value);
         }
     }
     Ok(())
 }
 
-fn profile_range_by_id(refs: &[FStringRef], profile_id: i32, payload: &[u8]) -> Option<(usize, usize)> {
-    let profiles_idx = refs.iter().position(|r| r.value == "m_Profiles")?;
-    let profiles_end = refs
-        .iter()
-        .enumerate()
-        .skip(profiles_idx + 1)
-        .find(|(_, r)| r.value == "SavedDataVersion")
-        .map(|(i, _)| i)
-        .unwrap_or(refs.len());
-    let starts: Vec<usize> = refs
-        .iter()
-        .enumerate()
-        .take(profiles_end)
-        .skip(profiles_idx + 1)
-        .filter_map(|(i, r)| (r.value == "m_ProfileName").then_some(i))
-        .collect();
-    for (ord, &start) in starts.iter().enumerate() {
-        let end = starts.get(ord + 1).copied().unwrap_or(profiles_end);
-        let id = read_i32_property_in_range(payload, refs, start, end, "m_ProfileId")
-            .unwrap_or(ord as i32);
-        if id == profile_id {
-            return Some((start, end));
+/// Properties of a single profile element inside `m_Profiles`, regardless of
+/// whether the array element is a plain struct or an InstancedStruct wrapper.
+fn profile_element_properties(value: &properties::PropertyValue) -> Option<&[properties::Property]> {
+    match value {
+        properties::PropertyValue::Struct(properties::StructValue::Properties(p)) => Some(p),
+        properties::PropertyValue::Struct(properties::StructValue::Instanced(Some(i))) => {
+            Some(&i.properties)
+        }
+        _ => None,
+    }
+}
+
+/// Locate the `m_Profiles` array element whose `m_ProfileId` equals
+/// `profile_id`, returning the addressable path prefix to that element
+/// (`["m_Profiles", "[i]"]`) together with the element's property list.
+///
+/// `m_Profiles` is an ArrayProperty of profile structs in the real
+/// PersistentDataList; only that shape is supported. Returns `None` when no
+/// matching profile exists so the caller can raise a clear error.
+fn profile_element<'a>(
+    root: &'a properties::RootObject,
+    profile_id: i32,
+) -> Option<(Vec<String>, &'a [properties::Property])> {
+    let (profiles_path, profiles) = properties::find_property_by_name(root, "m_Profiles")?;
+    let properties::PropertyValue::Array { elements } = &profiles.value else {
+        return None;
+    };
+    for (i, element) in elements.iter().enumerate() {
+        let Some(props) = profile_element_properties(element) else {
+            continue;
+        };
+        let id = props.iter().find_map(|p| match (&p.name[..], &p.value) {
+            ("m_ProfileId", properties::PropertyValue::Int(v)) => Some(*v),
+            _ => None,
+        });
+        if id == Some(profile_id) {
+            let mut prefix = profiles_path.clone();
+            prefix.push(format!("[{i}]"));
+            return Some((prefix, props));
         }
     }
     None
+}
+
+/// Resolve the full addressable path to a difficulty property `name` WITHIN the
+/// profile whose id is `profile_id`. Scoped to that profile element so a field
+/// in another profile is never matched. Returns `Ok(None)` when the field is
+/// absent in that profile (caller skips it); errs only when the profile itself
+/// is missing.
+fn profile_difficulty_path(
+    root: &properties::RootObject,
+    profile_id: i32,
+    name: &str,
+) -> Result<Option<Vec<String>>, CoreError> {
+    let (prefix, element_props) = profile_element(root, profile_id)
+        .ok_or_else(|| CoreError::Validation(format!("profile {profile_id} not found")))?;
+    let Some((rel, _)) = properties::find_path_in_properties(element_props, name) else {
+        return Ok(None);
+    };
+    let mut full = prefix;
+    full.extend(rel);
+    Ok(Some(full))
+}
+
+/// Locate the byte offset where the GVAS save object begins inside a
+/// PersistentDataList.sav (or similar GVAS file). The file starts with a
+/// variable-length GVAS header (save-game/package versions + a custom-version
+/// array of unpredictable length + the save-game class name) before the object
+/// body that `parse_private_root` consumes. Rather than parse every header
+/// version exactly, probe for the offset at which the object parses and
+/// consumes the rest of the file. This is version-agnostic and deterministic.
+///
+/// The probe is bounded to the header region (object class names appear within
+/// a few KB) so it stays linear in practice.
+fn locate_gvas_object(data: &[u8]) -> Result<usize, CoreError> {
+    let limit = data.len().min(8192);
+    for off in 0..limit {
+        if let Ok(root) = properties::parse_private_root_at(data, off) {
+            // consumed is absolute; a full parse ends exactly at the file end.
+            if root.consumed == data.len() {
+                return Ok(off);
+            }
+        }
+    }
+    Err(CoreError::Parse(
+        "could not locate the GVAS save object in the file".into(),
+    ))
+}
+
+/// Parse the GVAS object inside a PersistentDataList file. The returned tree's
+/// offsets are ABSOLUTE within `data`, so they patch the file directly.
+fn parse_profile_file(data: &[u8]) -> Result<properties::RootObject, CoreError> {
+    let off = locate_gvas_object(data)?;
+    properties::parse_private_root_at(data, off)
 }
 
 fn write_profile_difficulty(
@@ -2335,43 +2504,114 @@ fn write_profile_difficulty(
             "PersistentDataList.sav is not a GVAS file".into(),
         ));
     }
-    // Apply field-by-field, re-locating the profile range after each splice
-    // (reuses the same resolution helpers as apply_save_difficulty for consistency).
-    for (name, class) in req.class_edits()? {
-        let refs = scan_fstrings(data, 0);
-        let (s, e) = profile_range_by_id(&refs, profile_id, data)
+    // Verify the profile exists up front so a missing-profile request errors
+    // (rather than silently skipping every field), mirroring the old behavior.
+    {
+        let root = parse_profile_file(data)?;
+        profile_element(&root, profile_id)
             .ok_or_else(|| CoreError::Validation(format!("profile {profile_id} not found")))?;
-        // Skip silently if a field is absent in this profile range.
-        if find_ref_in_range(&refs, s, e, name).is_some() {
-            replace_class_or_str_property_in_range(
-                data,
-                &refs,
-                s,
-                e,
-                name,
-                &format!("{ANGELSCRIPT}{class}"),
-            )?;
-        }
     }
-    // Permadeath: write to whichever spelling (m_PermanentDeath / m_PermaDeath)
-    // is present in the profile range. Re-scan + re-locate first (earlier splices
-    // shift offsets), exactly like the per-field pattern below.
+
+    // Asset-path sub-settings: typed length-changing patch scoped to the named
+    // profile, re-parsing between every edit (offsets shift after each splice).
+    for (name, class) in req.class_edits()? {
+        patch_profile_difficulty_string(data, profile_id, name, &format!("{ANGELSCRIPT}{class}"))?;
+    }
+    // Permadeath under whichever spelling exists in THIS profile.
     if let Some(perma) = req.resolved_permadeath() {
-        let refs = scan_fstrings(data, 0);
-        let (s, e) = profile_range_by_id(&refs, profile_id, data)
-            .ok_or_else(|| CoreError::Validation(format!("profile {profile_id} not found")))?;
-        write_permadeath_in_range(data, &refs, s, e, perma)?;
+        for name in PERMADEATH_NAMES {
+            let present = {
+                let root = parse_profile_file(data)?;
+                profile_difficulty_path(&root, profile_id, name)?.is_some()
+            };
+            if present {
+                patch_profile_difficulty_bool(data, profile_id, name, perma)?;
+                break;
+            }
+        }
     }
     // Flow helper (no alternate spelling).
     if let Some(flow) = req.flow_helper {
-        let refs = scan_fstrings(data, 0);
-        let (s, e) = profile_range_by_id(&refs, profile_id, data)
-            .ok_or_else(|| CoreError::Validation(format!("profile {profile_id} not found")))?;
-        if find_ref_in_range(&refs, s, e, "m_FakeSloppyCombos").is_some() {
-            write_bool_property_in_range(data, &refs, s, e, "m_FakeSloppyCombos", flow)?;
-        }
+        patch_profile_difficulty_bool(data, profile_id, "m_FakeSloppyCombos", flow)?;
+    }
+    // Validation gate: the edited PersistentDataList must strictly re-parse from
+    // its GVAS object and consume every byte. A length-changing patch that left
+    // an enclosing size field stale misaligns here, so we abort rather than ship
+    // a profile the game would reject.
+    let root = parse_profile_file(data).map_err(|err| {
+        CoreError::Validation(format!(
+            "profile difficulty edit produced a payload that does not strictly re-parse: {err}"
+        ))
+    })?;
+    if root.consumed != data.len() {
+        return Err(CoreError::Validation(format!(
+            "profile difficulty edit left {} trailing unparsed bytes",
+            data.len() - root.consumed
+        )));
     }
     Ok(())
+}
+
+/// Strictly re-parse a single-record GVAS payload and require it to consume the
+/// whole buffer. This is the real guard against shipping a save the game cannot
+/// load: a difficulty patch that left an enclosing `StructProperty` /
+/// `InstancedStruct` / `MapProperty` size field stale would misalign here.
+fn validate_typed_reparse(payload: &[u8], context: &str) -> Result<(), CoreError> {
+    let root = parse_save_tree(payload).map_err(|err| {
+        CoreError::Validation(format!(
+            "{context} produced a payload that does not strictly re-parse: {err}"
+        ))
+    })?;
+    if root.consumed != payload.len() {
+        return Err(CoreError::Validation(format!(
+            "{context} produced a payload with {} trailing unparsed bytes",
+            payload.len() - root.consumed
+        )));
+    }
+    Ok(())
+}
+
+/// Patch one string-valued difficulty field within a specific profile, with
+/// full enclosing-size propagation. Skips silently if the field is absent.
+fn patch_profile_difficulty_string(
+    data: &mut Vec<u8>,
+    profile_id: i32,
+    name: &str,
+    new_value: &str,
+) -> Result<(), CoreError> {
+    let root = parse_profile_file(data)?;
+    let Some(full_path) = profile_difficulty_path(&root, profile_id, name)? else {
+        return Ok(());
+    };
+    let segs = properties::parse_path(&full_path)?;
+    let chain = properties::resolve_chain(&root.properties, &segs)?;
+    let target = chain.target.clone();
+    let enclosing = chain.enclosing_size_fields.clone();
+    drop(root);
+    properties::patch_string(data, &target, &enclosing, new_value)
+}
+
+/// Patch one BoolProperty difficulty field within a specific profile. Skips
+/// silently if the field is absent.
+fn patch_profile_difficulty_bool(
+    data: &mut Vec<u8>,
+    profile_id: i32,
+    name: &str,
+    value: bool,
+) -> Result<(), CoreError> {
+    let root = parse_profile_file(data)?;
+    let Some(full_path) = profile_difficulty_path(&root, profile_id, name)? else {
+        return Ok(());
+    };
+    let segs = properties::parse_path(&full_path)?;
+    let chain = properties::resolve_chain(&root.properties, &segs)?;
+    let target = chain.target.clone();
+    drop(root);
+    properties::patch_scalar(
+        data.as_mut_slice(),
+        &target,
+        properties::ScalarValue::Bool(value),
+    )
 }
 
 fn read_i32_after_property(payload: &[u8], refs: &[FStringRef], name: &str) -> Option<i32> {
@@ -2412,62 +2652,11 @@ fn read_bool_property_in_range(
     read_bool_property_at(payload, refs, name_idx)
 }
 
-fn write_bool_property_in_range(
-    payload: &mut [u8],
-    refs: &[FStringRef],
-    start_idx: usize,
-    end_idx: usize,
-    name: &str,
-    value: bool,
-) -> Result<(), CoreError> {
-    let name_idx = find_ref_in_range(refs, start_idx, end_idx, name)
-        .ok_or_else(|| CoreError::Parse(format!("property {name} was not found")))?;
-    let type_ref = refs
-        .get(name_idx + 1)
-        .ok_or_else(|| CoreError::Parse(format!("type for {name} was not found")))?;
-    if type_ref.value != "BoolProperty" {
-        return Err(CoreError::Parse(format!(
-            "property {name} is not a BoolProperty"
-        )));
-    }
-    // value byte sits 8 bytes past the type ref (4 flags + 4 size), mirroring read_bool_property_at
-    let offset = type_ref.len_offset + type_ref.total_len + 8;
-    // A GVAS BoolProperty's value lives in the tag_flags byte as bit 0x10
-    // (properties::TAG_FLAG_BOOL_TRUE). Set/clear only that bit so the strict
-    // parser / the game read it correctly and other tag-flag bits survive.
-    let byte = payload
-        .get_mut(offset)
-        .ok_or_else(|| CoreError::Parse(format!("bool value for {name} is out of range")))?;
-    if value {
-        *byte |= properties::TAG_FLAG_BOOL_TRUE;
-    } else {
-        *byte &= !properties::TAG_FLAG_BOOL_TRUE;
-    }
-    Ok(())
-}
-
 /// Permadeath may be stored under either spelling depending on save version.
 /// The read path falls back from `m_PermanentDeath` to `m_PermaDeath`
-/// (see `parse_profile_summaries`); the write path mirrors that here.
+/// (see `parse_profile_summaries`); the typed write path mirrors that by
+/// patching whichever spelling the parsed tree actually contains.
 const PERMADEATH_NAMES: [&str; 2] = ["m_PermanentDeath", "m_PermaDeath"];
-
-/// Write `value` to whichever permadeath spelling is present in `[s, e)`.
-/// If neither is present, skip silently (matches the existing absent-field
-/// behavior at both write sites).
-fn write_permadeath_in_range(
-    payload: &mut [u8],
-    refs: &[FStringRef],
-    s: usize,
-    e: usize,
-    value: bool,
-) -> Result<(), CoreError> {
-    for name in PERMADEATH_NAMES {
-        if find_ref_in_range(refs, s, e, name).is_some() {
-            return write_bool_property_in_range(payload, refs, s, e, name, value);
-        }
-    }
-    Ok(())
-}
 
 fn find_ref_in_range(
     refs: &[FStringRef],
@@ -6911,48 +7100,6 @@ fn replace_str_property_fstring_in_range(
     write_str_property_value(payload, size_offset, value_ref, new_value)
 }
 
-/// Like `replace_str_property_fstring_in_range`, but also accepts
-/// `ClassProperty`. A ClassProperty's value is serialized as an inline FString
-/// with the identical layout to a StrProperty, so the same size-aware splice
-/// rewrites asset-path values (e.g. a DifficultyPreset class path) in place.
-fn replace_class_or_str_property_in_range(
-    payload: &mut Vec<u8>,
-    refs: &[FStringRef],
-    start_idx: usize,
-    end_idx: usize,
-    property_name: &str,
-    new_value: &str,
-) -> Result<(), CoreError> {
-    let name_idx = find_ref_in_range(refs, start_idx, end_idx, property_name)
-        .ok_or_else(|| CoreError::Parse(format!("property {property_name} was not found")))?;
-    if name_idx + 2 >= end_idx {
-        return Err(CoreError::Parse(format!(
-            "value for {property_name} was not found"
-        )));
-    }
-    let type_ref = refs
-        .get(name_idx + 1)
-        .ok_or_else(|| CoreError::Parse(format!("type for {property_name} was not found")))?;
-    if type_ref.value != "StrProperty"
-        && type_ref.value != "ClassProperty"
-        && type_ref.value != "ObjectProperty"
-    {
-        return Err(CoreError::Parse(format!(
-            "property {property_name} is not a StrProperty/ClassProperty/ObjectProperty"
-        )));
-    }
-    let value_ref = refs
-        .get(name_idx + 2)
-        .ok_or_else(|| CoreError::Parse(format!("value for {property_name} was not found")))?;
-    if value_ref.utf16 {
-        return Err(CoreError::UnsupportedEdit(
-            "UTF-16 FString replacement is not implemented yet".to_string(),
-        ));
-    }
-    let size_offset = type_ref.len_offset + type_ref.total_len + 4;
-    write_str_property_value(payload, size_offset, value_ref, new_value)
-}
-
 fn sha1_hex(data: &[u8]) -> String {
     let mut hasher = Sha1::new();
     hasher.update(data);
@@ -6993,6 +7140,70 @@ mod tests {
     use std::sync::Mutex;
     use tempfile::tempdir;
 
+    /// Real-data regression for the difficulty data-corruption bug. The fixture
+    /// is a real, valid save whose PUBLIC payload nests the difficulty inside
+    /// `CustomPayload` (Map) -> InstancedStruct. Changing Resources to Novice
+    /// rewrites `ResourcesDifficultySettings_Standard` -> `_Easy` (-4 bytes), a
+    /// LENGTH-CHANGING edit. Before the fix, the raw splice updated only the
+    /// ObjectProperty's own tag size and left the enclosing Map + InstancedStruct
+    /// sizes stale, so a strict re-parse misaligned (the game would start a new
+    /// game). The typed write propagates every enclosing size field, so the
+    /// edited public payload still strictly re-parses and reports the new value.
+    ///
+    /// The save is referenced by absolute path (NOT committed to the repo); the
+    /// test is skipped cleanly if it is unavailable.
+    #[test]
+    fn real_save_difficulty_subsetting_length_change_reparses() {
+        let path = r"C:\sbx\goresave\work\corrupt\G1R-003.good.sav";
+        let Ok(data) = fs::read(path) else {
+            eprintln!("skipping: fixture {path} not present");
+            return;
+        };
+
+        // Sanity: the unedited public payload parses and starts as Standard.
+        let before = difficulty_for_gsav_bytes(&data).unwrap();
+        assert_eq!(
+            before.resources.as_deref(),
+            Some("ResourcesDifficultySettings_Standard"),
+            "fixture precondition: resources start at Standard",
+        );
+
+        // Custom preset, Resources -> Novice (-> _Easy, shrinks the asset path).
+        let req = DifficultyRequest {
+            preset: "Custom".into(),
+            combat: None,
+            resources: Some("Novice".into()),
+            progression: None,
+            flow_helper: None,
+            permadeath: None,
+        };
+        let edited = write_difficulty_into_save_public(&data, &req)
+            .expect("public difficulty write must succeed and self-validate");
+
+        // The edited public payload must STRICTLY re-parse and consume every
+        // byte (this is what fails on the raw-splice code: a stale enclosing
+        // Map/InstancedStruct size desyncs the parse).
+        let parts = split_gsav(&edited).unwrap();
+        let pub_payload = parts.public_payload.to_vec();
+        let root = properties::parse_property_list_root(&pub_payload)
+            .expect("edited public payload must re-parse cleanly");
+        assert_eq!(
+            root.consumed,
+            pub_payload.len(),
+            "edited public payload must consume every byte (no size desync)",
+        );
+
+        // And the new value must be readable.
+        let after = difficulty_for_gsav_bytes(&edited).unwrap();
+        assert_eq!(
+            after.resources.as_deref(),
+            Some("ResourcesDifficultySettings_Easy"),
+            "resources sub-setting must now read as Easy",
+        );
+        // The size actually changed, proving this exercised the length-changing path.
+        assert_ne!(data.len(), edited.len(), "edit must change the payload length");
+    }
+
     #[test]
     fn summarize_typed_parse_reports_status() {
         // skipped for previews (result = None)
@@ -7030,216 +7241,243 @@ mod tests {
         out
     }
 
-    #[test]
-    fn write_bool_property_in_range_flips_value_byte() {
-        let mut payload = Vec::new();
-        payload.extend_from_slice(&fstring("m_PermanentDeath"));
-        payload.extend_from_slice(&fstring("BoolProperty"));
-        payload.extend_from_slice(&[0u8; 8]);
-        // Seed an unrelated tag-flag bit (0x08) so we can confirm it survives.
-        payload.push(properties::TAG_FLAG_NATIVE_SERIALIZE); // value/tag byte
+    // --- Typed GVAS test-fixture builders -------------------------------------
+    //
+    // The difficulty write now operates on the typed property tree, so fixtures
+    // must be REAL parseable GVAS, not flat fstring soup. These helpers mirror
+    // the real save shape: the difficulty fields are ObjectProperty asset paths
+    // (length-changing on edit) and BoolProperty toggles, nested inside a
+    // `CustomPayload` MapProperty -> InstancedStruct so a missed enclosing-size
+    // fixup desyncs the strict re-parse.
 
-        let refs = scan_fstrings(&payload, 0);
-        // Locate the value byte the writer targets so we can assert on the bit.
-        let name_idx = find_ref_in_range(&refs, 0, refs.len(), "m_PermanentDeath").unwrap();
-        let type_ref = &refs[name_idx + 1];
-        let value_offset = type_ref.len_offset + type_ref.total_len + 8;
+    /// `[u32 size][u8 tag_flags]` value header preceding a sized property value.
+    fn diff_header(size: u32, flags: u8) -> Vec<u8> {
+        let mut out = 0u32.to_le_bytes().to_vec(); // array_index
+        out.extend_from_slice(&size.to_le_bytes());
+        out.push(flags);
+        out
+    }
 
-        write_bool_property_in_range(&mut payload, &refs, 0, refs.len(), "m_PermanentDeath", true)
-            .unwrap();
-        // A true BoolProperty must set the 0x10 bit, not overwrite the byte with 0x01.
-        assert_ne!(payload[value_offset] & properties::TAG_FLAG_BOOL_TRUE, 0);
-        // The unrelated 0x08 bit must survive.
-        assert_ne!(payload[value_offset] & properties::TAG_FLAG_NATIVE_SERIALIZE, 0);
+    /// `name`/`type` tag pair.
+    fn diff_tag(name: &str, type_name: &str) -> Vec<u8> {
+        let mut out = fstring(name);
+        out.extend_from_slice(&fstring(type_name));
+        out
+    }
 
-        let refs2 = scan_fstrings(&payload, 0);
-        assert_eq!(
-            read_bool_property_in_range(&payload, &refs2, 0, refs2.len(), "m_PermanentDeath"),
-            Some(true),
+    /// An ObjectProperty whose value is an asset path (the difficulty sub-settings).
+    fn obj_prop(name: &str, path: &str) -> Vec<u8> {
+        let value = fstring(path);
+        let mut out = diff_tag(name, "ObjectProperty");
+        out.extend_from_slice(&diff_header(value.len() as u32, 0));
+        out.extend_from_slice(&value);
+        out
+    }
+
+    /// A BoolProperty (value carried in the 0x10 tag bit).
+    fn bool_prop(name: &str, on: bool) -> Vec<u8> {
+        let mut out = diff_tag(name, "BoolProperty");
+        out.extend_from_slice(&diff_header(
+            0,
+            if on { properties::TAG_FLAG_BOOL_TRUE } else { 0 },
+        ));
+        out
+    }
+
+    /// The difficulty property list (no `None` terminator).
+    fn difficulty_props(preset_level: &str, perma_name: &str, perma_on: bool) -> Vec<u8> {
+        let mut out = obj_prop(
+            "m_difficultyPreset",
+            &format!("/Script/Angelscript.DifficultyPreset_{preset_level}"),
         );
+        out.extend_from_slice(&obj_prop(
+            "m_customCombatSettings",
+            &format!("/Script/Angelscript.CombatDifficultySettings_{preset_level}"),
+        ));
+        out.extend_from_slice(&obj_prop(
+            "m_customResourcesSettings",
+            &format!("/Script/Angelscript.ResourcesDifficultySettings_{preset_level}"),
+        ));
+        out.extend_from_slice(&obj_prop(
+            "m_customProgressionSettings",
+            &format!("/Script/Angelscript.ProgressionDifficultySettings_{preset_level}"),
+        ));
+        out.extend_from_slice(&bool_prop(perma_name, perma_on));
+        out.extend_from_slice(&bool_prop("m_FakeSloppyCombos", false));
+        out
+    }
 
-        // Writing false clears the 0x10 bit but preserves the unrelated 0x08 bit.
-        write_bool_property_in_range(&mut payload, &refs2, 0, refs2.len(), "m_PermanentDeath", false)
-            .unwrap();
-        assert_eq!(payload[value_offset] & properties::TAG_FLAG_BOOL_TRUE, 0);
-        assert_ne!(payload[value_offset] & properties::TAG_FLAG_NATIVE_SERIALIZE, 0);
+    /// Wrap a property list in the real-save nesting: a `CustomPayload`
+    /// MapProperty<Object, InstancedStruct> whose single entry's InstancedStruct
+    /// holds `inner_props`. A trailing `m_AfterMap` int follows the map so any
+    /// missed enclosing-size fixup shifts it and breaks the strict re-parse.
+    fn custom_payload_map(inner_props: &[u8]) -> Vec<u8> {
+        let mut struct_body = inner_props.to_vec();
+        struct_body.extend_from_slice(&fstring("None"));
+        let mut instanced = fstring("/Script/G1R.SaveDataPayload");
+        instanced.extend_from_slice(&(struct_body.len() as u32).to_le_bytes());
+        instanced.extend_from_slice(&struct_body);
+
+        let mut map_body = 0u32.to_le_bytes().to_vec(); // num_to_remove
+        map_body.extend_from_slice(&1u32.to_le_bytes()); // count
+        map_body.extend_from_slice(&fstring("/Script/G1R.SaveDataPayload")); // Object key
+        map_body.extend_from_slice(&instanced);
+
+        let mut props = diff_tag("CustomPayload", "MapProperty");
+        // Map descriptor (read before the value header): count + key body +
+        // key_flags + value body.
+        props.extend_from_slice(&2u32.to_le_bytes()); // descriptor count
+        props.extend_from_slice(&fstring("ObjectProperty")); // key type
+        props.extend_from_slice(&0u32.to_le_bytes()); // key_flags
+        props.extend_from_slice(&fstring("StructProperty")); // value type
+        props.extend_from_slice(&1u32.to_le_bytes()); // struct desc count
+        props.extend_from_slice(&fstring("InstancedStruct")); // struct type
+        props.extend_from_slice(&1u32.to_le_bytes()); // package count
+        props.extend_from_slice(&fstring("/Script/StructUtils")); // package
+        // value header
+        props.extend_from_slice(&0u32.to_le_bytes()); // array_index
+        props.extend_from_slice(&(map_body.len() as u32).to_le_bytes()); // size
+        props.push(properties::TAG_FLAG_NATIVE_SERIALIZE); // tag_flags
+        props.extend_from_slice(&map_body);
+
+        // trailing root-level int
+        props.extend_from_slice(&diff_tag("m_AfterMap", "IntProperty"));
+        props.extend_from_slice(&diff_header(4, 0));
+        props.extend_from_slice(&7i32.to_le_bytes());
+        props
+    }
+
+    /// A bare property-list payload (public-payload framing): the difficulty
+    /// nested in CustomPayload, then `None`.
+    fn nested_public_payload(preset_level: &str, perma_name: &str, perma_on: bool) -> Vec<u8> {
+        let mut out = custom_payload_map(&difficulty_props(preset_level, perma_name, perma_on));
+        out.extend_from_slice(&fstring("None"));
+        out
+    }
+
+    /// A full GVAS-object payload (private-payload framing): class + flag +
+    /// nested difficulty + `None` + footer.
+    fn nested_object_payload(preset_level: &str, perma_name: &str, perma_on: bool) -> Vec<u8> {
+        let mut out = fstring("/Script/G1R.SaveGame");
+        out.push(0); // object flag
+        out.extend_from_slice(&custom_payload_map(&difficulty_props(
+            preset_level,
+            perma_name,
+            perma_on,
+        )));
+        out.extend_from_slice(&fstring("None"));
+        out.extend_from_slice(&0u32.to_le_bytes()); // footer
+        out
+    }
+
+    /// Read a nested difficulty ObjectProperty's value from a parsed tree.
+    fn read_nested_difficulty(payload: &[u8], name: &str) -> Option<String> {
+        let root = parse_save_tree(payload).ok()?;
+        let (_, prop) = properties::find_property_by_name(&root, name)?;
+        match &prop.value {
+            properties::PropertyValue::Object(s) => Some(s.clone()),
+            _ => None,
+        }
+    }
+
+    /// Read a nested difficulty BoolProperty's value from a parsed tree.
+    fn read_nested_bool(payload: &[u8], name: &str) -> Option<bool> {
+        let root = parse_save_tree(payload).ok()?;
+        let (_, prop) = properties::find_property_by_name(&root, name)?;
+        match &prop.value {
+            properties::PropertyValue::Bool(b) => Some(*b),
+            _ => None,
+        }
     }
 
     #[test]
-    fn write_profile_difficulty_targets_only_the_named_profile() {
-        let mut data = b"GVAS".to_vec();
-        data.extend_from_slice(&fstring("m_Profiles"));
-        // profile 0
-        data.extend_from_slice(&fstring("m_ProfileName"));
-        data.extend_from_slice(&fstring("m_ProfileId"));
-        data.extend_from_slice(&fstring("IntProperty"));
-        data.extend_from_slice(&[0u8; 4]);
-        data.extend_from_slice(&4u32.to_le_bytes());
-        data.push(0);
-        data.extend_from_slice(&0i32.to_le_bytes());
-        data.extend_from_slice(&fstring("m_difficultyPreset"));
-        data.extend_from_slice(&fstring("ClassProperty"));
-        data.extend_from_slice(&[0u8; 4]);
-        data.extend_from_slice(&0u32.to_le_bytes());
-        data.push(0);
-        data.extend_from_slice(&fstring("/Script/Angelscript.DifficultyPreset_Custom"));
-        // profile 1
-        data.extend_from_slice(&fstring("m_ProfileName"));
-        data.extend_from_slice(&fstring("m_ProfileId"));
-        data.extend_from_slice(&fstring("IntProperty"));
-        data.extend_from_slice(&[0u8; 4]);
-        data.extend_from_slice(&4u32.to_le_bytes());
-        data.push(0);
-        data.extend_from_slice(&1i32.to_le_bytes());
-        data.extend_from_slice(&fstring("m_difficultyPreset"));
-        data.extend_from_slice(&fstring("ClassProperty"));
-        data.extend_from_slice(&[0u8; 4]);
-        data.extend_from_slice(&0u32.to_le_bytes());
-        data.push(0);
-        data.extend_from_slice(&fstring("/Script/Angelscript.DifficultyPreset_Easy"));
-        data.extend_from_slice(&fstring("SavedDataVersion"));
+    fn apply_save_difficulty_patches_bool_via_tag_flag_and_propagates_sizes() {
+        // Length-changing edit on a NESTED ObjectProperty plus a Bool toggle:
+        // the edited bare-list payload must STRICTLY re-parse (enclosing Map +
+        // InstancedStruct sizes fixed) and read back the new values.
+        let mut payload = nested_public_payload("Standard", "m_PermanentDeath", false);
+        let original_len = payload.len();
 
         let req = DifficultyRequest {
             preset: "Hard".into(),
             combat: None,
             resources: None,
             progression: None,
-            flow_helper: None,
-            permadeath: None,
-        };
-        write_profile_difficulty(&mut data, 1, &req).unwrap();
-
-        let refs = scan_fstrings(&data, 0);
-        let presets: Vec<_> = refs
-            .iter()
-            .filter(|r| r.value.contains("DifficultyPreset_"))
-            .map(|r| r.value.clone())
-            .collect();
-        assert!(presets
-            .iter()
-            .any(|p| p.ends_with("DifficultyPreset_Custom")));
-        assert!(presets.iter().any(|p| p.ends_with("DifficultyPreset_Hard")));
-        assert!(!presets.iter().any(|p| p.ends_with("DifficultyPreset_Easy")));
-    }
-
-    #[test]
-    fn write_profile_difficulty_writes_permadeath_under_alternate_spelling() {
-        // A 2-profile buffer where the TARGET profile (id 1) stores permadeath
-        // under the alternate spelling `m_PermaDeath` (the read parser already
-        // supports this fallback; the write path must mirror it).
-        let mut data = b"GVAS".to_vec();
-        data.extend_from_slice(&fstring("m_Profiles"));
-        // profile 0 (untouched)
-        data.extend_from_slice(&fstring("m_ProfileName"));
-        data.extend_from_slice(&fstring("m_ProfileId"));
-        data.extend_from_slice(&fstring("IntProperty"));
-        data.extend_from_slice(&[0u8; 4]);
-        data.extend_from_slice(&4u32.to_le_bytes());
-        data.push(0);
-        data.extend_from_slice(&0i32.to_le_bytes());
-        // profile 1 (target) — permadeath stored as `m_PermaDeath`, currently true.
-        data.extend_from_slice(&fstring("m_ProfileName"));
-        data.extend_from_slice(&fstring("m_ProfileId"));
-        data.extend_from_slice(&fstring("IntProperty"));
-        data.extend_from_slice(&[0u8; 4]);
-        data.extend_from_slice(&4u32.to_le_bytes());
-        data.push(0);
-        data.extend_from_slice(&1i32.to_le_bytes());
-        data.extend_from_slice(&fstring("m_PermaDeath"));
-        data.extend_from_slice(&fstring("BoolProperty"));
-        data.extend_from_slice(&[0u8; 8]);
-        data.push(properties::TAG_FLAG_BOOL_TRUE); // currently on (game stores true as 0x10)
-        data.extend_from_slice(&fstring("SavedDataVersion"));
-
-        // Novice forces permadeath off (resolved_permadeath() => Some(false)).
-        let req = DifficultyRequest {
-            preset: "Novice".into(),
-            combat: None,
-            resources: None,
-            progression: None,
-            flow_helper: None,
-            permadeath: Some(true),
-        };
-        write_profile_difficulty(&mut data, 1, &req).unwrap();
-
-        let refs = scan_fstrings(&data, 0);
-        let (s, e) = profile_range_by_id(&refs, 1, &data).unwrap();
-        assert_eq!(
-            read_bool_property_in_range(&data, &refs, s, e, "m_PermaDeath"),
-            Some(false),
-            "Novice-forced permadeath-off must be written even under the m_PermaDeath spelling",
-        );
-    }
-
-    #[test]
-    fn apply_save_difficulty_sets_preset_and_subsettings() {
-        let mut payload = Vec::new();
-        for name in [
-            "m_difficultyPreset",
-            "m_customCombatSettings",
-            "m_customResourcesSettings",
-            "m_customProgressionSettings",
-        ] {
-            payload.extend_from_slice(&fstring(name));
-            payload.extend_from_slice(&fstring("ClassProperty"));
-            payload.extend_from_slice(&[0u8; 4]);
-            payload.extend_from_slice(&0u32.to_le_bytes());
-            payload.push(0);
-            payload.extend_from_slice(&fstring("/Script/Angelscript.DifficultyPreset_Easy"));
-        }
-        payload.extend_from_slice(&fstring("m_PermanentDeath"));
-        payload.extend_from_slice(&fstring("BoolProperty"));
-        payload.extend_from_slice(&[0u8; 8]);
-        payload.push(0);
-
-        let req = DifficultyRequest {
-            preset: "Custom".to_string(),
-            combat: Some("Hard".to_string()),
-            resources: None,
-            progression: None,
-            flow_helper: None,
+            flow_helper: Some(true),
             permadeath: Some(true),
         };
         apply_save_difficulty(&mut payload, &req).unwrap();
-
-        let refs = scan_fstrings(&payload, 0);
-        let end = refs.len();
+        // Hard ("_Hard", 5 chars) is shorter than the fixture's "_Standard"
+        // (9 chars) on all four asset paths, so this is a length-CHANGING edit.
+        // The tree must still re-parse, with every enclosing size field fixed.
+        let root = properties::parse_property_list_root(&payload).unwrap();
+        assert_eq!(root.consumed, payload.len());
         assert_eq!(
-            value_after_property_in_range(&refs, 0, end, "m_difficultyPreset").as_deref(),
+            read_nested_difficulty(&payload, "m_difficultyPreset").as_deref(),
+            Some("/Script/Angelscript.DifficultyPreset_Hard"),
+        );
+        assert_eq!(read_nested_bool(&payload, "m_PermanentDeath"), Some(true));
+        assert_eq!(read_nested_bool(&payload, "m_FakeSloppyCombos"), Some(true));
+        // The trailing root-level int survived intact (no size desync).
+        let after = properties::resolve(
+            &root.properties,
+            &properties::parse_path(&["m_AfterMap".into()]).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(after.value, properties::PropertyValue::Int(7));
+        // All four asset paths shrank by 4 bytes ("Standard" -> "Hard").
+        assert_eq!(payload.len(), original_len - 16);
+    }
+
+    #[test]
+    fn apply_save_difficulty_shrinking_subsetting_fixes_enclosing_sizes() {
+        // Custom -> Resources Novice rewrites _Standard -> _Easy (-4 bytes), the
+        // exact length-changing case that corrupted real saves. The enclosing
+        // Map/InstancedStruct sizes must shrink in lockstep or the strict
+        // re-parse (now run as the validation gate) fails.
+        let mut payload = nested_public_payload("Standard", "m_PermaDeath", false);
+        let original_len = payload.len();
+
+        let req = DifficultyRequest {
+            preset: "Custom".into(),
+            combat: None,
+            resources: Some("Novice".into()),
+            progression: None,
+            flow_helper: None,
+            permadeath: None,
+        };
+        apply_save_difficulty(&mut payload, &req).unwrap();
+
+        let root = properties::parse_property_list_root(&payload).unwrap();
+        assert_eq!(
+            root.consumed,
+            payload.len(),
+            "edited payload must re-parse with no size desync",
+        );
+        assert_eq!(
+            read_nested_difficulty(&payload, "m_customResourcesSettings").as_deref(),
+            Some("/Script/Angelscript.ResourcesDifficultySettings_Easy"),
+        );
+        // Combat/Progression default to Gothic (Standard) under Custom.
+        assert_eq!(
+            read_nested_difficulty(&payload, "m_customCombatSettings").as_deref(),
+            Some("/Script/Angelscript.CombatDifficultySettings_Standard"),
+        );
+        assert_eq!(
+            read_nested_difficulty(&payload, "m_difficultyPreset").as_deref(),
             Some("/Script/Angelscript.DifficultyPreset_Custom"),
         );
-        assert_eq!(
-            value_after_property_in_range(&refs, 0, end, "m_customCombatSettings").as_deref(),
-            Some("/Script/Angelscript.CombatDifficultySettings_Hard"),
-        );
-        assert_eq!(
-            value_after_property_in_range(&refs, 0, end, "m_customResourcesSettings").as_deref(),
-            Some("/Script/Angelscript.ResourcesDifficultySettings_Standard"),
-        );
-        assert_eq!(
-            read_bool_property_in_range(&payload, &refs, 0, end, "m_PermanentDeath"),
-            Some(true),
-        );
+        // preset "Standard"(8)->"Custom"(6) = -2, resources "Standard"->"Easy" = -4.
+        assert_eq!(payload.len(), original_len - 6, "net shrink of 6 bytes");
     }
 
     #[test]
     fn apply_save_difficulty_non_custom_mirrors_preset_and_locks_permadeath() {
-        let mut payload = Vec::new();
-        for name in ["m_difficultyPreset", "m_customCombatSettings"] {
-            payload.extend_from_slice(&fstring(name));
-            payload.extend_from_slice(&fstring("ClassProperty"));
-            payload.extend_from_slice(&[0u8; 4]);
-            payload.extend_from_slice(&0u32.to_le_bytes());
-            payload.push(0);
-            payload.extend_from_slice(&fstring("/Script/Angelscript.DifficultyPreset_Custom"));
-        }
-        payload.extend_from_slice(&fstring("m_PermanentDeath"));
-        payload.extend_from_slice(&fstring("BoolProperty"));
-        payload.extend_from_slice(&[0u8; 8]);
-        payload.push(properties::TAG_FLAG_BOOL_TRUE); // currently true (game stores true as 0x10)
+        // Novice mirrors every sub-setting to Easy AND forces permadeath off,
+        // even though permadeath: Some(true) was requested. Works on the full
+        // OBJECT framing (private-payload shape) to exercise that branch too.
+        let mut payload = nested_object_payload("Standard", "m_PermanentDeath", true);
 
-        // Novice should mirror all sub-settings to Easy AND force permadeath off,
-        // even though permadeath: Some(true) was requested.
         let req = DifficultyRequest {
             preset: "Novice".into(),
             combat: None,
@@ -7249,39 +7487,25 @@ mod tests {
             permadeath: Some(true),
         };
         apply_save_difficulty(&mut payload, &req).unwrap();
-        let refs = scan_fstrings(&payload, 0);
-        let end = refs.len();
+
+        // Strict OBJECT re-parse must succeed.
+        let root = properties::parse_private_root(&payload).unwrap();
+        assert_eq!(root.consumed, payload.len());
         assert_eq!(
-            value_after_property_in_range(&refs, 0, end, "m_difficultyPreset").as_deref(),
+            read_nested_difficulty(&payload, "m_difficultyPreset").as_deref(),
             Some("/Script/Angelscript.DifficultyPreset_Easy"),
         );
         assert_eq!(
-            value_after_property_in_range(&refs, 0, end, "m_customCombatSettings").as_deref(),
-            Some("/Script/Angelscript.CombatDifficultySettings_Easy"),
+            read_nested_difficulty(&payload, "m_customResourcesSettings").as_deref(),
+            Some("/Script/Angelscript.ResourcesDifficultySettings_Easy"),
         );
-        assert_eq!(
-            read_bool_property_in_range(&payload, &refs, 0, end, "m_PermanentDeath"),
-            Some(false),
-        );
+        assert_eq!(read_nested_bool(&payload, "m_PermanentDeath"), Some(false));
     }
 
     #[test]
     fn write_difficulty_into_save_updates_public_payload() {
-        let mut public = Vec::new();
-        public.extend_from_slice(&fstring("m_difficultyPreset"));
-        public.extend_from_slice(&fstring("ClassProperty"));
-        public.extend_from_slice(&[0u8; 4]);
-        public.extend_from_slice(&0u32.to_le_bytes());
-        public.push(0);
-        public.extend_from_slice(&fstring("/Script/Angelscript.DifficultyPreset_Custom"));
-        public.extend_from_slice(&fstring("m_PermanentDeath"));
-        public.extend_from_slice(&fstring("BoolProperty"));
-        public.extend_from_slice(&[0u8; 8]);
-        public.push(properties::TAG_FLAG_BOOL_TRUE); // game stores true as 0x10
-
-        // minimal_stream()/[0,0,0,0] trailer mirror the other GSAV tests: an empty
-        // compressed stream would make split_gsav -> parse_compressed_stream fail
-        // (it requires the size prefix + method fstring + PACKAGE_FILE_TAG header).
+        let public = nested_public_payload("Custom", "m_PermaDeath", true);
+        // minimal_stream()/[0,0,0,0] trailer mirror the other GSAV tests.
         let gsav = build_gsav(2, &public, &minimal_stream(), &[0, 0, 0, 0]);
         let req = DifficultyRequest {
             preset: "Novice".into(),
@@ -7294,70 +7518,95 @@ mod tests {
         let out = write_difficulty_into_save_public(&gsav, &req).unwrap();
         let d = difficulty_for_gsav_bytes(&out).unwrap();
         assert_eq!(d.preset.as_deref(), Some("DifficultyPreset_Easy"));
+        assert_eq!(d.resources.as_deref(), Some("ResourcesDifficultySettings_Easy"));
         assert_eq!(d.permadeath, Some(false)); // Novice forces off
+        // The edited public payload strictly re-parses.
+        let parts = split_gsav(&out).unwrap();
+        let root = properties::parse_property_list_root(parts.public_payload).unwrap();
+        assert_eq!(root.consumed, parts.public_payload.len());
     }
 
-    /// Build a private payload that carries an editable `m_difficultyPreset`
-    /// ClassProperty plus an `m_PermanentDeath` BoolProperty, so the
-    /// `private.difficulty.set` edit (which reuses `apply_save_difficulty`) has
-    /// something to splice.
+    /// Build the difficulty-bearing PRIVATE payload (full GVAS object).
     fn difficulty_private_payload() -> Vec<u8> {
-        let mut out = Vec::new();
-        out.extend_from_slice(&fstring("m_difficultyPreset"));
-        out.extend_from_slice(&fstring("ClassProperty"));
-        out.extend_from_slice(&[0u8; 4]);
-        out.extend_from_slice(&0u32.to_le_bytes());
-        out.push(0);
-        out.extend_from_slice(&fstring("/Script/Angelscript.DifficultyPreset_Custom"));
-        out.extend_from_slice(&fstring("m_PermanentDeath"));
-        out.extend_from_slice(&fstring("BoolProperty"));
-        out.extend_from_slice(&[0u8; 8]);
-        out.push(1);
-        out.extend_from_slice(&fstring("None"));
-        out
+        nested_object_payload("Custom", "m_PermaDeath", true)
     }
 
-    /// Build a public payload that carries an editable `m_difficultyPreset`
-    /// ClassProperty plus `m_PermanentDeath`, so `write_difficulty_into_save_public`
-    /// can splice it.
+    /// Build the difficulty-bearing PUBLIC payload (bare property list).
     fn difficulty_public_payload() -> Vec<u8> {
-        let mut out = Vec::new();
-        out.extend_from_slice(&fstring("m_difficultyPreset"));
-        out.extend_from_slice(&fstring("ClassProperty"));
-        out.extend_from_slice(&[0u8; 4]);
-        out.extend_from_slice(&0u32.to_le_bytes());
-        out.push(0);
-        out.extend_from_slice(&fstring("/Script/Angelscript.DifficultyPreset_Custom"));
-        out.extend_from_slice(&fstring("m_PermanentDeath"));
-        out.extend_from_slice(&fstring("BoolProperty"));
-        out.extend_from_slice(&[0u8; 8]);
-        out.push(1);
-        out.extend_from_slice(&fstring("None"));
+        nested_public_payload("Custom", "m_PermaDeath", true)
+    }
+
+    /// One profile's property list (no `None`): id + nested difficulty in a
+    /// `ProfileData` InstancedStruct (mirrors the real ProfileData nesting).
+    fn profile_props(id: i32, preset_level: &str, perma_on: bool) -> Vec<u8> {
+        let mut out = diff_tag("m_ProfileName", "StrProperty");
+        let name = fstring(&format!("Profile{id}"));
+        out.extend_from_slice(&diff_header(name.len() as u32, 0));
+        out.extend_from_slice(&name);
+        out.extend_from_slice(&diff_tag("m_ProfileId", "IntProperty"));
+        out.extend_from_slice(&diff_header(4, 0));
+        out.extend_from_slice(&id.to_le_bytes());
+        // ProfileData InstancedStruct wrapping the difficulty fields.
+        let mut struct_body = difficulty_props(preset_level, "m_PermaDeath", perma_on);
+        struct_body.extend_from_slice(&fstring("None"));
+        let mut instanced = fstring("/Script/G1R.ProfileData");
+        instanced.extend_from_slice(&(struct_body.len() as u32).to_le_bytes());
+        instanced.extend_from_slice(&struct_body);
+        out.extend_from_slice(&diff_tag("ProfileData", "StructProperty"));
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&fstring("InstancedStruct"));
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&fstring("/Script/StructUtils"));
+        out.extend_from_slice(&diff_header(instanced.len() as u32, properties::TAG_FLAG_NATIVE_SERIALIZE));
+        out.extend_from_slice(&instanced);
         out
     }
 
-    /// Build a 2-profile PersistentDataList.sav buffer (profile 0 = Custom,
-    /// profile 1 = Easy), mirroring the buffer used by
-    /// `write_profile_difficulty_targets_only_the_named_profile`.
+    /// Build a 2-profile PersistentDataList.sav (full GVAS object): profile 0 =
+    /// Custom, profile 1 = Easy, in an `m_Profiles` ArrayProperty<StructProperty>.
+    ///
+    /// Layout per the parser: tag (name/type), the ARRAY inner descriptor
+    /// (inner_count u32 + "StructProperty" + struct descriptor), then
+    /// array_index u32 + size u32 + tag_flags u8, then the body
+    /// `[element_count u32][struct0 props + None][struct1 props + None]`.
     fn difficulty_persistent_profiles() -> Vec<u8> {
+        let mut body = 2u32.to_le_bytes().to_vec(); // element count
+        let mut p0 = profile_props(0, "Custom", false);
+        p0.extend_from_slice(&fstring("None"));
+        let mut p1 = profile_props(1, "Easy", false);
+        p1.extend_from_slice(&fstring("None"));
+        body.extend_from_slice(&p0);
+        body.extend_from_slice(&p1);
+
+        let mut props = diff_tag("m_Profiles", "ArrayProperty");
+        // ArrayProperty inner descriptor: inner_count + inner type + struct desc.
+        props.extend_from_slice(&1u32.to_le_bytes()); // inner_count
+        props.extend_from_slice(&fstring("StructProperty")); // inner type
+        props.extend_from_slice(&1u32.to_le_bytes()); // struct desc count
+        props.extend_from_slice(&fstring("ProfileEntry")); // struct type
+        props.extend_from_slice(&1u32.to_le_bytes()); // package count
+        props.extend_from_slice(&fstring("/Script/G1R")); // package
+        // value header
+        props.extend_from_slice(&0u32.to_le_bytes()); // array_index
+        props.extend_from_slice(&(body.len() as u32).to_le_bytes()); // size
+        props.push(0); // tag_flags
+        props.extend_from_slice(&body);
+
+        // The object body (class + flag + props + None + footer).
+        let mut object = fstring("/Script/G1R.PersistentDataList");
+        object.push(0); // object flag
+        object.extend_from_slice(&props);
+        object.extend_from_slice(&fstring("None"));
+        object.extend_from_slice(&0u32.to_le_bytes()); // footer
+
+        // Prepend a GVAS header (real files carry a variable-length header before
+        // the object). The bytes are opaque filler the probe skips; they must not
+        // themselves parse as a clean full-file object. `GVAS` magic satisfies the
+        // starts_with check; the version/filler block stands in for the real
+        // save-game/package versions + custom-version array + class name.
         let mut data = b"GVAS".to_vec();
-        data.extend_from_slice(&fstring("m_Profiles"));
-        for (id, preset) in [(0i32, "DifficultyPreset_Custom"), (1i32, "DifficultyPreset_Easy")] {
-            data.extend_from_slice(&fstring("m_ProfileName"));
-            data.extend_from_slice(&fstring("m_ProfileId"));
-            data.extend_from_slice(&fstring("IntProperty"));
-            data.extend_from_slice(&[0u8; 4]);
-            data.extend_from_slice(&4u32.to_le_bytes());
-            data.push(0);
-            data.extend_from_slice(&id.to_le_bytes());
-            data.extend_from_slice(&fstring("m_difficultyPreset"));
-            data.extend_from_slice(&fstring("ClassProperty"));
-            data.extend_from_slice(&[0u8; 4]);
-            data.extend_from_slice(&0u32.to_le_bytes());
-            data.push(0);
-            data.extend_from_slice(&fstring(&format!("/Script/Angelscript.{preset}")));
-        }
-        data.extend_from_slice(&fstring("SavedDataVersion"));
+        data.extend_from_slice(&[0u8; 24]); // opaque header filler
+        data.extend_from_slice(&object);
         data
     }
 
@@ -7596,105 +7845,97 @@ mod tests {
     }
 
     #[test]
-    fn replace_class_property_value_in_range_rewrites_path() {
-        let mut payload = Vec::new();
-        payload.extend_from_slice(&fstring("m_difficultyPreset"));
-        payload.extend_from_slice(&fstring("ClassProperty"));
-        payload.extend_from_slice(&[0u8; 4]); // flags
-        payload.extend_from_slice(&0u32.to_le_bytes()); // size (rewritten)
-        payload.push(0); // tag
-        payload.extend_from_slice(&fstring("/Script/Angelscript.DifficultyPreset_Custom"));
+    fn write_profile_difficulty_targets_only_the_named_profile() {
+        // 2 profiles: 0 = Custom, 1 = Easy. Editing profile 1 to Hard must touch
+        // ONLY profile 1; profile 0 stays Custom. The edited file must strictly
+        // re-parse from its GVAS object (enclosing sizes propagated).
+        let mut data = difficulty_persistent_profiles();
+        let req = DifficultyRequest {
+            preset: "Hard".into(),
+            combat: None,
+            resources: None,
+            progression: None,
+            flow_helper: None,
+            permadeath: None,
+        };
+        write_profile_difficulty(&mut data, 1, &req).unwrap();
 
-        let refs = scan_fstrings(&payload, 0);
-        replace_class_or_str_property_in_range(
-            &mut payload,
-            &refs,
-            0,
-            refs.len(),
-            "m_difficultyPreset",
-            "/Script/Angelscript.DifficultyPreset_Easy",
-        )
-        .unwrap();
+        // Strict re-parse from the GVAS object (the validation gate already ran,
+        // but assert here to be explicit).
+        let root = parse_profile_file(&data).unwrap();
+        assert_eq!(root.consumed, data.len());
 
-        let refs2 = scan_fstrings(&payload, 0);
+        // Profile 0 untouched (Custom), profile 1 now Hard, no leftover Easy.
+        let p0 = profile_difficulty_path(&root, 0, "m_difficultyPreset")
+            .unwrap()
+            .unwrap();
+        let p0v = properties::resolve(&root.properties, &properties::parse_path(&p0).unwrap())
+            .unwrap();
         assert_eq!(
-            value_after_property_in_range(&refs2, 0, refs2.len(), "m_difficultyPreset").as_deref(),
-            Some("/Script/Angelscript.DifficultyPreset_Easy"),
-        );
-    }
-
-    #[test]
-    fn replace_object_property_value_in_range_rewrites_path() {
-        // Real on-disk saves serialize m_difficultyPreset as an ObjectProperty
-        // (asset path is the object reference) with the same header layout as
-        // Str/ClassProperty: [4 bytes flags][4-byte size][1 byte tag][value FString].
-        let mut payload = Vec::new();
-        payload.extend_from_slice(&fstring("m_difficultyPreset"));
-        payload.extend_from_slice(&fstring("ObjectProperty"));
-        payload.extend_from_slice(&[0u8; 4]); // flags
-        payload.extend_from_slice(&0u32.to_le_bytes()); // size (rewritten)
-        payload.push(0); // tag
-        payload.extend_from_slice(&fstring("/Script/Angelscript.DifficultyPreset_Custom"));
-
-        let refs = scan_fstrings(&payload, 0);
-        replace_class_or_str_property_in_range(
-            &mut payload,
-            &refs,
-            0,
-            refs.len(),
-            "m_difficultyPreset",
-            "/Script/Angelscript.DifficultyPreset_Easy",
-        )
-        .unwrap();
-
-        let refs2 = scan_fstrings(&payload, 0);
-        assert_eq!(
-            value_after_property_in_range(&refs2, 0, refs2.len(), "m_difficultyPreset").as_deref(),
-            Some("/Script/Angelscript.DifficultyPreset_Easy"),
-        );
-    }
-
-    #[test]
-    fn replace_class_or_str_property_does_not_splice_past_end_idx() {
-        // The matched property name is the LAST ref inside the selected range
-        // (end_idx). Its type/value refs live AFTER end_idx, in the FOLLOWING
-        // field/profile. Without the range guard the helper would read
-        // refs[name_idx + 2] (= the next field's value) and corrupt bytes
-        // outside the selected profile. With the guard it must fail cleanly and
-        // leave the following field's bytes untouched.
-        let mut payload = Vec::new();
-        payload.extend_from_slice(&fstring("m_difficultyPreset"));
-        // --- everything below belongs to the NEXT field, outside the range ---
-        payload.extend_from_slice(&fstring("ObjectProperty"));
-        payload.extend_from_slice(&[0u8; 4]); // flags
-        payload.extend_from_slice(&0u32.to_le_bytes()); // size
-        payload.push(0); // tag
-        payload.extend_from_slice(&fstring("/Script/Angelscript.DifficultyPreset_Custom"));
-
-        let before = payload.clone();
-        let refs = scan_fstrings(&payload, 0);
-        // end_idx bounds the search to ONLY the property-name ref. The type ref
-        // (name_idx + 1) and value ref (name_idx + 2) fall at/beyond end_idx.
-        let end_idx = 1;
-        let err = replace_class_or_str_property_in_range(
-            &mut payload,
-            &refs,
-            0,
-            end_idx,
-            "m_difficultyPreset",
-            "/Script/Angelscript.DifficultyPreset_Easy",
-        )
-        .unwrap_err();
-        match &err {
-            CoreError::Parse(msg) => assert!(
-                msg.contains("value for m_difficultyPreset was not found"),
-                "unexpected error message: {msg}",
+            p0v.value,
+            properties::PropertyValue::Object(
+                "/Script/Angelscript.DifficultyPreset_Custom".into()
             ),
-            other => panic!("expected Parse error, got {other:?}"),
-        }
-        // The out-of-range following field must be byte-for-byte untouched.
-        assert_eq!(payload, before, "bytes outside the selected range were modified");
+        );
+        let p1 = profile_difficulty_path(&root, 1, "m_difficultyPreset")
+            .unwrap()
+            .unwrap();
+        let p1v = properties::resolve(&root.properties, &properties::parse_path(&p1).unwrap())
+            .unwrap();
+        assert_eq!(
+            p1v.value,
+            properties::PropertyValue::Object("/Script/Angelscript.DifficultyPreset_Hard".into()),
+        );
     }
+
+    #[test]
+    fn write_profile_difficulty_writes_permadeath_under_alternate_spelling() {
+        // The fixture stores permadeath as `m_PermaDeath` in each profile. Novice
+        // forces permadeath off even though Some(true) was requested, and the
+        // write must target the alternate spelling that is actually present.
+        let mut data = difficulty_persistent_profiles();
+        // Seed profile 1's permadeath ON so we can observe it being forced off.
+        {
+            let root = parse_profile_file(&data).unwrap();
+            let path = profile_difficulty_path(&root, 1, "m_PermaDeath")
+                .unwrap()
+                .unwrap();
+            let chain =
+                properties::resolve_chain(&root.properties, &properties::parse_path(&path).unwrap())
+                    .unwrap();
+            let target = chain.target.clone();
+            drop(root);
+            properties::patch_scalar(
+                data.as_mut_slice(),
+                &target,
+                properties::ScalarValue::Bool(true),
+            )
+            .unwrap();
+        }
+
+        let req = DifficultyRequest {
+            preset: "Novice".into(),
+            combat: None,
+            resources: None,
+            progression: None,
+            flow_helper: None,
+            permadeath: Some(true),
+        };
+        write_profile_difficulty(&mut data, 1, &req).unwrap();
+
+        let root = parse_profile_file(&data).unwrap();
+        let path = profile_difficulty_path(&root, 1, "m_PermaDeath")
+            .unwrap()
+            .unwrap();
+        let v =
+            properties::resolve(&root.properties, &properties::parse_path(&path).unwrap()).unwrap();
+        assert_eq!(
+            v.value,
+            properties::PropertyValue::Bool(false),
+            "Novice-forced permadeath-off must be written under the m_PermaDeath spelling",
+        );
+    }
+
 
     fn minimal_stream() -> Vec<u8> {
         let mut out = Vec::new();

@@ -615,6 +615,16 @@ pub fn find_property_by_name<'a>(
     root: &'a RootObject,
     name: &str,
 ) -> Option<(Vec<String>, &'a Property)> {
+    find_path_in_properties(&root.properties, name)
+}
+
+/// Like [`find_property_by_name`] but rooted at an arbitrary property slice
+/// (e.g. one profile's properties inside `m_Profiles`). The returned path is
+/// RELATIVE to that slice. Used to scope a by-name lookup to a sub-tree.
+pub fn find_path_in_properties<'a>(
+    properties: &'a [Property],
+    name: &str,
+) -> Option<(Vec<String>, &'a Property)> {
     fn in_props<'a>(
         props: &'a [Property],
         name: &str,
@@ -679,7 +689,7 @@ pub fn find_property_by_name<'a>(
         }
     }
     let mut path = Vec::new();
-    let target = in_props(&root.properties, name, &mut path)?;
+    let target = in_props(properties, name, &mut path)?;
     Some((path, target))
 }
 
@@ -1191,7 +1201,21 @@ pub fn count_properties(props: &[Property]) -> PropertyCounts {
 
 /// Parse a full decompressed private payload (strict: every byte accounted for).
 pub fn parse_private_root(payload: &[u8]) -> Result<RootObject, CoreError> {
-    let mut r = Reader::new(payload, 0);
+    parse_private_root_at(payload, 0)
+}
+
+/// Like [`parse_private_root`] but the object begins at absolute offset `start`
+/// within `payload` (the rest of `payload` before `start` is a header the
+/// object body does not include). Recorded offsets are ABSOLUTE within
+/// `payload`, so `patch_string` / `patch_scalar` can splice directly into the
+/// same buffer. `consumed` is the absolute end of the object.
+pub fn parse_private_root_at(payload: &[u8], start: usize) -> Result<RootObject, CoreError> {
+    if start > payload.len() {
+        return Err(CoreError::Parse("object start past end of payload".into()));
+    }
+    // base_offset = start makes Reader::abs_pos() report offsets within the
+    // whole `payload`, while it reads only the object slice.
+    let mut r = Reader::new(&payload[start..], start);
     let root = read_object(&mut r, 0)?;
     if r.remaining() != 0 {
         return Err(CoreError::Parse(format!(
@@ -1200,6 +1224,26 @@ pub fn parse_private_root(payload: &[u8]) -> Result<RootObject, CoreError> {
         )));
     }
     Ok(root)
+}
+
+/// Parse a bare GVAS property list (no `class`/flag object framing, no footer)
+/// that begins at offset 0 and is terminated by a `None` name. This is the
+/// shape of a save's uncompressed PUBLIC payload (`SaveGamePublicData`), which
+/// starts directly at the first property (e.g. `CustomPayload`) rather than at
+/// an object header. The returned [`RootObject`] reuses the same property tree
+/// (so `resolve_chain` / `patch_string` apply unchanged); `class` is empty,
+/// `footer` is `0`, and `consumed` is the absolute end of the property list
+/// including the closing `None`.
+pub fn parse_property_list_root(payload: &[u8]) -> Result<RootObject, CoreError> {
+    let mut r = Reader::new(payload, 0);
+    let properties = read_property_list(&mut r, 0)?;
+    Ok(RootObject {
+        class: String::new(),
+        flag: 0,
+        properties,
+        footer: 0,
+        consumed: r.abs_pos(),
+    })
 }
 
 fn read_object(r: &mut Reader, depth: usize) -> Result<RootObject, CoreError> {
@@ -2498,6 +2542,92 @@ mod tests {
 
         assert_eq!(payload.len(), original_len - 2);
         assert_nested_string_patch(&payload, "Po");
+    }
+
+    /// Difficulty-shaped synthetic regression: an asset-path `ObjectProperty`
+    /// (`m_customResourcesSettings`) nested inside an `InstancedStruct` inside a
+    /// `MapProperty` — exactly the shape that corrupted real saves. Shrinking the
+    /// asset path must update BOTH the InstancedStruct `data_size` and the Map
+    /// tag size, and the tree must strictly re-parse (a stale enclosing size
+    /// would desync the byte-exact parser, like the game's loader did).
+    #[test]
+    fn patch_object_difficulty_in_map_instanced_struct_fixes_size_chain() {
+        // InstancedStruct body: one ObjectProperty asset path + None.
+        let resources = fstring("/Script/Angelscript.ResourcesDifficultySettings_Standard");
+        let nested = {
+            let mut n = tag("m_customResourcesSettings", "ObjectProperty");
+            n.extend_from_slice(&header(resources.len() as u32, 0));
+            n.extend_from_slice(&resources);
+            n.extend_from_slice(&fstring("None"));
+            n
+        };
+        let mut instanced = fstring("/Script/G1R.SaveDataPayload");
+        instanced.extend_from_slice(&(nested.len() as u32).to_le_bytes());
+        instanced.extend_from_slice(&nested);
+
+        // Map<Object, InstancedStruct> with one entry.
+        let mut map_body = 0u32.to_le_bytes().to_vec(); // num_to_remove
+        map_body.extend_from_slice(&1u32.to_le_bytes()); // count
+        map_body.extend_from_slice(&fstring("/Script/G1R.SaveDataPayload")); // Object key
+        map_body.extend_from_slice(&instanced);
+
+        let mut props = tag("CustomPayload", "MapProperty");
+        props.extend_from_slice(&2u32.to_le_bytes()); // descriptor count
+        props.extend_from_slice(&fstring("ObjectProperty")); // key type
+        props.extend_from_slice(&0u32.to_le_bytes()); // key_flags
+        props.extend_from_slice(&fstring("StructProperty")); // value type
+        props.extend_from_slice(&1u32.to_le_bytes());
+        props.extend_from_slice(&fstring("InstancedStruct"));
+        props.extend_from_slice(&1u32.to_le_bytes());
+        props.extend_from_slice(&fstring("/Script/StructUtils"));
+        props.extend_from_slice(&header(map_body.len() as u32, TAG_FLAG_NATIVE_SERIALIZE));
+        props.extend_from_slice(&map_body);
+        // Trailing root-level int: a missed size fixup shifts it and breaks parse.
+        props.extend_from_slice(&int_property("m_AfterMap", 7));
+        let mut payload = root("/Script/Test.Save", &props);
+        let original_len = payload.len();
+
+        let path = parse_path(&[
+            "CustomPayload".into(),
+            "{/Script/G1R.SaveDataPayload}".into(),
+            "m_customResourcesSettings".into(),
+        ])
+        .unwrap();
+        let parsed = parse_private_root(&payload).unwrap();
+        let chain = resolve_chain(&parsed.properties, &path).unwrap();
+        // Two enclosing size fields: the Map tag size and the InstancedStruct
+        // data_size (outermost first).
+        assert_eq!(chain.enclosing_size_fields.len(), 2);
+        let map_property = &parsed.properties[0];
+        assert_eq!(chain.enclosing_size_fields[0], map_property.size_field_offset());
+        let target = chain.target.clone();
+        let enclosing = chain.enclosing_size_fields.clone();
+
+        // Shrink _Standard -> _Easy (-4 bytes).
+        patch_string(
+            &mut payload,
+            &target,
+            &enclosing,
+            "/Script/Angelscript.ResourcesDifficultySettings_Easy",
+        )
+        .unwrap();
+        assert_eq!(payload.len(), original_len - 4);
+
+        // Strict re-parse must succeed and consume every byte.
+        let reparsed = parse_private_root(&payload).unwrap();
+        assert_eq!(reparsed.consumed, payload.len());
+        let after = resolve(&reparsed.properties, &path).unwrap();
+        assert_eq!(
+            after.value,
+            PropertyValue::Object("/Script/Angelscript.ResourcesDifficultySettings_Easy".into()),
+        );
+        // The trailing int survived (no desync).
+        let after_int = resolve(
+            &reparsed.properties,
+            &parse_path(&["m_AfterMap".into()]).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(after_int.value, PropertyValue::Int(7));
     }
 
     #[test]
