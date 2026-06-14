@@ -73,12 +73,27 @@ Left untouched (present on `ProfileData` but not in the in-game difficulty scree
 
 ## Behavior
 
-- When **preset = Custom**: the Custom block (Flow Helper, Permadeath, Combat,
-  Resources, Progression) is enabled and each field is independently editable.
-- When **preset = Novice/Gothic/Hard**: the Custom block is shown disabled, and on save
-  the three sub-settings are rewritten to the matching level (mirrors the game) while
-  the bools are left as-is. (Confirm bool behavior against the fixture; if the game
-  also resets bools for non-Custom presets, match that.)
+Per-control editability mirrors the in-game difficulty screen (confirmed from the four
+preset screenshots — orange = editable, grey = locked):
+
+| Control | Novice | Gothic | Hard | Custom |
+| --- | --- | --- | --- | --- |
+| Flow Helper (`m_FakeSloppyCombos`) | editable | editable | editable | editable |
+| Permadeath (`m_PermanentDeath`) | locked off | editable | editable | editable |
+| Combat / Resources / Progression | locked = Novice | locked = Gothic | locked = Hard | editable |
+
+Rules:
+
+- **Flow Helper** is always editable and independent of the preset — never force it.
+  In-game default is on for every preset.
+- **Permadeath** is editable for Gothic / Hard / Custom (default off). For Novice it is
+  locked off: when the editor sets preset = Novice, force `m_PermanentDeath = false`
+  and disable the toggle.
+- **Sub-settings** (Combat / Resources / Progression) are editable only for Custom. For
+  Novice / Gothic / Hard, on save rewrite all three to the matching level (mirrors the
+  game: a Novice profile stores `*_Easy`, etc.) and show them disabled. Custom defaults
+  the three to Gothic (`*_Standard`) when first switched, but otherwise preserves
+  whatever is stored.
 - Editing difficulty rewrites the whole profile and affects all of its saves — show a
   one-line note to that effect near the Save action.
 
