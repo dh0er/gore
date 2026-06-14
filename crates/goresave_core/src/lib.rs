@@ -6838,9 +6838,12 @@ fn replace_class_or_str_property_in_range(
     let type_ref = refs
         .get(name_idx + 1)
         .ok_or_else(|| CoreError::Parse(format!("type for {property_name} was not found")))?;
-    if type_ref.value != "StrProperty" && type_ref.value != "ClassProperty" {
+    if type_ref.value != "StrProperty"
+        && type_ref.value != "ClassProperty"
+        && type_ref.value != "ObjectProperty"
+    {
         return Err(CoreError::Parse(format!(
-            "property {property_name} is not a StrProperty/ClassProperty"
+            "property {property_name} is not a StrProperty/ClassProperty/ObjectProperty"
         )));
     }
     let value_ref = refs
@@ -7342,6 +7345,37 @@ mod tests {
         let mut payload = Vec::new();
         payload.extend_from_slice(&fstring("m_difficultyPreset"));
         payload.extend_from_slice(&fstring("ClassProperty"));
+        payload.extend_from_slice(&[0u8; 4]); // flags
+        payload.extend_from_slice(&0u32.to_le_bytes()); // size (rewritten)
+        payload.push(0); // tag
+        payload.extend_from_slice(&fstring("/Script/Angelscript.DifficultyPreset_Custom"));
+
+        let refs = scan_fstrings(&payload, 0);
+        replace_class_or_str_property_in_range(
+            &mut payload,
+            &refs,
+            0,
+            refs.len(),
+            "m_difficultyPreset",
+            "/Script/Angelscript.DifficultyPreset_Easy",
+        )
+        .unwrap();
+
+        let refs2 = scan_fstrings(&payload, 0);
+        assert_eq!(
+            value_after_property_in_range(&refs2, 0, refs2.len(), "m_difficultyPreset").as_deref(),
+            Some("/Script/Angelscript.DifficultyPreset_Easy"),
+        );
+    }
+
+    #[test]
+    fn replace_object_property_value_in_range_rewrites_path() {
+        // Real on-disk saves serialize m_difficultyPreset as an ObjectProperty
+        // (asset path is the object reference) with the same header layout as
+        // Str/ClassProperty: [4 bytes flags][4-byte size][1 byte tag][value FString].
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&fstring("m_difficultyPreset"));
+        payload.extend_from_slice(&fstring("ObjectProperty"));
         payload.extend_from_slice(&[0u8; 4]); // flags
         payload.extend_from_slice(&0u32.to_le_bytes()); // size (rewritten)
         payload.push(0); // tag
