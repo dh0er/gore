@@ -503,6 +503,30 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
                 sync_persistent_data_list,
             )?)
         }
+        "write_difficulty" => {
+            let req: DifficultyRequest = serde_json::from_value(
+                payload.get("difficulty").cloned().unwrap_or(Value::Null),
+            )
+            .map_err(|e| CoreError::InvalidRequest(e.to_string()))?;
+            let backup = payload
+                .get("backup")
+                .and_then(Value::as_bool)
+                .unwrap_or(true);
+            let codec_backend = payload
+                .get("binaryHost")
+                .map(binary_host_backend_from_config)
+                .transpose()?;
+            let codec_backend = codec_backend
+                .as_ref()
+                .map(|backend| backend as &dyn codec_backend::CodecBackend);
+            let targets = payload.get("targets").cloned().unwrap_or(Value::Null);
+            Ok(write_difficulty_internal(
+                &req,
+                &targets,
+                backup,
+                codec_backend,
+            )?)
+        }
         other => Err(CoreError::InvalidRequest(format!(
             "unknown command {other:?}"
         ))),
@@ -6584,6 +6608,151 @@ fn replace_public_fstring(
 /// (`SaveGamePublicData`), leaving the compressed private stream and trailer
 /// untouched. The private payload is updated separately via the
 /// `private.difficulty.set` edit kind.
+/// One save or profile file the difficulty write will touch, captured up front
+/// so backups, staging, and the atomic replace operate on already-validated
+/// bytes — never on a partially-edited buffer.
+struct DifficultyWritePlan {
+    path: PathBuf,
+    original: Vec<u8>,
+    edited: Vec<u8>,
+}
+
+/// Orchestrate a difficulty write across any combination of save slots and a
+/// PersistentDataList profile, mirroring `write_save_internal`'s
+/// edit -> validate -> backup -> stage -> atomic-replace pipeline so a failure
+/// at any step leaves every target untouched.
+fn write_difficulty_internal(
+    req: &DifficultyRequest,
+    targets: &Value,
+    backup: bool,
+    codec_backend: Option<&dyn codec_backend::CodecBackend>,
+) -> Result<Value, CoreError> {
+    let mut plans: Vec<DifficultyWritePlan> = Vec::new();
+
+    if let Some(saves) = targets.get("saves").and_then(Value::as_array) {
+        for save in saves {
+            let path = PathBuf::from(save.as_str().ok_or_else(|| {
+                CoreError::InvalidRequest("targets.saves entries must be strings".to_string())
+            })?);
+            let original = fs::read(&path)?;
+            // Edit the PUBLIC payload first, then route the PRIVATE difficulty
+            // edit through the same codec-backed path write_save uses. The
+            // private edit REQUIRES a codec backend; apply_private_edits errors
+            // with a clear message if none is configured.
+            let public_done = write_difficulty_into_save_public(&original, req)?;
+            let edit = Edit {
+                path: "private.difficulty.set".to_string(),
+                value: serde_json::to_value(req)
+                    .map_err(|e| CoreError::InvalidRequest(e.to_string()))?,
+            };
+            let edited = apply_private_edits(&public_done, &[&edit], codec_backend)?;
+            // Validate exactly as write_save_internal does: parse the edited
+            // bytes, and for GSAV confirm a byte-identical rebuild so the
+            // compressed stream / trailer were preserved.
+            inspect_bytes(&edited, None, false)?;
+            if edited.starts_with(b"GSAV") {
+                let rebuilt = rebuild_gsav_preserving_stream(&edited)?;
+                if rebuilt != edited {
+                    return Err(CoreError::Validation(
+                        "edited GSAV does not rebuild byte-identically".to_string(),
+                    ));
+                }
+            }
+            plans.push(DifficultyWritePlan {
+                path,
+                original,
+                edited,
+            });
+        }
+    }
+
+    if let Some(profile) = targets.get("profile").filter(|v| !v.is_null()) {
+        let path = PathBuf::from(profile.get("path").and_then(Value::as_str).ok_or_else(|| {
+            CoreError::InvalidRequest("targets.profile.path is required".to_string())
+        })?);
+        let profile_id = profile
+            .get("profileId")
+            .and_then(Value::as_i64)
+            .ok_or_else(|| {
+                CoreError::InvalidRequest("targets.profile.profileId is required".to_string())
+            })? as i32;
+        let original = fs::read(&path)?;
+        let mut edited = original.clone();
+        write_profile_difficulty(&mut edited, profile_id, req)?;
+        plans.push(DifficultyWritePlan {
+            path,
+            original,
+            edited,
+        });
+    }
+
+    if plans.is_empty() {
+        return Err(CoreError::InvalidRequest(
+            "write_difficulty requires at least one target".to_string(),
+        ));
+    }
+
+    // Only touch files whose bytes actually changed; an unchanged target needs
+    // no backup, no staging, and no replace.
+    let changed: Vec<&DifficultyWritePlan> =
+        plans.iter().filter(|p| p.original != p.edited).collect();
+
+    // Back up every changed target under ONE shared suffix BEFORE writing
+    // anything, so a restore can pair save + profile by suffix.
+    if backup {
+        let paths: Vec<&Path> = changed.iter().map(|p| p.path.as_path()).collect();
+        if !paths.is_empty() {
+            let suffix = shared_backup_suffix(&paths);
+            for p in &changed {
+                create_backup_with_suffix(&p.path, &suffix)?;
+            }
+        }
+    }
+
+    // Stage every edited buffer to a tmp file and validate it on disk before
+    // any target is replaced.
+    let mut tmps: Vec<(PathBuf, PathBuf)> = Vec::new();
+    for p in &changed {
+        let tmp = p.path.with_extension("sav.tmp-goresave");
+        fs::write(&tmp, &p.edited)?;
+        inspect_save(&tmp, false)?;
+        tmps.push((p.path.clone(), tmp));
+    }
+
+    // Atomic replace: begin each (move-aside + rename-in). If any begin_replace
+    // fails, roll back the ones already begun so no target is left swapped.
+    // Mirrors write_save_internal's PendingReplace ownership: commit/rollback
+    // each consume the value, so we collect by value and drain.
+    let mut committed: Vec<PendingReplace> = Vec::new();
+    for (target, tmp) in &tmps {
+        match begin_replace(target, tmp) {
+            Ok(pending) => committed.push(pending),
+            Err(err) => {
+                for pending in committed {
+                    pending.rollback();
+                }
+                return Err(err);
+            }
+        }
+    }
+    for pending in committed {
+        pending.commit();
+    }
+
+    // The bytes on disk changed; drop any cached decoded payloads.
+    for (target, _) in &tmps {
+        invalidate_decoded_payload_cache(target);
+    }
+
+    Ok(json!({
+        "targetsWritten": changed.len(),
+        "paths": changed
+            .iter()
+            .map(|p| p.path.display().to_string())
+            .collect::<Vec<_>>(),
+    }))
+}
+
 fn write_difficulty_into_save_public(
     data: &[u8],
     req: &DifficultyRequest,
@@ -6963,6 +7132,209 @@ mod tests {
         let d = difficulty_for_gsav_bytes(&out).unwrap();
         assert_eq!(d.preset.as_deref(), Some("DifficultyPreset_Easy"));
         assert_eq!(d.permadeath, Some(false)); // Novice forces off
+    }
+
+    /// Build a private payload that carries an editable `m_difficultyPreset`
+    /// ClassProperty plus an `m_PermanentDeath` BoolProperty, so the
+    /// `private.difficulty.set` edit (which reuses `apply_save_difficulty`) has
+    /// something to splice.
+    fn difficulty_private_payload() -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(&fstring("m_difficultyPreset"));
+        out.extend_from_slice(&fstring("ClassProperty"));
+        out.extend_from_slice(&[0u8; 4]);
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.push(0);
+        out.extend_from_slice(&fstring("/Script/Angelscript.DifficultyPreset_Custom"));
+        out.extend_from_slice(&fstring("m_PermanentDeath"));
+        out.extend_from_slice(&fstring("BoolProperty"));
+        out.extend_from_slice(&[0u8; 8]);
+        out.push(1);
+        out.extend_from_slice(&fstring("None"));
+        out
+    }
+
+    /// Build a public payload that carries an editable `m_difficultyPreset`
+    /// ClassProperty plus `m_PermanentDeath`, so `write_difficulty_into_save_public`
+    /// can splice it.
+    fn difficulty_public_payload() -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(&fstring("m_difficultyPreset"));
+        out.extend_from_slice(&fstring("ClassProperty"));
+        out.extend_from_slice(&[0u8; 4]);
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.push(0);
+        out.extend_from_slice(&fstring("/Script/Angelscript.DifficultyPreset_Custom"));
+        out.extend_from_slice(&fstring("m_PermanentDeath"));
+        out.extend_from_slice(&fstring("BoolProperty"));
+        out.extend_from_slice(&[0u8; 8]);
+        out.push(1);
+        out.extend_from_slice(&fstring("None"));
+        out
+    }
+
+    /// Build a 2-profile PersistentDataList.sav buffer (profile 0 = Custom,
+    /// profile 1 = Easy), mirroring the buffer used by
+    /// `write_profile_difficulty_targets_only_the_named_profile`.
+    fn difficulty_persistent_profiles() -> Vec<u8> {
+        let mut data = b"GVAS".to_vec();
+        data.extend_from_slice(&fstring("m_Profiles"));
+        for (id, preset) in [(0i32, "DifficultyPreset_Custom"), (1i32, "DifficultyPreset_Easy")] {
+            data.extend_from_slice(&fstring("m_ProfileName"));
+            data.extend_from_slice(&fstring("m_ProfileId"));
+            data.extend_from_slice(&fstring("IntProperty"));
+            data.extend_from_slice(&[0u8; 4]);
+            data.extend_from_slice(&4u32.to_le_bytes());
+            data.push(0);
+            data.extend_from_slice(&id.to_le_bytes());
+            data.extend_from_slice(&fstring("m_difficultyPreset"));
+            data.extend_from_slice(&fstring("ClassProperty"));
+            data.extend_from_slice(&[0u8; 4]);
+            data.extend_from_slice(&0u32.to_le_bytes());
+            data.push(0);
+            data.extend_from_slice(&fstring(&format!("/Script/Angelscript.{preset}")));
+        }
+        data.extend_from_slice(&fstring("SavedDataVersion"));
+        data
+    }
+
+    #[test]
+    fn write_difficulty_internal_writes_save_and_profile_under_one_backup_suffix() {
+        let dir = tempdir().unwrap();
+        let save_path = dir.path().join("G1R-001.sav");
+        let profile_path = dir.path().join("PersistentDataList.sav");
+
+        // Save: public difficulty + a private difficulty payload behind the
+        // test codec backend.
+        let private_payload = difficulty_private_payload();
+        let seed_compressed = b"seed-compressed".to_vec();
+        let stream = compressed_stream_with_one_chunk(&seed_compressed, private_payload.len());
+        fs::write(
+            &save_path,
+            build_gsav(2, &difficulty_public_payload(), &stream, &[0, 0, 0, 0]),
+        )
+        .unwrap();
+        let backend = PrefixCodecBackend {
+            seed_compressed,
+            seed_uncompressed: private_payload,
+        };
+
+        // Profile target: 2-profile PersistentDataList, editing only profile 1.
+        fs::write(&profile_path, difficulty_persistent_profiles()).unwrap();
+
+        let req = DifficultyRequest {
+            preset: "Hard".into(),
+            combat: None,
+            resources: None,
+            progression: None,
+            flow_helper: None,
+            permadeath: None,
+        };
+        let targets = json!({
+            "saves": [save_path.display().to_string()],
+            "profile": { "path": profile_path.display().to_string(), "profileId": 1 },
+        });
+
+        let response =
+            write_difficulty_internal(&req, &targets, true, Some(&backend)).unwrap();
+        assert_eq!(response["targetsWritten"], 2);
+
+        // The save's PUBLIC payload now reports Hard (re-read + parse).
+        let written_save = fs::read(&save_path).unwrap();
+        let d = difficulty_for_gsav_bytes(&written_save).unwrap();
+        assert_eq!(d.preset.as_deref(), Some("DifficultyPreset_Hard"));
+
+        // The save's PRIVATE payload was also edited to Hard.
+        let parts = split_gsav(&written_save).unwrap();
+        let written_stream =
+            parse_compressed_stream(&written_save, 13 + parts.public_payload.len()).unwrap();
+        let decoded =
+            decompress_private_payload(&written_save, &written_stream, &backend).unwrap();
+        let private_refs = scan_fstrings(&decoded, 0);
+        assert_eq!(
+            value_after_property_in_range(
+                &private_refs,
+                0,
+                private_refs.len(),
+                "m_difficultyPreset"
+            )
+            .as_deref(),
+            Some("/Script/Angelscript.DifficultyPreset_Hard"),
+        );
+
+        // Profile 1 became Hard; profile 0 (Custom) was left untouched.
+        let written_profile = fs::read(&profile_path).unwrap();
+        let presets: Vec<_> = scan_fstrings(&written_profile, 0)
+            .into_iter()
+            .filter(|r| r.value.contains("DifficultyPreset_"))
+            .map(|r| r.value)
+            .collect();
+        assert!(presets.iter().any(|p| p.ends_with("DifficultyPreset_Custom")));
+        assert!(presets.iter().any(|p| p.ends_with("DifficultyPreset_Hard")));
+        assert!(!presets.iter().any(|p| p.ends_with("DifficultyPreset_Easy")));
+
+        // Both targets were backed up under ONE shared suffix.
+        let backups = dir.path().join("goresave_backups");
+        let mut save_suffix = None;
+        let mut profile_suffix = None;
+        for entry in fs::read_dir(&backups).unwrap() {
+            let name = entry.unwrap().file_name().to_string_lossy().into_owned();
+            if let Some(rest) = name.strip_prefix("G1R-001.sav.bak.") {
+                save_suffix = Some(rest.to_string());
+            } else if let Some(rest) = name.strip_prefix("PersistentDataList.sav.bak.") {
+                profile_suffix = Some(rest.to_string());
+            }
+        }
+        let save_suffix = save_suffix.expect("save backup created");
+        let profile_suffix = profile_suffix.expect("profile backup created");
+        assert_eq!(save_suffix, profile_suffix, "shared backup suffix");
+    }
+
+    #[test]
+    fn write_difficulty_internal_requires_at_least_one_target() {
+        let req = DifficultyRequest {
+            preset: "Hard".into(),
+            combat: None,
+            resources: None,
+            progression: None,
+            flow_helper: None,
+            permadeath: None,
+        };
+        let err = write_difficulty_internal(&req, &json!({}), false, None).unwrap_err();
+        assert!(matches!(err, CoreError::InvalidRequest(_)));
+    }
+
+    #[test]
+    fn write_difficulty_internal_profile_only_needs_no_codec() {
+        let dir = tempdir().unwrap();
+        let profile_path = dir.path().join("PersistentDataList.sav");
+        fs::write(&profile_path, difficulty_persistent_profiles()).unwrap();
+
+        let req = DifficultyRequest {
+            preset: "Hard".into(),
+            combat: None,
+            resources: None,
+            progression: None,
+            flow_helper: None,
+            permadeath: None,
+        };
+        let targets = json!({
+            "profile": { "path": profile_path.display().to_string(), "profileId": 1 },
+        });
+
+        // No codec backend supplied: the profile-only path must not require one.
+        let response = write_difficulty_internal(&req, &targets, true, None).unwrap();
+        assert_eq!(response["targetsWritten"], 1);
+
+        let written = fs::read(&profile_path).unwrap();
+        let presets: Vec<_> = scan_fstrings(&written, 0)
+            .into_iter()
+            .filter(|r| r.value.contains("DifficultyPreset_"))
+            .map(|r| r.value)
+            .collect();
+        assert!(presets.iter().any(|p| p.ends_with("DifficultyPreset_Hard")));
+        assert!(!presets.iter().any(|p| p.ends_with("DifficultyPreset_Easy")));
+        assert!(dir.path().join("goresave_backups").exists());
     }
 
     #[test]
