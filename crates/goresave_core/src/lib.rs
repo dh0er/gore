@@ -2461,20 +2461,68 @@ fn parse_profile_file(data: &[u8]) -> Result<properties::RootObject, CoreError> 
     };
     let limit = data.len().min(8192);
     for off in 0..limit {
+        // Object framing (class + flag + props + footer): read_object reads the
+        // class FString AT `off`, so the candidate start is self-validated.
         if let Ok(root) = properties::parse_private_root_at(data, off) {
             if is_profile_root(&root) {
                 return Ok(root);
             }
         }
-        if let Ok(root) = properties::parse_property_list_root_at(data, off) {
-            if is_profile_root(&root) {
-                return Ok(root);
+        // Bare-list framing: the property list follows the header's save-game
+        // class name directly. Require a valid class-name FString to end exactly
+        // at `off` so the skipped prefix is a real header — not arbitrary or
+        // truncated bytes the scan would otherwise accept by starting the parse
+        // straight at `m_Profiles` and treating a corrupt prefix as the header.
+        if class_name_fstring_ends_at(data, off) {
+            if let Ok(root) = properties::parse_property_list_root_at(data, off) {
+                if is_profile_root(&root) {
+                    return Ok(root);
+                }
             }
         }
     }
     Err(CoreError::Parse(
         "could not locate the GVAS save object in the file".into(),
     ))
+}
+
+/// True when a valid ASCII FString — the save-game class name that terminates a
+/// GVAS header — ends exactly at byte `off`. Used to confirm the bytes skipped
+/// before a bare property-list parse are a real header tail rather than
+/// arbitrary data the offset scan happened to skip over.
+fn class_name_fstring_ends_at(data: &[u8], off: usize) -> bool {
+    // FString layout: i32 length (INCLUDING the trailing NUL) + bytes. Search a
+    // bounded window for a length prefix `s` whose string terminates at `off`.
+    for content_len in 2..=512usize {
+        let total = 4 + content_len;
+        if total > off {
+            break;
+        }
+        let s = off - total;
+        // Keep the prefix after the 4-byte GVAS magic.
+        if s < 4 {
+            continue;
+        }
+        let declared = i32::from_le_bytes(match data[s..s + 4].try_into() {
+            Ok(bytes) => bytes,
+            Err(_) => continue,
+        });
+        if declared <= 0 || declared as usize != content_len {
+            continue;
+        }
+        let content = &data[s + 4..off];
+        if *content.last().unwrap() != 0 {
+            continue;
+        }
+        // A class name is a printable path (e.g. "/Script/G1R.PersistentDataList").
+        if content[..content_len - 1]
+            .iter()
+            .all(|&b| b.is_ascii_graphic() || b == b' ')
+        {
+            return true;
+        }
+    }
+    false
 }
 
 fn write_profile_difficulty(
@@ -7214,13 +7262,16 @@ mod tests {
     }
 
     /// Build a 2-profile PersistentDataList.sav in the STANDARD GVAS save-game
-    /// shape: a variable-length header (whose class name we stand in for with
-    /// filler) followed DIRECTLY by the property list terminated by `None` — no
+    /// shape: a variable-length header ending with the save-game class name
+    /// FString, followed DIRECTLY by the property list terminated by `None` — no
     /// nested `class`/flag object framing and no footer. This is the layout the
     /// object-only probe used to hard-fail on.
     fn difficulty_persistent_profiles_bare() -> Vec<u8> {
         let mut data = b"GVAS".to_vec();
-        data.extend_from_slice(&[0u8; 24]); // opaque header filler (stands in for class name)
+        data.extend_from_slice(&[0u8; 24]); // opaque version/custom-version filler
+        // The header ends with the save-game class name FString, directly before
+        // the property list — what class_name_fstring_ends_at validates.
+        data.extend_from_slice(&fstring("/Script/G1R.PersistentDataList"));
         data.extend_from_slice(&persistent_profiles_property_block());
         data.extend_from_slice(&fstring("None")); // property-list terminator, then EOF
         data
@@ -7296,6 +7347,32 @@ mod tests {
         assert!(
             parse_profile_file(&data).is_err(),
             "a terminator-only file has no m_Profiles and must be rejected",
+        );
+    }
+
+    #[test]
+    fn parse_profile_file_rejects_corrupt_header_prefix() {
+        // The property list (with m_Profiles) parses to EOF, but the prefix is
+        // not a valid GVAS header — no class-name FString ends at the list start.
+        // The scan must NOT accept it by treating the garbage prefix as a header.
+        let mut data = b"GVAS".to_vec();
+        data.extend_from_slice(&[0xFFu8; 20]); // garbage where a header would be
+        data.extend_from_slice(&persistent_profiles_property_block());
+        data.extend_from_slice(&fstring("None"));
+
+        // Sanity: the property list itself parses-and-consumes from its start,
+        // so the class-name-prefix check (not a parse failure) is what rejects it.
+        let list_off = 4 + 20;
+        assert!(
+            properties::parse_property_list_root_at(&data, list_off)
+                .map(|r| r.consumed == data.len()
+                    && r.properties.iter().any(|p| p.name == "m_Profiles"))
+                .unwrap_or(false),
+            "precondition: the property list parses to EOF from its start",
+        );
+        assert!(
+            parse_profile_file(&data).is_err(),
+            "a corrupt (non-header) prefix must be rejected",
         );
     }
 
