@@ -191,6 +191,12 @@ class _DifficultyDialogState extends State<DifficultyDialog> {
   late String _combat;
   late String _resources;
   late String _progression;
+  // Whether each Custom sub-level has a concrete value to write. False when the
+  // stored class is unrecognised and the user has not picked one — then it is
+  // omitted from the save so the stored (unknown) sub-setting is preserved.
+  late bool _combatSet;
+  late bool _resourcesSet;
+  late bool _progressionSet;
   bool _saving = false;
 
   /// The last write error, surfaced INSIDE the dialog. The workspace error
@@ -210,17 +216,25 @@ class _DifficultyDialogState extends State<DifficultyDialog> {
     _combat = _normalizeLevel(stored.combatLabel, _preset);
     _resources = _normalizeLevel(stored.resourcesLabel, _preset);
     _progression = _normalizeLevel(stored.progressionLabel, _preset);
+    // A sub-level is "set" only when the stored class maps to a known level;
+    // an unrecognised class stays unset (omitted on save) until the user picks.
+    _combatSet = _levels.contains(stored.combatLabel);
+    _resourcesSet = _levels.contains(stored.resourcesLabel);
+    _progressionSet = _levels.contains(stored.progressionLabel);
   }
 
-  /// The level a picker should DISPLAY: the draft value on Custom (pickers
-  /// editable), otherwise the level the preset implies (pickers locked).
-  String _displayedLevel(String field) {
+  /// The level a picker should DISPLAY, or null to show no selection: the draft
+  /// value on Custom (pickers editable), otherwise the level the preset implies
+  /// (pickers locked). Null only when Custom and the field is unset (the stored
+  /// class is unrecognised and the user has not picked one yet).
+  String? _displayedLevel(String field) {
     if (_preset != 'Custom') return _impliedLevelForPreset(_preset);
-    return switch (field) {
-      'combat' => _combat,
-      'resources' => _resources,
-      _ => _progression,
+    final (value, isSet) = switch (field) {
+      'combat' => (_combat, _combatSet),
+      'resources' => (_resources, _resourcesSet),
+      _ => (_progression, _progressionSet),
     };
+    return isSet ? value : null;
   }
 
   void _selectPreset(String preset) {
@@ -234,6 +248,11 @@ class _DifficultyDialogState extends State<DifficultyDialog> {
         _combat = implied;
         _resources = implied;
         _progression = implied;
+        // The sub-levels are now concrete (the preset's implied level), so a
+        // later switch back to Custom starts from known values.
+        _combatSet = true;
+        _resourcesSet = true;
+        _progressionSet = true;
       }
     });
   }
@@ -245,9 +264,11 @@ class _DifficultyDialogState extends State<DifficultyDialog> {
       // and the user did not pick one): the core then leaves the preset and
       // sub-settings as stored and writes only the bool toggles below.
       if (known) 'preset': _preset,
-      if (_preset == 'Custom') 'combat': _combat,
-      if (_preset == 'Custom') 'resources': _resources,
-      if (_preset == 'Custom') 'progression': _progression,
+      // Only send a Custom sub-level that is actually set; omitting one leaves
+      // the stored (possibly unrecognised) sub-setting untouched.
+      if (_preset == 'Custom' && _combatSet) 'combat': _combat,
+      if (_preset == 'Custom' && _resourcesSet) 'resources': _resources,
+      if (_preset == 'Custom' && _progressionSet) 'progression': _progression,
       'flowHelper': _flow,
       'permadeath': _perma,
     };
@@ -354,21 +375,30 @@ class _DifficultyDialogState extends State<DifficultyDialog> {
                 label: 'Combat',
                 value: _displayedLevel('combat'),
                 enabled: levelsEnabled,
-                onChanged: (v) => setState(() => _combat = v),
+                onChanged: (v) => setState(() {
+                  _combat = v;
+                  _combatSet = true;
+                }),
               ),
               const SizedBox(height: 8),
               _LevelPicker(
                 label: 'Resources',
                 value: _displayedLevel('resources'),
                 enabled: levelsEnabled,
-                onChanged: (v) => setState(() => _resources = v),
+                onChanged: (v) => setState(() {
+                  _resources = v;
+                  _resourcesSet = true;
+                }),
               ),
               const SizedBox(height: 8),
               _LevelPicker(
                 label: 'Progression',
                 value: _displayedLevel('progression'),
                 enabled: levelsEnabled,
-                onChanged: (v) => setState(() => _progression = v),
+                onChanged: (v) => setState(() {
+                  _progression = v;
+                  _progressionSet = true;
+                }),
               ),
               const SizedBox(height: 16),
               Container(
@@ -449,8 +479,9 @@ class _DifficultyDialogState extends State<DifficultyDialog> {
   }
 }
 
-/// One labelled Novice/Gothic/Hard segmented picker. Disabled state reflects
-/// the value but ignores taps.
+/// One labelled Novice/Gothic/Hard segmented picker. A null [value] shows no
+/// selection (an unrecognised, unpicked Custom sub-level). Disabled state
+/// reflects the value but ignores taps.
 class _LevelPicker extends StatelessWidget {
   const _LevelPicker({
     required this.label,
@@ -460,7 +491,7 @@ class _LevelPicker extends StatelessWidget {
   });
 
   final String label;
-  final String value;
+  final String? value;
   final bool enabled;
   final ValueChanged<String> onChanged;
 
@@ -479,7 +510,8 @@ class _LevelPicker extends StatelessWidget {
               for (final level in _levels)
                 ButtonSegment<String>(value: level, label: Text(level)),
             ],
-            selected: {value},
+            emptySelectionAllowed: value == null,
+            selected: value == null ? const <String>{} : {value!},
             showSelectedIcon: false,
             onSelectionChanged:
                 enabled ? (selection) => onChanged(selection.first) : null,

@@ -2294,37 +2294,58 @@ impl DifficultyRequest {
     /// Resolved short class names (no package prefix). Empty when no `preset` was
     /// requested — a bool-only edit leaves the preset/sub-setting asset paths
     /// exactly as stored.
+    ///
+    /// For Custom, each sub-setting is rewritten ONLY when the request supplies
+    /// it; an omitted Custom sub-level leaves the stored class untouched (so an
+    /// unrecognised stored sub-setting is preserved on a bool-only or
+    /// partial-Custom save). For Novice/Gothic/Hard, all three sub-settings are
+    /// mirrored to the preset level (the in-game behaviour).
     fn class_edits(&self) -> Result<Vec<(&'static str, String)>, CoreError> {
         let Some(preset_label) = self.preset.as_deref() else {
             return Ok(Vec::new());
         };
-        let preset = if preset_label == "Custom" {
-            "DifficultyPreset_Custom".to_string()
-        } else {
-            format!("DifficultyPreset_{}", level_suffix(preset_label)?)
-        };
-        let lvl = |explicit: &Option<String>| -> Result<&'static str, CoreError> {
-            if preset_label == "Custom" {
-                level_suffix(explicit.as_deref().unwrap_or("Gothic"))
-            } else {
-                level_suffix(preset_label)
+        if preset_label == "Custom" {
+            let mut edits = vec![(
+                "m_difficultyPreset",
+                "DifficultyPreset_Custom".to_string(),
+            )];
+            if let Some(combat) = &self.combat {
+                edits.push((
+                    "m_customCombatSettings",
+                    format!("CombatDifficultySettings_{}", level_suffix(combat)?),
+                ));
             }
-        };
-        Ok(vec![
-            ("m_difficultyPreset", preset),
-            (
-                "m_customCombatSettings",
-                format!("CombatDifficultySettings_{}", lvl(&self.combat)?),
-            ),
-            (
-                "m_customResourcesSettings",
-                format!("ResourcesDifficultySettings_{}", lvl(&self.resources)?),
-            ),
-            (
-                "m_customProgressionSettings",
-                format!("ProgressionDifficultySettings_{}", lvl(&self.progression)?),
-            ),
-        ])
+            if let Some(resources) = &self.resources {
+                edits.push((
+                    "m_customResourcesSettings",
+                    format!("ResourcesDifficultySettings_{}", level_suffix(resources)?),
+                ));
+            }
+            if let Some(progression) = &self.progression {
+                edits.push((
+                    "m_customProgressionSettings",
+                    format!("ProgressionDifficultySettings_{}", level_suffix(progression)?),
+                ));
+            }
+            Ok(edits)
+        } else {
+            let suffix = level_suffix(preset_label)?;
+            Ok(vec![
+                ("m_difficultyPreset", format!("DifficultyPreset_{suffix}")),
+                (
+                    "m_customCombatSettings",
+                    format!("CombatDifficultySettings_{suffix}"),
+                ),
+                (
+                    "m_customResourcesSettings",
+                    format!("ResourcesDifficultySettings_{suffix}"),
+                ),
+                (
+                    "m_customProgressionSettings",
+                    format!("ProgressionDifficultySettings_{suffix}"),
+                ),
+            ])
+        }
     }
 
     /// Permadeath is locked off for Novice. With no preset requested the stored
@@ -7449,6 +7470,59 @@ mod tests {
         let flowv =
             properties::resolve(&root.properties, &properties::parse_path(&flow).unwrap()).unwrap();
         assert_eq!(flowv.value, properties::PropertyValue::Bool(true));
+    }
+
+    #[test]
+    fn write_profile_difficulty_custom_preserves_omitted_sub_levels() {
+        // A Custom request that supplies only `resources` must rewrite ONLY the
+        // resources sub-setting and leave combat/progression as stored — so an
+        // unrecognised stored Custom sub-setting survives a partial edit.
+        let mut data = difficulty_persistent_profiles(); // profile 0 = Custom
+        let combat_before = {
+            let root = parse_profile_file(&data).unwrap();
+            let path = profile_difficulty_path(&root, 0, "m_customCombatSettings")
+                .unwrap()
+                .unwrap();
+            properties::resolve(&root.properties, &properties::parse_path(&path).unwrap())
+                .unwrap()
+                .value
+                .clone()
+        };
+
+        let req = DifficultyRequest {
+            preset: Some("Custom".into()),
+            combat: None,
+            resources: Some("Novice".into()),
+            progression: None,
+            flow_helper: None,
+            permadeath: None,
+        };
+        write_profile_difficulty(&mut data, 0, &req).unwrap();
+
+        let root = parse_profile_file(&data).unwrap();
+        assert_eq!(root.consumed, data.len());
+        // resources was rewritten to Easy.
+        let r = profile_difficulty_path(&root, 0, "m_customResourcesSettings")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            properties::resolve(&root.properties, &properties::parse_path(&r).unwrap())
+                .unwrap()
+                .value,
+            properties::PropertyValue::Object(
+                "/Script/Angelscript.ResourcesDifficultySettings_Easy".into()
+            ),
+        );
+        // combat is untouched (omitted from the request).
+        let c = profile_difficulty_path(&root, 0, "m_customCombatSettings")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            properties::resolve(&root.properties, &properties::parse_path(&c).unwrap())
+                .unwrap()
+                .value,
+            combat_before,
+        );
     }
 
     #[test]
