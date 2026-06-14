@@ -779,7 +779,8 @@ class BackupEntry {
   final String? playerSaveName;
   final String? slotName;
 
-  bool get canRestore => scope == 'save' && status == 'ok';
+  bool get canRestore =>
+      (scope == 'save' || scope == 'persistent_data_list') && status == 'ok';
 }
 
 class CodecStatus {

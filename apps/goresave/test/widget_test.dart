@@ -345,10 +345,24 @@ void main() {
     expect(find.text('Companion backups'), findsOneWidget);
     expect(find.text('PersistentDataList.sav.bak.250'), findsOneWidget);
     expect(find.text('Before companion edit'), findsOneWidget);
+    // Companion (PersistentDataList.sav) backups are restorable: restoring one
+    // targets PersistentDataList.sav in the save folder, not the selected slot.
     expect(
       find.byTooltip('Restore PersistentDataList.sav.bak.250'),
-      findsNothing,
+      findsOneWidget,
     );
+    await tester.tap(
+      find.byTooltip('Restore PersistentDataList.sav.bak.250'),
+      warnIfMissed: false,
+    );
+    await tester.pumpAndSettle();
+    final companionRestore = core.requests.lastWhere(
+      (r) => r.command == 'restore_backup',
+    );
+    expect(companionRestore.payload, {
+      'path': r'C:\tmp\saves\PersistentDataList.sav',
+      'backupPath': r'C:\tmp\saves\PersistentDataList.sav.bak.250',
+    });
   });
 
   testWidgets('switching tabs preserves unsaved edit and Save count', (

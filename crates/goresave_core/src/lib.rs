@@ -1530,6 +1530,12 @@ fn prepare_paired_persistent_data_list_restore(
     save_path: &Path,
     slot_backup_path: &Path,
 ) -> Result<Option<CompanionRestorePlan>, CoreError> {
+    // When the restore target IS PersistentDataList.sav (restoring a profile
+    // difficulty backup directly), there is no separate companion: pairing here
+    // would treat the file as its own companion and try to replace it twice.
+    if save_path.file_name().and_then(|n| n.to_str()) == Some("PersistentDataList.sav") {
+        return Ok(None);
+    }
     let Some(parent) = save_path.parent() else {
         return Ok(None);
     };
@@ -8484,6 +8490,59 @@ mod tests {
             inspect_save(&current_backup, false).unwrap()["public"]["playerSaveName"],
             "Live"
         );
+    }
+
+    #[test]
+    fn restore_backup_restores_persistent_data_list_profile_backup_directly() {
+        // A profile difficulty write backs up only PersistentDataList.sav.
+        // Restoring that companion backup must target the PDL itself and must
+        // NOT self-pair (treating the file as its own companion would replace
+        // it twice). The file rolls back to the backup content.
+        let dir = tempdir().unwrap();
+        let pdl = dir.path().join("PersistentDataList.sav");
+        let subfolder = dir.path().join("goresave_backups");
+        fs::create_dir_all(&subfolder).unwrap();
+        let backup = subfolder.join("PersistentDataList.sav.bak.200");
+
+        let backup_data = difficulty_persistent_profiles(); // profile 1 = Easy
+        let mut live = backup_data.clone();
+        write_profile_difficulty(
+            &mut live,
+            1,
+            &DifficultyRequest {
+                preset: Some("Hard".into()),
+                combat: None,
+                resources: None,
+                progression: None,
+                flow_helper: None,
+                permadeath: None,
+            },
+        )
+        .unwrap();
+        fs::write(&pdl, &live).unwrap();
+        fs::write(&backup, &backup_data).unwrap();
+        assert_ne!(live, backup_data, "fixture precondition: live differs");
+
+        let response = execute_json(
+            &json!({
+                "command": "restore_backup",
+                "payload": {"path": pdl, "backupPath": backup}
+            })
+            .to_string(),
+        );
+        let value: Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(value["ok"], true, "restore failed: {value:?}");
+
+        // The PDL rolled back to the backup: profile 1 is Easy again, no Hard.
+        let restored = fs::read(&pdl).unwrap();
+        assert_eq!(restored, backup_data);
+        let presets: Vec<_> = scan_fstrings(&restored, 0)
+            .into_iter()
+            .filter(|r| r.value.contains("DifficultyPreset_"))
+            .map(|r| r.value)
+            .collect();
+        assert!(presets.iter().any(|p| p.ends_with("DifficultyPreset_Easy")));
+        assert!(!presets.iter().any(|p| p.ends_with("DifficultyPreset_Hard")));
     }
 
     #[test]

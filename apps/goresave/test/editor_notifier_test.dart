@@ -160,7 +160,8 @@ void main() {
         notifier.state.companionBackups.single.fileName,
         'PersistentDataList.sav.bak.250',
       );
-      expect(notifier.state.companionBackups.single.canRestore, isFalse);
+      // Companion (PersistentDataList.sav) backups are restorable directly.
+      expect(notifier.state.companionBackups.single.canRestore, isTrue);
     },
   );
 

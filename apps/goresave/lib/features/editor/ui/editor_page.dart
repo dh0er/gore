@@ -3263,8 +3263,8 @@ class _BackupsPanel extends StatelessWidget {
             (backup) => _BackupCard(
               backup: backup,
               isLoading: state.isLoading,
-              showRestoreAction: false,
-              onRestore: () {},
+              showRestoreAction: true,
+              onRestore: () => notifier.restoreCompanionBackup(backup.path),
             ),
           ),
         ],

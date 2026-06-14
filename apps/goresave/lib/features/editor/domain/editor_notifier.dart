@@ -869,8 +869,30 @@ class EditorNotifier extends StateNotifier<EditorState> {
     }
   }
 
-  Future<void> restoreBackup(String backupPath) async {
-    final path = state.selectedPath;
+  /// Restore the profile's `PersistentDataList.sav` from one of its companion
+  /// backups (e.g. one created by a profile difficulty write). Targets the
+  /// PersistentDataList.sav that sits alongside the selected save (the same
+  /// directory the slot lives in), not the selected slot itself.
+  Future<void> restoreCompanionBackup(String backupPath) async {
+    final selected = state.selectedPath;
+    if (selected == null) return;
+    // The save paths carry the on-disk style of the save folder (Windows-style
+    // even on a POSIX host), so pick a matching path Context — p.dirname on a
+    // POSIX host would otherwise collapse a `C:\...` path to '.'.
+    final isWindowsStyle =
+        selected.contains('\\') || RegExp(r'^[A-Za-z]:').hasMatch(selected);
+    final ctx = isWindowsStyle ? p.Context(style: p.Style.windows) : p.posix;
+    await restoreBackup(
+      backupPath,
+      targetPath: ctx.join(ctx.dirname(selected), 'PersistentDataList.sav'),
+    );
+  }
+
+  /// Restore a backup. [targetPath] overrides the file to restore (used for
+  /// companion `PersistentDataList.sav` backups); it defaults to the selected
+  /// slot.
+  Future<void> restoreBackup(String backupPath, {String? targetPath}) async {
+    final path = targetPath ?? state.selectedPath;
     if (path == null) return;
     await _withLoading(() async {
       final response = await _execute(
