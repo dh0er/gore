@@ -1,4 +1,4 @@
-# Profil tab — view + edit profile difficulty
+# Difficulty editor tab — per-save, with optional profile / all-saves propagation
 
 Date: 2026-06-14
 Status: Design approved by user (pending spec review)
@@ -6,51 +6,58 @@ Status: Design approved by user (pending spec review)
 ## Problem
 
 The game lets the player choose a difficulty (Novice / Gothic / Hard / Custom) only
-once, at profile creation, and never again. The difficulty actually lives in the
-profile, which the editor already parses read-only (`ProfileSummary`). We want a new
-**"Profil" tab** that displays profile overview data and lets the user edit the
-difficulty settings of an existing profile.
+once, at profile creation, and never again in-game. We want an editor tab to change
+the difficulty of an existing playthrough.
+
+Investigation showed difficulty is **not** profile-only — it is stored in three places:
+
+1. `PersistentDataList.sav` -> `/Script/G1R.ProfileData` (profile level).
+2. Each savegame's **public payload** -> `/Script/G1R.SaveGamePublicData` (uncompressed
+   GVAS, verified at `public_properties` in the inspect output).
+3. Each savegame's **private payload** -> `/Script/G1R.SaveDataPayload` (inside the
+   compressed stream; verified in `work/decompressed/*.bin`).
+
+The savegame's own copy (private payload, driving `DifficultyManagerSubsystem` on load)
+is the authoritative gameplay value. The profile copy is the menu default / display for
+new saves. So **editing only the profile would not change an existing save's
+difficulty** — the edit has to target the savegame itself.
 
 ## Decisions (from brainstorming)
 
-- **Placement:** a new editor tab **"Profil"** at **position 2**, immediately right of
-  Overview (tab index 1). The remaining tabs shift right.
-- **Binding:** the tab is bound to the **effective profile**
-  (`EditorState.activeProfile` / `effectiveProfileId`), NOT to the selected savegame.
-  This is the smart resolution of the cross-save problem: the profile is already
-  resolved app-wide (sidebar profile selector + the current save's profile), so the
-  tab reads that shared state instead of `SaveInspection`. The other 7 tabs stay
-  bound to the selected save; only Profil is profile-scoped.
-- **Edit scope:** difficulty only (full). Profile overview fields (name, id, slot
-  counts, MaxQuick/MaxAuto) are shown **read-only**. Editing those is out of scope v1.
-- **Core write op:** a dedicated command `write_profile_difficulty` targeting
-  `PersistentDataList.sav` (keeps `write_save`'s slot/private logic clean).
+- The editor is **per-save**: a new tab bound to the currently selected savegame
+  (`SaveInspection`), like the other editor tabs. This dissolves the original cross-save
+  concern — the authoritative edit is per-save.
+- Tab **position 2**, immediately right of Overview (index 1); remaining tabs shift
+  right. Working name **"Schwierigkeit"** (shows profile overview read-only as context
+  plus the editable difficulty). Final tab label TBD with user; not blocking.
+- Editing a save writes difficulty into **both** the save's public payload and its
+  private payload (the authoritative copy), so menu display and gameplay stay
+  consistent.
+- **Two opt-in checkboxes**, both default OFF:
+  - *"Auch das Profil aktualisieren"* — also write the difficulty into the profile's
+    `ProfileData` in `PersistentDataList.sav`.
+  - *"Auf ALLE Savegames dieses Profils anwenden"* — also write every other savegame
+    belonging to the same profile.
+- **UI must explain** the three-place storage and what each checkbox does, so the user
+  understands why editing one save does not by itself change others or the profile.
+- **Backups are mandatory** for every file written, under one shared backup suffix, with
+  atomic replace and rollback if any target fails. No partial writes.
+- Edit scope: difficulty only. Profile/save overview fields stay read-only.
 
-## Verified facts (from live PersistentDataList.sav + UE4SS dump)
+## Verified facts
 
-The difficulty fields are `ClassProperty`/`BoolProperty` members of
-`/Script/G1R.ProfileData`, stored per profile inside `PersistentDataList.sav` (GVAS),
-in the profile's ref range located by `parse_profile_summaries`
-(`crates/goresave_core/src/lib.rs:904`).
+Difficulty fields are `ClassProperty` / `BoolProperty` members. Confirmed values:
 
-Confirmed against the user's live file (two profiles present):
+- Live `PersistentDataList.sav`: profile 0 = `DifficultyPreset_Custom` (sub-settings
+  `*_Standard`); profile 1 = `DifficultyPreset_Easy` (all sub-settings present and
+  `*_Easy`, plus the bools). So **all difficulty properties are always serialized**
+  on every profile and every save -> all edits are in-place splices, no structural
+  property insertion needed.
+- Inspect output of a real save: difficulty present in `public_properties`
+  (uncompressed) and again in the decoded private payload.
 
-- Profile 0 (Custom): `m_difficultyPreset = DifficultyPreset_Custom`, sub-settings all
-  `*_Standard`.
-- Profile 1 (Novice): `m_difficultyPreset = DifficultyPreset_Easy`, **and all three
-  sub-settings are present and = `*_Easy`**, plus the bools.
-
-Two assumptions therefore hold:
-
-1. **Preset mapping** — Novice = `Easy`, Gothic = `Standard`, Hard = `Hard`, Custom =
-   `Custom`.
-2. **All difficulty properties are always serialized** on every profile, regardless of
-   preset (offsets are contiguous `0x40–0x68` on `ProfileData`). So switching any
-   profile to/from Custom is a pure **in-place edit** — no structural property
-   insertion needed. This removes the main implementation risk.
-
-The game mirrors the sub-settings to the preset level (a Novice profile stores all
-`_Easy` sub-settings). We replicate that: see Behavior below.
+Preset mapping (confirmed): Novice = `Easy`, Gothic = `Standard`, Hard = `Hard`,
+Custom = `Custom`.
 
 ## Field mapping
 
@@ -65,16 +72,13 @@ Asset-path prefix: `/Script/Angelscript.`
 | Close Combat Flow Helper | `m_FakeSloppyCombos` | BoolProperty | on/off |
 | Permadeath | `m_PermanentDeath` | BoolProperty | on/off |
 
-Sub-setting level labels follow the same Novice/Gothic/Hard naming as the preset
-(`Easy`/`Standard`/`Hard`).
+Left untouched (present but not in the in-game difficulty screen): `m_Survival`,
+`m_PermanentDeathGameOver`, `m_MaxQuick`, `m_MaxAuto`.
 
-Left untouched (present on `ProfileData` but not in the in-game difficulty screen):
-`m_Survival`, `m_PermanentDeathGameOver`, `m_MaxQuick`, `m_MaxAuto`.
+## Editability behavior
 
-## Behavior
-
-Per-control editability mirrors the in-game difficulty screen (confirmed from the four
-preset screenshots — orange = editable, grey = locked):
+Mirrors the in-game difficulty screen (confirmed from the four preset screenshots —
+orange = editable, grey = locked):
 
 | Control | Novice | Gothic | Hard | Custom |
 | --- | --- | --- | --- | --- |
@@ -84,70 +88,98 @@ preset screenshots — orange = editable, grey = locked):
 
 Rules:
 
-- **Flow Helper** is always editable and independent of the preset — never force it.
-  In-game default is on for every preset.
-- **Permadeath** is editable for Gothic / Hard / Custom (default off). For Novice it is
-  locked off: when the editor sets preset = Novice, force `m_PermanentDeath = false`
-  and disable the toggle.
-- **Sub-settings** (Combat / Resources / Progression) are editable only for Custom. For
-  Novice / Gothic / Hard, on save rewrite all three to the matching level (mirrors the
-  game: a Novice profile stores `*_Easy`, etc.) and show them disabled. Custom defaults
-  the three to Gothic (`*_Standard`) when first switched, but otherwise preserves
-  whatever is stored.
-- Editing difficulty rewrites the whole profile and affects all of its saves — show a
-  one-line note to that effect near the Save action.
+- **Flow Helper** always editable, independent of preset (in-game default on). Never
+  forced.
+- **Permadeath** editable for Gothic / Hard / Custom (default off). For Novice it is
+  locked off: when preset = Novice, force `m_PermanentDeath = false`.
+- **Sub-settings** editable only for Custom. For Novice / Gothic / Hard, on save rewrite
+  all three to the matching level (mirrors the game) and show them disabled. Custom
+  defaults the three to Gothic (`*_Standard`) on first switch, otherwise preserves
+  stored values.
 
 ## Core (Rust) — `crates/goresave_core/src/lib.rs`
 
-New command `write_profile_difficulty`:
+Single command **`write_difficulty`** so the all-or-nothing backup/rollback guarantee
+lives in one place:
 
-- Payload: `{ path, profileId, difficulty: { preset, combat?, resources?,
-  progression?, flowHelper?, permadeath? } }` where `path` resolves to the save
-  directory / `PersistentDataList.sav`.
-- Locate the profile's ref range via the same boundary logic as
-  `parse_profile_summaries` (`m_ProfileName` start, next-profile / `SavedDataVersion`
-  end). Match `profileId` via `m_ProfileId`.
-- ClassProperty string edits: a ClassProperty-aware variant of
-  `replace_str_property_fstring_in_range` (`lib.rs:3958`). Verify the on-disk
-  ClassProperty layout against the fixture (TDD, byte-exact) — it may differ from
-  `StrProperty`.
-- Bool edits: in-place single byte (reuse the bool read path's offset logic).
-- Safety pipeline mirrors `write_save_internal` (`lib.rs:3762`): backup, write tmp,
-  re-parse + validate (round-trip the written values back through
-  `parse_profile_summaries` and assert they match), atomic `begin_replace`/commit.
-- Reject if a targeted property is not found in the profile range (defensive; not
-  expected given the always-present finding).
+```
+{
+  difficulty: { preset, combat?, resources?, progression?, flowHelper?, permadeath? },
+  targets: {
+    saves:   ["<slot path>", ...],          // each gets public + private edits
+    profile: { path: "<PersistentDataList.sav>", profileId } | null
+  },
+  backup: true
+}
+```
+
+Per-save difficulty write (one helper, used for every entry in `targets.saves`):
+
+- **Public payload:** ClassProperty / Bool splices on the uncompressed GVAS region.
+  Extend `apply_public_edit` (`lib.rs:3994`) with the difficulty paths; reuse a
+  ClassProperty-aware variant of the existing fstring splice.
+- **Private payload:** same edits inside `SaveDataPayload`, applied through the existing
+  private-edit + Kraken recompress pipeline (`apply_private_edits`, `lib.rs:3789`) that
+  inventory edits already use.
+
+Profile difficulty write (when `targets.profile` set): locate the profile range via the
+same boundary logic as `parse_profile_summaries` (`lib.rs:904`), splice
+`ProfileData` ClassProperty / Bool members in place.
+
+Orchestration + safety:
+
+- Validate ClassProperty on-disk layout against fixtures (TDD, byte-exact) — it may
+  differ from `StrProperty`.
+- Back up **every** target file under one `shared_backup_suffix` (`lib.rs` existing
+  helper, today used for slot+companion). Write each to a `.tmp-goresave`, re-inspect /
+  re-parse each to confirm the written value, then `begin_replace` all and commit; if
+  any replace fails, roll back every already-committed target. Reuse the
+  begin_replace / commit / rollback pattern from `write_save_internal` (`lib.rs:3854`).
+- GSAV saves must still rebuild byte-identically except for the intended edit
+  (`rebuild_gsav_preserving_stream`).
 
 ## Frontend (Flutter / Riverpod)
 
-- New `_ProfilePanel` widget, added to the `TabBar` tabs and `TabBarView` children at
-  index 1 in `apps/goresave/lib/features/editor/ui/editor_page.dart` (bump the
-  `TabController` length 7 -> 8). Wrap in `_KeepAliveTab`. Icon e.g.
-  `Icons.badge_outlined` / `Icons.person_pin_outlined`, label "Profil".
-- Reads `state.activeProfile`. Empty state ("Kein Profil ausgewählt") when none
-  resolves.
-- Layout mirrors the in-game difficulty screen: a preset selector (4 options) and a
-  Custom block with two toggles (Flow Helper, Permadeath) and three 3-way pickers
-  (Combat, Resources, Progression) that enable only for Custom. Read-only profile
-  overview (name, id, slot counts) above.
-- **Own edit buffer + Save/Reset** inside the tab, independent of the save-scoped
-  pending-edit buffer. Save dispatches `_core.execute('write_profile_difficulty', …)`
-  via `EditorNotifier`, then refreshes profiles.
-- Extend the unsaved-edits / profile-switch guard
-  (`editor_notifier.dart:347`) so Profil edits block profile/save switches the same way
-  save edits do.
+- New `_DifficultyPanel`, added to the `TabBar` tabs and `TabBarView` children at index 1
+  in `apps/goresave/lib/features/editor/ui/editor_page.dart` (bump `TabController`
+  length 7 -> 8, wrap in `_KeepAliveTab`).
+- Bound to the selected save's `SaveInspection` (current save's difficulty is the edit
+  subject). Shows the resolved profile overview (`state.activeProfile`) read-only as
+  context.
+- Layout mirrors the in-game screen: preset selector (4 options); a Custom block with
+  two toggles (Flow Helper, Permadeath) and three 3-way pickers (Combat, Resources,
+  Progression) enabled per the editability matrix.
+- An **explanation block** stating: difficulty is stored in this save (gameplay-
+  relevant), in the profile (menu default), and separately in every other save; this
+  editor changes only the current save unless the checkboxes below are ticked.
+- **Two checkboxes** (default off): update profile; apply to all saves of this profile.
+- Own edit buffer + Save / Reset inside the tab. Save assembles `targets`
+  (always the current save; + all profile slots if checked; + profile if checked) and
+  dispatches `write_difficulty` via `EditorNotifier`, then refreshes.
+- Extend the unsaved-edits / profile-switch guard (`editor_notifier.dart:347`) to cover
+  dirty difficulty edits.
+
+## Authority note (verify before relying on save edits)
+
+Strongly inferred that the private `SaveDataPayload` drives loaded-game difficulty.
+Recommend one empirical check during implementation: edit one save's difficulty, load
+it in-game, confirm the change takes effect. If only public or only private matters,
+narrow the per-save write accordingly.
 
 ## Testing
 
-- **Core:** parse + write round-trip test on a `PersistentDataList.sav` fixture (copy a
-  sanitized snapshot of the live file into `fixtures/`). Cases: Custom→Novice,
-  Novice→Custom, toggle each bool, change each sub-setting. Assert byte-exact GVAS
-  re-serialization elsewhere and that re-parse returns the written values.
-- **Frontend:** widget test for preset→Custom enable/disable, buffer Save/Reset, and
-  the profile-switch guard with dirty Profil edits.
+- **Core:** round-trip tests on (a) a `PersistentDataList.sav` fixture and (b) a real
+  save fixture (`work/decompressed` payloads + a slot file). Cases: each preset switch,
+  each bool toggle, each sub-setting; assert byte-exact re-serialization elsewhere and
+  re-parse returns the written values, for public and private. Multi-target test:
+  current save + profile + all saves all written and backed up; induced failure rolls
+  everything back.
+- **Frontend:** widget tests for the editability matrix (enable/disable per preset),
+  checkbox-driven `targets` assembly, buffer Save/Reset, and the dirty-edit switch
+  guard.
 
 ## Out of scope (v1)
 
 - Editing `m_MaxQuick` / `m_MaxAuto`, `m_Survival`, `m_PermanentDeathGameOver`.
-- Editing profile name / overview fields.
+- Editing profile/save names or other overview fields.
 - Creating, deleting, or batch-editing profiles.
