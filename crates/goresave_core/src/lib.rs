@@ -5083,7 +5083,7 @@ fn main_container_summary(root: &properties::RootObject) -> Option<MainContainer
             {
                 for slot in &slots {
                     if !struct_element_property(slot, "m_Payload")
-                        .is_some_and(|p| property_value_has_container_data(&p.value))
+                        .is_some_and(|p| payload_carries_state(&p.value))
                     {
                         has_clean_template = true;
                     }
@@ -5121,23 +5121,27 @@ fn main_container_summary(root: &properties::RootObject) -> Option<MainContainer
     })
 }
 
-/// True when any container value (map/array/set/instanced objects) reachable
-/// under `value` holds at least one element — i.e. a template's m_Payload
-/// carries item-specific state that must not be cloned onto a new item.
-fn property_value_has_container_data(value: &properties::PropertyValue) -> bool {
+/// True when a template's m_Payload carries item-specific state that must not be
+/// cloned onto a new item. The only "clean" shape is one made up entirely of
+/// EMPTY containers (the known empty-map payload). Any non-empty container, or
+/// any scalar/name/object/enum leaf, counts as state — a directly-stored field
+/// such as a durability integer would otherwise be mistaken for a clean slot and
+/// copied into an unrelated new item.
+fn payload_carries_state(value: &properties::PropertyValue) -> bool {
     use properties::{PropertyValue as PV, StructValue as SV};
     match value {
         PV::Array { elements } | PV::Set { elements, .. } => !elements.is_empty(),
         PV::Map { entries, .. } => !entries.is_empty(),
         PV::ObjectInstances(instances) => !instances.is_empty(),
-        PV::Struct(SV::Properties(props)) => props
-            .iter()
-            .any(|p| property_value_has_container_data(&p.value)),
+        PV::Struct(SV::Properties(props)) => props.iter().any(|p| payload_carries_state(&p.value)),
         PV::Struct(SV::Instanced(Some(instanced))) => instanced
             .properties
             .iter()
-            .any(|p| property_value_has_container_data(&p.value)),
-        _ => false,
+            .any(|p| payload_carries_state(&p.value)),
+        // An empty/absent instanced struct carries nothing; any other leaf
+        // (scalar/name/object/enum) is item-specific state.
+        PV::Struct(SV::Instanced(None)) => false,
+        _ => true,
     }
 }
 
@@ -5220,7 +5224,7 @@ fn apply_private_inventory_add_item_to_payload(
     // m_InventoryType to MainContainer below.
     let is_clean = |slot: &properties::PropertyValue| {
         !struct_element_property(slot, "m_Payload")
-            .is_some_and(|p| property_value_has_container_data(&p.value))
+            .is_some_and(|p| payload_carries_state(&p.value))
     };
     let max_id = slots.iter().filter_map(slot_id).max().unwrap_or(-1);
     let new_id = max_id.checked_add(1).ok_or_else(|| {
@@ -5439,7 +5443,7 @@ fn donor_slot_template_bytes(
         // state) — not just the last one, which may be stateful.
         let Some(donor_index) = donor_slots.iter().position(|slot| {
             !struct_element_property(slot, "m_Payload")
-                .is_some_and(|p| property_value_has_container_data(&p.value))
+                .is_some_and(|p| payload_carries_state(&p.value))
         }) else {
             continue;
         };
@@ -10288,6 +10292,46 @@ mod tests {
         assert_eq!(layout.kind, properties::ContainerKind::Array);
         assert_eq!(layout.inner_type, "StructProperty");
         assert_eq!(layout.count, 2);
+    }
+
+    #[test]
+    fn payload_carries_state_flags_direct_scalar_fields() {
+        // Clean: payload is only an empty m_GenericData map.
+        let clean_slot = inv_item_slot(
+            0,
+            INV_MAIN_LABEL,
+            "/Script/Angelscript.ItMi_Orenugget",
+            1,
+            &inv_empty_payload_map(),
+        );
+        // Stateful: an item-specific scalar stored directly in the payload (no
+        // non-empty container), which the old container-only check missed.
+        let mut scalar_payload = inv_empty_payload_map();
+        scalar_payload.extend_from_slice(&int_property("Durability", 50));
+        let scalar_slot = inv_item_slot(
+            1,
+            INV_MAIN_LABEL,
+            "/Script/Angelscript.ItMi_Orenugget",
+            1,
+            &scalar_payload,
+        );
+
+        let payload = typed_inventory_private_payload(&[], &[clean_slot, scalar_slot]);
+        let root = properties::parse_private_root(&payload).unwrap();
+        let slots_segs = properties::parse_path(&inv_slots_prefix(1)).unwrap();
+        let slots = properties::resolve(&root.properties, &slots_segs).unwrap();
+        let properties::PropertyValue::Array { elements } = &slots.value else {
+            panic!("m_Slots is not an array");
+        };
+        let payload_value = |slot| &struct_element_property(slot, "m_Payload").unwrap().value;
+        assert!(
+            !payload_carries_state(payload_value(&elements[0])),
+            "an empty-map payload must be treated as a clean template"
+        );
+        assert!(
+            payload_carries_state(payload_value(&elements[1])),
+            "a payload with a direct scalar field must be treated as state"
+        );
     }
 
     #[test]
