@@ -319,6 +319,30 @@ void main() {
   );
 
   testWidgets(
+    'with no resolvable profile, a field edit never sets alsoProfile/allSaves '
+    'on the candidate (defense-in-depth against a stale tick)',
+    (tester) async {
+      // profile == null models a save with no resolvable profile. Changing a
+      // control fires _apply, which must force the propagation flags false so
+      // a pending difficulty can never carry propagation the save-path could
+      // not honour.
+      await pumpCard(tester, profile: null);
+
+      // Tap the Novice segment within the PRESET picker specifically (the
+      // 'Novice' label also appears in the level pickers). This diverges from
+      // the stored Custom preset, so _apply registers a pending difficulty.
+      await tester.tap(
+        find.descendant(of: _presetPicker(), matching: find.text('Novice')),
+      );
+      await tester.pumpAndSettle();
+
+      expect(notifier.state.pendingDifficulty, isNotNull);
+      expect(notifier.state.pendingDifficulty!.alsoProfile, isFalse);
+      expect(notifier.state.pendingDifficulty!.allSaves, isFalse);
+    },
+  );
+
+  testWidgets(
     'a global Reset (pendingDifficulty cleared) makes the card show stored '
     'values again',
     (tester) async {

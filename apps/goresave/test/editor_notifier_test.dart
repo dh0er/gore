@@ -724,6 +724,69 @@ void main() {
     },
   );
 
+  test(
+    'global saveAllPending fails loudly and keeps the pending difficulty when '
+    'propagation is requested but the edited save profile cannot be resolved',
+    () async {
+      // A scan where the selected save\'s persistentProfileId (99) matches no
+      // profile in state.profiles, so editedSaveProfile is null — propagation
+      // cannot bind to a profile.
+      final core = _RecordingCoreService(
+        scanData: {
+          'saves': [
+            {
+              'path': r'C:\tmp\saves\G1R-001.sav',
+              'slot': 'G1R-001',
+              'format': 'GSAV',
+              'fileSize': 100,
+              'sha1': 'a',
+              'status': 'ok',
+              'playerSaveName': 'Save A',
+              'persistentProfileId': 99,
+            },
+          ],
+          'profiles': [
+            {
+              'profileId': 7,
+              'profileName': 'Nameless Hero',
+              'quickSaveSlots': <String>[],
+              'autoSaveSlots': <String>[],
+              'savedSlots': ['G1R-001'],
+            },
+          ],
+          'activeProfileId': 7,
+        },
+      );
+      final notifier = difficultyNotifier(core);
+      await pumpEventQueue();
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+      // Sanity: the edited save\'s profile is genuinely unresolvable.
+      expect(notifier.state.editedSaveProfile, isNull);
+
+      notifier.setPendingDifficulty(
+        const PendingDifficulty(
+          difficulty: {'preset': 'Hard', 'flowHelper': false, 'permadeath': true},
+          alsoProfile: true,
+        ),
+      );
+
+      final ok = await notifier.saveAllPending();
+
+      // Fails loudly with a clear error.
+      expect(ok, isFalse);
+      expect(notifier.state.error, contains('could not be resolved'));
+      // No write was issued — the current-slot save must not slip through.
+      expect(
+        core.requests.where((r) => r.command == 'write_difficulty'),
+        isEmpty,
+      );
+      // The pending edit is KEPT so nothing is silently lost.
+      expect(notifier.state.pendingDifficulty, isNotNull);
+      expect(notifier.state.pendingDifficulty!.alsoProfile, isTrue);
+    },
+  );
+
   test('saveAllPending keeps pending edits on failure', () async {
     final core = _FailingWriteCoreService();
     final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');

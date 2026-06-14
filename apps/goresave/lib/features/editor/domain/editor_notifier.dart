@@ -667,6 +667,28 @@ class EditorNotifier extends StateNotifier<EditorState> {
       return false;
     }
 
+    // Propagation (alsoProfile/allSaves) binds to the EDITED SAVE's profile.
+    // If that profile cannot be resolved (no persistentProfileId on the save,
+    // or no matching profile in state.profiles), _buildDifficultyPayload would
+    // silently omit the profile target and never expand the all-saves set —
+    // dropping the propagation the user explicitly requested while the
+    // current-slot write still succeeds. Refuse loudly instead: abort the save
+    // and KEEP the pending difficulty so nothing is silently lost. Mirrors the
+    // codec-not-ready guard above (abort-and-keep). Uses the same resolution as
+    // state.editedSaveProfile (profile whose profileId == the selected save's
+    // persistentProfileId).
+    if (difficultyEdit != null &&
+        (difficultyEdit.alsoProfile || difficultyEdit.allSaves) &&
+        state.editedSaveProfile == null) {
+      state = state.copyWith(
+        error:
+            'Cannot propagate difficulty: the edited save\'s profile could '
+            'not be resolved. Save without "Also update the profile" / '
+            '"Apply to all saves of this profile", or reselect the save.',
+      );
+      return false;
+    }
+
     final difficultyPayload = difficultyEdit == null
         ? null
         : _buildDifficultyPayload(difficultyEdit);
