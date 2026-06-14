@@ -2180,7 +2180,9 @@ pub fn parse_difficulty_settings(payload: &[u8]) -> DifficultySettings {
         resources: class("m_customResourcesSettings"),
         progression: class("m_customProgressionSettings"),
         flow_helper: read_bool_property_in_range(payload, &refs, 0, end, "m_FakeSloppyCombos"),
-        permadeath: read_bool_property_in_range(payload, &refs, 0, end, "m_PermanentDeath"),
+        permadeath: PERMADEATH_NAMES
+            .iter()
+            .find_map(|n| read_bool_property_in_range(payload, &refs, 0, end, n)),
     }
 }
 
@@ -12707,6 +12709,22 @@ mod tests {
         assert_eq!(d.combat.as_deref(), Some("CombatDifficultySettings_Hard"));
         assert_eq!(d.flow_helper, Some(true));
         assert_eq!(d.permadeath, Some(false));
+    }
+
+    #[test]
+    fn parse_difficulty_settings_reads_permadeath_alternate_spelling() {
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&fstring("m_difficultyPreset"));
+        payload.extend_from_slice(&fstring("ClassProperty"));
+        payload.extend_from_slice(&fstring("/Script/Angelscript.DifficultyPreset_Custom"));
+        // Permadeath stored under the alternate spelling `m_PermaDeath`.
+        payload.extend_from_slice(&fstring("m_PermaDeath"));
+        payload.extend_from_slice(&fstring("BoolProperty"));
+        payload.extend_from_slice(&[0u8; 8]); // array_index + size
+        payload.push(1); // bool value byte (true)
+
+        let d = parse_difficulty_settings(&payload);
+        assert_eq!(d.permadeath, Some(true));
     }
 
     #[test]
