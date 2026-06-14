@@ -1794,6 +1794,41 @@ fn unique_backup_path(path: &Path) -> PathBuf {
     backup_path_with_suffix(path, &suffix)
 }
 
+/// Suffixes of backups in `path`'s backup locations that belong to a DIFFERENT
+/// save file (e.g. slot backups when `path` is PersistentDataList.sav). A
+/// standalone profile backup must avoid these so the suffix-only pairing in
+/// [`prepare_paired_persistent_data_list_restore`] cannot later mistake it for
+/// an unrelated slot's companion and roll the profile back on a slot restore.
+fn existing_foreign_backup_suffixes(path: &Path) -> Vec<String> {
+    let mut suffixes = Vec::new();
+    let Some(parent) = path.parent() else {
+        return suffixes;
+    };
+    let own_prefix = backup_file_prefix(path).ok();
+    for dir in [parent.to_path_buf(), parent.join("goresave_backups")] {
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+                continue;
+            };
+            // Skip our own file's backups; only foreign suffixes can collide.
+            if let Some(own) = &own_prefix {
+                if name.starts_with(own) {
+                    continue;
+                }
+            }
+            if let Some(idx) = name.rfind(".bak.") {
+                if name[..idx].ends_with(".sav") {
+                    suffixes.push(name[idx + ".bak.".len()..].to_string());
+                }
+            }
+        }
+    }
+    suffixes
+}
+
 fn backup_path_with_suffix(path: &Path, suffix: &str) -> PathBuf {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let file_name = path
@@ -6824,7 +6859,13 @@ fn write_difficulty_internal(
         // file's backup path for collisions, not its siblings'.
         let mut used_suffixes: Vec<String> = Vec::new();
         for p in &changed {
-            let backup_path = create_unique_backup_avoiding(&p.path, &used_suffixes)?;
+            // Also avoid suffixes already used by OTHER files' backups (e.g. slot
+            // backups), so a profile-only PDL backup never shares a suffix with a
+            // slot backup — which the suffix-only paired-restore heuristic would
+            // otherwise wrongly treat as that slot's companion.
+            let mut avoid = used_suffixes.clone();
+            avoid.extend(existing_foreign_backup_suffixes(&p.path));
+            let backup_path = create_unique_backup_avoiding(&p.path, &avoid)?;
             if let Some(name) = backup_path.file_name().and_then(|n| n.to_str()) {
                 if let Ok(prefix) = backup_file_prefix(&p.path) {
                     if let Some(suffix) = name.strip_prefix(&prefix) {
@@ -7282,6 +7323,61 @@ mod tests {
         assert!(presets.iter().any(|p| p.ends_with("DifficultyPreset_Hard")));
         assert!(!presets.iter().any(|p| p.ends_with("DifficultyPreset_Easy")));
         assert!(dir.path().join("goresave_backups").exists());
+    }
+
+    #[test]
+    fn write_difficulty_profile_backup_avoids_existing_slot_backup_suffix() {
+        // A standalone profile backup must not reuse a slot backup's suffix, or
+        // the suffix-only paired-restore heuristic would later treat it as that
+        // slot's companion and roll the profile back on a slot restore.
+        let dir = tempdir().unwrap();
+        let pdl = dir.path().join("PersistentDataList.sav");
+        fs::write(&pdl, difficulty_persistent_profiles()).unwrap();
+
+        // Pre-existing slot backup whose suffix is the current second.
+        let subfolder = dir.path().join("goresave_backups");
+        fs::create_dir_all(&subfolder).unwrap();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        fs::write(
+            subfolder.join(format!("G1R-001.sav.bak.{now}")),
+            b"slot backup",
+        )
+        .unwrap();
+
+        let req = DifficultyRequest {
+            preset: Some("Hard".into()),
+            combat: None,
+            resources: None,
+            progression: None,
+            flow_helper: None,
+            permadeath: None,
+        };
+        let targets = json!({
+            "profile": { "path": pdl.display().to_string(), "profileId": 1 },
+        });
+        write_difficulty_internal(&req, &targets, true).unwrap();
+
+        // The profile backup must NOT have landed on the slot backup's suffix.
+        assert!(
+            !subfolder
+                .join(format!("PersistentDataList.sav.bak.{now}"))
+                .exists(),
+            "profile backup must avoid the existing slot backup suffix",
+        );
+        // Exactly one profile backup was created (under a different suffix).
+        let pdl_backups = fs::read_dir(&subfolder)
+            .unwrap()
+            .flatten()
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with("PersistentDataList.sav.bak.")
+            })
+            .count();
+        assert_eq!(pdl_backups, 1);
     }
 
     #[test]
