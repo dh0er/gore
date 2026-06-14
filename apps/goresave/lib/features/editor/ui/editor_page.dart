@@ -158,7 +158,6 @@ class _SaveSidebar extends StatelessWidget {
           _ProfileHeader(
             profile: state.activeProfile,
             profiles: state.profiles,
-            saveCount: saves.length,
             notifier: notifier,
             isLoading: state.isLoading,
           ),
@@ -202,14 +201,12 @@ class _ProfileHeader extends StatelessWidget {
   const _ProfileHeader({
     required this.profile,
     required this.profiles,
-    required this.saveCount,
     required this.notifier,
     required this.isLoading,
   });
 
   final ProfileSummary? profile;
   final List<ProfileSummary> profiles;
-  final int saveCount;
   final EditorNotifier notifier;
   final bool isLoading;
 
@@ -217,8 +214,6 @@ class _ProfileHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
     final scheme = Theme.of(context).colorScheme;
-    final quickCount = profile?.quickSaveSlots.length ?? 0;
-    final autoCount = profile?.autoSaveSlots.length ?? 0;
     final multiProfile = profiles.length > 1;
     return Container(
       width: double.infinity,
@@ -245,32 +240,28 @@ class _ProfileHeader extends StatelessWidget {
           ),
           const SizedBox(width: 12),
           Expanded(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
+            child: Row(
               children: [
-                if (multiProfile)
-                  _ProfileSwitcher(
-                    profile: profile,
-                    profiles: profiles,
-                    notifier: notifier,
-                    isLoading: isLoading,
-                  )
-                else
-                  Text(
-                    profile?.displayName ?? 'Profile',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: textTheme.titleMedium,
-                  ),
-                const SizedBox(height: 4),
+                Flexible(
+                  child: multiProfile
+                      ? _ProfileSwitcher(
+                          profile: profile,
+                          profiles: profiles,
+                          notifier: notifier,
+                          isLoading: isLoading,
+                        )
+                      : Text(
+                          profile?.displayName ?? 'Profile',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: textTheme.titleMedium,
+                        ),
+                ),
+                const SizedBox(width: 12),
                 ProfileDifficultyChip(
                   profile: profile,
                   notifier: notifier,
                   isLoading: isLoading,
-                  countsTooltip:
-                      '${_formatCount(saveCount, 'save')}  ·  '
-                      'Quick $quickCount  ·  Auto $autoCount',
                 ),
               ],
             ),
@@ -541,10 +532,6 @@ String _formatSaveKind({required bool? quickSave, required bool? autoSave}) {
   if (autoSave == true) return 'Auto save';
   if (quickSave == false || autoSave == false) return 'Manual save';
   return '-';
-}
-
-String _formatCount(int count, String singular) {
-  return count == 1 ? '1 $singular' : '$count ${singular}s';
 }
 
 class _EditorWorkspace extends StatelessWidget {

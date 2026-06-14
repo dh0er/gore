@@ -63,7 +63,6 @@ class ProfileDifficultyChip extends StatelessWidget {
     required this.profile,
     required this.notifier,
     required this.isLoading,
-    required this.countsTooltip,
   });
 
   /// The active profile. Null when no profile is resolved — the chip is then
@@ -71,10 +70,6 @@ class ProfileDifficultyChip extends StatelessWidget {
   final ProfileSummary? profile;
   final EditorNotifier notifier;
   final bool isLoading;
-
-  /// Save / Quick / Auto counts, folded into the chip tooltip so the header
-  /// still surfaces them without a separate label.
-  final String countsTooltip;
 
   @override
   Widget build(BuildContext context) {
@@ -135,8 +130,8 @@ class ProfileDifficultyChip extends StatelessWidget {
 
     return Tooltip(
       message: hasProfile
-          ? 'Edit difficulty for this profile\n$countsTooltip'
-          : countsTooltip,
+          ? 'Edit difficulty for this profile'
+          : 'No profile selected',
       child: Material(
         color: Colors.transparent,
         child: InkWell(
