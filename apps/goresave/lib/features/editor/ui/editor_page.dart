@@ -517,9 +517,9 @@ String _saveSlotSubtitle(SaveSlot save) {
   if (timePlayed != '-') {
     parts.add(timePlayed);
   }
-  final mapName = save.mapName;
-  if (mapName != null && mapName.isNotEmpty) {
-    parts.add(mapName);
+  final difficulty = save.difficulty?.presetLabel;
+  if (difficulty != null && difficulty != '-') {
+    parts.add(difficulty);
   }
   return parts.join(' | ');
 }
@@ -935,8 +935,9 @@ class _OverviewDiagnosticsState extends State<_OverviewDiagnostics> {
                         'Slot': inspection.slot ?? '-',
                         if (inspection.chapterId != null)
                           'Chapter': inspection.chapterId.toString(),
-                        if (inspection.mapName != null)
-                          'Map': inspection.mapName!,
+                        if (inspection.difficulty?.presetLabel != null &&
+                            inspection.difficulty!.presetLabel != '-')
+                          'Difficulty': inspection.difficulty!.presetLabel,
                         if (inspection.timePlayedSeconds != null)
                           'Time played': _formatDurationSeconds(
                             inspection.timePlayedSeconds,
@@ -1065,10 +1066,11 @@ class _HeaderCard extends StatelessWidget {
                                   inspection.timePlayedSeconds,
                                 ),
                               ),
-                            if (inspection.mapName != null)
+                            if (inspection.difficulty?.presetLabel != null &&
+                                inspection.difficulty!.presetLabel != '-')
                               _InfoPill(
-                                icon: Icons.map_outlined,
-                                label: inspection.mapName!,
+                                icon: Icons.local_fire_department_outlined,
+                                label: inspection.difficulty!.presetLabel,
                               ),
                           ];
                           if (pills.isEmpty) return const SizedBox.shrink();
