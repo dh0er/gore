@@ -233,14 +233,20 @@ class _DifficultyDialogState extends State<DifficultyDialog> {
     });
   }
 
-  Map<String, Object?> _buildDifficulty() => {
-    'preset': _preset,
-    if (_preset == 'Custom') 'combat': _combat,
-    if (_preset == 'Custom') 'resources': _resources,
-    if (_preset == 'Custom') 'progression': _progression,
-    'flowHelper': _flow,
-    'permadeath': _perma,
-  };
+  Map<String, Object?> _buildDifficulty() {
+    final known = _preset != _unknownPreset;
+    return {
+      // Omit the preset when none is selected (the stored class is unrecognised
+      // and the user did not pick one): the core then leaves the preset and
+      // sub-settings as stored and writes only the bool toggles below.
+      if (known) 'preset': _preset,
+      if (_preset == 'Custom') 'combat': _combat,
+      if (_preset == 'Custom') 'resources': _resources,
+      if (_preset == 'Custom') 'progression': _progression,
+      'flowHelper': _flow,
+      'permadeath': _perma,
+    };
+  }
 
   Future<void> _save() async {
     setState(() => _saving = true);
@@ -301,8 +307,9 @@ class _DifficultyDialogState extends State<DifficultyDialog> {
                 Padding(
                   padding: const EdgeInsets.only(top: 6),
                   child: Text(
-                    'Stored preset is unrecognised '
-                    '(${_stored.presetLabel}). Pick one to enable Save.',
+                    'Stored preset is unrecognised (${_stored.presetLabel}). '
+                    'You can still save Flow Helper / Permadeath changes, or '
+                    'pick a preset above to overwrite it.',
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: scheme.error,
                     ),
@@ -383,7 +390,10 @@ class _DifficultyDialogState extends State<DifficultyDialog> {
           child: const Text('Cancel'),
         ),
         FilledButton(
-          onPressed: (known && !_saving) ? _save : null,
+          // Save is allowed even with an unrecognised stored preset: an
+          // unselected preset is simply omitted (bool-only edit). It is blocked
+          // only while a write is in flight.
+          onPressed: _saving ? null : _save,
           child: _saving
               ? const SizedBox(
                   width: 16,

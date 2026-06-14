@@ -2209,7 +2209,13 @@ fn level_suffix(label: &str) -> Result<&'static str, CoreError> {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct DifficultyRequest {
-    preset: String, // Novice|Gothic|Hard|Custom
+    /// The UI preset to write (Novice|Gothic|Hard|Custom), or `None` to leave the
+    /// stored preset and sub-settings untouched and write only the bool toggles.
+    /// This lets a profile whose stored preset class is unrecognised (e.g. a
+    /// `/Game/...` path or a new game-update preset) still take a flow-helper /
+    /// permadeath edit without forcing a preset rewrite.
+    #[serde(default)]
+    preset: Option<String>,
     #[serde(default)]
     combat: Option<String>,
     #[serde(default)]
@@ -2223,18 +2229,23 @@ struct DifficultyRequest {
 }
 
 impl DifficultyRequest {
-    /// Resolved short class names (no package prefix).
+    /// Resolved short class names (no package prefix). Empty when no `preset` was
+    /// requested — a bool-only edit leaves the preset/sub-setting asset paths
+    /// exactly as stored.
     fn class_edits(&self) -> Result<Vec<(&'static str, String)>, CoreError> {
-        let preset = if self.preset == "Custom" {
+        let Some(preset_label) = self.preset.as_deref() else {
+            return Ok(Vec::new());
+        };
+        let preset = if preset_label == "Custom" {
             "DifficultyPreset_Custom".to_string()
         } else {
-            format!("DifficultyPreset_{}", level_suffix(&self.preset)?)
+            format!("DifficultyPreset_{}", level_suffix(preset_label)?)
         };
         let lvl = |explicit: &Option<String>| -> Result<&'static str, CoreError> {
-            if self.preset == "Custom" {
+            if preset_label == "Custom" {
                 level_suffix(explicit.as_deref().unwrap_or("Gothic"))
             } else {
-                level_suffix(&self.preset)
+                level_suffix(preset_label)
             }
         };
         Ok(vec![
@@ -2254,9 +2265,10 @@ impl DifficultyRequest {
         ])
     }
 
-    /// Permadeath is locked off for Novice.
+    /// Permadeath is locked off for Novice. With no preset requested the stored
+    /// permadeath toggle is honoured as-is.
     fn resolved_permadeath(&self) -> Option<bool> {
-        if self.preset == "Novice" {
+        if self.preset.as_deref() == Some("Novice") {
             Some(false)
         } else {
             self.permadeath
@@ -7129,7 +7141,7 @@ mod tests {
         assert!(profile_element(&root, 1).is_some());
 
         let req = DifficultyRequest {
-            preset: "Hard".into(),
+            preset: Some("Hard".into()),
             combat: None,
             resources: None,
             progression: None,
@@ -7166,7 +7178,7 @@ mod tests {
     #[test]
     fn write_difficulty_internal_requires_at_least_one_target() {
         let req = DifficultyRequest {
-            preset: "Hard".into(),
+            preset: Some("Hard".into()),
             combat: None,
             resources: None,
             progression: None,
@@ -7184,7 +7196,7 @@ mod tests {
         fs::write(&profile_path, difficulty_persistent_profiles()).unwrap();
 
         let req = DifficultyRequest {
-            preset: "Hard".into(),
+            preset: Some("Hard".into()),
             combat: None,
             resources: None,
             progression: None,
@@ -7243,13 +7255,52 @@ mod tests {
     }
 
     #[test]
+    fn write_profile_difficulty_without_preset_edits_only_bools() {
+        // A bool-only request (no `preset`) must leave the stored preset and
+        // sub-setting asset paths untouched and patch only the toggles, so a
+        // profile with an unrecognised preset class can still take a
+        // flow-helper / permadeath edit without rewriting the preset.
+        let mut data = difficulty_persistent_profiles();
+        // Profile 1 stores Easy; assert it survives a permadeath-only edit.
+        let req = DifficultyRequest {
+            preset: None,
+            combat: None,
+            resources: None,
+            progression: None,
+            flow_helper: Some(true),
+            permadeath: None,
+        };
+        write_profile_difficulty(&mut data, 1, &req).unwrap();
+
+        let root = parse_profile_file(&data).unwrap();
+        assert_eq!(root.consumed, data.len());
+        // Profile 1's preset is unchanged (still Easy), proving no preset write.
+        let p1 = profile_difficulty_path(&root, 1, "m_difficultyPreset")
+            .unwrap()
+            .unwrap();
+        let p1v =
+            properties::resolve(&root.properties, &properties::parse_path(&p1).unwrap()).unwrap();
+        assert_eq!(
+            p1v.value,
+            properties::PropertyValue::Object("/Script/Angelscript.DifficultyPreset_Easy".into()),
+        );
+        // The flow-helper bool was written.
+        let flow = profile_difficulty_path(&root, 1, "m_FakeSloppyCombos")
+            .unwrap()
+            .unwrap();
+        let flowv =
+            properties::resolve(&root.properties, &properties::parse_path(&flow).unwrap()).unwrap();
+        assert_eq!(flowv.value, properties::PropertyValue::Bool(true));
+    }
+
+    #[test]
     fn write_profile_difficulty_targets_only_the_named_profile() {
         // 2 profiles: 0 = Custom, 1 = Easy. Editing profile 1 to Hard must touch
         // ONLY profile 1; profile 0 stays Custom. The edited file must strictly
         // re-parse from its GVAS object (enclosing sizes propagated).
         let mut data = difficulty_persistent_profiles();
         let req = DifficultyRequest {
-            preset: "Hard".into(),
+            preset: Some("Hard".into()),
             combat: None,
             resources: None,
             progression: None,
@@ -7312,7 +7363,7 @@ mod tests {
         }
 
         let req = DifficultyRequest {
-            preset: "Novice".into(),
+            preset: Some("Novice".into()),
             combat: None,
             resources: None,
             progression: None,
