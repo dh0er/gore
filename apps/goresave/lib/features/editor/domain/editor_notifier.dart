@@ -412,11 +412,21 @@ class EditorNotifier extends StateNotifier<EditorState> {
       if (!savePaths.contains(path)) savePaths.add(path);
     }
 
+    // The save `path`s here carry the on-disk style of the save folder, which
+    // is Windows-style for these saves even when the host (e.g. Linux CI) is
+    // POSIX. `package:path`'s top-level functions use the HOST style, so on a
+    // POSIX host `p.dirname('C:\\...\\G1R-001.sav')` collapses to '.'. Pick a
+    // Context matching the SAVE path's style so dirname/join stay correct on any
+    // host. Treat a backslash or an `X:` drive prefix as Windows-style.
+    final isWindowsStyle =
+        path.contains('\\') || RegExp(r'^[A-Za-z]:').hasMatch(path);
+    final ctx = isWindowsStyle ? p.Context(style: p.Style.windows) : p.posix;
+
     final targets = <String, Object?>{
       'saves': savePaths,
       if (edit.alsoProfile && editedProfile != null)
         'profile': {
-          'path': p.join(p.dirname(path), 'PersistentDataList.sav'),
+          'path': ctx.join(ctx.dirname(path), 'PersistentDataList.sav'),
           'profileId': editedProfile.profileId,
         },
     };
@@ -703,30 +713,41 @@ class EditorNotifier extends StateNotifier<EditorState> {
       // 2) Difficulty (write_difficulty), if pending. Each write re-reads the
       // file, so running it after the slot write is safe.
       if (difficultyPayload != null) {
-        final response = await _execute(
-          'write_difficulty',
-          payload: difficultyPayload,
-        );
-        if (response['ok'] != true) {
-          // The slot edits are already committed to disk, but the difficulty
-          // write failed. Record the error and fall through to refresh +
-          // converge: we must NOT keep the committed slot edits pending.
-          difficultyError = _errorMessage(response);
-        } else {
-          difficultyCommitted = true;
-          final data = (response['data'] as Map).cast<String, Object?>();
-          final targetsList = (difficultyPayload['targets'] as Map);
-          final saveTargets = (targetsList['saves'] as List?)?.length ?? 1;
-          final profileTarget = targetsList.containsKey('profile') ? 1 : 0;
-          final written =
-              (data['targetsWritten'] as num?)?.toInt() ??
-              (saveTargets + profileTarget);
-          messages.add(
-            written == 0
-                ? 'No difficulty changes to write'
-                : 'Difficulty written to $written '
-                      'target${written == 1 ? '' : 's'} (backup created)',
+        try {
+          final response = await _execute(
+            'write_difficulty',
+            payload: difficultyPayload,
           );
+          if (response['ok'] != true) {
+            // The slot edits are already committed to disk, but the difficulty
+            // write failed. Record the error and fall through to refresh +
+            // converge: we must NOT keep the committed slot edits pending.
+            difficultyError = _errorMessage(response);
+          } else {
+            difficultyCommitted = true;
+            final data = (response['data'] as Map).cast<String, Object?>();
+            final targetsList = (difficultyPayload['targets'] as Map);
+            final saveTargets = (targetsList['saves'] as List?)?.length ?? 1;
+            final profileTarget = targetsList.containsKey('profile') ? 1 : 0;
+            final written =
+                (data['targetsWritten'] as num?)?.toInt() ??
+                (saveTargets + profileTarget);
+            messages.add(
+              written == 0
+                  ? 'No difficulty changes to write'
+                  : 'Difficulty written to $written '
+                        'target${written == 1 ? '' : 's'} (backup created)',
+            );
+          }
+        } catch (error) {
+          // A THROWN difficulty dispatch (e.g. malformed native JSON from the
+          // core) must be treated as a difficulty failure for convergence, not
+          // swallowed by _withLoading's generic catch — otherwise difficultyError
+          // stays null and the convergence branch would clearPendingDifficulty(),
+          // silently discarding an edit that never landed on disk. Setting
+          // difficultyError (with difficultyCommitted false) routes us to the
+          // "keep pendingDifficulty + surface error" branch.
+          difficultyError = 'Unexpected error: $error';
         }
       }
 

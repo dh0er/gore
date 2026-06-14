@@ -575,6 +575,65 @@ void main() {
   );
 
   test(
+    'thrown write_difficulty converges: write_save succeeds, write_difficulty '
+    'THROWS — slot edits cleared, difficulty KEPT (not discarded), error surfaced',
+    () async {
+      final core = _ThrowingDifficultyWriteCoreService(
+        scanData: difficultyScanData(),
+      );
+      final notifier = difficultyNotifier(core);
+      await pumpEventQueue();
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+      notifier.setPendingEdit(
+        'publicName',
+        const PendingSaveEdit(
+          edits: [
+            {'path': 'public.m_PlayerSaveName', 'value': 'Renamed'},
+          ],
+        ),
+      );
+      const pendingDifficulty = PendingDifficulty(
+        difficulty: {'preset': 'Hard', 'flowHelper': false, 'permadeath': true},
+      );
+      notifier.setPendingDifficulty(pendingDifficulty);
+
+      final ok = await notifier.saveAllPending();
+
+      expect(
+        ok,
+        isFalse,
+        reason: 'overall save failed (difficulty threw, did not land)',
+      );
+      // write_save ran (and succeeded) before the throwing write_difficulty.
+      final writeCommands = core.requests
+          .map((r) => r.command)
+          .where((c) => c == 'write_save' || c == 'write_difficulty')
+          .toList();
+      expect(writeCommands, ['write_save', 'write_difficulty']);
+      // Committed slot edits are on disk — they MUST NOT stay pending.
+      expect(
+        notifier.state.pendingEdits.containsKey('publicName'),
+        isFalse,
+        reason: 'committed slot edits cleared (converged with disk)',
+      );
+      // The thrown difficulty write never landed — it MUST be retained, not
+      // discarded by clearPendingDifficulty().
+      expect(
+        notifier.state.pendingDifficulty,
+        pendingDifficulty,
+        reason: 'a thrown difficulty write keeps the pending edit',
+      );
+      // An honest error is surfaced (not silently swallowed).
+      expect(notifier.state.error, isNotNull);
+      expect(
+        notifier.state.error,
+        contains('Slot changes saved, but difficulty failed'),
+      );
+    },
+  );
+
+  test(
     'global Reset (refresh) clears a pending difficulty edit',
     () async {
       final core = _RecordingCoreService(scanData: difficultyScanData());
@@ -1921,6 +1980,27 @@ class _FailingDifficultyWriteCoreService extends _RecordingCoreService {
         'ok': false,
         'error': {'message': 'difficulty write failed'},
       };
+    }
+    return super.execute(command, payload: payload);
+  }
+}
+
+/// write_save succeeds, but write_difficulty THROWS (e.g. malformed native
+/// JSON from the core) instead of returning an error result — exercises the
+/// thrown-write convergence path (the difficulty edit must be KEPT pending).
+class _ThrowingDifficultyWriteCoreService extends _RecordingCoreService {
+  _ThrowingDifficultyWriteCoreService({super.scanData});
+
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    if (command == 'write_difficulty') {
+      requests.add(
+        _RecordedRequest(command, Map<String, Object?>.from(payload)),
+      );
+      throw const FormatException('malformed native difficulty response');
     }
     return super.execute(command, payload: payload);
   }
