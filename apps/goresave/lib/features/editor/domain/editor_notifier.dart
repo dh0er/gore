@@ -914,7 +914,13 @@ class EditorNotifier extends StateNotifier<EditorState> {
       final data = (response['data'] as Map?)?.cast<String, Object?>();
       final companionPresent = data?['persistentCompanionPresent'] == true;
       final companionRestored = data?['persistentRestoredFrom'] != null;
-      final restoreMessage = companionPresent && !companionRestored
+      // The companion-unchanged warning is only meaningful for SLOT restores.
+      // When the restore target IS PersistentDataList.sav (a companion-backup
+      // restore), the core reports persistentCompanionPresent (the target file
+      // exists) and no separate companion — but this restore just replaced it,
+      // so the warning would be misleading. Suppress it for PDL targets.
+      final targetIsPdl = path.endsWith('PersistentDataList.sav');
+      final restoreMessage = companionPresent && !companionRestored && !targetIsPdl
           ? 'Restored backup: $backupPath (PersistentDataList.sav left unchanged '
                 '— no matching companion backup; slot metadata may differ)'
           : 'Restored backup: $backupPath';
