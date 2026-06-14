@@ -1466,8 +1466,15 @@ fn restore_backup(path: &Path, backup_path: &Path) -> Result<Value, CoreError> {
     // leaving the slot restored while PersistentDataList.sav stays out of sync.
     let companion_plan = prepare_paired_persistent_data_list_restore(path, backup_path)?;
 
-    // Take safety backups of both files up front.
-    let current_backup_path = create_backup_copy(path)?;
+    // Take safety backups of both files up front. For a profile-file restore,
+    // the safety backup must avoid existing slot-backup suffixes too — otherwise
+    // it could land on a slot's suffix and be wrongly paired as that slot's
+    // companion on a later slot restore (same hazard as the write path).
+    let current_backup_path = if target_is_profile {
+        create_unique_backup_avoiding(path, &existing_foreign_backup_suffixes(path))?
+    } else {
+        create_backup_copy(path)?
+    };
     let companion_safety_backup = match &companion_plan {
         Some(plan) => Some(create_backup_copy(&plan.persistent_path)?),
         None => None,
@@ -3891,7 +3898,11 @@ fn read_bool_property_at(payload: &[u8], refs: &[FStringRef], name_idx: usize) -
     if cursor + 9 > payload.len() {
         return None;
     }
-    Some(*payload.get(cursor + 8)? != 0)
+    // A BoolProperty's value lives in the 0x10 (TAG_FLAG_BOOL_TRUE) bit of the
+    // tag byte, matching the typed parser/writer. Test that bit rather than
+    // "nonzero", or a false bool carrying another tag flag (e.g. 0x08) would be
+    // misread as true and written back as true on the next save.
+    Some(*payload.get(cursor + 8)? & properties::TAG_FLAG_BOOL_TRUE != 0)
 }
 
 fn i32_value_offset_at(payload: &[u8], refs: &[FStringRef], name_idx: usize) -> Option<usize> {
@@ -7759,7 +7770,9 @@ mod tests {
         out.extend_from_slice(&fstring("BoolProperty"));
         out.extend_from_slice(&0u32.to_le_bytes());
         out.extend_from_slice(&0u32.to_le_bytes());
-        out.push(u8::from(value));
+        // The bool lives in the 0x10 (TAG_FLAG_BOOL_TRUE) tag bit, as real saves
+        // and the typed parser/writer encode it.
+        out.push(if value { properties::TAG_FLAG_BOOL_TRUE } else { 0 });
         out
     }
 
@@ -12942,11 +12955,11 @@ mod tests {
         payload.extend_from_slice(&fstring("m_FakeSloppyCombos"));
         payload.extend_from_slice(&fstring("BoolProperty"));
         payload.extend_from_slice(&[0u8; 8]); // array_index + size
-        payload.push(1); // bool value byte
+        payload.push(properties::TAG_FLAG_BOOL_TRUE); // bool tag bit = true
         payload.extend_from_slice(&fstring("m_PermanentDeath"));
         payload.extend_from_slice(&fstring("BoolProperty"));
         payload.extend_from_slice(&[0u8; 8]);
-        payload.push(0);
+        payload.push(0); // false
 
         let d = parse_difficulty_settings(&payload);
         assert_eq!(d.preset.as_deref(), Some("DifficultyPreset_Custom"));
@@ -12965,10 +12978,24 @@ mod tests {
         payload.extend_from_slice(&fstring("m_PermaDeath"));
         payload.extend_from_slice(&fstring("BoolProperty"));
         payload.extend_from_slice(&[0u8; 8]); // array_index + size
-        payload.push(1); // bool value byte (true)
+        payload.push(properties::TAG_FLAG_BOOL_TRUE); // bool tag bit = true
 
         let d = parse_difficulty_settings(&payload);
         assert_eq!(d.permadeath, Some(true));
+    }
+
+    #[test]
+    fn parse_difficulty_settings_bool_only_true_on_0x10_bit() {
+        // A FALSE BoolProperty whose tag byte carries another flag (0x08) must
+        // read false — only the 0x10 (TAG_FLAG_BOOL_TRUE) bit means true. A
+        // "nonzero" test would misread it and a later save would flip it on.
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&fstring("m_FakeSloppyCombos"));
+        payload.extend_from_slice(&fstring("BoolProperty"));
+        payload.extend_from_slice(&[0u8; 8]);
+        payload.push(0x08); // a non-0x10 flag; the bool value is FALSE
+        let d = parse_difficulty_settings(&payload);
+        assert_eq!(d.flow_helper, Some(false));
     }
 
     #[test]
