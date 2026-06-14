@@ -2142,6 +2142,111 @@ fn difficulty_for_gsav_bytes(data: &[u8]) -> Option<DifficultySettings> {
     Some(parse_difficulty_settings(parts.public_payload))
 }
 
+const ANGELSCRIPT: &str = "/Script/Angelscript.";
+
+fn level_suffix(label: &str) -> Result<&'static str, CoreError> {
+    match label {
+        "Novice" => Ok("Easy"),
+        "Gothic" => Ok("Standard"),
+        "Hard" => Ok("Hard"),
+        other => Err(CoreError::InvalidRequest(format!(
+            "unknown difficulty level {other}"
+        ))),
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DifficultyRequest {
+    preset: String, // Novice|Gothic|Hard|Custom
+    #[serde(default)]
+    combat: Option<String>,
+    #[serde(default)]
+    resources: Option<String>,
+    #[serde(default)]
+    progression: Option<String>,
+    #[serde(default)]
+    flow_helper: Option<bool>,
+    #[serde(default)]
+    permadeath: Option<bool>,
+}
+
+impl DifficultyRequest {
+    /// Resolved short class names (no package prefix).
+    fn class_edits(&self) -> Result<Vec<(&'static str, String)>, CoreError> {
+        let preset = if self.preset == "Custom" {
+            "DifficultyPreset_Custom".to_string()
+        } else {
+            format!("DifficultyPreset_{}", level_suffix(&self.preset)?)
+        };
+        let lvl = |explicit: &Option<String>| -> Result<&'static str, CoreError> {
+            if self.preset == "Custom" {
+                level_suffix(explicit.as_deref().unwrap_or("Gothic"))
+            } else {
+                level_suffix(&self.preset)
+            }
+        };
+        Ok(vec![
+            ("m_difficultyPreset", preset),
+            (
+                "m_customCombatSettings",
+                format!("CombatDifficultySettings_{}", lvl(&self.combat)?),
+            ),
+            (
+                "m_customResourcesSettings",
+                format!("ResourcesDifficultySettings_{}", lvl(&self.resources)?),
+            ),
+            (
+                "m_customProgressionSettings",
+                format!("ProgressionDifficultySettings_{}", lvl(&self.progression)?),
+            ),
+        ])
+    }
+
+    /// Permadeath is locked off for Novice.
+    fn resolved_permadeath(&self) -> Option<bool> {
+        if self.preset == "Novice" {
+            Some(false)
+        } else {
+            self.permadeath
+        }
+    }
+}
+
+fn apply_save_difficulty(payload: &mut Vec<u8>, req: &DifficultyRequest) -> Result<(), CoreError> {
+    // Class properties: re-scan before each splice (lengths shift).
+    for (name, class) in req.class_edits()? {
+        let refs = scan_fstrings(payload, 0);
+        let end = refs.len();
+        if find_ref_in_range(&refs, 0, end, name).is_some() {
+            replace_class_or_str_property_in_range(
+                payload,
+                &refs,
+                0,
+                end,
+                name,
+                &format!("{ANGELSCRIPT}{class}"),
+            )?;
+        }
+    }
+    // Bools: guard each write so an absent property is skipped, not errored.
+    if let Some(perma) = req.resolved_permadeath() {
+        let refs = scan_fstrings(payload, 0);
+        let end = refs.len();
+        if find_ref_in_range(&refs, 0, end, "m_PermanentDeath").is_some() {
+            write_bool_property_in_range(payload, &refs, 0, end, "m_PermanentDeath", perma)?;
+        }
+    }
+    if let Some(flow) = req.flow_helper {
+        let refs = scan_fstrings(payload, 0);
+        let end = refs.len();
+        if find_ref_in_range(&refs, 0, end, "m_FakeSloppyCombos").is_some() {
+            write_bool_property_in_range(payload, &refs, 0, end, "m_FakeSloppyCombos", flow)?;
+        }
+    }
+    Ok(())
+}
+
 fn read_i32_after_property(payload: &[u8], refs: &[FStringRef], name: &str) -> Option<i32> {
     let name_idx = refs.iter().position(|r| r.value == name)?;
     read_i32_property_at(payload, refs, name_idx)
@@ -2198,6 +2303,7 @@ fn write_bool_property_in_range(
             "property {name} is not a BoolProperty"
         )));
     }
+    // value byte sits 8 bytes past the type ref (4 flags + 4 size), mirroring read_bool_property_at
     let offset = type_ref.len_offset + type_ref.total_len + 8;
     *payload
         .get_mut(offset)
@@ -6570,6 +6676,57 @@ mod tests {
         let refs2 = scan_fstrings(&payload, 0);
         assert_eq!(
             read_bool_property_in_range(&payload, &refs2, 0, refs2.len(), "m_PermanentDeath"),
+            Some(true),
+        );
+    }
+
+    #[test]
+    fn apply_save_difficulty_sets_preset_and_subsettings() {
+        let mut payload = Vec::new();
+        for name in [
+            "m_difficultyPreset",
+            "m_customCombatSettings",
+            "m_customResourcesSettings",
+            "m_customProgressionSettings",
+        ] {
+            payload.extend_from_slice(&fstring(name));
+            payload.extend_from_slice(&fstring("ClassProperty"));
+            payload.extend_from_slice(&[0u8; 4]);
+            payload.extend_from_slice(&0u32.to_le_bytes());
+            payload.push(0);
+            payload.extend_from_slice(&fstring("/Script/Angelscript.DifficultyPreset_Easy"));
+        }
+        payload.extend_from_slice(&fstring("m_PermanentDeath"));
+        payload.extend_from_slice(&fstring("BoolProperty"));
+        payload.extend_from_slice(&[0u8; 8]);
+        payload.push(0);
+
+        let req = DifficultyRequest {
+            preset: "Custom".to_string(),
+            combat: Some("Hard".to_string()),
+            resources: None,
+            progression: None,
+            flow_helper: None,
+            permadeath: Some(true),
+        };
+        apply_save_difficulty(&mut payload, &req).unwrap();
+
+        let refs = scan_fstrings(&payload, 0);
+        let end = refs.len();
+        assert_eq!(
+            value_after_property_in_range(&refs, 0, end, "m_difficultyPreset").as_deref(),
+            Some("/Script/Angelscript.DifficultyPreset_Custom"),
+        );
+        assert_eq!(
+            value_after_property_in_range(&refs, 0, end, "m_customCombatSettings").as_deref(),
+            Some("/Script/Angelscript.CombatDifficultySettings_Hard"),
+        );
+        assert_eq!(
+            value_after_property_in_range(&refs, 0, end, "m_customResourcesSettings").as_deref(),
+            Some("/Script/Angelscript.ResourcesDifficultySettings_Standard"),
+        );
+        assert_eq!(
+            read_bool_property_in_range(&payload, &refs, 0, end, "m_PermanentDeath"),
             Some(true),
         );
     }
