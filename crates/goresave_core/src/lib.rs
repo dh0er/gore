@@ -6918,6 +6918,11 @@ fn replace_class_or_str_property_in_range(
 ) -> Result<(), CoreError> {
     let name_idx = find_ref_in_range(refs, start_idx, end_idx, property_name)
         .ok_or_else(|| CoreError::Parse(format!("property {property_name} was not found")))?;
+    if name_idx + 2 >= end_idx {
+        return Err(CoreError::Parse(format!(
+            "value for {property_name} was not found"
+        )));
+    }
     let type_ref = refs
         .get(name_idx + 1)
         .ok_or_else(|| CoreError::Parse(format!("type for {property_name} was not found")))?;
@@ -7624,6 +7629,48 @@ mod tests {
             value_after_property_in_range(&refs2, 0, refs2.len(), "m_difficultyPreset").as_deref(),
             Some("/Script/Angelscript.DifficultyPreset_Easy"),
         );
+    }
+
+    #[test]
+    fn replace_class_or_str_property_does_not_splice_past_end_idx() {
+        // The matched property name is the LAST ref inside the selected range
+        // (end_idx). Its type/value refs live AFTER end_idx, in the FOLLOWING
+        // field/profile. Without the range guard the helper would read
+        // refs[name_idx + 2] (= the next field's value) and corrupt bytes
+        // outside the selected profile. With the guard it must fail cleanly and
+        // leave the following field's bytes untouched.
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&fstring("m_difficultyPreset"));
+        // --- everything below belongs to the NEXT field, outside the range ---
+        payload.extend_from_slice(&fstring("ObjectProperty"));
+        payload.extend_from_slice(&[0u8; 4]); // flags
+        payload.extend_from_slice(&0u32.to_le_bytes()); // size
+        payload.push(0); // tag
+        payload.extend_from_slice(&fstring("/Script/Angelscript.DifficultyPreset_Custom"));
+
+        let before = payload.clone();
+        let refs = scan_fstrings(&payload, 0);
+        // end_idx bounds the search to ONLY the property-name ref. The type ref
+        // (name_idx + 1) and value ref (name_idx + 2) fall at/beyond end_idx.
+        let end_idx = 1;
+        let err = replace_class_or_str_property_in_range(
+            &mut payload,
+            &refs,
+            0,
+            end_idx,
+            "m_difficultyPreset",
+            "/Script/Angelscript.DifficultyPreset_Easy",
+        )
+        .unwrap_err();
+        match &err {
+            CoreError::Parse(msg) => assert!(
+                msg.contains("value for m_difficultyPreset was not found"),
+                "unexpected error message: {msg}",
+            ),
+            other => panic!("expected Parse error, got {other:?}"),
+        }
+        // The out-of-range following field must be byte-for-byte untouched.
+        assert_eq!(payload, before, "bytes outside the selected range were modified");
     }
 
     fn minimal_stream() -> Vec<u8> {
