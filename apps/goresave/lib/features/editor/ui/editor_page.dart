@@ -1700,9 +1700,17 @@ class _PrivateInventorySummaryCardState
     final hasItems = inventory.items.isNotEmpty;
     final hasPendingAdd = _pendingAdd != null;
     final hasPendingRemove = _pendingRemovePath != null;
+    final hasPendingCount = _pendingCountChanges.isNotEmpty;
     final hasPendingChanges =
-        _pendingCountChanges.isNotEmpty || hasPendingAdd || hasPendingRemove;
+        hasPendingCount || hasPendingAdd || hasPendingRemove;
     final canRemove = widget.canRemoveItem;
+    // A structural edit (add/remove) must be saved on its own (the core/notifier
+    // reject a batch that mixes it with count edits), so structural edits and
+    // count edits are kept mutually exclusive in the UI: a structural edit is
+    // blocked while counts are pending, and count editing is blocked while a
+    // structural edit is pending.
+    final structuralBlocked = hasPendingAdd || hasPendingRemove || hasPendingCount;
+    final countEditable = widget.editable && !hasPendingAdd && !hasPendingRemove;
 
     return Card(
       child: Padding(
@@ -1743,13 +1751,13 @@ class _PrivateInventorySummaryCardState
                         ? 'Save pending changes first — one new item per save'
                         : hasPendingRemove
                             ? 'Save the pending removal first — one structural change per save'
-                            : 'Add item to inventory',
+                            : hasPendingCount
+                                ? 'Save or reset pending count changes first — a structural edit must be saved on its own'
+                                : 'Add item to inventory',
                     child: FilledButton.icon(
                       icon: const Icon(Icons.add, size: 18),
                       label: const Text('Add item'),
-                      onPressed: (hasPendingAdd || hasPendingRemove)
-                          ? null
-                          : _openAddDialog,
+                      onPressed: structuralBlocked ? null : _openAddDialog,
                     ),
                   ),
                 ],
@@ -1871,8 +1879,8 @@ class _PrivateInventorySummaryCardState
                                           theme,
                                           item,
                                           canRemove: canRemove,
-                                          removeBlocked:
-                                              hasPendingAdd || hasPendingRemove,
+                                          countEditable: countEditable,
+                                          removeBlocked: structuralBlocked,
                                         ),
                                       );
                                     },
@@ -1908,14 +1916,17 @@ class _PrivateInventorySummaryCardState
     ThemeData theme,
     PrivateInventoryItem item, {
     required bool canRemove,
+    required bool countEditable,
     required bool removeBlocked,
   }) {
-    // A remove-only inventory (removeItem advertised without setItemCount) is
-    // not `editable` for count edits, but the delete action must still show.
+    // The count editor shows only when count editing is currently allowed (the
+    // inventory is count-editable AND no structural edit is pending). A
+    // remove-only inventory, or one with a pending structural edit, shows the
+    // count as plain text but the delete action may still apply.
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        if (widget.editable)
+        if (countEditable)
           _InventoryItemCountEditor(
             item: item,
             pendingCount: _pendingCountChanges[_inventoryItemKey(item)]?.count,
@@ -1931,8 +1942,8 @@ class _PrivateInventorySummaryCardState
           const SizedBox(width: 4),
           Tooltip(
             message: removeBlocked
-                ? 'Save the pending structural change first — '
-                    'one add or remove per save'
+                ? 'Save or reset your pending inventory changes first — '
+                    'an add or remove must be saved on its own'
                 : 'Remove item from inventory',
             child: IconButton(
               icon: const Icon(Icons.delete_outline),
