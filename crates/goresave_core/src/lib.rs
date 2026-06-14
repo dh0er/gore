@@ -6418,6 +6418,40 @@ fn replace_str_property_fstring_in_range(
     write_str_property_value(payload, size_offset, value_ref, new_value)
 }
 
+/// Like `replace_str_property_fstring_in_range`, but also accepts
+/// `ClassProperty`. A ClassProperty's value is serialized as an inline FString
+/// with the identical layout to a StrProperty, so the same size-aware splice
+/// rewrites asset-path values (e.g. a DifficultyPreset class path) in place.
+fn replace_class_or_str_property_in_range(
+    payload: &mut Vec<u8>,
+    refs: &[FStringRef],
+    start_idx: usize,
+    end_idx: usize,
+    property_name: &str,
+    new_value: &str,
+) -> Result<(), CoreError> {
+    let name_idx = find_ref_in_range(refs, start_idx, end_idx, property_name)
+        .ok_or_else(|| CoreError::Parse(format!("property {property_name} was not found")))?;
+    let type_ref = refs
+        .get(name_idx + 1)
+        .ok_or_else(|| CoreError::Parse(format!("type for {property_name} was not found")))?;
+    if type_ref.value != "StrProperty" && type_ref.value != "ClassProperty" {
+        return Err(CoreError::Parse(format!(
+            "property {property_name} is not a StrProperty/ClassProperty"
+        )));
+    }
+    let value_ref = refs
+        .get(name_idx + 2)
+        .ok_or_else(|| CoreError::Parse(format!("value for {property_name} was not found")))?;
+    if value_ref.utf16 {
+        return Err(CoreError::UnsupportedEdit(
+            "UTF-16 FString replacement is not implemented yet".to_string(),
+        ));
+    }
+    let size_offset = type_ref.len_offset + type_ref.total_len + 4;
+    write_str_property_value(payload, size_offset, value_ref, new_value)
+}
+
 fn sha1_hex(data: &[u8]) -> String {
     let mut hasher = Sha1::new();
     hasher.update(data);
@@ -6493,6 +6527,34 @@ mod tests {
         out.extend_from_slice(value.as_bytes());
         out.push(0);
         out
+    }
+
+    #[test]
+    fn replace_class_property_value_in_range_rewrites_path() {
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&fstring("m_difficultyPreset"));
+        payload.extend_from_slice(&fstring("ClassProperty"));
+        payload.extend_from_slice(&[0u8; 4]); // flags
+        payload.extend_from_slice(&0u32.to_le_bytes()); // size (rewritten)
+        payload.push(0); // tag
+        payload.extend_from_slice(&fstring("/Script/Angelscript.DifficultyPreset_Custom"));
+
+        let refs = scan_fstrings(&payload, 0);
+        replace_class_or_str_property_in_range(
+            &mut payload,
+            &refs,
+            0,
+            refs.len(),
+            "m_difficultyPreset",
+            "/Script/Angelscript.DifficultyPreset_Easy",
+        )
+        .unwrap();
+
+        let refs2 = scan_fstrings(&payload, 0);
+        assert_eq!(
+            value_after_property_in_range(&refs2, 0, refs2.len(), "m_difficultyPreset").as_deref(),
+            Some("/Script/Angelscript.DifficultyPreset_Easy"),
+        );
     }
 
     fn minimal_stream() -> Vec<u8> {
