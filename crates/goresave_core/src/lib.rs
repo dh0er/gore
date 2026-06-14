@@ -167,6 +167,17 @@ pub struct ProfileSummary {
 
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct DifficultySettings {
+    pub preset: Option<String>,
+    pub combat: Option<String>,
+    pub resources: Option<String>,
+    pub progression: Option<String>,
+    pub flow_helper: Option<bool>,
+    pub permadeath: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SaveDirSummary {
     pub saves: Vec<SaveListItem>,
     pub profiles: Vec<ProfileSummary>,
@@ -2097,6 +2108,26 @@ fn value_after_property_in_range(
         .map(|r| r.value.clone())
 }
 
+fn short_class_name(path: &str) -> String {
+    path.rsplit('.').next().unwrap_or(path).to_string()
+}
+
+pub fn parse_difficulty_settings(payload: &[u8]) -> DifficultySettings {
+    let refs = scan_fstrings(payload, 0);
+    let end = refs.len();
+    let class = |name: &str| {
+        value_after_property_in_range(&refs, 0, end, name).map(|v| short_class_name(&v))
+    };
+    DifficultySettings {
+        preset: class("m_difficultyPreset"),
+        combat: class("m_customCombatSettings"),
+        resources: class("m_customResourcesSettings"),
+        progression: class("m_customProgressionSettings"),
+        flow_helper: read_bool_property_in_range(payload, &refs, 0, end, "m_FakeSloppyCombos"),
+        permadeath: read_bool_property_in_range(payload, &refs, 0, end, "m_PermanentDeath"),
+    }
+}
+
 fn read_i32_after_property(payload: &[u8], refs: &[FStringRef], name: &str) -> Option<i32> {
     let name_idx = refs.iter().position(|r| r.value == name)?;
     read_i32_property_at(payload, refs, name_idx)
@@ -3480,6 +3511,7 @@ fn is_property_type_name(value: &str) -> bool {
             | "ByteProperty"
             | "EnumProperty"
             | "DoubleProperty"
+            | "ClassProperty"
     )
 }
 
@@ -11599,5 +11631,30 @@ mod tests {
             err.to_string().contains("at most one structural array edit"),
             "unexpected error message: {err}"
         );
+    }
+
+    #[test]
+    fn parse_difficulty_settings_reads_preset_and_bools() {
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&fstring("m_difficultyPreset"));
+        payload.extend_from_slice(&fstring("ClassProperty"));
+        payload.extend_from_slice(&fstring("/Script/Angelscript.DifficultyPreset_Custom"));
+        payload.extend_from_slice(&fstring("m_customCombatSettings"));
+        payload.extend_from_slice(&fstring("ClassProperty"));
+        payload.extend_from_slice(&fstring("/Script/Angelscript.CombatDifficultySettings_Hard"));
+        payload.extend_from_slice(&fstring("m_FakeSloppyCombos"));
+        payload.extend_from_slice(&fstring("BoolProperty"));
+        payload.extend_from_slice(&[0u8; 8]); // array_index + size
+        payload.push(1); // bool value byte
+        payload.extend_from_slice(&fstring("m_PermanentDeath"));
+        payload.extend_from_slice(&fstring("BoolProperty"));
+        payload.extend_from_slice(&[0u8; 8]);
+        payload.push(0);
+
+        let d = parse_difficulty_settings(&payload);
+        assert_eq!(d.preset.as_deref(), Some("DifficultyPreset_Custom"));
+        assert_eq!(d.combat.as_deref(), Some("CombatDifficultySettings_Hard"));
+        assert_eq!(d.flow_helper, Some(true));
+        assert_eq!(d.permadeath, Some(false));
     }
 }
