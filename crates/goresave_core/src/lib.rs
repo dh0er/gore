@@ -2470,36 +2470,40 @@ fn profile_difficulty_path(
     Ok(Some(full))
 }
 
-/// Locate the byte offset where the GVAS save object begins inside a
-/// PersistentDataList.sav (or similar GVAS file). The file starts with a
-/// variable-length GVAS header (save-game/package versions + a custom-version
-/// array of unpredictable length + the save-game class name) before the object
-/// body that `parse_private_root` consumes. Rather than parse every header
-/// version exactly, probe for the offset at which the object parses and
-/// consumes the rest of the file. This is version-agnostic and deterministic.
+/// Parse the GVAS save object inside a PersistentDataList file, returning a tree
+/// whose offsets are ABSOLUTE within `data` so it patches the file directly.
 ///
-/// The probe is bounded to the header region (object class names appear within
-/// a few KB) so it stays linear in practice.
-fn locate_gvas_object(data: &[u8]) -> Result<usize, CoreError> {
+/// The file starts with a variable-length GVAS header (save-game/package
+/// versions + a custom-version array of unpredictable length + the save-game
+/// class name) before the object body. Rather than parse every header version
+/// exactly, probe for the offset at which the body parses AND consumes the rest
+/// of the file — version-agnostic and deterministic, bounded to the header
+/// region (class names appear within a few KB) so it stays linear in practice.
+///
+/// Two body framings are accepted, mirroring `parse_save_tree`:
+///   * a nested `class` + flag + props + footer object — `parse_private_root_at`;
+///   * a bare property list that follows the header's class name directly, with
+///     no nested object framing — `parse_property_list_root_at`. This is the
+///     shape of a standard GVAS save-game file (the common PersistentDataList
+///     layout), where the object-only probe would otherwise hard-fail.
+fn parse_profile_file(data: &[u8]) -> Result<properties::RootObject, CoreError> {
     let limit = data.len().min(8192);
     for off in 0..limit {
+        // consumed is absolute; a full parse ends exactly at the file end.
         if let Ok(root) = properties::parse_private_root_at(data, off) {
-            // consumed is absolute; a full parse ends exactly at the file end.
             if root.consumed == data.len() {
-                return Ok(off);
+                return Ok(root);
+            }
+        }
+        if let Ok(root) = properties::parse_property_list_root_at(data, off) {
+            if root.consumed == data.len() {
+                return Ok(root);
             }
         }
     }
     Err(CoreError::Parse(
         "could not locate the GVAS save object in the file".into(),
     ))
-}
-
-/// Parse the GVAS object inside a PersistentDataList file. The returned tree's
-/// offsets are ABSOLUTE within `data`, so they patch the file directly.
-fn parse_profile_file(data: &[u8]) -> Result<properties::RootObject, CoreError> {
-    let off = locate_gvas_object(data)?;
-    properties::parse_private_root_at(data, off)
 }
 
 fn write_profile_difficulty(
@@ -4949,10 +4953,12 @@ fn coerce_typed_value(
                 "private.typed.setValue does not support this ByteProperty form".to_string(),
             )),
         },
-        "StrProperty" | "NameProperty" | "ObjectProperty" | "EnumProperty" => value
-            .as_str()
-            .map(|v| TypedSetValue::Text(v.to_string()))
-            .ok_or_else(|| err("a string")),
+        "StrProperty" | "NameProperty" | "ObjectProperty" | "ClassProperty" | "EnumProperty" => {
+            value
+                .as_str()
+                .map(|v| TypedSetValue::Text(v.to_string()))
+                .ok_or_else(|| err("a string"))
+        }
         other => Err(CoreError::UnsupportedEdit(format!(
             "private.typed.setValue does not support {other} targets \
              (fixed-size scalars and string-valued properties only)"
@@ -7578,27 +7584,7 @@ mod tests {
     /// array_index u32 + size u32 + tag_flags u8, then the body
     /// `[element_count u32][struct0 props + None][struct1 props + None]`.
     fn difficulty_persistent_profiles() -> Vec<u8> {
-        let mut body = 2u32.to_le_bytes().to_vec(); // element count
-        let mut p0 = profile_props(0, "Custom", false);
-        p0.extend_from_slice(&fstring("None"));
-        let mut p1 = profile_props(1, "Easy", false);
-        p1.extend_from_slice(&fstring("None"));
-        body.extend_from_slice(&p0);
-        body.extend_from_slice(&p1);
-
-        let mut props = diff_tag("m_Profiles", "ArrayProperty");
-        // ArrayProperty inner descriptor: inner_count + inner type + struct desc.
-        props.extend_from_slice(&1u32.to_le_bytes()); // inner_count
-        props.extend_from_slice(&fstring("StructProperty")); // inner type
-        props.extend_from_slice(&1u32.to_le_bytes()); // struct desc count
-        props.extend_from_slice(&fstring("ProfileEntry")); // struct type
-        props.extend_from_slice(&1u32.to_le_bytes()); // package count
-        props.extend_from_slice(&fstring("/Script/G1R")); // package
-        // value header
-        props.extend_from_slice(&0u32.to_le_bytes()); // array_index
-        props.extend_from_slice(&(body.len() as u32).to_le_bytes()); // size
-        props.push(0); // tag_flags
-        props.extend_from_slice(&body);
+        let props = persistent_profiles_property_block();
 
         // The object body (class + flag + props + None + footer).
         let mut object = fstring("/Script/G1R.PersistentDataList");
@@ -7616,6 +7602,91 @@ mod tests {
         data.extend_from_slice(&[0u8; 24]); // opaque header filler
         data.extend_from_slice(&object);
         data
+    }
+
+    /// The `m_Profiles` ArrayProperty<StructProperty> property block shared by
+    /// both PersistentDataList framings (object-wrapped and bare).
+    fn persistent_profiles_property_block() -> Vec<u8> {
+        let mut body = 2u32.to_le_bytes().to_vec(); // element count
+        let mut p0 = profile_props(0, "Custom", false);
+        p0.extend_from_slice(&fstring("None"));
+        let mut p1 = profile_props(1, "Easy", false);
+        p1.extend_from_slice(&fstring("None"));
+        body.extend_from_slice(&p0);
+        body.extend_from_slice(&p1);
+
+        let mut props = diff_tag("m_Profiles", "ArrayProperty");
+        props.extend_from_slice(&1u32.to_le_bytes()); // inner_count
+        props.extend_from_slice(&fstring("StructProperty")); // inner type
+        props.extend_from_slice(&1u32.to_le_bytes()); // struct desc count
+        props.extend_from_slice(&fstring("ProfileEntry")); // struct type
+        props.extend_from_slice(&1u32.to_le_bytes()); // package count
+        props.extend_from_slice(&fstring("/Script/G1R")); // package
+        props.extend_from_slice(&0u32.to_le_bytes()); // array_index
+        props.extend_from_slice(&(body.len() as u32).to_le_bytes()); // size
+        props.push(0); // tag_flags
+        props.extend_from_slice(&body);
+        props
+    }
+
+    /// Build a 2-profile PersistentDataList.sav in the STANDARD GVAS save-game
+    /// shape: a variable-length header (whose class name we stand in for with
+    /// filler) followed DIRECTLY by the property list terminated by `None` — no
+    /// nested `class`/flag object framing and no footer. This is the layout the
+    /// object-only probe used to hard-fail on.
+    fn difficulty_persistent_profiles_bare() -> Vec<u8> {
+        let mut data = b"GVAS".to_vec();
+        data.extend_from_slice(&[0u8; 24]); // opaque header filler (stands in for class name)
+        data.extend_from_slice(&persistent_profiles_property_block());
+        data.extend_from_slice(&fstring("None")); // property-list terminator, then EOF
+        data
+    }
+
+    #[test]
+    fn parse_profile_file_handles_bare_property_list_framing() {
+        // A standard GVAS save-game file has no nested class+flag+footer object:
+        // the property list follows the header directly. parse_profile_file must
+        // locate and fully consume it, and write_profile_difficulty must edit a
+        // profile in place and still strictly re-parse.
+        let mut data = difficulty_persistent_profiles_bare();
+
+        let root = parse_profile_file(&data).unwrap();
+        assert_eq!(root.consumed, data.len());
+        assert!(profile_element(&root, 1).is_some());
+
+        let req = DifficultyRequest {
+            preset: "Hard".into(),
+            combat: None,
+            resources: None,
+            progression: None,
+            flow_helper: None,
+            permadeath: None,
+        };
+        write_profile_difficulty(&mut data, 1, &req).unwrap();
+
+        let root = parse_profile_file(&data).unwrap();
+        assert_eq!(root.consumed, data.len());
+        let p1 = profile_difficulty_path(&root, 1, "m_difficultyPreset")
+            .unwrap()
+            .unwrap();
+        let p1v =
+            properties::resolve(&root.properties, &properties::parse_path(&p1).unwrap()).unwrap();
+        assert_eq!(
+            p1v.value,
+            properties::PropertyValue::Object("/Script/Angelscript.DifficultyPreset_Hard".into()),
+        );
+        // Profile 0 must remain untouched.
+        let p0 = profile_difficulty_path(&root, 0, "m_difficultyPreset")
+            .unwrap()
+            .unwrap();
+        let p0v =
+            properties::resolve(&root.properties, &properties::parse_path(&p0).unwrap()).unwrap();
+        assert_eq!(
+            p0v.value,
+            properties::PropertyValue::Object(
+                "/Script/Angelscript.DifficultyPreset_Custom".into()
+            ),
+        );
     }
 
     #[test]

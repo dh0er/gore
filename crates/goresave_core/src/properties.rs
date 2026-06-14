@@ -1237,7 +1237,20 @@ pub fn parse_private_root_at(payload: &[u8], start: usize) -> Result<RootObject,
 /// `footer` is `0`, and `consumed` is the absolute end of the property list
 /// including the closing `None`.
 pub fn parse_property_list_root(payload: &[u8]) -> Result<RootObject, CoreError> {
-    let mut r = Reader::new(payload, 0);
+    parse_property_list_root_at(payload, 0)
+}
+
+/// Like [`parse_property_list_root`] but the property list begins at absolute
+/// offset `start` within `payload` (the bytes before `start` are a header the
+/// list does not include). Recorded offsets are ABSOLUTE within `payload`. This
+/// is the shape of a standard GVAS save-game file, whose variable-length header
+/// ends with the save-game class name and is followed DIRECTLY by the object's
+/// property list (no nested `class`/flag object framing, no footer).
+pub fn parse_property_list_root_at(payload: &[u8], start: usize) -> Result<RootObject, CoreError> {
+    if start > payload.len() {
+        return Err(CoreError::Parse("list start past end of payload".into()));
+    }
+    let mut r = Reader::new(&payload[start..], start);
     let properties = read_property_list(&mut r, 0)?;
     Ok(RootObject {
         class: String::new(),
