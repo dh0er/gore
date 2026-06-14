@@ -342,6 +342,10 @@ class EditorNotifier extends StateNotifier<EditorState> {
     required int profileId,
     required Map<String, Object?> difficulty,
   }) {
+    // Re-entry guard: bail if a load is already in flight (a rescan or another
+    // write), so this write + refresh cannot interleave editor-state updates
+    // with that work — mirrors saveAllPending / applyMemoryEventEdit.
+    if (state.isLoading) return Future.value(false);
     // Refuse while slot edits are pending: this write runs _runWrite -> refresh,
     // and the same-save _inspect clears the pending registry — silently
     // discarding those drafts even though no write_save ran for them. Make the
