@@ -725,6 +725,58 @@ void main() {
   );
 
   test(
+    'global saveAllPending rejects when a pending difficulty edit conflicts '
+    'with a typed All-data edit targeting a difficulty property',
+    () async {
+      final core = _RecordingCoreService(scanData: difficultyScanData());
+      final notifier = difficultyNotifier(core);
+      await pumpEventQueue();
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+      // A typed "All data" edit targeting the difficulty preset...
+      notifier.setPendingEdit(
+        'typed:m_difficultyPreset',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.typed.setValue',
+              'value': {
+                'path': ['m_difficultyPreset'],
+                'value': '/Script/Angelscript.DifficultyPreset_Hard',
+              },
+            },
+          ],
+        ),
+      );
+      // ...and a Difficulty-card edit, both pending at once.
+      notifier.setPendingDifficulty(
+        const PendingDifficulty(
+          difficulty: {'preset': 'Easy', 'flowHelper': false, 'permadeath': true},
+        ),
+      );
+
+      final ok = await notifier.saveAllPending();
+
+      // Refuses loudly with a conflict error.
+      expect(ok, isFalse);
+      expect(notifier.state.error, contains('Conflicting difficulty edits'));
+      // No writes issued at all.
+      expect(
+        core.requests.where(
+          (r) => r.command == 'write_save' || r.command == 'write_difficulty',
+        ),
+        isEmpty,
+      );
+      // BOTH pending sets are retained so the user can resolve the conflict.
+      expect(
+        notifier.state.pendingEdits.containsKey('typed:m_difficultyPreset'),
+        isTrue,
+      );
+      expect(notifier.state.pendingDifficulty, isNotNull);
+    },
+  );
+
+  test(
     'global saveAllPending fails loudly and keeps the pending difficulty when '
     'propagation is requested but the edited save profile cannot be resolved',
     () async {

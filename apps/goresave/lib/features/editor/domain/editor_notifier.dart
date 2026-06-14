@@ -667,6 +667,44 @@ class EditorNotifier extends StateNotifier<EditorState> {
       return false;
     }
 
+    // A difficulty edit (Difficulty card) and a typed "All data" edit that
+    // targets one of the difficulty properties are BOTH pending. write_difficulty
+    // runs AFTER write_save, so the Difficulty card would silently overwrite the
+    // typed value and both drafts would be cleared as "saved". The slot-internal
+    // duplicate-path guard above can't see this (it only compares typed edits to
+    // each other). Refuse loudly and keep BOTH pending sets so the user resolves
+    // it. Mirrors the codec-not-ready / unresolvable-profile abort-and-keep guards.
+    const difficultyPropertyNames = {
+      'm_difficultyPreset',
+      'm_customCombatSettings',
+      'm_customResourcesSettings',
+      'm_customProgressionSettings',
+      'm_PermanentDeath',
+      'm_PermaDeath',
+      'm_FakeSloppyCombos',
+    };
+    if (difficultyEdit != null) {
+      final typedTargetsDifficulty = allEdits.any((edit) {
+        if (edit['path'] != 'private.typed.setValue') return false;
+        final value = edit['value'];
+        if (value is! Map) return false;
+        final path = value['path'];
+        if (path is! List) return false;
+        return path.any(
+          (seg) => difficultyPropertyNames.contains(seg?.toString()),
+        );
+      });
+      if (typedTargetsDifficulty) {
+        state = state.copyWith(
+          error:
+              'Conflicting difficulty edits: you changed difficulty both in '
+              'the Difficulty card and via All data. Save or reset one of '
+              'them first.',
+        );
+        return false;
+      }
+    }
+
     // Propagation (alsoProfile/allSaves) binds to the EDITED SAVE's profile.
     // If that profile cannot be resolved (no persistentProfileId on the save,
     // or no matching profile in state.profiles), _buildDifficultyPayload would

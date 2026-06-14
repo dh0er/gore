@@ -2432,10 +2432,17 @@ fn write_bool_property_in_range(
     }
     // value byte sits 8 bytes past the type ref (4 flags + 4 size), mirroring read_bool_property_at
     let offset = type_ref.len_offset + type_ref.total_len + 8;
-    *payload
+    // A GVAS BoolProperty's value lives in the tag_flags byte as bit 0x10
+    // (properties::TAG_FLAG_BOOL_TRUE). Set/clear only that bit so the strict
+    // parser / the game read it correctly and other tag-flag bits survive.
+    let byte = payload
         .get_mut(offset)
-        .ok_or_else(|| CoreError::Parse(format!("bool value for {name} is out of range")))? =
-        if value { 1 } else { 0 };
+        .ok_or_else(|| CoreError::Parse(format!("bool value for {name} is out of range")))?;
+    if value {
+        *byte |= properties::TAG_FLAG_BOOL_TRUE;
+    } else {
+        *byte &= !properties::TAG_FLAG_BOOL_TRUE;
+    }
     Ok(())
 }
 
@@ -7029,17 +7036,33 @@ mod tests {
         payload.extend_from_slice(&fstring("m_PermanentDeath"));
         payload.extend_from_slice(&fstring("BoolProperty"));
         payload.extend_from_slice(&[0u8; 8]);
-        payload.push(0); // value byte
+        // Seed an unrelated tag-flag bit (0x08) so we can confirm it survives.
+        payload.push(properties::TAG_FLAG_NATIVE_SERIALIZE); // value/tag byte
 
         let refs = scan_fstrings(&payload, 0);
+        // Locate the value byte the writer targets so we can assert on the bit.
+        let name_idx = find_ref_in_range(&refs, 0, refs.len(), "m_PermanentDeath").unwrap();
+        let type_ref = &refs[name_idx + 1];
+        let value_offset = type_ref.len_offset + type_ref.total_len + 8;
+
         write_bool_property_in_range(&mut payload, &refs, 0, refs.len(), "m_PermanentDeath", true)
             .unwrap();
+        // A true BoolProperty must set the 0x10 bit, not overwrite the byte with 0x01.
+        assert_ne!(payload[value_offset] & properties::TAG_FLAG_BOOL_TRUE, 0);
+        // The unrelated 0x08 bit must survive.
+        assert_ne!(payload[value_offset] & properties::TAG_FLAG_NATIVE_SERIALIZE, 0);
 
         let refs2 = scan_fstrings(&payload, 0);
         assert_eq!(
             read_bool_property_in_range(&payload, &refs2, 0, refs2.len(), "m_PermanentDeath"),
             Some(true),
         );
+
+        // Writing false clears the 0x10 bit but preserves the unrelated 0x08 bit.
+        write_bool_property_in_range(&mut payload, &refs2, 0, refs2.len(), "m_PermanentDeath", false)
+            .unwrap();
+        assert_eq!(payload[value_offset] & properties::TAG_FLAG_BOOL_TRUE, 0);
+        assert_ne!(payload[value_offset] & properties::TAG_FLAG_NATIVE_SERIALIZE, 0);
     }
 
     #[test]
@@ -7125,7 +7148,7 @@ mod tests {
         data.extend_from_slice(&fstring("m_PermaDeath"));
         data.extend_from_slice(&fstring("BoolProperty"));
         data.extend_from_slice(&[0u8; 8]);
-        data.push(1); // currently on
+        data.push(properties::TAG_FLAG_BOOL_TRUE); // currently on (game stores true as 0x10)
         data.extend_from_slice(&fstring("SavedDataVersion"));
 
         // Novice forces permadeath off (resolved_permadeath() => Some(false)).
@@ -7213,7 +7236,7 @@ mod tests {
         payload.extend_from_slice(&fstring("m_PermanentDeath"));
         payload.extend_from_slice(&fstring("BoolProperty"));
         payload.extend_from_slice(&[0u8; 8]);
-        payload.push(1); // currently true
+        payload.push(properties::TAG_FLAG_BOOL_TRUE); // currently true (game stores true as 0x10)
 
         // Novice should mirror all sub-settings to Easy AND force permadeath off,
         // even though permadeath: Some(true) was requested.
@@ -7254,7 +7277,7 @@ mod tests {
         public.extend_from_slice(&fstring("m_PermanentDeath"));
         public.extend_from_slice(&fstring("BoolProperty"));
         public.extend_from_slice(&[0u8; 8]);
-        public.push(1);
+        public.push(properties::TAG_FLAG_BOOL_TRUE); // game stores true as 0x10
 
         // minimal_stream()/[0,0,0,0] trailer mirror the other GSAV tests: an empty
         // compressed stream would make split_gsav -> parse_compressed_stream fail
