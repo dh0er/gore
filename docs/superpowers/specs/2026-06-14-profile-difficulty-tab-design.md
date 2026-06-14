@@ -1,4 +1,4 @@
-# Difficulty editor tab — per-save, with optional profile / all-saves propagation
+# Difficulty editor — Overview card, per-save, with optional profile / all-saves propagation
 
 Date: 2026-06-14
 Status: Design approved by user (pending spec review)
@@ -6,7 +6,7 @@ Status: Design approved by user (pending spec review)
 ## Problem
 
 The game lets the player choose a difficulty (Novice / Gothic / Hard / Custom) only
-once, at profile creation, and never again in-game. We want an editor tab to change
+once, at profile creation, and never again in-game. We want an editor control to change
 the difficulty of an existing playthrough.
 
 Investigation showed difficulty is **not** profile-only — it is stored in three places:
@@ -24,12 +24,20 @@ difficulty** — the edit has to target the savegame itself.
 
 ## Decisions (from brainstorming)
 
-- The editor is **per-save**: a new tab bound to the currently selected savegame
-  (`SaveInspection`), like the other editor tabs. This dissolves the original cross-save
-  concern — the authoritative edit is per-save.
-- Tab **position 2**, immediately right of Overview (index 1); remaining tabs shift
-  right. Working name **"Schwierigkeit"** (shows profile overview read-only as context
-  plus the editable difficulty). Final tab label TBD with user; not blocking.
+- The editor is **per-save**, bound to the currently selected savegame
+  (`SaveInspection`). This dissolves the original cross-save concern — the authoritative
+  edit is per-save.
+- **No new tab.** The difficulty editor is a **collapsible "Difficulty" card** inside
+  the existing **Overview** tab, reusing the `_CollapsibleCardHeader` pattern (as
+  "Diagnostics & details" does).
+- **No profile overview data** is shown (dropped from scope).
+- **Replace the location/map badges with the difficulty.** "MainMap" is the only map in
+  the game (verified: every save's `mapName` is `MainMap`), so the map label carries no
+  information. Replace it at all three render sites with the save's difficulty preset
+  label (Novice / Gothic / Hard / Custom):
+  - sidebar subtitle `_saveSlotSubtitle` (`editor_page.dart:520`)
+  - header `_InfoPill` (`editor_page.dart:1068`)
+  - "Diagnostics & details" metric grid `'Map'` entry (`editor_page.dart:938`)
 - Editing a save writes difficulty into **both** the save's public payload and its
   private payload (the authoritative copy), so menu display and gameplay stay
   consistent.
@@ -99,7 +107,18 @@ Rules:
 
 ## Core (Rust) — `crates/goresave_core/src/lib.rs`
 
-Single command **`write_difficulty`** so the all-or-nothing backup/rollback guarantee
+**Surface per-save difficulty (read path).** The save's own difficulty lives in its
+public payload (`SaveGamePublicData`) and private payload (`SaveDataPayload`). Parse the
+preset + sub-settings + bools from the public payload and add them to:
+
+- `inspect_save` output / `SaveInspection` (drives the Difficulty card).
+- `list_saves` output / `SaveSlot` (drives the sidebar subtitle badge) — read from the
+  small uncompressed public payload during scan, alongside the existing chapter/map
+  read; no decompression needed, so scan cost stays low.
+
+The profile copy in `ProfileSummary` (already parsed) stays as-is and is not shown.
+
+**Write path — single command `write_difficulty`** so the all-or-nothing backup/rollback guarantee
 lives in one place:
 
 ```
@@ -140,12 +159,14 @@ Orchestration + safety:
 
 ## Frontend (Flutter / Riverpod)
 
-- New `_DifficultyPanel`, added to the `TabBar` tabs and `TabBarView` children at index 1
-  in `apps/goresave/lib/features/editor/ui/editor_page.dart` (bump `TabController`
-  length 7 -> 8, wrap in `_KeepAliveTab`).
-- Bound to the selected save's `SaveInspection` (current save's difficulty is the edit
-  subject). Shows the resolved profile overview (`state.activeProfile`) read-only as
-  context.
+All in `apps/goresave/lib/features/editor/ui/editor_page.dart`.
+
+**Difficulty card (Overview tab):**
+
+- New `_DifficultyCard`, a collapsible card in the Overview panel's column, using the
+  existing `_CollapsibleCardHeader` (title "Difficulty", icon e.g.
+  `Icons.local_fire_department_outlined`). Bound to the selected save's
+  `SaveInspection`.
 - Layout mirrors the in-game screen: preset selector (4 options); a Custom block with
   two toggles (Flow Helper, Permadeath) and three 3-way pickers (Combat, Resources,
   Progression) enabled per the editability matrix.
@@ -153,11 +174,19 @@ Orchestration + safety:
   relevant), in the profile (menu default), and separately in every other save; this
   editor changes only the current save unless the checkboxes below are ticked.
 - **Two checkboxes** (default off): update profile; apply to all saves of this profile.
-- Own edit buffer + Save / Reset inside the tab. Save assembles `targets`
+- Own edit buffer + Save / Reset inside the card. Save assembles `targets`
   (always the current save; + all profile slots if checked; + profile if checked) and
   dispatches `write_difficulty` via `EditorNotifier`, then refreshes.
 - Extend the unsaved-edits / profile-switch guard (`editor_notifier.dart:347`) to cover
   dirty difficulty edits.
+
+**Map badge -> difficulty replacement:**
+
+- Add a `difficultyLabel` helper mapping the save's preset
+  (`Easy/Standard/Hard/Custom` -> `Novice/Gothic/Hard/Custom`).
+- Replace the three `mapName` render sites (subtitle, header pill, diagnostics metric)
+  with the difficulty label. The header pill keeps a fitting icon
+  (e.g. `Icons.local_fire_department_outlined`); the metric key becomes `'Difficulty'`.
 
 ## Authority note (verify before relying on save edits)
 
