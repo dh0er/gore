@@ -8,6 +8,14 @@ import 'package:goresave/features/editor/domain/pending_edits.dart';
 /// (Novice→_Easy, Gothic→_Standard, Hard→_Hard, Custom→_Custom).
 const _presets = ['Novice', 'Gothic', 'Hard', 'Custom'];
 
+/// Sentinel for a stored preset that is missing or not one of the four known
+/// UI presets (e.g. an unmapped raw core class name). Must NEVER be treated as
+/// a concrete preset: when it is the active value the selector shows nothing
+/// selected and the card refuses to build a saveable candidate, so a global
+/// Save can never silently write a guessed preset. Resolved only when the user
+/// explicitly picks a known preset.
+const _unknownPreset = '';
+
 /// The three sub-level options shown for Combat / Resources / Progression.
 const _levels = ['Novice', 'Gothic', 'Hard'];
 
@@ -153,8 +161,11 @@ class _DifficultyCardState extends State<DifficultyCard> {
 
   // --- Label/normalisation helpers ---------------------------------------
 
+  /// Resolve a stored/draft preset label to a known UI preset, or the
+  /// [_unknownPreset] sentinel when it is missing or not one of the four
+  /// presets. Never falls back to a concrete preset — see [_unknownPreset].
   String _normalizePreset(String? label) =>
-      _presets.contains(label) ? label! : 'Gothic';
+      _presets.contains(label) ? label! : _unknownPreset;
 
   String _normalizeLevel(String? label, String preset) {
     if (_levels.contains(label)) return label!;
@@ -185,6 +196,19 @@ class _DifficultyCardState extends State<DifficultyCard> {
     bool? allSaves,
   }) {
     final nextPreset = preset ?? _preset;
+
+    // The stored preset is unknown (missing or an unmapped class name) and the
+    // user has not explicitly picked one yet. Do NOT build a saveable candidate
+    // from a guessed preset — that would let a propagation toggle or a global
+    // Save write a difficulty (historically Gothic) the user never chose. Any
+    // edit only becomes saveable once the user explicitly selects a preset
+    // (which arrives here as a non-null `preset`).
+    if (nextPreset == _unknownPreset) {
+      widget.notifier.clearPendingDifficulty();
+      setState(() {});
+      return;
+    }
+
     // Novice forces permadeath off; otherwise carry the explicit toggle or the
     // current displayed value.
     final nextPerma = nextPreset == 'Novice' ? false : (perma ?? _perma);
@@ -289,7 +313,13 @@ class _DifficultyCardState extends State<DifficultyCard> {
                             style: theme.textTheme.titleMedium,
                           ),
                           Text(
-                            _preset,
+                            // Show the raw stored label for an unknown preset
+                            // so diagnostics still surface the on-disk value;
+                            // the selector below stays unselected until the
+                            // user picks a known preset.
+                            _preset == _unknownPreset
+                                ? 'Unknown (${widget.inspection.difficulty?.presetLabel ?? 'none'})'
+                                : _preset,
                             style: theme.textTheme.bodySmall,
                           ),
                         ],
@@ -320,7 +350,12 @@ class _DifficultyCardState extends State<DifficultyCard> {
                   for (final preset in _presets)
                     ButtonSegment<String>(value: preset, label: Text(preset)),
                 ],
-                selected: {_preset},
+                // An unknown stored preset shows NOTHING selected — the user
+                // must explicitly pick one before any difficulty is saveable.
+                emptySelectionAllowed: _preset == _unknownPreset,
+                selected: _preset == _unknownPreset
+                    ? const <String>{}
+                    : {_preset},
                 showSelectedIcon: false,
                 onSelectionChanged: presetEnabled
                     ? (selection) => _apply(preset: selection.first)

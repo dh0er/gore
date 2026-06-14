@@ -45,6 +45,24 @@ SaveInspection _customInspection() {
   });
 }
 
+/// A SaveInspection whose stored difficulty preset is an UNMAPPED core class
+/// name. `presetLabel` therefore passes the raw string through, which is not
+/// one of the four UI presets, so the card must treat it as "unknown" — never
+/// silently as Gothic.
+SaveInspection _unknownPresetInspection() {
+  return SaveInspection.fromJson({
+    'format': 'G1R',
+    'path': r'C:\tmp\saves\G1R-002.sav',
+    'size': 1024,
+    'sha1': 'def',
+    'difficulty': {
+      'preset': 'EDifficulty_SomeFutureMode',
+      'flowHelper': true,
+      'permadeath': true,
+    },
+  });
+}
+
 /// Resolve a SwitchListTile by its title text.
 SwitchListTile _switchByTitle(WidgetTester tester, String title) {
   return tester
@@ -380,6 +398,89 @@ void main() {
       );
       expect(presetPicker.selected, {'Custom'});
       expect(find.text('Unsaved'), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'an unknown stored preset shows NOTHING selected and registers no pending '
+    'difficulty until the user explicitly picks a preset',
+    (tester) async {
+      await pumpCard(
+        tester,
+        profile: profile,
+        inspection: _unknownPresetInspection(),
+      );
+
+      // The preset selector highlights nothing — the unmapped class name is
+      // NOT silently treated as Gothic (or any concrete preset).
+      final presetPicker = tester.widget<SegmentedButton<String>>(
+        _presetPicker(),
+      );
+      expect(presetPicker.selected, isEmpty);
+      expect(presetPicker.emptySelectionAllowed, isTrue);
+
+      // Nothing pending: a global Save must not write a guessed preset.
+      expect(notifier.state.pendingDifficulty, isNull);
+      expect(notifier.state.pendingEditCount, 0);
+      expect(notifier.state.hasUnsavedEdits, isFalse);
+
+      // Toggling a non-preset control (flow helper) while the preset is still
+      // unknown must NOT manufacture a saveable candidate from a guessed
+      // preset — there is still nothing pending.
+      await tester.tap(
+        find.ancestor(
+          of: find.text('Close Combat Flow Helper'),
+          matching: find.byType(SwitchListTile),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        notifier.state.pendingDifficulty,
+        isNull,
+        reason: 'no explicit preset chosen yet → no saveable difficulty',
+      );
+
+      // Ticking a propagation box while the preset is unknown likewise must not
+      // produce a candidate that would write a guessed difficulty.
+      await tester.tap(find.text('Also update the profile'));
+      await tester.pumpAndSettle();
+      expect(
+        notifier.state.pendingDifficulty,
+        isNull,
+        reason: 'propagation cannot write difficulty without a chosen preset',
+      );
+    },
+  );
+
+  testWidgets(
+    'after the user explicitly picks a preset, an unknown-stored save '
+    'registers a pending difficulty normally',
+    (tester) async {
+      await pumpCard(
+        tester,
+        profile: profile,
+        inspection: _unknownPresetInspection(),
+      );
+      expect(notifier.state.pendingDifficulty, isNull);
+
+      // Explicitly choose Hard. The stored preset (unknown) != Hard, so this is
+      // a real change and registers a pending difficulty with that preset.
+      await tester.tap(
+        find.descendant(of: _presetPicker(), matching: find.text('Hard')),
+      );
+      await tester.pumpAndSettle();
+
+      expect(notifier.state.pendingDifficulty, isNotNull);
+      expect(notifier.state.pendingEditCount, 1);
+      expect(notifier.state.hasUnsavedEdits, isTrue);
+      expect(notifier.state.pendingDifficulty!.difficulty['preset'], 'Hard');
+
+      // The selector now highlights the explicitly-chosen preset.
+      final presetPicker = tester.widget<SegmentedButton<String>>(
+        _presetPicker(),
+      );
+      expect(presetPicker.selected, {'Hard'});
+      expect(find.text('Unsaved'), findsOneWidget);
     },
   );
 
