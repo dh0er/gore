@@ -135,6 +135,8 @@ pub struct SaveListItem {
     pub auto_save: Option<bool>,
     pub persistent_profile_id: Option<i32>,
     pub screenshot: Option<ScreenshotSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub difficulty: Option<DifficultySettings>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -601,6 +603,7 @@ fn scan_save_dir_summary_with_codec_backend(
                     auto_save: persistent.and_then(|metadata| metadata.auto_save),
                     persistent_profile_id: persistent.and_then(|metadata| metadata.profile_id),
                     screenshot: screenshot.clone(),
+                    difficulty: difficulty_for_gsav_bytes(&data),
                 });
             }
             Err(err) => saves.push(SaveListItem {
@@ -624,6 +627,7 @@ fn scan_save_dir_summary_with_codec_backend(
                 auto_save: persistent.and_then(|metadata| metadata.auto_save),
                 persistent_profile_id: persistent.and_then(|metadata| metadata.profile_id),
                 screenshot: screenshot.clone(),
+                difficulty: None,
             }),
         }
     }
@@ -1859,6 +1863,8 @@ fn inspect_bytes_with_codec_backend(
             value["persistent"] =
                 serde_json::to_value(metadata).map_err(|e| CoreError::Parse(e.to_string()))?;
         }
+        value["difficulty"] = serde_json::to_value(difficulty_for_gsav_bytes(data))
+            .map_err(|e| CoreError::Parse(e.to_string()))?;
         Ok(value)
     } else if data.starts_with(b"GVAS") {
         Ok(parse_gvas(data, path))
@@ -2126,6 +2132,14 @@ pub fn parse_difficulty_settings(payload: &[u8]) -> DifficultySettings {
         flow_helper: read_bool_property_in_range(payload, &refs, 0, end, "m_FakeSloppyCombos"),
         permadeath: read_bool_property_in_range(payload, &refs, 0, end, "m_PermanentDeath"),
     }
+}
+
+fn difficulty_for_gsav_bytes(data: &[u8]) -> Option<DifficultySettings> {
+    if !data.starts_with(b"GSAV") {
+        return None;
+    }
+    let parts = split_gsav(data).ok()?;
+    Some(parse_difficulty_settings(parts.public_payload))
 }
 
 fn read_i32_after_property(payload: &[u8], refs: &[FStringRef], name: &str) -> Option<i32> {
@@ -11656,5 +11670,10 @@ mod tests {
         assert_eq!(d.combat.as_deref(), Some("CombatDifficultySettings_Hard"));
         assert_eq!(d.flow_helper, Some(true));
         assert_eq!(d.permadeath, Some(false));
+    }
+
+    #[test]
+    fn difficulty_for_gsav_bytes_none_for_non_gsav() {
+        assert!(difficulty_for_gsav_bytes(b"NOPE").is_none());
     }
 }
