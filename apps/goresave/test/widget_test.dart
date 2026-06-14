@@ -33,10 +33,10 @@ void main() {
     expect(find.text('Die Welt der Verurteilten'), findsAtLeastNWidgets(1));
     expect(find.text('Overview'), findsOneWidget);
     expect(find.text('Public save name'), findsOneWidget);
-    // Header pills summarise chapter, time played and map for the save.
+    // Header pills summarise chapter, time played and difficulty for the save.
     expect(find.text('Chapter 1'), findsOneWidget);
     expect(find.text('1h 56m'), findsOneWidget);
-    expect(find.text('MainMap'), findsAtLeastNWidgets(1));
+    expect(find.text('Custom'), findsAtLeastNWidgets(1));
     expect(find.text('Profile 0'), findsOneWidget);
 
     // Format/save-kind details live in the collapsed diagnostics card.
@@ -48,17 +48,19 @@ void main() {
     expect(find.text('Auto save'), findsOneWidget);
     expect(find.bySemanticsLabel('Screenshot for G1R-001'), findsWidgets);
 
-    // Inspection JSON card exists and is collapsed by default.
-    expect(find.text('Inspection JSON'), findsOneWidget);
-    expect(find.text('Raw save inspection data'), findsOneWidget);
     // JSON content is not visible until expanded.
     expect(find.text('"format"'), findsNothing);
-    // Expand the card and confirm JSON content appears.
+    // Scroll the Inspection JSON card into view (the lazy ListView only builds
+    // children near the viewport).
     await tester.scrollUntilVisible(
       find.text('Inspection JSON'),
       120,
       scrollable: find.byType(Scrollable).last,
     );
+    // Inspection JSON card exists and is collapsed by default.
+    expect(find.text('Inspection JSON'), findsOneWidget);
+    expect(find.text('Raw save inspection data'), findsOneWidget);
+    // Expand the card and confirm JSON content appears.
     await tester.tap(find.text('Inspection JSON'));
     await tester.pumpAndSettle();
     expect(find.textContaining('"format"'), findsOneWidget);
@@ -570,6 +572,7 @@ class _FakeCoreService implements GoresaveCoreService {
               'slotName': 'G1R-001',
               'playerSaveName': 'Die Welt der Verurteilten',
             },
+            'difficulty': {'preset': 'DifficultyPreset_Custom'},
             'persistent': {
               'playerSaveName': 'Die Welt der Verurteilten, Tag 1, 13:07',
               'chapterId': 1,
