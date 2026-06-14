@@ -2155,7 +2155,7 @@ fn level_suffix(label: &str) -> Result<&'static str, CoreError> {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct DifficultyRequest {
     preset: String, // Novice|Gothic|Hard|Custom
@@ -4247,6 +4247,9 @@ fn apply_private_edits(
             "private.typed.setValue" => {
                 parse_private_typed_set_value_edit(edit).map(PrivateEdit::TypedSetValue)
             }
+            "private.difficulty.set" => {
+                parse_private_difficulty_edit(edit).map(PrivateEdit::Difficulty)
+            }
             // Index-addressed edits (arrayRemove/arrayDuplicate) target indices
             // that shift after each structural change within the same batch;
             // callers must submit at most one structural array edit per write.
@@ -4400,6 +4403,7 @@ enum PrivateEdit {
     InventoryRemoveItem(PrivateInventoryRemoveItemEdit),
     TypedSetValue(PrivateTypedSetValueEdit),
     TypedContainer(PrivateTypedContainerEdit),
+    Difficulty(DifficultyRequest),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -4439,6 +4443,11 @@ fn parse_typed_edit_path(
         )));
     }
     properties::parse_path(&segments)
+}
+
+fn parse_private_difficulty_edit(edit: &Edit) -> Result<DifficultyRequest, CoreError> {
+    serde_json::from_value::<DifficultyRequest>(edit.value.clone())
+        .map_err(|e| CoreError::InvalidRequest(e.to_string()))
 }
 
 fn parse_private_typed_set_value_edit(edit: &Edit) -> Result<PrivateTypedSetValueEdit, CoreError> {
@@ -5060,6 +5069,7 @@ fn apply_private_edit_to_payload(
         PrivateEdit::TypedContainer(edit) => {
             apply_private_typed_container_edit_to_payload(payload, edit)
         }
+        PrivateEdit::Difficulty(req) => apply_save_difficulty(payload, req),
     }
 }
 
@@ -6500,6 +6510,28 @@ fn replace_public_fstring(
     Ok(())
 }
 
+/// Splice a difficulty change into a save's uncompressed public payload
+/// (`SaveGamePublicData`), leaving the compressed private stream and trailer
+/// untouched. The private payload is updated separately via the
+/// `private.difficulty.set` edit kind.
+fn write_difficulty_into_save_public(
+    data: &[u8],
+    req: &DifficultyRequest,
+) -> Result<Vec<u8>, CoreError> {
+    let parts = split_gsav(data)?;
+    let mut public_payload = parts.public_payload.to_vec();
+    let compressed_stream = parts.compressed_stream.to_vec();
+    let trailer = parts.trailer.to_vec();
+    let version = parts.version;
+    apply_save_difficulty(&mut public_payload, req)?;
+    Ok(build_gsav(
+        version,
+        &public_payload,
+        &compressed_stream,
+        &trailer,
+    ))
+}
+
 fn replace_str_property_fstring(
     payload: &mut Vec<u8>,
     property_name: &str,
@@ -6729,6 +6761,81 @@ mod tests {
             read_bool_property_in_range(&payload, &refs, 0, end, "m_PermanentDeath"),
             Some(true),
         );
+    }
+
+    #[test]
+    fn apply_save_difficulty_non_custom_mirrors_preset_and_locks_permadeath() {
+        let mut payload = Vec::new();
+        for name in ["m_difficultyPreset", "m_customCombatSettings"] {
+            payload.extend_from_slice(&fstring(name));
+            payload.extend_from_slice(&fstring("ClassProperty"));
+            payload.extend_from_slice(&[0u8; 4]);
+            payload.extend_from_slice(&0u32.to_le_bytes());
+            payload.push(0);
+            payload.extend_from_slice(&fstring("/Script/Angelscript.DifficultyPreset_Custom"));
+        }
+        payload.extend_from_slice(&fstring("m_PermanentDeath"));
+        payload.extend_from_slice(&fstring("BoolProperty"));
+        payload.extend_from_slice(&[0u8; 8]);
+        payload.push(1); // currently true
+
+        // Novice should mirror all sub-settings to Easy AND force permadeath off,
+        // even though permadeath: Some(true) was requested.
+        let req = DifficultyRequest {
+            preset: "Novice".into(),
+            combat: None,
+            resources: None,
+            progression: None,
+            flow_helper: None,
+            permadeath: Some(true),
+        };
+        apply_save_difficulty(&mut payload, &req).unwrap();
+        let refs = scan_fstrings(&payload, 0);
+        let end = refs.len();
+        assert_eq!(
+            value_after_property_in_range(&refs, 0, end, "m_difficultyPreset").as_deref(),
+            Some("/Script/Angelscript.DifficultyPreset_Easy"),
+        );
+        assert_eq!(
+            value_after_property_in_range(&refs, 0, end, "m_customCombatSettings").as_deref(),
+            Some("/Script/Angelscript.CombatDifficultySettings_Easy"),
+        );
+        assert_eq!(
+            read_bool_property_in_range(&payload, &refs, 0, end, "m_PermanentDeath"),
+            Some(false),
+        );
+    }
+
+    #[test]
+    fn write_difficulty_into_save_updates_public_payload() {
+        let mut public = Vec::new();
+        public.extend_from_slice(&fstring("m_difficultyPreset"));
+        public.extend_from_slice(&fstring("ClassProperty"));
+        public.extend_from_slice(&[0u8; 4]);
+        public.extend_from_slice(&0u32.to_le_bytes());
+        public.push(0);
+        public.extend_from_slice(&fstring("/Script/Angelscript.DifficultyPreset_Custom"));
+        public.extend_from_slice(&fstring("m_PermanentDeath"));
+        public.extend_from_slice(&fstring("BoolProperty"));
+        public.extend_from_slice(&[0u8; 8]);
+        public.push(1);
+
+        // minimal_stream()/[0,0,0,0] trailer mirror the other GSAV tests: an empty
+        // compressed stream would make split_gsav -> parse_compressed_stream fail
+        // (it requires the size prefix + method fstring + PACKAGE_FILE_TAG header).
+        let gsav = build_gsav(2, &public, &minimal_stream(), &[0, 0, 0, 0]);
+        let req = DifficultyRequest {
+            preset: "Novice".into(),
+            combat: None,
+            resources: None,
+            progression: None,
+            flow_helper: None,
+            permadeath: Some(true),
+        };
+        let out = write_difficulty_into_save_public(&gsav, &req).unwrap();
+        let d = difficulty_for_gsav_bytes(&out).unwrap();
+        assert_eq!(d.preset.as_deref(), Some("DifficultyPreset_Easy"));
+        assert_eq!(d.permadeath, Some(false)); // Novice forces off
     }
 
     #[test]
