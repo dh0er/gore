@@ -69,6 +69,7 @@ class EditorState {
     this.codecError,
     this.lastWriteMessage,
     this.pendingEdits = const {},
+    this.difficultyDirty = false,
   });
 
   final String saveDir;
@@ -94,6 +95,19 @@ class EditorState {
   /// 'inventory', 'typed:&lt;joined path&gt;'). Cleared on save, refresh to a
   /// different save, or selection change.
   final Map<String, PendingSaveEdit> pendingEdits;
+
+  /// True when the Difficulty card holds an unsaved draft that differs from the
+  /// selected save's stored difficulty. The Difficulty card manages its draft in
+  /// widget-local state (it is not part of the [pendingEdits] registry, since a
+  /// difficulty write is its own multi-target command), so this flag is the
+  /// signal the profile-switch guard uses to refuse switching mid-edit. Cleared
+  /// on a successful difficulty write and whenever a new inspection lands.
+  final bool difficultyDirty;
+
+  /// True when there are any unsaved edits anywhere — pending registry edits or
+  /// a dirty difficulty draft. The profile-switch guard blocks on this so a
+  /// difficulty draft is protected exactly like a pending field edit.
+  bool get hasUnsavedEdits => pendingEdits.isNotEmpty || difficultyDirty;
 
   /// True once the user ran a successful codec round-trip verification this
   /// session for an executable the probe could not auto-trust (a pattern-
@@ -188,6 +202,7 @@ class EditorState {
     String? codecError,
     String? lastWriteMessage,
     Map<String, PendingSaveEdit>? pendingEdits,
+    bool? difficultyDirty,
     bool clearInspection = false,
     bool clearBackups = false,
     bool clearError = false,
@@ -227,6 +242,7 @@ class EditorState {
       pendingEdits: clearPendingEdits
           ? const {}
           : pendingEdits ?? this.pendingEdits,
+      difficultyDirty: difficultyDirty ?? this.difficultyDirty,
     );
   }
 }
@@ -338,7 +354,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
         'profile': {'path': profile.path, 'profileId': profile.profileId},
     };
     final n = savePaths.length + (profile != null ? 1 : 0);
-    return _runWrite(
+    final ok = await _runWrite(
       command: 'write_difficulty',
       payload: {
         'difficulty': difficulty,
@@ -354,6 +370,12 @@ class EditorNotifier extends StateNotifier<EditorState> {
             'target${written == 1 ? '' : 's'} (backup created)';
       },
     );
+    // On success the draft now matches what was written. The post-success
+    // refresh()/_inspect already clears difficultyDirty when the fresh
+    // inspection lands, but clear it explicitly too so the flag drops even if
+    // that re-inspect were to fail (the write itself succeeded on disk).
+    if (ok) setDifficultyDirty(false);
+    return ok;
   }
 
   /// Serializes all core calls. The native layer runs each command in its own
@@ -392,7 +414,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// visible save is selected (triggering [_inspect]); if there are none,
   /// the selection is cleared.
   Future<void> selectProfile(int? profileId) async {
-    if (state.pendingEdits.isNotEmpty) {
+    if (state.hasUnsavedEdits) {
       state = state.copyWith(
         error:
             'Save or reset your unsaved changes first — switching profiles '
@@ -477,6 +499,14 @@ class EditorNotifier extends StateNotifier<EditorState> {
     final updated = Map<String, PendingSaveEdit>.from(state.pendingEdits);
     updated.remove(key);
     state = state.copyWith(pendingEdits: updated);
+  }
+
+  /// Set whether the Difficulty card holds an unsaved draft. Called by the card
+  /// as its draft becomes dirty/clean and on save/reset. Drives the
+  /// profile-switch guard via [EditorState.hasUnsavedEdits].
+  void setDifficultyDirty(bool dirty) {
+    if (state.difficultyDirty == dirty) return;
+    state = state.copyWith(difficultyDirty: dirty);
   }
 
   /// Clear all pending edits.
@@ -702,6 +732,9 @@ class EditorNotifier extends StateNotifier<EditorState> {
         clearInspection: selectedPath == null,
         clearBackups: selectedPath == null,
         clearPendingEdits: selectedPath == null,
+        // Nothing selected → no card → no draft. When a save remains selected,
+        // the follow-up _inspect clears this when the fresh inspection lands.
+        difficultyDirty: selectedPath == null ? false : null,
       );
       if (selectedPath != null) {
         await _inspect(selectedPath);
@@ -740,6 +773,10 @@ class EditorNotifier extends StateNotifier<EditorState> {
       // fields still show the drafts and the registry must keep matching
       // them so the user can retry the save.
       clearPendingEdits: switchingSlot,
+      // Same rationale for the difficulty draft: a slot switch must not carry
+      // a draft into a different save. A same-save re-inspect clears it when
+      // the fresh inspection lands (below).
+      difficultyDirty: switchingSlot ? false : null,
     );
     try {
       final payload = <String, Object?>{
@@ -768,6 +805,9 @@ class EditorNotifier extends StateNotifier<EditorState> {
       state = state.copyWith(
         inspection: SaveInspection.fromJson(data),
         clearPendingEdits: true,
+        // A fresh inspection re-seeds the Difficulty card from the stored
+        // value, so any prior draft is no longer dirty.
+        difficultyDirty: false,
       );
       final backupSnapshot = await _loadBackups(path, seq);
       if (backupSnapshot == null) return;

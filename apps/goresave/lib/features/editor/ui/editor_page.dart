@@ -16,6 +16,7 @@ import 'package:goresave/features/editor/domain/pending_edits.dart';
 import 'package:goresave/providers/data_providers.dart';
 import 'package:intl/intl.dart';
 import 'add_inventory_item_dialog.dart';
+import 'difficulty_card.dart';
 import 'hero_stats_card.dart';
 import 'progression_panel.dart';
 
@@ -685,7 +686,7 @@ class _EditorWorkspace extends StatelessWidget {
                     child: _OverviewPanel(
                       inspection: inspection,
                       notifier: notifier,
-                      selectedSave: state.selectedSave,
+                      state: state,
                     ),
                   ),
                   _KeepAliveTab(
@@ -802,21 +803,26 @@ class _OverviewPanel extends StatelessWidget {
   const _OverviewPanel({
     required this.inspection,
     required this.notifier,
-    required this.selectedSave,
+    required this.state,
   });
 
   final SaveInspection inspection;
   final EditorNotifier notifier;
-  final SaveSlot? selectedSave;
+  final EditorState state;
 
   @override
   Widget build(BuildContext context) {
     return ListView(
       padding: const EdgeInsets.all(20),
       children: [
-        _HeaderCard(inspection: inspection, save: selectedSave),
+        _HeaderCard(inspection: inspection, save: state.selectedSave),
         const SizedBox(height: 16),
-        _DifficultyCard(inspection: inspection),
+        DifficultyCard(
+          inspection: inspection,
+          notifier: notifier,
+          profile: state.activeProfile,
+          canCompress: state.codecCompressReady,
+        ),
         const SizedBox(height: 16),
         _MetadataEditor(inspection: inspection, notifier: notifier),
         const SizedBox(height: 16),
@@ -979,51 +985,6 @@ class _OverviewDiagnosticsState extends State<_OverviewDiagnostics> {
                     ),
                   ),
                 ],
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _DifficultyCard extends StatefulWidget {
-  const _DifficultyCard({required this.inspection});
-  final SaveInspection inspection;
-  @override
-  State<_DifficultyCard> createState() => _DifficultyCardState();
-}
-
-class _DifficultyCardState extends State<_DifficultyCard> {
-  bool _expanded = false;
-  @override
-  Widget build(BuildContext context) {
-    final d = widget.inspection.difficulty;
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _CollapsibleCardHeader(
-              icon: Icons.local_fire_department_outlined,
-              title: 'Difficulty',
-              subtitle: d?.presetLabel ?? 'Unknown',
-              expanded: _expanded,
-              onToggle: () => setState(() => _expanded = !_expanded),
-            ),
-            if (_expanded && d != null) ...[
-              const SizedBox(height: 8),
-              _MetricGrid(
-                metrics: {
-                  'Preset': d.presetLabel,
-                  'Close Combat Flow Helper': d.flowHelper == true ? 'On' : 'Off',
-                  'Permadeath': d.permadeath == true ? 'On' : 'Off',
-                  'Combat': d.combatLabel,
-                  'Resources': d.resourcesLabel,
-                  'Progression': d.progressionLabel,
-                },
               ),
             ],
           ],
