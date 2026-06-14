@@ -3399,6 +3399,32 @@ fn looks_item_definition_path(value: &str) -> bool {
     value.starts_with("/Script/Angelscript.") || looks_inventory_candidate(value)
 }
 
+/// Non-inventory Angelscript classes that match the broad `It*` scan but are NOT
+/// item definitions. Mirrors EXCLUDE_PREFIXES in tools/build_item_catalog.py;
+/// keep the two in sync.
+const NON_ITEM_CLASS_PREFIXES: [&str; 5] = [
+    "ItemAnimConfig",
+    "ItemSpawnManagerConfig",
+    "ItemCollisionFX",
+    "ItemVisualWorldTargetConfig",
+    "ItAI_",
+];
+
+/// Whether `path` is a writable item-definition class — the exact set the
+/// bundled catalog includes: an `/Script/Angelscript.It*` class that is neither
+/// a known non-inventory class nor a `*_Base` template. addItem writes this into
+/// m_ItemDefinition, so a non-item class would persist an invalid entry.
+fn is_item_definition_class(path: &str) -> bool {
+    let Some(class) = path.strip_prefix("/Script/Angelscript.") else {
+        return false;
+    };
+    class.starts_with("It")
+        && !class.ends_with("_Base")
+        && !NON_ITEM_CLASS_PREFIXES
+            .iter()
+            .any(|prefix| class.starts_with(prefix))
+}
+
 fn looks_inventory_candidate(value: &str) -> bool {
     if value.starts_with("m_") || value.starts_with("/Script/") {
         return false;
@@ -4668,16 +4694,15 @@ fn parse_private_inventory_add_item_edit(
             )
         })?;
     // addItem WRITES this string into m_ItemDefinition (an ObjectProperty), so
-    // it must be a real item-definition class, not a bare id (unresolvable ref),
-    // an arbitrary /Script object (e.g. /Script/Engine.Foo), or a non-item
-    // Angelscript class (e.g. /Script/Angelscript.GothicFinalDataGame) that would
-    // persist an invalid inventory entry. Every item definition in the bundled
-    // catalog (798 classes) is an Angelscript `It*` class, so require that.
-    if !path.starts_with("/Script/Angelscript.It") {
+    // it must be a real item-definition class — the exact set the bundled
+    // catalog includes. A bare id (unresolvable ref), an arbitrary /Script
+    // object (e.g. /Script/Engine.Foo), a non-item Angelscript class (e.g.
+    // /Script/Angelscript.GothicFinalDataGame), or a non-inventory It* class
+    // (e.g. ItemAnimConfig) would all persist an invalid inventory entry.
+    if !is_item_definition_class(path) {
         return Err(CoreError::InvalidRequest(format!(
-            "private.inventory.addItem value.path must be an Angelscript \
-             item-definition class (/Script/Angelscript.It*, \
-             e.g. /Script/Angelscript.ItMi_Orenugget), got {path:?}"
+            "private.inventory.addItem value.path must be an item-definition \
+             class (e.g. /Script/Angelscript.ItMi_Orenugget), got {path:?}"
         )));
     }
     let count = value.get("count").and_then(Value::as_i64).ok_or_else(|| {
@@ -10757,6 +10782,27 @@ mod tests {
         assert!(
             matches!(err, CoreError::InvalidRequest(_)),
             "expected InvalidRequest for non-item Angelscript class, got: {err}"
+        );
+
+        // A non-inventory It* class that the catalog builder excludes (e.g.
+        // ItemCollisionFX) matches the broad It prefix but must be rejected.
+        let err = write_save_with_codec_backend(
+            &path,
+            &[json!({
+                "path": "private.inventory.addItem",
+                "value": {
+                    "path": "/Script/Angelscript.ItemCollisionFX",
+                    "count": 1
+                }
+            })],
+            false,
+            None,
+            Some(&backend),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, CoreError::InvalidRequest(_)),
+            "expected InvalidRequest for non-inventory It* class, got: {err}"
         );
     }
 
