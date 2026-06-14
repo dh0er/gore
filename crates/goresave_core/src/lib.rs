@@ -7,7 +7,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha1::{Digest, Sha1};
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::ffi::{CStr, CString, c_char};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -513,20 +512,10 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
                 .get("backup")
                 .and_then(Value::as_bool)
                 .unwrap_or(true);
-            let codec_backend = payload
-                .get("binaryHost")
-                .map(binary_host_backend_from_config)
-                .transpose()?;
-            let codec_backend = codec_backend
-                .as_ref()
-                .map(|backend| backend as &dyn codec_backend::CodecBackend);
+            // Difficulty is profile-only now; PersistentDataList.sav is a plain
+            // GVAS file with no compressed stream, so no codec host is needed.
             let targets = payload.get("targets").cloned().unwrap_or(Value::Null);
-            Ok(write_difficulty_internal(
-                &req,
-                &targets,
-                backup,
-                codec_backend,
-            )?)
+            Ok(write_difficulty_internal(&req, &targets, backup)?)
         }
         other => Err(CoreError::InvalidRequest(format!(
             "unknown command {other:?}"
@@ -2266,137 +2255,6 @@ impl DifficultyRequest {
     }
 }
 
-/// Parse the typed property tree of a difficulty-bearing GVAS payload, handling
-/// BOTH framings the difficulty editor touches:
-///   * the save's decoded PRIVATE payload (`SaveDataPayload`) and the
-///     PersistentDataList are full GVAS objects (`class` + flag + props +
-///     footer) — `parse_private_root`;
-///   * the save's uncompressed PUBLIC payload (`SaveGamePublicData`) begins
-///     directly at the first property (`CustomPayload`) with no object header —
-///     `parse_property_list_root`.
-/// The object parse is tried first; on failure the bare-list parse is tried.
-/// Either way the returned tree carries absolute offsets, so `resolve_chain` /
-/// `patch_string` / `patch_scalar` apply unchanged. `consumed` is checked
-/// against the payload length so a structurally broken payload still errors.
-fn parse_save_tree(payload: &[u8]) -> Result<properties::RootObject, CoreError> {
-    match properties::parse_private_root(payload) {
-        Ok(root) => Ok(root),
-        Err(object_err) => {
-            let root = properties::parse_property_list_root(payload).map_err(|list_err| {
-                CoreError::Parse(format!(
-                    "payload parses neither as a GVAS object ({object_err}) nor as a bare \
-                     property list ({list_err})"
-                ))
-            })?;
-            if root.consumed != payload.len() {
-                return Err(CoreError::Parse(format!(
-                    "bare property list left {} trailing bytes",
-                    payload.len() - root.consumed
-                )));
-            }
-            Ok(root)
-        }
-    }
-}
-
-/// Build the `Vec<PathSeg>` to the FIRST property named `name` anywhere in the
-/// parsed tree (difficulty property names are unique), then resolve it to a
-/// [`properties::ResolvedChain`]. The chain carries the absolute offsets of
-/// every enclosing GVAS size field (ancestor tag sizes + InstancedStruct
-/// `data_size`), which a length-changing patch must fix up so the strict
-/// deserializer (the game) does not misalign. Returns `None` when the property
-/// is absent — callers skip such fields cleanly.
-fn difficulty_chain<'a>(
-    root: &'a properties::RootObject,
-    name: &str,
-) -> Result<Option<properties::ResolvedChain<'a>>, CoreError> {
-    let Some((path, _)) = properties::find_property_by_name(root, name) else {
-        return Ok(None);
-    };
-    let segs = properties::parse_path(&path)?;
-    properties::resolve_chain(&root.properties, &segs).map(Some)
-}
-
-/// Patch a single string-valued difficulty field (an asset-path
-/// Class/Object/Str property) by name, with full enclosing-size propagation.
-/// Skips silently when the property is absent. Returns `true` when a patch was
-/// applied (so the caller knows it must re-parse before the next edit).
-fn patch_difficulty_string(
-    payload: &mut Vec<u8>,
-    name: &str,
-    new_value: &str,
-) -> Result<bool, CoreError> {
-    let root = parse_save_tree(payload)?;
-    let Some(chain) = difficulty_chain(&root, name)? else {
-        return Ok(false);
-    };
-    let target = chain.target.clone();
-    let enclosing = chain.enclosing_size_fields.clone();
-    drop(root);
-    properties::patch_string(payload, &target, &enclosing, new_value)?;
-    Ok(true)
-}
-
-/// Patch a single BoolProperty difficulty field by name (sets/clears the 0x10
-/// tag bit). Bool patches are fixed-size, but we still re-parse per call for a
-/// fresh, valid offset. Skips silently when the property is absent.
-fn patch_difficulty_bool(
-    payload: &mut Vec<u8>,
-    name: &str,
-    value: bool,
-) -> Result<(), CoreError> {
-    let root = parse_save_tree(payload)?;
-    let Some(chain) = difficulty_chain(&root, name)? else {
-        return Ok(());
-    };
-    let target = chain.target.clone();
-    drop(root);
-    properties::patch_scalar(
-        payload.as_mut_slice(),
-        &target,
-        properties::ScalarValue::Bool(value),
-    )
-}
-
-fn apply_save_difficulty(payload: &mut Vec<u8>, req: &DifficultyRequest) -> Result<(), CoreError> {
-    // Asset-path properties (preset + the three sub-settings) are
-    // length-changing: a typed patch rewrites the FString value AND every
-    // enclosing size field (the Map tag size and the InstancedStruct data_size
-    // that wrap CustomPayload). RE-PARSE between patches — each successful
-    // patch invalidates all recorded offsets.
-    for (name, class) in req.class_edits()? {
-        patch_difficulty_string(payload, name, &format!("{ANGELSCRIPT}{class}"))?;
-    }
-    // Permadeath (alternate spellings) and the flow helper are BoolProperties:
-    // the value is the tag's 0x10 bit, patched in place via patch_scalar.
-    if let Some(perma) = req.resolved_permadeath() {
-        write_permadeath_typed(payload, perma)?;
-    }
-    if let Some(flow) = req.flow_helper {
-        patch_difficulty_bool(payload, "m_FakeSloppyCombos", flow)?;
-    }
-    // Validation gate (applies to BOTH the save's public payload and its decoded
-    // private payload, which are each a single-record GVAS): the edited bytes
-    // must strictly re-parse and consume the whole buffer, or we abort. This is
-    // the guard that prevents shipping a save the game refuses to load.
-    validate_typed_reparse(payload, "save difficulty edit")?;
-    Ok(())
-}
-
-/// Write `value` to whichever permadeath spelling exists in the tree
-/// (`m_PermanentDeath` / `m_PermaDeath`); skip silently if neither is present.
-fn write_permadeath_typed(payload: &mut Vec<u8>, value: bool) -> Result<(), CoreError> {
-    for name in PERMADEATH_NAMES {
-        let present = {
-            let root = parse_save_tree(payload)?;
-            difficulty_chain(&root, name)?.is_some()
-        };
-        if present {
-            return patch_difficulty_bool(payload, name, value);
-        }
-    }
-    Ok(())
-}
 
 /// Properties of a single profile element inside `m_Profiles`, regardless of
 /// whether the array element is a plain struct or an InstancedStruct wrapper.
@@ -2564,24 +2422,6 @@ fn write_profile_difficulty(
     Ok(())
 }
 
-/// Strictly re-parse a single-record GVAS payload and require it to consume the
-/// whole buffer. This is the real guard against shipping a save the game cannot
-/// load: a difficulty patch that left an enclosing `StructProperty` /
-/// `InstancedStruct` / `MapProperty` size field stale would misalign here.
-fn validate_typed_reparse(payload: &[u8], context: &str) -> Result<(), CoreError> {
-    let root = parse_save_tree(payload).map_err(|err| {
-        CoreError::Validation(format!(
-            "{context} produced a payload that does not strictly re-parse: {err}"
-        ))
-    })?;
-    if root.consumed != payload.len() {
-        return Err(CoreError::Validation(format!(
-            "{context} produced a payload with {} trailing unparsed bytes",
-            payload.len() - root.consumed
-        )));
-    }
-    Ok(())
-}
 
 /// Patch one string-valued difficulty field within a specific profile, with
 /// full enclosing-size propagation. Skips silently if the field is absent.
@@ -4605,9 +4445,6 @@ fn apply_private_edits(
             "private.typed.setValue" => {
                 parse_private_typed_set_value_edit(edit).map(PrivateEdit::TypedSetValue)
             }
-            "private.difficulty.set" => {
-                parse_private_difficulty_edit(edit).map(PrivateEdit::Difficulty)
-            }
             // Index-addressed edits (arrayRemove/arrayDuplicate) target indices
             // that shift after each structural change within the same batch;
             // callers must submit at most one structural array edit per write.
@@ -4761,7 +4598,6 @@ enum PrivateEdit {
     InventoryRemoveItem(PrivateInventoryRemoveItemEdit),
     TypedSetValue(PrivateTypedSetValueEdit),
     TypedContainer(PrivateTypedContainerEdit),
-    Difficulty(DifficultyRequest),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -4801,11 +4637,6 @@ fn parse_typed_edit_path(
         )));
     }
     properties::parse_path(&segments)
-}
-
-fn parse_private_difficulty_edit(edit: &Edit) -> Result<DifficultyRequest, CoreError> {
-    serde_json::from_value::<DifficultyRequest>(edit.value.clone())
-        .map_err(|e| CoreError::InvalidRequest(e.to_string()))
 }
 
 fn parse_private_typed_set_value_edit(edit: &Edit) -> Result<PrivateTypedSetValueEdit, CoreError> {
@@ -5429,7 +5260,6 @@ fn apply_private_edit_to_payload(
         PrivateEdit::TypedContainer(edit) => {
             apply_private_typed_container_edit_to_payload(payload, edit)
         }
-        PrivateEdit::Difficulty(req) => apply_save_difficulty(payload, req),
     }
 }
 
@@ -6870,10 +6700,6 @@ fn replace_public_fstring(
     Ok(())
 }
 
-/// Splice a difficulty change into a save's uncompressed public payload
-/// (`SaveGamePublicData`), leaving the compressed private stream and trailer
-/// untouched. The private payload is updated separately via the
-/// `private.difficulty.set` edit kind.
 /// One save or profile file the difficulty write will touch, captured up front
 /// so backups, staging, and the atomic replace operate on already-validated
 /// bytes — never on a partially-edited buffer.
@@ -6891,63 +6717,13 @@ fn write_difficulty_internal(
     req: &DifficultyRequest,
     targets: &Value,
     backup: bool,
-    codec_backend: Option<&dyn codec_backend::CodecBackend>,
 ) -> Result<Value, CoreError> {
     let mut plans: Vec<DifficultyWritePlan> = Vec::new();
 
-    if let Some(saves) = targets.get("saves").and_then(Value::as_array) {
-        // Dedup save paths up front: the staging/replace loop reuses each
-        // target's *.tmp-goresave (and *.replaced-goresave aside) path, so two
-        // plans for the SAME file would collide — the first begin_replace
-        // consumes the temp file, the second moves the just-replaced target
-        // aside (clobbering the first aside) then fails because the temp is
-        // gone, and rollback can leave the save MISSING. Keep the first
-        // occurrence; silently drop later duplicates (the Dart caller may
-        // legitimately include the current save in an "all saves" set).
-        let mut seen: HashSet<PathBuf> = HashSet::new();
-        for save in saves {
-            let path = PathBuf::from(save.as_str().ok_or_else(|| {
-                CoreError::InvalidRequest("targets.saves entries must be strings".to_string())
-            })?);
-            // Normalize via canonicalize when possible so the same file
-            // referenced two ways (e.g. relative vs absolute) is also caught;
-            // fall back to the raw path when the file can't be canonicalized.
-            let key = fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
-            if !seen.insert(key) {
-                continue;
-            }
-            let original = fs::read(&path)?;
-            // Edit the PUBLIC payload first, then route the PRIVATE difficulty
-            // edit through the same codec-backed path write_save uses. The
-            // private edit REQUIRES a codec backend; apply_private_edits errors
-            // with a clear message if none is configured.
-            let public_done = write_difficulty_into_save_public(&original, req)?;
-            let edit = Edit {
-                path: "private.difficulty.set".to_string(),
-                value: serde_json::to_value(req)
-                    .map_err(|e| CoreError::InvalidRequest(e.to_string()))?,
-            };
-            let edited = apply_private_edits(&public_done, &[&edit], codec_backend)?;
-            // Validate exactly as write_save_internal does: parse the edited
-            // bytes, and for GSAV confirm a byte-identical rebuild so the
-            // compressed stream / trailer were preserved.
-            inspect_bytes(&edited, None, false)?;
-            if edited.starts_with(b"GSAV") {
-                let rebuilt = rebuild_gsav_preserving_stream(&edited)?;
-                if rebuilt != edited {
-                    return Err(CoreError::Validation(
-                        "edited GSAV does not rebuild byte-identically".to_string(),
-                    ));
-                }
-            }
-            plans.push(DifficultyWritePlan {
-                path,
-                original,
-                edited,
-            });
-        }
-    }
-
+    // Difficulty is written ONLY to the profile's `ProfileData`. The profile
+    // copy is the authoritative, profile-wide value the game reads on load;
+    // editing a save's own copy has no in-game effect, so there is no per-save
+    // write path.
     if let Some(profile) = targets.get("profile").filter(|v| !v.is_null()) {
         let path = PathBuf::from(profile.get("path").and_then(Value::as_str).ok_or_else(|| {
             CoreError::InvalidRequest("targets.profile.path is required".to_string())
@@ -7046,24 +6822,6 @@ fn write_difficulty_internal(
     }))
 }
 
-fn write_difficulty_into_save_public(
-    data: &[u8],
-    req: &DifficultyRequest,
-) -> Result<Vec<u8>, CoreError> {
-    let parts = split_gsav(data)?;
-    let mut public_payload = parts.public_payload.to_vec();
-    let compressed_stream = parts.compressed_stream.to_vec();
-    let trailer = parts.trailer.to_vec();
-    let version = parts.version;
-    apply_save_difficulty(&mut public_payload, req)?;
-    Ok(build_gsav(
-        version,
-        &public_payload,
-        &compressed_stream,
-        &trailer,
-    ))
-}
-
 fn replace_str_property_fstring(
     payload: &mut Vec<u8>,
     property_name: &str,
@@ -7153,70 +6911,6 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
     use tempfile::tempdir;
-
-    /// Real-data regression for the difficulty data-corruption bug. The fixture
-    /// is a real, valid save whose PUBLIC payload nests the difficulty inside
-    /// `CustomPayload` (Map) -> InstancedStruct. Changing Resources to Novice
-    /// rewrites `ResourcesDifficultySettings_Standard` -> `_Easy` (-4 bytes), a
-    /// LENGTH-CHANGING edit. Before the fix, the raw splice updated only the
-    /// ObjectProperty's own tag size and left the enclosing Map + InstancedStruct
-    /// sizes stale, so a strict re-parse misaligned (the game would start a new
-    /// game). The typed write propagates every enclosing size field, so the
-    /// edited public payload still strictly re-parses and reports the new value.
-    ///
-    /// The save is referenced by absolute path (NOT committed to the repo); the
-    /// test is skipped cleanly if it is unavailable.
-    #[test]
-    fn real_save_difficulty_subsetting_length_change_reparses() {
-        let path = r"C:\sbx\goresave\work\corrupt\G1R-003.good.sav";
-        let Ok(data) = fs::read(path) else {
-            eprintln!("skipping: fixture {path} not present");
-            return;
-        };
-
-        // Sanity: the unedited public payload parses and starts as Standard.
-        let before = difficulty_for_gsav_bytes(&data).unwrap();
-        assert_eq!(
-            before.resources.as_deref(),
-            Some("ResourcesDifficultySettings_Standard"),
-            "fixture precondition: resources start at Standard",
-        );
-
-        // Custom preset, Resources -> Novice (-> _Easy, shrinks the asset path).
-        let req = DifficultyRequest {
-            preset: "Custom".into(),
-            combat: None,
-            resources: Some("Novice".into()),
-            progression: None,
-            flow_helper: None,
-            permadeath: None,
-        };
-        let edited = write_difficulty_into_save_public(&data, &req)
-            .expect("public difficulty write must succeed and self-validate");
-
-        // The edited public payload must STRICTLY re-parse and consume every
-        // byte (this is what fails on the raw-splice code: a stale enclosing
-        // Map/InstancedStruct size desyncs the parse).
-        let parts = split_gsav(&edited).unwrap();
-        let pub_payload = parts.public_payload.to_vec();
-        let root = properties::parse_property_list_root(&pub_payload)
-            .expect("edited public payload must re-parse cleanly");
-        assert_eq!(
-            root.consumed,
-            pub_payload.len(),
-            "edited public payload must consume every byte (no size desync)",
-        );
-
-        // And the new value must be readable.
-        let after = difficulty_for_gsav_bytes(&edited).unwrap();
-        assert_eq!(
-            after.resources.as_deref(),
-            Some("ResourcesDifficultySettings_Easy"),
-            "resources sub-setting must now read as Easy",
-        );
-        // The size actually changed, proving this exercised the length-changing path.
-        assert_ne!(data.len(), edited.len(), "edit must change the payload length");
-    }
 
     #[test]
     fn summarize_typed_parse_reports_status() {
@@ -7319,235 +7013,6 @@ mod tests {
         out.extend_from_slice(&bool_prop(perma_name, perma_on));
         out.extend_from_slice(&bool_prop("m_FakeSloppyCombos", false));
         out
-    }
-
-    /// Wrap a property list in the real-save nesting: a `CustomPayload`
-    /// MapProperty<Object, InstancedStruct> whose single entry's InstancedStruct
-    /// holds `inner_props`. A trailing `m_AfterMap` int follows the map so any
-    /// missed enclosing-size fixup shifts it and breaks the strict re-parse.
-    fn custom_payload_map(inner_props: &[u8]) -> Vec<u8> {
-        let mut struct_body = inner_props.to_vec();
-        struct_body.extend_from_slice(&fstring("None"));
-        let mut instanced = fstring("/Script/G1R.SaveDataPayload");
-        instanced.extend_from_slice(&(struct_body.len() as u32).to_le_bytes());
-        instanced.extend_from_slice(&struct_body);
-
-        let mut map_body = 0u32.to_le_bytes().to_vec(); // num_to_remove
-        map_body.extend_from_slice(&1u32.to_le_bytes()); // count
-        map_body.extend_from_slice(&fstring("/Script/G1R.SaveDataPayload")); // Object key
-        map_body.extend_from_slice(&instanced);
-
-        let mut props = diff_tag("CustomPayload", "MapProperty");
-        // Map descriptor (read before the value header): count + key body +
-        // key_flags + value body.
-        props.extend_from_slice(&2u32.to_le_bytes()); // descriptor count
-        props.extend_from_slice(&fstring("ObjectProperty")); // key type
-        props.extend_from_slice(&0u32.to_le_bytes()); // key_flags
-        props.extend_from_slice(&fstring("StructProperty")); // value type
-        props.extend_from_slice(&1u32.to_le_bytes()); // struct desc count
-        props.extend_from_slice(&fstring("InstancedStruct")); // struct type
-        props.extend_from_slice(&1u32.to_le_bytes()); // package count
-        props.extend_from_slice(&fstring("/Script/StructUtils")); // package
-        // value header
-        props.extend_from_slice(&0u32.to_le_bytes()); // array_index
-        props.extend_from_slice(&(map_body.len() as u32).to_le_bytes()); // size
-        props.push(properties::TAG_FLAG_NATIVE_SERIALIZE); // tag_flags
-        props.extend_from_slice(&map_body);
-
-        // trailing root-level int
-        props.extend_from_slice(&diff_tag("m_AfterMap", "IntProperty"));
-        props.extend_from_slice(&diff_header(4, 0));
-        props.extend_from_slice(&7i32.to_le_bytes());
-        props
-    }
-
-    /// A bare property-list payload (public-payload framing): the difficulty
-    /// nested in CustomPayload, then `None`.
-    fn nested_public_payload(preset_level: &str, perma_name: &str, perma_on: bool) -> Vec<u8> {
-        let mut out = custom_payload_map(&difficulty_props(preset_level, perma_name, perma_on));
-        out.extend_from_slice(&fstring("None"));
-        out
-    }
-
-    /// A full GVAS-object payload (private-payload framing): class + flag +
-    /// nested difficulty + `None` + footer.
-    fn nested_object_payload(preset_level: &str, perma_name: &str, perma_on: bool) -> Vec<u8> {
-        let mut out = fstring("/Script/G1R.SaveGame");
-        out.push(0); // object flag
-        out.extend_from_slice(&custom_payload_map(&difficulty_props(
-            preset_level,
-            perma_name,
-            perma_on,
-        )));
-        out.extend_from_slice(&fstring("None"));
-        out.extend_from_slice(&0u32.to_le_bytes()); // footer
-        out
-    }
-
-    /// Read a nested difficulty ObjectProperty's value from a parsed tree.
-    fn read_nested_difficulty(payload: &[u8], name: &str) -> Option<String> {
-        let root = parse_save_tree(payload).ok()?;
-        let (_, prop) = properties::find_property_by_name(&root, name)?;
-        match &prop.value {
-            properties::PropertyValue::Object(s) => Some(s.clone()),
-            _ => None,
-        }
-    }
-
-    /// Read a nested difficulty BoolProperty's value from a parsed tree.
-    fn read_nested_bool(payload: &[u8], name: &str) -> Option<bool> {
-        let root = parse_save_tree(payload).ok()?;
-        let (_, prop) = properties::find_property_by_name(&root, name)?;
-        match &prop.value {
-            properties::PropertyValue::Bool(b) => Some(*b),
-            _ => None,
-        }
-    }
-
-    #[test]
-    fn apply_save_difficulty_patches_bool_via_tag_flag_and_propagates_sizes() {
-        // Length-changing edit on a NESTED ObjectProperty plus a Bool toggle:
-        // the edited bare-list payload must STRICTLY re-parse (enclosing Map +
-        // InstancedStruct sizes fixed) and read back the new values.
-        let mut payload = nested_public_payload("Standard", "m_PermanentDeath", false);
-        let original_len = payload.len();
-
-        let req = DifficultyRequest {
-            preset: "Hard".into(),
-            combat: None,
-            resources: None,
-            progression: None,
-            flow_helper: Some(true),
-            permadeath: Some(true),
-        };
-        apply_save_difficulty(&mut payload, &req).unwrap();
-        // Hard ("_Hard", 5 chars) is shorter than the fixture's "_Standard"
-        // (9 chars) on all four asset paths, so this is a length-CHANGING edit.
-        // The tree must still re-parse, with every enclosing size field fixed.
-        let root = properties::parse_property_list_root(&payload).unwrap();
-        assert_eq!(root.consumed, payload.len());
-        assert_eq!(
-            read_nested_difficulty(&payload, "m_difficultyPreset").as_deref(),
-            Some("/Script/Angelscript.DifficultyPreset_Hard"),
-        );
-        assert_eq!(read_nested_bool(&payload, "m_PermanentDeath"), Some(true));
-        assert_eq!(read_nested_bool(&payload, "m_FakeSloppyCombos"), Some(true));
-        // The trailing root-level int survived intact (no size desync).
-        let after = properties::resolve(
-            &root.properties,
-            &properties::parse_path(&["m_AfterMap".into()]).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(after.value, properties::PropertyValue::Int(7));
-        // All four asset paths shrank by 4 bytes ("Standard" -> "Hard").
-        assert_eq!(payload.len(), original_len - 16);
-    }
-
-    #[test]
-    fn apply_save_difficulty_shrinking_subsetting_fixes_enclosing_sizes() {
-        // Custom -> Resources Novice rewrites _Standard -> _Easy (-4 bytes), the
-        // exact length-changing case that corrupted real saves. The enclosing
-        // Map/InstancedStruct sizes must shrink in lockstep or the strict
-        // re-parse (now run as the validation gate) fails.
-        let mut payload = nested_public_payload("Standard", "m_PermaDeath", false);
-        let original_len = payload.len();
-
-        let req = DifficultyRequest {
-            preset: "Custom".into(),
-            combat: None,
-            resources: Some("Novice".into()),
-            progression: None,
-            flow_helper: None,
-            permadeath: None,
-        };
-        apply_save_difficulty(&mut payload, &req).unwrap();
-
-        let root = properties::parse_property_list_root(&payload).unwrap();
-        assert_eq!(
-            root.consumed,
-            payload.len(),
-            "edited payload must re-parse with no size desync",
-        );
-        assert_eq!(
-            read_nested_difficulty(&payload, "m_customResourcesSettings").as_deref(),
-            Some("/Script/Angelscript.ResourcesDifficultySettings_Easy"),
-        );
-        // Combat/Progression default to Gothic (Standard) under Custom.
-        assert_eq!(
-            read_nested_difficulty(&payload, "m_customCombatSettings").as_deref(),
-            Some("/Script/Angelscript.CombatDifficultySettings_Standard"),
-        );
-        assert_eq!(
-            read_nested_difficulty(&payload, "m_difficultyPreset").as_deref(),
-            Some("/Script/Angelscript.DifficultyPreset_Custom"),
-        );
-        // preset "Standard"(8)->"Custom"(6) = -2, resources "Standard"->"Easy" = -4.
-        assert_eq!(payload.len(), original_len - 6, "net shrink of 6 bytes");
-    }
-
-    #[test]
-    fn apply_save_difficulty_non_custom_mirrors_preset_and_locks_permadeath() {
-        // Novice mirrors every sub-setting to Easy AND forces permadeath off,
-        // even though permadeath: Some(true) was requested. Works on the full
-        // OBJECT framing (private-payload shape) to exercise that branch too.
-        let mut payload = nested_object_payload("Standard", "m_PermanentDeath", true);
-
-        let req = DifficultyRequest {
-            preset: "Novice".into(),
-            combat: None,
-            resources: None,
-            progression: None,
-            flow_helper: None,
-            permadeath: Some(true),
-        };
-        apply_save_difficulty(&mut payload, &req).unwrap();
-
-        // Strict OBJECT re-parse must succeed.
-        let root = properties::parse_private_root(&payload).unwrap();
-        assert_eq!(root.consumed, payload.len());
-        assert_eq!(
-            read_nested_difficulty(&payload, "m_difficultyPreset").as_deref(),
-            Some("/Script/Angelscript.DifficultyPreset_Easy"),
-        );
-        assert_eq!(
-            read_nested_difficulty(&payload, "m_customResourcesSettings").as_deref(),
-            Some("/Script/Angelscript.ResourcesDifficultySettings_Easy"),
-        );
-        assert_eq!(read_nested_bool(&payload, "m_PermanentDeath"), Some(false));
-    }
-
-    #[test]
-    fn write_difficulty_into_save_updates_public_payload() {
-        let public = nested_public_payload("Custom", "m_PermaDeath", true);
-        // minimal_stream()/[0,0,0,0] trailer mirror the other GSAV tests.
-        let gsav = build_gsav(2, &public, &minimal_stream(), &[0, 0, 0, 0]);
-        let req = DifficultyRequest {
-            preset: "Novice".into(),
-            combat: None,
-            resources: None,
-            progression: None,
-            flow_helper: None,
-            permadeath: Some(true),
-        };
-        let out = write_difficulty_into_save_public(&gsav, &req).unwrap();
-        let d = difficulty_for_gsav_bytes(&out).unwrap();
-        assert_eq!(d.preset.as_deref(), Some("DifficultyPreset_Easy"));
-        assert_eq!(d.resources.as_deref(), Some("ResourcesDifficultySettings_Easy"));
-        assert_eq!(d.permadeath, Some(false)); // Novice forces off
-        // The edited public payload strictly re-parses.
-        let parts = split_gsav(&out).unwrap();
-        let root = properties::parse_property_list_root(parts.public_payload).unwrap();
-        assert_eq!(root.consumed, parts.public_payload.len());
-    }
-
-    /// Build the difficulty-bearing PRIVATE payload (full GVAS object).
-    fn difficulty_private_payload() -> Vec<u8> {
-        nested_object_payload("Custom", "m_PermaDeath", true)
-    }
-
-    /// Build the difficulty-bearing PUBLIC payload (bare property list).
-    fn difficulty_public_payload() -> Vec<u8> {
-        nested_public_payload("Custom", "m_PermaDeath", true)
     }
 
     /// One profile's property list (no `None`): id + nested difficulty in a
@@ -7690,193 +7155,6 @@ mod tests {
     }
 
     #[test]
-    fn write_difficulty_internal_writes_save_and_profile_under_distinct_backup_suffixes() {
-        let dir = tempdir().unwrap();
-        let save_path = dir.path().join("G1R-001.sav");
-        let profile_path = dir.path().join("PersistentDataList.sav");
-
-        // Save: public difficulty + a private difficulty payload behind the
-        // test codec backend.
-        let private_payload = difficulty_private_payload();
-        let seed_compressed = b"seed-compressed".to_vec();
-        let stream = compressed_stream_with_one_chunk(&seed_compressed, private_payload.len());
-        fs::write(
-            &save_path,
-            build_gsav(2, &difficulty_public_payload(), &stream, &[0, 0, 0, 0]),
-        )
-        .unwrap();
-        let backend = PrefixCodecBackend {
-            seed_compressed,
-            seed_uncompressed: private_payload,
-        };
-
-        // Profile target: 2-profile PersistentDataList, editing only profile 1.
-        fs::write(&profile_path, difficulty_persistent_profiles()).unwrap();
-
-        let req = DifficultyRequest {
-            preset: "Hard".into(),
-            combat: None,
-            resources: None,
-            progression: None,
-            flow_helper: None,
-            permadeath: None,
-        };
-        let targets = json!({
-            "saves": [save_path.display().to_string()],
-            "profile": { "path": profile_path.display().to_string(), "profileId": 1 },
-        });
-
-        let response =
-            write_difficulty_internal(&req, &targets, true, Some(&backend)).unwrap();
-        assert_eq!(response["targetsWritten"], 2);
-
-        // The save's PUBLIC payload now reports Hard (re-read + parse).
-        let written_save = fs::read(&save_path).unwrap();
-        let d = difficulty_for_gsav_bytes(&written_save).unwrap();
-        assert_eq!(d.preset.as_deref(), Some("DifficultyPreset_Hard"));
-
-        // The save's PRIVATE payload was also edited to Hard.
-        let parts = split_gsav(&written_save).unwrap();
-        let written_stream =
-            parse_compressed_stream(&written_save, 13 + parts.public_payload.len()).unwrap();
-        let decoded =
-            decompress_private_payload(&written_save, &written_stream, &backend).unwrap();
-        let private_refs = scan_fstrings(&decoded, 0);
-        assert_eq!(
-            value_after_property_in_range(
-                &private_refs,
-                0,
-                private_refs.len(),
-                "m_difficultyPreset"
-            )
-            .as_deref(),
-            Some("/Script/Angelscript.DifficultyPreset_Hard"),
-        );
-
-        // Profile 1 became Hard; profile 0 (Custom) was left untouched.
-        let written_profile = fs::read(&profile_path).unwrap();
-        let presets: Vec<_> = scan_fstrings(&written_profile, 0)
-            .into_iter()
-            .filter(|r| r.value.contains("DifficultyPreset_"))
-            .map(|r| r.value)
-            .collect();
-        assert!(presets.iter().any(|p| p.ends_with("DifficultyPreset_Custom")));
-        assert!(presets.iter().any(|p| p.ends_with("DifficultyPreset_Hard")));
-        assert!(!presets.iter().any(|p| p.ends_with("DifficultyPreset_Easy")));
-
-        // Each target was backed up under its OWN distinct suffix, so the
-        // paired-restore heuristic (prepare_paired_persistent_data_list_restore,
-        // which matches when the companion's suffix equals the slot's suffix)
-        // does NOT auto-couple a single slot restore to the profile rollback.
-        let backups = dir.path().join("goresave_backups");
-        let mut save_suffix = None;
-        let mut profile_suffix = None;
-        for entry in fs::read_dir(&backups).unwrap() {
-            let name = entry.unwrap().file_name().to_string_lossy().into_owned();
-            if let Some(rest) = name.strip_prefix("G1R-001.sav.bak.") {
-                save_suffix = Some(rest.to_string());
-            } else if let Some(rest) = name.strip_prefix("PersistentDataList.sav.bak.") {
-                profile_suffix = Some(rest.to_string());
-            }
-        }
-        let save_suffix = save_suffix.expect("save backup created");
-        let profile_suffix = profile_suffix.expect("profile backup created");
-        assert_ne!(
-            save_suffix, profile_suffix,
-            "save and profile backups must have DISTINCT suffixes so a single \
-             slot restore is not coupled to the profile rollback",
-        );
-
-        // Confirm the suffixes really would not pair: the slot suffix must not
-        // match the companion-prefixed name (the exact check restore performs).
-        assert_ne!(
-            format!("PersistentDataList.sav.bak.{save_suffix}"),
-            format!("PersistentDataList.sav.bak.{profile_suffix}"),
-        );
-        let pdl_backup = backups.join(format!("PersistentDataList.sav.bak.{save_suffix}"));
-        assert!(
-            !pdl_backup.exists(),
-            "no PersistentDataList backup shares the slot's suffix, so \
-             prepare_paired_persistent_data_list_restore finds no companion to pair",
-        );
-    }
-
-    #[test]
-    fn write_difficulty_internal_dedups_duplicate_save_targets() {
-        // Regression: if targets.saves lists the SAME path twice, the old code
-        // built two plans for one file. Staging reused the same *.tmp-goresave
-        // and begin_replace ran twice on the same target: the first consumed the
-        // temp file, the second moved the (already-replaced) target aside —
-        // removing the first replace's aside — then FAILED because the temp file
-        // was gone, and rollback could leave the save file MISSING. Dedup must
-        // keep exactly one plan per save path so the write succeeds and the file
-        // is never lost.
-        let dir = tempdir().unwrap();
-        let save_path = dir.path().join("G1R-001.sav");
-
-        let private_payload = difficulty_private_payload();
-        let seed_compressed = b"seed-compressed".to_vec();
-        let stream = compressed_stream_with_one_chunk(&seed_compressed, private_payload.len());
-        let original_bytes =
-            build_gsav(2, &difficulty_public_payload(), &stream, &[0, 0, 0, 0]);
-        fs::write(&save_path, &original_bytes).unwrap();
-        let backend = PrefixCodecBackend {
-            seed_compressed,
-            seed_uncompressed: private_payload,
-        };
-
-        let req = DifficultyRequest {
-            preset: "Hard".into(),
-            combat: None,
-            resources: None,
-            progression: None,
-            flow_helper: None,
-            permadeath: None,
-        };
-        // Same save path listed TWICE.
-        let path_str = save_path.display().to_string();
-        let targets = json!({
-            "saves": [path_str.clone(), path_str],
-        });
-
-        let response =
-            write_difficulty_internal(&req, &targets, true, Some(&backend)).unwrap();
-        // Exactly one target written despite the duplicate entry.
-        assert_eq!(response["targetsWritten"], 1);
-
-        // The save still exists and was edited to Hard (NOT lost to rollback).
-        assert!(save_path.exists(), "save file must not be lost");
-        let written_save = fs::read(&save_path).unwrap();
-        let d = difficulty_for_gsav_bytes(&written_save).unwrap();
-        assert_eq!(d.preset.as_deref(), Some("DifficultyPreset_Hard"));
-        assert_ne!(written_save, original_bytes, "save must reflect the edit");
-
-        // Only one backup/replace happened: a single backup for this path, and
-        // no leftover staging artifacts (tmp / replaced-aside) that a second,
-        // colliding replace would have orphaned.
-        let backups = dir.path().join("goresave_backups");
-        let backup_count = fs::read_dir(&backups)
-            .unwrap()
-            .filter(|e| {
-                e.as_ref()
-                    .unwrap()
-                    .file_name()
-                    .to_string_lossy()
-                    .starts_with("G1R-001.sav.bak.")
-            })
-            .count();
-        assert_eq!(backup_count, 1, "exactly one backup for the deduped path");
-        assert!(
-            !save_path.with_extension("sav.tmp-goresave").exists(),
-            "no leftover staging temp file",
-        );
-        assert!(
-            !save_path.with_extension("sav.replaced-goresave").exists(),
-            "no leftover moved-aside original",
-        );
-    }
-
-    #[test]
     fn write_difficulty_internal_requires_at_least_one_target() {
         let req = DifficultyRequest {
             preset: "Hard".into(),
@@ -7886,7 +7164,7 @@ mod tests {
             flow_helper: None,
             permadeath: None,
         };
-        let err = write_difficulty_internal(&req, &json!({}), false, None).unwrap_err();
+        let err = write_difficulty_internal(&req, &json!({}), false).unwrap_err();
         assert!(matches!(err, CoreError::InvalidRequest(_)));
     }
 
@@ -7908,8 +7186,8 @@ mod tests {
             "profile": { "path": profile_path.display().to_string(), "profileId": 1 },
         });
 
-        // No codec backend supplied: the profile-only path must not require one.
-        let response = write_difficulty_internal(&req, &targets, true, None).unwrap();
+        // The profile-only path needs no codec backend.
+        let response = write_difficulty_internal(&req, &targets, true).unwrap();
         assert_eq!(response["targetsWritten"], 1);
 
         let written = fs::read(&profile_path).unwrap();
