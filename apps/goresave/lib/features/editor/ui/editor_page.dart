@@ -258,10 +258,12 @@ class _ProfileHeader extends StatelessWidget {
                         ),
                 ),
                 const SizedBox(width: 12),
-                ProfileDifficultyChip(
-                  profile: profile,
-                  notifier: notifier,
-                  isLoading: isLoading,
+                Flexible(
+                  child: ProfileDifficultyChip(
+                    profile: profile,
+                    notifier: notifier,
+                    isLoading: isLoading,
+                  ),
                 ),
               ],
             ),
