@@ -1622,20 +1622,25 @@ class _PrivateInventorySummaryCardState
   }
 
   Future<void> _openAddDialog() async {
+    // Scope the dialog to the inventory it was opened for. If the user switches
+    // saves (or the inventory refreshes) while the dialog is open, the awaited
+    // result is stale — its excludePaths and target belong to the old save, so
+    // applying it would queue the add against the wrong save.
+    final dialogInventory = widget.inventory;
     final result = await showDialog<InventoryItemAdd>(
       context: context,
       builder: (_) => AddInventoryItemDialog(
-        excludePaths: widget.inventory.mainContainerPaths.toSet(),
+        excludePaths: dialogInventory.mainContainerPaths.toSet(),
       ),
     );
-    if (result != null) {
-      setState(() {
-        _pendingAdd = result;
-        // Keep the one-structural-edit-per-save invariant unconditionally.
-        _pendingRemovePath = null;
-      });
-      _pushInventoryPending();
-    }
+    if (result == null) return;
+    if (!mounted || !identical(widget.inventory, dialogInventory)) return;
+    setState(() {
+      _pendingAdd = result;
+      // Keep the one-structural-edit-per-save invariant unconditionally.
+      _pendingRemovePath = null;
+    });
+    _pushInventoryPending();
   }
 
   void _queueRemove(PrivateInventoryItem item) {
@@ -1903,21 +1908,23 @@ class _PrivateInventorySummaryCardState
     required bool canRemove,
     required bool removeBlocked,
   }) {
-    if (!widget.editable) {
-      return Text(
-        '×${item.count ?? '?'}',
-        style: theme.textTheme.bodyMedium,
-      );
-    }
+    // A remove-only inventory (removeItem advertised without setItemCount) is
+    // not `editable` for count edits, but the delete action must still show.
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        _InventoryItemCountEditor(
-          item: item,
-          pendingCount: _pendingCountChanges[_inventoryItemKey(item)]?.count,
-          onPendingCountChanged: (change) =>
-              _setPendingCountChange(item, change),
-        ),
+        if (widget.editable)
+          _InventoryItemCountEditor(
+            item: item,
+            pendingCount: _pendingCountChanges[_inventoryItemKey(item)]?.count,
+            onPendingCountChanged: (change) =>
+                _setPendingCountChange(item, change),
+          )
+        else
+          Text(
+            '×${item.count ?? '?'}',
+            style: theme.textTheme.bodyMedium,
+          ),
         if (canRemove && item.path.isNotEmpty && item.removable) ...[
           const SizedBox(width: 4),
           Tooltip(
