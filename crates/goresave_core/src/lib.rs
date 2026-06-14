@@ -2280,9 +2280,19 @@ fn inspect_private_payload(
                     "private.typed.setRemove",
                     "private.typed.arrayRemove",
                     "private.typed.arrayDuplicate",
-                    "private.inventory.addItem",
-                    "private.inventory.removeItem",
                 ]);
+                // addItem/removeItem are gated per save (clean template /
+                // removable item); mirror the inventory summary's gating so the
+                // top-level writable list never advertises an op write_save
+                // would reject.
+                if let Some(mc) = &main_container {
+                    if mc.has_clean_template {
+                        writable.push("private.inventory.addItem");
+                    }
+                    if !mc.removable_paths.is_empty() {
+                        writable.push("private.inventory.removeItem");
+                    }
+                }
             }
             Ok(json!({
                 "status": if preview { "decoded_preview" } else { "decoded" },
