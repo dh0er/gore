@@ -165,6 +165,53 @@ class ProfileSummary {
   }
 }
 
+/// Maps a difficulty class short-name suffix to its UI label.
+String _difficultyLevelLabel(String? className) {
+  if (className == null) return '-';
+  if (className.endsWith('_Easy')) return 'Novice';
+  if (className.endsWith('_Standard')) return 'Gothic';
+  if (className.endsWith('_Hard')) return 'Hard';
+  if (className.endsWith('_Custom')) return 'Custom';
+  return className;
+}
+
+class DifficultySettings {
+  const DifficultySettings({
+    this.preset,
+    this.combat,
+    this.resources,
+    this.progression,
+    this.flowHelper,
+    this.permadeath,
+  });
+
+  factory DifficultySettings.fromJson(Map<String, Object?> json) {
+    return DifficultySettings(
+      preset: json['preset'] as String?,
+      combat: json['combat'] as String?,
+      resources: json['resources'] as String?,
+      progression: json['progression'] as String?,
+      flowHelper: json['flowHelper'] as bool?,
+      permadeath: json['permadeath'] as bool?,
+    );
+  }
+
+  static DifficultySettings? maybeFromJson(Object? json) =>
+      json is Map ? DifficultySettings.fromJson(json.cast<String, Object?>()) : null;
+
+  final String? preset;
+  final String? combat;
+  final String? resources;
+  final String? progression;
+  final bool? flowHelper;
+  final bool? permadeath;
+
+  String get presetLabel => _difficultyLevelLabel(preset);
+  String get combatLabel => _difficultyLevelLabel(combat);
+  String get resourcesLabel => _difficultyLevelLabel(resources);
+  String get progressionLabel => _difficultyLevelLabel(progression);
+}
+
 class SaveSlot {
   const SaveSlot({
     required this.path,
@@ -186,6 +233,7 @@ class SaveSlot {
     this.autoSave,
     this.persistentProfileId,
     this.screenshot,
+    this.difficulty,
   });
 
   factory SaveSlot.fromJson(Map<String, Object?> json) {
@@ -209,6 +257,7 @@ class SaveSlot {
       autoSave: json['autoSave'] as bool?,
       persistentProfileId: (json['persistentProfileId'] as num?)?.toInt(),
       screenshot: ScreenshotSummary.maybeFromJson(json['screenshot']),
+      difficulty: DifficultySettings.maybeFromJson(json['difficulty']),
     );
   }
 
@@ -231,6 +280,7 @@ class SaveSlot {
   final bool? autoSave;
   final int? persistentProfileId;
   final ScreenshotSummary? screenshot;
+  final DifficultySettings? difficulty;
 
   String get displayName {
     final name = playerSaveName ?? persistentPlayerSaveName;
@@ -261,6 +311,7 @@ class SaveInspection {
     this.autoSave,
     this.persistentProfileId,
     this.screenshot,
+    this.difficulty,
     this.privateStatus,
     this.privateDecoded = false,
     this.privateDecompressedSize,
@@ -310,6 +361,7 @@ class SaveInspection {
       autoSave: persistent?['autoSave'] as bool?,
       persistentProfileId: (persistent?['profileId'] as num?)?.toInt(),
       screenshot: ScreenshotSummary.maybeFromJson(json['screenshot']),
+      difficulty: DifficultySettings.maybeFromJson(json['difficulty']),
       privateStatus: privateStatus,
       privateDecoded:
           privateStatus == 'decoded' || privateStatus == 'decoded_preview',
@@ -358,6 +410,7 @@ class SaveInspection {
   final bool? autoSave;
   final int? persistentProfileId;
   final ScreenshotSummary? screenshot;
+  final DifficultySettings? difficulty;
   final String? privateStatus;
   final bool privateDecoded;
   final int? privateDecompressedSize;

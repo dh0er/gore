@@ -16,6 +16,7 @@ import 'package:goresave/features/editor/domain/pending_edits.dart';
 import 'package:goresave/providers/data_providers.dart';
 import 'package:intl/intl.dart';
 import 'add_inventory_item_dialog.dart';
+import 'difficulty_card.dart';
 import 'hero_stats_card.dart';
 import 'progression_panel.dart';
 
@@ -287,10 +288,13 @@ class _ProfileHeader extends StatelessWidget {
   }
 
   /// Rescanning re-inspects the selected slot, which clears the global
-  /// pending-edit registry — never silently discard unsaved drafts.
+  /// pending-edit registry (including any pending difficulty edit) and re-seeds
+  /// every editor — never silently discard unsaved changes. Guard on the same
+  /// `hasUnsavedEdits` signal the profile-switch guard uses (pending registry
+  /// edits OR a pending difficulty edit).
   Future<void> _confirmRefresh(BuildContext context) async {
-    final pendingCount = notifier.pendingEditCount;
-    if (pendingCount > 0) {
+    if (notifier.state.hasUnsavedEdits) {
+      final pendingCount = notifier.pendingEditCount;
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
@@ -312,6 +316,8 @@ class _ProfileHeader extends StatelessWidget {
         ),
       );
       if (confirmed != true) return;
+      // The user chose to discard. refresh() centrally clears all pending edits
+      // (registry + the pending difficulty edit) and re-seeds the editors.
     }
     await notifier.refresh();
   }
@@ -517,9 +523,9 @@ String _saveSlotSubtitle(SaveSlot save) {
   if (timePlayed != '-') {
     parts.add(timePlayed);
   }
-  final mapName = save.mapName;
-  if (mapName != null && mapName.isNotEmpty) {
-    parts.add(mapName);
+  final difficulty = save.difficulty?.presetLabel;
+  if (difficulty != null && difficulty != '-') {
+    parts.add(difficulty);
   }
   return parts.join(' | ');
 }
@@ -685,7 +691,7 @@ class _EditorWorkspace extends StatelessWidget {
                     child: _OverviewPanel(
                       inspection: inspection,
                       notifier: notifier,
-                      selectedSave: state.selectedSave,
+                      state: state,
                     ),
                   ),
                   _KeepAliveTab(
@@ -802,21 +808,30 @@ class _OverviewPanel extends StatelessWidget {
   const _OverviewPanel({
     required this.inspection,
     required this.notifier,
-    required this.selectedSave,
+    required this.state,
   });
 
   final SaveInspection inspection;
   final EditorNotifier notifier;
-  final SaveSlot? selectedSave;
+  final EditorState state;
 
   @override
   Widget build(BuildContext context) {
     return ListView(
       padding: const EdgeInsets.all(20),
       children: [
-        _HeaderCard(inspection: inspection, save: selectedSave),
+        _HeaderCard(inspection: inspection, save: state.selectedSave),
         const SizedBox(height: 16),
         _MetadataEditor(inspection: inspection, notifier: notifier),
+        const SizedBox(height: 16),
+        DifficultyCard(
+          inspection: inspection,
+          notifier: notifier,
+          // Propagation binds to the EDITED SAVE's profile, not the sidebar's
+          // effective filter profile (which can differ).
+          profile: state.editedSaveProfile,
+          canCompress: state.codecCompressReady,
+        ),
         const SizedBox(height: 16),
         _OverviewDiagnostics(inspection: inspection),
         const SizedBox(height: 16),
@@ -935,8 +950,9 @@ class _OverviewDiagnosticsState extends State<_OverviewDiagnostics> {
                         'Slot': inspection.slot ?? '-',
                         if (inspection.chapterId != null)
                           'Chapter': inspection.chapterId.toString(),
-                        if (inspection.mapName != null)
-                          'Map': inspection.mapName!,
+                        if (inspection.difficulty?.presetLabel != null &&
+                            inspection.difficulty!.presetLabel != '-')
+                          'Difficulty': inspection.difficulty!.presetLabel,
                         if (inspection.timePlayedSeconds != null)
                           'Time played': _formatDurationSeconds(
                             inspection.timePlayedSeconds,
@@ -1065,10 +1081,11 @@ class _HeaderCard extends StatelessWidget {
                                   inspection.timePlayedSeconds,
                                 ),
                               ),
-                            if (inspection.mapName != null)
+                            if (inspection.difficulty?.presetLabel != null &&
+                                inspection.difficulty!.presetLabel != '-')
                               _InfoPill(
-                                icon: Icons.map_outlined,
-                                label: inspection.mapName!,
+                                icon: Icons.local_fire_department_outlined,
+                                label: inspection.difficulty!.presetLabel,
                               ),
                           ];
                           if (pills.isEmpty) return const SizedBox.shrink();
@@ -1925,6 +1942,12 @@ class _PrivateInventorySummaryCardState
     // count as plain text but the delete action may still apply.
     return Row(
       mainAxisSize: MainAxisSize.min,
+      // Top-align so the count field's error line ('Min 1') has room to render
+      // below the field without growing the row or shoving the delete button —
+      // the field reserves constant vertical space for that line (see
+      // _InventoryItemCountEditor.helperText), and the delete button sits at the
+      // top next to the field, not vertically centred against the taller field.
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         if (countEditable)
           _InventoryItemCountEditor(
@@ -1938,17 +1961,26 @@ class _PrivateInventorySummaryCardState
             '×${item.count ?? '?'}',
             style: theme.textTheme.bodyMedium,
           ),
-        if (canRemove && item.path.isNotEmpty && item.removable) ...[
+        if (canRemove && item.path.isNotEmpty) ...[
           const SizedBox(width: 4),
           Tooltip(
-            message: removeBlocked
+            message: !item.removable
+                ? "Can't delete: this item is likely equipped or "
+                    'assigned to a hotkey slot'
+                : removeBlocked
                 ? 'Save or reset your pending inventory changes first — '
                     'an add or remove must be saved on its own'
                 : 'Remove item from inventory',
             child: IconButton(
               icon: const Icon(Icons.delete_outline),
-              onPressed:
-                  removeBlocked ? null : () => _queueRemove(item),
+              // A non-removable item shows the trash icon disabled (its asset
+              // path occurs in more than one container — e.g. also equipped or
+              // in a quickslot — so the core can't unambiguously remove it). A
+              // removable item is disabled only while a structural/count edit
+              // is pending; otherwise it queues the remove.
+              onPressed: (!item.removable || removeBlocked)
+                  ? null
+                  : () => _queueRemove(item),
             ),
           ),
         ],
@@ -2093,12 +2125,20 @@ class _InventoryItemCountEditorState extends State<_InventoryItemCountEditor> {
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      width: 120,
+      width: 132,
       child: TextField(
         controller: _controller,
         keyboardType: TextInputType.number,
         onChanged: _onCountTextChanged,
-        decoration: InputDecoration(labelText: 'Count', errorText: _error),
+        decoration: InputDecoration(
+          labelText: 'Count',
+          errorText: _error,
+          // Reserve a constant line below the field with a blank helper so that
+          // showing the 'Min 1' error swaps in place of the helper rather than
+          // adding a new line — the field height stays stable, so it never
+          // grows inside the trailing Row when the user types 0.
+          helperText: ' ',
+        ),
       ),
     );
   }

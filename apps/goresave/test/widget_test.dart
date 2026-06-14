@@ -33,14 +33,19 @@ void main() {
     expect(find.text('Die Welt der Verurteilten'), findsAtLeastNWidgets(1));
     expect(find.text('Overview'), findsOneWidget);
     expect(find.text('Public save name'), findsOneWidget);
-    // Header pills summarise chapter, time played and map for the save.
+    // Header pills summarise chapter, time played and difficulty for the save.
     expect(find.text('Chapter 1'), findsOneWidget);
     expect(find.text('1h 56m'), findsOneWidget);
-    expect(find.text('MainMap'), findsAtLeastNWidgets(1));
+    expect(find.text('Custom'), findsAtLeastNWidgets(1));
     expect(find.text('Profile 0'), findsOneWidget);
 
     // Format/save-kind details live in the collapsed diagnostics card.
     expect(find.text('Format'), findsNothing);
+    // The Difficulty card now opens expanded by default, pushing the diagnostics
+    // card down. Collapse it so the compact Overview lays out as before and the
+    // diagnostics card is reachable.
+    await tester.tap(find.text('Difficulty'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Diagnostics & details'));
     await tester.pumpAndSettle();
     expect(find.text('Format'), findsOneWidget);
@@ -48,17 +53,19 @@ void main() {
     expect(find.text('Auto save'), findsOneWidget);
     expect(find.bySemanticsLabel('Screenshot for G1R-001'), findsWidgets);
 
-    // Inspection JSON card exists and is collapsed by default.
-    expect(find.text('Inspection JSON'), findsOneWidget);
-    expect(find.text('Raw save inspection data'), findsOneWidget);
     // JSON content is not visible until expanded.
     expect(find.text('"format"'), findsNothing);
-    // Expand the card and confirm JSON content appears.
+    // Scroll the Inspection JSON card into view (the lazy ListView only builds
+    // children near the viewport).
     await tester.scrollUntilVisible(
       find.text('Inspection JSON'),
       120,
       scrollable: find.byType(Scrollable).last,
     );
+    // Inspection JSON card exists and is collapsed by default.
+    expect(find.text('Inspection JSON'), findsOneWidget);
+    expect(find.text('Raw save inspection data'), findsOneWidget);
+    // Expand the card and confirm JSON content appears.
     await tester.tap(find.text('Inspection JSON'));
     await tester.pumpAndSettle();
     expect(find.textContaining('"format"'), findsOneWidget);
@@ -477,6 +484,69 @@ void main() {
 
     expect(find.bySemanticsLabel('Loading editor data'), findsNothing);
   });
+
+  testWidgets(
+      'non-removable inventory item shows a disabled trash button with an '
+      'explanatory tooltip', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1400, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final core = _RemovableInventoryCoreService();
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          coreServiceProvider.overrideWithValue(core),
+          editorSettingsStoreProvider.overrideWithValue(
+            const NoopEditorSettingsStore(),
+          ),
+        ],
+        child: const GoresaveApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.widgetWithText(Tab, 'Inventory'));
+    await tester.pumpAndSettle();
+
+    // Food is the first category, so the non-removable Cheese stack is visible.
+    final cheeseRow = find.ancestor(
+      of: find.text('ItFo_Cheese'),
+      matching: find.byType(ListTile),
+    );
+    expect(cheeseRow, findsOneWidget);
+    // The trash button renders even though the item is non-removable, but it is
+    // disabled and explains why via its tooltip.
+    final cheeseDeleteTooltip = find.descendant(
+      of: cheeseRow,
+      matching: find.byTooltip(
+        "Can't delete: this item is likely equipped or "
+        'assigned to a hotkey slot',
+      ),
+    );
+    expect(cheeseDeleteTooltip, findsOneWidget);
+    final cheeseDelete = tester.widget<IconButton>(
+      find.descendant(of: cheeseDeleteTooltip, matching: find.byType(IconButton)),
+    );
+    expect(cheeseDelete.onPressed, isNull);
+
+    // Switch to the removable Orenugget stack: its trash button is enabled with
+    // the standard remove tooltip.
+    await tester.tap(find.text('Miscellaneous (1)'));
+    await tester.pumpAndSettle();
+
+    final oreRow = find.ancestor(
+      of: find.text('ItMi_Orenugget'),
+      matching: find.byType(ListTile),
+    );
+    final oreDeleteTooltip = find.descendant(
+      of: oreRow,
+      matching: find.byTooltip('Remove item from inventory'),
+    );
+    expect(oreDeleteTooltip, findsOneWidget);
+    final oreDelete = tester.widget<IconButton>(
+      find.descendant(of: oreDeleteTooltip, matching: find.byType(IconButton)),
+    );
+    expect(oreDelete.onPressed, isNotNull);
+  });
 }
 
 class _RecordedRequest {
@@ -570,6 +640,7 @@ class _FakeCoreService implements GoresaveCoreService {
               'slotName': 'G1R-001',
               'playerSaveName': 'Die Welt der Verurteilten',
             },
+            'difficulty': {'preset': 'DifficultyPreset_Custom'},
             'persistent': {
               'playerSaveName': 'Die Welt der Verurteilten, Tag 1, 13:07',
               'chapterId': 1,
@@ -838,6 +909,41 @@ class _FakeCoreService implements GoresaveCoreService {
           'error': {'message': 'Unhandled fake command $command'},
         };
     }
+  }
+}
+
+/// A fake core that enables the inventory remove (trash) UI: it verifies the
+/// typed parse, advertises `private.inventory.removeItem`, and marks the
+/// Orenugget stack removable while the Cheese stack is NOT removable (its asset
+/// path occurs in more than one container — e.g. also equipped / in a
+/// quickslot — so the core can't unambiguously remove it).
+class _RemovableInventoryCoreService extends _FakeCoreService {
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    final result = await super.execute(command, payload: payload);
+    if (command != 'inspect_save') return result;
+    final data = (result['data'] as Map).cast<String, Object?>();
+    final private = (data['private'] as Map).cast<String, Object?>();
+    // Mark the typed parse verified so addItem/removeItem are gated open.
+    private['typedParse'] = {'status': 'ok', 'propertyCount': 1, 'maxDepth': 1};
+    final inventory = (private['inventory'] as Map).cast<String, Object?>();
+    inventory['writable'] = const [
+      'private.inventory.setItemCount',
+      'private.inventory.removeItem',
+    ];
+    final items = (inventory['items'] as List)
+        .map((e) => (e as Map).cast<String, Object?>())
+        .toList();
+    for (final item in items) {
+      // Orenugget is uniquely in the MainContainer → removable; Cheese also
+      // lives in another container → not removable (trash disabled).
+      item['removable'] = item['id'] == 'ItMi_Orenugget';
+    }
+    inventory['items'] = items;
+    return result;
   }
 }
 
