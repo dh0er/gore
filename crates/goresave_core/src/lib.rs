@@ -4644,12 +4644,14 @@ fn parse_private_inventory_add_item_edit(
             )
         })?;
     // addItem WRITES this string into m_ItemDefinition (an ObjectProperty), so
-    // a bare inventory id (which looks_item_definition_path accepts for
-    // matching existing items) would produce an unresolvable object reference.
-    // Require a fully-qualified script asset path, as the bundled catalog uses.
-    if !path.starts_with("/Script/") || !path.contains('.') {
+    // it must be a real item-definition asset, not a bare id (unresolvable ref)
+    // nor an arbitrary /Script object (e.g. /Script/Engine.Foo) that would
+    // persist a non-item reference. The catalog and item detection are scoped to
+    // the Angelscript item-definition namespace, so require that prefix.
+    if !path.starts_with("/Script/Angelscript.") {
         return Err(CoreError::InvalidRequest(format!(
-            "private.inventory.addItem value.path must be a full asset path \
+            "private.inventory.addItem value.path must be an Angelscript \
+             item-definition asset path \
              (e.g. /Script/Angelscript.ItMi_Orenugget), got {path:?}"
         )));
     }
@@ -10627,6 +10629,46 @@ mod tests {
         assert!(
             matches!(err, CoreError::InvalidRequest(_)),
             "expected InvalidRequest for invalid item path, got: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_private_inventory_add_item_rejects_non_item_script_path() {
+        // A /Script object outside the Angelscript item namespace (e.g.
+        // /Script/Engine.Foo) parses as a "full asset path" but is not an item
+        // definition; addItem must reject it rather than persist a non-item ref.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-001.sav");
+        let private_payload = inventory_payload_for_add_item_tests();
+        let seed_compressed = b"seed-nonitem".to_vec();
+        let stream = compressed_stream_with_one_chunk(&seed_compressed, private_payload.len());
+        fs::write(
+            &path,
+            build_gsav(2, &public_payload("Slot A"), &stream, &[0, 0, 0, 0]),
+        )
+        .unwrap();
+        let backend = PrefixCodecBackend {
+            seed_compressed,
+            seed_uncompressed: private_payload,
+        };
+
+        let err = write_save_with_codec_backend(
+            &path,
+            &[json!({
+                "path": "private.inventory.addItem",
+                "value": {
+                    "path": "/Script/Engine.Foo",
+                    "count": 5
+                }
+            })],
+            false,
+            None,
+            Some(&backend),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, CoreError::InvalidRequest(_)),
+            "expected InvalidRequest for non-item /Script path, got: {err}"
         );
     }
 
