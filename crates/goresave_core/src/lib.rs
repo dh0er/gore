@@ -4069,6 +4069,30 @@ fn apply_private_edits(
              separate writes"
         )));
     }
+    // An inventory structural edit (addItem/removeItem) splices the MainContainer
+    // slot array and shifts every byte after the splice point. Any peer edit in
+    // the same batch is unsafe: a later edit resolves its target against the
+    // pre-splice layout — an in-place setItemCount patches stale byte offsets,
+    // and a typed setValue re-resolves a now-shifted array index — so it can
+    // corrupt the save or hit the wrong slot. Require such an edit to stand alone.
+    let inventory_structural_edits = edit_specs
+        .iter()
+        .filter(|edit| {
+            matches!(
+                edit,
+                PrivateEdit::InventoryAddItem(_) | PrivateEdit::InventoryRemoveItem(_)
+            )
+        })
+        .count();
+    if inventory_structural_edits >= 1 && edit_specs.len() > 1 {
+        return Err(CoreError::UnsupportedEdit(
+            "a write containing private.inventory.addItem or removeItem must \
+             contain no other edits — the structural splice shifts the byte \
+             offsets and array indices later edits resolve against; submit them \
+             as separate writes"
+                .to_string(),
+        ));
+    }
     let mut private_payload = decompress_private_payload(data, &stream, backend)?;
     for edit in &edit_specs {
         apply_private_edit_to_payload(&mut private_payload, edit)?;
@@ -4644,15 +4668,16 @@ fn parse_private_inventory_add_item_edit(
             )
         })?;
     // addItem WRITES this string into m_ItemDefinition (an ObjectProperty), so
-    // it must be a real item-definition asset, not a bare id (unresolvable ref)
-    // nor an arbitrary /Script object (e.g. /Script/Engine.Foo) that would
-    // persist a non-item reference. The catalog and item detection are scoped to
-    // the Angelscript item-definition namespace, so require that prefix.
-    if !path.starts_with("/Script/Angelscript.") {
+    // it must be a real item-definition class, not a bare id (unresolvable ref),
+    // an arbitrary /Script object (e.g. /Script/Engine.Foo), or a non-item
+    // Angelscript class (e.g. /Script/Angelscript.GothicFinalDataGame) that would
+    // persist an invalid inventory entry. Every item definition in the bundled
+    // catalog (798 classes) is an Angelscript `It*` class, so require that.
+    if !path.starts_with("/Script/Angelscript.It") {
         return Err(CoreError::InvalidRequest(format!(
             "private.inventory.addItem value.path must be an Angelscript \
-             item-definition asset path \
-             (e.g. /Script/Angelscript.ItMi_Orenugget), got {path:?}"
+             item-definition class (/Script/Angelscript.It*, \
+             e.g. /Script/Angelscript.ItMi_Orenugget), got {path:?}"
         )));
     }
     let count = value.get("count").and_then(Value::as_i64).ok_or_else(|| {
@@ -9215,6 +9240,48 @@ mod tests {
         assert_eq!(response["editsApplied"], 1);
     }
 
+    #[test]
+    fn write_save_rejects_inventory_structural_edit_with_peer() {
+        // An inventory add/remove must stand alone: a peer edit in the same
+        // write resolves against the pre-splice layout and would be corrupted.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-001.sav");
+        let private_payload = inventory_payload_for_add_item_tests();
+        let seed_compressed = b"seed-peer".to_vec();
+        let stream = compressed_stream_with_one_chunk(&seed_compressed, private_payload.len());
+        fs::write(
+            &path,
+            build_gsav(2, &public_payload("Slot A"), &stream, &[0, 0, 0, 0]),
+        )
+        .unwrap();
+        let backend = PrefixCodecBackend {
+            seed_compressed,
+            seed_uncompressed: private_payload,
+        };
+
+        let err = write_save_with_codec_backend(
+            &path,
+            &[
+                json!({
+                    "path": "private.inventory.addItem",
+                    "value": { "path": "/Script/Angelscript.ItMi_Orenugget", "count": 1 }
+                }),
+                json!({
+                    "path": "private.typed.setValue",
+                    "value": { "path": ["m_MaxQuick"], "value": 9 }
+                }),
+            ],
+            false,
+            None,
+            Some(&backend),
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("must contain no other edits"),
+            "unexpected error: {err}"
+        );
+    }
+
     // ── Task 5 helpers ──────────────────────────────────────────────────────
 
     fn private_enum_property(name: &str, enum_type: &str, label: &str) -> Vec<u8> {
@@ -10669,6 +10736,27 @@ mod tests {
         assert!(
             matches!(err, CoreError::InvalidRequest(_)),
             "expected InvalidRequest for non-item /Script path, got: {err}"
+        );
+
+        // A non-item Angelscript class (right namespace, not an `It*` item
+        // definition) must also be rejected.
+        let err = write_save_with_codec_backend(
+            &path,
+            &[json!({
+                "path": "private.inventory.addItem",
+                "value": {
+                    "path": "/Script/Angelscript.GothicFinalDataGame",
+                    "count": 1
+                }
+            })],
+            false,
+            None,
+            Some(&backend),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, CoreError::InvalidRequest(_)),
+            "expected InvalidRequest for non-item Angelscript class, got: {err}"
         );
     }
 

@@ -1499,50 +1499,50 @@ class _InventoryPanel extends StatelessWidget {
             'Inventory editing needs decoded private payload data from the G1R codec host.',
       );
     }
+    // Inventory writes recompress the payload too, so require a
+    // compress-capable codec host in addition to a full decode.
+    // The core only allows count edits in a detected player
+    // inventory region, advertised via writable; gate on it so other
+    // scopes don't show editors whose saves fail in the core.
+    final writable = inspection.privateInventory.writable;
+    final editable =
+        inspection.privateEditable &&
+        canCompress &&
+        writable.contains('private.inventory.setItemCount');
+    // addItem/removeItem edit the typed property tree, so both require a
+    // verified typed parse plus their own advertised op. They are gated
+    // independently: the core can expose one without the other (e.g.
+    // removeItem with no clean template for adds), and addItem can be valid even
+    // when the FString scan found no stacks (empty/unscanned MainContainer).
+    final canAddItem =
+        inspection.privateEditable &&
+        canCompress &&
+        inspection.privateTypedVerified &&
+        writable.contains('private.inventory.addItem');
+    final canRemoveItem =
+        inspection.privateEditable &&
+        canCompress &&
+        inspection.privateTypedVerified &&
+        writable.contains('private.inventory.removeItem');
+
     final hasItems = inspection.privateInventory.hasData;
-    if (!hasItems) {
-      // Decoded fine, just nothing recognised — say so instead of leaving
-      // the tab blank.
+    if (!hasItems && !canAddItem && !canRemoveItem) {
+      // Decoded fine, nothing recognised and nothing addable — say so instead
+      // of leaving the tab blank.
       return const _MessagePane(
         icon: Icons.inventory_2_outlined,
         title: 'Inventory',
         body: 'No item stacks found in the decoded private payload.',
       );
     }
-    // Inventory writes recompress the payload too, so require a
-    // compress-capable codec host in addition to a full decode.
-    // The core only allows count edits in a detected player
-    // inventory region, advertised via writable; gate on it so other
-    // scopes don't show editors whose saves fail in the core.
     return Padding(
       padding: const EdgeInsets.all(20),
       child: _PrivateInventorySummaryCard(
         inventory: inspection.privateInventory,
         notifier: notifier,
-        editable:
-            inspection.privateEditable &&
-            canCompress &&
-            inspection.privateInventory.writable.contains(
-              'private.inventory.setItemCount',
-            ),
-        // addItem/removeItem edit the typed property tree, so both require a
-        // verified typed parse plus their own advertised op. They are gated
-        // independently: the core can expose one without the other (e.g.
-        // removeItem with no clean template for adds).
-        canAddItem:
-            inspection.privateEditable &&
-            canCompress &&
-            inspection.privateTypedVerified &&
-            inspection.privateInventory.writable.contains(
-              'private.inventory.addItem',
-            ),
-        canRemoveItem:
-            inspection.privateEditable &&
-            canCompress &&
-            inspection.privateTypedVerified &&
-            inspection.privateInventory.writable.contains(
-              'private.inventory.removeItem',
-            ),
+        editable: editable,
+        canAddItem: canAddItem,
+        canRemoveItem: canRemoveItem,
       ),
     );
   }
@@ -1622,19 +1622,21 @@ class _PrivateInventorySummaryCardState
   }
 
   Future<void> _openAddDialog() async {
-    // Scope the dialog to the inventory it was opened for. If the user switches
-    // saves (or the inventory refreshes) while the dialog is open, the awaited
-    // result is stale — its excludePaths and target belong to the old save, so
-    // applying it would queue the add against the wrong save.
-    final dialogInventory = widget.inventory;
+    // Scope the dialog to the save it was opened for. If the user switches to a
+    // different save while the dialog is open, the awaited result is stale — its
+    // excludePaths and target belong to the old save, so applying it would queue
+    // the add against the wrong save. Key on the selected save path, not the
+    // inventory object identity: re-inspecting the SAME save allocates a fresh
+    // summary instance with identical contents, and that result must still apply.
+    final dialogSavePath = widget.notifier.state.selectedPath;
     final result = await showDialog<InventoryItemAdd>(
       context: context,
       builder: (_) => AddInventoryItemDialog(
-        excludePaths: dialogInventory.mainContainerPaths.toSet(),
+        excludePaths: widget.inventory.mainContainerPaths.toSet(),
       ),
     );
     if (result == null) return;
-    if (!mounted || !identical(widget.inventory, dialogInventory)) return;
+    if (!mounted || widget.notifier.state.selectedPath != dialogSavePath) return;
     setState(() {
       _pendingAdd = result;
       // Keep the one-structural-edit-per-save invariant unconditionally.
