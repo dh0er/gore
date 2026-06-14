@@ -342,6 +342,18 @@ class EditorNotifier extends StateNotifier<EditorState> {
     required int profileId,
     required Map<String, Object?> difficulty,
   }) {
+    // Refuse while slot edits are pending: this write runs _runWrite -> refresh,
+    // and the same-save _inspect clears the pending registry — silently
+    // discarding those drafts even though no write_save ran for them. Make the
+    // user save or reset them first.
+    if (state.hasUnsavedEdits) {
+      state = state.copyWith(
+        error:
+            'You have unsaved save edits. Save or reset them before changing '
+            'the profile difficulty.',
+      );
+      return Future.value(false);
+    }
     final dir = state.saveDir;
     if (dir.isEmpty) {
       state = state.copyWith(error: 'No save folder selected.');

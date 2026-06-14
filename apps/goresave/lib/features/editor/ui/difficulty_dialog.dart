@@ -82,8 +82,12 @@ class ProfileDifficultyChip extends StatelessWidget {
     final color = known ? _presetColor(preset) : _presetColor(_unknownPreset);
     final label = known
         ? preset
-        : (hasProfile ? 'Set difficulty' : 'No profile');
-    final enabled = hasProfile && !isLoading;
+        : (hasProfile ? 'No difficulty' : 'No profile');
+    // Only a profile whose difficulty actually resolved is editable. A profile
+    // synthesized from slots (or a scan that found no difficulty fields) has no
+    // `m_Profiles` entry to patch, so a write would dead-end (fails, or
+    // targetsWritten: 0). Gate on a resolved preset, not just a profile object.
+    final enabled = hasProfile && known && !isLoading;
 
     final chip = AnimatedContainer(
       duration: const Duration(milliseconds: 120),
@@ -134,9 +138,11 @@ class ProfileDifficultyChip extends StatelessWidget {
     );
 
     return Tooltip(
-      message: hasProfile
-          ? 'Edit difficulty for this profile'
-          : 'No profile selected',
+      message: !hasProfile
+          ? 'No profile selected'
+          : (known
+                ? 'Edit difficulty for this profile'
+                : 'This profile has no editable difficulty'),
       child: Material(
         color: Colors.transparent,
         child: InkWell(
