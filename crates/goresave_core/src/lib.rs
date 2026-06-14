@@ -2372,16 +2372,25 @@ fn profile_difficulty_path(
 ///     shape of a standard GVAS save-game file (the common PersistentDataList
 ///     layout), where the object-only probe would otherwise hard-fail.
 fn parse_profile_file(data: &[u8]) -> Result<properties::RootObject, CoreError> {
+    // A candidate offset is the real profile root only if it consumes the whole
+    // file AND carries the top-level `m_Profiles` array. Without the second
+    // check the trailing `None` terminator alone parses as an empty property
+    // list that also consumes to EOF, so a length-changing edit that left an
+    // enclosing size stale (real root parse fails) could still be accepted here
+    // — and this helper IS write_profile_difficulty's strict post-edit gate.
+    let is_profile_root = |root: &properties::RootObject| {
+        root.consumed == data.len()
+            && root.properties.iter().any(|p| p.name == "m_Profiles")
+    };
     let limit = data.len().min(8192);
     for off in 0..limit {
-        // consumed is absolute; a full parse ends exactly at the file end.
         if let Ok(root) = properties::parse_private_root_at(data, off) {
-            if root.consumed == data.len() {
+            if is_profile_root(&root) {
                 return Ok(root);
             }
         }
         if let Ok(root) = properties::parse_property_list_root_at(data, off) {
-            if root.consumed == data.len() {
+            if is_profile_root(&root) {
                 return Ok(root);
             }
         }
@@ -7178,6 +7187,32 @@ mod tests {
             properties::PropertyValue::Object(
                 "/Script/Angelscript.DifficultyPreset_Custom".into()
             ),
+        );
+    }
+
+    #[test]
+    fn parse_profile_file_rejects_terminator_only_parse() {
+        // A header followed only by the top-level `None` terminator parses as an
+        // empty property list that consumes to EOF. Without the m_Profiles guard
+        // that empty parse would be accepted as the profile root, letting a
+        // corrupt length-changing edit slip past the post-edit validation gate.
+        let mut data = b"GVAS".to_vec();
+        data.extend_from_slice(&[0u8; 24]); // header filler
+        data.extend_from_slice(&fstring("None")); // bare terminator, no m_Profiles
+
+        // Sanity: the bare list DOES parse-and-consume from the terminator
+        // offset (so the guard, not a parse failure, is what rejects it).
+        assert!(
+            (0..data.len()).any(|off| {
+                properties::parse_property_list_root_at(&data, off)
+                    .map(|r| r.consumed == data.len())
+                    .unwrap_or(false)
+            }),
+            "precondition: some offset parses an empty list to EOF",
+        );
+        assert!(
+            parse_profile_file(&data).is_err(),
+            "a terminator-only file has no m_Profiles and must be rejected",
         );
     }
 
