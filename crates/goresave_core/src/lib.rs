@@ -2412,7 +2412,9 @@ fn profile_element_properties(value: &properties::PropertyValue) -> Option<&[pro
 
 /// Locate the `m_Profiles` array element whose `m_ProfileId` equals
 /// `profile_id`, returning the addressable path prefix to that element
-/// (`["m_Profiles", "[i]"]`) together with the element's property list.
+/// (`["m_Profiles", "[i]"]`) together with the element's property list. An
+/// element without an `m_ProfileId` falls back to its array index as its id,
+/// matching how the listing path exposes such profiles.
 ///
 /// `m_Profiles` is an ArrayProperty of profile structs in the real
 /// PersistentDataList; only that shape is supported. Returns `None` when no
@@ -2429,11 +2431,17 @@ fn profile_element<'a>(
         let Some(props) = profile_element_properties(element) else {
             continue;
         };
-        let id = props.iter().find_map(|p| match (&p.name[..], &p.value) {
-            ("m_ProfileId", properties::PropertyValue::Int(v)) => Some(*v),
-            _ => None,
-        });
-        if id == Some(profile_id) {
+        // Mirror the listing path (`read_i32_property_in_range(...).unwrap_or(ordinal)`):
+        // a profile that omits `m_ProfileId` is exposed under its array index, so we
+        // must accept that same index here or the write fails as "profile not found".
+        let id = props
+            .iter()
+            .find_map(|p| match (&p.name[..], &p.value) {
+                ("m_ProfileId", properties::PropertyValue::Int(v)) => Some(*v),
+                _ => None,
+            })
+            .unwrap_or(i as i32);
+        if id == profile_id {
             let mut prefix = profiles_path.clone();
             prefix.push(format!("[{i}]"));
             return Some((prefix, props));

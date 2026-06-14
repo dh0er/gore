@@ -821,11 +821,13 @@ fn encode_fstring_value(value: &str) -> Vec<u8> {
 }
 
 /// True when a tagged property's whole value payload is a single FString that
-/// [`patch_string`] can replace: Str/Name/Object/Enum properties, plus the
+/// [`patch_string`] can replace: Str/Name/Object/Class/Enum properties, plus the
 /// enum-as-FString form of ByteProperty (the plain one-byte form is a scalar).
 pub fn string_patchable(property: &Property) -> bool {
     match property.type_name.as_str() {
-        "StrProperty" | "NameProperty" | "ObjectProperty" | "EnumProperty" => true,
+        "StrProperty" | "NameProperty" | "ObjectProperty" | "ClassProperty" | "EnumProperty" => {
+            true
+        }
         "ByteProperty" => matches!(property.value, PropertyValue::Enum(_)),
         _ => false,
     }
@@ -1413,7 +1415,7 @@ fn read_sized_value(
         }
         "StrProperty" => Ok(PropertyValue::Str(r.fstring()?)),
         "NameProperty" => Ok(PropertyValue::Name(r.fstring()?)),
-        "ObjectProperty" => Ok(PropertyValue::Object(r.fstring()?)),
+        "ObjectProperty" | "ClassProperty" => Ok(PropertyValue::Object(r.fstring()?)),
         "EnumProperty" => Ok(PropertyValue::Enum(r.fstring()?)),
         "SoftObjectProperty" => Ok(PropertyValue::SoftObject(read_soft_object_path(r)?)),
         "TextProperty" => Ok(PropertyValue::Opaque(r.read(r.remaining())?.to_vec())),
