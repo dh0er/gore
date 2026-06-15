@@ -6,6 +6,11 @@ Usage: python tools/build_npc_catalog.py <UE4SS_ObjectDump.txt> [-o OUT.json]
 Extracts CharacterDefinition_* class identifiers only (id, class, category).
 The `id` of a Human definition is the exact CharacterKnowledgeByUniqueName map
 key (e.g. OC_STT_Diego). No localized names or stats are extracted.
+
+Id derivation: Human_ entries are stripped to the map-key form (e.g.
+OC_STT_Diego), while non-human entries keep their sub-prefix (e.g.
+Creature_Biter). Anything matching neither Human_ nor Creature_ is
+categorised as "other".
 """
 from __future__ import annotations
 
@@ -77,8 +82,18 @@ def main() -> int:
         json.dumps(entries, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     print(f"wrote {len(entries)} npcs to {args.out}")
+    from collections import Counter
+    counts = Counter(e["category"] for e in entries)
+    print(", ".join(f"{cat}: {counts[cat]}" for cat in sorted(counts)))
+    others = [e["class"] for e in entries if e["category"] == "other"]
+    if others:
+        print(f"other category ({len(others)} classes):")
+        for cls in others:
+            print(f"  - {cls}")
     if skipped:
-        print(f"skipped {len(skipped)} classes")
+        print(f"skipped {len(skipped)} classes:")
+        for name in skipped:
+            print(f"  - {name}")
     return 0
 
 
