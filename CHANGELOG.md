@@ -19,6 +19,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Items can be removed from the inventory with a per-row delete button. Item
   counts are clamped to a minimum of 1; deleting an item removes its slot
   rather than leaving a count-0 ghost.
+- New game builds are now adopted automatically. When the editor sees a
+  `G1R-Win64-Shipping.exe` it does not recognize (e.g. a fresh patch), it
+  silently verifies the embedded compression code against a built-in
+  known-answer sample and, if it round-trips correctly, enables editing for
+  that build without waiting for an editor update. The verified result is
+  cached per executable, so the check runs only once per new build.
+
+### Changed
+
+- When a game version genuinely cannot be opened, the editor now shows a
+  plain-language message ("This game version can't be opened yet") with a
+  suggested next step, instead of internal codec details. The technical
+  fields are still available behind a "Details" expander.
 
 ## [0.1.2] - 2026-06-12
 

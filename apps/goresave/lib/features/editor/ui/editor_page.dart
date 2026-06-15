@@ -3529,42 +3529,115 @@ class _SettingsPanel extends StatelessWidget {
                   onBrowse: notifier.chooseGameExe,
                 ),
                 const SizedBox(height: 12),
-                if (state.codecError != null)
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Icon(
-                        Icons.error_outline,
-                        color: Theme.of(context).colorScheme.error,
-                        size: 18,
-                      ),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: Text(
-                          state.codecError!,
-                          style: TextStyle(
-                            color: Theme.of(context).colorScheme.error,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                if (state.codecError != null) const SizedBox(height: 8),
-                Text(codec?.message ?? 'No codec status'),
-                if (codec != null) ...[
-                  const SizedBox(height: 8),
-                  Text(
-                    'Decompress: ${codec.canDecompress ? 'yes' : 'no'} | Compress: ${codec.canCompress ? 'yes' : 'no'}',
-                  ),
-                  if (codec.selectedBackend != null)
-                    Text('Backend: ${codec.selectedBackend}'),
+                CodecStatusView(codec: codec, codecError: state.codecError),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class CodecStatusView extends StatelessWidget {
+  const CodecStatusView({super.key, required this.codec, required this.codecError});
+
+  final CodecStatus? codec;
+  final String? codecError;
+
+  @override
+  Widget build(BuildContext context) {
+    final codec = this.codec;
+    final scheme = Theme.of(context).colorScheme;
+    // A codec error (e.g. a failed verification) can coexist with a status
+    // (verifyCodec sets codecError but keeps codecStatus), so render it whenever
+    // present -- both when there is no status and alongside one.
+    final error = codecError;
+    final errorRow = error == null
+        ? null
+        : Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(Icons.error_outline, color: scheme.error, size: 18),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(error, style: TextStyle(color: scheme.error)),
+              ),
+            ],
+          );
+    if (codec == null) {
+      return errorRow ?? const Text('No codec status');
+    }
+    final severity = codec.userSeverity ?? (codec.available ? 'ok' : 'error');
+    final isError = severity == 'error';
+    final isWarn = severity == 'warn';
+    final statusColor = isError
+        ? scheme.error
+        : isWarn
+        ? scheme.tertiary
+        : scheme.primary;
+    final statusIcon = isError
+        ? Icons.error_outline
+        : isWarn
+        ? Icons.warning_amber_rounded
+        : Icons.check_circle_outline;
+    final title = codec.userTitle ?? codec.message;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (errorRow != null) ...[errorRow, const SizedBox(height: 8)],
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(
+              statusIcon,
+              size: 18,
+              color: statusColor,
+            ),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(title,
+                  style: TextStyle(color: isError || isWarn ? statusColor : null)),
+            ),
+          ],
+        ),
+        if ((codec.userMessage ?? '').isNotEmpty) ...[
+          const SizedBox(height: 4),
+          Text(codec.userMessage!),
+        ],
+        if ((codec.userHint ?? '').isNotEmpty) ...[
+          const SizedBox(height: 4),
+          Text(codec.userHint!, style: Theme.of(context).textTheme.bodySmall),
+        ],
+        const SizedBox(height: 8),
+        ExpansionTile(
+          tilePadding: EdgeInsets.zero,
+          childrenPadding: const EdgeInsets.only(bottom: 8),
+          title: const Text('Details'),
+          children: [
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(codec.message),
+                  Text('Decompress: ${codec.canDecompress ? 'yes' : 'no'} | '
+                      'Compress: ${codec.canCompress ? 'yes' : 'no'}'),
+                  // When a user-facing codec message is present it is always
+                  // about the G1R codec host, so label the backend that way
+                  // rather than the internal active backend (which is the
+                  // pure-Rust fallback when the host probe failed).
+                  if (codec.userTitle != null || codec.selectedBackend != null)
+                    Text(
+                      'Backend: ${codec.userTitle != null ? 'G1R codec host' : codec.selectedBackend}',
+                    ),
                   if (codec.profile != null) Text('Profile: ${codec.profile}'),
                   if (codec.resolutionMode != null)
                     Text('Resolution: ${codec.resolutionMode}'),
                 ],
-              ],
+              ),
             ),
-          ),
+          ],
         ),
       ],
     );

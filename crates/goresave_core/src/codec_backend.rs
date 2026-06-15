@@ -145,6 +145,43 @@ impl G1rBinaryHostBackend {
     fn recorded_requests_for_tests(&self) -> Vec<Value> {
         self.invoker.recorded_requests()
     }
+
+    /// Build a backend whose host responses are produced by a closure that
+    /// dispatches on the request's `command` field. Test-only seam used by the
+    /// core crate's tests to exercise `probe`/`calibrate` flows without a real
+    /// helper process.
+    #[cfg(test)]
+    pub(crate) fn with_command_dispatch_for_tests<F>(
+        exe_path: impl Into<PathBuf>,
+        dispatch: F,
+    ) -> Self
+    where
+        F: Fn(&str) -> Result<Value, CoreError> + Send + Sync + 'static,
+    {
+        Self {
+            exe_path: exe_path.into(),
+            derived_profile_cache_path: None,
+            invoker: Box::new(DispatchingCodecHostInvoker {
+                dispatch: Box::new(dispatch),
+            }),
+        }
+    }
+}
+
+#[cfg(test)]
+struct DispatchingCodecHostInvoker {
+    dispatch: Box<dyn Fn(&str) -> Result<Value, CoreError> + Send + Sync>,
+}
+
+#[cfg(test)]
+impl CodecHostInvoker for DispatchingCodecHostInvoker {
+    fn invoke(&self, request: Value) -> Result<Value, CoreError> {
+        let command = request
+            .get("command")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        (self.dispatch)(command)
+    }
 }
 
 impl CodecBackend for G1rBinaryHostBackend {
@@ -152,39 +189,7 @@ impl CodecBackend for G1rBinaryHostBackend {
         let data = self.invoker.invoke(self.request(json!({
             "command": "probe",
         })))?;
-        Ok(CodecBackendProbe {
-            backend: "g1r_binary_host".to_string(),
-            available: data
-                .get("supported")
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
-            can_decompress: data
-                .get("canDecompress")
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
-            can_compress: data
-                .get("canCompress")
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
-            status: if data
-                .get("supported")
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
-            {
-                "supported".to_string()
-            } else {
-                "unsupported".to_string()
-            },
-            profile: data
-                .get("profile")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned),
-            resolution_mode: data
-                .get("resolutionMode")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned),
-            details: data,
-        })
+        Ok(Self::probe_from_response(data))
     }
 
     fn decompress(&self, input: &[u8], expected_size: usize) -> Result<Vec<u8>, CoreError> {
@@ -279,6 +284,49 @@ impl CodecBackend for G1rBinaryHostBackend {
 }
 
 impl G1rBinaryHostBackend {
+    pub fn calibrate(&self) -> Result<CodecBackendProbe, CoreError> {
+        let data = self.invoker.invoke(self.request(json!({
+            "command": "calibrate",
+        })))?;
+        Ok(Self::probe_from_response(data))
+    }
+
+    /// Map a `probe`/`calibrate` host response into a `CodecBackendProbe`.
+    /// Shared so the two commands can never drift in how they interpret the
+    /// response fields.
+    fn probe_from_response(data: Value) -> CodecBackendProbe {
+        let supported = data
+            .get("supported")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        CodecBackendProbe {
+            backend: "g1r_binary_host".to_string(),
+            available: supported,
+            can_decompress: data
+                .get("canDecompress")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            can_compress: data
+                .get("canCompress")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            status: if supported {
+                "supported".to_string()
+            } else {
+                "unsupported".to_string()
+            },
+            profile: data
+                .get("profile")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
+            resolution_mode: data
+                .get("resolutionMode")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
+            details: data,
+        }
+    }
+
     fn request(&self, mut value: Value) -> Value {
         value["exePath"] = json!(self.exe_path.display().to_string());
         if let Some(cache_path) = &self.derived_profile_cache_path {
@@ -503,6 +551,31 @@ mod tests {
         assert!(probe.can_compress);
         assert_eq!(probe.profile.as_deref(), Some("g1r-23A85CE7"));
         assert_eq!(probe.resolution_mode.as_deref(), Some("known_profile"));
+    }
+
+    #[test]
+    fn binary_host_calibrate_maps_promoted_response() {
+        let invoker = RecordingInvoker::with_responses(vec![Ok(json!({
+            "supported": true,
+            "profile": "g1r-derived-77f3d48c",
+            "resolutionMode": "derived_profile_cache",
+            "canCompress": true,
+            "canDecompress": true,
+            "calibrationRan": true
+        }))]);
+        let backend = G1rBinaryHostBackend::with_invoker(
+            PathBuf::from("G1R-Win64-Shipping.exe"),
+            Box::new(invoker),
+        );
+
+        let probe = backend.calibrate().unwrap();
+
+        assert!(probe.available);
+        assert!(probe.can_compress);
+        assert_eq!(
+            probe.resolution_mode.as_deref(),
+            Some("derived_profile_cache")
+        );
     }
 
     #[test]

@@ -5,19 +5,42 @@ use goresave_g1r_codec_host::{
     PrivateMappingReport, ProbeRequest, ResolutionMode, ResolvedRvaReport, RuntimeCodecRvas,
     RuntimeCompressSample, RuntimeSelftestOracleSample, RuntimeSelftestReport,
     RuntimeSelftestSaveChunkRequest, RuntimeSelftestWorkerRequest, SectionProtection,
-    SelfTestRequest, SelfTestResponse, derived_profile_entry_from_verified_self_test,
-    export_derived_profile_from_cache, handle_ipc_line, handle_ipc_line_with_runtime_worker,
-    parse_profile_json, probe_exe, probe_exe_with_derived_cache,
-    record_derived_profile_cache_after_self_test, run_runtime_selftest_worker,
-    run_runtime_selftest_worker_with_request, runtime_selftest_sample_from_save_chunk,
-    runtime_selftest_worker_report, self_test_exe, self_test_exe_with_import_resolver,
-    write_derived_profile_cache_entry,
+    SelfTestRequest, SelfTestResponse, calibration_compress_input, calibration_sample,
+    derived_profile_entry_from_verified_self_test, export_derived_profile_from_cache,
+    handle_ipc_line, handle_ipc_line_with_runtime_worker, parse_profile_json, probe_exe,
+    probe_exe_with_derived_cache, record_derived_profile_cache_after_self_test,
+    run_runtime_selftest_worker, run_runtime_selftest_worker_with_request,
+    runtime_selftest_sample_from_save_chunk, runtime_selftest_worker_report, self_test_exe,
+    self_test_exe_with_import_resolver, write_derived_profile_cache_entry,
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+
+fn base64_decode(s: &str) -> Vec<u8> {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD.decode(s).unwrap()
+}
+
+#[test]
+fn calibration_sample_is_well_formed() {
+    let sample = calibration_sample();
+    let compressed = base64_decode(&sample.compressed_base64);
+    assert_eq!(compressed.len(), 3622);
+    assert_eq!(sample.expected_size, 4096);
+    assert_eq!(sample.expected_decompressed_sha1.len(), 40);
+    assert_eq!(sample.expected_decompressed_head_hex.len(), 128);
+}
+
+#[test]
+fn calibration_compress_input_is_deterministic_4kib() {
+    let a = calibration_compress_input();
+    let b = calibration_compress_input();
+    assert_eq!(a.len(), 4096);
+    assert_eq!(a, b);
+}
 
 #[test]
 fn profile_parser_accepts_valid_profile() {
@@ -882,6 +905,38 @@ fn ipc_self_test_uses_runtime_worker_when_configured() {
     assert_eq!(value["data"]["runtimeSelftests"]["decompress"], "not_run");
     assert_eq!(value["data"]["privateMapping"]["entryPointRun"], false);
     assert_eq!(value["data"]["canDecompress"], false);
+}
+
+#[test]
+fn ipc_calibrate_is_noop_for_known_profile() {
+    let exe = minimal_pe64_with_imports_and_relocations();
+    let profile = parse_profile_json(&profile_json(
+        &sha256_hex(&exe),
+        exe.len() as u64,
+        "0x23A85CE7",
+        "0x140000000",
+        "0x1010",
+        "0x1020",
+        "0x1030",
+    ))
+    .unwrap();
+    let temp = write_temp_exe(&exe);
+
+    let response = handle_ipc_line_with_runtime_worker(
+        &format!(
+            r#"{{"id":"cal-1","command":"calibrate","exePath":"{}"}}"#,
+            json_escape_path(temp.path())
+        ),
+        &[profile],
+        &helper_binary_path(),
+    );
+    let value: Value = serde_json::from_str(&response).unwrap();
+
+    assert_eq!(value["id"], "cal-1");
+    assert_eq!(value["ok"], true);
+    assert_eq!(value["data"]["supported"], true);
+    assert_eq!(value["data"]["resolutionMode"], "known_profile");
+    assert_eq!(value["data"]["calibrationRan"], false);
 }
 
 #[test]

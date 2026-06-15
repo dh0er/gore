@@ -794,6 +794,10 @@ class CodecStatus {
     this.selectedBackend,
     this.profile,
     this.resolutionMode,
+    this.userTitle,
+    this.userMessage,
+    this.userHint,
+    this.userSeverity,
   });
 
   factory CodecStatus.fromJson(Map<String, Object?> json) {
@@ -807,6 +811,10 @@ class CodecStatus {
       selectedBackend: json['selectedBackend'] as String?,
       profile: json['profile'] as String?,
       resolutionMode: json['resolutionMode'] as String?,
+      userTitle: json['userTitle'] as String?,
+      userMessage: json['userMessage'] as String?,
+      userHint: json['userHint'] as String?,
+      userSeverity: json['userSeverity'] as String?,
     );
   }
 
@@ -819,4 +827,8 @@ class CodecStatus {
   final String? selectedBackend;
   final String? profile;
   final String? resolutionMode;
+  final String? userTitle;
+  final String? userMessage;
+  final String? userHint;
+  final String? userSeverity;
 }

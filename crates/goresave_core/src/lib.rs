@@ -375,7 +375,7 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
                 .unwrap_or_else(default_save_root);
             let codec_backend = payload
                 .get("binaryHost")
-                .map(binary_host_backend_from_config)
+                .map(ensured_binary_host_from_config)
                 .transpose()?;
             let codec_backend = codec_backend
                 .as_ref()
@@ -400,7 +400,7 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
                 .map(|value| value as usize);
             let codec_backend = payload
                 .get("binaryHost")
-                .map(binary_host_backend_from_config)
+                .map(ensured_binary_host_from_config)
                 .transpose()?;
             let codec_backend = codec_backend
                 .as_ref()
@@ -417,7 +417,7 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
             let path = required_path(&payload)?;
             let codec_backend = payload
                 .get("binaryHost")
-                .map(binary_host_backend_from_config)
+                .map(ensured_binary_host_from_config)
                 .transpose()?;
             let codec_backend = codec_backend
                 .as_ref()
@@ -428,7 +428,7 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
             let path = required_path(&payload)?;
             let codec_backend = payload
                 .get("binaryHost")
-                .map(binary_host_backend_from_config)
+                .map(ensured_binary_host_from_config)
                 .transpose()?;
             let codec_backend = codec_backend
                 .as_ref()
@@ -465,7 +465,7 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
                     "validate_codec_roundtrip requires payload.binaryHost".to_string(),
                 )
             })?;
-            let backend = binary_host_backend_from_config(binary_host)?;
+            let backend = ensured_binary_host_from_config(binary_host)?;
             Ok(validate_codec_roundtrip_with_backend(&path, &backend)?)
         }
         "write_save" => {
@@ -489,7 +489,7 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
                 .unwrap_or(false);
             let codec_backend = payload
                 .get("binaryHost")
-                .map(binary_host_backend_from_config)
+                .map(ensured_binary_host_from_config)
                 .transpose()?;
             let codec_backend = codec_backend
                 .as_ref()
@@ -504,10 +504,9 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
             )?)
         }
         "write_difficulty" => {
-            let req: DifficultyRequest = serde_json::from_value(
-                payload.get("difficulty").cloned().unwrap_or(Value::Null),
-            )
-            .map_err(|e| CoreError::InvalidRequest(e.to_string()))?;
+            let req: DifficultyRequest =
+                serde_json::from_value(payload.get("difficulty").cloned().unwrap_or(Value::Null))
+                    .map_err(|e| CoreError::InvalidRequest(e.to_string()))?;
             let backup = payload
                 .get("backup")
                 .and_then(Value::as_bool)
@@ -1385,8 +1384,7 @@ fn list_persistent_data_list_backups_for_save(
                 Ok(_) => {
                     let persistent_slots = parse_persistent_slot_metadata(&data);
                     let slot_meta = persistent_slots.get(slot);
-                    let player_save_name =
-                        slot_meta.and_then(|m| m.player_save_name.clone());
+                    let player_save_name = slot_meta.and_then(|m| m.player_save_name.clone());
                     let slot_name = slot_meta
                         .and_then(|m| m.slot_name.clone())
                         .unwrap_or_else(|| slot.to_string());
@@ -1663,9 +1661,7 @@ fn ensure_backup_belongs_to_save(path: &Path, backup_path: &Path) -> Result<(), 
     // Accept backups both in the save's parent directory (legacy) and in
     // its goresave_backups subfolder (new layout).
     let subfolder = canonical_save_parent.join("goresave_backups");
-    if canonical_backup_parent != canonical_save_parent
-        && canonical_backup_parent != subfolder
-    {
+    if canonical_backup_parent != canonical_save_parent && canonical_backup_parent != subfolder {
         return Err(CoreError::InvalidRequest(
             "backupPath must be next to the selected save file or in its goresave_backups subfolder".to_string(),
         ));
@@ -1737,7 +1733,8 @@ fn map_locked_file_error(err: std::io::Error, context: &str) -> CoreError {
 /// [`PendingReplace`] must be either committed or rolled back.
 fn begin_replace(target: &Path, staged: &Path) -> Result<PendingReplace, CoreError> {
     if !target.exists() {
-        fs::rename(staged, target).map_err(|e| map_locked_file_error(e, &target.display().to_string()))?;
+        fs::rename(staged, target)
+            .map_err(|e| map_locked_file_error(e, &target.display().to_string()))?;
         return Ok(PendingReplace {
             target: target.to_path_buf(),
             aside: None,
@@ -1783,9 +1780,7 @@ fn create_unique_backup_avoiding(path: &Path, avoid: &[String]) -> Result<PathBu
         .as_secs();
     let mut suffix = format!("{timestamp}");
     let mut attempt = 0u32;
-    while avoid.iter().any(|s| s == &suffix)
-        || backup_path_with_suffix(path, &suffix).exists()
-    {
+    while avoid.iter().any(|s| s == &suffix) || backup_path_with_suffix(path, &suffix).exists() {
         attempt += 1;
         suffix = format!("{timestamp}.{attempt}");
         if attempt >= 1_000_000 {
@@ -2312,10 +2307,7 @@ impl DifficultyRequest {
             return Ok(Vec::new());
         };
         if preset_label == "Custom" {
-            let mut edits = vec![(
-                "m_difficultyPreset",
-                "DifficultyPreset_Custom".to_string(),
-            )];
+            let mut edits = vec![("m_difficultyPreset", "DifficultyPreset_Custom".to_string())];
             if let Some(combat) = &self.combat {
                 edits.push((
                     "m_customCombatSettings",
@@ -2331,7 +2323,10 @@ impl DifficultyRequest {
             if let Some(progression) = &self.progression {
                 edits.push((
                     "m_customProgressionSettings",
-                    format!("ProgressionDifficultySettings_{}", level_suffix(progression)?),
+                    format!(
+                        "ProgressionDifficultySettings_{}",
+                        level_suffix(progression)?
+                    ),
                 ));
             }
             Ok(edits)
@@ -2366,10 +2361,11 @@ impl DifficultyRequest {
     }
 }
 
-
 /// Properties of a single profile element inside `m_Profiles`, regardless of
 /// whether the array element is a plain struct or an InstancedStruct wrapper.
-fn profile_element_properties(value: &properties::PropertyValue) -> Option<&[properties::Property]> {
+fn profile_element_properties(
+    value: &properties::PropertyValue,
+) -> Option<&[properties::Property]> {
     match value {
         properties::PropertyValue::Struct(properties::StructValue::Properties(p)) => Some(p),
         properties::PropertyValue::Struct(properties::StructValue::Instanced(Some(i))) => {
@@ -2463,8 +2459,7 @@ fn parse_profile_file(data: &[u8]) -> Result<properties::RootObject, CoreError> 
     // enclosing size stale (real root parse fails) could still be accepted here
     // — and this helper IS write_profile_difficulty's strict post-edit gate.
     let is_profile_root = |root: &properties::RootObject| {
-        root.consumed == data.len()
-            && root.properties.iter().any(|p| p.name == "m_Profiles")
+        root.consumed == data.len() && root.properties.iter().any(|p| p.name == "m_Profiles")
     };
     let limit = data.len().min(8192);
     for off in 0..limit {
@@ -2589,7 +2584,6 @@ fn write_profile_difficulty(
     }
     Ok(())
 }
-
 
 /// Patch one string-valued difficulty field within a specific profile, with
 /// full enclosing-size propagation. Skips silently if the field is absent.
@@ -2805,15 +2799,15 @@ fn inspect_private_payload(
                 .as_ref()
                 .and_then(|r| r.as_ref().ok())
                 .and_then(main_container_summary);
-            let inventory = summarize_private_inventory_payload(
-                &payload,
-                &refs,
-                main_container.as_ref(),
-            );
+            let inventory =
+                summarize_private_inventory_payload(&payload, &refs, main_container.as_ref());
             let typed_parse = summarize_typed_parse_result(&payload, typed_result.as_ref());
             let typed_ok = typed_parse["status"] == "ok";
             let progression = summarize_private_progression_overview(
-                typed_result.as_ref().and_then(|r| r.as_ref().ok()).filter(|_| typed_ok),
+                typed_result
+                    .as_ref()
+                    .and_then(|r| r.as_ref().ok())
+                    .filter(|_| typed_ok),
             );
             let mut writable = vec!["private.replaceFString"];
             if typed_parse["status"] == "ok" {
@@ -2989,8 +2983,7 @@ fn summarize_private_inventory_payload(
     for item in &mut items {
         let path = item["path"].as_str().unwrap_or("");
         item["removable"] = json!(
-            !path.is_empty()
-                && main_container.is_some_and(|mc| mc.removable_paths.contains(path))
+            !path.is_empty() && main_container.is_some_and(|mc| mc.removable_paths.contains(path))
         );
     }
     // setItemCount patches an existing scanned stack in place, so it depends on
@@ -3378,8 +3371,7 @@ fn progression_quests(
             Some(sf) => {
                 // Accept short label ("Running") or full enum form ("EQuestState::Running"),
                 // both case-insensitive.
-                let short =
-                    short_enum_label(e.state.as_deref().unwrap_or("")).to_ascii_lowercase();
+                let short = short_enum_label(e.state.as_deref().unwrap_or("")).to_ascii_lowercase();
                 let full = e.state.as_deref().unwrap_or("").to_ascii_lowercase();
                 short == sf || full == sf
             }
@@ -3523,11 +3515,7 @@ fn progression_knowledge(
                 all.retain(|e| e.to_ascii_lowercase().contains(query));
             }
             let total = all.len();
-            let page = all
-                .into_iter()
-                .skip(offset)
-                .take(limit)
-                .collect::<Vec<_>>();
+            let page = all.into_iter().skip(offset).take(limit).collect::<Vec<_>>();
             let mut set_path = base_path.clone();
             set_path.push(format!("{{{character}}}"));
             set_path.push("Knowledge".to_string());
@@ -3552,8 +3540,8 @@ fn progression_events(
     offset: usize,
     limit: usize,
 ) -> Result<Value, CoreError> {
-    let (base_path, map_prop) =
-        properties::find_property_by_name(root, "LongTermMemoryByGlobalId").ok_or_else(|| {
+    let (base_path, map_prop) = properties::find_property_by_name(root, "LongTermMemoryByGlobalId")
+        .ok_or_else(|| {
             CoreError::Parse(
                 "LongTermMemoryByGlobalId not found in the decoded payload".to_string(),
             )
@@ -3773,7 +3761,6 @@ fn summarize_private_progression_overview(root: Option<&properties::RootObject>)
     })
 }
 
-
 fn summarize_private_inventory_items(
     payload: &[u8],
     refs: &[FStringRef],
@@ -3966,8 +3953,7 @@ fn looks_item_definition_path(value: &str) -> bool {
 /// path in this allow-list, so a typo or non-item class (even a well-formed
 /// `/Script/Angelscript.It*` name) cannot persist an unresolvable
 /// m_ItemDefinition. Regenerated by tools/build_item_catalog.py.
-const ITEM_CATALOG_JSON: &str =
-    include_str!("../../../apps/goresave/assets/item_catalog.json");
+const ITEM_CATALOG_JSON: &str = include_str!("../../../apps/goresave/assets/item_catalog.json");
 
 /// Set of valid item-definition asset paths from the bundled catalog.
 fn item_catalog_paths() -> &'static std::collections::HashSet<String> {
@@ -4052,6 +4038,81 @@ fn check_codec(payload: &Value) -> Result<Value, CoreError> {
     codec_status_from_probes(pure_probe, binary_probe)
 }
 
+/// Build the user-facing codec fields shown in the UI. `error_text` is the raw
+/// host/probe error string when the binary backend probe failed (used only to
+/// categorize, never shown verbatim to the user).
+fn codec_user_message_for(
+    selected_backend: &str,
+    available: bool,
+    can_compress: bool,
+    can_decompress: bool,
+    error_text: Option<&str>,
+) -> Value {
+    // Pure-Rust backend selected (no game codec needed for read-only flows):
+    // leave user fields empty; callers fall back to existing behavior.
+    if selected_backend != "g1r_binary_host" {
+        return json!({});
+    }
+    if let Some(err) = error_text {
+        let lower = err.to_ascii_lowercase();
+        // Game executable missing (host: "G1R executable not found: <path>").
+        if lower.contains("executable not found") {
+            return json!({
+                "userSeverity": "error",
+                "userTitle": "Gothic 1 Remake not found",
+                "userMessage": "The game executable wasn't found at the saved path.",
+                "userHint": "Set the game path in settings.",
+            });
+        }
+        // The build resolves but its codec can't be verified (new/unknown build
+        // or a failed calibration) -- the genuine "wait for an editor update" case.
+        if lower.contains("could not be resolved")
+            || lower.contains("calibration did not produce")
+            || lower.contains("unsupported")
+        {
+            return json!({
+                "userSeverity": "error",
+                "userTitle": "This game version can't be opened yet",
+                "userMessage": "Looks like a new game update the editor doesn't recognize yet.",
+                "userHint": "Check for an editor update - a new version usually follows shortly.",
+            });
+        }
+        // Anything else (missing/misconfigured codec helper, IO or launch
+        // failures) is a local setup problem the user can fix in Settings, not a
+        // new game build to wait out.
+        return json!({
+            "userSeverity": "error",
+            "userTitle": "Codec helper isn't set up",
+            "userMessage": "The editor couldn't start its codec helper for this game.",
+            "userHint": "Check the codec helper and game paths in settings.",
+        });
+    }
+    if can_compress {
+        return json!({
+            "userSeverity": "ok",
+            "userTitle": "Game codec ready",
+            "userMessage": "The editor can read and write this game version.",
+            "userHint": "",
+        });
+    }
+    if available || can_decompress {
+        // Usable for reading, but compression is not verified so writing stays
+        // gated -- do not claim full "ready".
+        return json!({
+            "userSeverity": "warn",
+            "userTitle": "Game codec partly ready",
+            "userMessage": "The editor can read this game's saves, but saving isn't verified yet.",
+            "userHint": "",
+        });
+    }
+    json!({
+        "userSeverity": "error",
+        "userTitle": "This game version can't be opened yet",
+        "userMessage": "Looks like a new game update the editor doesn't recognize yet.",
+        "userHint": "Check for an editor update - a new version usually follows shortly.",
+    })
+}
+
 fn codec_status_from_probes(
     pure_probe: codec_backend::CodecBackendProbe,
     binary_probe: Option<Result<codec_backend::CodecBackendProbe, CoreError>>,
@@ -4059,6 +4120,11 @@ fn codec_status_from_probes(
     let mut backends =
         vec![serde_json::to_value(&pure_probe).map_err(|e| CoreError::Codec(e.to_string()))?];
     let mut selected_probe = pure_probe.clone();
+    let mut binary_error: Option<String> = None;
+    let mut binary_host_attempted = false;
+    let mut binary_available = false;
+    let mut binary_can_compress = false;
+    let mut binary_can_decompress = false;
 
     if let Some(binary_probe) = binary_probe {
         match binary_probe {
@@ -4066,11 +4132,17 @@ fn codec_status_from_probes(
                 backends.push(
                     serde_json::to_value(&probe).map_err(|e| CoreError::Codec(e.to_string()))?,
                 );
+                binary_host_attempted = true;
+                binary_available = probe.available;
+                binary_can_compress = probe.can_compress;
+                binary_can_decompress = probe.can_decompress;
                 if probe.available {
                     selected_probe = probe;
                 }
             }
             Err(err) => {
+                binary_host_attempted = true;
+                binary_error = Some(err.to_string());
                 backends.push(json!({
                     "backend": "g1r_binary_host",
                     "available": false,
@@ -4099,6 +4171,31 @@ fn codec_status_from_probes(
     if value["selectedBackend"] == "g1r_binary_host" {
         value["status"] = json!(binary_host_status(&selected_probe));
         value["message"] = json!(binary_host_message(&selected_probe));
+    }
+
+    let user = if binary_host_attempted {
+        codec_user_message_for(
+            "g1r_binary_host",
+            binary_available,
+            binary_can_compress,
+            binary_can_decompress,
+            binary_error.as_deref(),
+        )
+    } else {
+        // No binary host configured: pure-Rust selected, no user-facing codec
+        // message (read-only flows).
+        codec_user_message_for(
+            &selected_probe.backend,
+            selected_probe.available,
+            selected_probe.can_compress,
+            selected_probe.can_decompress,
+            None,
+        )
+    };
+    if let Some(obj) = user.as_object() {
+        for (k, v) in obj {
+            value[k.clone()] = v.clone();
+        }
     }
 
     Ok(value)
@@ -4132,7 +4229,179 @@ fn probe_binary_host_from_config(
     config: &Value,
 ) -> Result<codec_backend::CodecBackendProbe, CoreError> {
     let backend = binary_host_backend_from_config(config)?;
-    codec_backend::CodecBackend::probe(&backend)
+    let probe = codec_backend::CodecBackend::probe(&backend)?;
+    Ok(auto_calibrate_if_pattern_profile(
+        &backend,
+        probe,
+        &host_config_suffix(config),
+    ))
+}
+
+/// The host configuration, besides the executable, that affects codec
+/// resolution: the helper used to run the host and the derived-profile cache it
+/// reads/writes. Used to scope both the ensured-backend cache and the
+/// calibration attempt budget, so changing either (e.g. fixing a bad helper
+/// path) is treated as a fresh configuration rather than reusing stale state.
+fn host_config_suffix(config: &Value) -> String {
+    let field = |name: &str| config.get(name).and_then(Value::as_str).unwrap_or("");
+    format!(
+        "{}\u{1f}{}",
+        field("helperPath"),
+        field("derivedProfileCachePath"),
+    )
+}
+
+/// Executables whose calibration has already been ensured this session, keyed by
+/// exe path. Prevents re-probing (which hashes the whole game executable) on
+/// every codec operation once the build has been calibrated.
+fn binary_host_ensured_exes() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
+    static ENSURED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+        std::sync::OnceLock::new();
+    ENSURED.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
+}
+
+/// Build the binary host backend for a codec OPERATION (decode/encode), ensuring
+/// a pattern-resolved build has been calibrated first. `check_codec` is not the
+/// only entry point -- `inspect_save` and friends decode too, and on startup the
+/// app inspects in parallel with `check_codec`. Without this, the first inspect
+/// of an unknown build would fail (the host rejects decode for `pattern_profile`)
+/// until a separate `check_codec` happened to write the derived cache. Ensuring
+/// calibration here writes that cache before this backend is used. Runs at most
+/// once per executable per session; a no-op for known profiles or when the probe
+/// fails (e.g. no helper).
+fn ensured_binary_host_from_config(
+    config: &Value,
+) -> Result<codec_backend::G1rBinaryHostBackend, CoreError> {
+    let backend = binary_host_backend_from_config(config)?;
+    // Key by the full host configuration that affects resolution, not just the
+    // exe path: the same executable used with a different derived-profile cache
+    // (or helper) needs its own probe/calibration. (The session cache still
+    // assumes the executable bytes at a given path are stable for the session;
+    // an in-place game update would require an explicit codec re-check.)
+    let exe_key = config
+        .get("exePath")
+        .and_then(Value::as_str)
+        .map(|exe| format!("{exe}\u{1f}{}", host_config_suffix(config)));
+    if let Some(key) = &exe_key {
+        if binary_host_ensured_exes()
+            .lock()
+            .map(|set| set.contains(key))
+            .unwrap_or(false)
+        {
+            return Ok(backend);
+        }
+    }
+    // Probe and (for an untrusted build) calibrate. Only mark the executable
+    // "ensured" -- to skip this re-probe on later operations -- once it is fully
+    // usable: available AND write-capable. A probe failure, an unsupported build,
+    // or a decode-only build (available but not yet compress-verified) is left
+    // unmarked so a later operation retries calibration (e.g. after the user
+    // fixes Settings, within the attempt budget, or to verify compression),
+    // instead of being stuck for the session.
+    let fully_usable = match codec_backend::CodecBackend::probe(&backend) {
+        // Side effect: a pattern-resolved build writes its derived cache here, so
+        // the decode/encode that follows on this backend resolves it.
+        Ok(probe) => {
+            let p = auto_calibrate_if_pattern_profile(&backend, probe, &host_config_suffix(config));
+            p.available && p.can_compress
+        }
+        Err(_) => false,
+    };
+    if fully_usable {
+        if let Some(key) = exe_key {
+            if let Ok(mut set) = binary_host_ensured_exes().lock() {
+                set.insert(key);
+            }
+        }
+    }
+    Ok(backend)
+}
+
+/// Maximum failed calibration attempts per executable per session. A failed
+/// calibration runs the expensive runtime selftest; without a cap, every codec
+/// check on an unpromotable build would re-run it. A small budget still lets a
+/// transient failure -- or a setup the user just fixed -- recover on a retry,
+/// then stops. (Classifying durable vs transient failures by error text is
+/// unreliable; a bounded attempt count is robust and simple.)
+const MAX_CALIBRATION_ATTEMPTS: u32 = 2;
+
+/// Process-global count of failed calibration attempts per executable SHA-256.
+/// The core runs as a long-lived FFI library, so this persists for the session.
+/// Keyed by SHA-256 so a different (e.g. newly patched) build is independent.
+fn calibration_attempts() -> &'static std::sync::Mutex<std::collections::HashMap<String, u32>> {
+    static ATTEMPTS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, u32>>> =
+        std::sync::OnceLock::new();
+    ATTEMPTS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+/// Auto-calibration: an untrusted (pattern-resolved) or decode-only build is
+/// promoted to a verified write-capable derived profile by running one runtime
+/// selftest with the host's embedded sample. Best-effort: a failure leaves the
+/// build unpromoted (the UI shows a plain message). Bounded so an unpromotable
+/// build does not re-run the selftest forever.
+fn auto_calibrate_if_pattern_profile(
+    backend: &codec_backend::G1rBinaryHostBackend,
+    probe: codec_backend::CodecBackendProbe,
+    config_suffix: &str,
+) -> codec_backend::CodecBackendProbe {
+    auto_calibrate_bounded(backend, probe, config_suffix, calibration_attempts())
+}
+
+fn auto_calibrate_bounded(
+    backend: &codec_backend::G1rBinaryHostBackend,
+    probe: codec_backend::CodecBackendProbe,
+    config_suffix: &str,
+    attempts: &std::sync::Mutex<std::collections::HashMap<String, u32>>,
+) -> codec_backend::CodecBackendProbe {
+    // Calibrate an untrusted (pattern-resolved) build OR one usable only for
+    // decompression (a decode-only derived-cache entry that can be promoted to
+    // write-capable). Write-capable supported profiles and the pure-Rust
+    // fallback need no calibration.
+    let needs_calibration = probe.resolution_mode.as_deref() == Some("pattern_profile")
+        || (probe.available && !probe.can_compress);
+    if !needs_calibration {
+        return probe;
+    }
+    // Scope the attempt budget by executable AND host configuration, so fixing a
+    // bad helper/cache path mid-session is a fresh build to retry rather than a
+    // capped one (matching the ensured-backend cache key).
+    let exe_sha = probe
+        .details
+        .get("exeSha256")
+        .and_then(Value::as_str)
+        .map(|sha| format!("{sha}\u{1f}{config_suffix}"));
+    // Give up re-running the expensive selftest once an executable has failed the
+    // capped number of times this session.
+    if let Some(sha) = &exe_sha {
+        if attempts
+            .lock()
+            .map(|m| m.get(sha).copied().unwrap_or(0) >= MAX_CALIBRATION_ATTEMPTS)
+            .unwrap_or(false)
+        {
+            return probe;
+        }
+    }
+    match backend.calibrate() {
+        Ok(calibrated) => calibrated,
+        Err(_) => {
+            // A failed calibration may still have written a decode-only derived
+            // cache. Re-probe so the response reflects that (read-only usable)
+            // instead of the stale pre-calibration probe.
+            let after =
+                codec_backend::CodecBackend::probe(backend).unwrap_or_else(|_| probe.clone());
+            // Count every failed calibration against the budget -- including a
+            // decode-only outcome (available but not write-capable). It still gets
+            // up to MAX_CALIBRATION_ATTEMPTS retries (a transient compress failure
+            // may clear), but a build whose compressor consistently fails will not
+            // re-run the expensive selftest on every operation forever.
+            if let Some(sha) = exe_sha {
+                if let Ok(mut map) = attempts.lock() {
+                    *map.entry(sha).or_insert(0) += 1;
+                }
+            }
+            after
+        }
+    }
 }
 
 fn binary_host_backend_from_config(
@@ -4587,53 +4856,52 @@ fn apply_private_edits(
     })?;
     let parts = split_gsav(data)?;
     let stream = parse_compressed_stream(data, 13 + parts.public_payload.len())?;
-    let edit_specs = edits
-        .iter()
-        .map(|edit| match edit.path.as_str() {
-            "private.replaceFString" | "private.fstring" => {
-                parse_private_fstring_edit(edit).map(PrivateEdit::FString)
-            }
-            "private.player.setPlayerName" => {
-                parse_private_player_name_edit(edit).map(PrivateEdit::PlayerName)
-            }
-            "private.profile.setProfileName" => {
-                parse_private_profile_name_edit(edit).map(PrivateEdit::ProfileName)
-            }
-            "private.player.setAttribute" => {
-                parse_private_player_attribute_edit(edit).map(PrivateEdit::PlayerAttribute)
-            }
-            "private.player.setTransform" => {
-                parse_private_player_transform_edit(edit).map(PrivateEdit::PlayerTransform)
-            }
-            "private.inventory.setItemCount" => {
-                parse_private_inventory_item_count_edit(edit).map(PrivateEdit::InventoryItemCount)
-            }
-            "private.inventory.addItem" => {
-                parse_private_inventory_add_item_edit(edit).map(PrivateEdit::InventoryAddItem)
-            }
-            "private.inventory.removeItem" => {
-                parse_private_inventory_remove_item_edit(edit).map(PrivateEdit::InventoryRemoveItem)
-            }
-            "private.typed.setValue" => {
-                parse_private_typed_set_value_edit(edit).map(PrivateEdit::TypedSetValue)
-            }
-            // Index-addressed edits (arrayRemove/arrayDuplicate) target indices
-            // that shift after each structural change within the same batch;
-            // callers must submit at most one structural array edit per write.
-            // Each edit re-parses the payload, so value-addressed ops
-            // (setAdd/setRemove) batch safely.
-            "private.typed.setAdd"
-            | "private.typed.setRemove"
-            | "private.typed.arrayRemove"
-            | "private.typed.arrayDuplicate" => {
-                parse_private_typed_container_edit(edit, edit.path.as_str())
-                    .map(PrivateEdit::TypedContainer)
-            }
-            other => Err(CoreError::UnsupportedEdit(format!(
-                "{other} is not writable in this build"
-            ))),
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    let edit_specs =
+        edits
+            .iter()
+            .map(|edit| match edit.path.as_str() {
+                "private.replaceFString" | "private.fstring" => {
+                    parse_private_fstring_edit(edit).map(PrivateEdit::FString)
+                }
+                "private.player.setPlayerName" => {
+                    parse_private_player_name_edit(edit).map(PrivateEdit::PlayerName)
+                }
+                "private.profile.setProfileName" => {
+                    parse_private_profile_name_edit(edit).map(PrivateEdit::ProfileName)
+                }
+                "private.player.setAttribute" => {
+                    parse_private_player_attribute_edit(edit).map(PrivateEdit::PlayerAttribute)
+                }
+                "private.player.setTransform" => {
+                    parse_private_player_transform_edit(edit).map(PrivateEdit::PlayerTransform)
+                }
+                "private.inventory.setItemCount" => parse_private_inventory_item_count_edit(edit)
+                    .map(PrivateEdit::InventoryItemCount),
+                "private.inventory.addItem" => {
+                    parse_private_inventory_add_item_edit(edit).map(PrivateEdit::InventoryAddItem)
+                }
+                "private.inventory.removeItem" => parse_private_inventory_remove_item_edit(edit)
+                    .map(PrivateEdit::InventoryRemoveItem),
+                "private.typed.setValue" => {
+                    parse_private_typed_set_value_edit(edit).map(PrivateEdit::TypedSetValue)
+                }
+                // Index-addressed edits (arrayRemove/arrayDuplicate) target indices
+                // that shift after each structural change within the same batch;
+                // callers must submit at most one structural array edit per write.
+                // Each edit re-parses the payload, so value-addressed ops
+                // (setAdd/setRemove) batch safely.
+                "private.typed.setAdd"
+                | "private.typed.setRemove"
+                | "private.typed.arrayRemove"
+                | "private.typed.arrayDuplicate" => {
+                    parse_private_typed_container_edit(edit, edit.path.as_str())
+                        .map(PrivateEdit::TypedContainer)
+                }
+                other => Err(CoreError::UnsupportedEdit(format!(
+                    "{other} is not writable in this build"
+                ))),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
     // Structural edits (arrayRemove, arrayDuplicate, addItem, removeItem) change
     // the length of array or set data; a second such edit in the same batch
     // would silently target shifted offsets/indices.  Reject the batch
@@ -4792,9 +5060,7 @@ fn parse_typed_edit_path(
         .get("path")
         .and_then(Value::as_array)
         .ok_or_else(|| {
-            CoreError::InvalidRequest(format!(
-                "{op} requires value.path as an array of segments"
-            ))
+            CoreError::InvalidRequest(format!("{op} requires value.path as an array of segments"))
         })?
         .iter()
         .map(|segment| {
@@ -4829,9 +5095,10 @@ fn parse_private_typed_container_edit(
     edit: &Edit,
     op: &str,
 ) -> Result<PrivateTypedContainerEdit, CoreError> {
-    let value = edit.value.as_object().ok_or_else(|| {
-        CoreError::InvalidRequest(format!("{op} value must be an object"))
-    })?;
+    let value = edit
+        .value
+        .as_object()
+        .ok_or_else(|| CoreError::InvalidRequest(format!("{op} value must be an object")))?;
     let path = parse_typed_edit_path(op, value)?;
     let container_edit = match op {
         "private.typed.setAdd" | "private.typed.setRemove" => {
@@ -5247,9 +5514,7 @@ fn parse_private_inventory_add_item_edit(
     edit: &Edit,
 ) -> Result<PrivateInventoryAddItemEdit, CoreError> {
     let value = edit.value.as_object().ok_or_else(|| {
-        CoreError::InvalidRequest(
-            "private.inventory.addItem value must be an object".to_string(),
-        )
+        CoreError::InvalidRequest("private.inventory.addItem value must be an object".to_string())
     })?;
     let path = value
         .get("path")
@@ -5613,8 +5878,9 @@ fn main_container_summary(root: &properties::RootObject) -> Option<MainContainer
     })?;
     // Resolve the MainContainer's m_Slots (must exist for a valid result).
     let main_segment = format!("[{main_index}]");
-    let properties::PropertyValue::Array { elements: main_slots } =
-        resolve_child(&["m_Values", "Items", &main_segment, "m_Slots"])?
+    let properties::PropertyValue::Array {
+        elements: main_slots,
+    } = resolve_child(&["m_Values", "Items", &main_segment, "m_Slots"])?
     else {
         return None;
     };
@@ -5623,8 +5889,9 @@ fn main_container_summary(root: &properties::RootObject) -> Option<MainContainer
     let mut has_clean_template = false;
     let mut global_counts: std::collections::HashMap<String, usize> =
         std::collections::HashMap::new();
-    if let Some(properties::PropertyValue::Array { elements: containers }) =
-        resolve_child(&["m_Values", "Items"])
+    if let Some(properties::PropertyValue::Array {
+        elements: containers,
+    }) = resolve_child(&["m_Values", "Items"])
     {
         for index in 0..containers.len() {
             let segment = format!("[{index}]");
@@ -5773,40 +6040,37 @@ fn apply_private_inventory_add_item_to_payload(
     // MainContainer), borrow a clean slot's bytes from another container and fix
     // m_InventoryType to MainContainer below.
     let is_clean = |slot: &properties::PropertyValue| {
-        !struct_element_property(slot, "m_Payload")
-            .is_some_and(|p| payload_carries_state(&p.value))
+        !struct_element_property(slot, "m_Payload").is_some_and(|p| payload_carries_state(&p.value))
     };
     let max_id = slots.iter().filter_map(slot_id).max().unwrap_or(-1);
     let new_id = max_id.checked_add(1).ok_or_else(|| {
         CoreError::Parse("inventory slot ids exhausted (m_Id overflow)".to_string())
     })?;
-    let (container_edit, new_index, needs_type_patch) = if let Some(source) =
-        slots.iter().rposition(|slot| is_clean(slot))
-    {
-        // ArrayDuplicate inserts the copy right after the source slot.
-        (
-            properties::ContainerEdit::ArrayDuplicate(source),
-            source + 1,
-            false,
-        )
-    } else {
-        let template_bytes =
-            donor_slot_template_bytes(payload, &root, &inventory_path, main_index)?.ok_or_else(
-                || {
-                    CoreError::UnsupportedEdit(
-                        "no inventory container has a clean (state-free) slot to use as a \
+    let (container_edit, new_index, needs_type_patch) =
+        if let Some(source) = slots.iter().rposition(|slot| is_clean(slot)) {
+            // ArrayDuplicate inserts the copy right after the source slot.
+            (
+                properties::ContainerEdit::ArrayDuplicate(source),
+                source + 1,
+                false,
+            )
+        } else {
+            let template_bytes =
+                donor_slot_template_bytes(payload, &root, &inventory_path, main_index)?
+                    .ok_or_else(|| {
+                        CoreError::UnsupportedEdit(
+                            "no inventory container has a clean (state-free) slot to use as a \
                          template; cannot synthesize a new item slot"
-                            .to_string(),
-                    )
-                },
-            )?;
-        // ArrayInsertBytes appends to the end of the MainContainer.
-        (
-            properties::ContainerEdit::ArrayInsertBytes(template_bytes),
-            slots.len(),
-            true,
-        )
-    };
+                                .to_string(),
+                        )
+                    })?;
+            // ArrayInsertBytes appends to the end of the MainContainer.
+            (
+                properties::ContainerEdit::ArrayInsertBytes(template_bytes),
+                slots.len(),
+                true,
+            )
+        };
 
     // 3. Apply the structural edit on a scratch copy (size chains fixed up by
     //    patch_container; failed patches leave the original untouched).
@@ -5863,8 +6127,8 @@ fn apply_private_inventory_add_item_to_payload(
             suffix.extend([slot_segment.clone(), "m_InventoryType".to_string()]);
             suffix
         })?;
-        let type_chain = properties::resolve_chain(&reparsed.properties, &type_segs)
-            .map_err(|err| {
+        let type_chain =
+            properties::resolve_chain(&reparsed.properties, &type_segs).map_err(|err| {
                 CoreError::Parse(format!(
                     "synthesized inventory slot is missing m_InventoryType: {err}"
                 ))
@@ -7165,7 +7429,11 @@ mod tests {
         let mut out = diff_tag(name, "BoolProperty");
         out.extend_from_slice(&diff_header(
             0,
-            if on { properties::TAG_FLAG_BOOL_TRUE } else { 0 },
+            if on {
+                properties::TAG_FLAG_BOOL_TRUE
+            } else {
+                0
+            },
         ));
         out
     }
@@ -7214,7 +7482,10 @@ mod tests {
         out.extend_from_slice(&fstring("InstancedStruct"));
         out.extend_from_slice(&1u32.to_le_bytes());
         out.extend_from_slice(&fstring("/Script/StructUtils"));
-        out.extend_from_slice(&diff_header(instanced.len() as u32, properties::TAG_FLAG_NATIVE_SERIALIZE));
+        out.extend_from_slice(&diff_header(
+            instanced.len() as u32,
+            properties::TAG_FLAG_NATIVE_SERIALIZE,
+        ));
         out.extend_from_slice(&instanced);
         out
     }
@@ -7329,9 +7600,7 @@ mod tests {
             properties::resolve(&root.properties, &properties::parse_path(&p0).unwrap()).unwrap();
         assert_eq!(
             p0v.value,
-            properties::PropertyValue::Object(
-                "/Script/Angelscript.DifficultyPreset_Custom".into()
-            ),
+            properties::PropertyValue::Object("/Script/Angelscript.DifficultyPreset_Custom".into()),
         );
     }
 
@@ -7638,19 +7907,17 @@ mod tests {
         let p0 = profile_difficulty_path(&root, 0, "m_difficultyPreset")
             .unwrap()
             .unwrap();
-        let p0v = properties::resolve(&root.properties, &properties::parse_path(&p0).unwrap())
-            .unwrap();
+        let p0v =
+            properties::resolve(&root.properties, &properties::parse_path(&p0).unwrap()).unwrap();
         assert_eq!(
             p0v.value,
-            properties::PropertyValue::Object(
-                "/Script/Angelscript.DifficultyPreset_Custom".into()
-            ),
+            properties::PropertyValue::Object("/Script/Angelscript.DifficultyPreset_Custom".into()),
         );
         let p1 = profile_difficulty_path(&root, 1, "m_difficultyPreset")
             .unwrap()
             .unwrap();
-        let p1v = properties::resolve(&root.properties, &properties::parse_path(&p1).unwrap())
-            .unwrap();
+        let p1v =
+            properties::resolve(&root.properties, &properties::parse_path(&p1).unwrap()).unwrap();
         assert_eq!(
             p1v.value,
             properties::PropertyValue::Object("/Script/Angelscript.DifficultyPreset_Hard".into()),
@@ -7669,9 +7936,11 @@ mod tests {
             let path = profile_difficulty_path(&root, 1, "m_PermaDeath")
                 .unwrap()
                 .unwrap();
-            let chain =
-                properties::resolve_chain(&root.properties, &properties::parse_path(&path).unwrap())
-                    .unwrap();
+            let chain = properties::resolve_chain(
+                &root.properties,
+                &properties::parse_path(&path).unwrap(),
+            )
+            .unwrap();
             let target = chain.target.clone();
             drop(root);
             properties::patch_scalar(
@@ -7704,7 +7973,6 @@ mod tests {
             "Novice-forced permadeath-off must be written under the m_PermaDeath spelling",
         );
     }
-
 
     fn minimal_stream() -> Vec<u8> {
         let mut out = Vec::new();
@@ -7772,7 +8040,11 @@ mod tests {
         out.extend_from_slice(&0u32.to_le_bytes());
         // The bool lives in the 0x10 (TAG_FLAG_BOOL_TRUE) tag bit, as real saves
         // and the typed parser/writer encode it.
-        out.push(if value { properties::TAG_FLAG_BOOL_TRUE } else { 0 });
+        out.push(if value {
+            properties::TAG_FLAG_BOOL_TRUE
+        } else {
+            0
+        });
         out
     }
 
@@ -8675,7 +8947,11 @@ mod tests {
         fs::write(&new_backup, minimal_gsav("New")).unwrap();
 
         let backups = list_save_backups(&path).unwrap();
-        assert_eq!(backups.len(), 2, "both legacy and subfolder backups expected");
+        assert_eq!(
+            backups.len(),
+            2,
+            "both legacy and subfolder backups expected"
+        );
         // Newest-first: epoch 150 before epoch 50.
         assert!(backups[0].path.contains("150"), "subfolder backup first");
         assert!(backups[1].path.contains("50"), "legacy backup second");
@@ -10242,7 +10518,11 @@ mod tests {
         // Old heuristic fields must not appear.
         assert!(value["private"]["progression"].get("candidates").is_none());
         assert!(value["private"]["progression"].get("sections").is_none());
-        assert!(value["private"]["progression"].get("gameplayTags").is_none());
+        assert!(
+            value["private"]["progression"]
+                .get("gameplayTags")
+                .is_none()
+        );
     }
 
     #[test]
@@ -10474,6 +10754,326 @@ mod tests {
         );
     }
 
+    #[test]
+    fn check_codec_auto_calibrates_pattern_profile_then_reports_supported() {
+        let backend = codec_backend::G1rBinaryHostBackend::with_command_dispatch_for_tests(
+            "D:\\G1R-Win64-Shipping.exe",
+            |command| match command {
+                "probe" => Ok(json!({
+                    "supported": false,
+                    "canDecompress": false,
+                    "canCompress": false,
+                    "profile": "g1r-23A85CE7",
+                    "resolutionMode": "pattern_profile"
+                })),
+                "calibrate" => Ok(json!({
+                    "supported": true,
+                    "canDecompress": true,
+                    "canCompress": true,
+                    "profile": "g1r-derived-77f3d48c",
+                    "resolutionMode": "derived_profile_cache",
+                    "calibrationRan": true
+                })),
+                other => Err(CoreError::Codec(format!("unexpected command {other}"))),
+            },
+        );
+
+        let probe = codec_backend::CodecBackend::probe(&backend).unwrap();
+        assert_eq!(probe.resolution_mode.as_deref(), Some("pattern_profile"));
+        assert!(!probe.available);
+
+        let promoted = auto_calibrate_if_pattern_profile(&backend, probe, "");
+
+        assert!(promoted.available);
+        assert!(promoted.can_compress);
+        assert_eq!(
+            promoted.resolution_mode.as_deref(),
+            Some("derived_profile_cache")
+        );
+    }
+
+    #[test]
+    fn auto_calibrate_keeps_unsupported_probe_when_calibrate_errors() {
+        let backend = codec_backend::G1rBinaryHostBackend::with_command_dispatch_for_tests(
+            "D:\\G1R-Win64-Shipping.exe",
+            |command| match command {
+                "probe" => Ok(json!({
+                    "supported": false,
+                    "canDecompress": false,
+                    "canCompress": false,
+                    "profile": "g1r-23A85CE7",
+                    "resolutionMode": "pattern_profile"
+                })),
+                "calibrate" => Err(CoreError::Codec("calibration selftest failed".to_string())),
+                other => Err(CoreError::Codec(format!("unexpected command {other}"))),
+            },
+        );
+
+        let probe = codec_backend::CodecBackend::probe(&backend).unwrap();
+        assert_eq!(probe.resolution_mode.as_deref(), Some("pattern_profile"));
+        assert!(!probe.available);
+
+        let result = auto_calibrate_if_pattern_profile(&backend, probe, "");
+
+        // Best-effort: a calibration failure leaves the original unsupported
+        // probe, not an error.
+        assert!(!result.available);
+        assert_eq!(result.resolution_mode.as_deref(), Some("pattern_profile"));
+    }
+
+    #[test]
+    fn auto_calibrate_skips_rerun_after_failure_in_session() {
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let calls_in = calls.clone();
+        let backend = codec_backend::G1rBinaryHostBackend::with_command_dispatch_for_tests(
+            "D:\\G1R-Win64-Shipping.exe",
+            move |command| match command {
+                "calibrate" => {
+                    calls_in.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    Err(CoreError::Codec("calibration selftest failed".to_string()))
+                }
+                other => Err(CoreError::Codec(format!("unexpected command {other}"))),
+            },
+        );
+        let cache = std::sync::Mutex::new(std::collections::HashMap::new());
+        let probe = codec_backend::CodecBackendProbe {
+            backend: "g1r_binary_host".to_string(),
+            available: false,
+            can_decompress: false,
+            can_compress: false,
+            status: "unsupported".to_string(),
+            profile: Some("g1r-23A85CE7".to_string()),
+            resolution_mode: Some("pattern_profile".to_string()),
+            details: json!({ "exeSha256": "deadbeefdeadbeef" }),
+        };
+
+        // Four checks of the same unpromotable build: calibration retries up to
+        // the attempt budget (MAX_CALIBRATION_ATTEMPTS), then stops re-running the
+        // expensive selftest. The build stays unsupported throughout.
+        let mut last = probe.clone();
+        for _ in 0..4 {
+            last = auto_calibrate_bounded(&backend, probe.clone(), "", &cache);
+        }
+        assert!(!last.available);
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            MAX_CALIBRATION_ATTEMPTS as usize
+        );
+    }
+
+    #[test]
+    fn auto_calibrate_recalibrates_decompress_only_supported_probe() {
+        // A supported-but-decompress-only derived-cache entry must be
+        // recalibrated so it can be promoted to write-capable.
+        let backend = codec_backend::G1rBinaryHostBackend::with_command_dispatch_for_tests(
+            "D:\\G1R-Win64-Shipping.exe",
+            |command| match command {
+                "calibrate" => Ok(json!({
+                    "supported": true,
+                    "canDecompress": true,
+                    "canCompress": true,
+                    "profile": "g1r-derived-77f3d48c",
+                    "resolutionMode": "derived_profile_cache",
+                    "calibrationRan": true
+                })),
+                other => Err(CoreError::Codec(format!("unexpected command {other}"))),
+            },
+        );
+        let cache = std::sync::Mutex::new(std::collections::HashMap::new());
+        let probe = codec_backend::CodecBackendProbe {
+            backend: "g1r_binary_host".to_string(),
+            available: true,
+            can_decompress: true,
+            can_compress: false,
+            status: "codec_host_decompress_ready".to_string(),
+            profile: Some("g1r-derived-77f3d48c".to_string()),
+            resolution_mode: Some("derived_profile_cache".to_string()),
+            details: json!({ "exeSha256": "cafecafecafecafe" }),
+        };
+
+        let promoted = auto_calibrate_bounded(&backend, probe, "", &cache);
+
+        assert!(promoted.can_compress);
+    }
+
+    #[test]
+    fn auto_calibrate_reprobes_and_retries_after_decode_only_calibration() {
+        // calibrate fails (compress selftest failed) but a decode-only derived
+        // cache now exists, which the re-probe reports.
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let calls_in = calls.clone();
+        let backend = codec_backend::G1rBinaryHostBackend::with_command_dispatch_for_tests(
+            "D:\\G1R-Win64-Shipping.exe",
+            move |command| match command {
+                "calibrate" => {
+                    calls_in.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    Err(CoreError::Codec("compress selftest failed".to_string()))
+                }
+                "probe" => Ok(json!({
+                    "supported": true,
+                    "canDecompress": true,
+                    "canCompress": false,
+                    "profile": "g1r-derived-77f3d48c",
+                    "resolutionMode": "derived_profile_cache",
+                    "exeSha256": "feedfacefeedface"
+                })),
+                other => Err(CoreError::Codec(format!("unexpected command {other}"))),
+            },
+        );
+        let cache = std::sync::Mutex::new(std::collections::HashMap::new());
+        let probe = codec_backend::CodecBackendProbe {
+            backend: "g1r_binary_host".to_string(),
+            available: false,
+            can_decompress: false,
+            can_compress: false,
+            status: "unsupported".to_string(),
+            profile: Some("g1r-23A85CE7".to_string()),
+            resolution_mode: Some("pattern_profile".to_string()),
+            details: json!({ "exeSha256": "feedfacefeedface" }),
+        };
+
+        let first = auto_calibrate_bounded(&backend, probe.clone(), "", &cache);
+        // Not stale: reflects the decode-only cache, usable for reading.
+        assert!(first.available);
+        assert!(!first.can_compress);
+
+        // A decode-only build retries the compress selftest (a transient failure
+        // may clear) but is still bounded: after MAX_CALIBRATION_ATTEMPTS it stops
+        // re-running the expensive selftest instead of doing so on every check.
+        for _ in 0..4 {
+            let _ = auto_calibrate_bounded(&backend, probe.clone(), "", &cache);
+        }
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            MAX_CALIBRATION_ATTEMPTS as usize
+        );
+    }
+
+    #[test]
+    fn codec_status_unsupported_binary_build_shows_plain_message() {
+        let pure_probe = codec_backend::CodecBackendProbe {
+            backend: "pure_rust_kraken".to_string(),
+            available: false,
+            can_decompress: false,
+            can_compress: false,
+            status: "native_encoder_in_progress".to_string(),
+            profile: None,
+            resolution_mode: None,
+            details: json!({}),
+        };
+        let binary_probe = codec_backend::CodecBackendProbe {
+            backend: "g1r_binary_host".to_string(),
+            available: false,
+            can_decompress: false,
+            can_compress: false,
+            status: "unsupported".to_string(),
+            profile: Some("g1r-23A85CE7".to_string()),
+            resolution_mode: Some("pattern_profile".to_string()),
+            details: json!({}),
+        };
+
+        let value = codec_status_from_probes(pure_probe, Some(Ok(binary_probe))).unwrap();
+
+        assert_eq!(value["userSeverity"], "error");
+        assert_eq!(value["userTitle"], "This game version can't be opened yet");
+    }
+
+    #[test]
+    fn codec_status_ready_binary_build_shows_ready_message() {
+        let pure_probe = codec_backend::CodecBackendProbe {
+            backend: "pure_rust_kraken".to_string(),
+            available: false,
+            can_decompress: false,
+            can_compress: false,
+            status: "native_encoder_in_progress".to_string(),
+            profile: None,
+            resolution_mode: None,
+            details: json!({}),
+        };
+        let binary_probe = codec_backend::CodecBackendProbe {
+            backend: "g1r_binary_host".to_string(),
+            available: true,
+            can_decompress: true,
+            can_compress: true,
+            status: "supported".to_string(),
+            profile: Some("g1r-23A85CE7".to_string()),
+            resolution_mode: Some("known_profile".to_string()),
+            details: json!({}),
+        };
+
+        let value = codec_status_from_probes(pure_probe, Some(Ok(binary_probe))).unwrap();
+
+        assert_eq!(value["userSeverity"], "ok");
+        assert_eq!(value["userTitle"], "Game codec ready");
+    }
+
+    #[test]
+    fn codec_user_message_ready_for_compress_capable_build() {
+        let m = codec_user_message_for("g1r_binary_host", true, true, true, None);
+        assert_eq!(m["userSeverity"], "ok");
+        assert_eq!(m["userTitle"], "Game codec ready");
+    }
+
+    #[test]
+    fn codec_user_message_unsupported_for_unavailable_build() {
+        let m = codec_user_message_for("g1r_binary_host", false, false, false, None);
+        assert_eq!(m["userSeverity"], "error");
+        assert_eq!(m["userTitle"], "This game version can't be opened yet");
+        assert!(m["userHint"].as_str().unwrap().contains("editor update"));
+    }
+
+    #[test]
+    fn codec_user_message_exe_not_found() {
+        let m = codec_user_message_for(
+            "g1r_binary_host",
+            false,
+            false,
+            false,
+            Some("G1R executable not found: D:/x/G1R-Win64-Shipping.exe"),
+        );
+        assert_eq!(m["userTitle"], "Gothic 1 Remake not found");
+        assert!(m["userHint"].as_str().unwrap().contains("game path"));
+    }
+
+    #[test]
+    fn codec_user_message_helper_misconfig_is_setup_error() {
+        let m = codec_user_message_for(
+            "g1r_binary_host",
+            false,
+            false,
+            false,
+            Some("binaryHost.helperPath is required"),
+        );
+        assert_eq!(m["userSeverity"], "error");
+        assert_eq!(m["userTitle"], "Codec helper isn't set up");
+        assert!(m["userHint"].as_str().unwrap().contains("settings"));
+        // Must NOT send the user to wait for a game/editor update.
+        assert_ne!(m["userTitle"], "This game version can't be opened yet");
+    }
+
+    #[test]
+    fn codec_user_message_unresolved_build_waits_for_update() {
+        let m = codec_user_message_for(
+            "g1r_binary_host",
+            false,
+            false,
+            false,
+            Some("G1R executable could not be resolved to verified codec functions"),
+        );
+        assert_eq!(m["userTitle"], "This game version can't be opened yet");
+        assert!(m["userHint"].as_str().unwrap().contains("editor update"));
+    }
+
+    #[test]
+    fn codec_user_message_decode_only_is_not_ready() {
+        // available + decompress but no verified compress: reading works, writing
+        // is gated, so it must not claim full "ready".
+        let m = codec_user_message_for("g1r_binary_host", true, false, true, None);
+        assert_eq!(m["userSeverity"], "warn");
+        assert_eq!(m["userTitle"], "Game codec partly ready");
+        assert_ne!(m["userTitle"], "Game codec ready");
+    }
+
     fn private_name_set_property(name: &str, values: &[&str]) -> Vec<u8> {
         let mut body = 0u32.to_le_bytes().to_vec();
         body.extend_from_slice(&(values.len() as u32).to_le_bytes());
@@ -10650,10 +11250,14 @@ mod tests {
         )
         .unwrap_err();
         assert!(
-            err.to_string().contains("at most one structural array edit"),
+            err.to_string()
+                .contains("at most one structural array edit"),
             "unexpected error: {err}"
         );
-        assert!(!output_path.exists(), "rejected write must not produce a file");
+        assert!(
+            !output_path.exists(),
+            "rejected write must not produce a file"
+        );
 
         // A single structural edit (even alongside a value-addressed edit)
         // still applies.
@@ -10742,7 +11346,9 @@ mod tests {
         map_body.extend_from_slice(&2u32.to_le_bytes()); // count
         map_body.extend_from_slice(&fstring("/Script/Angelscript.Quest_OldCamp_SLEEPER"));
         map_body.extend_from_slice(&quest_value("EQuestState::Running"));
-        map_body.extend_from_slice(&fstring("/Script/Angelscript.Quest_BanditsCamp_BANDITSTRUST"));
+        map_body.extend_from_slice(&fstring(
+            "/Script/Angelscript.Quest_BanditsCamp_BANDITSTRUST",
+        ));
         map_body.extend_from_slice(&quest_value("EQuestState::Available"));
 
         let mut props = fstring("QuestDataByClass");
@@ -10869,8 +11475,8 @@ mod tests {
         };
 
         // No filters: both facets cover all entries.
-        let base = query_progression(&path, &json!({ "section": "quests" }), Some(&backend))
-            .unwrap();
+        let base =
+            query_progression(&path, &json!({ "section": "quests" }), Some(&backend)).unwrap();
         assert_eq!(base["groupCounts"]["BanditsCamp"], 1);
         assert_eq!(base["groupCounts"]["OldCamp"], 1);
         assert_eq!(base["stateCounts"]["Running"], 1);
@@ -10879,9 +11485,12 @@ mod tests {
         // state:"Running" → 1 hit (SLEEPER).
         // groupCounts respects query+state (not group), so only Running entries counted.
         // stateCounts respects query+group (no group filter), so all entries counted.
-        let running =
-            query_progression(&path, &json!({ "section": "quests", "state": "Running" }), Some(&backend))
-                .unwrap();
+        let running = query_progression(
+            &path,
+            &json!({ "section": "quests", "state": "Running" }),
+            Some(&backend),
+        )
+        .unwrap();
         assert_eq!(running["total"], 1);
         assert_eq!(running["quests"][0]["name"], "SLEEPER");
         // groupCounts: only Running entries → OldCamp=1, BanditsCamp absent.
@@ -11003,7 +11612,10 @@ mod tests {
         let private_payload = {
             let diego = private_name_set_property(
                 "Knowledge",
-                &["Voiceline_info_diego_gamestart_11_00", "ChoiceDiegoGamestart"],
+                &[
+                    "Voiceline_info_diego_gamestart_11_00",
+                    "ChoiceDiegoGamestart",
+                ],
             );
             let xardas = private_name_set_property("Knowledge", &["Voiceline_xardas_intro"]);
             let map = name_keyed_struct_map(
@@ -11101,7 +11713,10 @@ mod tests {
                     t
                 };
                 e.extend_from_slice(&private_struct_property(
-                    "Time", "InGameTime", &time_body, 0,
+                    "Time",
+                    "InGameTime",
+                    &time_body,
+                    0,
                 ));
                 let mut affected = fstring("AffectedCharacterGlobalId");
                 affected.extend_from_slice(&fstring("NameProperty"));
@@ -11498,7 +12113,13 @@ mod tests {
         map_descriptor.extend_from_slice(&0u32.to_le_bytes()); // key_flags
         map_descriptor.extend_from_slice(&fstring("StructProperty"));
         map_descriptor.extend_from_slice(&inv_struct_descriptor("InstancedStruct"));
-        let generic = inv_tagged("m_GenericData", "MapProperty", &map_descriptor, 0, &map_body);
+        let generic = inv_tagged(
+            "m_GenericData",
+            "MapProperty",
+            &map_descriptor,
+            0,
+            &map_body,
+        );
 
         let mut p = fstring("/Script/Angelscript.GothicFinalDataGame");
         p.push(0);
@@ -11779,10 +12400,7 @@ mod tests {
             count: 1,
         };
         let err = apply_private_inventory_add_item_to_payload(&mut payload, &edit).unwrap_err();
-        assert!(
-            err.to_string().contains("clean"),
-            "unexpected error: {err}"
-        );
+        assert!(err.to_string().contains("clean"), "unexpected error: {err}");
         assert_eq!(payload, before, "failed edit must not mutate the payload");
     }
 
@@ -11916,18 +12534,19 @@ mod tests {
         // The new item exists in the MainContainer with the requested count.
         let refs = scan_fstrings(&payload, 0);
         let (items, _t, _s) = summarize_private_inventory_items(&payload, &refs, usize::MAX);
-        assert!(items.iter().any(|it| it["path"]
-            == "/Script/Angelscript.ItMi_Sulfur"
-            && it["count"] == 4));
+        assert!(
+            items
+                .iter()
+                .any(|it| it["path"] == "/Script/Angelscript.ItMi_Sulfur" && it["count"] == 4)
+        );
     }
 
     #[test]
     fn add_item_rejects_when_no_clean_template_anywhere() {
         // Every slot in every container carries item-specific state, so there
         // is no clean template to clone.
-        let stateful = |id, path| {
-            inv_item_slot(id, INV_MAIN_LABEL, path, 1, &inv_nonempty_payload_map())
-        };
+        let stateful =
+            |id, path| inv_item_slot(id, INV_MAIN_LABEL, path, 1, &inv_nonempty_payload_map());
         let other = vec![inv_item_slot(
             9,
             INV_OTHER_LABEL,
@@ -12006,8 +12625,7 @@ mod tests {
                 &inv_empty_payload_map(),
             ),
         ];
-        let private_payload =
-            typed_inventory_private_payload(&other_slots, &default_main_slots());
+        let private_payload = typed_inventory_private_payload(&other_slots, &default_main_slots());
         let seed_compressed = b"seed-removable".to_vec();
         let stream = compressed_stream_with_one_chunk(&seed_compressed, private_payload.len());
         fs::write(
@@ -12470,7 +13088,8 @@ mod tests {
             "expected UnsupportedEdit for two addItem in batch, got: {err}"
         );
         assert!(
-            err.to_string().contains("at most one structural array edit"),
+            err.to_string()
+                .contains("at most one structural array edit"),
             "unexpected error message: {err}"
         );
     }
@@ -12528,7 +13147,8 @@ mod tests {
             "expected UnsupportedEdit for addItem + arrayDuplicate, got: {err}"
         );
         assert!(
-            err.to_string().contains("at most one structural array edit"),
+            err.to_string()
+                .contains("at most one structural array edit"),
             "unexpected error message: {err}"
         );
     }
@@ -12739,8 +13359,7 @@ mod tests {
         let edit = PrivateInventoryRemoveItemEdit {
             path: "/Script/Angelscript.ItMi_Sulfur".to_string(),
         };
-        let err =
-            apply_private_inventory_remove_item_to_payload(&mut payload, &edit).unwrap_err();
+        let err = apply_private_inventory_remove_item_to_payload(&mut payload, &edit).unwrap_err();
         assert!(
             err.to_string().contains("does not contain"),
             "unexpected error: {err}"
@@ -12793,8 +13412,7 @@ mod tests {
         let edit = PrivateInventoryRemoveItemEdit {
             path: "/Script/Angelscript.ItMi_Orenugget".to_string(),
         };
-        let err =
-            apply_private_inventory_remove_item_to_payload(&mut payload, &edit).unwrap_err();
+        let err = apply_private_inventory_remove_item_to_payload(&mut payload, &edit).unwrap_err();
         assert!(
             matches!(err, CoreError::Parse(_)),
             "expected Parse error for untyped payload, got: {err}"
@@ -12893,7 +13511,8 @@ mod tests {
             "expected UnsupportedEdit for two removeItem in batch, got: {err}"
         );
         assert!(
-            err.to_string().contains("at most one structural array edit"),
+            err.to_string()
+                .contains("at most one structural array edit"),
             "unexpected error message: {err}"
         );
     }
@@ -12938,7 +13557,8 @@ mod tests {
             "expected UnsupportedEdit for addItem + removeItem, got: {err}"
         );
         assert!(
-            err.to_string().contains("at most one structural array edit"),
+            err.to_string()
+                .contains("at most one structural array edit"),
             "unexpected error message: {err}"
         );
     }
@@ -12951,7 +13571,9 @@ mod tests {
         payload.extend_from_slice(&fstring("/Script/Angelscript.DifficultyPreset_Custom"));
         payload.extend_from_slice(&fstring("m_customCombatSettings"));
         payload.extend_from_slice(&fstring("ClassProperty"));
-        payload.extend_from_slice(&fstring("/Script/Angelscript.CombatDifficultySettings_Hard"));
+        payload.extend_from_slice(&fstring(
+            "/Script/Angelscript.CombatDifficultySettings_Hard",
+        ));
         payload.extend_from_slice(&fstring("m_FakeSloppyCombos"));
         payload.extend_from_slice(&fstring("BoolProperty"));
         payload.extend_from_slice(&[0u8; 8]); // array_index + size

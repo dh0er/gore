@@ -1,14 +1,16 @@
-﻿//! Apply one private.typed.setValue edit to a save (use a throwaway copy).
+//! Apply one private.typed.setValue edit to a save (use a throwaway copy).
 //!
 //! Usage: try_typed_edit <save.sav> <codec_host.exe> <game.exe> <path-json> <value>
 
 use goresave_core::execute_json;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 6 {
-        eprintln!("usage: try_typed_edit <save.sav> <codec_host.exe> <game.exe> <path-json> <value>");
+        eprintln!(
+            "usage: try_typed_edit <save.sav> <codec_host.exe> <game.exe> <path-json> <value>"
+        );
         std::process::exit(2);
     }
     let path_segments: Value = serde_json::from_str(&args[4]).expect("path-json must be JSON");

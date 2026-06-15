@@ -4,7 +4,7 @@
 //! Usage: try_add_item <save.sav> <codec_host.exe> <game.exe> <item_path> <count> [add|remove]
 
 use goresave_core::execute_json;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -54,7 +54,10 @@ fn main() {
         .any(|it| it["path"].as_str() == Some(args[4].as_str()));
     eprintln!(
         "INSPECT scope={} itemStackCount={} returnedItems={} contains_added={}",
-        inv["itemScope"], inv["itemStackCount"], items.len(), found
+        inv["itemScope"],
+        inv["itemStackCount"],
+        items.len(),
+        found
     );
     if let Some(it) = items
         .iter()
