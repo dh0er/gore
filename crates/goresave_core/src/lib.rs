@@ -4278,18 +4278,22 @@ fn ensured_binary_host_from_config(
         }
     }
     // Probe and (for an untrusted build) calibrate. Only mark the executable
-    // "ensured" -- to skip this re-probe on later operations -- once it is
-    // actually usable. If the probe fails (missing/transient helper) or the build
-    // stays unsupported, leave it unmarked so a later operation retries (e.g.
-    // after the user fixes Settings, or within the calibration attempt budget),
-    // instead of being stuck for the whole session.
-    let usable = match codec_backend::CodecBackend::probe(&backend) {
+    // "ensured" -- to skip this re-probe on later operations -- once it is fully
+    // usable: available AND write-capable. A probe failure, an unsupported build,
+    // or a decode-only build (available but not yet compress-verified) is left
+    // unmarked so a later operation retries calibration (e.g. after the user
+    // fixes Settings, within the attempt budget, or to verify compression),
+    // instead of being stuck for the session.
+    let fully_usable = match codec_backend::CodecBackend::probe(&backend) {
         // Side effect: a pattern-resolved build writes its derived cache here, so
         // the decode/encode that follows on this backend resolves it.
-        Ok(probe) => auto_calibrate_if_pattern_profile(&backend, probe).available,
+        Ok(probe) => {
+            let p = auto_calibrate_if_pattern_profile(&backend, probe);
+            p.available && p.can_compress
+        }
         Err(_) => false,
     };
-    if usable {
+    if fully_usable {
         if let Some(key) = exe_key {
             if let Ok(mut set) = binary_host_ensured_exes().lock() {
                 set.insert(key);
