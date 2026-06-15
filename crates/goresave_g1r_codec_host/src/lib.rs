@@ -1761,7 +1761,7 @@ fn probe_exe_inner(
         // A known profile is matched by full-file SHA-256, so the executable is
         // bit-identical to the one these codec RVAs were reverse-engineered and
         // round-trip tested against. Decode/encode are therefore as verified as
-        // a runtime selftest would make them ??? advertise both as capable.
+        // a runtime selftest would make them -- advertise both as capable.
         // (Pattern-resolved/unknown executables still require runtime
         // verification before compress is trusted.)
         return Ok(ProbeResponse {
