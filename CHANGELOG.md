@@ -6,6 +6,17 @@ notes, so every release needs an entry.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.1] - 2026-06-15
+
+### Fixed
+
+- Saves containing a `FieldPathProperty` no longer break every typed-parse tab.
+  The typed property parser aborted on the first unsupported property type,
+  which failed the whole typed parse and left the All data tab showing a parse
+  error, the Progression tab locked, and the Player/Inventory edit controls
+  gated off. `FieldPathProperty` is now kept as opaque bytes (read-only,
+  round-tripped on save), like `TextProperty`.
+
 ## [0.2.0] - 2026-06-14
 
 ### Added

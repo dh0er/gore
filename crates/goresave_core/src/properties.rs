@@ -1424,7 +1424,13 @@ fn read_sized_value(
         "ObjectProperty" | "ClassProperty" => Ok(PropertyValue::Object(r.fstring()?)),
         "EnumProperty" => Ok(PropertyValue::Enum(r.fstring()?)),
         "SoftObjectProperty" => Ok(PropertyValue::SoftObject(read_soft_object_path(r)?)),
-        "TextProperty" => Ok(PropertyValue::Opaque(r.read(r.remaining())?.to_vec())),
+        // FFieldPath (TArray<FName> + owner) has no scalar/string editing story,
+        // so keep its payload opaque like TextProperty rather than aborting the
+        // whole typed parse. Saves carrying one would otherwise fail every
+        // typed-parse-gated tab (All data, Progression, typed editing).
+        "TextProperty" | "FieldPathProperty" => {
+            Ok(PropertyValue::Opaque(r.read(r.remaining())?.to_vec()))
+        }
         "StructProperty" => {
             let (struct_type, _) = descriptor
                 .struct_type
@@ -1763,6 +1769,25 @@ mod tests {
         let parsed = parse_private_root(&payload).unwrap();
         assert_eq!(parsed.properties[0].value, PropertyValue::Bool(true));
         assert_eq!(parsed.properties[1].value, PropertyValue::Bool(false));
+    }
+
+    #[test]
+    fn field_path_property_kept_opaque() {
+        // FFieldPath has no scalar editing story; the typed parser must keep its
+        // payload as opaque bytes (like TextProperty) instead of aborting the
+        // whole save parse with "unsupported property type".
+        let body = vec![1u8, 2, 3, 4, 5, 6, 7, 8];
+        let mut props = tag("MyFieldPath", "FieldPathProperty");
+        props.extend_from_slice(&header(body.len() as u32, 0));
+        props.extend_from_slice(&body);
+        let payload = root("/Script/Test.Save", &props);
+
+        let parsed = parse_private_root(&payload).unwrap();
+        assert_eq!(
+            parsed.properties[0].value,
+            PropertyValue::Opaque(vec![1, 2, 3, 4, 5, 6, 7, 8])
+        );
+        assert_eq!(parsed.properties[0].type_name, "FieldPathProperty");
     }
 
     #[test]
