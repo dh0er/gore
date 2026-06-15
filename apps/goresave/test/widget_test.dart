@@ -336,13 +336,13 @@ void main() {
     });
 
     await tester.scrollUntilVisible(
-      find.text('Companion backups'),
+      find.text('Profile backups'),
       120,
       scrollable: find.byType(Scrollable).last,
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Companion backups'), findsOneWidget);
+    expect(find.text('Profile backups'), findsOneWidget);
     expect(find.text('PersistentDataList.sav.bak.250'), findsOneWidget);
     expect(find.text('Before companion edit'), findsOneWidget);
     // Companion (PersistentDataList.sav) backups are restorable: restoring one

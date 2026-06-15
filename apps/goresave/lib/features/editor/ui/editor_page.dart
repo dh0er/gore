@@ -3255,7 +3255,7 @@ class _BackupsPanel extends StatelessWidget {
         if (companionBackups.isNotEmpty) ...[
           if (backups.isNotEmpty) const SizedBox(height: 8),
           Text(
-            'Companion backups',
+            'Profile backups',
             style: Theme.of(context).textTheme.titleMedium,
           ),
           const SizedBox(height: 8),
