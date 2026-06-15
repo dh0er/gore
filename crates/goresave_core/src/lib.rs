@@ -4230,7 +4230,25 @@ fn probe_binary_host_from_config(
 ) -> Result<codec_backend::CodecBackendProbe, CoreError> {
     let backend = binary_host_backend_from_config(config)?;
     let probe = codec_backend::CodecBackend::probe(&backend)?;
-    Ok(auto_calibrate_if_pattern_profile(&backend, probe))
+    Ok(auto_calibrate_if_pattern_profile(
+        &backend,
+        probe,
+        &host_config_suffix(config),
+    ))
+}
+
+/// The host configuration, besides the executable, that affects codec
+/// resolution: the helper used to run the host and the derived-profile cache it
+/// reads/writes. Used to scope both the ensured-backend cache and the
+/// calibration attempt budget, so changing either (e.g. fixing a bad helper
+/// path) is treated as a fresh configuration rather than reusing stale state.
+fn host_config_suffix(config: &Value) -> String {
+    let field = |name: &str| config.get(name).and_then(Value::as_str).unwrap_or("");
+    format!(
+        "{}\u{1f}{}",
+        field("helperPath"),
+        field("derivedProfileCachePath"),
+    )
 }
 
 /// Executables whose calibration has already been ensured this session, keyed by
@@ -4260,14 +4278,10 @@ fn ensured_binary_host_from_config(
     // (or helper) needs its own probe/calibration. (The session cache still
     // assumes the executable bytes at a given path are stable for the session;
     // an in-place game update would require an explicit codec re-check.)
-    let exe_key = config.get("exePath").and_then(Value::as_str).map(|exe| {
-        let field = |name: &str| config.get(name).and_then(Value::as_str).unwrap_or("");
-        format!(
-            "{exe}\u{1f}{}\u{1f}{}",
-            field("derivedProfileCachePath"),
-            field("helperPath"),
-        )
-    });
+    let exe_key = config
+        .get("exePath")
+        .and_then(Value::as_str)
+        .map(|exe| format!("{exe}\u{1f}{}", host_config_suffix(config)));
     if let Some(key) = &exe_key {
         if binary_host_ensured_exes()
             .lock()
@@ -4288,7 +4302,7 @@ fn ensured_binary_host_from_config(
         // Side effect: a pattern-resolved build writes its derived cache here, so
         // the decode/encode that follows on this backend resolves it.
         Ok(probe) => {
-            let p = auto_calibrate_if_pattern_profile(&backend, probe);
+            let p = auto_calibrate_if_pattern_profile(&backend, probe, &host_config_suffix(config));
             p.available && p.can_compress
         }
         Err(_) => false,
@@ -4328,13 +4342,15 @@ fn calibration_attempts() -> &'static std::sync::Mutex<std::collections::HashMap
 fn auto_calibrate_if_pattern_profile(
     backend: &codec_backend::G1rBinaryHostBackend,
     probe: codec_backend::CodecBackendProbe,
+    config_suffix: &str,
 ) -> codec_backend::CodecBackendProbe {
-    auto_calibrate_bounded(backend, probe, calibration_attempts())
+    auto_calibrate_bounded(backend, probe, config_suffix, calibration_attempts())
 }
 
 fn auto_calibrate_bounded(
     backend: &codec_backend::G1rBinaryHostBackend,
     probe: codec_backend::CodecBackendProbe,
+    config_suffix: &str,
     attempts: &std::sync::Mutex<std::collections::HashMap<String, u32>>,
 ) -> codec_backend::CodecBackendProbe {
     // Calibrate an untrusted (pattern-resolved) build OR one usable only for
@@ -4346,11 +4362,14 @@ fn auto_calibrate_bounded(
     if !needs_calibration {
         return probe;
     }
+    // Scope the attempt budget by executable AND host configuration, so fixing a
+    // bad helper/cache path mid-session is a fresh build to retry rather than a
+    // capped one (matching the ensured-backend cache key).
     let exe_sha = probe
         .details
         .get("exeSha256")
         .and_then(Value::as_str)
-        .map(str::to_string);
+        .map(|sha| format!("{sha}\u{1f}{config_suffix}"));
     // Give up re-running the expensive selftest once an executable has failed the
     // capped number of times this session.
     if let Some(sha) = &exe_sha {
@@ -10763,7 +10782,7 @@ mod tests {
         assert_eq!(probe.resolution_mode.as_deref(), Some("pattern_profile"));
         assert!(!probe.available);
 
-        let promoted = auto_calibrate_if_pattern_profile(&backend, probe);
+        let promoted = auto_calibrate_if_pattern_profile(&backend, probe, "");
 
         assert!(promoted.available);
         assert!(promoted.can_compress);
@@ -10794,7 +10813,7 @@ mod tests {
         assert_eq!(probe.resolution_mode.as_deref(), Some("pattern_profile"));
         assert!(!probe.available);
 
-        let result = auto_calibrate_if_pattern_profile(&backend, probe);
+        let result = auto_calibrate_if_pattern_profile(&backend, probe, "");
 
         // Best-effort: a calibration failure leaves the original unsupported
         // probe, not an error.
@@ -10833,7 +10852,7 @@ mod tests {
         // expensive selftest. The build stays unsupported throughout.
         let mut last = probe.clone();
         for _ in 0..4 {
-            last = auto_calibrate_bounded(&backend, probe.clone(), &cache);
+            last = auto_calibrate_bounded(&backend, probe.clone(), "", &cache);
         }
         assert!(!last.available);
         assert_eq!(
@@ -10872,7 +10891,7 @@ mod tests {
             details: json!({ "exeSha256": "cafecafecafecafe" }),
         };
 
-        let promoted = auto_calibrate_bounded(&backend, probe, &cache);
+        let promoted = auto_calibrate_bounded(&backend, probe, "", &cache);
 
         assert!(promoted.can_compress);
     }
@@ -10913,14 +10932,14 @@ mod tests {
             details: json!({ "exeSha256": "feedfacefeedface" }),
         };
 
-        let first = auto_calibrate_bounded(&backend, probe.clone(), &cache);
+        let first = auto_calibrate_bounded(&backend, probe.clone(), "", &cache);
         // Not stale: reflects the decode-only cache, usable for reading.
         assert!(first.available);
         assert!(!first.can_compress);
 
         // A decode-only build is not blocked: a later check retries the compress
         // selftest (might succeed) instead of being suppressed for the session.
-        let _second = auto_calibrate_bounded(&backend, probe, &cache);
+        let _second = auto_calibrate_bounded(&backend, probe, "", &cache);
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
     }
 

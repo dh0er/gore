@@ -69,4 +69,28 @@ void main() {
     expect(find.text('Codec helper not found'), findsOneWidget);
     expect(find.byIcon(Icons.error_outline), findsOneWidget);
   });
+
+  testWidgets('shows codecError alongside an existing codec status',
+      (tester) async {
+    const codec = CodecStatus(
+      available: true,
+      status: 'codec_host_ready',
+      message: 'ok',
+      userSeverity: 'ok',
+      userTitle: 'Game codec ready',
+      canCompress: true,
+      canDecompress: true,
+    );
+    await tester.pumpWidget(const MaterialApp(
+      home: Scaffold(body: SingleChildScrollView(
+        child: CodecStatusView(
+          codec: codec,
+          codecError: 'Codec verification failed',
+        ))),
+    ));
+
+    // Both the error (e.g. a failed verifyCodec) and the status are visible.
+    expect(find.text('Codec verification failed'), findsOneWidget);
+    expect(find.text('Game codec ready'), findsOneWidget);
+  });
 }

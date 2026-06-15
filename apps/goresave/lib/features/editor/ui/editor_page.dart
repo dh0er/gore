@@ -3552,21 +3552,24 @@ class CodecStatusView extends StatelessWidget {
   Widget build(BuildContext context) {
     final codec = this.codec;
     final scheme = Theme.of(context).colorScheme;
+    // A codec error (e.g. a failed verification) can coexist with a status
+    // (verifyCodec sets codecError but keeps codecStatus), so render it whenever
+    // present -- both when there is no status and alongside one.
+    final error = codecError;
+    final errorRow = error == null
+        ? null
+        : Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(Icons.error_outline, color: scheme.error, size: 18),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(error, style: TextStyle(color: scheme.error)),
+              ),
+            ],
+          );
     if (codec == null) {
-      final error = codecError;
-      if (error == null) {
-        return const Text('No codec status');
-      }
-      return Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(Icons.error_outline, color: scheme.error, size: 18),
-          const SizedBox(width: 6),
-          Expanded(
-            child: Text(error, style: TextStyle(color: scheme.error)),
-          ),
-        ],
-      );
+      return errorRow ?? const Text('No codec status');
     }
     final severity = codec.userSeverity ?? (codec.available ? 'ok' : 'error');
     final isError = severity == 'error';
@@ -3585,6 +3588,7 @@ class CodecStatusView extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        if (errorRow != null) ...[errorRow, const SizedBox(height: 8)],
         Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
