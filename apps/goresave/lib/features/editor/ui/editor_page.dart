@@ -3578,6 +3578,17 @@ class CodecStatusView extends StatelessWidget {
     }
     final severity = codec.userSeverity ?? (codec.available ? 'ok' : 'error');
     final isError = severity == 'error';
+    final isWarn = severity == 'warn';
+    final statusColor = isError
+        ? scheme.error
+        : isWarn
+        ? scheme.tertiary
+        : scheme.primary;
+    final statusIcon = isError
+        ? Icons.error_outline
+        : isWarn
+        ? Icons.warning_amber_rounded
+        : Icons.check_circle_outline;
     final title = codec.userTitle ?? codec.message;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -3586,14 +3597,14 @@ class CodecStatusView extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Icon(
-              isError ? Icons.error_outline : Icons.check_circle_outline,
+              statusIcon,
               size: 18,
-              color: isError ? scheme.error : scheme.primary,
+              color: statusColor,
             ),
             const SizedBox(width: 6),
             Expanded(
               child: Text(title,
-                  style: TextStyle(color: isError ? scheme.error : null)),
+                  style: TextStyle(color: isError || isWarn ? statusColor : null)),
             ),
           ],
         ),
@@ -3619,8 +3630,14 @@ class CodecStatusView extends StatelessWidget {
                   Text(codec.message),
                   Text('Decompress: ${codec.canDecompress ? 'yes' : 'no'} | '
                       'Compress: ${codec.canCompress ? 'yes' : 'no'}'),
-                  if (codec.selectedBackend != null)
-                    Text('Backend: ${codec.selectedBackend}'),
+                  // When a user-facing codec message is present it is always
+                  // about the G1R codec host, so label the backend that way
+                  // rather than the internal active backend (which is the
+                  // pure-Rust fallback when the host probe failed).
+                  if (codec.userTitle != null || codec.selectedBackend != null)
+                    Text(
+                      'Backend: ${codec.userTitle != null ? 'G1R codec host' : codec.selectedBackend}',
+                    ),
                   if (codec.profile != null) Text('Profile: ${codec.profile}'),
                   if (codec.resolutionMode != null)
                     Text('Resolution: ${codec.resolutionMode}'),
