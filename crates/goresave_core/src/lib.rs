@@ -4255,10 +4255,19 @@ fn ensured_binary_host_from_config(
     config: &Value,
 ) -> Result<codec_backend::G1rBinaryHostBackend, CoreError> {
     let backend = binary_host_backend_from_config(config)?;
-    let exe_key = config
-        .get("exePath")
-        .and_then(Value::as_str)
-        .map(str::to_string);
+    // Key by the full host configuration that affects resolution, not just the
+    // exe path: the same executable used with a different derived-profile cache
+    // (or helper) needs its own probe/calibration. (The session cache still
+    // assumes the executable bytes at a given path are stable for the session;
+    // an in-place game update would require an explicit codec re-check.)
+    let exe_key = config.get("exePath").and_then(Value::as_str).map(|exe| {
+        let field = |name: &str| config.get(name).and_then(Value::as_str).unwrap_or("");
+        format!(
+            "{exe}\u{1f}{}\u{1f}{}",
+            field("derivedProfileCachePath"),
+            field("helperPath"),
+        )
+    });
     if let Some(key) = &exe_key {
         if binary_host_ensured_exes()
             .lock()
