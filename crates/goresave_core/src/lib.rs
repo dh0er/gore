@@ -4038,6 +4038,54 @@ fn check_codec(payload: &Value) -> Result<Value, CoreError> {
     codec_status_from_probes(pure_probe, binary_probe)
 }
 
+/// Build the user-facing codec fields shown in the UI. `error_text` is the raw
+/// host/probe error string when the binary backend probe failed (used only to
+/// categorize, never shown verbatim to the user).
+fn codec_user_message_for(
+    selected_backend: &str,
+    available: bool,
+    can_compress: bool,
+    can_decompress: bool,
+    error_text: Option<&str>,
+) -> Value {
+    // Pure-Rust backend selected (no game codec needed for read-only flows):
+    // leave user fields empty; callers fall back to existing behavior.
+    if selected_backend != "g1r_binary_host" {
+        return json!({});
+    }
+    if let Some(err) = error_text {
+        let lower = err.to_ascii_lowercase();
+        if lower.contains("not found") || lower.contains("missing") {
+            return json!({
+                "userSeverity": "error",
+                "userTitle": "Gothic 1 Remake not found",
+                "userMessage": "The game executable wasn't found at the saved path.",
+                "userHint": "Set the game path in settings.",
+            });
+        }
+        return json!({
+            "userSeverity": "error",
+            "userTitle": "This game version can't be opened yet",
+            "userMessage": "Looks like a new game update the editor doesn't recognize yet.",
+            "userHint": "Check for an editor update - a new version usually follows shortly.",
+        });
+    }
+    if available || can_compress || can_decompress {
+        return json!({
+            "userSeverity": "ok",
+            "userTitle": "Game codec ready",
+            "userMessage": "The editor can read and write this game version.",
+            "userHint": "",
+        });
+    }
+    json!({
+        "userSeverity": "error",
+        "userTitle": "This game version can't be opened yet",
+        "userMessage": "Looks like a new game update the editor doesn't recognize yet.",
+        "userHint": "Check for an editor update - a new version usually follows shortly.",
+    })
+}
+
 fn codec_status_from_probes(
     pure_probe: codec_backend::CodecBackendProbe,
     binary_probe: Option<Result<codec_backend::CodecBackendProbe, CoreError>>,
@@ -4045,6 +4093,7 @@ fn codec_status_from_probes(
     let mut backends =
         vec![serde_json::to_value(&pure_probe).map_err(|e| CoreError::Codec(e.to_string()))?];
     let mut selected_probe = pure_probe.clone();
+    let mut binary_error: Option<String> = None;
 
     if let Some(binary_probe) = binary_probe {
         match binary_probe {
@@ -4057,6 +4106,7 @@ fn codec_status_from_probes(
                 }
             }
             Err(err) => {
+                binary_error = Some(err.to_string());
                 backends.push(json!({
                     "backend": "g1r_binary_host",
                     "available": false,
@@ -4085,6 +4135,24 @@ fn codec_status_from_probes(
     if value["selectedBackend"] == "g1r_binary_host" {
         value["status"] = json!(binary_host_status(&selected_probe));
         value["message"] = json!(binary_host_message(&selected_probe));
+    }
+
+    let user_backend = if binary_error.is_some() {
+        "g1r_binary_host"
+    } else {
+        selected_probe.backend.as_str()
+    };
+    let user = codec_user_message_for(
+        user_backend,
+        selected_probe.available,
+        selected_probe.can_compress,
+        selected_probe.can_decompress,
+        binary_error.as_deref(),
+    );
+    if let Some(obj) = user.as_object() {
+        for (k, v) in obj {
+            value[k.clone()] = v.clone();
+        }
     }
 
     Ok(value)
@@ -10526,6 +10594,34 @@ mod tests {
             promoted.resolution_mode.as_deref(),
             Some("derived_profile_cache")
         );
+    }
+
+    #[test]
+    fn codec_user_message_ready_for_compress_capable_build() {
+        let m = codec_user_message_for("g1r_binary_host", true, true, true, None);
+        assert_eq!(m["userSeverity"], "ok");
+        assert_eq!(m["userTitle"], "Game codec ready");
+    }
+
+    #[test]
+    fn codec_user_message_unsupported_for_unavailable_build() {
+        let m = codec_user_message_for("g1r_binary_host", false, false, false, None);
+        assert_eq!(m["userSeverity"], "error");
+        assert_eq!(m["userTitle"], "This game version can't be opened yet");
+        assert!(m["userHint"].as_str().unwrap().contains("editor update"));
+    }
+
+    #[test]
+    fn codec_user_message_exe_not_found() {
+        let m = codec_user_message_for(
+            "g1r_binary_host",
+            false,
+            false,
+            false,
+            Some("G1R executable not found: D:/x/G1R-Win64-Shipping.exe"),
+        );
+        assert_eq!(m["userTitle"], "Gothic 1 Remake not found");
+        assert!(m["userHint"].as_str().unwrap().contains("game path"));
     }
 
     fn private_name_set_property(name: &str, values: &[&str]) -> Vec<u8> {
