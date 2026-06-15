@@ -33,19 +33,16 @@ void main() {
     expect(find.text('Die Welt der Verurteilten'), findsAtLeastNWidgets(1));
     expect(find.text('Overview'), findsOneWidget);
     expect(find.text('Public save name'), findsOneWidget);
-    // Header pills summarise chapter, time played and difficulty for the save.
+    // Header pills summarise chapter and time played for the save.
     expect(find.text('Chapter 1'), findsOneWidget);
     expect(find.text('1h 56m'), findsOneWidget);
-    expect(find.text('Custom'), findsAtLeastNWidgets(1));
     expect(find.text('Profile 0'), findsOneWidget);
+    // The profile header carries the difficulty chip (profile-wide difficulty).
+    expect(find.text('Custom'), findsAtLeastNWidgets(1));
 
     // Format/save-kind details live in the collapsed diagnostics card.
     expect(find.text('Format'), findsNothing);
-    // The Difficulty card now opens expanded by default, pushing the diagnostics
-    // card down. Collapse it so the compact Overview lays out as before and the
-    // diagnostics card is reachable.
-    await tester.tap(find.text('Difficulty'));
-    await tester.pumpAndSettle();
+    // Expand the diagnostics card to reach the format/save-kind metrics.
     await tester.tap(find.text('Diagnostics & details'));
     await tester.pumpAndSettle();
     expect(find.text('Format'), findsOneWidget);
@@ -339,19 +336,33 @@ void main() {
     });
 
     await tester.scrollUntilVisible(
-      find.text('Companion backups'),
+      find.text('Profile backups'),
       120,
       scrollable: find.byType(Scrollable).last,
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Companion backups'), findsOneWidget);
+    expect(find.text('Profile backups'), findsOneWidget);
     expect(find.text('PersistentDataList.sav.bak.250'), findsOneWidget);
     expect(find.text('Before companion edit'), findsOneWidget);
+    // Companion (PersistentDataList.sav) backups are restorable: restoring one
+    // targets PersistentDataList.sav in the save folder, not the selected slot.
     expect(
       find.byTooltip('Restore PersistentDataList.sav.bak.250'),
-      findsNothing,
+      findsOneWidget,
     );
+    await tester.tap(
+      find.byTooltip('Restore PersistentDataList.sav.bak.250'),
+      warnIfMissed: false,
+    );
+    await tester.pumpAndSettle();
+    final companionRestore = core.requests.lastWhere(
+      (r) => r.command == 'restore_backup',
+    );
+    expect(companionRestore.payload, {
+      'path': r'C:\tmp\saves\PersistentDataList.sav',
+      'backupPath': r'C:\tmp\saves\PersistentDataList.sav.bak.250',
+    });
   });
 
   testWidgets('switching tabs preserves unsaved edit and Save count', (
@@ -612,6 +623,7 @@ class _FakeCoreService implements GoresaveCoreService {
                 'quickSaveSlots': ['G1R-001', 'G1R-002', 'G1R-003'],
                 'autoSaveSlots': ['G1R-001', 'G1R-002'],
                 'savedSlots': ['G1R-001'],
+                'difficultyPreset': 'DifficultyPreset_Custom',
                 'maxQuick': 3,
                 'maxAuto': 2,
               },

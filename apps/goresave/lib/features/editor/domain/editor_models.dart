@@ -163,6 +163,18 @@ class ProfileSummary {
     if (name == null || name.isEmpty) return 'Profile $profileId';
     return name == profileId.toString() ? 'Profile $name' : name;
   }
+
+  /// The profile's difficulty, mapped into the same [DifficultySettings] shape
+  /// the editor uses. This is the authoritative, profile-wide difficulty — the
+  /// only difficulty the app reads or writes.
+  DifficultySettings get difficulty => DifficultySettings(
+    preset: difficultyPreset,
+    combat: customCombatSettings,
+    resources: customResourcesSettings,
+    progression: customProgressionSettings,
+    flowHelper: fakeSloppyCombos,
+    permadeath: permanentDeath,
+  );
 }
 
 /// Maps a difficulty class short-name suffix to its UI label.
@@ -205,6 +217,18 @@ class DifficultySettings {
   final String? progression;
   final bool? flowHelper;
   final bool? permadeath;
+
+  /// True when ANY difficulty field is present. Distinguishes a profile that
+  /// carries editable difficulty (even with an unrecognised preset class — the
+  /// dialog can still repair it) from one synthesized without difficulty data
+  /// (nothing to patch). Drives whether the header chip is interactive.
+  bool get hasAnyValue =>
+      preset != null ||
+      combat != null ||
+      resources != null ||
+      progression != null ||
+      flowHelper != null ||
+      permadeath != null;
 
   String get presetLabel => _difficultyLevelLabel(preset);
   String get combatLabel => _difficultyLevelLabel(combat);
@@ -755,7 +779,8 @@ class BackupEntry {
   final String? playerSaveName;
   final String? slotName;
 
-  bool get canRestore => scope == 'save' && status == 'ok';
+  bool get canRestore =>
+      (scope == 'save' || scope == 'persistent_data_list') && status == 'ok';
 }
 
 class CodecStatus {

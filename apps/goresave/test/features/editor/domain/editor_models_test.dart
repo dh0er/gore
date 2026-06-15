@@ -448,7 +448,7 @@ void main() {
     });
   });
 
-  test('BackupEntry reads companion scope and disables direct restore', () {
+  test('BackupEntry reads companion scope and allows direct restore', () {
     final backup = BackupEntry.fromJson({
       'path': r'C:\saves\PersistentDataList.sav.bak.250',
       'fileName': 'PersistentDataList.sav.bak.250',
@@ -464,6 +464,20 @@ void main() {
     expect(backup.scope, 'persistent_data_list');
     expect(backup.slotName, 'G1R-001');
     expect(backup.playerSaveName, 'Before companion edit');
+    // Companion (PersistentDataList.sav) backups are now restorable directly so
+    // a profile difficulty edit's backup can be rolled back from the UI.
+    expect(backup.canRestore, isTrue);
+  });
+
+  test('BackupEntry companion scope with non-ok status is not restorable', () {
+    final backup = BackupEntry.fromJson({
+      'path': r'C:\saves\PersistentDataList.sav.bak.251',
+      'fileName': 'PersistentDataList.sav.bak.251',
+      'fileSize': 8192,
+      'sha1': 'def789',
+      'status': 'selected slot metadata missing',
+      'scope': 'persistent_data_list',
+    });
     expect(backup.canRestore, isFalse);
   });
 }

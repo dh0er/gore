@@ -16,7 +16,7 @@ import 'package:goresave/features/editor/domain/pending_edits.dart';
 import 'package:goresave/providers/data_providers.dart';
 import 'package:intl/intl.dart';
 import 'add_inventory_item_dialog.dart';
-import 'difficulty_card.dart';
+import 'difficulty_dialog.dart';
 import 'hero_stats_card.dart';
 import 'progression_panel.dart';
 
@@ -158,7 +158,6 @@ class _SaveSidebar extends StatelessWidget {
           _ProfileHeader(
             profile: state.activeProfile,
             profiles: state.profiles,
-            saveCount: saves.length,
             notifier: notifier,
             isLoading: state.isLoading,
           ),
@@ -202,14 +201,12 @@ class _ProfileHeader extends StatelessWidget {
   const _ProfileHeader({
     required this.profile,
     required this.profiles,
-    required this.saveCount,
     required this.notifier,
     required this.isLoading,
   });
 
   final ProfileSummary? profile;
   final List<ProfileSummary> profiles;
-  final int saveCount;
   final EditorNotifier notifier;
   final bool isLoading;
 
@@ -217,8 +214,6 @@ class _ProfileHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
     final scheme = Theme.of(context).colorScheme;
-    final quickCount = profile?.quickSaveSlots.length ?? 0;
-    final autoCount = profile?.autoSaveSlots.length ?? 0;
     final multiProfile = profiles.length > 1;
     return Container(
       width: double.infinity,
@@ -245,31 +240,29 @@ class _ProfileHeader extends StatelessWidget {
           ),
           const SizedBox(width: 12),
           Expanded(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
+            child: Row(
               children: [
-                if (multiProfile)
-                  _ProfileSwitcher(
+                Flexible(
+                  child: multiProfile
+                      ? _ProfileSwitcher(
+                          profile: profile,
+                          profiles: profiles,
+                          notifier: notifier,
+                          isLoading: isLoading,
+                        )
+                      : Text(
+                          profile?.displayName ?? 'Profile',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: textTheme.titleMedium,
+                        ),
+                ),
+                const SizedBox(width: 12),
+                Flexible(
+                  child: ProfileDifficultyChip(
                     profile: profile,
-                    profiles: profiles,
                     notifier: notifier,
                     isLoading: isLoading,
-                  )
-                else
-                  Text(
-                    profile?.displayName ?? 'Profile',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: textTheme.titleMedium,
-                  ),
-                const SizedBox(height: 2),
-                Text(
-                  '${_formatCount(saveCount, 'save')} | Quick $quickCount | Auto $autoCount',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: textTheme.bodySmall?.copyWith(
-                    color: scheme.onSurfaceVariant,
                   ),
                 ),
               ],
@@ -523,10 +516,6 @@ String _saveSlotSubtitle(SaveSlot save) {
   if (timePlayed != '-') {
     parts.add(timePlayed);
   }
-  final difficulty = save.difficulty?.presetLabel;
-  if (difficulty != null && difficulty != '-') {
-    parts.add(difficulty);
-  }
   return parts.join(' | ');
 }
 
@@ -545,10 +534,6 @@ String _formatSaveKind({required bool? quickSave, required bool? autoSave}) {
   if (autoSave == true) return 'Auto save';
   if (quickSave == false || autoSave == false) return 'Manual save';
   return '-';
-}
-
-String _formatCount(int count, String singular) {
-  return count == 1 ? '1 $singular' : '$count ${singular}s';
 }
 
 class _EditorWorkspace extends StatelessWidget {
@@ -824,15 +809,6 @@ class _OverviewPanel extends StatelessWidget {
         const SizedBox(height: 16),
         _MetadataEditor(inspection: inspection, notifier: notifier),
         const SizedBox(height: 16),
-        DifficultyCard(
-          inspection: inspection,
-          notifier: notifier,
-          // Propagation binds to the EDITED SAVE's profile, not the sidebar's
-          // effective filter profile (which can differ).
-          profile: state.editedSaveProfile,
-          canCompress: state.codecCompressReady,
-        ),
-        const SizedBox(height: 16),
         _OverviewDiagnostics(inspection: inspection),
         const SizedBox(height: 16),
         _OverviewInspectionJson(inspection: inspection),
@@ -950,9 +926,6 @@ class _OverviewDiagnosticsState extends State<_OverviewDiagnostics> {
                         'Slot': inspection.slot ?? '-',
                         if (inspection.chapterId != null)
                           'Chapter': inspection.chapterId.toString(),
-                        if (inspection.difficulty?.presetLabel != null &&
-                            inspection.difficulty!.presetLabel != '-')
-                          'Difficulty': inspection.difficulty!.presetLabel,
                         if (inspection.timePlayedSeconds != null)
                           'Time played': _formatDurationSeconds(
                             inspection.timePlayedSeconds,
@@ -1080,12 +1053,6 @@ class _HeaderCard extends StatelessWidget {
                                 label: _formatDurationSeconds(
                                   inspection.timePlayedSeconds,
                                 ),
-                              ),
-                            if (inspection.difficulty?.presetLabel != null &&
-                                inspection.difficulty!.presetLabel != '-')
-                              _InfoPill(
-                                icon: Icons.local_fire_department_outlined,
-                                label: inspection.difficulty!.presetLabel,
                               ),
                           ];
                           if (pills.isEmpty) return const SizedBox.shrink();
@@ -3288,7 +3255,7 @@ class _BackupsPanel extends StatelessWidget {
         if (companionBackups.isNotEmpty) ...[
           if (backups.isNotEmpty) const SizedBox(height: 8),
           Text(
-            'Companion backups',
+            'Profile backups',
             style: Theme.of(context).textTheme.titleMedium,
           ),
           const SizedBox(height: 8),
@@ -3296,8 +3263,8 @@ class _BackupsPanel extends StatelessWidget {
             (backup) => _BackupCard(
               backup: backup,
               isLoading: state.isLoading,
-              showRestoreAction: false,
-              onRestore: () {},
+              showRestoreAction: true,
+              onRestore: () => notifier.restoreCompanionBackup(backup.path),
             ),
           ),
         ],

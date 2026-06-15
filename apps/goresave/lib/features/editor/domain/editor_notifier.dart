@@ -69,7 +69,6 @@ class EditorState {
     this.codecError,
     this.lastWriteMessage,
     this.pendingEdits = const {},
-    this.pendingDifficulty,
   });
 
   final String saveDir;
@@ -96,21 +95,10 @@ class EditorState {
   /// different save, or selection change.
   final Map<String, PendingSaveEdit> pendingEdits;
 
-  /// The pending (unsaved) difficulty edit, or null when difficulty is at the
-  /// selected save's stored value with no propagation requested. It is held as
-  /// a typed field rather than in [pendingEdits] because a difficulty write is
-  /// its own multi-target `write_difficulty` command (not a `write_save` edit
-  /// object). It participates in [hasUnsavedEdits], [pendingEditCount] (so the
-  /// global "Unsaved (N)" badge counts it and Save enables), the global
-  /// [saveAllPending], and the global Reset. Cleared on a save switch, refresh,
-  /// and whenever the user reverts the controls back to the stored value.
-  final PendingDifficulty? pendingDifficulty;
-
-  /// True when there are any unsaved edits anywhere — pending registry edits or
-  /// a pending difficulty edit. The profile-switch guard blocks on this so a
-  /// difficulty edit is protected exactly like a pending field edit.
-  bool get hasUnsavedEdits =>
-      pendingEdits.isNotEmpty || pendingDifficulty != null;
+  /// True when there are any unsaved edits. The profile-switch guard blocks on
+  /// this. Difficulty is edited separately (a profile-level dialog that writes
+  /// immediately) and is never part of the pending set.
+  bool get hasUnsavedEdits => pendingEdits.isNotEmpty;
 
   /// True once the user ran a successful codec round-trip verification this
   /// session for an executable the probe could not auto-trust (a pattern-
@@ -136,12 +124,10 @@ class EditorState {
   final String? codecError;
   final String? lastWriteMessage;
 
-  /// Total number of edit objects across all pending keys, plus the pending
-  /// difficulty edit (counted as one) so the global "Unsaved (N)" badge and the
-  /// Save/Reset buttons reflect a pending difficulty just like any field edit.
+  /// Total number of edit objects across all pending keys, driving the global
+  /// "Unsaved (N)" badge and the Save/Reset buttons.
   int get pendingEditCount =>
-      pendingEdits.values.fold(0, (n, e) => n + e.edits.length) +
-      (pendingDifficulty != null ? 1 : 0);
+      pendingEdits.values.fold(0, (n, e) => n + e.edits.length);
 
   SaveSlot? get selectedSave {
     for (final save in saves) {
@@ -189,20 +175,6 @@ class EditorState {
     return null;
   }
 
-  /// The profile of the SAVE currently under edit (the inspected/selected save),
-  /// resolved from its `persistentProfileId`. This is what difficulty
-  /// propagation must bind to — distinct from [activeProfile], which describes
-  /// the sidebar's effective filter profile and can differ from the edited
-  /// save's own profile. Null when the selected save has no profile id or no
-  /// matching profile exists (propagation is then disabled).
-  ProfileSummary? get editedSaveProfile {
-    final profileId = selectedSave?.persistentProfileId;
-    if (profileId == null) return null;
-    for (final profile in profiles) {
-      if (profile.profileId == profileId) return profile;
-    }
-    return null;
-  }
 
   EditorState copyWith({
     String? saveDir,
@@ -223,7 +195,6 @@ class EditorState {
     String? codecError,
     String? lastWriteMessage,
     Map<String, PendingSaveEdit>? pendingEdits,
-    Object? pendingDifficulty = _unchanged,
     bool clearInspection = false,
     bool clearBackups = false,
     bool clearError = false,
@@ -263,15 +234,6 @@ class EditorState {
       pendingEdits: clearPendingEdits
           ? const {}
           : pendingEdits ?? this.pendingEdits,
-      // A pending difficulty edit is cleared on the same events that clear the
-      // pending-edit registry (slot switch, refresh, fresh inspection landing),
-      // so honour clearPendingEdits for it too. Otherwise apply the explicit
-      // value (passing null clears it; the _unchanged sentinel keeps it).
-      pendingDifficulty: clearPendingEdits
-          ? null
-          : (identical(pendingDifficulty, _unchanged)
-                ? this.pendingDifficulty
-                : pendingDifficulty as PendingDifficulty?),
     );
   }
 }
@@ -366,78 +328,77 @@ class EditorNotifier extends StateNotifier<EditorState> {
     return ok;
   }
 
-  /// Resolve the `write_difficulty` targets for [edit] against the current
-  /// state, binding propagation to the EDITED SAVE's profile (not the sidebar's
-  /// filter profile). Returns the assembled command payload, or null when there
-  /// is no selected save to target.
+  /// Write difficulty into the active profile's `PersistentDataList.sav`.
   ///
-  /// - The current save is always a target.
-  /// - `allSaves`: every save whose `persistentProfileId` matches the edited
-  ///   save's profile id (current save always included).
-  /// - `alsoProfile`: the profile's `PersistentDataList.sav`
-  ///   (`dirname(currentSavePath)/PersistentDataList.sav`) with that profile id.
-  ///
-  /// The `binaryHost` codec host is attached exactly as the `write_save` path
-  /// does (via [_codecPayload]) — the private-payload edit on save targets
-  /// requires the codec host, and the core errors without it.
-  Map<String, Object?>? _buildDifficultyPayload(PendingDifficulty edit) {
-    final path = state.selectedPath;
-    if (path == null) return null;
-
-    // The profile of the SAVE under edit (not state.activeProfile, which is the
-    // sidebar's effective filter profile and can differ). Resolve it from the
-    // selected save's persistentProfileId.
-    final editedProfileId = state.selectedSave?.persistentProfileId;
-    ProfileSummary? editedProfile;
-    if (editedProfileId != null) {
-      for (final profile in state.profiles) {
-        if (profile.profileId == editedProfileId) {
-          editedProfile = profile;
-          break;
-        }
-      }
+  /// This is the ONLY difficulty write the app performs: the profile copy is
+  /// the authoritative, profile-wide value — editing a save's own copy has no
+  /// in-game effect, so the per-save write path was removed. The change applies
+  /// to every save in the profile. [difficulty] is the same map shape the core's
+  /// `write_difficulty` expects (`preset`, optional `combat`/`resources`/
+  /// `progression`, `flowHelper`, `permadeath`). No codec host is needed —
+  /// `PersistentDataList.sav` is a plain GVAS file with no compressed stream.
+  /// Returns true on success; on failure sets `state.error` and returns false.
+  Future<bool> writeProfileDifficulty({
+    required int profileId,
+    required Map<String, Object?> difficulty,
+  }) {
+    // Re-entry guard: bail if a load is already in flight (a rescan or another
+    // write), so this write + refresh cannot interleave editor-state updates
+    // with that work — mirrors saveAllPending / applyMemoryEventEdit. Set an
+    // explicit error so the dialog explains why rather than showing a generic
+    // failure.
+    if (state.isLoading) {
+      state = state.copyWith(
+        error: 'Another operation is in progress. Try again in a moment.',
+      );
+      return Future.value(false);
     }
-
-    final savePaths = <String>[path];
-    if (edit.allSaves && editedProfile != null) {
-      savePaths
-        ..clear()
-        ..addAll(
-          state.saves
-              .where((s) => s.persistentProfileId == editedProfile!.profileId)
-              .map((s) => s.path),
-        );
-      // The current save is always a target, even if its persistentProfileId is
-      // null or mismatched.
-      if (!savePaths.contains(path)) savePaths.add(path);
+    // Refuse while slot edits are pending: this write runs _runWrite -> refresh,
+    // and the same-save _inspect clears the pending registry — silently
+    // discarding those drafts even though no write_save ran for them. Make the
+    // user save or reset them first.
+    if (state.hasUnsavedEdits) {
+      state = state.copyWith(
+        error:
+            'You have unsaved save edits. Save or reset them before changing '
+            'the profile difficulty.',
+      );
+      return Future.value(false);
     }
-
-    // The save `path`s here carry the on-disk style of the save folder, which
-    // is Windows-style for these saves even when the host (e.g. Linux CI) is
-    // POSIX. `package:path`'s top-level functions use the HOST style, so on a
-    // POSIX host `p.dirname('C:\\...\\G1R-001.sav')` collapses to '.'. Pick a
-    // Context matching the SAVE path's style so dirname/join stay correct on any
-    // host. Treat a backslash or an `X:` drive prefix as Windows-style.
+    final dir = state.saveDir;
+    if (dir.isEmpty) {
+      state = state.copyWith(error: 'No save folder selected.');
+      return Future.value(false);
+    }
+    // `dir` carries the on-disk style of the save folder (Windows-style for
+    // these saves even on a POSIX host). Pick a path Context matching that style
+    // so join() stays correct on any host (a POSIX host's p.join would otherwise
+    // mangle a Windows save path).
     final isWindowsStyle =
-        path.contains('\\') || RegExp(r'^[A-Za-z]:').hasMatch(path);
+        dir.contains('\\') || RegExp(r'^[A-Za-z]:').hasMatch(dir);
     final ctx = isWindowsStyle ? p.Context(style: p.Style.windows) : p.posix;
-
-    final targets = <String, Object?>{
-      'saves': savePaths,
-      if (edit.alsoProfile && editedProfile != null)
+    final payload = <String, Object?>{
+      'difficulty': difficulty,
+      'targets': {
         'profile': {
-          'path': ctx.join(ctx.dirname(path), 'PersistentDataList.sav'),
-          'profileId': editedProfile.profileId,
+          'path': ctx.join(dir, 'PersistentDataList.sav'),
+          'profileId': profileId,
         },
-    };
-
-    return {
-      'difficulty': edit.difficulty,
-      'targets': targets,
+      },
       'backup': true,
-      ..._codecPayload(),
     };
+    return _runWrite(
+      command: 'write_difficulty',
+      payload: payload,
+      message: (data) {
+        final written = (data['targetsWritten'] as num?)?.toInt() ?? 0;
+        return written == 0
+            ? 'No difficulty changes to write'
+            : 'Difficulty written to the profile (backup created)';
+      },
+    );
   }
+
 
   /// Serializes all core calls. The native layer runs each command in its own
   /// isolate with no serialization, so overlapping write_save/restore_backup
@@ -451,6 +412,10 @@ class EditorNotifier extends StateNotifier<EditorState> {
 
   /// Convenience forwarder — prefer [EditorState.pendingEditCount].
   int get pendingEditCount => state.pendingEditCount;
+
+  /// The current error message, if any. Lets a modal (e.g. the difficulty
+  /// dialog) read a just-failed write's error without reaching into `state`.
+  String? get lastError => state.error;
 
   /// Dismiss the current error banner.
   void dismissError() {
@@ -562,37 +527,21 @@ class EditorNotifier extends StateNotifier<EditorState> {
     state = state.copyWith(pendingEdits: updated);
   }
 
-  /// Upsert the pending difficulty edit. Called by the Difficulty card as its
-  /// controls change (or a propagation box is ticked). Participates in
-  /// [EditorState.hasUnsavedEdits], [EditorState.pendingEditCount] (so the
-  /// global Save/Reset reflect it), and is written by [saveAllPending].
-  void setPendingDifficulty(PendingDifficulty edit) {
-    state = state.copyWith(pendingDifficulty: edit);
-  }
-
-  /// Clear the pending difficulty edit (e.g. the card reverts to the stored
-  /// value with no propagation requested).
-  void clearPendingDifficulty() {
-    if (state.pendingDifficulty == null) return;
-    state = state.copyWith(pendingDifficulty: null);
-  }
-
-  /// Clear all pending edits (registry and the pending difficulty edit).
+  /// Clear all pending edits.
   void clearAllPendingEdits() {
-    if (state.pendingEdits.isEmpty && state.pendingDifficulty == null) return;
+    if (state.pendingEdits.isEmpty) return;
     state = state.copyWith(clearPendingEdits: true);
   }
 
-  /// Save all pending edits: the slot edits in one `write_save` and the pending
-  /// difficulty edit in one `write_difficulty`. When both exist, both core
-  /// writes run sequentially against the current save's `.sav` (each re-reads
-  /// the file, so order is safe — slot write_save first, then write_difficulty),
-  /// then the state refreshes ONCE at the end. No-op when nothing is pending.
-  /// Re-entry-safe: bails immediately if a load is already in flight.
-  /// Returns true on success (or when nothing to save), false on failure.
+  /// Save all pending slot edits in one `write_save`, then refresh ONCE.
+  /// No-op when nothing is pending. Re-entry-safe: bails immediately if a load
+  /// is already in flight. Returns true on success (or when nothing to save),
+  /// false on failure.
+  ///
+  /// Difficulty is NOT part of this path — it is a profile-level edit written
+  /// directly by [writeProfileDifficulty] from the profile-header dialog.
   Future<bool> saveAllPending() async {
-    final difficultyEdit = state.pendingDifficulty;
-    if (state.pendingEdits.isEmpty && difficultyEdit == null) return true;
+    if (state.pendingEdits.isEmpty) return true;
     if (state.isLoading) return false;
     final savePath = state.selectedPath;
     if (savePath == null) return false;
@@ -655,206 +604,46 @@ class EditorNotifier extends StateNotifier<EditorState> {
       return false;
     }
 
-    // Difficulty rewrites the private payload of each target save, so it needs
-    // a compress-ready codec — surface the same error the other private writes
-    // use rather than silently skipping it.
-    if (difficultyEdit != null && !state.codecCompressReady) {
-      state = state.copyWith(
-        error:
-            'Saving difficulty needs a verified G1R codec host '
-            '(it rewrites the private payload of each targeted save).',
-      );
-      return false;
-    }
-
-    // A difficulty edit (Difficulty card) and a typed "All data" edit that
-    // targets one of the difficulty properties are BOTH pending. write_difficulty
-    // runs AFTER write_save, so the Difficulty card would silently overwrite the
-    // typed value and both drafts would be cleared as "saved". The slot-internal
-    // duplicate-path guard above can't see this (it only compares typed edits to
-    // each other). Refuse loudly and keep BOTH pending sets so the user resolves
-    // it. Mirrors the codec-not-ready / unresolvable-profile abort-and-keep guards.
-    const difficultyPropertyNames = {
-      'm_difficultyPreset',
-      'm_customCombatSettings',
-      'm_customResourcesSettings',
-      'm_customProgressionSettings',
-      'm_PermanentDeath',
-      'm_PermaDeath',
-      'm_FakeSloppyCombos',
-    };
-    if (difficultyEdit != null) {
-      final typedTargetsDifficulty = allEdits.any((edit) {
-        if (edit['path'] != 'private.typed.setValue') return false;
-        final value = edit['value'];
-        if (value is! Map) return false;
-        final path = value['path'];
-        if (path is! List) return false;
-        return path.any(
-          (seg) => difficultyPropertyNames.contains(seg?.toString()),
-        );
-      });
-      if (typedTargetsDifficulty) {
-        state = state.copyWith(
-          error:
-              'Conflicting difficulty edits: you changed difficulty both in '
-              'the Difficulty card and via All data. Save or reset one of '
-              'them first.',
-        );
-        return false;
-      }
-    }
-
-    // Propagation (alsoProfile/allSaves) binds to the EDITED SAVE's profile.
-    // If that profile cannot be resolved (no persistentProfileId on the save,
-    // or no matching profile in state.profiles), _buildDifficultyPayload would
-    // silently omit the profile target and never expand the all-saves set —
-    // dropping the propagation the user explicitly requested while the
-    // current-slot write still succeeds. Refuse loudly instead: abort the save
-    // and KEEP the pending difficulty so nothing is silently lost. Mirrors the
-    // codec-not-ready guard above (abort-and-keep). Uses the same resolution as
-    // state.editedSaveProfile (profile whose profileId == the selected save's
-    // persistentProfileId).
-    if (difficultyEdit != null &&
-        (difficultyEdit.alsoProfile || difficultyEdit.allSaves) &&
-        state.editedSaveProfile == null) {
-      state = state.copyWith(
-        error:
-            'Cannot propagate difficulty: the edited save\'s profile could '
-            'not be resolved. Save without "Also update the profile" / '
-            '"Apply to all saves of this profile", or reselect the save.',
-      );
-      return false;
-    }
-
-    final difficultyPayload = difficultyEdit == null
-        ? null
-        : _buildDifficultyPayload(difficultyEdit);
-
     final n = allEdits.length;
-    // Outcome tracking. The two core commands write the same .sav independently,
-    // so there is no atomic cross-command rollback: if write_save commits but
-    // write_difficulty then fails, the slot bytes are ALREADY on disk. We must
-    // therefore converge editor state with disk (no divergence) rather than
-    // pretend nothing happened — see the convergence block after the writes.
-    var slotEditsCommitted = false; // write_save succeeded (or no slot edits)
-    var difficultyCommitted = false; // write_difficulty succeeded
-    String? difficultyError; // set when write_difficulty failed after a slot commit
+    // `slotCommitted` tracks that write_save put the bytes on disk, captured
+    // BEFORE refresh() so we still converge (clear the snapshot keys) even if a
+    // later refresh fails — leaving committed edits pending would make the
+    // editor think on-disk changes are unsaved and a retry double-apply them.
+    var slotCommitted = false;
     var ok = false;
     await _withLoading(() async {
-      final messages = <String>[];
-
-      // 1) Slot edits (write_save), if any.
-      if (allEdits.isNotEmpty) {
-        final response = await _execute(
-          'write_save',
-          payload: {
-            'path': savePath,
-            'backup': true,
-            if (syncPersistent) 'syncPersistentDataList': true,
-            'edits': allEdits,
-            ..._codecPayload(),
-          },
-        );
-        if (response['ok'] != true) {
-          // write_save failed: nothing committed. Keep ALL pending edits.
-          state = state.copyWith(error: _errorMessage(response));
-          return;
-        }
-        final data = (response['data'] as Map).cast<String, Object?>();
-        messages.add(
-          _backupMessage('$n change${n == 1 ? '' : 's'} saved with backup', data),
-        );
+      final response = await _execute(
+        'write_save',
+        payload: {
+          'path': savePath,
+          'backup': true,
+          if (syncPersistent) 'syncPersistentDataList': true,
+          'edits': allEdits,
+          ..._codecPayload(),
+        },
+      );
+      if (response['ok'] != true) {
+        // write_save failed: nothing committed. Keep ALL pending edits.
+        state = state.copyWith(error: _errorMessage(response));
+        return;
       }
-      // Either there were no slot edits, or write_save succeeded — the slot
-      // edits in the snapshot are now on disk.
-      slotEditsCommitted = true;
-
-      // 2) Difficulty (write_difficulty), if pending. Each write re-reads the
-      // file, so running it after the slot write is safe.
-      if (difficultyPayload != null) {
-        try {
-          final response = await _execute(
-            'write_difficulty',
-            payload: difficultyPayload,
-          );
-          if (response['ok'] != true) {
-            // The slot edits are already committed to disk, but the difficulty
-            // write failed. Record the error and fall through to refresh +
-            // converge: we must NOT keep the committed slot edits pending.
-            difficultyError = _errorMessage(response);
-          } else {
-            difficultyCommitted = true;
-            final data = (response['data'] as Map).cast<String, Object?>();
-            final targetsList = (difficultyPayload['targets'] as Map);
-            final saveTargets = (targetsList['saves'] as List?)?.length ?? 1;
-            final profileTarget = targetsList.containsKey('profile') ? 1 : 0;
-            final written =
-                (data['targetsWritten'] as num?)?.toInt() ??
-                (saveTargets + profileTarget);
-            messages.add(
-              written == 0
-                  ? 'No difficulty changes to write'
-                  : 'Difficulty written to $written '
-                        'target${written == 1 ? '' : 's'} (backup created)',
-            );
-          }
-        } catch (error) {
-          // A THROWN difficulty dispatch (e.g. malformed native JSON from the
-          // core) must be treated as a difficulty failure for convergence, not
-          // swallowed by _withLoading's generic catch — otherwise difficultyError
-          // stays null and the convergence branch would clearPendingDifficulty(),
-          // silently discarding an edit that never landed on disk. Setting
-          // difficultyError (with difficultyCommitted false) routes us to the
-          // "keep pendingDifficulty + surface error" branch.
-          difficultyError = 'Unexpected error: $error';
-        }
-      }
-
-      // Report the slot/difficulty messages that did land, then refresh ONCE so
-      // the re-inspect reflects exactly what is on disk. The error (if any) is
-      // re-applied after refresh, since refresh clears it.
-      if (messages.isNotEmpty) {
-        state = state.copyWith(lastWriteMessage: messages.join('; '));
-      }
+      slotCommitted = true;
+      final data = (response['data'] as Map).cast<String, Object?>();
+      state = state.copyWith(
+        lastWriteMessage: _backupMessage(
+          '$n change${n == 1 ? '' : 's'} saved with backup',
+          data,
+        ),
+      );
       await refresh();
-      // Overall success only when nothing failed.
-      ok = difficultyError == null;
+      ok = true;
     });
 
-    // Converge editor state with disk. After this returns, the pending set
-    // reflects exactly what is NOT yet on disk.
-    if (slotEditsCommitted) {
-      // The snapshot slot edits ARE on disk now — clear them regardless of the
-      // difficulty outcome. Leaving them pending is the divergence bug (the
-      // editor would still think on-disk changes are unsaved, and a retry would
-      // double-apply). refresh()'s _inspect already clears all pending on a
-      // successful re-inspect, but a failed re-inspect keeps them — so clear the
-      // committed keys explicitly here to guarantee convergence either way.
+    // The snapshot edits are on disk now — clear them explicitly so a failed
+    // re-inspect still converges (refresh()'s _inspect clears on success).
+    if (slotCommitted) {
       for (final key in snapshotKeys) {
         clearPendingEdit(key);
-      }
-      if (difficultyCommitted) {
-        // Difficulty is on disk too — nothing left pending for it.
-        clearPendingDifficulty();
-      } else if (difficultyError != null) {
-        // Slot edits landed but difficulty did NOT. Keep ONLY the difficulty
-        // edit pending so the user can retry just the difficulty, and surface a
-        // clear, honest error. Re-assert the pending difficulty in case the
-        // post-write refresh re-seeded/cleared it.
-        if (difficultyEdit != null) {
-          state = state.copyWith(pendingDifficulty: difficultyEdit);
-        }
-        // Only claim the slot changes were saved when there actually were any —
-        // a difficulty-only save that fails has nothing committed to report.
-        state = state.copyWith(
-          error: allEdits.isEmpty
-              ? 'Difficulty failed: $difficultyError'
-              : 'Slot changes saved, but difficulty failed: $difficultyError',
-        );
-      } else {
-        // No difficulty edit was pending — slot-only save. Nothing else to do.
-        clearPendingDifficulty();
       }
     }
     return ok;
@@ -1095,8 +884,42 @@ class EditorNotifier extends StateNotifier<EditorState> {
     }
   }
 
-  Future<void> restoreBackup(String backupPath) async {
-    final path = state.selectedPath;
+  /// Restore the profile's `PersistentDataList.sav` from one of its companion
+  /// backups (e.g. one created by a profile difficulty write). Targets the
+  /// PersistentDataList.sav that sits alongside the selected save (the same
+  /// directory the slot lives in), not the selected slot itself.
+  Future<void> restoreCompanionBackup(String backupPath) async {
+    // Restoring the PDL runs refresh(), which clears the pending slot-edit
+    // registry. Those drafts are unrelated to the profile file, so block the
+    // restore while they are unsaved (mirrors the profile difficulty write)
+    // rather than silently discarding them.
+    if (state.hasUnsavedEdits) {
+      state = state.copyWith(
+        error:
+            'You have unsaved save edits. Save or reset them before restoring '
+            'a profile backup.',
+      );
+      return;
+    }
+    final selected = state.selectedPath;
+    if (selected == null) return;
+    // The save paths carry the on-disk style of the save folder (Windows-style
+    // even on a POSIX host), so pick a matching path Context — p.dirname on a
+    // POSIX host would otherwise collapse a `C:\...` path to '.'.
+    final isWindowsStyle =
+        selected.contains('\\') || RegExp(r'^[A-Za-z]:').hasMatch(selected);
+    final ctx = isWindowsStyle ? p.Context(style: p.Style.windows) : p.posix;
+    await restoreBackup(
+      backupPath,
+      targetPath: ctx.join(ctx.dirname(selected), 'PersistentDataList.sav'),
+    );
+  }
+
+  /// Restore a backup. [targetPath] overrides the file to restore (used for
+  /// companion `PersistentDataList.sav` backups); it defaults to the selected
+  /// slot.
+  Future<void> restoreBackup(String backupPath, {String? targetPath}) async {
+    final path = targetPath ?? state.selectedPath;
     if (path == null) return;
     await _withLoading(() async {
       final response = await _execute(
@@ -1110,7 +933,13 @@ class EditorNotifier extends StateNotifier<EditorState> {
       final data = (response['data'] as Map?)?.cast<String, Object?>();
       final companionPresent = data?['persistentCompanionPresent'] == true;
       final companionRestored = data?['persistentRestoredFrom'] != null;
-      final restoreMessage = companionPresent && !companionRestored
+      // The companion-unchanged warning is only meaningful for SLOT restores.
+      // When the restore target IS PersistentDataList.sav (a companion-backup
+      // restore), the core reports persistentCompanionPresent (the target file
+      // exists) and no separate companion — but this restore just replaced it,
+      // so the warning would be misleading. Suppress it for PDL targets.
+      final targetIsPdl = path.endsWith('PersistentDataList.sav');
+      final restoreMessage = companionPresent && !companionRestored && !targetIsPdl
           ? 'Restored backup: $backupPath (PersistentDataList.sav left unchanged '
                 '— no matching companion backup; slot metadata may differ)'
           : 'Restored backup: $backupPath';
