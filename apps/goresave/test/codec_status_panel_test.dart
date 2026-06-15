@@ -57,4 +57,16 @@ void main() {
     // Not the fully-ready success check.
     expect(find.byIcon(Icons.check_circle_outline), findsNothing);
   });
+
+  testWidgets('renders codecError once when there is no codec status',
+      (tester) async {
+    await tester.pumpWidget(const MaterialApp(
+      home: Scaffold(body: SingleChildScrollView(
+        child: CodecStatusView(codec: null, codecError: 'Codec helper not found'))),
+    ));
+
+    // Shown exactly once (the parent settings row no longer duplicates it).
+    expect(find.text('Codec helper not found'), findsOneWidget);
+    expect(find.byIcon(Icons.error_outline), findsOneWidget);
+  });
 }

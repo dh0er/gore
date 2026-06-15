@@ -3532,27 +3532,6 @@ class _SettingsPanel extends StatelessWidget {
                   onBrowse: notifier.chooseGameExe,
                 ),
                 const SizedBox(height: 12),
-                if (state.codecError != null)
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Icon(
-                        Icons.error_outline,
-                        color: Theme.of(context).colorScheme.error,
-                        size: 18,
-                      ),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: Text(
-                          state.codecError!,
-                          style: TextStyle(
-                            color: Theme.of(context).colorScheme.error,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                if (state.codecError != null) const SizedBox(height: 8),
                 CodecStatusView(codec: codec, codecError: state.codecError),
               ],
             ),
@@ -3574,7 +3553,20 @@ class CodecStatusView extends StatelessWidget {
     final codec = this.codec;
     final scheme = Theme.of(context).colorScheme;
     if (codec == null) {
-      return Text(codecError ?? 'No codec status');
+      final error = codecError;
+      if (error == null) {
+        return const Text('No codec status');
+      }
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.error_outline, color: scheme.error, size: 18),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(error, style: TextStyle(color: scheme.error)),
+          ),
+        ],
+      );
     }
     final severity = codec.userSeverity ?? (codec.available ? 'ok' : 'error');
     final isError = severity == 'error';
