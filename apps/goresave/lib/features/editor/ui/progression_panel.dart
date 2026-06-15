@@ -2,8 +2,12 @@ import 'package:flutter/material.dart';
 
 import '../domain/editor_models.dart';
 import '../domain/editor_notifier.dart';
+import '../domain/knowledge_catalog.dart';
+import '../domain/npc_catalog.dart';
 import '../domain/pending_edits.dart';
 import '../domain/progression_models.dart';
+import 'add_knowledge_entry_dialog.dart';
+import 'add_npc_dialog.dart';
 
 /// All five EQuestState values, in dropdown order.
 const questStates = <String>[
@@ -631,11 +635,61 @@ class _KnowledgeDetailState extends State<_KnowledgeDetail> {
   bool _checkingDuplicate = false;
   // Error text shown beneath the add field (duplicate-check failure, etc.).
   String? _addError;
+  // Bundled catalogs for the NPC + knowledge-entry picker dialogs. Null until
+  // loaded asynchronously in initState.
+  NpcCatalog? _npcCatalog;
+  KnowledgeCatalog? _knowledgeCatalog;
 
   @override
   void initState() {
     super.initState();
     _loadCharacters(offset: 0);
+    _loadCatalogs();
+  }
+
+  Future<void> _loadCatalogs() async {
+    final npc = await NpcCatalog.loadBundled();
+    final knowledge = await KnowledgeCatalog.loadBundled();
+    if (!mounted) return;
+    setState(() {
+      _npcCatalog = npc;
+      _knowledgeCatalog = knowledge;
+    });
+  }
+
+  Future<void> _addNpc() async {
+    final catalog = _npcCatalog;
+    if (catalog == null) return;
+    // Best-effort exclude: only NPCs on the currently loaded page are known
+    // here (the list is paginated/searchable). The core rejects true
+    // duplicates regardless.
+    final existing = _characters.characters
+        .map((c) => c.name.toLowerCase())
+        .toSet();
+    final picked = await showAddNpcDialog(
+      context,
+      catalog: catalog,
+      exclude: existing,
+    );
+    if (picked == null || !mounted) return;
+    final ok = await widget.notifier.applyAddKnowledgeCharacter(picked);
+    if (!mounted || !ok) return; // on failure the notifier set state.error.
+    await _loadCharacters(offset: 0);
+    if (!mounted) return;
+    await _selectCharacter(picked);
+  }
+
+  Future<void> _browseAddEntry() async {
+    final catalog = _knowledgeCatalog;
+    if (catalog == null) return;
+    final existing = _entries.entries.map((e) => e.toLowerCase()).toSet();
+    final picked = await showAddKnowledgeEntryDialog(
+      context,
+      catalog: catalog,
+      exclude: existing,
+    );
+    if (picked == null || !mounted) return;
+    await _addEntry(picked); // existing path: dup-check + pending edit.
   }
 
   @override
@@ -932,6 +986,17 @@ class _KnowledgeDetailState extends State<_KnowledgeDetail> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
+                        if (widget.editable) ...[
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: OutlinedButton.icon(
+                              icon: const Icon(Icons.person_add_alt_1, size: 18),
+                              label: const Text('Add NPC'),
+                              onPressed: _npcCatalog == null ? null : _addNpc,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                        ],
                         TextField(
                           controller: _characterSearch,
                           decoration: InputDecoration(
@@ -1072,6 +1137,17 @@ class _KnowledgeDetailState extends State<_KnowledgeDetail> {
                                                     _addController.text,
                                                   ),
                                           ),
+                                    // Browse the full knowledge-entry catalog.
+                                    // The free-text field above stays as a
+                                    // fallback for non-catalog tokens.
+                                    IconButton(
+                                      icon: const Icon(Icons.menu_book_outlined),
+                                      tooltip: 'Browse catalog',
+                                      onPressed:
+                                          addDisabled || _knowledgeCatalog == null
+                                          ? null
+                                          : _browseAddEntry,
+                                    ),
                                   ],
                                 );
                               },
