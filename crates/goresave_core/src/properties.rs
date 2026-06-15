@@ -1037,6 +1037,10 @@ pub enum ContainerEdit {
     /// type; the caller is responsible for that (it is validated by the
     /// re-parse the caller performs afterwards).
     ArrayInsertBytes(Vec<u8>),
+    /// Append a pre-built (inline key ++ inline value) entry to a MapProperty.
+    /// The bytes must be schema-valid for this map's key/value descriptors; the
+    /// caller validates via the re-parse it performs afterwards.
+    MapInsert { entry_bytes: Vec<u8> },
 }
 
 fn set_string_elements(target: &Property) -> Option<&[PropertyValue]> {
@@ -1074,8 +1078,16 @@ pub fn patch_container(
     enclosing_size_fields: &[usize],
     edit: &ContainerEdit,
 ) -> Result<(), CoreError> {
-    let layout = container_layout(payload, target)?;
+    // Map inserts are handled inline (key/value pairs); `container_layout`
+    // rejects MapProperty, so resolve the Array/Set layout lazily and skip it
+    // for the map path. The shared size-chain fixup below runs for both.
+    let layout = match edit {
+        ContainerEdit::MapInsert { .. } => None,
+        _ => Some(container_layout(payload, target)?),
+    };
     let require_kind = |wanted: ContainerKind, op: &str| {
+        // Only reachable for Array/Set edits, where `layout` is always Some.
+        let layout = layout.as_ref().expect("non-map edit resolves a layout");
         if layout.kind == wanted {
             Ok(())
         } else {
@@ -1095,6 +1107,7 @@ pub fn patch_container(
     ) = match edit {
         ContainerEdit::SetAdd(value) => {
             require_kind(ContainerKind::Set, "setAdd")?;
+            let layout = layout.as_ref().expect("set edit resolves a layout");
             if !matches!(layout.inner_type.as_str(), "NameProperty" | "StrProperty") {
                 return Err(CoreError::UnsupportedEdit(format!(
                     "setAdd supports Name/Str sets; this set holds {}",
@@ -1114,6 +1127,7 @@ pub fn patch_container(
         }
         ContainerEdit::SetRemove(value) => {
             require_kind(ContainerKind::Set, "setRemove")?;
+            let layout = layout.as_ref().expect("set edit resolves a layout");
             let elements = set_string_elements(target)
                 .ok_or_else(|| CoreError::Parse("set value not parsed as a set".into()))?;
             let fold_case = layout.inner_type == "NameProperty";
@@ -1124,6 +1138,7 @@ pub fn patch_container(
         }
         ContainerEdit::ArrayRemove(index) => {
             require_kind(ContainerKind::Array, "arrayRemove")?;
+            let layout = layout.as_ref().expect("array edit resolves a layout");
             let range = layout.element_ranges.get(*index).cloned().ok_or_else(|| {
                 CoreError::InvalidRequest(format!(
                     "array index {index} out of bounds ({} elements)",
@@ -1134,6 +1149,7 @@ pub fn patch_container(
         }
         ContainerEdit::ArrayDuplicate(index) => {
             require_kind(ContainerKind::Array, "arrayDuplicate")?;
+            let layout = layout.as_ref().expect("array edit resolves a layout");
             let range = layout.element_ranges.get(*index).cloned().ok_or_else(|| {
                 CoreError::InvalidRequest(format!(
                     "array index {index} out of bounds ({} elements)",
@@ -1150,10 +1166,34 @@ pub fn patch_container(
             let end = target.value_offset + target.value_size;
             (None, end, bytes.clone(), 1)
         }
+        ContainerEdit::MapInsert { entry_bytes } => {
+            if target.type_name != "MapProperty" {
+                return Err(CoreError::InvalidRequest(format!(
+                    "mapInsert requires a MapProperty target, got {}",
+                    target.type_name
+                )));
+            }
+            let insert_at = target.value_offset + target.value_size; // end of map body
+            (None, insert_at, entry_bytes.clone(), 1)
+        }
+    };
+    // The entry/element count lives at `count_offset`; its current value comes
+    // from the layout for Array/Set, or from `map_layout` for the map path.
+    // Both are computed before any mutation (offsets stay valid until the
+    // splice), preserving the "failed patch leaves payload untouched" rule.
+    let (count, count_offset) = match edit {
+        ContainerEdit::MapInsert { .. } => {
+            let map = map_layout(payload, target)?;
+            (map.count, map.count_offset)
+        }
+        _ => {
+            let layout = layout.as_ref().expect("non-map edit resolves a layout");
+            (layout.count, layout.count_offset)
+        }
     };
     let removed = remove_range.as_ref().map_or(0, |r| r.len());
     let delta = insert_bytes.len() as i64 - removed as i64;
-    let new_count = u32::try_from(layout.count as i64 + count_delta)
+    let new_count = u32::try_from(count as i64 + count_delta)
         .map_err(|_| CoreError::Parse("container count underflow".to_string()))?;
     let new_size = u32::try_from(target.value_size as i64 + delta)
         .map_err(|_| CoreError::Parse("container size would leave the u32 range".to_string()))?;
@@ -1184,7 +1224,7 @@ pub fn patch_container(
     // The count field lives inside the value payload but always precedes the
     // splice position (elements follow the count), so writing it before the
     // splice is safe.
-    writes.push((layout.count_offset, new_count));
+    writes.push((count_offset, new_count));
     for (offset, value) in writes {
         payload[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
     }
@@ -2995,6 +3035,37 @@ mod tests {
         assert_eq!(layout.count, 2);
         assert_eq!(layout.entry_ranges.len(), 2);
         assert_eq!(layout.entry_ranges[0].end, layout.entry_ranges[1].start);
+    }
+
+    #[test]
+    fn map_insert_appends_entry_and_fixes_sizes() {
+        let mut payload = private_root_with_property(&knowledge_map_property(&["A"]));
+        let root = parse_private_root(&payload).unwrap();
+        let (_, prop) = find_property_by_name(&root, "CharacterKnowledgeByUniqueName").unwrap();
+        let enclosing: Vec<usize> = Vec::new(); // top-level property; no enclosing size fields
+
+        // New entry bytes: inline Name key "ZZ" + empty KnowledgeSet value.
+        let mut entry = fstring("ZZ");
+        let mut val = name_set_property("Knowledge", &[]);
+        val.extend_from_slice(&fstring("None"));
+        entry.extend_from_slice(&val);
+
+        let prop_owned = prop.clone();
+        drop(root);
+        patch_container(
+            &mut payload,
+            &prop_owned,
+            &enclosing,
+            &ContainerEdit::MapInsert { entry_bytes: entry },
+        )
+        .unwrap();
+
+        let root2 = parse_private_root(&payload).unwrap();
+        let (_, prop2) = find_property_by_name(&root2, "CharacterKnowledgeByUniqueName").unwrap();
+        let PropertyValue::Map { entries, .. } = &prop2.value else { panic!("not a map") };
+        assert_eq!(entries.len(), 2);
+        assert!(entries.iter().any(|(k, _)| matches!(k, PropertyValue::Name(s) if s == "ZZ")));
+        assert_eq!(root2.consumed, payload.len()); // proves size fields are consistent
     }
 
     fn int_array_property(name: &str, values: &[i32]) -> Vec<u8> {
