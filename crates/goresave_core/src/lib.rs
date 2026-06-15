@@ -3540,9 +3540,8 @@ fn progression_knowledge(
 /// closes a non-native struct's property list.
 ///
 /// The returned bytes are a schema-valid entry for the proven map layout and are
-/// meant to feed `ContainerEdit::MapInsert`. (Task 6 wires this into the IPC op;
-/// today only the round-trip test exercises it.)
-#[allow(dead_code)]
+/// meant to feed `ContainerEdit::MapInsert`. Wired into the
+/// `private.knowledge.addCharacter` IPC op.
 fn encode_knowledge_map_entry(unique_name: &str) -> Vec<u8> {
     let mut out = properties::encode_fstring_value(unique_name); // inline Name key
     out.extend_from_slice(&encode_empty_name_set_property("Knowledge"));
@@ -3555,7 +3554,6 @@ fn encode_knowledge_map_entry(unique_name: &str) -> Vec<u8> {
 /// name fstring, "SetProperty" fstring, `1u32`, "NameProperty" fstring,
 /// `0u32` array_index, body-size `u32`, `0u8` tag_flags, then the body
 /// (`num_to_remove u32` + `count u32`).
-#[allow(dead_code)]
 fn encode_empty_name_set_property(name: &str) -> Vec<u8> {
     let mut body = 0u32.to_le_bytes().to_vec(); // num_to_remove
     body.extend_from_slice(&0u32.to_le_bytes()); // count
@@ -4934,6 +4932,20 @@ fn apply_private_edits(
                     parse_private_typed_container_edit(edit, edit.path.as_str())
                         .map(PrivateEdit::TypedContainer)
                 }
+                "private.knowledge.addCharacter" => {
+                    let name = edit
+                        .value
+                        .get("value")
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| {
+                            CoreError::InvalidRequest(
+                                "private.knowledge.addCharacter requires a string `value`"
+                                    .to_string(),
+                            )
+                        })?
+                        .to_string();
+                    Ok(PrivateEdit::KnowledgeAddCharacter(name))
+                }
                 other => Err(CoreError::UnsupportedEdit(format!(
                     "{other} is not writable in this build"
                 ))),
@@ -5075,6 +5087,7 @@ enum PrivateEdit {
     InventoryRemoveItem(PrivateInventoryRemoveItemEdit),
     TypedSetValue(PrivateTypedSetValueEdit),
     TypedContainer(PrivateTypedContainerEdit),
+    KnowledgeAddCharacter(String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -5734,6 +5747,9 @@ fn apply_private_edit_to_payload(
         PrivateEdit::TypedContainer(edit) => {
             apply_private_typed_container_edit_to_payload(payload, edit)
         }
+        PrivateEdit::KnowledgeAddCharacter(name) => {
+            apply_private_knowledge_add_character_to_payload(payload, name)
+        }
     }
 }
 
@@ -5759,6 +5775,75 @@ fn apply_private_typed_container_edit_to_payload(
             "container patch produced an inconsistent payload: {err}"
         ))
     })?;
+    *payload = patched;
+    Ok(())
+}
+
+/// Insert a brand-new NPC (empty `Knowledge` set) into the savegame's
+/// `CharacterKnowledgeByUniqueName` map. Resolves the nested map plus its
+/// enclosing size fields, rejects a duplicate name (case-insensitive Name
+/// semantics), then splices in a schema-valid empty-knowledge entry. All
+/// resolution and validation happen before `patch_container`, and the patch is
+/// applied on a scratch copy proven consistent by a strict re-parse, so a
+/// failed edit leaves the caller's payload untouched.
+fn apply_private_knowledge_add_character_to_payload(
+    payload: &mut Vec<u8>,
+    unique_name: &str,
+) -> Result<(), CoreError> {
+    let name = unique_name.trim();
+    if name.is_empty() {
+        return Err(CoreError::InvalidRequest(
+            "character name is empty".to_string(),
+        ));
+    }
+    // Resolve the map + enclosing size fields, and reject duplicates, in a scope
+    // that drops the borrow before the &mut payload patch.
+    let (target, enclosing) = {
+        let root = properties::parse_private_root(payload)?;
+        let (path, map_prop) =
+            properties::find_property_by_name(&root, "CharacterKnowledgeByUniqueName")
+                .ok_or_else(|| {
+                    CoreError::Parse("CharacterKnowledgeByUniqueName not found".to_string())
+                })?;
+        if let properties::PropertyValue::Map { entries, .. } = &map_prop.value {
+            if entries.iter().any(|(k, _)| {
+                map_key_string(k)
+                    .map(|s| s.eq_ignore_ascii_case(name))
+                    .unwrap_or(false)
+            }) {
+                return Err(CoreError::InvalidRequest(format!(
+                    "character {name:?} already has a knowledge entry"
+                )));
+            }
+        }
+        let segs = properties::parse_path(&path)?;
+        let chain = properties::resolve_chain(&root.properties, &segs)?;
+        (chain.target.clone(), chain.enclosing_size_fields.clone())
+    };
+    let entry = encode_knowledge_map_entry(name);
+    // Length-changing patch on a scratch copy, proven consistent by a strict
+    // re-parse before it touches the caller's payload.
+    let mut patched = payload.clone();
+    properties::patch_container(
+        &mut patched,
+        &target,
+        &enclosing,
+        &properties::ContainerEdit::MapInsert { entry_bytes: entry },
+    )?;
+    let root2 = properties::parse_private_root(&patched).map_err(|err| {
+        CoreError::Parse(format!(
+            "knowledge add-character produced an inconsistent payload: {err}"
+        ))
+    })?;
+    // Strict re-parse validation: the key must now resolve.
+    properties::find_property_by_name(&root2, "CharacterKnowledgeByUniqueName")
+        .and_then(|(_, p)| match &p.value {
+            properties::PropertyValue::Map { entries, .. } => entries
+                .iter()
+                .find(|(k, _)| map_key_string(k) == Some(name)),
+            _ => None,
+        })
+        .ok_or_else(|| CoreError::Parse("post-insert validation failed".to_string()))?;
     *payload = patched;
     Ok(())
 }
@@ -11197,6 +11282,88 @@ mod tests {
         let (parsed_key, knowledge) = parse_single_knowledge_entry(&entry);
         assert_eq!(parsed_key, key);
         assert!(knowledge.is_empty());
+    }
+
+    /// Build a full private-root payload whose only property is a
+    /// `CharacterKnowledgeByUniqueName` map carrying `chars` (each with an empty
+    /// `Knowledge` set). Uses the same corrected map-tag header proven in
+    /// Tasks 3/5 (`parse_single_knowledge_entry`), generalised to N entries.
+    fn build_knowledge_map_payload(chars: &[&str]) -> Vec<u8> {
+        let mut entries = Vec::new();
+        for name in chars {
+            entries.extend_from_slice(&encode_knowledge_map_entry(name));
+        }
+        let mut body = 0u32.to_le_bytes().to_vec(); // num_to_remove
+        body.extend_from_slice(&(chars.len() as u32).to_le_bytes()); // count
+        body.extend_from_slice(&entries);
+
+        // MapProperty<NameProperty, StructProperty(KnowledgeSet)> tag.
+        let mut prop = fstring("CharacterKnowledgeByUniqueName");
+        prop.extend_from_slice(&fstring("MapProperty"));
+        prop.extend_from_slice(&2u32.to_le_bytes()); // descriptor count
+        prop.extend_from_slice(&fstring("NameProperty")); // key type
+        prop.extend_from_slice(&0u32.to_le_bytes()); // key_flags
+        prop.extend_from_slice(&fstring("StructProperty")); // value type
+        prop.extend_from_slice(&1u32.to_le_bytes()); // struct descriptor count
+        prop.extend_from_slice(&fstring("KnowledgeSet")); // value struct type
+        prop.extend_from_slice(&1u32.to_le_bytes()); // package count
+        prop.extend_from_slice(&fstring("/Script/G1R")); // package
+        prop.extend_from_slice(&0u32.to_le_bytes()); // array_index
+        prop.extend_from_slice(&(body.len() as u32).to_le_bytes()); // size
+        prop.push(0); // tag_flags
+        prop.extend_from_slice(&body);
+
+        // Private-root framing: class fstring + object flag + props + "None" + footer.
+        let mut payload = fstring("/Script/Test.Save");
+        payload.push(0);
+        payload.extend_from_slice(&prop);
+        payload.extend_from_slice(&fstring("None"));
+        payload.extend_from_slice(&0u32.to_le_bytes());
+        payload
+    }
+
+    #[test]
+    fn add_character_inserts_empty_entry_and_rejects_duplicate() {
+        let mut payload = build_knowledge_map_payload(&["OC_STT_Diego"]);
+        let new_npc = "OC_TEST_BrandNew";
+
+        // not present yet
+        let root0 = properties::parse_private_root(&payload).unwrap();
+        let before = progression_knowledge(&root0, "", None, 0, 10_000).unwrap();
+        assert!(!before["characters"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["name"] == new_npc));
+
+        // apply
+        apply_private_knowledge_add_character_to_payload(&mut payload, new_npc).unwrap();
+
+        // present now with 0 entries; payload fully consistent
+        let root1 = properties::parse_private_root(&payload).unwrap();
+        assert_eq!(root1.consumed, payload.len());
+        let after = progression_knowledge(&root1, "", Some(new_npc), 0, 10).unwrap();
+        assert_eq!(after["total"], 0);
+
+        // duplicate rejected (case-insensitive Name semantics)
+        assert!(apply_private_knowledge_add_character_to_payload(&mut payload, new_npc).is_err());
+        assert!(
+            apply_private_knowledge_add_character_to_payload(&mut payload, "oc_test_brandnew")
+                .is_err()
+        );
+    }
+
+    #[test]
+    #[ignore = "needs GORESAVE_PAYLOAD_BIN=<a decompressed host.bin>"]
+    fn add_character_roundtrips_on_real_payload() {
+        let path = std::env::var("GORESAVE_PAYLOAD_BIN").expect("set GORESAVE_PAYLOAD_BIN");
+        let mut payload = std::fs::read(path).unwrap();
+        let new_npc = "OC_TEST_BrandNew";
+        apply_private_knowledge_add_character_to_payload(&mut payload, new_npc).unwrap();
+        let root = properties::parse_private_root(&payload).unwrap();
+        assert_eq!(root.consumed, payload.len());
+        let after = progression_knowledge(&root, "", Some(new_npc), 0, 10).unwrap();
+        assert_eq!(after["total"], 0);
     }
 
     #[test]
