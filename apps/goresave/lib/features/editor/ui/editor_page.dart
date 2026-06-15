@@ -3553,21 +3553,81 @@ class _SettingsPanel extends StatelessWidget {
                     ],
                   ),
                 if (state.codecError != null) const SizedBox(height: 8),
-                Text(codec?.message ?? 'No codec status'),
-                if (codec != null) ...[
-                  const SizedBox(height: 8),
-                  Text(
-                    'Decompress: ${codec.canDecompress ? 'yes' : 'no'} | Compress: ${codec.canCompress ? 'yes' : 'no'}',
-                  ),
+                CodecStatusView(codec: codec, codecError: state.codecError),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class CodecStatusView extends StatelessWidget {
+  const CodecStatusView({super.key, required this.codec, required this.codecError});
+
+  final CodecStatus? codec;
+  final String? codecError;
+
+  @override
+  Widget build(BuildContext context) {
+    final codec = this.codec;
+    final scheme = Theme.of(context).colorScheme;
+    if (codec == null) {
+      return Text(codecError ?? 'No codec status');
+    }
+    final severity = codec.userSeverity ?? (codec.available ? 'ok' : 'error');
+    final isError = severity == 'error';
+    final title = codec.userTitle ?? codec.message;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(
+              isError ? Icons.error_outline : Icons.check_circle_outline,
+              size: 18,
+              color: isError ? scheme.error : scheme.primary,
+            ),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(title,
+                  style: TextStyle(color: isError ? scheme.error : null)),
+            ),
+          ],
+        ),
+        if ((codec.userMessage ?? '').isNotEmpty) ...[
+          const SizedBox(height: 4),
+          Text(codec.userMessage!),
+        ],
+        if ((codec.userHint ?? '').isNotEmpty) ...[
+          const SizedBox(height: 4),
+          Text(codec.userHint!, style: Theme.of(context).textTheme.bodySmall),
+        ],
+        const SizedBox(height: 8),
+        ExpansionTile(
+          tilePadding: EdgeInsets.zero,
+          childrenPadding: const EdgeInsets.only(bottom: 8),
+          title: const Text('Details'),
+          children: [
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(codec.message),
+                  Text('Decompress: ${codec.canDecompress ? 'yes' : 'no'} | '
+                      'Compress: ${codec.canCompress ? 'yes' : 'no'}'),
                   if (codec.selectedBackend != null)
                     Text('Backend: ${codec.selectedBackend}'),
                   if (codec.profile != null) Text('Profile: ${codec.profile}'),
                   if (codec.resolutionMode != null)
                     Text('Resolution: ${codec.resolutionMode}'),
                 ],
-              ],
+              ),
             ),
-          ),
+          ],
         ),
       ],
     );
