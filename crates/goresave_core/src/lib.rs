@@ -4292,12 +4292,22 @@ fn auto_calibrate_with_failure_cache(
     match backend.calibrate() {
         Ok(calibrated) => calibrated,
         Err(_) => {
-            if let Some(sha) = exe_sha {
-                if let Ok(mut set) = failed_shas.lock() {
-                    set.insert(sha);
+            // A failed calibration may still have written a decode-only derived
+            // cache. Re-probe so the response reflects that (read-only usable)
+            // instead of the stale pre-calibration probe.
+            let after =
+                codec_backend::CodecBackend::probe(backend).unwrap_or_else(|_| probe.clone());
+            // Only suppress further (expensive) selftests when nothing usable
+            // came out -- a fully unsupported build. A decode-only result stays
+            // eligible for a later compress retry that might succeed.
+            if !after.available {
+                if let Some(sha) = exe_sha {
+                    if let Ok(mut set) = failed_shas.lock() {
+                        set.insert(sha);
+                    }
                 }
             }
-            probe
+            after
         }
     }
 }
@@ -10788,6 +10798,53 @@ mod tests {
         let promoted = auto_calibrate_with_failure_cache(&backend, probe, &cache);
 
         assert!(promoted.can_compress);
+    }
+
+    #[test]
+    fn auto_calibrate_reprobes_and_retries_after_decode_only_calibration() {
+        // calibrate fails (compress selftest failed) but a decode-only derived
+        // cache now exists, which the re-probe reports.
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let calls_in = calls.clone();
+        let backend = codec_backend::G1rBinaryHostBackend::with_command_dispatch_for_tests(
+            "D:\\G1R-Win64-Shipping.exe",
+            move |command| match command {
+                "calibrate" => {
+                    calls_in.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    Err(CoreError::Codec("compress selftest failed".to_string()))
+                }
+                "probe" => Ok(json!({
+                    "supported": true,
+                    "canDecompress": true,
+                    "canCompress": false,
+                    "profile": "g1r-derived-77f3d48c",
+                    "resolutionMode": "derived_profile_cache",
+                    "exeSha256": "feedfacefeedface"
+                })),
+                other => Err(CoreError::Codec(format!("unexpected command {other}"))),
+            },
+        );
+        let cache = std::sync::Mutex::new(std::collections::HashSet::new());
+        let probe = codec_backend::CodecBackendProbe {
+            backend: "g1r_binary_host".to_string(),
+            available: false,
+            can_decompress: false,
+            can_compress: false,
+            status: "unsupported".to_string(),
+            profile: Some("g1r-23A85CE7".to_string()),
+            resolution_mode: Some("pattern_profile".to_string()),
+            details: json!({ "exeSha256": "feedfacefeedface" }),
+        };
+
+        let first = auto_calibrate_with_failure_cache(&backend, probe.clone(), &cache);
+        // Not stale: reflects the decode-only cache, usable for reading.
+        assert!(first.available);
+        assert!(!first.can_compress);
+
+        // A decode-only build is not blocked: a later check retries the compress
+        // selftest (might succeed) instead of being suppressed for the session.
+        let _second = auto_calibrate_with_failure_cache(&backend, probe, &cache);
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
     }
 
     #[test]
