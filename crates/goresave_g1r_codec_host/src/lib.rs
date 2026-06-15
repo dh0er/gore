@@ -4200,8 +4200,12 @@ fn run_calibrate_command(
         Some(cache_path.as_path()),
     )?;
     if probe.supported {
-        let mut value = serde_json::to_value(&probe)
-            .map_err(|e| HostError::new(ErrorCode::InvalidRequest, e.to_string()))?;
+        let mut value = serde_json::to_value(&probe).map_err(|e| {
+            HostError::new(
+                ErrorCode::InvalidRequest,
+                format!("calibrate probe serialization failed: {e}"),
+            )
+        })?;
         value["calibrationRan"] = json!(false);
         return Ok(value);
     }
@@ -4230,8 +4234,12 @@ fn run_calibrate_command(
     obj.insert("runtimeSelftestRunCompress".into(), json!(true));
     obj.insert(
         "runtimeSelftestSample".into(),
-        serde_json::to_value(&sample)
-            .map_err(|e| HostError::new(ErrorCode::InvalidRequest, e.to_string()))?,
+        serde_json::to_value(&sample).map_err(|e| {
+            HostError::new(
+                ErrorCode::InvalidRequest,
+                format!("calibrate sample serialization failed: {e}"),
+            )
+        })?,
     );
     obj.insert(
         "runtimeSelftestCompressSample".into(),
@@ -4242,7 +4250,7 @@ fn run_calibrate_command(
     );
 
     let (_id, st_result) = run_self_test_command(id, &st, profiles, runtime_worker_path);
-    let _ = st_result?; // selftest + cache recording ran; failures propagate.
+    st_result?; // selftest + cache recording ran for side effects; failures propagate.
 
     // 3. Re-probe: the derived cache now (if calibration passed) promotes the
     //    exe to a supported derived profile.
@@ -4258,8 +4266,12 @@ fn run_calibrate_command(
             json!({ "sha256": promoted.exe_sha256, "peTimestamp": format!("0x{:08X}", promoted.pe_timestamp) }),
         ));
     }
-    let mut value = serde_json::to_value(&promoted)
-        .map_err(|e| HostError::new(ErrorCode::InvalidRequest, e.to_string()))?;
+    let mut value = serde_json::to_value(&promoted).map_err(|e| {
+        HostError::new(
+            ErrorCode::InvalidRequest,
+            format!("calibrate promoted-probe serialization failed: {e}"),
+        )
+    })?;
     value["calibrationRan"] = json!(true);
     Ok(value)
 }
