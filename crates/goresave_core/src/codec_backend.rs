@@ -152,39 +152,7 @@ impl CodecBackend for G1rBinaryHostBackend {
         let data = self.invoker.invoke(self.request(json!({
             "command": "probe",
         })))?;
-        Ok(CodecBackendProbe {
-            backend: "g1r_binary_host".to_string(),
-            available: data
-                .get("supported")
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
-            can_decompress: data
-                .get("canDecompress")
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
-            can_compress: data
-                .get("canCompress")
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
-            status: if data
-                .get("supported")
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
-            {
-                "supported".to_string()
-            } else {
-                "unsupported".to_string()
-            },
-            profile: data
-                .get("profile")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned),
-            resolution_mode: data
-                .get("resolutionMode")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned),
-            details: data,
-        })
+        Ok(Self::probe_from_response(data))
     }
 
     fn decompress(&self, input: &[u8], expected_size: usize) -> Result<Vec<u8>, CoreError> {
@@ -283,12 +251,20 @@ impl G1rBinaryHostBackend {
         let data = self.invoker.invoke(self.request(json!({
             "command": "calibrate",
         })))?;
-        Ok(CodecBackendProbe {
+        Ok(Self::probe_from_response(data))
+    }
+
+    /// Map a `probe`/`calibrate` host response into a `CodecBackendProbe`.
+    /// Shared so the two commands can never drift in how they interpret the
+    /// response fields.
+    fn probe_from_response(data: Value) -> CodecBackendProbe {
+        let supported = data
+            .get("supported")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        CodecBackendProbe {
             backend: "g1r_binary_host".to_string(),
-            available: data
-                .get("supported")
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
+            available: supported,
             can_decompress: data
                 .get("canDecompress")
                 .and_then(Value::as_bool)
@@ -297,11 +273,7 @@ impl G1rBinaryHostBackend {
                 .get("canCompress")
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
-            status: if data
-                .get("supported")
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
-            {
+            status: if supported {
                 "supported".to_string()
             } else {
                 "unsupported".to_string()
@@ -315,7 +287,7 @@ impl G1rBinaryHostBackend {
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned),
             details: data,
-        })
+        }
     }
 
     fn request(&self, mut value: Value) -> Value {
