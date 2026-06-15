@@ -375,7 +375,7 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
                 .unwrap_or_else(default_save_root);
             let codec_backend = payload
                 .get("binaryHost")
-                .map(binary_host_backend_from_config)
+                .map(ensured_binary_host_from_config)
                 .transpose()?;
             let codec_backend = codec_backend
                 .as_ref()
@@ -400,7 +400,7 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
                 .map(|value| value as usize);
             let codec_backend = payload
                 .get("binaryHost")
-                .map(binary_host_backend_from_config)
+                .map(ensured_binary_host_from_config)
                 .transpose()?;
             let codec_backend = codec_backend
                 .as_ref()
@@ -417,7 +417,7 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
             let path = required_path(&payload)?;
             let codec_backend = payload
                 .get("binaryHost")
-                .map(binary_host_backend_from_config)
+                .map(ensured_binary_host_from_config)
                 .transpose()?;
             let codec_backend = codec_backend
                 .as_ref()
@@ -428,7 +428,7 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
             let path = required_path(&payload)?;
             let codec_backend = payload
                 .get("binaryHost")
-                .map(binary_host_backend_from_config)
+                .map(ensured_binary_host_from_config)
                 .transpose()?;
             let codec_backend = codec_backend
                 .as_ref()
@@ -465,7 +465,7 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
                     "validate_codec_roundtrip requires payload.binaryHost".to_string(),
                 )
             })?;
-            let backend = binary_host_backend_from_config(binary_host)?;
+            let backend = ensured_binary_host_from_config(binary_host)?;
             Ok(validate_codec_roundtrip_with_backend(&path, &backend)?)
         }
         "write_save" => {
@@ -489,7 +489,7 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
                 .unwrap_or(false);
             let codec_backend = payload
                 .get("binaryHost")
-                .map(binary_host_backend_from_config)
+                .map(ensured_binary_host_from_config)
                 .transpose()?;
             let codec_backend = codec_backend
                 .as_ref()
@@ -4231,6 +4231,54 @@ fn probe_binary_host_from_config(
     let backend = binary_host_backend_from_config(config)?;
     let probe = codec_backend::CodecBackend::probe(&backend)?;
     Ok(auto_calibrate_if_pattern_profile(&backend, probe))
+}
+
+/// Executables whose calibration has already been ensured this session, keyed by
+/// exe path. Prevents re-probing (which hashes the whole game executable) on
+/// every codec operation once the build has been calibrated.
+fn binary_host_ensured_exes() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
+    static ENSURED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+        std::sync::OnceLock::new();
+    ENSURED.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
+}
+
+/// Build the binary host backend for a codec OPERATION (decode/encode), ensuring
+/// a pattern-resolved build has been calibrated first. `check_codec` is not the
+/// only entry point -- `inspect_save` and friends decode too, and on startup the
+/// app inspects in parallel with `check_codec`. Without this, the first inspect
+/// of an unknown build would fail (the host rejects decode for `pattern_profile`)
+/// until a separate `check_codec` happened to write the derived cache. Ensuring
+/// calibration here writes that cache before this backend is used. Runs at most
+/// once per executable per session; a no-op for known profiles or when the probe
+/// fails (e.g. no helper).
+fn ensured_binary_host_from_config(
+    config: &Value,
+) -> Result<codec_backend::G1rBinaryHostBackend, CoreError> {
+    let backend = binary_host_backend_from_config(config)?;
+    let exe_key = config
+        .get("exePath")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    if let Some(key) = &exe_key {
+        if binary_host_ensured_exes()
+            .lock()
+            .map(|set| set.contains(key))
+            .unwrap_or(false)
+        {
+            return Ok(backend);
+        }
+    }
+    if let Ok(probe) = codec_backend::CodecBackend::probe(&backend) {
+        // Side effect: a pattern-resolved build writes its derived cache here, so
+        // the decode/encode that follows on this backend resolves it.
+        let _ = auto_calibrate_if_pattern_profile(&backend, probe);
+    }
+    if let Some(key) = exe_key {
+        if let Ok(mut set) = binary_host_ensured_exes().lock() {
+            set.insert(key);
+        }
+    }
+    Ok(backend)
 }
 
 /// Auto-calibration: a pattern-resolved (untrusted) build is promoted to a
