@@ -4268,14 +4268,23 @@ fn ensured_binary_host_from_config(
             return Ok(backend);
         }
     }
-    if let Ok(probe) = codec_backend::CodecBackend::probe(&backend) {
+    // Probe and (for an untrusted build) calibrate. Only mark the executable
+    // "ensured" -- to skip this re-probe on later operations -- once it is
+    // actually usable. If the probe fails (missing/transient helper) or the build
+    // stays unsupported, leave it unmarked so a later operation retries (e.g.
+    // after the user fixes Settings, or within the calibration attempt budget),
+    // instead of being stuck for the whole session.
+    let usable = match codec_backend::CodecBackend::probe(&backend) {
         // Side effect: a pattern-resolved build writes its derived cache here, so
         // the decode/encode that follows on this backend resolves it.
-        let _ = auto_calibrate_if_pattern_profile(&backend, probe);
-    }
-    if let Some(key) = exe_key {
-        if let Ok(mut set) = binary_host_ensured_exes().lock() {
-            set.insert(key);
+        Ok(probe) => auto_calibrate_if_pattern_profile(&backend, probe).available,
+        Err(_) => false,
+    };
+    if usable {
+        if let Some(key) = exe_key {
+            if let Ok(mut set) = binary_host_ensured_exes().lock() {
+                set.insert(key);
+            }
         }
     }
     Ok(backend)
