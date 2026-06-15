@@ -969,6 +969,57 @@ pub fn container_layout(payload: &[u8], property: &Property) -> Result<Container
     })
 }
 
+/// Byte layout of a MapProperty value: the count-field offset and the absolute
+/// byte range of every (key+value) entry. Mirrors `container_layout` for maps,
+/// which `container_layout` rejects (maps have inline key/value pairs).
+#[derive(Debug, Clone, PartialEq)]
+pub struct MapLayout {
+    pub count_offset: usize,
+    pub count: usize,
+    pub entry_ranges: Vec<core::ops::Range<usize>>,
+}
+
+pub fn map_layout(payload: &[u8], property: &Property) -> Result<MapLayout, CoreError> {
+    if property.type_name != "MapProperty" {
+        return Err(CoreError::InvalidRequest(format!(
+            "map_layout requires a MapProperty target, got {}",
+            property.type_name
+        )));
+    }
+    let (key, value) = property
+        .descriptor
+        .map
+        .as_deref()
+        .ok_or_else(|| CoreError::Parse("MapProperty missing descriptor".into()))?;
+    let end = property
+        .value_offset
+        .checked_add(property.value_size)
+        .filter(|end| *end <= payload.len())
+        .ok_or_else(|| CoreError::Parse("map value out of bounds".to_string()))?;
+    let mut r = Reader::new(&payload[property.value_offset..end], property.value_offset);
+    let _num_to_remove = r.u32()?;
+    let count_offset = r.abs_pos();
+    let count = r.u32()? as usize;
+    let mut entry_ranges = Vec::with_capacity(count.min(1 << 16));
+    for _ in 0..count {
+        let start = r.abs_pos();
+        read_inline_value(&mut r, key, 0)?;
+        read_inline_value(&mut r, value, 0)?;
+        entry_ranges.push(start..r.abs_pos());
+    }
+    if r.remaining() != 0 {
+        return Err(CoreError::Parse(format!(
+            "map body left {} bytes after {count} entries",
+            r.remaining()
+        )));
+    }
+    Ok(MapLayout {
+        count_offset,
+        count,
+        entry_ranges,
+    })
+}
+
 /// Structural container edit applied by `patch_container`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ContainerEdit {
@@ -2898,6 +2949,52 @@ mod tests {
         out.extend_from_slice(&header(body.len() as u32, 0));
         out.extend_from_slice(&body);
         out
+    }
+
+    /// Wrap a single tagged property in a parseable private-root payload.
+    fn private_root_with_property(prop: &[u8]) -> Vec<u8> {
+        root("/Script/Test.Save", prop)
+    }
+
+    /// A MapProperty<NameProperty, StructProperty(KnowledgeSet)> with `chars`
+    /// entries, each an empty Knowledge set. Returns a full tagged property.
+    fn knowledge_map_property(chars: &[&str]) -> Vec<u8> {
+        let empty_value = || {
+            // Inline struct value: a property list holding one (empty) Name set
+            // named "Knowledge", terminated by "None".
+            let mut v = name_set_property("Knowledge", &[]);
+            v.extend_from_slice(&fstring("None"));
+            v
+        };
+        let mut body = 0u32.to_le_bytes().to_vec(); // num_to_remove
+        body.extend_from_slice(&(chars.len() as u32).to_le_bytes()); // count
+        for c in chars {
+            body.extend_from_slice(&fstring(c)); // inline Name key
+            body.extend_from_slice(&empty_value()); // inline struct value
+        }
+        let mut out = tag("CharacterKnowledgeByUniqueName", "MapProperty");
+        out.extend_from_slice(&2u32.to_le_bytes()); // descriptor count
+        out.extend_from_slice(&fstring("NameProperty")); // key type
+        out.extend_from_slice(&0u32.to_le_bytes()); // key_flags
+        out.extend_from_slice(&fstring("StructProperty")); // value type
+        out.extend_from_slice(&1u32.to_le_bytes()); // struct descriptor count
+        out.extend_from_slice(&fstring("KnowledgeSet")); // value struct type
+        out.extend_from_slice(&1u32.to_le_bytes()); // package count
+        out.extend_from_slice(&fstring("/Script/G1R")); // package
+        out.extend_from_slice(&header(body.len() as u32, 0));
+        out.extend_from_slice(&body);
+        out
+    }
+
+    #[test]
+    fn map_layout_reports_count_and_entry_ranges() {
+        let payload = private_root_with_property(&knowledge_map_property(&["A", "BB"]));
+        let root = parse_private_root(&payload).unwrap();
+        let (_, prop) = find_property_by_name(&root, "CharacterKnowledgeByUniqueName").unwrap();
+        let layout = map_layout(&payload, prop).unwrap();
+        assert_eq!(layout.count, 2);
+        assert_eq!(layout.entry_ranges.len(), 2);
+        assert_eq!(layout.entry_ranges[0].end, layout.entry_ranges[1].start);
     }
 
     fn int_array_property(name: &str, values: &[i32]) -> Vec<u8> {
