@@ -2817,6 +2817,10 @@ fn inspect_private_payload(
                     "private.typed.setRemove",
                     "private.typed.arrayRemove",
                     "private.typed.arrayDuplicate",
+                    // Inserts a new entry into the CharacterKnowledgeByUniqueName
+                    // map; needs only a decodable typed parse (no inventory
+                    // main_container gating).
+                    "private.knowledge.addCharacter",
                 ]);
                 // addItem/removeItem are gated per save (clean template /
                 // removable item); mirror the inventory summary's gating so the
@@ -3792,6 +3796,10 @@ fn summarize_private_progression_overview(root: Option<&properties::RootObject>)
             "private.typed.setRemove",
             "private.typed.arrayRemove",
             "private.typed.arrayDuplicate",
+            // Knowledge add-character is a progression edit on the
+            // CharacterKnowledgeByUniqueName map summarized above; it requires
+            // only the typed parse (guaranteed here since `root` is Some).
+            "private.knowledge.addCharacter",
         ],
     })
 }
@@ -4977,27 +4985,32 @@ fn apply_private_edits(
              separate writes"
         )));
     }
-    // An inventory structural edit (addItem/removeItem) splices the MainContainer
-    // slot array and shifts every byte after the splice point. Any peer edit in
-    // the same batch is unsafe: a later edit resolves its target against the
-    // pre-splice layout — an in-place setItemCount patches stale byte offsets,
-    // and a typed setValue re-resolves a now-shifted array index — so it can
-    // corrupt the save or hit the wrong slot. Require such an edit to stand alone.
-    let inventory_structural_edits = edit_specs
+    // A splicing structural edit inserts or removes bytes mid-payload and shifts
+    // every byte after the splice point:
+    //   - inventory addItem/removeItem splice the MainContainer slot array, and
+    //   - knowledge.addCharacter inserts a new entry into the
+    //     CharacterKnowledgeByUniqueName MapProperty.
+    // Any peer edit in the same batch is unsafe: a later edit resolves its target
+    // against the pre-splice layout — an in-place setItemCount patches stale byte
+    // offsets, and a typed setValue re-resolves a now-shifted array index — so it
+    // can corrupt the save or hit the wrong slot. Require such an edit to stand alone.
+    let splicing_structural_edits = edit_specs
         .iter()
         .filter(|edit| {
             matches!(
                 edit,
-                PrivateEdit::InventoryAddItem(_) | PrivateEdit::InventoryRemoveItem(_)
+                PrivateEdit::InventoryAddItem(_)
+                    | PrivateEdit::InventoryRemoveItem(_)
+                    | PrivateEdit::KnowledgeAddCharacter(_)
             )
         })
         .count();
-    if inventory_structural_edits >= 1 && edit_specs.len() > 1 {
+    if splicing_structural_edits >= 1 && edit_specs.len() > 1 {
         return Err(CoreError::UnsupportedEdit(
-            "a write containing private.inventory.addItem or removeItem must \
-             contain no other edits — the structural splice shifts the byte \
-             offsets and array indices later edits resolve against; submit them \
-             as separate writes"
+            "a write containing private.inventory.addItem, private.inventory.removeItem, \
+             or private.knowledge.addCharacter must contain no other edits — the \
+             structural splice (slot-array or map insert) shifts the byte offsets and \
+             array indices later edits resolve against; submit them as separate writes"
                 .to_string(),
         ));
     }
@@ -10009,6 +10022,15 @@ mod tests {
                 .unwrap()
                 .contains(&json!("private.typed.setValue"))
         );
+        // knowledge.addCharacter is gated only on the typed parse (no map/
+        // main_container gating), so a typed-ok payload advertises it even when
+        // it carries no CharacterKnowledgeByUniqueName map.
+        assert!(
+            inspected["private"]["writable"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("private.knowledge.addCharacter"))
+        );
 
         let response = write_save_with_codec_backend(
             &path,
@@ -11592,6 +11614,89 @@ mod tests {
         );
     }
 
+    #[test]
+    fn write_save_rejects_knowledge_add_character_with_peer() {
+        // knowledge.addCharacter splices the CharacterKnowledgeByUniqueName map,
+        // shifting every byte after the insert. Like an inventory structural
+        // edit, it must stand alone: a peer edit in the same write resolves
+        // against the pre-splice layout and would corrupt the save.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-knowledge-peer.sav");
+        let private_payload = build_knowledge_map_payload(&["OC_STT_Diego"]);
+        let seed_compressed = b"seed-knowledge-peer".to_vec();
+        let stream = compressed_stream_with_one_chunk(&seed_compressed, private_payload.len());
+        fs::write(
+            &path,
+            build_gsav(2, &public_payload("Slot A"), &stream, &[0, 0, 0, 0]),
+        )
+        .unwrap();
+        let backend = PrefixCodecBackend {
+            seed_compressed,
+            seed_uncompressed: private_payload,
+        };
+
+        let err = write_save_with_codec_backend(
+            &path,
+            &[
+                json!({
+                    "path": "private.knowledge.addCharacter",
+                    "value": { "value": "OC_TEST_BrandNew" }
+                }),
+                json!({
+                    "path": "private.typed.setValue",
+                    "value": { "path": ["m_MaxQuick"], "value": 9 }
+                }),
+            ],
+            false,
+            None,
+            Some(&backend),
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("must contain no other edits"),
+            "unexpected error: {err}"
+        );
+        // The error must call out the map-insert case, not only inventory.
+        assert!(
+            err.to_string().contains("private.knowledge.addCharacter"),
+            "error should mention the knowledge op: {err}"
+        );
+    }
+
+    #[test]
+    fn write_save_accepts_knowledge_add_character_alone() {
+        // A solo knowledge.addCharacter is accepted and applied: the
+        // stand-alone rule only fires when peer edits are present.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-knowledge-solo.sav");
+        let output_path = dir.path().join("G1R-knowledge-solo.out.sav");
+        let private_payload = build_knowledge_map_payload(&["OC_STT_Diego"]);
+        let seed_compressed = b"seed-knowledge-solo".to_vec();
+        let stream = compressed_stream_with_one_chunk(&seed_compressed, private_payload.len());
+        fs::write(
+            &path,
+            build_gsav(2, &public_payload("Slot A"), &stream, &[0, 0, 0, 0]),
+        )
+        .unwrap();
+        let backend = PrefixCodecBackend {
+            seed_compressed,
+            seed_uncompressed: private_payload,
+        };
+
+        let response = write_save_with_codec_backend(
+            &path,
+            &[json!({
+                "path": "private.knowledge.addCharacter",
+                "value": { "value": "OC_TEST_BrandNew" }
+            })],
+            false,
+            Some(&output_path),
+            Some(&backend),
+        )
+        .unwrap();
+        assert_eq!(response["editsApplied"], 1);
+    }
+
     // ── Task 5 helpers ──────────────────────────────────────────────────────
 
     fn private_enum_property(name: &str, enum_type: &str, label: &str) -> Vec<u8> {
@@ -12109,6 +12214,14 @@ mod tests {
                 .as_array()
                 .unwrap()
                 .contains(&json!("private.typed.setValue"))
+        );
+        // The knowledge map is editable via add-character; the progression
+        // summary advertises it whenever the typed parse succeeds.
+        assert!(
+            progression["writable"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("private.knowledge.addCharacter"))
         );
         // The old heuristic fields are gone.
         assert!(progression.get("candidates").is_none());
