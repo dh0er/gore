@@ -279,6 +279,45 @@ impl CodecBackend for G1rBinaryHostBackend {
 }
 
 impl G1rBinaryHostBackend {
+    pub fn calibrate(&self) -> Result<CodecBackendProbe, CoreError> {
+        let data = self.invoker.invoke(self.request(json!({
+            "command": "calibrate",
+        })))?;
+        Ok(CodecBackendProbe {
+            backend: "g1r_binary_host".to_string(),
+            available: data
+                .get("supported")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            can_decompress: data
+                .get("canDecompress")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            can_compress: data
+                .get("canCompress")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            status: if data
+                .get("supported")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                "supported".to_string()
+            } else {
+                "unsupported".to_string()
+            },
+            profile: data
+                .get("profile")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
+            resolution_mode: data
+                .get("resolutionMode")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
+            details: data,
+        })
+    }
+
     fn request(&self, mut value: Value) -> Value {
         value["exePath"] = json!(self.exe_path.display().to_string());
         if let Some(cache_path) = &self.derived_profile_cache_path {
@@ -503,6 +542,31 @@ mod tests {
         assert!(probe.can_compress);
         assert_eq!(probe.profile.as_deref(), Some("g1r-23A85CE7"));
         assert_eq!(probe.resolution_mode.as_deref(), Some("known_profile"));
+    }
+
+    #[test]
+    fn binary_host_calibrate_maps_promoted_response() {
+        let invoker = RecordingInvoker::with_responses(vec![Ok(json!({
+            "supported": true,
+            "profile": "g1r-derived-77f3d48c",
+            "resolutionMode": "derived_profile_cache",
+            "canCompress": true,
+            "canDecompress": true,
+            "calibrationRan": true
+        }))]);
+        let backend = G1rBinaryHostBackend::with_invoker(
+            PathBuf::from("G1R-Win64-Shipping.exe"),
+            Box::new(invoker),
+        );
+
+        let probe = backend.calibrate().unwrap();
+
+        assert!(probe.available);
+        assert!(probe.can_compress);
+        assert_eq!(
+            probe.resolution_mode.as_deref(),
+            Some("derived_profile_cache")
+        );
     }
 
     #[test]
