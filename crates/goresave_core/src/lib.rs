@@ -4389,14 +4389,14 @@ fn auto_calibrate_bounded(
             // instead of the stale pre-calibration probe.
             let after =
                 codec_backend::CodecBackend::probe(backend).unwrap_or_else(|_| probe.clone());
-            // Count an attempt only when nothing usable resulted. A decode-only
-            // result (still available) stays fully retry-eligible -- a later
-            // compress retry may succeed -- and is not counted against the budget.
-            if !after.available {
-                if let Some(sha) = exe_sha {
-                    if let Ok(mut map) = attempts.lock() {
-                        *map.entry(sha).or_insert(0) += 1;
-                    }
+            // Count every failed calibration against the budget -- including a
+            // decode-only outcome (available but not write-capable). It still gets
+            // up to MAX_CALIBRATION_ATTEMPTS retries (a transient compress failure
+            // may clear), but a build whose compressor consistently fails will not
+            // re-run the expensive selftest on every operation forever.
+            if let Some(sha) = exe_sha {
+                if let Ok(mut map) = attempts.lock() {
+                    *map.entry(sha).or_insert(0) += 1;
                 }
             }
             after
@@ -10937,10 +10937,16 @@ mod tests {
         assert!(first.available);
         assert!(!first.can_compress);
 
-        // A decode-only build is not blocked: a later check retries the compress
-        // selftest (might succeed) instead of being suppressed for the session.
-        let _second = auto_calibrate_bounded(&backend, probe, "", &cache);
-        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+        // A decode-only build retries the compress selftest (a transient failure
+        // may clear) but is still bounded: after MAX_CALIBRATION_ATTEMPTS it stops
+        // re-running the expensive selftest instead of doing so on every check.
+        for _ in 0..4 {
+            let _ = auto_calibrate_bounded(&backend, probe.clone(), "", &cache);
+        }
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            MAX_CALIBRATION_ATTEMPTS as usize
+        );
     }
 
     #[test]
