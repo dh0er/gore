@@ -148,7 +148,7 @@ class _AddNpcDialogState extends State<_AddNpcDialog> {
                                     SidebarTile(
                                       icon: _iconForNpcCategory(g.category),
                                       label:
-                                          '${g.category} (${g.entries.length})',
+                                          '${_cap(g.category)} (${g.entries.length})',
                                       selected: !searching &&
                                           g.category == selectedCategory,
                                       onTap: () => setState(() {
@@ -198,7 +198,7 @@ class _AddNpcDialogState extends State<_AddNpcDialog> {
         overflow: TextOverflow.ellipsis,
       ),
       subtitle: Text(
-        entry.category,
+        _cap(entry.category),
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
         style: theme.textTheme.bodySmall,
@@ -207,6 +207,8 @@ class _AddNpcDialogState extends State<_AddNpcDialog> {
     );
   }
 }
+
+String _cap(String s) => s.isEmpty ? s : '${s[0].toUpperCase()}${s.substring(1)}';
 
 IconData _iconForNpcCategory(String category) {
   switch (category) {

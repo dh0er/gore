@@ -151,7 +151,7 @@ class _AddKnowledgeEntryDialogState extends State<_AddKnowledgeEntryDialog> {
                                       icon:
                                           _iconForKnowledgeCategory(g.category),
                                       label:
-                                          '${g.category} (${g.entries.length})',
+                                          '${_cap(g.category)} (${g.entries.length})',
                                       selected: !searching &&
                                           g.category == selectedCategory,
                                       onTap: () => setState(() {
@@ -204,6 +204,8 @@ class _AddKnowledgeEntryDialogState extends State<_AddKnowledgeEntryDialog> {
     );
   }
 }
+
+String _cap(String s) => s.isEmpty ? s : '${s[0].toUpperCase()}${s.substring(1)}';
 
 IconData _iconForKnowledgeCategory(String category) {
   switch (category) {
