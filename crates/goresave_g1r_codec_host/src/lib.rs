@@ -4199,7 +4199,12 @@ fn run_calibrate_command(
         profiles,
         Some(cache_path.as_path()),
     )?;
-    if probe.supported {
+    // Short-circuit only WRITE-CAPABLE profiles. A decompress-only derived-cache
+    // entry (from an earlier selftest where compress failed) is `supported` but
+    // not `can_compress`; returning here would never re-run the compression
+    // selftest, leaving that build stuck decode-only. Let it fall through to a
+    // fresh calibration that can promote it to write-capable.
+    if probe.supported && probe.can_compress {
         let mut value = serde_json::to_value(&probe).map_err(|e| {
             HostError::new(
                 ErrorCode::InvalidRequest,

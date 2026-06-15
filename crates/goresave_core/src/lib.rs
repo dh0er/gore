@@ -4262,7 +4262,13 @@ fn auto_calibrate_with_failure_cache(
     probe: codec_backend::CodecBackendProbe,
     failed_shas: &std::sync::Mutex<std::collections::HashSet<String>>,
 ) -> codec_backend::CodecBackendProbe {
-    if probe.resolution_mode.as_deref() != Some("pattern_profile") {
+    // Calibrate when the build is untrusted (pattern-resolved) OR usable only for
+    // decompression (a decode-only derived-cache entry), so it can be promoted to
+    // write-capable. Write-capable supported profiles and the pure-Rust fallback
+    // need no calibration.
+    let needs_calibration = probe.resolution_mode.as_deref() == Some("pattern_profile")
+        || (probe.available && !probe.can_compress);
+    if !needs_calibration {
         return probe;
     }
     let exe_sha = probe
@@ -10747,6 +10753,41 @@ mod tests {
         assert!(!first.available);
         assert!(!second.available);
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn auto_calibrate_recalibrates_decompress_only_supported_probe() {
+        // A supported-but-decompress-only derived-cache entry must be
+        // recalibrated so it can be promoted to write-capable.
+        let backend = codec_backend::G1rBinaryHostBackend::with_command_dispatch_for_tests(
+            "D:\\G1R-Win64-Shipping.exe",
+            |command| match command {
+                "calibrate" => Ok(json!({
+                    "supported": true,
+                    "canDecompress": true,
+                    "canCompress": true,
+                    "profile": "g1r-derived-77f3d48c",
+                    "resolutionMode": "derived_profile_cache",
+                    "calibrationRan": true
+                })),
+                other => Err(CoreError::Codec(format!("unexpected command {other}"))),
+            },
+        );
+        let cache = std::sync::Mutex::new(std::collections::HashSet::new());
+        let probe = codec_backend::CodecBackendProbe {
+            backend: "g1r_binary_host".to_string(),
+            available: true,
+            can_decompress: true,
+            can_compress: false,
+            status: "codec_host_decompress_ready".to_string(),
+            profile: Some("g1r-derived-77f3d48c".to_string()),
+            resolution_mode: Some("derived_profile_cache".to_string()),
+            details: json!({ "exeSha256": "cafecafecafecafe" }),
+        };
+
+        let promoted = auto_calibrate_with_failure_cache(&backend, probe, &cache);
+
+        assert!(promoted.can_compress);
     }
 
     #[test]
