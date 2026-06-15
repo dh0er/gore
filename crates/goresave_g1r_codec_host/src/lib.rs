@@ -30,7 +30,6 @@ const MAX_CODEC_UNCOMPRESSED_SIZE: usize = 0x20000;
 const MAX_CODEC_COMPRESSED_OUTPUT_SIZE: usize = MAX_CODEC_UNCOMPRESSED_SIZE + 0x10000;
 const MAX_RUNTIME_REPEAT_COUNT: usize = 100;
 const OODLE_COMPRESSOR_KRAKEN: i32 = 8;
-const RUNTIME_SELFTEST_WORKER_TIMEOUT: Duration = Duration::from_secs(5);
 // Work commands (compress/decompress and their _many variants) re-read and map
 // the full game executable per worker run and process real payloads, so their
 // timeout must absorb cold disk reads, antivirus scans, and slow CPUs that the
@@ -2042,9 +2041,13 @@ fn runtime_selftest_report(
                     compress_sample: compress_sample.cloned(),
                     compress_samples: Vec::new(),
                 };
+                // Mapping the full game executable and running the codec calls is
+                // as heavy as a normal work command (and used by auto-calibration),
+                // so give it the work-command timeout rather than the short quick-
+                // selftest one -- cold disks / AV scanning can exceed 5s.
                 return run_runtime_selftest_worker_with_request(
                     runtime_worker_path,
-                    RUNTIME_SELFTEST_WORKER_TIMEOUT,
+                    RUNTIME_WORK_WORKER_BASE_TIMEOUT,
                     &[],
                     &request,
                 );
@@ -2052,7 +2055,7 @@ fn runtime_selftest_report(
 
             return run_runtime_selftest_worker(
                 runtime_worker_path,
-                RUNTIME_SELFTEST_WORKER_TIMEOUT,
+                RUNTIME_WORK_WORKER_BASE_TIMEOUT,
                 &[],
             );
         }
@@ -3845,11 +3848,6 @@ mod runtime_work_timeout_tests {
             runtime_work_worker_timeout(usize::MAX),
             Duration::from_secs(600)
         );
-    }
-
-    #[test]
-    fn work_timeout_always_exceeds_selftest_timeout() {
-        assert!(runtime_work_worker_timeout(0) > RUNTIME_SELFTEST_WORKER_TIMEOUT);
     }
 }
 
