@@ -137,6 +137,12 @@ pub fn calibration_sample() -> RuntimeSelftestOracleSample {
     }
 }
 
+/// Compression level used for the calibration compress selftest. Must match the
+/// level the production write/roundtrip path uses (goresave_core compresses save
+/// chunks at level 6) so a build is only reported write-capable when it works at
+/// the level real saves will use.
+const CALIBRATION_COMPRESS_LEVEL: u8 = 6;
+
 /// A 4 KiB deterministic synthetic buffer used as the compress selftest input.
 /// Independent of the decompress oracle: the worker compresses it then
 /// decompresses the result to verify a real round-trip.
@@ -4260,7 +4266,11 @@ fn run_calibrate_command(
         "runtimeSelftestCompressSample".into(),
         json!({
             "inputBase64": BASE64_STANDARD.encode(&compress_input),
-            "level": 4
+            // Verify at the same level the production write/roundtrip path uses
+            // (goresave_core compresses save chunks at level 6). A build whose
+            // wrapper works at a lower level but misbehaves at 6 must not be
+            // reported write-capable.
+            "level": CALIBRATION_COMPRESS_LEVEL
         }),
     );
 
