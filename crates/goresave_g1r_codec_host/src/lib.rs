@@ -2869,7 +2869,17 @@ pub fn derived_profile_entry_from_verified_self_test(
     exe_path: &Path,
     response: &SelfTestResponse,
 ) -> Result<Option<DerivedProfileCacheEntry>, HostError> {
-    if response.resolution_mode != Some(ResolutionMode::PatternProfile) {
+    // A pattern-resolved selftest derives a fresh profile. A derived-cache
+    // selftest is normally a no-op, EXCEPT when it now verifies compression: that
+    // upgrades a stuck decompress-only cache entry to write-capable (re-running
+    // calibration could otherwise never promote it, since the cache makes the exe
+    // resolve as derived_profile_cache rather than pattern_profile).
+    let writable = match response.resolution_mode {
+        Some(ResolutionMode::PatternProfile) => true,
+        Some(ResolutionMode::DerivedProfileCache) => response.can_compress,
+        _ => false,
+    };
+    if !writable {
         return Ok(None);
     }
     if !response.can_decompress {

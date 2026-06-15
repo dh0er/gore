@@ -4291,16 +4291,18 @@ fn auto_calibrate_with_failure_cache(
     }
     match backend.calibrate() {
         Ok(calibrated) => calibrated,
-        Err(_) => {
+        Err(err) => {
             // A failed calibration may still have written a decode-only derived
             // cache. Re-probe so the response reflects that (read-only usable)
             // instead of the stale pre-calibration probe.
             let after =
                 codec_backend::CodecBackend::probe(backend).unwrap_or_else(|_| probe.clone());
-            // Only suppress further (expensive) selftests when nothing usable
-            // came out -- a fully unsupported build. A decode-only result stays
-            // eligible for a later compress retry that might succeed.
-            if !after.available {
+            // Suppress further (expensive) selftests only for a genuine, durable
+            // codec failure that left nothing usable. A decode-only result
+            // (still available) stays retry-eligible, and a transient/setup
+            // failure (bad helper path, worker launch, cache IO) must NOT be
+            // cached so fixing Settings and re-checking retries calibration.
+            if !after.available && is_durable_codec_failure(&err.to_string()) {
                 if let Some(sha) = exe_sha {
                     if let Ok(mut set) = failed_shas.lock() {
                         set.insert(sha);
@@ -4310,6 +4312,17 @@ fn auto_calibrate_with_failure_cache(
             after
         }
     }
+}
+
+/// Whether a calibration error reflects a durable "this build's codec can't be
+/// verified" outcome (worth caching to avoid repeating the expensive selftest)
+/// rather than a transient or setup problem the user can fix and retry.
+fn is_durable_codec_failure(error: &str) -> bool {
+    let lower = error.to_ascii_lowercase();
+    lower.contains("could not be resolved")
+        || lower.contains("did not produce")
+        || lower.contains("selftest")
+        || lower.contains("unsupported")
 }
 
 fn binary_host_backend_from_config(
@@ -10843,6 +10856,57 @@ mod tests {
 
         // A decode-only build is not blocked: a later check retries the compress
         // selftest (might succeed) instead of being suppressed for the session.
+        let _second = auto_calibrate_with_failure_cache(&backend, probe, &cache);
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn is_durable_codec_failure_distinguishes_codec_from_setup_errors() {
+        assert!(is_durable_codec_failure(
+            "G1R executable could not be resolved to verified codec functions"
+        ));
+        assert!(is_durable_codec_failure(
+            "calibration did not produce a write-capable codec profile"
+        ));
+        assert!(!is_durable_codec_failure(
+            "binaryHost.helperPath is required"
+        ));
+        assert!(!is_durable_codec_failure(
+            "io error: The system cannot find the file specified. (os error 2)"
+        ));
+    }
+
+    #[test]
+    fn auto_calibrate_retries_after_transient_setup_failure() {
+        // A setup/transient failure (e.g. bad helper path) must not be cached, so
+        // fixing Settings and re-checking retries calibration.
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let calls_in = calls.clone();
+        let backend = codec_backend::G1rBinaryHostBackend::with_command_dispatch_for_tests(
+            "D:\\G1R-Win64-Shipping.exe",
+            move |command| match command {
+                "calibrate" => {
+                    calls_in.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    Err(CoreError::Codec(
+                        "binaryHost.helperPath is required".to_string(),
+                    ))
+                }
+                other => Err(CoreError::Codec(format!("unexpected command {other}"))),
+            },
+        );
+        let cache = std::sync::Mutex::new(std::collections::HashSet::new());
+        let probe = codec_backend::CodecBackendProbe {
+            backend: "g1r_binary_host".to_string(),
+            available: false,
+            can_decompress: false,
+            can_compress: false,
+            status: "unsupported".to_string(),
+            profile: Some("g1r-23A85CE7".to_string()),
+            resolution_mode: Some("pattern_profile".to_string()),
+            details: json!({ "exeSha256": "0badcafe0badcafe" }),
+        };
+
+        let _first = auto_calibrate_with_failure_cache(&backend, probe.clone(), &cache);
         let _second = auto_calibrate_with_failure_cache(&backend, probe, &cache);
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
     }
