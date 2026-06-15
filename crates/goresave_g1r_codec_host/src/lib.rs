@@ -4259,10 +4259,15 @@ fn run_calibrate_command(
         profiles,
         Some(cache_path.as_path()),
     )?;
-    if !promoted.supported {
+    // Calibration only succeeds when the build is usable for BOTH directions.
+    // A selftest where decompress passed but compress failed still writes a
+    // decompress-only derived-cache entry (so the re-probe is `supported`), but
+    // the compressor was not verified -- treating that as success would let the
+    // app trust writes it cannot actually perform. Require compression too.
+    if !promoted.supported || !promoted.can_compress {
         return Err(HostError::with_details(
             ErrorCode::UnsupportedExe,
-            "calibration did not produce a usable codec profile",
+            "calibration did not produce a write-capable codec profile",
             json!({ "sha256": promoted.exe_sha256, "peTimestamp": format!("0x{:08X}", promoted.pe_timestamp) }),
         ));
     }

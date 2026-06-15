@@ -4055,7 +4055,8 @@ fn codec_user_message_for(
     }
     if let Some(err) = error_text {
         let lower = err.to_ascii_lowercase();
-        if lower.contains("not found") || lower.contains("missing") {
+        // Game executable missing (host: "G1R executable not found: <path>").
+        if lower.contains("executable not found") {
             return json!({
                 "userSeverity": "error",
                 "userTitle": "Gothic 1 Remake not found",
@@ -4063,18 +4064,44 @@ fn codec_user_message_for(
                 "userHint": "Set the game path in settings.",
             });
         }
+        // The build resolves but its codec can't be verified (new/unknown build
+        // or a failed calibration) -- the genuine "wait for an editor update" case.
+        if lower.contains("could not be resolved")
+            || lower.contains("calibration did not produce")
+            || lower.contains("unsupported")
+        {
+            return json!({
+                "userSeverity": "error",
+                "userTitle": "This game version can't be opened yet",
+                "userMessage": "Looks like a new game update the editor doesn't recognize yet.",
+                "userHint": "Check for an editor update - a new version usually follows shortly.",
+            });
+        }
+        // Anything else (missing/misconfigured codec helper, IO or launch
+        // failures) is a local setup problem the user can fix in Settings, not a
+        // new game build to wait out.
         return json!({
             "userSeverity": "error",
-            "userTitle": "This game version can't be opened yet",
-            "userMessage": "Looks like a new game update the editor doesn't recognize yet.",
-            "userHint": "Check for an editor update - a new version usually follows shortly.",
+            "userTitle": "Codec helper isn't set up",
+            "userMessage": "The editor couldn't start its codec helper for this game.",
+            "userHint": "Check the codec helper and game paths in settings.",
         });
     }
-    if available || can_compress || can_decompress {
+    if can_compress {
         return json!({
             "userSeverity": "ok",
             "userTitle": "Game codec ready",
             "userMessage": "The editor can read and write this game version.",
+            "userHint": "",
+        });
+    }
+    if available || can_decompress {
+        // Usable for reading, but compression is not verified so writing stays
+        // gated -- do not claim full "ready".
+        return json!({
+            "userSeverity": "warn",
+            "userTitle": "Game codec partly ready",
+            "userMessage": "The editor can read this game's saves, but saving isn't verified yet.",
             "userHint": "",
         });
     }
@@ -4211,17 +4238,62 @@ fn probe_binary_host_from_config(
 /// embedded sample. Best-effort: a calibration failure leaves the original
 /// unsupported probe, which the UI surfaces as a plain "can't open yet"
 /// message rather than an error.
+/// Process-global set of executable SHA-256s whose calibration already failed
+/// this session. A failed calibration runs the expensive runtime selftest, so
+/// without this guard every `check_codec` on an unsupported build would re-run
+/// it. Keyed by SHA-256 so a different (e.g. newly patched) build still gets one
+/// fresh attempt. The core runs as a long-lived FFI library, so this persists
+/// for the app session.
+fn failed_calibration_shas() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+        std::sync::OnceLock::new();
+    CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
+}
+
 fn auto_calibrate_if_pattern_profile(
     backend: &codec_backend::G1rBinaryHostBackend,
     probe: codec_backend::CodecBackendProbe,
 ) -> codec_backend::CodecBackendProbe {
-    if probe.resolution_mode.as_deref() == Some("pattern_profile") {
-        match backend.calibrate() {
-            Ok(calibrated) => return calibrated,
-            Err(_) => return probe,
+    auto_calibrate_with_failure_cache(backend, probe, failed_calibration_shas())
+}
+
+fn auto_calibrate_with_failure_cache(
+    backend: &codec_backend::G1rBinaryHostBackend,
+    probe: codec_backend::CodecBackendProbe,
+    failed_shas: &std::sync::Mutex<std::collections::HashSet<String>>,
+) -> codec_backend::CodecBackendProbe {
+    if probe.resolution_mode.as_deref() != Some("pattern_profile") {
+        return probe;
+    }
+    let exe_sha = probe
+        .details
+        .get("exeSha256")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    // A successful calibration writes a derived-profile cache, so the next probe
+    // resolves as `derived_profile_cache` and never reaches this path again. Only
+    // failures would otherwise repeat, so skip re-running the selftest for a build
+    // that already failed this session.
+    if let Some(sha) = &exe_sha {
+        if failed_shas
+            .lock()
+            .map(|set| set.contains(sha))
+            .unwrap_or(false)
+        {
+            return probe;
         }
     }
-    probe
+    match backend.calibrate() {
+        Ok(calibrated) => calibrated,
+        Err(_) => {
+            if let Some(sha) = exe_sha {
+                if let Ok(mut set) = failed_shas.lock() {
+                    set.insert(sha);
+                }
+            }
+            probe
+        }
+    }
 }
 
 fn binary_host_backend_from_config(
@@ -10642,6 +10714,42 @@ mod tests {
     }
 
     #[test]
+    fn auto_calibrate_skips_rerun_after_failure_in_session() {
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let calls_in = calls.clone();
+        let backend = codec_backend::G1rBinaryHostBackend::with_command_dispatch_for_tests(
+            "D:\\G1R-Win64-Shipping.exe",
+            move |command| match command {
+                "calibrate" => {
+                    calls_in.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    Err(CoreError::Codec("calibration selftest failed".to_string()))
+                }
+                other => Err(CoreError::Codec(format!("unexpected command {other}"))),
+            },
+        );
+        let cache = std::sync::Mutex::new(std::collections::HashSet::new());
+        let probe = codec_backend::CodecBackendProbe {
+            backend: "g1r_binary_host".to_string(),
+            available: false,
+            can_decompress: false,
+            can_compress: false,
+            status: "unsupported".to_string(),
+            profile: Some("g1r-23A85CE7".to_string()),
+            resolution_mode: Some("pattern_profile".to_string()),
+            details: json!({ "exeSha256": "deadbeefdeadbeef" }),
+        };
+
+        let first = auto_calibrate_with_failure_cache(&backend, probe.clone(), &cache);
+        let second = auto_calibrate_with_failure_cache(&backend, probe, &cache);
+
+        // Both stay unsupported, but the expensive selftest ran only once for the
+        // same build SHA this session.
+        assert!(!first.available);
+        assert!(!second.available);
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
     fn codec_status_unsupported_binary_build_shows_plain_message() {
         let pure_probe = codec_backend::CodecBackendProbe {
             backend: "pure_rust_kraken".to_string(),
@@ -10725,6 +10833,45 @@ mod tests {
         );
         assert_eq!(m["userTitle"], "Gothic 1 Remake not found");
         assert!(m["userHint"].as_str().unwrap().contains("game path"));
+    }
+
+    #[test]
+    fn codec_user_message_helper_misconfig_is_setup_error() {
+        let m = codec_user_message_for(
+            "g1r_binary_host",
+            false,
+            false,
+            false,
+            Some("binaryHost.helperPath is required"),
+        );
+        assert_eq!(m["userSeverity"], "error");
+        assert_eq!(m["userTitle"], "Codec helper isn't set up");
+        assert!(m["userHint"].as_str().unwrap().contains("settings"));
+        // Must NOT send the user to wait for a game/editor update.
+        assert_ne!(m["userTitle"], "This game version can't be opened yet");
+    }
+
+    #[test]
+    fn codec_user_message_unresolved_build_waits_for_update() {
+        let m = codec_user_message_for(
+            "g1r_binary_host",
+            false,
+            false,
+            false,
+            Some("G1R executable could not be resolved to verified codec functions"),
+        );
+        assert_eq!(m["userTitle"], "This game version can't be opened yet");
+        assert!(m["userHint"].as_str().unwrap().contains("editor update"));
+    }
+
+    #[test]
+    fn codec_user_message_decode_only_is_not_ready() {
+        // available + decompress but no verified compress: reading works, writing
+        // is gated, so it must not claim full "ready".
+        let m = codec_user_message_for("g1r_binary_host", true, false, true, None);
+        assert_eq!(m["userSeverity"], "warn");
+        assert_eq!(m["userTitle"], "Game codec partly ready");
+        assert_ne!(m["userTitle"], "Game codec ready");
     }
 
     fn private_name_set_property(name: &str, values: &[&str]) -> Vec<u8> {
