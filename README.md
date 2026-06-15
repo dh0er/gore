@@ -5,6 +5,7 @@ a Flutter interface backed by a Rust savegame core.
 
 ## Features
 
+- Profile: Change difficulty settings
 - Player: Edit stats, skills, location and much more
 - Inventory: Change count of existing items; add new items from a bundled catalog with categorized browsing.
 - Progression: Edit quest markers, NPC knowledge and events
