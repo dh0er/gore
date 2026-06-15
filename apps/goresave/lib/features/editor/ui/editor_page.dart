@@ -1909,12 +1909,9 @@ class _PrivateInventorySummaryCardState
     // count as plain text but the delete action may still apply.
     return Row(
       mainAxisSize: MainAxisSize.min,
-      // Top-align so the count field's error line ('Min 1') has room to render
-      // below the field without growing the row or shoving the delete button —
-      // the field reserves constant vertical space for that line (see
-      // _InventoryItemCountEditor.helperText), and the delete button sits at the
-      // top next to the field, not vertically centred against the taller field.
-      crossAxisAlignment: CrossAxisAlignment.start,
+      // Centre the delete button against the count field so the trash icon lines
+      // up with the input value rather than floating up by the 'Count' label.
+      crossAxisAlignment: CrossAxisAlignment.center,
       children: [
         if (countEditable)
           _InventoryItemCountEditor(
@@ -2100,11 +2097,11 @@ class _InventoryItemCountEditorState extends State<_InventoryItemCountEditor> {
         decoration: InputDecoration(
           labelText: 'Count',
           errorText: _error,
-          // Reserve a constant line below the field with a blank helper so that
-          // showing the 'Min 1' error swaps in place of the helper rather than
-          // adding a new line — the field height stays stable, so it never
-          // grows inside the trailing Row when the user types 0.
-          helperText: ' ',
+          // Compact the field so it fits inside the dense ListTile row. A
+          // reserved helper line would steal the input box's vertical space
+          // here (the tile caps the field height), squeezing the box until the
+          // value clips at the border — so the error grows the row instead.
+          isDense: true,
         ),
       ),
     );
