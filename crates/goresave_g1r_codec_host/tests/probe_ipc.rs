@@ -3,7 +3,8 @@ use goresave_g1r_codec_host::WindowsImportResolver;
 use goresave_g1r_codec_host::{
     DerivedProfileCacheEntry, ErrorCode, HostError, ImportResolver, PeImage, PeImportSymbol,
     PrivateMappingReport, ProbeRequest, ResolutionMode, ResolvedRvaReport, RuntimeCodecRvas,
-    RuntimeCompressSample, RuntimeSelftestOracleSample, RuntimeSelftestReport,
+    RuntimeCompressSample, RuntimeSelftestOracleSample, RuntimeSelftestReport, calibration_compress_input,
+    calibration_sample,
     RuntimeSelftestSaveChunkRequest, RuntimeSelftestWorkerRequest, SectionProtection,
     SelfTestRequest, SelfTestResponse, derived_profile_entry_from_verified_self_test,
     export_derived_profile_from_cache, handle_ipc_line, handle_ipc_line_with_runtime_worker,
@@ -18,6 +19,29 @@ use sha2::{Digest, Sha256};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+
+fn base64_decode(s: &str) -> Vec<u8> {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD.decode(s).unwrap()
+}
+
+#[test]
+fn calibration_sample_is_well_formed() {
+    let sample = calibration_sample();
+    let compressed = base64_decode(&sample.compressed_base64);
+    assert_eq!(compressed.len(), 3622);
+    assert_eq!(sample.expected_size, 4096);
+    assert_eq!(sample.expected_decompressed_sha1.len(), 40);
+    assert_eq!(sample.expected_decompressed_head_hex.len(), 128);
+}
+
+#[test]
+fn calibration_compress_input_is_deterministic_4kib() {
+    let a = calibration_compress_input();
+    let b = calibration_compress_input();
+    assert_eq!(a.len(), 4096);
+    assert_eq!(a, b);
+}
 
 #[test]
 fn profile_parser_accepts_valid_profile() {
