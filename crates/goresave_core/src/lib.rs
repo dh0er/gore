@@ -4094,6 +4094,10 @@ fn codec_status_from_probes(
         vec![serde_json::to_value(&pure_probe).map_err(|e| CoreError::Codec(e.to_string()))?];
     let mut selected_probe = pure_probe.clone();
     let mut binary_error: Option<String> = None;
+    let mut binary_host_attempted = false;
+    let mut binary_available = false;
+    let mut binary_can_compress = false;
+    let mut binary_can_decompress = false;
 
     if let Some(binary_probe) = binary_probe {
         match binary_probe {
@@ -4101,11 +4105,16 @@ fn codec_status_from_probes(
                 backends.push(
                     serde_json::to_value(&probe).map_err(|e| CoreError::Codec(e.to_string()))?,
                 );
+                binary_host_attempted = true;
+                binary_available = probe.available;
+                binary_can_compress = probe.can_compress;
+                binary_can_decompress = probe.can_decompress;
                 if probe.available {
                     selected_probe = probe;
                 }
             }
             Err(err) => {
+                binary_host_attempted = true;
                 binary_error = Some(err.to_string());
                 backends.push(json!({
                     "backend": "g1r_binary_host",
@@ -4137,18 +4146,25 @@ fn codec_status_from_probes(
         value["message"] = json!(binary_host_message(&selected_probe));
     }
 
-    let user_backend = if binary_error.is_some() {
-        "g1r_binary_host"
+    let user = if binary_host_attempted {
+        codec_user_message_for(
+            "g1r_binary_host",
+            binary_available,
+            binary_can_compress,
+            binary_can_decompress,
+            binary_error.as_deref(),
+        )
     } else {
-        selected_probe.backend.as_str()
+        // No binary host configured: pure-Rust selected, no user-facing codec
+        // message (read-only flows).
+        codec_user_message_for(
+            &selected_probe.backend,
+            selected_probe.available,
+            selected_probe.can_compress,
+            selected_probe.can_decompress,
+            None,
+        )
     };
-    let user = codec_user_message_for(
-        user_backend,
-        selected_probe.available,
-        selected_probe.can_compress,
-        selected_probe.can_decompress,
-        binary_error.as_deref(),
-    );
     if let Some(obj) = user.as_object() {
         for (k, v) in obj {
             value[k.clone()] = v.clone();
@@ -10594,6 +10610,93 @@ mod tests {
             promoted.resolution_mode.as_deref(),
             Some("derived_profile_cache")
         );
+    }
+
+    #[test]
+    fn auto_calibrate_keeps_unsupported_probe_when_calibrate_errors() {
+        let backend = codec_backend::G1rBinaryHostBackend::with_command_dispatch_for_tests(
+            "D:\\G1R-Win64-Shipping.exe",
+            |command| match command {
+                "probe" => Ok(json!({
+                    "supported": false,
+                    "canDecompress": false,
+                    "canCompress": false,
+                    "profile": "g1r-23A85CE7",
+                    "resolutionMode": "pattern_profile"
+                })),
+                "calibrate" => Err(CoreError::Codec("calibration selftest failed".to_string())),
+                other => Err(CoreError::Codec(format!("unexpected command {other}"))),
+            },
+        );
+
+        let probe = codec_backend::CodecBackend::probe(&backend).unwrap();
+        assert_eq!(probe.resolution_mode.as_deref(), Some("pattern_profile"));
+        assert!(!probe.available);
+
+        let result = auto_calibrate_if_pattern_profile(&backend, probe);
+
+        // Best-effort: a calibration failure leaves the original unsupported
+        // probe, not an error.
+        assert!(!result.available);
+        assert_eq!(result.resolution_mode.as_deref(), Some("pattern_profile"));
+    }
+
+    #[test]
+    fn codec_status_unsupported_binary_build_shows_plain_message() {
+        let pure_probe = codec_backend::CodecBackendProbe {
+            backend: "pure_rust_kraken".to_string(),
+            available: false,
+            can_decompress: false,
+            can_compress: false,
+            status: "native_encoder_in_progress".to_string(),
+            profile: None,
+            resolution_mode: None,
+            details: json!({}),
+        };
+        let binary_probe = codec_backend::CodecBackendProbe {
+            backend: "g1r_binary_host".to_string(),
+            available: false,
+            can_decompress: false,
+            can_compress: false,
+            status: "unsupported".to_string(),
+            profile: Some("g1r-23A85CE7".to_string()),
+            resolution_mode: Some("pattern_profile".to_string()),
+            details: json!({}),
+        };
+
+        let value = codec_status_from_probes(pure_probe, Some(Ok(binary_probe))).unwrap();
+
+        assert_eq!(value["userSeverity"], "error");
+        assert_eq!(value["userTitle"], "This game version can't be opened yet");
+    }
+
+    #[test]
+    fn codec_status_ready_binary_build_shows_ready_message() {
+        let pure_probe = codec_backend::CodecBackendProbe {
+            backend: "pure_rust_kraken".to_string(),
+            available: false,
+            can_decompress: false,
+            can_compress: false,
+            status: "native_encoder_in_progress".to_string(),
+            profile: None,
+            resolution_mode: None,
+            details: json!({}),
+        };
+        let binary_probe = codec_backend::CodecBackendProbe {
+            backend: "g1r_binary_host".to_string(),
+            available: true,
+            can_decompress: true,
+            can_compress: true,
+            status: "supported".to_string(),
+            profile: Some("g1r-23A85CE7".to_string()),
+            resolution_mode: Some("known_profile".to_string()),
+            details: json!({}),
+        };
+
+        let value = codec_status_from_probes(pure_probe, Some(Ok(binary_probe))).unwrap();
+
+        assert_eq!(value["userSeverity"], "ok");
+        assert_eq!(value["userTitle"], "Game codec ready");
     }
 
     #[test]
