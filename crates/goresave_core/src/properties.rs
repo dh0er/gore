@@ -916,10 +916,7 @@ pub struct ContainerLayout {
     pub element_ranges: Vec<core::ops::Range<usize>>,
 }
 
-pub fn container_layout(
-    payload: &[u8],
-    property: &Property,
-) -> Result<ContainerLayout, CoreError> {
+pub fn container_layout(payload: &[u8], property: &Property) -> Result<ContainerLayout, CoreError> {
     let kind = match property.type_name.as_str() {
         "ArrayProperty" => ContainerKind::Array,
         "SetProperty" => ContainerKind::Set,
@@ -936,11 +933,10 @@ pub fn container_layout(
             "container edits do not support instanced-object arrays".to_string(),
         ));
     }
-    let inner = property
-        .descriptor
-        .inner
-        .as_deref()
-        .ok_or_else(|| CoreError::Parse("container property missing inner descriptor".into()))?;
+    let inner =
+        property.descriptor.inner.as_deref().ok_or_else(|| {
+            CoreError::Parse("container property missing inner descriptor".into())
+        })?;
     let end = property
         .value_offset
         .checked_add(property.value_size)
@@ -1002,11 +998,7 @@ fn set_string_elements(target: &Property) -> Option<&[PropertyValue]> {
 /// Locate a string element in a set. `fold_case` follows UE FName semantics:
 /// Name sets compare case-insensitively, Str sets hold regular strings where
 /// case-only variants are distinct values.
-fn set_element_position(
-    elements: &[PropertyValue],
-    value: &str,
-    fold_case: bool,
-) -> Option<usize> {
+fn set_element_position(elements: &[PropertyValue], value: &str, fold_case: bool) -> Option<usize> {
     elements.iter().position(|e| match e {
         PropertyValue::Name(s) | PropertyValue::Str(s) => {
             if fold_case {
@@ -1074,9 +1066,8 @@ pub fn patch_container(
             let elements = set_string_elements(target)
                 .ok_or_else(|| CoreError::Parse("set value not parsed as a set".into()))?;
             let fold_case = layout.inner_type == "NameProperty";
-            let index = set_element_position(elements, value, fold_case).ok_or_else(|| {
-                CoreError::Parse(format!("set does not contain {value:?}"))
-            })?;
+            let index = set_element_position(elements, value, fold_case)
+                .ok_or_else(|| CoreError::Parse(format!("set does not contain {value:?}")))?;
             let range = layout.element_ranges[index].clone();
             (Some(range.clone()), range.start, Vec::new(), -1)
         }
@@ -1120,7 +1111,9 @@ pub fn patch_container(
     // valid (same discipline as patch_string).
     let mut writes = Vec::with_capacity(enclosing_size_fields.len() + 2);
     if target.value_offset < 5 {
-        return Err(CoreError::Parse("container tag offset underflow".to_string()));
+        return Err(CoreError::Parse(
+            "container tag offset underflow".to_string(),
+        ));
     }
     writes.push((target.size_field_offset(), new_size));
     for &offset in enclosing_size_fields {
@@ -2614,7 +2607,10 @@ mod tests {
         // data_size (outermost first).
         assert_eq!(chain.enclosing_size_fields.len(), 2);
         let map_property = &parsed.properties[0];
-        assert_eq!(chain.enclosing_size_fields[0], map_property.size_field_offset());
+        assert_eq!(
+            chain.enclosing_size_fields[0],
+            map_property.size_field_offset()
+        );
         let target = chain.target.clone();
         let enclosing = chain.enclosing_size_fields.clone();
 
@@ -2959,11 +2955,7 @@ mod tests {
 
     fn resolve_set_target(payload: &[u8]) -> (RootObject, Vec<PathSeg>) {
         let parsed = parse_private_root(payload).unwrap();
-        let path = parse_path(&[
-            "KnowledgeSet".to_string(),
-            "Knowledge".to_string(),
-        ])
-        .unwrap();
+        let path = parse_path(&["KnowledgeSet".to_string(), "Knowledge".to_string()]).unwrap();
         (parsed, path)
     }
 
@@ -3183,7 +3175,13 @@ mod tests {
         );
 
         let target = reparsed.properties[0].clone();
-        patch_container(&mut payload, &target, &[], &ContainerEdit::ArrayDuplicate(0)).unwrap();
+        patch_container(
+            &mut payload,
+            &target,
+            &[],
+            &ContainerEdit::ArrayDuplicate(0),
+        )
+        .unwrap();
         let reparsed = parse_private_root(&payload).unwrap();
         assert_eq!(
             reparsed.properties[0].value,
@@ -3212,8 +3210,13 @@ mod tests {
         let target = parsed.properties[0].clone();
         // set ops on an array
         assert!(
-            patch_container(&mut payload, &target, &[], &ContainerEdit::SetAdd("X".into()))
-                .is_err()
+            patch_container(
+                &mut payload,
+                &target,
+                &[],
+                &ContainerEdit::SetAdd("X".into())
+            )
+            .is_err()
         );
         // array ops on a set
         let mut payload = root("/Script/Test.Save", &name_set_property("S", &["A"]));
@@ -3256,11 +3259,17 @@ mod tests {
 
         let parsed = parse_private_root(&payload).unwrap();
         let (path, prop) = find_property_by_name(&parsed, "Knowledge").unwrap();
-        assert_eq!(path, vec!["m_GenericData", "{CharacterStates}", "Knowledge"]);
+        assert_eq!(
+            path,
+            vec!["m_GenericData", "{CharacterStates}", "Knowledge"]
+        );
         assert!(matches!(prop.value, PropertyValue::Set { .. }));
         // The returned path round-trips through resolve().
         let segs = parse_path(&path).unwrap();
-        assert_eq!(resolve(&parsed.properties, &segs).unwrap().name, "Knowledge");
+        assert_eq!(
+            resolve(&parsed.properties, &segs).unwrap().name,
+            "Knowledge"
+        );
 
         assert!(find_property_by_name(&parsed, "DoesNotExist").is_none());
     }

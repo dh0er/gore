@@ -3,7 +3,7 @@
 //! Usage: dump_typed <save.sav> <codec_host.exe> <game.exe> [query]
 
 use goresave_core::execute_json;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
