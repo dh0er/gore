@@ -4281,39 +4281,44 @@ fn ensured_binary_host_from_config(
     Ok(backend)
 }
 
-/// Auto-calibration: a pattern-resolved (untrusted) build is promoted to a
-/// verified derived profile by running one runtime selftest with the host's
-/// embedded sample. Best-effort: a calibration failure leaves the original
-/// unsupported probe, which the UI surfaces as a plain "can't open yet"
-/// message rather than an error.
-/// Process-global set of executable SHA-256s whose calibration already failed
-/// this session. A failed calibration runs the expensive runtime selftest, so
-/// without this guard every `check_codec` on an unsupported build would re-run
-/// it. Keyed by SHA-256 so a different (e.g. newly patched) build still gets one
-/// fresh attempt. The core runs as a long-lived FFI library, so this persists
-/// for the app session.
-fn failed_calibration_shas() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
-    static CACHE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+/// Maximum failed calibration attempts per executable per session. A failed
+/// calibration runs the expensive runtime selftest; without a cap, every codec
+/// check on an unpromotable build would re-run it. A small budget still lets a
+/// transient failure -- or a setup the user just fixed -- recover on a retry,
+/// then stops. (Classifying durable vs transient failures by error text is
+/// unreliable; a bounded attempt count is robust and simple.)
+const MAX_CALIBRATION_ATTEMPTS: u32 = 2;
+
+/// Process-global count of failed calibration attempts per executable SHA-256.
+/// The core runs as a long-lived FFI library, so this persists for the session.
+/// Keyed by SHA-256 so a different (e.g. newly patched) build is independent.
+fn calibration_attempts() -> &'static std::sync::Mutex<std::collections::HashMap<String, u32>> {
+    static ATTEMPTS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, u32>>> =
         std::sync::OnceLock::new();
-    CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
+    ATTEMPTS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
 
+/// Auto-calibration: an untrusted (pattern-resolved) or decode-only build is
+/// promoted to a verified write-capable derived profile by running one runtime
+/// selftest with the host's embedded sample. Best-effort: a failure leaves the
+/// build unpromoted (the UI shows a plain message). Bounded so an unpromotable
+/// build does not re-run the selftest forever.
 fn auto_calibrate_if_pattern_profile(
     backend: &codec_backend::G1rBinaryHostBackend,
     probe: codec_backend::CodecBackendProbe,
 ) -> codec_backend::CodecBackendProbe {
-    auto_calibrate_with_failure_cache(backend, probe, failed_calibration_shas())
+    auto_calibrate_bounded(backend, probe, calibration_attempts())
 }
 
-fn auto_calibrate_with_failure_cache(
+fn auto_calibrate_bounded(
     backend: &codec_backend::G1rBinaryHostBackend,
     probe: codec_backend::CodecBackendProbe,
-    failed_shas: &std::sync::Mutex<std::collections::HashSet<String>>,
+    attempts: &std::sync::Mutex<std::collections::HashMap<String, u32>>,
 ) -> codec_backend::CodecBackendProbe {
-    // Calibrate when the build is untrusted (pattern-resolved) OR usable only for
-    // decompression (a decode-only derived-cache entry), so it can be promoted to
-    // write-capable. Write-capable supported profiles and the pure-Rust fallback
-    // need no calibration.
+    // Calibrate an untrusted (pattern-resolved) build OR one usable only for
+    // decompression (a decode-only derived-cache entry that can be promoted to
+    // write-capable). Write-capable supported profiles and the pure-Rust
+    // fallback need no calibration.
     let needs_calibration = probe.resolution_mode.as_deref() == Some("pattern_profile")
         || (probe.available && !probe.can_compress);
     if !needs_calibration {
@@ -4324,14 +4329,12 @@ fn auto_calibrate_with_failure_cache(
         .get("exeSha256")
         .and_then(Value::as_str)
         .map(str::to_string);
-    // A successful calibration writes a derived-profile cache, so the next probe
-    // resolves as `derived_profile_cache` and never reaches this path again. Only
-    // failures would otherwise repeat, so skip re-running the selftest for a build
-    // that already failed this session.
+    // Give up re-running the expensive selftest once an executable has failed the
+    // capped number of times this session.
     if let Some(sha) = &exe_sha {
-        if failed_shas
+        if attempts
             .lock()
-            .map(|set| set.contains(sha))
+            .map(|m| m.get(sha).copied().unwrap_or(0) >= MAX_CALIBRATION_ATTEMPTS)
             .unwrap_or(false)
         {
             return probe;
@@ -4339,38 +4342,25 @@ fn auto_calibrate_with_failure_cache(
     }
     match backend.calibrate() {
         Ok(calibrated) => calibrated,
-        Err(err) => {
+        Err(_) => {
             // A failed calibration may still have written a decode-only derived
             // cache. Re-probe so the response reflects that (read-only usable)
             // instead of the stale pre-calibration probe.
             let after =
                 codec_backend::CodecBackend::probe(backend).unwrap_or_else(|_| probe.clone());
-            // Suppress further (expensive) selftests only for a genuine, durable
-            // codec failure that left nothing usable. A decode-only result
-            // (still available) stays retry-eligible, and a transient/setup
-            // failure (bad helper path, worker launch, cache IO) must NOT be
-            // cached so fixing Settings and re-checking retries calibration.
-            if !after.available && is_durable_codec_failure(&err.to_string()) {
+            // Count an attempt only when nothing usable resulted. A decode-only
+            // result (still available) stays fully retry-eligible -- a later
+            // compress retry may succeed -- and is not counted against the budget.
+            if !after.available {
                 if let Some(sha) = exe_sha {
-                    if let Ok(mut set) = failed_shas.lock() {
-                        set.insert(sha);
+                    if let Ok(mut map) = attempts.lock() {
+                        *map.entry(sha).or_insert(0) += 1;
                     }
                 }
             }
             after
         }
     }
-}
-
-/// Whether a calibration error reflects a durable "this build's codec can't be
-/// verified" outcome (worth caching to avoid repeating the expensive selftest)
-/// rather than a transient or setup problem the user can fix and retry.
-fn is_durable_codec_failure(error: &str) -> bool {
-    let lower = error.to_ascii_lowercase();
-    lower.contains("could not be resolved")
-        || lower.contains("did not produce")
-        || lower.contains("selftest")
-        || lower.contains("unsupported")
 }
 
 fn binary_host_backend_from_config(
@@ -10804,7 +10794,7 @@ mod tests {
                 other => Err(CoreError::Codec(format!("unexpected command {other}"))),
             },
         );
-        let cache = std::sync::Mutex::new(std::collections::HashSet::new());
+        let cache = std::sync::Mutex::new(std::collections::HashMap::new());
         let probe = codec_backend::CodecBackendProbe {
             backend: "g1r_binary_host".to_string(),
             available: false,
@@ -10816,14 +10806,18 @@ mod tests {
             details: json!({ "exeSha256": "deadbeefdeadbeef" }),
         };
 
-        let first = auto_calibrate_with_failure_cache(&backend, probe.clone(), &cache);
-        let second = auto_calibrate_with_failure_cache(&backend, probe, &cache);
-
-        // Both stay unsupported, but the expensive selftest ran only once for the
-        // same build SHA this session.
-        assert!(!first.available);
-        assert!(!second.available);
-        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        // Four checks of the same unpromotable build: calibration retries up to
+        // the attempt budget (MAX_CALIBRATION_ATTEMPTS), then stops re-running the
+        // expensive selftest. The build stays unsupported throughout.
+        let mut last = probe.clone();
+        for _ in 0..4 {
+            last = auto_calibrate_bounded(&backend, probe.clone(), &cache);
+        }
+        assert!(!last.available);
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            MAX_CALIBRATION_ATTEMPTS as usize
+        );
     }
 
     #[test]
@@ -10844,7 +10838,7 @@ mod tests {
                 other => Err(CoreError::Codec(format!("unexpected command {other}"))),
             },
         );
-        let cache = std::sync::Mutex::new(std::collections::HashSet::new());
+        let cache = std::sync::Mutex::new(std::collections::HashMap::new());
         let probe = codec_backend::CodecBackendProbe {
             backend: "g1r_binary_host".to_string(),
             available: true,
@@ -10856,7 +10850,7 @@ mod tests {
             details: json!({ "exeSha256": "cafecafecafecafe" }),
         };
 
-        let promoted = auto_calibrate_with_failure_cache(&backend, probe, &cache);
+        let promoted = auto_calibrate_bounded(&backend, probe, &cache);
 
         assert!(promoted.can_compress);
     }
@@ -10885,7 +10879,7 @@ mod tests {
                 other => Err(CoreError::Codec(format!("unexpected command {other}"))),
             },
         );
-        let cache = std::sync::Mutex::new(std::collections::HashSet::new());
+        let cache = std::sync::Mutex::new(std::collections::HashMap::new());
         let probe = codec_backend::CodecBackendProbe {
             backend: "g1r_binary_host".to_string(),
             available: false,
@@ -10897,65 +10891,14 @@ mod tests {
             details: json!({ "exeSha256": "feedfacefeedface" }),
         };
 
-        let first = auto_calibrate_with_failure_cache(&backend, probe.clone(), &cache);
+        let first = auto_calibrate_bounded(&backend, probe.clone(), &cache);
         // Not stale: reflects the decode-only cache, usable for reading.
         assert!(first.available);
         assert!(!first.can_compress);
 
         // A decode-only build is not blocked: a later check retries the compress
         // selftest (might succeed) instead of being suppressed for the session.
-        let _second = auto_calibrate_with_failure_cache(&backend, probe, &cache);
-        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
-    }
-
-    #[test]
-    fn is_durable_codec_failure_distinguishes_codec_from_setup_errors() {
-        assert!(is_durable_codec_failure(
-            "G1R executable could not be resolved to verified codec functions"
-        ));
-        assert!(is_durable_codec_failure(
-            "calibration did not produce a write-capable codec profile"
-        ));
-        assert!(!is_durable_codec_failure(
-            "binaryHost.helperPath is required"
-        ));
-        assert!(!is_durable_codec_failure(
-            "io error: The system cannot find the file specified. (os error 2)"
-        ));
-    }
-
-    #[test]
-    fn auto_calibrate_retries_after_transient_setup_failure() {
-        // A setup/transient failure (e.g. bad helper path) must not be cached, so
-        // fixing Settings and re-checking retries calibration.
-        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let calls_in = calls.clone();
-        let backend = codec_backend::G1rBinaryHostBackend::with_command_dispatch_for_tests(
-            "D:\\G1R-Win64-Shipping.exe",
-            move |command| match command {
-                "calibrate" => {
-                    calls_in.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    Err(CoreError::Codec(
-                        "binaryHost.helperPath is required".to_string(),
-                    ))
-                }
-                other => Err(CoreError::Codec(format!("unexpected command {other}"))),
-            },
-        );
-        let cache = std::sync::Mutex::new(std::collections::HashSet::new());
-        let probe = codec_backend::CodecBackendProbe {
-            backend: "g1r_binary_host".to_string(),
-            available: false,
-            can_decompress: false,
-            can_compress: false,
-            status: "unsupported".to_string(),
-            profile: Some("g1r-23A85CE7".to_string()),
-            resolution_mode: Some("pattern_profile".to_string()),
-            details: json!({ "exeSha256": "0badcafe0badcafe" }),
-        };
-
-        let _first = auto_calibrate_with_failure_cache(&backend, probe.clone(), &cache);
-        let _second = auto_calibrate_with_failure_cache(&backend, probe, &cache);
+        let _second = auto_calibrate_bounded(&backend, probe, &cache);
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
     }
 
