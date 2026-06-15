@@ -908,6 +908,38 @@ fn ipc_self_test_uses_runtime_worker_when_configured() {
 }
 
 #[test]
+fn ipc_calibrate_is_noop_for_known_profile() {
+    let exe = minimal_pe64_with_imports_and_relocations();
+    let profile = parse_profile_json(&profile_json(
+        &sha256_hex(&exe),
+        exe.len() as u64,
+        "0x23A85CE7",
+        "0x140000000",
+        "0x1010",
+        "0x1020",
+        "0x1030",
+    ))
+    .unwrap();
+    let temp = write_temp_exe(&exe);
+
+    let response = handle_ipc_line_with_runtime_worker(
+        &format!(
+            r#"{{"id":"cal-1","command":"calibrate","exePath":"{}"}}"#,
+            json_escape_path(temp.path())
+        ),
+        &[profile],
+        &helper_binary_path(),
+    );
+    let value: Value = serde_json::from_str(&response).unwrap();
+
+    assert_eq!(value["id"], "cal-1");
+    assert_eq!(value["ok"], true);
+    assert_eq!(value["data"]["supported"], true);
+    assert_eq!(value["data"]["resolutionMode"], "known_profile");
+    assert_eq!(value["data"]["calibrationRan"], false);
+}
+
+#[test]
 fn ipc_self_test_forwards_decompress_oracle_sample_to_runtime_worker() {
     let exe = minimal_pe64_with_imports_and_relocations();
     let profile = parse_profile_json(&profile_json(

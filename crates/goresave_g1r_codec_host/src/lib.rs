@@ -4069,6 +4069,201 @@ pub fn handle_ipc_line_with_runtime_worker(
     serialize_ipc_response(response)
 }
 
+fn run_self_test_command(
+    id: Option<String>,
+    value: &Value,
+    profiles: &[VersionProfile],
+    runtime_worker_path: Option<&Path>,
+) -> (Option<String>, Result<Value, HostError>) {
+    let Some(exe_path) = value.get("exePath").and_then(Value::as_str) else {
+        return (
+            id,
+            Err(HostError::new(
+                ErrorCode::InvalidRequest,
+                "self_test request exePath is required",
+            )),
+        );
+    };
+    let relocation_base = match value.get("relocationBase") {
+        Some(Value::String(value)) => parse_hex_u64(value).map(Some).ok_or_else(|| {
+            HostError::new(
+                ErrorCode::InvalidRequest,
+                "self_test relocationBase must be a hex string or integer",
+            )
+        }),
+        Some(Value::Number(value)) => value.as_u64().map(Some).ok_or_else(|| {
+            HostError::new(
+                ErrorCode::InvalidRequest,
+                "self_test relocationBase must fit in u64",
+            )
+        }),
+        Some(_) => Err(HostError::new(
+            ErrorCode::InvalidRequest,
+            "self_test relocationBase must be a hex string or integer",
+        )),
+        None => Ok(None),
+    };
+    let response = relocation_base.and_then(|relocation_base| {
+        let runtime_selftest_sample = parse_runtime_selftest_sample(value)?;
+        let runtime_selftest_compress_sample = parse_runtime_selftest_compress_sample(value)?;
+        let derived_profile_cache_path = Some(parse_derived_profile_cache_path(value));
+        let request = SelfTestRequest {
+            exe_path: PathBuf::from(exe_path),
+            relocation_base,
+            resolve_imports: value
+                .get("resolveImports")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            map_image: value
+                .get("mapImage")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            run_runtime_selftests: value
+                .get("runRuntimeSelftests")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            runtime_selftest_run_decompress: value
+                .get("runtimeSelftestRunDecompress")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            runtime_selftest_run_compress: value
+                .get("runtimeSelftestRunCompress")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            runtime_selftest_decompress_repeat_count: parse_optional_repeat_count(
+                value,
+                "self_test",
+                "runtimeSelftestDecompressRepeatCount",
+            )?,
+            runtime_selftest_compress_repeat_count: parse_optional_repeat_count(
+                value,
+                "self_test",
+                "runtimeSelftestCompressRepeatCount",
+            )?,
+            runtime_selftest_sample,
+            runtime_selftest_compress_sample,
+        };
+        let response = {
+            let search_dirs = request
+                .exe_path
+                .parent()
+                .map(|parent| vec![parent.to_path_buf()])
+                .unwrap_or_default();
+            let mut resolver = WindowsImportResolver::with_search_dirs(search_dirs);
+            self_test_exe_with_optional_import_resolver(
+                &request,
+                profiles,
+                Some(&mut resolver),
+                runtime_worker_path,
+                derived_profile_cache_path.as_deref(),
+            )
+        };
+        response.and_then(|response| {
+            let mut value = serde_json::to_value(&response).map_err(|err| {
+                HostError::new(
+                    ErrorCode::InvalidRequest,
+                    format!("self_test response serialization failed: {err}"),
+                )
+            })?;
+            let cache_report = record_derived_profile_cache_after_self_test(
+                &request.exe_path,
+                &response,
+                derived_profile_cache_path.as_deref(),
+            )?;
+            value["derivedProfileCache"] = serde_json::to_value(cache_report).map_err(|err| {
+                HostError::new(
+                    ErrorCode::InvalidRequest,
+                    format!("derived profile cache report serialization failed: {err}"),
+                )
+            })?;
+            Ok(value)
+        })
+    });
+    (id, response)
+}
+
+fn run_calibrate_command(
+    id: Option<String>,
+    exe_path: PathBuf,
+    cache_path: PathBuf,
+    base_value: &Value,
+    profiles: &[VersionProfile],
+    runtime_worker_path: Option<&Path>,
+) -> Result<Value, HostError> {
+    // 1. Probe first. If already supported (known profile or derived cache),
+    //    no calibration is needed.
+    let probe = probe_exe_with_derived_cache(
+        &ProbeRequest {
+            exe_path: exe_path.clone(),
+        },
+        profiles,
+        Some(cache_path.as_path()),
+    )?;
+    if probe.supported {
+        let mut value = serde_json::to_value(&probe)
+            .map_err(|e| HostError::new(ErrorCode::InvalidRequest, e.to_string()))?;
+        value["calibrationRan"] = json!(false);
+        return Ok(value);
+    }
+
+    // 2. Build a self_test request carrying the embedded sample + synthetic
+    //    compress input, force the runtime selftests on, and reuse the proven
+    //    self_test command (it records the derived profile cache on success).
+    let sample = calibration_sample();
+    let compress_input = calibration_compress_input();
+    let mut st = base_value.clone();
+    let obj = st.as_object_mut().ok_or_else(|| {
+        HostError::new(
+            ErrorCode::InvalidRequest,
+            "calibrate request must be an object",
+        )
+    })?;
+    obj.insert("exePath".into(), json!(exe_path.display().to_string()));
+    obj.insert(
+        "derivedProfileCachePath".into(),
+        json!(cache_path.display().to_string()),
+    );
+    obj.insert("mapImage".into(), json!(true));
+    obj.insert("resolveImports".into(), json!(true));
+    obj.insert("runRuntimeSelftests".into(), json!(true));
+    obj.insert("runtimeSelftestRunDecompress".into(), json!(true));
+    obj.insert("runtimeSelftestRunCompress".into(), json!(true));
+    obj.insert(
+        "runtimeSelftestSample".into(),
+        serde_json::to_value(&sample)
+            .map_err(|e| HostError::new(ErrorCode::InvalidRequest, e.to_string()))?,
+    );
+    obj.insert(
+        "runtimeSelftestCompressSample".into(),
+        json!({
+            "inputBase64": BASE64_STANDARD.encode(&compress_input),
+            "level": 4
+        }),
+    );
+
+    let (_id, st_result) = run_self_test_command(id, &st, profiles, runtime_worker_path);
+    let _ = st_result?; // selftest + cache recording ran; failures propagate.
+
+    // 3. Re-probe: the derived cache now (if calibration passed) promotes the
+    //    exe to a supported derived profile.
+    let promoted = probe_exe_with_derived_cache(
+        &ProbeRequest { exe_path },
+        profiles,
+        Some(cache_path.as_path()),
+    )?;
+    if !promoted.supported {
+        return Err(HostError::with_details(
+            ErrorCode::UnsupportedExe,
+            "calibration did not produce a usable codec profile",
+            json!({ "sha256": promoted.exe_sha256, "peTimestamp": format!("0x{:08X}", promoted.pe_timestamp) }),
+        ));
+    }
+    let mut value = serde_json::to_value(&promoted)
+        .map_err(|e| HostError::new(ErrorCode::InvalidRequest, e.to_string()))?;
+    value["calibrationRan"] = json!(true);
+    Ok(value)
+}
+
 fn handle_ipc_line_inner(
     line: &str,
     profiles: &[VersionProfile],
@@ -4135,113 +4330,27 @@ fn handle_ipc_line_inner(
             });
             (id, response)
         }
-        "self_test" => {
+        "self_test" => run_self_test_command(id, &value, profiles, runtime_worker_path),
+        "calibrate" => {
             let Some(exe_path) = value.get("exePath").and_then(Value::as_str) else {
                 return (
                     id,
                     Err(HostError::new(
                         ErrorCode::InvalidRequest,
-                        "self_test request exePath is required",
+                        "calibrate request exePath is required",
                     )),
                 );
             };
-            let relocation_base = match value.get("relocationBase") {
-                Some(Value::String(value)) => parse_hex_u64(value).map(Some).ok_or_else(|| {
-                    HostError::new(
-                        ErrorCode::InvalidRequest,
-                        "self_test relocationBase must be a hex string or integer",
-                    )
-                }),
-                Some(Value::Number(value)) => value.as_u64().map(Some).ok_or_else(|| {
-                    HostError::new(
-                        ErrorCode::InvalidRequest,
-                        "self_test relocationBase must fit in u64",
-                    )
-                }),
-                Some(_) => Err(HostError::new(
-                    ErrorCode::InvalidRequest,
-                    "self_test relocationBase must be a hex string or integer",
-                )),
-                None => Ok(None),
-            };
-            let response = relocation_base.and_then(|relocation_base| {
-                let runtime_selftest_sample = parse_runtime_selftest_sample(&value)?;
-                let runtime_selftest_compress_sample =
-                    parse_runtime_selftest_compress_sample(&value)?;
-                let derived_profile_cache_path = Some(parse_derived_profile_cache_path(&value));
-                let request = SelfTestRequest {
-                    exe_path: PathBuf::from(exe_path),
-                    relocation_base,
-                    resolve_imports: value
-                        .get("resolveImports")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false),
-                    map_image: value
-                        .get("mapImage")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false),
-                    run_runtime_selftests: value
-                        .get("runRuntimeSelftests")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false),
-                    runtime_selftest_run_decompress: value
-                        .get("runtimeSelftestRunDecompress")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false),
-                    runtime_selftest_run_compress: value
-                        .get("runtimeSelftestRunCompress")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false),
-                    runtime_selftest_decompress_repeat_count: parse_optional_repeat_count(
-                        &value,
-                        "self_test",
-                        "runtimeSelftestDecompressRepeatCount",
-                    )?,
-                    runtime_selftest_compress_repeat_count: parse_optional_repeat_count(
-                        &value,
-                        "self_test",
-                        "runtimeSelftestCompressRepeatCount",
-                    )?,
-                    runtime_selftest_sample,
-                    runtime_selftest_compress_sample,
-                };
-                let response = {
-                    let search_dirs = request
-                        .exe_path
-                        .parent()
-                        .map(|parent| vec![parent.to_path_buf()])
-                        .unwrap_or_default();
-                    let mut resolver = WindowsImportResolver::with_search_dirs(search_dirs);
-                    self_test_exe_with_optional_import_resolver(
-                        &request,
-                        profiles,
-                        Some(&mut resolver),
-                        runtime_worker_path,
-                        derived_profile_cache_path.as_deref(),
-                    )
-                };
-                response.and_then(|response| {
-                    let mut value = serde_json::to_value(&response).map_err(|err| {
-                        HostError::new(
-                            ErrorCode::InvalidRequest,
-                            format!("self_test response serialization failed: {err}"),
-                        )
-                    })?;
-                    let cache_report = record_derived_profile_cache_after_self_test(
-                        &request.exe_path,
-                        &response,
-                        derived_profile_cache_path.as_deref(),
-                    )?;
-                    value["derivedProfileCache"] =
-                        serde_json::to_value(cache_report).map_err(|err| {
-                            HostError::new(
-                                ErrorCode::InvalidRequest,
-                                format!("derived profile cache report serialization failed: {err}"),
-                            )
-                        })?;
-                    Ok(value)
-                })
-            });
+            let exe_path = PathBuf::from(exe_path);
+            let cache_path = parse_derived_profile_cache_path(&value);
+            let response = run_calibrate_command(
+                id.clone(),
+                exe_path,
+                cache_path,
+                &value,
+                profiles,
+                runtime_worker_path,
+            );
             (id, response)
         }
         "export_derived_profile" => {
