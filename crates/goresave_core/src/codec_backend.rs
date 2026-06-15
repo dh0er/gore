@@ -145,6 +145,43 @@ impl G1rBinaryHostBackend {
     fn recorded_requests_for_tests(&self) -> Vec<Value> {
         self.invoker.recorded_requests()
     }
+
+    /// Build a backend whose host responses are produced by a closure that
+    /// dispatches on the request's `command` field. Test-only seam used by the
+    /// core crate's tests to exercise `probe`/`calibrate` flows without a real
+    /// helper process.
+    #[cfg(test)]
+    pub(crate) fn with_command_dispatch_for_tests<F>(
+        exe_path: impl Into<PathBuf>,
+        dispatch: F,
+    ) -> Self
+    where
+        F: Fn(&str) -> Result<Value, CoreError> + Send + Sync + 'static,
+    {
+        Self {
+            exe_path: exe_path.into(),
+            derived_profile_cache_path: None,
+            invoker: Box::new(DispatchingCodecHostInvoker {
+                dispatch: Box::new(dispatch),
+            }),
+        }
+    }
+}
+
+#[cfg(test)]
+struct DispatchingCodecHostInvoker {
+    dispatch: Box<dyn Fn(&str) -> Result<Value, CoreError> + Send + Sync>,
+}
+
+#[cfg(test)]
+impl CodecHostInvoker for DispatchingCodecHostInvoker {
+    fn invoke(&self, request: Value) -> Result<Value, CoreError> {
+        let command = request
+            .get("command")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        (self.dispatch)(command)
+    }
 }
 
 impl CodecBackend for G1rBinaryHostBackend {
