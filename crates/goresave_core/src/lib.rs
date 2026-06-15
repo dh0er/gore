@@ -3533,6 +3533,43 @@ fn progression_knowledge(
     }
 }
 
+/// Serialize one `CharacterKnowledgeByUniqueName` map entry: an inline Name key
+/// (the NPC's unique name) followed by an inline `KnowledgeSet` struct value that
+/// holds an empty `Knowledge` set. The struct value is a property list with one
+/// (empty) Name set named "Knowledge", terminated by the "None" sentinel that
+/// closes a non-native struct's property list.
+///
+/// The returned bytes are a schema-valid entry for the proven map layout and are
+/// meant to feed `ContainerEdit::MapInsert`. (Task 6 wires this into the IPC op;
+/// today only the round-trip test exercises it.)
+#[allow(dead_code)]
+fn encode_knowledge_map_entry(unique_name: &str) -> Vec<u8> {
+    let mut out = properties::encode_fstring_value(unique_name); // inline Name key
+    out.extend_from_slice(&encode_empty_name_set_property("Knowledge"));
+    out.extend_from_slice(&properties::encode_fstring_value("None"));
+    out
+}
+
+/// A tagged `SetProperty<NameProperty>` carrying zero elements. The byte layout
+/// matches the proven `name_set_property("Knowledge", &[])` fixture exactly:
+/// name fstring, "SetProperty" fstring, `1u32`, "NameProperty" fstring,
+/// `0u32` array_index, body-size `u32`, `0u8` tag_flags, then the body
+/// (`num_to_remove u32` + `count u32`).
+#[allow(dead_code)]
+fn encode_empty_name_set_property(name: &str) -> Vec<u8> {
+    let mut body = 0u32.to_le_bytes().to_vec(); // num_to_remove
+    body.extend_from_slice(&0u32.to_le_bytes()); // count
+    let mut out = properties::encode_fstring_value(name);
+    out.extend_from_slice(&properties::encode_fstring_value("SetProperty"));
+    out.extend_from_slice(&1u32.to_le_bytes()); // array_index marker
+    out.extend_from_slice(&properties::encode_fstring_value("NameProperty"));
+    out.extend_from_slice(&0u32.to_le_bytes()); // array_index
+    out.extend_from_slice(&(body.len() as u32).to_le_bytes()); // body size
+    out.push(0); // tag_flags
+    out.extend_from_slice(&body);
+    out
+}
+
 fn progression_events(
     root: &properties::RootObject,
     query: &str,
@@ -11089,6 +11126,77 @@ mod tests {
         out.push(0); // tag_flags
         out.extend_from_slice(&body);
         out
+    }
+
+    /// Wrap a single `encode_knowledge_map_entry` blob in a one-entry
+    /// `CharacterKnowledgeByUniqueName` map, frame it as a private root, parse,
+    /// and return the entry's key string plus its `Knowledge` set elements.
+    ///
+    /// The map tag header mirrors `properties::knowledge_map_property` (the
+    /// corrected Task 3 layout); `parse_private_root` is the oracle — if the
+    /// produced entry bytes are wrong, this won't parse.
+    fn parse_single_knowledge_entry(entry_bytes: &[u8]) -> (String, Vec<String>) {
+        let mut body = 0u32.to_le_bytes().to_vec(); // num_to_remove
+        body.extend_from_slice(&1u32.to_le_bytes()); // count
+        body.extend_from_slice(entry_bytes);
+
+        // MapProperty<NameProperty, StructProperty(KnowledgeSet)> tag.
+        let mut prop = fstring("CharacterKnowledgeByUniqueName");
+        prop.extend_from_slice(&fstring("MapProperty"));
+        prop.extend_from_slice(&2u32.to_le_bytes()); // descriptor count
+        prop.extend_from_slice(&fstring("NameProperty")); // key type
+        prop.extend_from_slice(&0u32.to_le_bytes()); // key_flags
+        prop.extend_from_slice(&fstring("StructProperty")); // value type
+        prop.extend_from_slice(&1u32.to_le_bytes()); // struct descriptor count
+        prop.extend_from_slice(&fstring("KnowledgeSet")); // value struct type
+        prop.extend_from_slice(&1u32.to_le_bytes()); // package count
+        prop.extend_from_slice(&fstring("/Script/G1R")); // package
+        prop.extend_from_slice(&0u32.to_le_bytes()); // array_index
+        prop.extend_from_slice(&(body.len() as u32).to_le_bytes()); // size
+        prop.push(0); // tag_flags
+        prop.extend_from_slice(&body);
+
+        // Private-root framing: class fstring + object flag + props + "None" + footer.
+        let mut payload = fstring("/Script/Test.Save");
+        payload.push(0);
+        payload.extend_from_slice(&prop);
+        payload.extend_from_slice(&fstring("None"));
+        payload.extend_from_slice(&0u32.to_le_bytes());
+
+        let root = properties::parse_private_root(&payload).unwrap();
+        let (_, map_prop) =
+            properties::find_property_by_name(&root, "CharacterKnowledgeByUniqueName").unwrap();
+        let properties::PropertyValue::Map { entries, .. } = &map_prop.value else {
+            panic!("CharacterKnowledgeByUniqueName is not a map");
+        };
+        assert_eq!(entries.len(), 1, "expected exactly one entry");
+        let (key, value) = &entries[0];
+        let key = match key {
+            properties::PropertyValue::Name(s) | properties::PropertyValue::Str(s) => s.clone(),
+            other => panic!("unexpected key {other:?}"),
+        };
+        let knowledge = match struct_member(value, "Knowledge") {
+            Some(properties::PropertyValue::Set { elements, .. }) => elements
+                .iter()
+                .filter_map(|e| match e {
+                    properties::PropertyValue::Name(s) | properties::PropertyValue::Str(s) => {
+                        Some(s.clone())
+                    }
+                    _ => None,
+                })
+                .collect(),
+            other => panic!("Knowledge member is not a set: {other:?}"),
+        };
+        (key, knowledge)
+    }
+
+    #[test]
+    fn empty_knowledge_value_roundtrips_as_struct_with_empty_set() {
+        let key = "OC_TEST_Npc";
+        let entry = encode_knowledge_map_entry(key);
+        let (parsed_key, knowledge) = parse_single_knowledge_entry(&entry);
+        assert_eq!(parsed_key, key);
+        assert!(knowledge.is_empty());
     }
 
     #[test]

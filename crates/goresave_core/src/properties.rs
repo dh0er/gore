@@ -800,7 +800,7 @@ pub fn patch_scalar(
 /// Serialized FString payload for a replacement value, mirroring the formats
 /// `Reader::fstring` accepts: empty => bare zero length, ASCII => 8-bit chars
 /// with a NUL terminator, otherwise UTF-16LE with a negative character count.
-fn encode_fstring_value(value: &str) -> Vec<u8> {
+pub(crate) fn encode_fstring_value(value: &str) -> Vec<u8> {
     if value.is_empty() {
         return 0i32.to_le_bytes().to_vec();
     }
