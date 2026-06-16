@@ -1521,6 +1521,11 @@ fn protect_mapped_sections(
 /// Names are compared case-insensitively. UE4SS defaults to `dwmapi.dll` but is
 /// configurable to other names in this list, so the whole proxy family is
 /// covered.
+/// This list intentionally contains only core OS API DLLs that mod loaders
+/// wrap — it must NOT include redistributable DLLs that games legitimately ship
+/// application-local (e.g. `d3dcompiler_47.dll`, `xaudio2_9.dll`, the VC
+/// runtime). Overriding those to System32 could bind imports to a different
+/// build than the executable ships, which is exactly what scoping avoids.
 #[cfg(windows)]
 const KNOWN_PROXY_DLLS: &[&str] = &[
     "d3d8.dll",
@@ -1528,8 +1533,6 @@ const KNOWN_PROXY_DLLS: &[&str] = &[
     "d3d10.dll",
     "d3d11.dll",
     "d3d12.dll",
-    "d3dcompiler_43.dll",
-    "d3dcompiler_47.dll",
     "ddraw.dll",
     "dinput.dll",
     "dinput8.dll",
@@ -1542,8 +1545,6 @@ const KNOWN_PROXY_DLLS: &[&str] = &[
     "version.dll",
     "wininet.dll",
     "winmm.dll",
-    "xapofx1_5.dll",
-    "xaudio2_9.dll",
     "xinput1_1.dll",
     "xinput1_2.dll",
     "xinput1_3.dll",
@@ -3989,8 +3990,19 @@ mod candidate_dll_path_tests {
         let app_local = game_dir.join("vcruntime140.dll");
         fs::write(&app_local, b"app-local vc runtime").unwrap();
 
-        // Precondition: this name is not in the proxy override set.
-        assert!(!KNOWN_PROXY_DLLS.contains(&"vcruntime140.dll"));
+        // Precondition: redistributable DLLs games ship app-local must not be
+        // in the proxy override set, even when an identically-named copy exists
+        // in System32.
+        for name in [
+            "vcruntime140.dll",
+            "msvcp140.dll",
+            "d3dcompiler_43.dll",
+            "d3dcompiler_47.dll",
+            "xaudio2_9.dll",
+            "xapofx1_5.dll",
+        ] {
+            assert!(!KNOWN_PROXY_DLLS.contains(&name), "{name} must not be proxied");
+        }
 
         let resolver = WindowsImportResolver::with_search_dirs(vec![game_dir.clone()]);
         let resolved = resolver.candidate_dll_path("vcruntime140.dll").unwrap();
