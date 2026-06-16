@@ -1281,6 +1281,52 @@ class EditorNotifier extends StateNotifier<EditorState> {
     );
   }
 
+  /// Insert a brand-new character into CharacterKnowledgeByUniqueName and write
+  /// the file immediately (with backup), then re-inspect so the new NPC's empty
+  /// Knowledge set is queryable for follow-on entry edits. Map insertions are
+  /// structural and applied one-at-a-time, so this is intentionally NOT a
+  /// pending edit. Returns true on success; on failure sets state.error and
+  /// returns false.
+  ///
+  /// Mirrors [applyMemoryEventEdit]: same no-save / isLoading / hasUnsavedEdits
+  /// guards (an immediate write + refresh re-seeds the editors and would discard
+  /// any unsaved pending edits), and the same _runWrite-then-refresh flow.
+  Future<bool> applyAddKnowledgeCharacter(String uniqueName) async {
+    final savePath = state.selectedPath;
+    if (savePath == null) {
+      state = state.copyWith(error: 'No save selected.');
+      return false;
+    }
+    if (state.isLoading) {
+      state = state.copyWith(
+        error: 'Another operation is in progress — try again when it finishes.',
+      );
+      return false;
+    }
+    if (state.hasUnsavedEdits) {
+      state = state.copyWith(
+        error:
+            'Save or reset your unsaved changes first — adding a character '
+            'writes the file immediately and would discard them.',
+      );
+      return false;
+    }
+    return _runWrite(
+      payload: {
+        'path': savePath,
+        'backup': true,
+        'edits': [
+          {
+            'path': 'private.knowledge.addCharacter',
+            'value': {'value': uniqueName.trim()},
+          },
+        ],
+        ..._codecPayload(),
+      },
+      message: (data) => _backupMessage('Character added', data),
+    );
+  }
+
   String _errorMessage(Map<String, Object?> response) {
     final error = (response['error'] as Map?)?.cast<String, Object?>();
     return error?['message'] as String? ?? 'Unknown core error';

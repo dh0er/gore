@@ -1,0 +1,5477 @@
+[
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_AITestDummy",
+    "id": "AITestDummy"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_AM_JuvenileTroll_01",
+    "id": "AM_JuvenileTroll_01"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_AM_Snapper_01",
+    "id": "AM_Snapper_01"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_BC_BAN_Arlin_852",
+    "id": "BC_BAN_Arlin_852"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_BC_BAN_Bandit_01",
+    "id": "BC_BAN_Bandit_01"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_BC_BAN_Bandit_02",
+    "id": "BC_BAN_Bandit_02"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_BC_BAN_Bandit_03",
+    "id": "BC_BAN_Bandit_03"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_BC_BAN_Bandit_04",
+    "id": "BC_BAN_Bandit_04"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_BC_BAN_Bandit_05",
+    "id": "BC_BAN_Bandit_05"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_BC_BAN_Bandit_06",
+    "id": "BC_BAN_Bandit_06"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_BC_BAN_Bandit_07",
+    "id": "BC_BAN_Bandit_07"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_BC_BAN_Bandit_08",
+    "id": "BC_BAN_Bandit_08"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_BC_BAN_Bandit_09",
+    "id": "BC_BAN_Bandit_09"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_BC_BAN_Bandit_10",
+    "id": "BC_BAN_Bandit_10"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_BC_BAN_Bandit_11",
+    "id": "BC_BAN_Bandit_11"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_BC_BAN_Bandit_12",
+    "id": "BC_BAN_Bandit_12"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_BC_BAN_Bandit_13",
+    "id": "BC_BAN_Bandit_13"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_BC_BAN_Bandit_14",
+    "id": "BC_BAN_Bandit_14"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_BC_BAN_Bandit_15",
+    "id": "BC_BAN_Bandit_15"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_BC_BAN_Bandit_16",
+    "id": "BC_BAN_Bandit_16"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_BC_BAN_Bandit_17",
+    "id": "BC_BAN_Bandit_17"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_BC_BAN_Bandit_18",
+    "id": "BC_BAN_Bandit_18"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_BC_BAN_Bandit_19",
+    "id": "BC_BAN_Bandit_19"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_BC_BAN_Bandit_20",
+    "id": "BC_BAN_Bandit_20"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_BC_BAN_Bandit_21",
+    "id": "BC_BAN_Bandit_21"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_BC_BAN_Bandit_22",
+    "id": "BC_BAN_Bandit_22"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_BC_BAN_Bandit_23",
+    "id": "BC_BAN_Bandit_23"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_BC_BAN_Brannok_863",
+    "id": "BC_BAN_Brannok_863"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_BC_BAN_Quentin_858",
+    "id": "BC_BAN_Quentin_858"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_BC_BAN_Torik_864",
+    "id": "BC_BAN_Torik_864"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_BanditCamp_Bandit",
+    "id": "BanditCamp_Bandit"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_CS_Escort01",
+    "id": "CS_Escort01"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_CS_Escort02",
+    "id": "CS_Escort02"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_CS_Escort03",
+    "id": "CS_Escort03"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_CS_Escort04",
+    "id": "CS_Escort04"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_CS_Escort05",
+    "id": "CS_Escort05"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_CS_Escort06",
+    "id": "CS_Escort06"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_CS_FireMage01",
+    "id": "CS_FireMage01"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_CS_HeavyGuard01",
+    "id": "CS_HeavyGuard01"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_CS_Judge",
+    "id": "CS_Judge"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_CS_Velaya",
+    "id": "CS_Velaya"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Character_Scout_Skeleton_Xardas_Sleeper",
+    "id": "Character_Scout_Skeleton_Xardas_Sleeper"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Character_Skeleton_Xardas_Sleeper",
+    "id": "Character_Skeleton_Xardas_Sleeper"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Character_Warrior_Skeleton_Xardas_Sleeper",
+    "id": "Character_Warrior_Skeleton_Xardas_Sleeper"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Creature",
+    "id": "Creature"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_BigMolerat",
+    "id": "Creature_BigMolerat"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Biter",
+    "id": "Creature_Biter"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Biter_Armored",
+    "id": "Creature_Biter_Armored"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Biter_OrcGraveyard",
+    "id": "Creature_Biter_OrcGraveyard"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Biter_Strapped",
+    "id": "Creature_Biter_Strapped"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Bloodfly",
+    "id": "Creature_Bloodfly"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Bloodhound",
+    "id": "Creature_Bloodhound"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_CorKalomDemon_Sleeper",
+    "id": "Creature_CorKalomDemon_Sleeper"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Demon_Fire",
+    "id": "Creature_Demon_Fire"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Demon_Fire_Sleeper",
+    "id": "Creature_Demon_Fire_Sleeper"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Demon_Fire_Sleeper_Ruushk_01",
+    "id": "Creature_Demon_Fire_Sleeper_Ruushk_01"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Demon_Fire_Sleeper_Ruushk_02",
+    "id": "Creature_Demon_Fire_Sleeper_Ruushk_02"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Demon_Fire_Sleeper_Ruushk_03",
+    "id": "Creature_Demon_Fire_Sleeper_Ruushk_03"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Demon_Lesser",
+    "id": "Creature_Demon_Lesser"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Demon_Lesser_VKasorg",
+    "id": "Creature_Demon_Lesser_VKasorg"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Demon_Lord",
+    "id": "Creature_Demon_Lord"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Goblin",
+    "id": "Creature_Goblin"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Goblin_Black",
+    "id": "Creature_Goblin_Black"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Goblin_Black_Mace",
+    "id": "Creature_Goblin_Black_Mace"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Goblin_Black_Torch",
+    "id": "Creature_Goblin_Black_Torch"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Goblin_Green",
+    "id": "Creature_Goblin_Green"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Goblin_Green_Club",
+    "id": "Creature_Goblin_Green_Club"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Goblin_Green_Sword",
+    "id": "Creature_Goblin_Green_Sword"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Goblin_Green_Torch",
+    "id": "Creature_Goblin_Green_Torch"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Goblin_TrollTest",
+    "id": "Creature_Goblin_TrollTest"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Goblin_Warrior",
+    "id": "Creature_Goblin_Warrior"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Golem_Fire",
+    "id": "Creature_Golem_Fire"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Golem_Fire_Test",
+    "id": "Creature_Golem_Fire_Test"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Golem_Ice",
+    "id": "Creature_Golem_Ice"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Golem_IceMini",
+    "id": "Creature_Golem_IceMini"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Golem_Stone",
+    "id": "Creature_Golem_Stone"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Golem_Stone_AncientMonastery",
+    "id": "Creature_Golem_Stone_AncientMonastery"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Golem_Stone_Bridge",
+    "id": "Creature_Golem_Stone_Bridge"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Golem_Stone_Summoned",
+    "id": "Creature_Golem_Stone_Summoned"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Harpy",
+    "id": "Creature_Harpy"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Harpy_Sleeper",
+    "id": "Creature_Harpy_Sleeper"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_JuvenileTroll",
+    "id": "Creature_JuvenileTroll"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Lizard",
+    "id": "Creature_Lizard"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Lizard_Fire",
+    "id": "Creature_Lizard_Fire"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Lizard_Fire_Prime",
+    "id": "Creature_Lizard_Fire_Prime"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Lurker",
+    "id": "Creature_Lurker"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Lurker_Homer",
+    "id": "Creature_Lurker_Homer"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Meatbug",
+    "id": "Creature_Meatbug"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Minecrawler",
+    "id": "Creature_Minecrawler"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Minecrawler_Named",
+    "id": "Creature_Minecrawler_Named"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Minecrawler_Nymph",
+    "id": "Creature_Minecrawler_Nymph"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Minecrawler_Nymph_Queen",
+    "id": "Creature_Minecrawler_Nymph_Queen"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Minecrawler_Queen",
+    "id": "Creature_Minecrawler_Queen"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Minecrawler_Queen_Ph2",
+    "id": "Creature_Minecrawler_Queen_Ph2"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Minecrawler_Queen_Ph2_Sleeper",
+    "id": "Creature_Minecrawler_Queen_Ph2_Sleeper"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Minecrawler_Temple",
+    "id": "Creature_Minecrawler_Temple"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Minecrawler_Temple_Sleeper",
+    "id": "Creature_Minecrawler_Temple_Sleeper"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Minecrawler_Test",
+    "id": "Creature_Minecrawler_Test"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Minecrawler_Wait_Test",
+    "id": "Creature_Minecrawler_Wait_Test"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Minecrawler_Warrior",
+    "id": "Creature_Minecrawler_Warrior"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Minecrawler_Warrior_King",
+    "id": "Creature_Minecrawler_Warrior_King"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Molerat",
+    "id": "Creature_Molerat"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_OrcDog",
+    "id": "Creature_OrcDog"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Rat",
+    "id": "Creature_Rat"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Razor",
+    "id": "Creature_Razor"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_SH_ZombieSkeleton",
+    "id": "Creature_SH_ZombieSkeleton"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Scavenger_Adult",
+    "id": "Creature_Scavenger_Adult"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Scavenger_Adult_LayerHits",
+    "id": "Creature_Scavenger_Adult_LayerHits"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Scavenger_Adult_Riding",
+    "id": "Creature_Scavenger_Adult_Riding"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Scavenger_Adult_Riding_Cohsel",
+    "id": "Creature_Scavenger_Adult_Riding_Cohsel"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Scavenger_Medium",
+    "id": "Creature_Scavenger_Medium"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Scavenger_Young",
+    "id": "Creature_Scavenger_Young"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_ShadowBeast",
+    "id": "Creature_ShadowBeast"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_ShadowBeast_Cave",
+    "id": "Creature_ShadowBeast_Cave"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_ShadowBeast_Forest",
+    "id": "Creature_ShadowBeast_Forest"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_ShadowBeast_Frost",
+    "id": "Creature_ShadowBeast_Frost"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_ShadowBeast_Prime",
+    "id": "Creature_ShadowBeast_Prime"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_SkMageSummonedSkeleton",
+    "id": "Creature_SkMageSummonedSkeleton"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Skeleton",
+    "id": "Creature_Skeleton"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Skeleton_Base",
+    "id": "Creature_Skeleton_Base"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Skeleton_Mage",
+    "id": "Creature_Skeleton_Mage"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Skeleton_Mage1",
+    "id": "Creature_Skeleton_Mage1"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Skeleton_Mage2",
+    "id": "Creature_Skeleton_Mage2"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Skeleton_Mage3",
+    "id": "Creature_Skeleton_Mage3"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Skeleton_Mage4",
+    "id": "Creature_Skeleton_Mage4"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Skeleton_Scout",
+    "id": "Creature_Skeleton_Scout"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Skeleton_Summon",
+    "id": "Creature_Skeleton_Summon"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Skeleton_Warrior",
+    "id": "Creature_Skeleton_Warrior"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Skeleton_Warrior_Summon",
+    "id": "Creature_Skeleton_Warrior_Summon"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Skeleton_XardasServant",
+    "id": "Creature_Skeleton_XardasServant"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Snapper",
+    "id": "Creature_Snapper"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Swampshark",
+    "id": "Creature_Swampshark"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Swampshark_Named",
+    "id": "Creature_Swampshark_Named"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Swampshark_Prime",
+    "id": "Creature_Swampshark_Prime"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_TheSleeper",
+    "id": "Creature_TheSleeper"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Troll",
+    "id": "Creature_Troll"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Troll_Adult_Shrinked",
+    "id": "Creature_Troll_Adult_Shrinked"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_VUnhilqtSkeleton",
+    "id": "Creature_VUnhilqtSkeleton"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Wolf",
+    "id": "Creature_Wolf"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Wolf_Alpha",
+    "id": "Creature_Wolf_Alpha"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Wolf_Scary",
+    "id": "Creature_Wolf_Scary"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_XT_XardasDemon",
+    "id": "Creature_XT_XardasDemon"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_XardasDemon",
+    "id": "Creature_XardasDemon"
+  },
+  {
+    "category": "creature",
+    "class": "CharacterDefinition_Creature_Zombie",
+    "id": "Creature_Zombie"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_GRD_Guard01_246",
+    "id": "FM_GRD_Guard01_246"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_GRD_Guard01_283",
+    "id": "FM_GRD_Guard01_283"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_GRD_Guard02_284",
+    "id": "FM_GRD_Guard02_284"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_GRD_Guard03_285",
+    "id": "FM_GRD_Guard03_285"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_GRD_Guard04_286",
+    "id": "FM_GRD_Guard04_286"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_GRD_Guard05_287",
+    "id": "FM_GRD_Guard05_287"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_GRD_Guard06_288",
+    "id": "FM_GRD_Guard06_288"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_GRD_Guard07_289",
+    "id": "FM_GRD_Guard07_289"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_GRD_Guard08_290",
+    "id": "FM_GRD_Guard08_290"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_GRD_Guard09_291",
+    "id": "FM_GRD_Guard09_291"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_GRD_Guard10_292",
+    "id": "FM_GRD_Guard10_292"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_GRD_Guard11_293",
+    "id": "FM_GRD_Guard11_293"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_GRD_Guard12_294",
+    "id": "FM_GRD_Guard12_294"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_GRD_Guard13_295",
+    "id": "FM_GRD_Guard13_295"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_GRD_Guard14_296",
+    "id": "FM_GRD_Guard14_296"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_GRD_Guard15_297",
+    "id": "FM_GRD_Guard15_297"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_GRD_Guard16_298",
+    "id": "FM_GRD_Guard16_298"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_GRD_Guard17_299",
+    "id": "FM_GRD_Guard17_299"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_ORG_Rogue01_890",
+    "id": "FM_ORG_Rogue01_890"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_ORG_Rogue02_891",
+    "id": "FM_ORG_Rogue02_891"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_ORG_Rogue03_892",
+    "id": "FM_ORG_Rogue03_892"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_SFB_Scraper01_1030",
+    "id": "FM_SFB_Scraper01_1030"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_SFB_Scraper02_1031",
+    "id": "FM_SFB_Scraper02_1031"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_SFB_Scraper03_1032",
+    "id": "FM_SFB_Scraper03_1032"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_SFB_Scraper04_1033",
+    "id": "FM_SFB_Scraper04_1033"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_SFB_Scraper05_1034",
+    "id": "FM_SFB_Scraper05_1034"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_SFB_Scraper06_1035",
+    "id": "FM_SFB_Scraper06_1035"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_SFB_Scraper07_1036",
+    "id": "FM_SFB_Scraper07_1036"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_SFB_Scraper08_1038",
+    "id": "FM_SFB_Scraper08_1038"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_SFB_Scraper09_1039",
+    "id": "FM_SFB_Scraper09_1039"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_SFB_Scraper10_1040",
+    "id": "FM_SFB_Scraper10_1040"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_SFB_Scraper11_1041",
+    "id": "FM_SFB_Scraper11_1041"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_SFB_Scraper12_1042",
+    "id": "FM_SFB_Scraper12_1042"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_SFB_Scraper13_1043",
+    "id": "FM_SFB_Scraper13_1043"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_SFB_Scraper14_1044",
+    "id": "FM_SFB_Scraper14_1044"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_SFB_Swiney_1037",
+    "id": "FM_SFB_Swiney_1037"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_SLD_Baloro_753",
+    "id": "FM_SLD_Baloro_753"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_SLD_Mercenary01_750",
+    "id": "FM_SLD_Mercenary01_750"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_SLD_Mercenary02_751",
+    "id": "FM_SLD_Mercenary02_751"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_SLD_Mercenary03_755",
+    "id": "FM_SLD_Mercenary03_755"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_SLD_Mercenary04_756",
+    "id": "FM_SLD_Mercenary04_756"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_SLD_Mercenary05_757",
+    "id": "FM_SLD_Mercenary05_757"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_SLD_Mercenary06_758",
+    "id": "FM_SLD_Mercenary06_758"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_SLD_Mercenary07_759",
+    "id": "FM_SLD_Mercenary07_759"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_SLD_Mercenary08_760",
+    "id": "FM_SLD_Mercenary08_760"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_SLD_Mercenary09_761",
+    "id": "FM_SLD_Mercenary09_761"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_SLD_Mercenary10_762",
+    "id": "FM_SLD_Mercenary10_762"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_SLD_Mercenary11_763",
+    "id": "FM_SLD_Mercenary11_763"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_SLD_Mercenary12_764",
+    "id": "FM_SLD_Mercenary12_764"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_SLD_Mercenary13_765",
+    "id": "FM_SLD_Mercenary13_765"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_SLD_Okyl_752",
+    "id": "FM_SLD_Okyl_752"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_STT_Shadow01_336",
+    "id": "FM_STT_Shadow01_336"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_STT_Shadow02_337",
+    "id": "FM_STT_Shadow02_337"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_STT_Shadow03_338",
+    "id": "FM_STT_Shadow03_338"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_VLK_Digger01_5001",
+    "id": "FM_VLK_Digger01_5001"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_VLK_Digger02_5002",
+    "id": "FM_VLK_Digger02_5002"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_VLK_Digger03_5003",
+    "id": "FM_VLK_Digger03_5003"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_VLK_Digger04_5004",
+    "id": "FM_VLK_Digger04_5004"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_VLK_Digger05_5005",
+    "id": "FM_VLK_Digger05_5005"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_VLK_Digger06_5006",
+    "id": "FM_VLK_Digger06_5006"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_FM_VLK_Digger07_5007",
+    "id": "FM_VLK_Digger07_5007"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Human",
+    "id": "Human"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_BAU_Homer_935",
+    "id": "NC_BAU_Homer_935"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_BAU_Horatio_901",
+    "id": "NC_BAU_Horatio_901"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_BAU_Jan_942",
+    "id": "NC_BAU_Jan_942"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_BAU_Jeremiah_912",
+    "id": "NC_BAU_Jeremiah_912"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_BAU_Malon_930",
+    "id": "NC_BAU_Malon_930"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_BAU_Peasant01_904",
+    "id": "NC_BAU_Peasant01_904"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_BAU_Peasant02_905",
+    "id": "NC_BAU_Peasant02_905"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_BAU_Peasant03_907",
+    "id": "NC_BAU_Peasant03_907"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_BAU_Peasant04_908",
+    "id": "NC_BAU_Peasant04_908"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_BAU_Peasant05_914",
+    "id": "NC_BAU_Peasant05_914"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_BAU_Peasant06_915",
+    "id": "NC_BAU_Peasant06_915"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_BAU_Peasant07_916",
+    "id": "NC_BAU_Peasant07_916"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_BAU_Peasant08_917",
+    "id": "NC_BAU_Peasant08_917"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_BAU_Peasant09_919",
+    "id": "NC_BAU_Peasant09_919"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_BAU_Peasant10_920",
+    "id": "NC_BAU_Peasant10_920"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_BAU_Peasant11_921",
+    "id": "NC_BAU_Peasant11_921"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_BAU_Peasant12_922",
+    "id": "NC_BAU_Peasant12_922"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_BAU_Peasant13_923",
+    "id": "NC_BAU_Peasant13_923"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_BAU_Peasant14_924",
+    "id": "NC_BAU_Peasant14_924"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_BAU_Peasant15_925",
+    "id": "NC_BAU_Peasant15_925"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_BAU_Peasant16_926",
+    "id": "NC_BAU_Peasant16_926"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_BAU_Peasant17_927",
+    "id": "NC_BAU_Peasant17_927"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_BAU_Peasant18_928",
+    "id": "NC_BAU_Peasant18_928"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_BAU_Peasant19_929",
+    "id": "NC_BAU_Peasant19_929"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_BAU_Pock_902",
+    "id": "NC_BAU_Pock_902"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_BAU_Rayk_941",
+    "id": "NC_BAU_Rayk_941"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_BAU_RiceLord_900",
+    "id": "NC_BAU_RiceLord_900"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_BAU_Rufus_903",
+    "id": "NC_BAU_Rufus_903"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_KDW_Cronos_604",
+    "id": "NC_KDW_Cronos_604"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_KDW_Merdarion_602",
+    "id": "NC_KDW_Merdarion_602"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_KDW_Myxir_601",
+    "id": "NC_KDW_Myxir_601"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_KDW_Nefarius_603",
+    "id": "NC_KDW_Nefarius_603"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_KDW_Riordian_605",
+    "id": "NC_KDW_Riordian_605"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_KDW_Saturas_600",
+    "id": "NC_KDW_Saturas_600"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_NOV_BaalIsidro_1333",
+    "id": "NC_NOV_BaalIsidro_1333"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_NOV_BaalKagan_1332",
+    "id": "NC_NOV_BaalKagan_1332"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_ORG_Bouncer01_875",
+    "id": "NC_ORG_Bouncer01_875"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_ORG_Bouncer02_876",
+    "id": "NC_ORG_Bouncer02_876"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_ORG_Bruce_828",
+    "id": "NC_ORG_Bruce_828"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_ORG_Buster_833",
+    "id": "NC_ORG_Buster_833"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_ORG_Butch_851",
+    "id": "NC_ORG_Butch_851"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_ORG_Cipher_873",
+    "id": "NC_ORG_Cipher_873"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_ORG_Drax_819",
+    "id": "NC_ORG_Drax_819"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_ORG_Lares_801",
+    "id": "NC_ORG_Lares_801"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_ORG_Lefty_844",
+    "id": "NC_ORG_Lefty_844"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_ORG_Ratford_818",
+    "id": "NC_ORG_Ratford_818"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_ORG_Rogue01_800",
+    "id": "NC_ORG_Rogue01_800"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_ORG_Rogue02_804",
+    "id": "NC_ORG_Rogue02_804"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_ORG_Rogue03_806",
+    "id": "NC_ORG_Rogue03_806"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_ORG_Rogue04_807",
+    "id": "NC_ORG_Rogue04_807"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_ORG_Rogue05_810",
+    "id": "NC_ORG_Rogue05_810"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_ORG_Rogue06_811",
+    "id": "NC_ORG_Rogue06_811"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_ORG_Rogue07_815",
+    "id": "NC_ORG_Rogue07_815"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_ORG_Rogue08_816",
+    "id": "NC_ORG_Rogue08_816"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_ORG_Rogue09_817",
+    "id": "NC_ORG_Rogue09_817"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_ORG_Rogue10_820",
+    "id": "NC_ORG_Rogue10_820"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_ORG_Rogue11_821",
+    "id": "NC_ORG_Rogue11_821"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_ORG_Rogue12_822",
+    "id": "NC_ORG_Rogue12_822"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_ORG_Rogue13_823",
+    "id": "NC_ORG_Rogue13_823"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_ORG_Rogue14_824",
+    "id": "NC_ORG_Rogue14_824"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_ORG_Rogue15_825",
+    "id": "NC_ORG_Rogue15_825"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_ORG_Rogue16_829",
+    "id": "NC_ORG_Rogue16_829"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_ORG_Rogue17_830",
+    "id": "NC_ORG_Rogue17_830"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_ORG_Rogue18_831",
+    "id": "NC_ORG_Rogue18_831"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_ORG_Rogue19_832",
+    "id": "NC_ORG_Rogue19_832"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_ORG_Rogue20_834",
+    "id": "NC_ORG_Rogue20_834"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_ORG_Rogue21_836",
+    "id": "NC_ORG_Rogue21_836"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_ORG_Rogue22_837",
+    "id": "NC_ORG_Rogue22_837"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_ORG_Rogue23_838",
+    "id": "NC_ORG_Rogue23_838"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_ORG_Rogue24_845",
+    "id": "NC_ORG_Rogue24_845"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_ORG_Rogue24_846",
+    "id": "NC_ORG_Rogue24_846"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_ORG_Rogue25_846",
+    "id": "NC_ORG_Rogue25_846"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_ORG_Rogue26_875",
+    "id": "NC_ORG_Rogue26_875"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_ORG_Rogue27_876",
+    "id": "NC_ORG_Rogue27_876"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_ORG_Rogue28_877N",
+    "id": "NC_ORG_Rogue28_877N"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_ORG_Rogue29_878N",
+    "id": "NC_ORG_Rogue29_878N"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_ORG_Rogue30_879N",
+    "id": "NC_ORG_Rogue30_879N"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_ORG_Rogue31_880N",
+    "id": "NC_ORG_Rogue31_880N"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_ORG_Rogue33_882N",
+    "id": "NC_ORG_Rogue33_882N"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_ORG_Rogue34_883N",
+    "id": "NC_ORG_Rogue34_883N"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_ORG_Rogue35_884N",
+    "id": "NC_ORG_Rogue35_884N"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_ORG_Rogue36_885N",
+    "id": "NC_ORG_Rogue36_885N"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_ORG_Rogue37_886N",
+    "id": "NC_ORG_Rogue37_886N"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_ORG_Roscoe_840",
+    "id": "NC_ORG_Roscoe_840"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_ORG_Sharky_843",
+    "id": "NC_ORG_Sharky_843"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_ORG_Shrike_842",
+    "id": "NC_ORG_Shrike_842"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_ORG_Silas_841",
+    "id": "NC_ORG_Silas_841"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_ORG_Ulmar_881N",
+    "id": "NC_ORG_Ulmar_881N"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_ORG_Wedge_850",
+    "id": "NC_ORG_Wedge_850"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_ORG_Wolf_855",
+    "id": "NC_ORG_Wolf_855"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_SFB_Scraper01_1001",
+    "id": "NC_SFB_Scraper01_1001"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_SFB_Senyan_1000",
+    "id": "NC_SFB_Senyan_1000"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_SLD_Blade_704",
+    "id": "NC_SLD_Blade_704"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_SLD_Cord_709",
+    "id": "NC_SLD_Cord_709"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_SLD_Gorn_699",
+    "id": "NC_SLD_Gorn_699"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_SLD_Gorn_699_Sleeper",
+    "id": "NC_SLD_Gorn_699_Sleeper"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_SLD_Haenno_741",
+    "id": "NC_SLD_Haenno_741"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_SLD_Jarvis_728",
+    "id": "NC_SLD_Jarvis_728"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_SLD_Lee_700",
+    "id": "NC_SLD_Lee_700"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_SLD_Mercenary01_702",
+    "id": "NC_SLD_Mercenary01_702"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_SLD_Mercenary02_703",
+    "id": "NC_SLD_Mercenary02_703"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_SLD_Mercenary03_705",
+    "id": "NC_SLD_Mercenary03_705"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_SLD_Mercenary04_706",
+    "id": "NC_SLD_Mercenary04_706"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_SLD_Mercenary05_707",
+    "id": "NC_SLD_Mercenary05_707"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_SLD_Mercenary06_708",
+    "id": "NC_SLD_Mercenary06_708"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_SLD_Mercenary07_710",
+    "id": "NC_SLD_Mercenary07_710"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_SLD_Mercenary08_720",
+    "id": "NC_SLD_Mercenary08_720"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_SLD_Mercenary09_723",
+    "id": "NC_SLD_Mercenary09_723"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_SLD_Mercenary10_725",
+    "id": "NC_SLD_Mercenary10_725"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_SLD_Mercenary11_726",
+    "id": "NC_SLD_Mercenary11_726"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_SLD_Mercenary12_727",
+    "id": "NC_SLD_Mercenary12_727"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_SLD_Mercenary13_730",
+    "id": "NC_SLD_Mercenary13_730"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_SLD_Mercenary14_731",
+    "id": "NC_SLD_Mercenary14_731"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_SLD_Mercenary15_732",
+    "id": "NC_SLD_Mercenary15_732"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_SLD_Mercenary16_733",
+    "id": "NC_SLD_Mercenary16_733"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_SLD_Mercenary17_735",
+    "id": "NC_SLD_Mercenary17_735"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_SLD_Mercenary18_736",
+    "id": "NC_SLD_Mercenary18_736"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_SLD_Mercenary19_738",
+    "id": "NC_SLD_Mercenary19_738"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_SLD_Mercenary20_739N",
+    "id": "NC_SLD_Mercenary20_739N"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_SLD_Mercenary21_740N",
+    "id": "NC_SLD_Mercenary21_740N"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_SLD_Orik_701",
+    "id": "NC_SLD_Orik_701"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NC_SLD_Torlof_737",
+    "id": "NC_SLD_Torlof_737"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NewCamp_Mercenary",
+    "id": "NewCamp_Mercenary"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NewCamp_Peasant",
+    "id": "NewCamp_Peasant"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NewCamp_Rogue",
+    "id": "NewCamp_Rogue"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NewCamp_Scraper",
+    "id": "NewCamp_Scraper"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_NewCamp_WaterMage",
+    "id": "NewCamp_WaterMage"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_OA_Biter_Arena_01",
+    "id": "OA_Biter_Arena_01"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_OA_Lizard_Fire_01",
+    "id": "OA_Lizard_Fire_01"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OCR_GRD_Bloodwyn_233",
+    "id": "OCR_GRD_Bloodwyn_233"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OCR_GRD_Bullit_203",
+    "id": "OCR_GRD_Bullit_203"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OCR_GRD_Cutter_208",
+    "id": "OCR_GRD_Cutter_208"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OCR_GRD_GateGuard01_212",
+    "id": "OCR_GRD_GateGuard01_212"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OCR_GRD_GateGuard02_213",
+    "id": "OCR_GRD_GateGuard02_213"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OCR_GRD_GateGuard03_214",
+    "id": "OCR_GRD_GateGuard03_214"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OCR_GRD_GateGuard04_215",
+    "id": "OCR_GRD_GateGuard04_215"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OCR_GRD_GateGuard05_216",
+    "id": "OCR_GRD_GateGuard05_216"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OCR_GRD_GateGuard06_217",
+    "id": "OCR_GRD_GateGuard06_217"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OCR_GRD_Scatty_210",
+    "id": "OCR_GRD_Scatty_210"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OCR_GRD_Skip_211",
+    "id": "OCR_GRD_Skip_211"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OCR_GRD_Stone_219",
+    "id": "OCR_GRD_Stone_219"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_EBR_Arto_102",
+    "id": "OC_EBR_Arto_102"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_EBR_Bartholo_106",
+    "id": "OC_EBR_Bartholo_106"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_EBR_Gomez_100",
+    "id": "OC_EBR_Gomez_100"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_EBR_Raven_105",
+    "id": "OC_EBR_Raven_105"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_EBR_Scar_101",
+    "id": "OC_EBR_Scar_101"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_GRD_BridgeGuard01_275",
+    "id": "OC_GRD_BridgeGuard01_275"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_GRD_BridgeGuard02_276",
+    "id": "OC_GRD_BridgeGuard02_276"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_GRD_Fletcher_255",
+    "id": "OC_GRD_Fletcher_255"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_GRD_Guard01_204",
+    "id": "OC_GRD_Guard01_204"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_GRD_Guard02_206",
+    "id": "OC_GRD_Guard02_206"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_GRD_Guard03_209",
+    "id": "OC_GRD_Guard03_209"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_GRD_Guard04_218",
+    "id": "OC_GRD_Guard04_218"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_GRD_Guard05_220",
+    "id": "OC_GRD_Guard05_220"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_GRD_Guard06_221",
+    "id": "OC_GRD_Guard06_221"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_GRD_Guard07_222",
+    "id": "OC_GRD_Guard07_222"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_GRD_Guard08_223",
+    "id": "OC_GRD_Guard08_223"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_GRD_Guard09_225",
+    "id": "OC_GRD_Guard09_225"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_GRD_Guard10_226",
+    "id": "OC_GRD_Guard10_226"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_GRD_Guard11_227",
+    "id": "OC_GRD_Guard11_227"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_GRD_Guard12_228",
+    "id": "OC_GRD_Guard12_228"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_GRD_Guard13_229",
+    "id": "OC_GRD_Guard13_229"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_GRD_Guard14_230",
+    "id": "OC_GRD_Guard14_230"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_GRD_Guard15_231",
+    "id": "OC_GRD_Guard15_231"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_GRD_Guard16_232",
+    "id": "OC_GRD_Guard16_232"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_GRD_Guard17_237",
+    "id": "OC_GRD_Guard17_237"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_GRD_Guard18_238",
+    "id": "OC_GRD_Guard18_238"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_GRD_Guard19_239",
+    "id": "OC_GRD_Guard19_239"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_GRD_Guard20_240",
+    "id": "OC_GRD_Guard20_240"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_GRD_Guard21_241",
+    "id": "OC_GRD_Guard21_241"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_GRD_Guard22_242",
+    "id": "OC_GRD_Guard22_242"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_GRD_Guard23_243",
+    "id": "OC_GRD_Guard23_243"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_GRD_Guard24_244",
+    "id": "OC_GRD_Guard24_244"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_GRD_Guard25_245",
+    "id": "OC_GRD_Guard25_245"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_GRD_Guard26_252",
+    "id": "OC_GRD_Guard26_252"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_GRD_Guard27_253",
+    "id": "OC_GRD_Guard27_253"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_GRD_Guard28_265",
+    "id": "OC_GRD_Guard28_265"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_GRD_Guard29_279",
+    "id": "OC_GRD_Guard29_279"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_GRD_Guard30_280",
+    "id": "OC_GRD_Guard30_280"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_GRD_Guard30_281N",
+    "id": "OC_GRD_Guard30_281N"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_GRD_Guard30_282N",
+    "id": "OC_GRD_Guard30_282N"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_GRD_Guard31_283N",
+    "id": "OC_GRD_Guard31_283N"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_GRD_Guard32_284N",
+    "id": "OC_GRD_Guard32_284N"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_GRD_Guard33_285N",
+    "id": "OC_GRD_Guard33_285N"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_GRD_Guard34_286N",
+    "id": "OC_GRD_Guard34_286N"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_GRD_Guard35_287N",
+    "id": "OC_GRD_Guard35_287N"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_GRD_Guard36_288N",
+    "id": "OC_GRD_Guard36_288N"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_GRD_Guard37_289N",
+    "id": "OC_GRD_Guard37_289N"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_GRD_Guard38_290N",
+    "id": "OC_GRD_Guard38_290N"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_GRD_Guard39_291N",
+    "id": "OC_GRD_Guard39_291N"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_GRD_Guard40_292N",
+    "id": "OC_GRD_Guard40_292N"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_GRD_Guard41_293N",
+    "id": "OC_GRD_Guard41_293N"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_GRD_Guard42_294N",
+    "id": "OC_GRD_Guard42_294N"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_GRD_Guard43_295N",
+    "id": "OC_GRD_Guard43_295N"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_GRD_Jackal_201",
+    "id": "OC_GRD_Jackal_201"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_GRD_Kirgo_251",
+    "id": "OC_GRD_Kirgo_251"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_GRD_Nek_282",
+    "id": "OC_GRD_Nek_282"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_GRD_Orry_254",
+    "id": "OC_GRD_Orry_254"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_GRD_Pacho_224",
+    "id": "OC_GRD_Pacho_224"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_GRD_Scorpio_205",
+    "id": "OC_GRD_Scorpio_205"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_GRD_Thorus_200",
+    "id": "OC_GRD_Thorus_200"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_IE_Charlotte",
+    "id": "OC_IE_Charlotte"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_IE_DrPymonte",
+    "id": "OC_IE_DrPymonte"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_IE_Flex",
+    "id": "OC_IE_Flex"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_IE_Lutter",
+    "id": "OC_IE_Lutter"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_IE_Specki_1401",
+    "id": "OC_IE_Specki_1401"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_IE_Steve",
+    "id": "OC_IE_Steve"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_IE_Unicorn",
+    "id": "OC_IE_Unicorn"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_IE_VanLange_1400",
+    "id": "OC_IE_VanLange_1400"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_KDF_Corristo_402",
+    "id": "OC_KDF_Corristo_402"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_KDF_Damarok_401",
+    "id": "OC_KDF_Damarok_401"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_KDF_Drago_403",
+    "id": "OC_KDF_Drago_403"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_KDF_Milten",
+    "id": "OC_KDF_Milten"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_KDF_Milten_Sleeper",
+    "id": "OC_KDF_Milten_Sleeper"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_KDF_Rodriguez_400",
+    "id": "OC_KDF_Rodriguez_400"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_KDF_Torrez_405",
+    "id": "OC_KDF_Torrez_405"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_NOV_BaalParvez_1330",
+    "id": "OC_NOV_BaalParvez_1330"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_NOV_BaalTaran_1331",
+    "id": "OC_NOV_BaalTaran_1331"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_ORG_Mordrag_826",
+    "id": "OC_ORG_Mordrag_826"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_SLD_Kharim_729",
+    "id": "OC_SLD_Kharim_729"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_STT_Balam_324",
+    "id": "OC_STT_Balam_324"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_STT_Dexter_329",
+    "id": "OC_STT_Dexter_329"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_STT_Diego",
+    "id": "OC_STT_Diego"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_STT_Diego_Sleeper",
+    "id": "OC_STT_Diego_Sleeper"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_STT_Fingers_331",
+    "id": "OC_STT_Fingers_331"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_STT_Fisk_311",
+    "id": "OC_STT_Fisk_311"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_STT_Omid_325",
+    "id": "OC_STT_Omid_325"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_STT_Shadow01_304",
+    "id": "OC_STT_Shadow01_304"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_STT_Shadow02_306",
+    "id": "OC_STT_Shadow02_306"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_STT_Shadow03_310",
+    "id": "OC_STT_Shadow03_310"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_STT_Shadow04_313",
+    "id": "OC_STT_Shadow04_313"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_STT_Shadow05_314",
+    "id": "OC_STT_Shadow05_314"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_STT_Shadow06_316",
+    "id": "OC_STT_Shadow06_316"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_STT_Shadow07_318",
+    "id": "OC_STT_Shadow07_318"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_STT_Shadow08_319",
+    "id": "OC_STT_Shadow08_319"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_STT_Shadow09_322",
+    "id": "OC_STT_Shadow09_322"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_STT_Shadow10_328",
+    "id": "OC_STT_Shadow10_328"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_STT_Shadow11_330",
+    "id": "OC_STT_Shadow11_330"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_STT_Sly_315",
+    "id": "OC_STT_Sly_315"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_STT_Whistler_309",
+    "id": "OC_STT_Whistler_309"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_VLK_Digger01_501",
+    "id": "OC_VLK_Digger01_501"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_VLK_Digger02_502",
+    "id": "OC_VLK_Digger02_502"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_VLK_Digger03_503",
+    "id": "OC_VLK_Digger03_503"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_VLK_Digger04_504",
+    "id": "OC_VLK_Digger04_504"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_VLK_Digger05_505",
+    "id": "OC_VLK_Digger05_505"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_VLK_Digger06_506",
+    "id": "OC_VLK_Digger06_506"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_VLK_Digger07_507",
+    "id": "OC_VLK_Digger07_507"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_VLK_Digger08_508",
+    "id": "OC_VLK_Digger08_508"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_VLK_Digger09_509",
+    "id": "OC_VLK_Digger09_509"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_VLK_Digger10_510",
+    "id": "OC_VLK_Digger10_510"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_VLK_Digger11_512",
+    "id": "OC_VLK_Digger11_512"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_VLK_Digger12_513",
+    "id": "OC_VLK_Digger12_513"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_VLK_Digger13_514",
+    "id": "OC_VLK_Digger13_514"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_VLK_Digger14_515",
+    "id": "OC_VLK_Digger14_515"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_VLK_Digger15_516",
+    "id": "OC_VLK_Digger15_516"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_VLK_Digger16_517",
+    "id": "OC_VLK_Digger16_517"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_VLK_Digger17_519",
+    "id": "OC_VLK_Digger17_519"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_VLK_Digger18_520",
+    "id": "OC_VLK_Digger18_520"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_VLK_Digger19_521",
+    "id": "OC_VLK_Digger19_521"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_VLK_Digger20_522",
+    "id": "OC_VLK_Digger20_522"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_VLK_Digger21_523",
+    "id": "OC_VLK_Digger21_523"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_VLK_Digger22_526",
+    "id": "OC_VLK_Digger22_526"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_VLK_Digger23_527",
+    "id": "OC_VLK_Digger23_527"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_VLK_Digger24_528",
+    "id": "OC_VLK_Digger24_528"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_VLK_Digger25_529",
+    "id": "OC_VLK_Digger25_529"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_VLK_Digger26_531",
+    "id": "OC_VLK_Digger26_531"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_VLK_Digger27_532",
+    "id": "OC_VLK_Digger27_532"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_VLK_Digger28_533",
+    "id": "OC_VLK_Digger28_533"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_VLK_Digger29_534",
+    "id": "OC_VLK_Digger29_534"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_VLK_Digger30_535",
+    "id": "OC_VLK_Digger30_535"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_VLK_Digger31_553",
+    "id": "OC_VLK_Digger31_553"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_VLK_Digger32_554",
+    "id": "OC_VLK_Digger32_554"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_VLK_Digger33_555",
+    "id": "OC_VLK_Digger33_555"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_VLK_Digger34_556",
+    "id": "OC_VLK_Digger34_556"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_VLK_Digger35_557",
+    "id": "OC_VLK_Digger35_557"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_VLK_Digger36_560",
+    "id": "OC_VLK_Digger36_560"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_VLK_Digger37_561",
+    "id": "OC_VLK_Digger37_561"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_VLK_Digger38_565",
+    "id": "OC_VLK_Digger38_565"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_VLK_Digger39_575",
+    "id": "OC_VLK_Digger39_575"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_VLK_Digger40_576",
+    "id": "OC_VLK_Digger40_576"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_VLK_Digger41_577",
+    "id": "OC_VLK_Digger41_577"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_VLK_Digger42_578",
+    "id": "OC_VLK_Digger42_578"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_VLK_Digger43_579N",
+    "id": "OC_VLK_Digger43_579N"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_VLK_Digger44_580N",
+    "id": "OC_VLK_Digger44_580N"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_VLK_Diggerfan01",
+    "id": "OC_VLK_Diggerfan01"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_VLK_Diggerfan02",
+    "id": "OC_VLK_Diggerfan02"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_VLK_Diggerfan03",
+    "id": "OC_VLK_Diggerfan03"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_VLK_Diggerfan04",
+    "id": "OC_VLK_Diggerfan04"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_VLK_Dusty_524",
+    "id": "OC_VLK_Dusty_524"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_VLK_Graham_573",
+    "id": "OC_VLK_Graham_573"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_VLK_Gravo_572",
+    "id": "OC_VLK_Gravo_572"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_VLK_Grim_580",
+    "id": "OC_VLK_Grim_580"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_VLK_Guy_530",
+    "id": "OC_VLK_Guy_530"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_VLK_Herek_511",
+    "id": "OC_VLK_Herek_511"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_VLK_Huno_538",
+    "id": "OC_VLK_Huno_538"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_VLK_Jesse_564",
+    "id": "OC_VLK_Jesse_564"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_VLK_Kyle_536",
+    "id": "OC_VLK_Kyle_536"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_VLK_Mud_574",
+    "id": "OC_VLK_Mud_574"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_VLK_Snaf_581",
+    "id": "OC_VLK_Snaf_581"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_WOC_Prisoner01_111",
+    "id": "OC_WOC_Prisoner01_111"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_WOC_Prisoner02_112",
+    "id": "OC_WOC_Prisoner02_112"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_WOC_Seraphia_110",
+    "id": "OC_WOC_Seraphia_110"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_WOC_Syra_109",
+    "id": "OC_WOC_Syra_109"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OC_WOC_Velaya_108",
+    "id": "OC_WOC_Velaya_108"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OG_GUR_BaalLukor_1211",
+    "id": "OG_GUR_BaalLukor_1211"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OG_TPL_GorNaZar_1446",
+    "id": "OG_TPL_GorNaZar_1446"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OG_TPL_Templar01_1443",
+    "id": "OG_TPL_Templar01_1443"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OG_TPL_Templar02_1444",
+    "id": "OG_TPL_Templar02_1444"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OG_TPL_Templar03_1445",
+    "id": "OG_TPL_Templar03_1445"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OG_TPL_Templar05_1463",
+    "id": "OG_TPL_Templar05_1463"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_GRD_Aaron_262",
+    "id": "OM_GRD_Aaron_262"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_GRD_Asghan_263",
+    "id": "OM_GRD_Asghan_263"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_GRD_Brandick_261",
+    "id": "OM_GRD_Brandick_261"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_GRD_Drake_260",
+    "id": "OM_GRD_Drake_260"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_GRD_Guard01_234",
+    "id": "OM_GRD_Guard01_234"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_GRD_Guard02_235",
+    "id": "OM_GRD_Guard02_235"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_GRD_Guard03_236",
+    "id": "OM_GRD_Guard03_236"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_GRD_Guard05_264",
+    "id": "OM_GRD_Guard05_264"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_GRD_Guard06_266",
+    "id": "OM_GRD_Guard06_266"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_GRD_Guard07_267",
+    "id": "OM_GRD_Guard07_267"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_GRD_Guard08_268",
+    "id": "OM_GRD_Guard08_268"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_GRD_Guard09_269",
+    "id": "OM_GRD_Guard09_269"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_GRD_Guard10_272",
+    "id": "OM_GRD_Guard10_272"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_GRD_Guard11_273",
+    "id": "OM_GRD_Guard11_273"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_GRD_Guard12_277",
+    "id": "OM_GRD_Guard12_277"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_GRD_Guard13_278",
+    "id": "OM_GRD_Guard13_278"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_GRD_Guard13_280",
+    "id": "OM_GRD_Guard13_280"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_GRD_Guard14_281N",
+    "id": "OM_GRD_Guard14_281N"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_GRD_Ulbert_271",
+    "id": "OM_GRD_Ulbert_271"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_SC_TPL_Templar03_1436",
+    "id": "OM_SC_TPL_Templar03_1436"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_SC_TPL_Templar04_1437",
+    "id": "OM_SC_TPL_Templar04_1437"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_SC_TPL_Templar05_1438",
+    "id": "OM_SC_TPL_Templar05_1438"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_STT_Alberto_300",
+    "id": "OM_STT_Alberto_300"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_STT_Ian_301",
+    "id": "OM_STT_Ian_301"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_STT_Santino_335",
+    "id": "OM_STT_Santino_335"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_STT_Viper_302",
+    "id": "OM_STT_Viper_302"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_TPL_GorNaBar_1400",
+    "id": "OM_TPL_GorNaBar_1400"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_TPL_GorNaKosh_1401",
+    "id": "OM_TPL_GorNaKosh_1401"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_TPL_GorNaVid_1433",
+    "id": "OM_TPL_GorNaVid_1433"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_VLK_Aleph_585",
+    "id": "OM_VLK_Aleph_585"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_VLK_Digger01_518",
+    "id": "OM_VLK_Digger01_518"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_VLK_Digger02_525",
+    "id": "OM_VLK_Digger02_525"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_VLK_Digger03_539",
+    "id": "OM_VLK_Digger03_539"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_VLK_Digger04_540",
+    "id": "OM_VLK_Digger04_540"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_VLK_Digger05_541",
+    "id": "OM_VLK_Digger05_541"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_VLK_Digger06_542",
+    "id": "OM_VLK_Digger06_542"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_VLK_Digger07_543",
+    "id": "OM_VLK_Digger07_543"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_VLK_Digger08_544",
+    "id": "OM_VLK_Digger08_544"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_VLK_Digger09_545",
+    "id": "OM_VLK_Digger09_545"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_VLK_Digger10_546",
+    "id": "OM_VLK_Digger10_546"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_VLK_Digger11_547",
+    "id": "OM_VLK_Digger11_547"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_VLK_Digger12_548",
+    "id": "OM_VLK_Digger12_548"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_VLK_Digger13_549",
+    "id": "OM_VLK_Digger13_549"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_VLK_Digger14_550",
+    "id": "OM_VLK_Digger14_550"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_VLK_Digger15_551",
+    "id": "OM_VLK_Digger15_551"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_VLK_Digger16_558",
+    "id": "OM_VLK_Digger16_558"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_VLK_Digger17_559",
+    "id": "OM_VLK_Digger17_559"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_VLK_Digger18_562",
+    "id": "OM_VLK_Digger18_562"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_VLK_Digger19_563",
+    "id": "OM_VLK_Digger19_563"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_VLK_Digger20_566",
+    "id": "OM_VLK_Digger20_566"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_VLK_Digger21_567",
+    "id": "OM_VLK_Digger21_567"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_VLK_Digger22_571",
+    "id": "OM_VLK_Digger22_571"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_VLK_Digger23_579",
+    "id": "OM_VLK_Digger23_579"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_VLK_Digger24_588",
+    "id": "OM_VLK_Digger24_588"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_VLK_Digger25_589",
+    "id": "OM_VLK_Digger25_589"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_VLK_Digger26_590",
+    "id": "OM_VLK_Digger26_590"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_VLK_Digger27_591",
+    "id": "OM_VLK_Digger27_591"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_VLK_Digger28_592",
+    "id": "OM_VLK_Digger28_592"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_VLK_Digger29_593",
+    "id": "OM_VLK_Digger29_593"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_VLK_Digger30_1045N",
+    "id": "OM_VLK_Digger30_1045N"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_VLK_Digger31_1046N",
+    "id": "OM_VLK_Digger31_1046N"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_VLK_Digger32_1047N",
+    "id": "OM_VLK_Digger32_1047N"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_VLK_Digger33_1048N",
+    "id": "OM_VLK_Digger33_1048N"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_VLK_Digger34_1049N",
+    "id": "OM_VLK_Digger34_1049N"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_VLK_Digger35_1050N",
+    "id": "OM_VLK_Digger35_1050N"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_VLK_Digger36_1051N",
+    "id": "OM_VLK_Digger36_1051N"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_VLK_Digger37_1052N",
+    "id": "OM_VLK_Digger37_1052N"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_VLK_Digger38_1053N",
+    "id": "OM_VLK_Digger38_1053N"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_VLK_Digger39_1054N",
+    "id": "OM_VLK_Digger39_1054N"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_VLK_Garp_587",
+    "id": "OM_VLK_Garp_587"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_VLK_Glen_583",
+    "id": "OM_VLK_Glen_583"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_VLK_Grimes_586",
+    "id": "OM_VLK_Grimes_586"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OM_VLK_Snipes_584",
+    "id": "OM_VLK_Snipes_584"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OldCamp_Digger",
+    "id": "OldCamp_Digger"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OldCamp_FireMage",
+    "id": "OldCamp_FireMage"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OldCamp_Guard",
+    "id": "OldCamp_Guard"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OldCamp_OreBaron",
+    "id": "OldCamp_OreBaron"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OldCamp_Shadow",
+    "id": "OldCamp_Shadow"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_OldCamp_WomanSlave",
+    "id": "OldCamp_WomanSlave"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc",
+    "id": "Orc"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_OrcFemale",
+    "id": "OrcFemale"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_OrcShaman",
+    "id": "OrcShaman"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_OrcUndead",
+    "id": "OrcUndead"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_OrcUndead_Varrag",
+    "id": "OrcUndead_Varrag"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_OrcWorld",
+    "id": "OrcWorld"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_AM_UOW_UndeadOrcTempleGuard01_3032",
+    "id": "Orc_AM_UOW_UndeadOrcTempleGuard01_3032"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_Blacksmith",
+    "id": "Orc_Blacksmith"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_FM_OSL_OrcSlave01_6001",
+    "id": "Orc_FM_OSL_OrcSlave01_6001"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_FM_OSL_Tarrok_2001",
+    "id": "Orc_FM_OSL_Tarrok_2001"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OBL_OrcBlacksmith01_2063",
+    "id": "Orc_OW_OBL_OrcBlacksmith01_2063"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OPS_Muk_2404",
+    "id": "Orc_OW_OPS_Muk_2404"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OPS_OrcPeasantM01_2068",
+    "id": "Orc_OW_OPS_OrcPeasantM01_2068"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OPS_OrcPeasantM02_2069",
+    "id": "Orc_OW_OPS_OrcPeasantM02_2069"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OPS_OrcPeasantM03_2070",
+    "id": "Orc_OW_OPS_OrcPeasantM03_2070"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OPS_OrcPeasantM04_2071",
+    "id": "Orc_OW_OPS_OrcPeasantM04_2071"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OPS_OrcPeasantM05_2072",
+    "id": "Orc_OW_OPS_OrcPeasantM05_2072"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OPS_OrcPeasantM06_2073",
+    "id": "Orc_OW_OPS_OrcPeasantM06_2073"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OPS_OrcPeasantM07_2074",
+    "id": "Orc_OW_OPS_OrcPeasantM07_2074"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OPS_OrcPeasantM08_2075",
+    "id": "Orc_OW_OPS_OrcPeasantM08_2075"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OPS_OrcPeasantM09_2076",
+    "id": "Orc_OW_OPS_OrcPeasantM09_2076"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OPS_OrcPeasantM10_2077",
+    "id": "Orc_OW_OPS_OrcPeasantM10_2077"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OPS_OrcPeasantM11_2078",
+    "id": "Orc_OW_OPS_OrcPeasantM11_2078"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OPS_OrcPeasantM12_2079",
+    "id": "Orc_OW_OPS_OrcPeasantM12_2079"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OPS_OrcPeasantM13_2080",
+    "id": "Orc_OW_OPS_OrcPeasantM13_2080"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OPS_OrcPeasantM14_2081",
+    "id": "Orc_OW_OPS_OrcPeasantM14_2081"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OPS_OrcPeasantM15_2082",
+    "id": "Orc_OW_OPS_OrcPeasantM15_2082"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OPS_OrcPeasantM16_2083",
+    "id": "Orc_OW_OPS_OrcPeasantM16_2083"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OPS_OrcPeasantM17_2084",
+    "id": "Orc_OW_OPS_OrcPeasantM17_2084"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OPS_OrcPeasantM18_2085",
+    "id": "Orc_OW_OPS_OrcPeasantM18_2085"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OPS_OrcPeasantM19_2086",
+    "id": "Orc_OW_OPS_OrcPeasantM19_2086"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OPS_OrcPeasantM20_2087",
+    "id": "Orc_OW_OPS_OrcPeasantM20_2087"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OPS_OrcPeasantM21_2088",
+    "id": "Orc_OW_OPS_OrcPeasantM21_2088"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OPS_OrcPeasantM22_2089",
+    "id": "Orc_OW_OPS_OrcPeasantM22_2089"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OPS_OrcPeasantM23_2090",
+    "id": "Orc_OW_OPS_OrcPeasantM23_2090"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OPS_OrcPeasantM24_2091",
+    "id": "Orc_OW_OPS_OrcPeasantM24_2091"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OPS_OrcPeasantM25_2092",
+    "id": "Orc_OW_OPS_OrcPeasantM25_2092"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OPS_OrcPeasantM26_2093",
+    "id": "Orc_OW_OPS_OrcPeasantM26_2093"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OPS_OrcPeasantM27_2094",
+    "id": "Orc_OW_OPS_OrcPeasantM27_2094"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OPS_OrcPeasantM28_2095",
+    "id": "Orc_OW_OPS_OrcPeasantM28_2095"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OPS_OrcPeasantM29_2096",
+    "id": "Orc_OW_OPS_OrcPeasantM29_2096"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OPS_OrcPeasantM30_2097",
+    "id": "Orc_OW_OPS_OrcPeasantM30_2097"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OPS_OrcPeasantM31_2098",
+    "id": "Orc_OW_OPS_OrcPeasantM31_2098"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OPS_Umakhal_2402",
+    "id": "Orc_OW_OPS_Umakhal_2402"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OSC_OrcHunterM01_2059",
+    "id": "Orc_OW_OSC_OrcHunterM01_2059"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OSC_OrcHunterM02_2060",
+    "id": "Orc_OW_OSC_OrcHunterM02_2060"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OSC_OrcHunterM03_2061",
+    "id": "Orc_OW_OSC_OrcHunterM03_2061"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OSC_OrcHunterM04_2062",
+    "id": "Orc_OW_OSC_OrcHunterM04_2062"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OSC_OrcScoutM01_2021",
+    "id": "Orc_OW_OSC_OrcScoutM01_2021"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OSC_OrcScoutM02_2099",
+    "id": "Orc_OW_OSC_OrcScoutM02_2099"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OSC_OrcScoutM03_2100",
+    "id": "Orc_OW_OSC_OrcScoutM03_2100"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OSC_OrcScoutM04_2101",
+    "id": "Orc_OW_OSC_OrcScoutM04_2101"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OSC_OrcScoutM05_2102",
+    "id": "Orc_OW_OSC_OrcScoutM05_2102"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OSC_OrcScoutM06_2103",
+    "id": "Orc_OW_OSC_OrcScoutM06_2103"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OSC_OrcScoutM07_2104",
+    "id": "Orc_OW_OSC_OrcScoutM07_2104"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OSC_OrcScoutM08_2105",
+    "id": "Orc_OW_OSC_OrcScoutM08_2105"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OSC_OrcScoutM09_2106",
+    "id": "Orc_OW_OSC_OrcScoutM09_2106"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OSC_OrcScoutM10_2107",
+    "id": "Orc_OW_OSC_OrcScoutM10_2107"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OSC_OrcScoutM11_2108",
+    "id": "Orc_OW_OSC_OrcScoutM11_2108"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OSC_OrcScoutM12_2109",
+    "id": "Orc_OW_OSC_OrcScoutM12_2109"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OSC_OrcScoutM13_2111",
+    "id": "Orc_OW_OSC_OrcScoutM13_2111"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OSC_OrcScoutM14_2112",
+    "id": "Orc_OW_OSC_OrcScoutM14_2112"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OSC_OrcScoutM15_2113",
+    "id": "Orc_OW_OSC_OrcScoutM15_2113"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OSC_OrcScoutM16_2114",
+    "id": "Orc_OW_OSC_OrcScoutM16_2114"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OSC_OrcScoutM17_2115",
+    "id": "Orc_OW_OSC_OrcScoutM17_2115"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OSC_OrcScoutM18_2116",
+    "id": "Orc_OW_OSC_OrcScoutM18_2116"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OSC_OrcScoutM19_2117",
+    "id": "Orc_OW_OSC_OrcScoutM19_2117"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OSC_OrcScoutM20_2118",
+    "id": "Orc_OW_OSC_OrcScoutM20_2118"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OSC_OrcScoutM21_2204",
+    "id": "Orc_OW_OSC_OrcScoutM21_2204"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OSC_OrcScoutM22_2205",
+    "id": "Orc_OW_OSC_OrcScoutM22_2205"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OSC_OrcScoutM23_2206",
+    "id": "Orc_OW_OSC_OrcScoutM23_2206"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OSC_OrcScoutM24_2207",
+    "id": "Orc_OW_OSC_OrcScoutM24_2207"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OSM_OrcShamanM01_2064",
+    "id": "Orc_OW_OSM_OrcShamanM01_2064"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OSM_OrcShamanM02_2065",
+    "id": "Orc_OW_OSM_OrcShamanM02_2065"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OSM_OrcShamanM03_2066",
+    "id": "Orc_OW_OSM_OrcShamanM03_2066"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OSM_OrcShamanM04_2067",
+    "id": "Orc_OW_OSM_OrcShamanM04_2067"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OSM_UrNazkrog_2401",
+    "id": "Orc_OW_OSM_UrNazkrog_2401"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_Chokta_2407",
+    "id": "Orc_OW_OWR_Chokta_2407"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_Grazkrak_2400",
+    "id": "Orc_OW_OWR_Grazkrak_2400"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_Krashok_2405",
+    "id": "Orc_OW_OWR_Krashok_2405"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcClanWarriorM01_2027",
+    "id": "Orc_OW_OWR_OrcClanWarriorM01_2027"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcClanWarriorM02_2034",
+    "id": "Orc_OW_OWR_OrcClanWarriorM02_2034"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcClanWarriorM03_2049",
+    "id": "Orc_OW_OWR_OrcClanWarriorM03_2049"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcClanWarriorM04_2050",
+    "id": "Orc_OW_OWR_OrcClanWarriorM04_2050"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcFighterM01_2003",
+    "id": "Orc_OW_OWR_OrcFighterM01_2003"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcFighterM02_2004",
+    "id": "Orc_OW_OWR_OrcFighterM02_2004"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcFighterM03_2005",
+    "id": "Orc_OW_OWR_OrcFighterM03_2005"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcFighterM04_2007",
+    "id": "Orc_OW_OWR_OrcFighterM04_2007"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcFighterM05_2008",
+    "id": "Orc_OW_OWR_OrcFighterM05_2008"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcFighterM06_2009",
+    "id": "Orc_OW_OWR_OrcFighterM06_2009"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcFighterM07_2011",
+    "id": "Orc_OW_OWR_OrcFighterM07_2011"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcFighterM08_2012",
+    "id": "Orc_OW_OWR_OrcFighterM08_2012"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcFighterM09_2013",
+    "id": "Orc_OW_OWR_OrcFighterM09_2013"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcFighterM10_2017",
+    "id": "Orc_OW_OWR_OrcFighterM10_2017"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcFighterM11_2018",
+    "id": "Orc_OW_OWR_OrcFighterM11_2018"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcFighterM12_2019",
+    "id": "Orc_OW_OWR_OrcFighterM12_2019"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcFighterM13_2053",
+    "id": "Orc_OW_OWR_OrcFighterM13_2053"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcFighterM14_2055",
+    "id": "Orc_OW_OWR_OrcFighterM14_2055"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcFighterM15_2056",
+    "id": "Orc_OW_OWR_OrcFighterM15_2056"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcFighterM16_2057",
+    "id": "Orc_OW_OWR_OrcFighterM16_2057"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcFighterM17_2058",
+    "id": "Orc_OW_OWR_OrcFighterM17_2058"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcTempleWarriorM01_2041",
+    "id": "Orc_OW_OWR_OrcTempleWarriorM01_2041"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcTempleWarriorM02_2042",
+    "id": "Orc_OW_OWR_OrcTempleWarriorM02_2042"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcTempleWarriorM03_2043",
+    "id": "Orc_OW_OWR_OrcTempleWarriorM03_2043"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcTempleWarriorM04_2044",
+    "id": "Orc_OW_OWR_OrcTempleWarriorM04_2044"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcTempleWarriorM05_2045",
+    "id": "Orc_OW_OWR_OrcTempleWarriorM05_2045"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcTempleWarriorM06_2046",
+    "id": "Orc_OW_OWR_OrcTempleWarriorM06_2046"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcTempleWarriorM07_2047",
+    "id": "Orc_OW_OWR_OrcTempleWarriorM07_2047"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcTempleWarriorM08_2048",
+    "id": "Orc_OW_OWR_OrcTempleWarriorM08_2048"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcTempleWarriorM09_2201",
+    "id": "Orc_OW_OWR_OrcTempleWarriorM09_2201"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcTempleWarriorM10_2202",
+    "id": "Orc_OW_OWR_OrcTempleWarriorM10_2202"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcTempleWarriorM11_2203",
+    "id": "Orc_OW_OWR_OrcTempleWarriorM11_2203"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcWarriorM01_2001",
+    "id": "Orc_OW_OWR_OrcWarriorM01_2001"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcWarriorM02_2002",
+    "id": "Orc_OW_OWR_OrcWarriorM02_2002"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcWarriorM03_2006",
+    "id": "Orc_OW_OWR_OrcWarriorM03_2006"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcWarriorM04_2010",
+    "id": "Orc_OW_OWR_OrcWarriorM04_2010"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcWarriorM05_2014",
+    "id": "Orc_OW_OWR_OrcWarriorM05_2014"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcWarriorM06_2015",
+    "id": "Orc_OW_OWR_OrcWarriorM06_2015"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcWarriorM07_2016",
+    "id": "Orc_OW_OWR_OrcWarriorM07_2016"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcWarriorM08_2020",
+    "id": "Orc_OW_OWR_OrcWarriorM08_2020"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcWarriorM09_2022",
+    "id": "Orc_OW_OWR_OrcWarriorM09_2022"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcWarriorM10_2023",
+    "id": "Orc_OW_OWR_OrcWarriorM10_2023"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcWarriorM11_2024",
+    "id": "Orc_OW_OWR_OrcWarriorM11_2024"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcWarriorM12_2025",
+    "id": "Orc_OW_OWR_OrcWarriorM12_2025"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcWarriorM13_2026",
+    "id": "Orc_OW_OWR_OrcWarriorM13_2026"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcWarriorM14_2028",
+    "id": "Orc_OW_OWR_OrcWarriorM14_2028"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcWarriorM15_2029",
+    "id": "Orc_OW_OWR_OrcWarriorM15_2029"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcWarriorM16_2030",
+    "id": "Orc_OW_OWR_OrcWarriorM16_2030"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcWarriorM17_2031",
+    "id": "Orc_OW_OWR_OrcWarriorM17_2031"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcWarriorM18_2032",
+    "id": "Orc_OW_OWR_OrcWarriorM18_2032"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcWarriorM19_2033",
+    "id": "Orc_OW_OWR_OrcWarriorM19_2033"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcWarriorM20_2035",
+    "id": "Orc_OW_OWR_OrcWarriorM20_2035"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcWarriorM21_2036",
+    "id": "Orc_OW_OWR_OrcWarriorM21_2036"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcWarriorM22_2037",
+    "id": "Orc_OW_OWR_OrcWarriorM22_2037"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcWarriorM23_2038",
+    "id": "Orc_OW_OWR_OrcWarriorM23_2038"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcWarriorM24_2039",
+    "id": "Orc_OW_OWR_OrcWarriorM24_2039"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcWarriorM25_2040",
+    "id": "Orc_OW_OWR_OrcWarriorM25_2040"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcWarriorM26_2051",
+    "id": "Orc_OW_OWR_OrcWarriorM26_2051"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcWarriorM27_2052",
+    "id": "Orc_OW_OWR_OrcWarriorM27_2052"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcWarriorM28_2054",
+    "id": "Orc_OW_OWR_OrcWarriorM28_2054"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_OrcWarriorM29_2110",
+    "id": "Orc_OW_OWR_OrcWarriorM29_2110"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_ToChurnagg_2403",
+    "id": "Orc_OW_OWR_ToChurnagg_2403"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_OW_OWR_Umosh_2406",
+    "id": "Orc_OW_OWR_Umosh_2406"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_PeasantM",
+    "id": "Orc_PeasantM"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_ST_UOS_VarragArushat",
+    "id": "Orc_ST_UOS_VarragArushat"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_ST_UOS_VarragHashor",
+    "id": "Orc_ST_UOS_VarragHashor"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_ST_UOS_VarragKasorg",
+    "id": "Orc_ST_UOS_VarragKasorg"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_ST_UOS_VarragRuuushk",
+    "id": "Orc_ST_UOS_VarragRuuushk"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_ST_UOS_VarragUnhilqt",
+    "id": "Orc_ST_UOS_VarragUnhilqt"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_ST_UOW_UndeadOrcHighTempleGuard01_3016",
+    "id": "Orc_ST_UOW_UndeadOrcHighTempleGuard01_3016"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_ST_UOW_UndeadOrcHighTempleGuard02_3017",
+    "id": "Orc_ST_UOW_UndeadOrcHighTempleGuard02_3017"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_ST_UOW_UndeadOrcHighTempleGuard03_3018",
+    "id": "Orc_ST_UOW_UndeadOrcHighTempleGuard03_3018"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_ST_UOW_UndeadOrcHighTempleGuard04_3019",
+    "id": "Orc_ST_UOW_UndeadOrcHighTempleGuard04_3019"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_ST_UOW_UndeadOrcHighTempleGuard05_3020",
+    "id": "Orc_ST_UOW_UndeadOrcHighTempleGuard05_3020"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_ST_UOW_UndeadOrcHighTempleGuard06_3021",
+    "id": "Orc_ST_UOW_UndeadOrcHighTempleGuard06_3021"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_ST_UOW_UndeadOrcHighTempleGuard07_3022",
+    "id": "Orc_ST_UOW_UndeadOrcHighTempleGuard07_3022"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_ST_UOW_UndeadOrcHighTempleGuard08_3023",
+    "id": "Orc_ST_UOW_UndeadOrcHighTempleGuard08_3023"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_ST_UOW_UndeadOrcHighTempleGuard09_3024",
+    "id": "Orc_ST_UOW_UndeadOrcHighTempleGuard09_3024"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_ST_UOW_UndeadOrcHighTempleGuard10_3025",
+    "id": "Orc_ST_UOW_UndeadOrcHighTempleGuard10_3025"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_ST_UOW_UndeadOrcHighTempleGuard11_3026",
+    "id": "Orc_ST_UOW_UndeadOrcHighTempleGuard11_3026"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_ST_UOW_UndeadOrcHighTempleGuard12_3027",
+    "id": "Orc_ST_UOW_UndeadOrcHighTempleGuard12_3027"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_ST_UOW_UndeadOrcHighTempleGuard13_3028",
+    "id": "Orc_ST_UOW_UndeadOrcHighTempleGuard13_3028"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_ST_UOW_UndeadOrcHighTempleGuard14_3029",
+    "id": "Orc_ST_UOW_UndeadOrcHighTempleGuard14_3029"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_ST_UOW_UndeadOrcHighTempleGuard15_3030",
+    "id": "Orc_ST_UOW_UndeadOrcHighTempleGuard15_3030"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_ST_UOW_UndeadOrcHighTempleGuard16_3031",
+    "id": "Orc_ST_UOW_UndeadOrcHighTempleGuard16_3031"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_ST_UOW_UndeadOrcTempleGuard01_3000",
+    "id": "Orc_ST_UOW_UndeadOrcTempleGuard01_3000"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_ST_UOW_UndeadOrcTempleGuard02_3001",
+    "id": "Orc_ST_UOW_UndeadOrcTempleGuard02_3001"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_ST_UOW_UndeadOrcTempleGuard03_3002",
+    "id": "Orc_ST_UOW_UndeadOrcTempleGuard03_3002"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_ST_UOW_UndeadOrcTempleGuard04_3003",
+    "id": "Orc_ST_UOW_UndeadOrcTempleGuard04_3003"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_ST_UOW_UndeadOrcTempleGuard05_3004",
+    "id": "Orc_ST_UOW_UndeadOrcTempleGuard05_3004"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_ST_UOW_UndeadOrcTempleGuard06_3005",
+    "id": "Orc_ST_UOW_UndeadOrcTempleGuard06_3005"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_ST_UOW_UndeadOrcTempleGuard07_3006",
+    "id": "Orc_ST_UOW_UndeadOrcTempleGuard07_3006"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_ST_UOW_UndeadOrcTempleGuard08_3007",
+    "id": "Orc_ST_UOW_UndeadOrcTempleGuard08_3007"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_ST_UOW_UndeadOrcTempleGuard09_3008",
+    "id": "Orc_ST_UOW_UndeadOrcTempleGuard09_3008"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_ST_UOW_UndeadOrcTempleGuard10_3009",
+    "id": "Orc_ST_UOW_UndeadOrcTempleGuard10_3009"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_ST_UOW_UndeadOrcTempleGuard11_3010",
+    "id": "Orc_ST_UOW_UndeadOrcTempleGuard11_3010"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_ST_UOW_UndeadOrcTempleGuard12_3011",
+    "id": "Orc_ST_UOW_UndeadOrcTempleGuard12_3011"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_ST_UOW_UndeadOrcTempleGuard13_3012",
+    "id": "Orc_ST_UOW_UndeadOrcTempleGuard13_3012"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_ST_UOW_UndeadOrcTempleGuard14_3013",
+    "id": "Orc_ST_UOW_UndeadOrcTempleGuard14_3013"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_ST_UOW_UndeadOrcTempleGuard15_3014",
+    "id": "Orc_ST_UOW_UndeadOrcTempleGuard15_3014"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_ST_UOW_UndeadOrcTempleGuard16_3015",
+    "id": "Orc_ST_UOW_UndeadOrcTempleGuard16_3015"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_ST_UOW_UndeadOrcTempleGuard17_3033",
+    "id": "Orc_ST_UOW_UndeadOrcTempleGuard17_3033"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_ScoutM",
+    "id": "Orc_ScoutM"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_ShamanF",
+    "id": "Orc_ShamanF"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_ShamanM",
+    "id": "Orc_ShamanM"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_Sleeper",
+    "id": "Orc_Sleeper"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_Sleeper1",
+    "id": "Orc_Sleeper1"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_Sleeper2",
+    "id": "Orc_Sleeper2"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_Test",
+    "id": "Orc_Test"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_UL_OSL_UrShak_2200",
+    "id": "Orc_UL_OSL_UrShak_2200"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_UndeadWarriorM",
+    "id": "Orc_UndeadWarriorM"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Orc_WarriorM",
+    "id": "Orc_WarriorM"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_QD_Questdealer",
+    "id": "QD_Questdealer"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_GUR_BaalCadar_1208",
+    "id": "SC_GUR_BaalCadar_1208"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_GUR_BaalNamib_1204",
+    "id": "SC_GUR_BaalNamib_1204"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_GUR_BaalOrun_1209",
+    "id": "SC_GUR_BaalOrun_1209"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_GUR_BaalTondral_1203",
+    "id": "SC_GUR_BaalTondral_1203"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_GUR_BaalTyon_1210",
+    "id": "SC_GUR_BaalTyon_1210"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_GUR_CorAngar_1202",
+    "id": "SC_GUR_CorAngar_1202"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_GUR_CorKalom_1201",
+    "id": "SC_GUR_CorKalom_1201"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_GUR_YBerion_1200",
+    "id": "SC_GUR_YBerion_1200"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_BaalNetbek_1371",
+    "id": "SC_NOV_BaalNetbek_1371"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Balor_1304",
+    "id": "SC_NOV_Balor_1304"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Caine_1301",
+    "id": "SC_NOV_Caine_1301"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Darrion_1312",
+    "id": "SC_NOV_Darrion_1312"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Fortuno_1357",
+    "id": "SC_NOV_Fortuno_1357"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Ghorim_1310",
+    "id": "SC_NOV_Ghorim_1310"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Harlok_1358",
+    "id": "SC_NOV_Harlok_1358"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Joru_1305",
+    "id": "SC_NOV_Joru_1305"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Lester",
+    "id": "SC_NOV_Lester"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Lester_Sleeper",
+    "id": "SC_NOV_Lester_Sleeper"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Novice01_1306",
+    "id": "SC_NOV_Novice01_1306"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Novice02_1307",
+    "id": "SC_NOV_Novice02_1307"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Novice03_1308",
+    "id": "SC_NOV_Novice03_1308"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Novice04_1309",
+    "id": "SC_NOV_Novice04_1309"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Novice05_1311",
+    "id": "SC_NOV_Novice05_1311"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Novice06_1313",
+    "id": "SC_NOV_Novice06_1313"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Novice07_1314",
+    "id": "SC_NOV_Novice07_1314"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Novice08_1315",
+    "id": "SC_NOV_Novice08_1315"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Novice09_1316",
+    "id": "SC_NOV_Novice09_1316"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Novice10_1317",
+    "id": "SC_NOV_Novice10_1317"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Novice11_1318",
+    "id": "SC_NOV_Novice11_1318"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Novice12_1319",
+    "id": "SC_NOV_Novice12_1319"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Novice13_1320",
+    "id": "SC_NOV_Novice13_1320"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Novice14_1321",
+    "id": "SC_NOV_Novice14_1321"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Novice15_1322",
+    "id": "SC_NOV_Novice15_1322"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Novice16_1323",
+    "id": "SC_NOV_Novice16_1323"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Novice17_1324",
+    "id": "SC_NOV_Novice17_1324"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Novice18_1325",
+    "id": "SC_NOV_Novice18_1325"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Novice19_1326",
+    "id": "SC_NOV_Novice19_1326"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Novice20_1327",
+    "id": "SC_NOV_Novice20_1327"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Novice21_1328",
+    "id": "SC_NOV_Novice21_1328"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Novice22_1329",
+    "id": "SC_NOV_Novice22_1329"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Novice23_1334",
+    "id": "SC_NOV_Novice23_1334"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Novice24_1335",
+    "id": "SC_NOV_Novice24_1335"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Novice25_1336",
+    "id": "SC_NOV_Novice25_1336"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Novice26_1337",
+    "id": "SC_NOV_Novice26_1337"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Novice27_1338",
+    "id": "SC_NOV_Novice27_1338"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Novice28_1339",
+    "id": "SC_NOV_Novice28_1339"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Novice29_1340",
+    "id": "SC_NOV_Novice29_1340"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Novice30_1341",
+    "id": "SC_NOV_Novice30_1341"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Novice31_1342",
+    "id": "SC_NOV_Novice31_1342"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Novice32_1343",
+    "id": "SC_NOV_Novice32_1343"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Novice33_1344",
+    "id": "SC_NOV_Novice33_1344"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Novice34_1345",
+    "id": "SC_NOV_Novice34_1345"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Novice35_1346",
+    "id": "SC_NOV_Novice35_1346"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Novice36_1347",
+    "id": "SC_NOV_Novice36_1347"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Novice37_1348",
+    "id": "SC_NOV_Novice37_1348"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Novice38_1349",
+    "id": "SC_NOV_Novice38_1349"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Novice39_1350",
+    "id": "SC_NOV_Novice39_1350"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Novice40_1351",
+    "id": "SC_NOV_Novice40_1351"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Novice41_1353",
+    "id": "SC_NOV_Novice41_1353"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Novice42_1354",
+    "id": "SC_NOV_Novice42_1354"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Novice43_1355",
+    "id": "SC_NOV_Novice43_1355"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Novice44_1356N",
+    "id": "SC_NOV_Novice44_1356N"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Novice45_1357N",
+    "id": "SC_NOV_Novice45_1357N"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Novice46_1358N",
+    "id": "SC_NOV_Novice46_1358N"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Novice47_1359N",
+    "id": "SC_NOV_Novice47_1359N"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Nyras_1303",
+    "id": "SC_NOV_Nyras_1303"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Shrat_1356",
+    "id": "SC_NOV_Shrat_1356"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Talas_1300",
+    "id": "SC_NOV_Talas_1300"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Theron_1372N",
+    "id": "SC_NOV_Theron_1372N"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_NOV_Viran_1302",
+    "id": "SC_NOV_Viran_1302"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_TPL_GorHanis_1422",
+    "id": "SC_TPL_GorHanis_1422"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_TPL_GorNaDrak_1439",
+    "id": "SC_TPL_GorNaDrak_1439"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_TPL_GorNaDun_1411",
+    "id": "SC_TPL_GorNaDun_1411"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_TPL_GorNaRan_1405",
+    "id": "SC_TPL_GorNaRan_1405"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_TPL_GorNaToth_1402",
+    "id": "SC_TPL_GorNaToth_1402"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_TPL_KalomBodyguard_1406",
+    "id": "SC_TPL_KalomBodyguard_1406"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_TPL_Templar01_1403",
+    "id": "SC_TPL_Templar01_1403"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_TPL_Templar02_1404",
+    "id": "SC_TPL_Templar02_1404"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_TPL_Templar03_1406",
+    "id": "SC_TPL_Templar03_1406"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_TPL_Templar03_1407",
+    "id": "SC_TPL_Templar03_1407"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_TPL_Templar04_1408",
+    "id": "SC_TPL_Templar04_1408"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_TPL_Templar05_1409",
+    "id": "SC_TPL_Templar05_1409"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_TPL_Templar06_1410",
+    "id": "SC_TPL_Templar06_1410"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_TPL_Templar08_1412",
+    "id": "SC_TPL_Templar08_1412"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_TPL_Templar09_1413",
+    "id": "SC_TPL_Templar09_1413"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_TPL_Templar10_1414",
+    "id": "SC_TPL_Templar10_1414"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_TPL_Templar11_1415",
+    "id": "SC_TPL_Templar11_1415"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_TPL_Templar12_1416",
+    "id": "SC_TPL_Templar12_1416"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_TPL_Templar13_1417",
+    "id": "SC_TPL_Templar13_1417"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_TPL_Templar14_1418",
+    "id": "SC_TPL_Templar14_1418"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_TPL_Templar15_1419",
+    "id": "SC_TPL_Templar15_1419"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_TPL_Templar16_1420",
+    "id": "SC_TPL_Templar16_1420"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_TPL_Templar17_1423",
+    "id": "SC_TPL_Templar17_1423"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_TPL_Templar18_1424",
+    "id": "SC_TPL_Templar18_1424"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_TPL_Templar19_1425",
+    "id": "SC_TPL_Templar19_1425"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_TPL_Templar20_1430",
+    "id": "SC_TPL_Templar20_1430"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_TPL_Templar21_1431",
+    "id": "SC_TPL_Templar21_1431"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_TPL_Templar22_1432",
+    "id": "SC_TPL_Templar22_1432"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_TPL_Templar23_1440",
+    "id": "SC_TPL_Templar23_1440"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_TPL_Templar24_1441",
+    "id": "SC_TPL_Templar24_1441"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_TPL_Templar25_1442",
+    "id": "SC_TPL_Templar25_1442"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_TPL_Templar26_1443N",
+    "id": "SC_TPL_Templar26_1443N"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_TPL_Templar27_1444N",
+    "id": "SC_TPL_Templar27_1444N"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_VLK_Melvin_582",
+    "id": "SC_VLK_Melvin_582"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_WSC_Chani_1205",
+    "id": "SC_WSC_Chani_1205"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SC_WSC_Natalia_1207",
+    "id": "SC_WSC_Natalia_1207"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_SH_Skeleton",
+    "id": "SH_Skeleton"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_SH_Zombie_01",
+    "id": "SH_Zombie_01"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_ST_GUR_MadCorKalom_1212",
+    "id": "ST_GUR_MadCorKalom_1212"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_ST_GUR_MadCorKalom_1212_Into_Trance",
+    "id": "ST_GUR_MadCorKalom_1212_Into_Trance"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_ST_GUR_MadCorKalom_1212_Trance",
+    "id": "ST_GUR_MadCorKalom_1212_Trance"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_ST_GUR_MadCorKalom_1212_Trance_End",
+    "id": "ST_GUR_MadCorKalom_1212_Trance_End"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_ST_NOV_Novice01_1359",
+    "id": "ST_NOV_Novice01_1359"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_ST_NOV_Novice02_1360",
+    "id": "ST_NOV_Novice02_1360"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_ST_NOV_Novice03_1361",
+    "id": "ST_NOV_Novice03_1361"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_ST_NOV_Novice04_1362",
+    "id": "ST_NOV_Novice04_1362"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_ST_NOV_Novice05_1363",
+    "id": "ST_NOV_Novice05_1363"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_ST_NOV_Novice06_1364",
+    "id": "ST_NOV_Novice06_1364"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_ST_NOV_Novice07_1365",
+    "id": "ST_NOV_Novice07_1365"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_ST_NOV_Novice08_1366",
+    "id": "ST_NOV_Novice08_1366"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_ST_NOV_Novice09_1367",
+    "id": "ST_NOV_Novice09_1367"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_ST_NOV_Novice10_1368",
+    "id": "ST_NOV_Novice10_1368"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_ST_NOV_Novice11_1369",
+    "id": "ST_NOV_Novice11_1369"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_ST_NOV_Novice12_1370",
+    "id": "ST_NOV_Novice12_1370"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_ST_TPL_GorBoba_1455",
+    "id": "ST_TPL_GorBoba_1455"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_ST_TPL_Templar01_1447",
+    "id": "ST_TPL_Templar01_1447"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_ST_TPL_Templar02_1448",
+    "id": "ST_TPL_Templar02_1448"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_ST_TPL_Templar03_1449",
+    "id": "ST_TPL_Templar03_1449"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_ST_TPL_Templar04_1450",
+    "id": "ST_TPL_Templar04_1450"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_ST_TPL_Templar05_1451",
+    "id": "ST_TPL_Templar05_1451"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_ST_TPL_Templar06_1452",
+    "id": "ST_TPL_Templar06_1452"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_ST_TPL_Templar07_1453",
+    "id": "ST_TPL_Templar07_1453"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_ST_TPL_Templar08_1454",
+    "id": "ST_TPL_Templar08_1454"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_ST_TPL_Templar09_1456",
+    "id": "ST_TPL_Templar09_1456"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_ST_TPL_Templar10_1457",
+    "id": "ST_TPL_Templar10_1457"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_ST_TPL_Templar11_1458",
+    "id": "ST_TPL_Templar11_1458"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_ST_TPL_Templar12_1459",
+    "id": "ST_TPL_Templar12_1459"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_ST_TPL_Templar13_1460",
+    "id": "ST_TPL_Templar13_1460"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_ST_VLK_Mud_Sleeper",
+    "id": "ST_VLK_Mud_Sleeper"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_SkMage_Test_Soul",
+    "id": "SkMage_Test_Soul"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SwampCamp_Guru",
+    "id": "SwampCamp_Guru"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SwampCamp_Novice",
+    "id": "SwampCamp_Novice"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SwampCamp_Templar",
+    "id": "SwampCamp_Templar"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_SwampCamp_WomanSlave",
+    "id": "SwampCamp_WomanSlave"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Swampshark_Sleeper",
+    "id": "Swampshark_Sleeper"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TC_TrollAdult_01",
+    "id": "TC_TrollAdult_01"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TC_TrollPrime",
+    "id": "TC_TrollPrime"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter",
+    "id": "TestCharacter"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_A1H",
+    "id": "TestCharacter_A1H"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_A1H_Master",
+    "id": "TestCharacter_A1H_Master"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_A1H_Trained",
+    "id": "TestCharacter_A1H_Trained"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_A2H",
+    "id": "TestCharacter_A2H"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_A2H_Master",
+    "id": "TestCharacter_A2H_Master"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_A2H_Trained",
+    "id": "TestCharacter_A2H_Trained"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_AIWorldEvent_Follower",
+    "id": "TestCharacter_AIWorldEvent_Follower"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_AIWorldEvent_Leader",
+    "id": "TestCharacter_AIWorldEvent_Leader"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_BaalLukor",
+    "id": "TestCharacter_BaalLukor"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Bow",
+    "id": "TestCharacter_Bow"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Crossbow",
+    "id": "TestCharacter_Crossbow"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Crowd_Digger",
+    "id": "TestCharacter_Crowd_Digger"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Crowd_Guard",
+    "id": "TestCharacter_Crowd_Guard"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Digger",
+    "id": "TestCharacter_Digger"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Digger_Brave",
+    "id": "TestCharacter_Digger_Brave"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Dressed",
+    "id": "TestCharacter_Dressed"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Fists_Master",
+    "id": "TestCharacter_Fists_Master"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Fists_Trained",
+    "id": "TestCharacter_Fists_Trained"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Fists_Untrained",
+    "id": "TestCharacter_Fists_Untrained"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_FunctionalTests",
+    "id": "TestCharacter_FunctionalTests"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_FunctionalTests_Smalltalk",
+    "id": "TestCharacter_FunctionalTests_Smalltalk"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_FunctionalTests_WithoutMutables",
+    "id": "TestCharacter_FunctionalTests_WithoutMutables"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Gomez",
+    "id": "TestCharacter_Gomez"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Guard",
+    "id": "TestCharacter_Guard"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_GuardNH",
+    "id": "TestCharacter_GuardNH"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Guard_Coward",
+    "id": "TestCharacter_Guard_Coward"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Human_Base_Parent",
+    "id": "TestCharacter_Human_Base_Parent"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Human_LayerHits",
+    "id": "TestCharacter_Human_LayerHits"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Human_LayerHits_HitsAdditive",
+    "id": "TestCharacter_Human_LayerHits_HitsAdditive"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Human_LayerHits_HitsSupAr",
+    "id": "TestCharacter_Human_LayerHits_HitsSupAr"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Human_Simple",
+    "id": "TestCharacter_Human_Simple"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Human_Simple2",
+    "id": "TestCharacter_Human_Simple2"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Human_Simple_Blocking",
+    "id": "TestCharacter_Human_Simple_Blocking"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Human_Simple_CastSpell",
+    "id": "TestCharacter_Human_Simple_CastSpell"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Human_Simple_Executions",
+    "id": "TestCharacter_Human_Simple_Executions"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Human_Simple_VFX",
+    "id": "TestCharacter_Human_Simple_VFX"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Human_TestTaunts_A1H",
+    "id": "TestCharacter_Human_TestTaunts_A1H"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Human_TestTaunts_A2H",
+    "id": "TestCharacter_Human_TestTaunts_A2H"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Human_TestTaunts_Base",
+    "id": "TestCharacter_Human_TestTaunts_Base"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Human_TestTaunts_Bow",
+    "id": "TestCharacter_Human_TestTaunts_Bow"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Human_TestTaunts_Crossbow",
+    "id": "TestCharacter_Human_TestTaunts_Crossbow"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Human_TestTaunts_Fists",
+    "id": "TestCharacter_Human_TestTaunts_Fists"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Human_TestTaunts_M1H",
+    "id": "TestCharacter_Human_TestTaunts_M1H"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Human_TestTaunts_M2H",
+    "id": "TestCharacter_Human_TestTaunts_M2H"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Human_TestTaunts_Mage_Rune",
+    "id": "TestCharacter_Human_TestTaunts_Mage_Rune"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Human_TestTaunts_Mage_Scroll",
+    "id": "TestCharacter_Human_TestTaunts_Mage_Scroll"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Human_TestTaunts_S1H",
+    "id": "TestCharacter_Human_TestTaunts_S1H"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Human_TestTaunts_S2H",
+    "id": "TestCharacter_Human_TestTaunts_S2H"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Human_TestTaunts_S2H_Ma",
+    "id": "TestCharacter_Human_TestTaunts_S2H_Ma"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Human_TestTaunts_S2H_Tr",
+    "id": "TestCharacter_Human_TestTaunts_S2H_Tr"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Human_TestTaunts_Sff2H",
+    "id": "TestCharacter_Human_TestTaunts_Sff2H"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Human_TestTaunts_T1H",
+    "id": "TestCharacter_Human_TestTaunts_T1H"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_M1H",
+    "id": "TestCharacter_M1H"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_M1H_Master",
+    "id": "TestCharacter_M1H_Master"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_M1H_Trained",
+    "id": "TestCharacter_M1H_Trained"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_M2H",
+    "id": "TestCharacter_M2H"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_M2H_Master",
+    "id": "TestCharacter_M2H_Master"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_M2H_Trained",
+    "id": "TestCharacter_M2H_Trained"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Mage",
+    "id": "TestCharacter_Mage"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Mage_AllSpells",
+    "id": "TestCharacter_Mage_AllSpells"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Mage_BallLightning",
+    "id": "TestCharacter_Mage_BallLightning"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Mage_ChainLightning",
+    "id": "TestCharacter_Mage_ChainLightning"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Mage_FireBall",
+    "id": "TestCharacter_Mage_FireBall"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Mage_FireBolt",
+    "id": "TestCharacter_Mage_FireBolt"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Mage_FireRain",
+    "id": "TestCharacter_Mage_FireRain"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Mage_FistOfWind",
+    "id": "TestCharacter_Mage_FistOfWind"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Mage_Heal",
+    "id": "TestCharacter_Mage_Heal"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Mage_Ice",
+    "id": "TestCharacter_Mage_Ice"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Mage_IceBlock",
+    "id": "TestCharacter_Mage_IceBlock"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Mage_IceBolt",
+    "id": "TestCharacter_Mage_IceBolt"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Mage_IceWave",
+    "id": "TestCharacter_Mage_IceWave"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Mage_Light",
+    "id": "TestCharacter_Mage_Light"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Mage_Pyrokinesis",
+    "id": "TestCharacter_Mage_Pyrokinesis"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Mage_StormFist",
+    "id": "TestCharacter_Mage_StormFist"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Mage_StormOfFire",
+    "id": "TestCharacter_Mage_StormOfFire"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Mage_UrizielWaveOfDeath",
+    "id": "TestCharacter_Mage_UrizielWaveOfDeath"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Pickaxe",
+    "id": "TestCharacter_Pickaxe"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Pickaxe_Master",
+    "id": "TestCharacter_Pickaxe_Master"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Pickaxe_Trained",
+    "id": "TestCharacter_Pickaxe_Trained"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_S1H",
+    "id": "TestCharacter_S1H"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_S1H_Master",
+    "id": "TestCharacter_S1H_Master"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_S1H_Trained",
+    "id": "TestCharacter_S1H_Trained"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_S2H",
+    "id": "TestCharacter_S2H"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_S2H_Master",
+    "id": "TestCharacter_S2H_Master"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_S2H_Trained",
+    "id": "TestCharacter_S2H_Trained"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_ScavAdult_LayerHits_HitsAdditive",
+    "id": "TestCharacter_ScavAdult_LayerHits_HitsAdditive"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_ScavAdult_LayerHits_HitsSupAr",
+    "id": "TestCharacter_ScavAdult_LayerHits_HitsSupAr"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Sff2H",
+    "id": "TestCharacter_Sff2H"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Sff2H_Master",
+    "id": "TestCharacter_Sff2H_Master"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Sff2H_Trained",
+    "id": "TestCharacter_Sff2H_Trained"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_Sff2H_Untrained",
+    "id": "TestCharacter_Sff2H_Untrained"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_T1H",
+    "id": "TestCharacter_T1H"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_WallClimbing",
+    "id": "TestCharacter_WallClimbing"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestCharacter_WeaponSet",
+    "id": "TestCharacter_WeaponSet"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestDemon_Conversation",
+    "id": "TestDemon_Conversation"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_TestGuard",
+    "id": "TestGuard"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_TestGuardBow",
+    "id": "TestGuardBow"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_TestMage",
+    "id": "TestMage"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestOrc",
+    "id": "TestOrc"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestOrcSimple_Axe",
+    "id": "TestOrcSimple_Axe"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestOrcSimple_Fists",
+    "id": "TestOrcSimple_Fists"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestOrcSimple_Fists_Warrior",
+    "id": "TestOrcSimple_Fists_Warrior"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestOrcSimple_Mace",
+    "id": "TestOrcSimple_Mace"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestOrcSimple_NoWeapon",
+    "id": "TestOrcSimple_NoWeapon"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestOrcSimple_SpecialParent",
+    "id": "TestOrcSimple_SpecialParent"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestOrcSimple_Staff",
+    "id": "TestOrcSimple_Staff"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestOrcSimple_Staff_BallLighting",
+    "id": "TestOrcSimple_Staff_BallLighting"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestOrcSimple_Staff_BreathOfDeath",
+    "id": "TestOrcSimple_Staff_BreathOfDeath"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestOrcSimple_Staff_ChainLighting",
+    "id": "TestOrcSimple_Staff_ChainLighting"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestOrcSimple_Staff_Fireball",
+    "id": "TestOrcSimple_Staff_Fireball"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestOrcSimple_Staff_Pyrokinesis",
+    "id": "TestOrcSimple_Staff_Pyrokinesis"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestOrcSimple_Staff_StormOfFire",
+    "id": "TestOrcSimple_Staff_StormOfFire"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestOrcSimple_Staff_Undead",
+    "id": "TestOrcSimple_Staff_Undead"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestOrcSimple_Sword",
+    "id": "TestOrcSimple_Sword"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestOrcSimple_TauntParent",
+    "id": "TestOrcSimple_TauntParent"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestOrcSimple_Taunts_Axe",
+    "id": "TestOrcSimple_Taunts_Axe"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestOrcSimple_Taunts_Fists",
+    "id": "TestOrcSimple_Taunts_Fists"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestOrcSimple_Taunts_Mace",
+    "id": "TestOrcSimple_Taunts_Mace"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestOrcSimple_Taunts_Sword",
+    "id": "TestOrcSimple_Taunts_Sword"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestOrcSimple_Undead_SpecialParent",
+    "id": "TestOrcSimple_Undead_SpecialParent"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestOrc_A1H",
+    "id": "TestOrc_A1H"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestOrc_Conversation",
+    "id": "TestOrc_Conversation"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestOrc_Fists",
+    "id": "TestOrc_Fists"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestOrc_M1H",
+    "id": "TestOrc_M1H"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestOrc_S1H",
+    "id": "TestOrc_S1H"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestOrc_Sff1H_GVArushat",
+    "id": "TestOrc_Sff1H_GVArushat"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestOrc_Sff1H_Shaman",
+    "id": "TestOrc_Sff1H_Shaman"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestOrc_Sff1H_VHashor",
+    "id": "TestOrc_Sff1H_VHashor"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestOrc_Sff1H_VKasorg",
+    "id": "TestOrc_Sff1H_VKasorg"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestOrc_Sff1H_VRuuushk",
+    "id": "TestOrc_Sff1H_VRuuushk"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestOrc_Sff1H_VUnhilqt",
+    "id": "TestOrc_Sff1H_VUnhilqt"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_TestOrc_Sff1H_Varrags",
+    "id": "TestOrc_Sff1H_Varrags"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Test_MCrawler_B",
+    "id": "Test_MCrawler_B"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Test_MCrawler_L",
+    "id": "Test_MCrawler_L"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Test_MCrawler_R",
+    "id": "Test_MCrawler_R"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Test_MCrawler_Temple_Wait",
+    "id": "Test_MCrawler_Temple_Wait"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Test_MCrawler_Wait",
+    "id": "Test_MCrawler_Wait"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Test_MCrawler_Warrior_Wait",
+    "id": "Test_MCrawler_Warrior_Wait"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Test_Mini_Golem_Ice",
+    "id": "Test_Mini_Golem_Ice"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Test_Mini_Golem_Ice_Heal",
+    "id": "Test_Mini_Golem_Ice_Heal"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Tutorial_Combat_QuestDealer",
+    "id": "Tutorial_Combat_QuestDealer"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_UL_NON_Gilbert_1500",
+    "id": "UL_NON_Gilbert_1500"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_UL_ORG_Aidan_859",
+    "id": "UL_ORG_Aidan_859"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_UL_ORG_Blackmailer_888",
+    "id": "UL_ORG_Blackmailer_888"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_UL_ORG_CoBlackmailer_889",
+    "id": "UL_ORG_CoBlackmailer_889"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_UL_ORG_Jacko_862",
+    "id": "UL_ORG_Jacko_862"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_UL_ORG_Killian_861",
+    "id": "UL_ORG_Killian_861"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_UL_ORG_Renyu_860",
+    "id": "UL_ORG_Renyu_860"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_UL_ORG_Rogue01_1501",
+    "id": "UL_ORG_Rogue01_1501"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_UL_ORG_Rogue02_1502",
+    "id": "UL_ORG_Rogue02_1502"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_UL_ORG_Rogue03_1503",
+    "id": "UL_ORG_Rogue03_1503"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_UL_ORG_Rogue04_1504",
+    "id": "UL_ORG_Rogue04_1504"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_UL_STT_Cavalorn_336",
+    "id": "UL_STT_Cavalorn_336"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_UL_STT_Cohsel_337",
+    "id": "UL_STT_Cohsel_337"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_UL_Wolf_Cohsel",
+    "id": "UL_Wolf_Cohsel"
+  },
+  {
+    "category": "other",
+    "class": "CharacterDefinition_Viran_Bloodlfy",
+    "id": "Viran_Bloodlfy"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_XT_DMB_Xardas_404",
+    "id": "XT_DMB_Xardas_404"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_XT_DMB_Xardas_404_Sleeper",
+    "id": "XT_DMB_Xardas_404_Sleeper"
+  },
+  {
+    "category": "human",
+    "class": "CharacterDefinition_Human_XT_XardasDemon",
+    "id": "XT_XardasDemon"
+  }
+]

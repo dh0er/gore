@@ -1079,6 +1079,72 @@ void main() {
     },
   );
 
+  test(
+    'applyAddKnowledgeCharacter issues one write_save with the addCharacter edit',
+    () async {
+      final core = _RecordingCoreService();
+      final notifier = EditorNotifier(
+        core,
+        saveDir: r'C:\tmp\saves',
+        codecHostPath: r'C:\tools\goresave_g1r_codec_host.exe',
+        gameExePath: r'C:\Games\G1R\G1R-Win64-Shipping.exe',
+      );
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+      // Whitespace is trimmed before it reaches the core.
+      final result = await notifier.applyAddKnowledgeCharacter('  NewNpc  ');
+
+      expect(result, isTrue);
+
+      final write = core.requests.lastWhere((r) => r.command == 'write_save');
+      expect(write.payload['backup'], isTrue);
+      final edits = write.payload['edits'] as List;
+      expect(edits, hasLength(1));
+      final edit = edits.single as Map;
+      expect(edit['path'], 'private.knowledge.addCharacter');
+      expect(edit['value'], {'value': 'NewNpc'});
+    },
+  );
+
+  test(
+    'applyAddKnowledgeCharacter is blocked when pendingEdits is non-empty',
+    () async {
+      final core = _RecordingCoreService();
+      final notifier = EditorNotifier(
+        core,
+        saveDir: r'C:\tmp\saves',
+        codecHostPath: r'C:\tools\goresave_g1r_codec_host.exe',
+        gameExePath: r'C:\Games\G1R\G1R-Win64-Shipping.exe',
+      );
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+      notifier.setPendingEdit(
+        'x',
+        const PendingSaveEdit(
+          edits: [
+            {'path': 'public.m_PlayerSaveName', 'value': 'Draft'},
+          ],
+        ),
+      );
+
+      final writesBefore = core.requests
+          .where((r) => r.command == 'write_save')
+          .length;
+
+      final result = await notifier.applyAddKnowledgeCharacter('NewNpc');
+
+      expect(result, isFalse);
+      expect(notifier.state.error, isNotNull);
+      // No write_save must have been issued.
+      final writesAfter = core.requests
+          .where((r) => r.command == 'write_save')
+          .length;
+      expect(writesAfter, writesBefore);
+      // Pending edit must still be intact.
+      expect(notifier.state.pendingEdits.containsKey('x'), isTrue);
+    },
+  );
+
   // ---------------------------------------------------------------------------
   // Profile switcher (selectProfile)
   // ---------------------------------------------------------------------------

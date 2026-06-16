@@ -60,3 +60,5 @@ flutter:
   assets:
     - assets/goresave_icon.png
     - assets/item_catalog.json
+    - assets/npc_catalog.json
+    - assets/knowledge_catalog.json
