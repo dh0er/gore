@@ -1,28 +1,27 @@
 //! Round-trip probe: add or remove an inventory item on a save copy, then
 //! re-inspect.
 //!
-//! Usage: try_add_item <save.sav> <codec_host.exe> <game.exe> <item_path> <count> [add|remove]
+//! Usage: try_add_item <save.sav> <item_path> <count> [add|remove]
 
 use goresave_core::execute_json;
 use serde_json::{Value, json};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    if args.len() < 6 {
+    if args.len() < 4 {
         eprintln!(
-            "usage: try_add_item <save.sav> <codec_host.exe> <game.exe> <item_path> <count> [add|remove]"
+            "usage: try_add_item <save.sav> <item_path> <count> [add|remove]"
         );
         std::process::exit(2);
     }
-    let host = json!({ "helperPath": args[2], "exePath": args[3] });
-    let count: i64 = args[5].parse().expect("count");
-    let op = args.get(6).map(String::as_str).unwrap_or("add");
+    let count: i64 = args[3].parse().expect("count");
+    let op = args.get(4).map(String::as_str).unwrap_or("add");
     let edit = if op == "remove" {
         json!({ "path": "private.inventory.removeItem",
-                "value": { "path": args[4] } })
+                "value": { "path": args[2] } })
     } else {
         json!({ "path": "private.inventory.addItem",
-                "value": { "path": args[4], "count": count } })
+                "value": { "path": args[2], "count": count } })
     };
 
     let write = json!({
@@ -31,7 +30,6 @@ fn main() {
             "path": args[1],
             "backup": false,
             "edits": [edit],
-            "binaryHost": host,
         }
     });
     let write_out = execute_json(&write.to_string());
@@ -43,7 +41,7 @@ fn main() {
 
     let inspect = json!({
         "command": "inspect_save",
-        "payload": { "path": args[1], "includePrivate": true, "binaryHost": host }
+        "payload": { "path": args[1], "includePrivate": true }
     });
     let insp_out = execute_json(&inspect.to_string());
     let iv: Value = serde_json::from_str(&insp_out).unwrap();
@@ -51,7 +49,7 @@ fn main() {
     let items = inv["items"].as_array().cloned().unwrap_or_default();
     let found = items
         .iter()
-        .any(|it| it["path"].as_str() == Some(args[4].as_str()));
+        .any(|it| it["path"].as_str() == Some(args[2].as_str()));
     eprintln!(
         "INSPECT scope={} itemStackCount={} returnedItems={} contains_added={}",
         inv["itemScope"],
@@ -61,7 +59,7 @@ fn main() {
     );
     if let Some(it) = items
         .iter()
-        .find(|it| it["path"].as_str() == Some(args[4].as_str()))
+        .find(|it| it["path"].as_str() == Some(args[2].as_str()))
     {
         eprintln!("ADDED ITEM: {it}");
     }

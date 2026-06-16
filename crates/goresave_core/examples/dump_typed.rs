@@ -1,20 +1,18 @@
 //! Dump every typed property of a GSAV save as JSON lines.
 //!
-//! Usage: dump_typed <save.sav> <codec_host.exe> <game.exe> [query]
+//! Usage: dump_typed <save.sav> [query]
 
 use goresave_core::execute_json;
 use serde_json::{Value, json};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    if args.len() < 4 {
-        eprintln!("usage: dump_typed <save.sav> <codec_host.exe> <game.exe> [query]");
+    if args.len() < 2 {
+        eprintln!("usage: dump_typed <save.sav> [query]");
         std::process::exit(2);
     }
     let save = &args[1];
-    let helper = &args[2];
-    let game = &args[3];
-    let query = args.get(4).cloned().unwrap_or_default();
+    let query = args.get(2).cloned().unwrap_or_default();
 
     let mut offset = 0usize;
     loop {
@@ -25,7 +23,6 @@ fn main() {
                 "query": query,
                 "offset": offset,
                 "limit": 1000,
-                "binaryHost": { "helperPath": helper, "exePath": game },
             }
         });
         let response = execute_json(&request.to_string());
