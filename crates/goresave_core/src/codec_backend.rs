@@ -1,4 +1,4 @@
-use crate::{CoreError, kraken};
+use crate::{CoreError, codec_calibration, kraken};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -94,6 +94,49 @@ impl CodecBackend for PureRustKrakenBackend {
         Err(CoreError::Codec(
             "pure Rust Kraken encoder is not implemented yet".to_string(),
         ))
+    }
+}
+
+/// In-process Oodle Kraken codec backed by the vendored ooz sources. Always
+/// available; needs no game executable.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct OozKrakenBackend;
+
+impl OozKrakenBackend {
+    fn self_test(&self) -> (bool, bool, String) {
+        let can_decompress = codec_calibration::decode_self_test();
+        let can_compress = can_decompress && codec_calibration::compress_roundtrip_self_test();
+        let status = match (can_decompress, can_compress) {
+            (true, true) => "ready",
+            (true, false) => "decode_only",
+            _ => "unavailable",
+        };
+        (can_decompress, can_compress, status.to_string())
+    }
+}
+
+impl CodecBackend for OozKrakenBackend {
+    fn probe(&self) -> Result<CodecBackendProbe, CoreError> {
+        let (can_decompress, can_compress, status) = self.self_test();
+        Ok(CodecBackendProbe {
+            backend: "ooz_kraken".to_string(),
+            available: can_decompress,
+            can_decompress,
+            can_compress,
+            status,
+            profile: None,
+            resolution_mode: None,
+            details: json!({ "adapter": "ooz_kraken" }),
+        })
+    }
+
+    fn decompress(&self, input: &[u8], expected_size: usize) -> Result<Vec<u8>, CoreError> {
+        goresave_oodle::kraken_decompress(input, expected_size)
+            .map_err(|e| CoreError::Codec(e.to_string()))
+    }
+
+    fn compress(&self, input: &[u8], level: u8) -> Result<Vec<u8>, CoreError> {
+        goresave_oodle::kraken_compress(input, level).map_err(|e| CoreError::Codec(e.to_string()))
     }
 }
 
@@ -749,6 +792,22 @@ mod tests {
                 ]
             })]
         );
+    }
+
+    #[test]
+    fn ooz_backend_roundtrips_and_reports_available() {
+        let backend = OozKrakenBackend::default();
+
+        let input: Vec<u8> = (0..4096u32).map(|i| (i * 5) as u8).collect();
+        let comp = backend.compress(&input, 6).unwrap(); // level clamped internally
+        let back = backend.decompress(&comp, input.len()).unwrap();
+        assert_eq!(back, input);
+
+        let probe = backend.probe().unwrap();
+        assert_eq!(probe.backend, "ooz_kraken");
+        assert!(probe.available);
+        assert!(probe.can_decompress);
+        assert!(probe.can_compress);
     }
 
     #[test]
