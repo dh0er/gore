@@ -1,7 +1,7 @@
 // Clean C ABI over the vendored ooz codec. Kraken only on the encode side;
 // decode dispatches every Oodle codec.
+#include "stdafx.h" // ooz precompiled header: provides uint8/byte typedefs + simde
 #include <cstddef>
-#include <cstdint>
 #include "compress.h"
 
 // Defined in kraken.cpp, not declared in any header.
