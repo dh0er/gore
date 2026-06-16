@@ -1575,10 +1575,16 @@ fn read_sized_value(
                 entries,
             })
         }
-        other => Err(CoreError::Parse(format!(
-            "unsupported property type {other:?} at 0x{:x}",
-            r.abs_pos()
-        ))),
+        // Any leaf type we don't model: keep its sized payload opaque (read-only,
+        // round-tripped unchanged) rather than aborting. read_property bounds the
+        // sub-reader to exactly `size` bytes, so this consumes the whole payload
+        // byte-exact. Aborting here would fail the entire typed parse and gate off
+        // every typed-parse tab (All data, Progression, Inventory add/remove,
+        // Player editing) — the breakage the Text/FieldPath opaque arms each fixed
+        // one type at a time. Container types (Struct/Array/Set/Map/Enum) are
+        // matched above and still error if their descriptor is missing, so a real
+        // stream desync on a known type surfaces rather than being swallowed.
+        _ => Ok(PropertyValue::Opaque(r.read(r.remaining())?.to_vec())),
     }
 }
 
@@ -1879,6 +1885,28 @@ mod tests {
             PropertyValue::Opaque(vec![1, 2, 3, 4, 5, 6, 7, 8])
         );
         assert_eq!(parsed.properties[0].type_name, "FieldPathProperty");
+    }
+
+    #[test]
+    fn unknown_leaf_property_kept_opaque() {
+        // Any leaf property type the parser does not model must keep its sized
+        // payload as opaque bytes instead of aborting the whole typed parse.
+        // A single unmodelled type would otherwise leave privateTypedVerified
+        // false and gate off every typed-parse tab (All data, Progression,
+        // Inventory add/remove, Player editing) — the recurring breakage the
+        // FieldPathProperty/TextProperty opaque arms were each added to fix.
+        let body = vec![9u8, 8, 7, 6, 5];
+        let mut props = tag("SomeFuture", "WeakObjectProperty");
+        props.extend_from_slice(&header(body.len() as u32, 0));
+        props.extend_from_slice(&body);
+        let payload = root("/Script/Test.Save", &props);
+
+        let parsed = parse_private_root(&payload).unwrap();
+        assert_eq!(
+            parsed.properties[0].value,
+            PropertyValue::Opaque(vec![9, 8, 7, 6, 5])
+        );
+        assert_eq!(parsed.properties[0].type_name, "WeakObjectProperty");
     }
 
     #[test]
