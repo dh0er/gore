@@ -1505,6 +1505,79 @@ fn protect_mapped_sections(
     Ok(protected)
 }
 
+/// Well-known Windows system DLL names that mod loaders (UE4SS, ReShade, ENB,
+/// ...) commonly hijack by dropping an identically-named proxy/wrapper DLL next
+/// to the game executable. Loading such a proxy into the codec host process
+/// runs its `DllMain`, which (for UE4SS) tries to load `UE4SS.dll` relative to
+/// the host and fails with a `Failed to load UE4SS.dll` MessageBox (issue #18).
+///
+/// We deliberately scope the System32 override to this set rather than "any DLL
+/// that also exists in System32": that keeps the normal loader order
+/// (application directory before the system directory) for genuine app-local
+/// dependencies a game may ship under a system name (e.g. `msvcp140.dll`,
+/// `vcruntime140.dll`, `d3dcompiler_47.dll`), so we never resolve imports from
+/// an older/different system copy than the executable was built against.
+///
+/// Names are compared case-insensitively. UE4SS defaults to `dwmapi.dll` but is
+/// configurable to other names in this list, so the whole proxy family is
+/// covered.
+/// This list intentionally contains only core OS API DLLs that mod loaders
+/// wrap — it must NOT include redistributable DLLs that games legitimately ship
+/// application-local (e.g. `d3dcompiler_47.dll`, `xaudio2_9.dll`, the VC
+/// runtime). Overriding those to System32 could bind imports to a different
+/// build than the executable ships, which is exactly what scoping avoids.
+#[cfg(windows)]
+const KNOWN_PROXY_DLLS: &[&str] = &[
+    "d3d8.dll",
+    "d3d9.dll",
+    "d3d10.dll",
+    "d3d11.dll",
+    "d3d12.dll",
+    "ddraw.dll",
+    "dinput.dll",
+    "dinput8.dll",
+    "dsound.dll",
+    "dwmapi.dll",
+    "dxgi.dll",
+    "msacm32.dll",
+    "msvfw32.dll",
+    "opengl32.dll",
+    "version.dll",
+    "wininet.dll",
+    "winmm.dll",
+    "xinput1_1.dll",
+    "xinput1_2.dll",
+    "xinput1_3.dll",
+    "xinput1_4.dll",
+    "xinput9_1_0.dll",
+];
+
+/// Resolve a known mod-loader-proxy DLL name to the real file in the Windows
+/// system directory, if present.
+///
+/// Returns `None` for any name not in [`KNOWN_PROXY_DLLS`], for names with path
+/// components (a PE import is a bare filename), or when no such system DLL
+/// exists — all of which let the caller fall through to the game-directory
+/// search. Uses `SystemRoot`/`windir` (falling back to `C:\Windows`) so it
+/// honours non-default Windows installs.
+#[cfg(windows)]
+fn system32_dll_path(dll_name: &str) -> Option<PathBuf> {
+    // Reject anything with path components: a PE import is a bare filename.
+    if Path::new(dll_name).components().count() != 1 {
+        return None;
+    }
+    let lowered = dll_name.to_ascii_lowercase();
+    if !KNOWN_PROXY_DLLS.contains(&lowered.as_str()) {
+        return None;
+    }
+    let system_root = env::var_os("SystemRoot")
+        .or_else(|| env::var_os("windir"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
+    let system_dll = system_root.join("System32").join(dll_name);
+    system_dll.is_file().then_some(system_dll)
+}
+
 impl WindowsImportResolver {
     pub fn with_search_dirs(search_dirs: Vec<PathBuf>) -> Self {
         Self { search_dirs }
@@ -1515,6 +1588,18 @@ impl WindowsImportResolver {
         if dll_path.is_absolute() && dll_path.is_file() {
             return Some(dll_path.to_path_buf());
         }
+
+        // On Windows, for the narrow set of system DLL names that mod loaders
+        // hijack (see KNOWN_PROXY_DLLS), prefer the real System32 copy over an
+        // identically-named proxy DLL in the game directory. This avoids running
+        // UE4SS's proxy DllMain inside the codec host (issue #18). Every other
+        // name — including genuine app-local dependencies and game-specific
+        // DLLs — keeps the normal application-directory-first search below.
+        #[cfg(windows)]
+        if let Some(system_dll) = system32_dll_path(dll_name) {
+            return Some(system_dll);
+        }
+
         self.search_dirs
             .iter()
             .map(|dir| dir.join(dll_name))
@@ -3848,6 +3933,100 @@ mod runtime_work_timeout_tests {
             runtime_work_worker_timeout(usize::MAX),
             Duration::from_secs(600)
         );
+    }
+}
+
+#[cfg(all(test, windows))]
+mod candidate_dll_path_tests {
+    use super::*;
+
+    #[test]
+    fn prefers_system32_over_game_dir_proxy() {
+        // Plant a fake proxy DLL in a "game" dir under a real system DLL name.
+        let game_dir = std::env::temp_dir().join("goresave_dll_test_proxy");
+        let _ = fs::create_dir_all(&game_dir);
+        let proxy = game_dir.join("dwmapi.dll");
+        fs::write(&proxy, b"not a real dll").unwrap();
+
+        let resolver = WindowsImportResolver::with_search_dirs(vec![game_dir.clone()]);
+        let resolved = resolver.candidate_dll_path("dwmapi.dll").unwrap();
+
+        // Must resolve to the real System32 copy, never the planted proxy.
+        assert_ne!(resolved, proxy);
+        assert_eq!(
+            resolved.parent().unwrap().file_name().unwrap(),
+            std::ffi::OsStr::new("System32")
+        );
+
+        let _ = fs::remove_dir_all(&game_dir);
+    }
+
+    #[test]
+    fn falls_back_to_game_dir_for_non_system_dll() {
+        // A game-specific DLL that does not exist in System32 must resolve
+        // from the game directory.
+        let game_dir = std::env::temp_dir().join("goresave_dll_test_game");
+        let _ = fs::create_dir_all(&game_dir);
+        let game_dll = game_dir.join("goresave_fake_game.dll");
+        fs::write(&game_dll, b"game dll").unwrap();
+
+        let resolver = WindowsImportResolver::with_search_dirs(vec![game_dir.clone()]);
+        let resolved = resolver
+            .candidate_dll_path("goresave_fake_game.dll")
+            .unwrap();
+        assert_eq!(resolved, game_dll);
+
+        let _ = fs::remove_dir_all(&game_dir);
+    }
+
+    #[test]
+    fn keeps_app_local_copy_for_non_proxy_system_name() {
+        // A genuine app-local dependency that shares a system DLL name but is
+        // NOT a known mod-loader proxy (e.g. the VC runtime) must keep the
+        // normal application-directory-first loader order, even though the same
+        // name exists in System32.
+        let game_dir = std::env::temp_dir().join("goresave_dll_test_applocal");
+        let _ = fs::create_dir_all(&game_dir);
+        let app_local = game_dir.join("vcruntime140.dll");
+        fs::write(&app_local, b"app-local vc runtime").unwrap();
+
+        // Precondition: redistributable DLLs games ship app-local must not be
+        // in the proxy override set, even when an identically-named copy exists
+        // in System32.
+        for name in [
+            "vcruntime140.dll",
+            "msvcp140.dll",
+            "d3dcompiler_43.dll",
+            "d3dcompiler_47.dll",
+            "xaudio2_9.dll",
+            "xapofx1_5.dll",
+        ] {
+            assert!(!KNOWN_PROXY_DLLS.contains(&name), "{name} must not be proxied");
+        }
+
+        let resolver = WindowsImportResolver::with_search_dirs(vec![game_dir.clone()]);
+        let resolved = resolver.candidate_dll_path("vcruntime140.dll").unwrap();
+        assert_eq!(resolved, app_local);
+
+        let _ = fs::remove_dir_all(&game_dir);
+    }
+
+    #[test]
+    fn proxy_name_match_is_case_insensitive() {
+        let game_dir = std::env::temp_dir().join("goresave_dll_test_case");
+        let _ = fs::create_dir_all(&game_dir);
+        let proxy = game_dir.join("DWMAPI.DLL");
+        fs::write(&proxy, b"not a real dll").unwrap();
+
+        let resolver = WindowsImportResolver::with_search_dirs(vec![game_dir.clone()]);
+        let resolved = resolver.candidate_dll_path("DWMAPI.DLL").unwrap();
+        assert_ne!(resolved, proxy);
+        assert_eq!(
+            resolved.parent().unwrap().file_name().unwrap(),
+            std::ffi::OsStr::new("System32")
+        );
+
+        let _ = fs::remove_dir_all(&game_dir);
     }
 }
 
