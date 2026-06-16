@@ -86,4 +86,24 @@ mod tests {
         let back = kraken_decompress(&comp, input.len()).unwrap();
         assert_eq!(back, input);
     }
+
+    #[test]
+    fn compress_clamps_unsafe_level_instead_of_crashing() {
+        let input: Vec<u8> = (0..4096u32).map(|i| (i * 7) as u8).collect();
+        // Level 6 would crash the raw ooz encoder; the wrapper must clamp to 5.
+        let comp = kraken_compress(&input, 6).unwrap();
+        let back = kraken_decompress(&comp, input.len()).unwrap();
+        assert_eq!(back, input);
+    }
+
+    #[test]
+    fn decompress_rejects_wrong_expected_size() {
+        let input: Vec<u8> = (0..4096u32).map(|i| (i * 7) as u8).collect();
+        let comp = kraken_compress(&input, 5).unwrap();
+        // Feed only the first 16 bytes of the compressed stream; the decoder
+        // cannot produce the full 4096 bytes from a truncated block.
+        let truncated = &comp[..16];
+        let err = kraken_decompress(truncated, input.len()).unwrap_err();
+        assert!(matches!(err, OodleError::Decompress { .. }));
+    }
 }

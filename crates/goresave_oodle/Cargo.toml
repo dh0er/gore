@@ -3,5 +3,10 @@ name = "goresave_oodle"
 version = "0.1.0"
 edition = "2021"
 
+[dev-dependencies]
+base64 = "0.22"
+sha1 = "0.10"
+hex = "0.4"
+
 [build-dependencies]
 cc = "1"
