@@ -2817,9 +2817,9 @@ fn inspect_private_payload(
             Ok(json!({
                 "status": if preview { "decoded_preview" } else { "decoded" },
                 "message": if preview {
-                    "Private payload preview decoded through the G1R codec host."
+                    "Private payload preview decoded with the in-process Kraken codec."
                 } else {
-                    "Private payload decoded through the G1R codec host."
+                    "Private payload decoded with the in-process Kraken codec."
                 },
                 "method": stream.method,
                 "algorithmId": stream.algorithm_id,
@@ -3116,7 +3116,7 @@ fn search_typed_properties(
 ) -> Result<Value, CoreError> {
     let backend = backend.ok_or_else(|| {
         CoreError::Codec(
-            "typed property search requires a configured and verified G1R codec host".to_string(),
+            "typed property search requires a working codec backend".to_string(),
         )
     })?;
     let query = payload.get("query").and_then(Value::as_str).unwrap_or("");
@@ -3179,7 +3179,7 @@ fn query_progression(
 ) -> Result<Value, CoreError> {
     let backend = backend.ok_or_else(|| {
         CoreError::Codec(
-            "progression queries require a configured and verified G1R codec host".to_string(),
+            "progression queries require a working codec backend".to_string(),
         )
     })?;
     let section = payload
@@ -4493,7 +4493,7 @@ fn apply_private_edits(
     }
     let backend = codec_backend.ok_or_else(|| {
         CoreError::Codec(
-            "private edits require a configured and verified G1R codec host".to_string(),
+            "private edits require a working codec backend".to_string(),
         )
     })?;
     let parts = split_gsav(data)?;
