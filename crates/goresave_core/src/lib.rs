@@ -6035,7 +6035,7 @@ fn main_container_summary(root: &properties::RootObject) -> Option<MainContainer
             {
                 for slot in &slots {
                     if !struct_element_property(slot, "m_Payload")
-                        .is_some_and(|p| payload_carries_state(&p.value))
+                        .is_some_and(property_carries_state)
                     {
                         has_clean_template = true;
                     }
@@ -6073,27 +6073,75 @@ fn main_container_summary(root: &properties::RootObject) -> Option<MainContainer
     })
 }
 
-/// True when a template's m_Payload carries item-specific state that must not be
-/// cloned onto a new item. The only "clean" shape is one made up entirely of
-/// EMPTY containers (the known empty-map payload). Any non-empty container, or
-/// any scalar/name/object/enum leaf, counts as state — a directly-stored field
-/// such as a durability integer would otherwise be mistaken for a clean slot and
-/// copied into an unrelated new item.
-fn payload_carries_state(value: &properties::PropertyValue) -> bool {
-    use properties::{PropertyValue as PV, StructValue as SV};
+/// Scalar `m_Payload` fields that are part of the known default ItemPayload
+/// shape and may legitimately appear at their default value in a clean template.
+/// A direct scalar leaf NOT in this set is treated as item-specific state even
+/// when it currently holds the type default (0/""/false/"None"), because its
+/// real default is unknown and cloning it could seed an unrelated new item with
+/// stale state (e.g. a directly-stored durability that happens to be 0).
+const CLEAN_PAYLOAD_SCALAR_FIELDS: &[&str] = &["m_StageLevel", "m_OptionalObject", "TagName"];
+
+/// True when a scalar payload leaf holds a non-default value. Default is the
+/// type's zero value: 0 / 0.0 / false, and "" or the FName null "None" for
+/// string/name/object/class/enum leaves.
+fn scalar_leaf_is_nondefault(value: &properties::PropertyValue) -> bool {
+    use properties::PropertyValue as PV;
     match value {
+        PV::Int(0) | PV::UInt32(0) | PV::Int64(0) | PV::Byte(0) => false,
+        PV::Float(f) => *f != 0.0,
+        PV::Double(f) => *f != 0.0,
+        PV::Bool(b) => *b,
+        PV::Str(s) | PV::Name(s) | PV::Object(s) | PV::Enum(s) => !(s.is_empty() || s == "None"),
+        PV::Opaque(bytes) => !bytes.is_empty(),
+        // Any remaining leaf (non-zero number, SoftObject) is item state.
+        _ => true,
+    }
+}
+
+/// True when a property within a template's `m_Payload` carries item-specific
+/// state that must not be cloned onto a new item. A "clean" payload has every
+/// container empty and every scalar leaf either an empty/default container field
+/// or a known default ItemPayload scalar at its default value.
+///
+/// A real default-initialised ItemPayload is NOT a bare empty map: it carries
+/// `m_StageLevel=0`, `m_OptionalObject=""`, empty `m_GenericData`/`m_InnerItems`
+/// maps, `m_Ownership.UseOwnershipOfArea.TagName="None"`, and an EMPTY native
+/// GameplayTagContainer (`m_Ownership.OwnedByGuild`). The old rule flagged any
+/// scalar leaf as state, so every real slot looked dirty, `has_clean_template`
+/// was always false, and the inventory Add button vanished.
+///
+/// Containers are state iff non-empty (name-independent). Scalars are gated by
+/// name: only the known default ItemPayload fields may be default-clean; an
+/// unrecognised direct scalar is always state, so a directly-stored value such
+/// as a durability is never cloned even when it currently equals the default.
+fn property_carries_state(prop: &properties::Property) -> bool {
+    use properties::{PropertyValue as PV, StructValue as SV};
+    match &prop.value {
+        // Containers carry state only when non-empty.
         PV::Array { elements } | PV::Set { elements, .. } => !elements.is_empty(),
         PV::Map { entries, .. } => !entries.is_empty(),
         PV::ObjectInstances(instances) => !instances.is_empty(),
-        PV::Struct(SV::Properties(props)) => props.iter().any(|p| payload_carries_state(&p.value)),
-        PV::Struct(SV::Instanced(Some(instanced))) => instanced
-            .properties
-            .iter()
-            .any(|p| payload_carries_state(&p.value)),
-        // An empty/absent instanced struct carries nothing; any other leaf
-        // (scalar/name/object/enum) is item-specific state.
-        PV::Struct(SV::Instanced(None)) => false,
-        _ => true,
+        PV::Struct(s) => match s {
+            SV::Properties(props) => props.iter().any(property_carries_state),
+            SV::Instanced(Some(instanced)) => {
+                instanced.properties.iter().any(property_carries_state)
+            }
+            SV::Instanced(None) => false,
+            // Native-serialized struct variants carry state only when non-default.
+            SV::GameplayTagContainer(tags) => !tags.is_empty(),
+            SV::Vector3 { x, y, z } => *x != 0.0 || *y != 0.0 || *z != 0.0,
+            SV::Vector3f { x, y, z } => *x != 0.0 || *y != 0.0 || *z != 0.0,
+            SV::Vector4 { x, y, z, w } => *x != 0.0 || *y != 0.0 || *z != 0.0 || *w != 0.0,
+            SV::Vector2 { x, y } => *x != 0.0 || *y != 0.0,
+            SV::Guid(bytes) => bytes.iter().any(|&b| b != 0),
+            SV::DateTime(v) => *v != 0,
+        },
+        // Scalar leaf: state unless it is a known default ItemPayload field
+        // currently at its default value.
+        _ => {
+            !CLEAN_PAYLOAD_SCALAR_FIELDS.contains(&prop.name.as_str())
+                || scalar_leaf_is_nondefault(&prop.value)
+        }
     }
 }
 
@@ -6175,7 +6223,7 @@ fn apply_private_inventory_add_item_to_payload(
     // MainContainer), borrow a clean slot's bytes from another container and fix
     // m_InventoryType to MainContainer below.
     let is_clean = |slot: &properties::PropertyValue| {
-        !struct_element_property(slot, "m_Payload").is_some_and(|p| payload_carries_state(&p.value))
+        !struct_element_property(slot, "m_Payload").is_some_and(property_carries_state)
     };
     let max_id = slots.iter().filter_map(slot_id).max().unwrap_or(-1);
     let new_id = max_id.checked_add(1).ok_or_else(|| {
@@ -6391,8 +6439,7 @@ fn donor_slot_template_bytes(
         // Find any slot with an empty m_Payload (don't clone item-specific
         // state) — not just the last one, which may be stateful.
         let Some(donor_index) = donor_slots.iter().position(|slot| {
-            !struct_element_property(slot, "m_Payload")
-                .is_some_and(|p| payload_carries_state(&p.value))
+            !struct_element_property(slot, "m_Payload").is_some_and(property_carries_state)
         }) else {
             continue;
         };
@@ -12674,14 +12721,45 @@ mod tests {
         let properties::PropertyValue::Array { elements } = &slots.value else {
             panic!("m_Slots is not an array");
         };
-        let payload_value = |slot| &struct_element_property(slot, "m_Payload").unwrap().value;
+        let payload_prop = |slot| struct_element_property(slot, "m_Payload").unwrap();
         assert!(
-            !payload_carries_state(payload_value(&elements[0])),
+            !property_carries_state(payload_prop(&elements[0])),
             "an empty-map payload must be treated as a clean template"
         );
         assert!(
-            payload_carries_state(payload_value(&elements[1])),
+            property_carries_state(payload_prop(&elements[1])),
             "a payload with a direct scalar field must be treated as state"
+        );
+    }
+
+    #[test]
+    fn payload_carries_state_flags_zero_valued_unknown_scalar() {
+        // An unrecognised direct scalar at the type default (Durability=0) must
+        // still read as state: its real default is unknown, so cloning the slot
+        // would seed an unrelated new item with a stale field. Only the known
+        // default ItemPayload scalars may be default-clean.
+        let mut zero_scalar = inv_empty_payload_map();
+        zero_scalar.extend_from_slice(&int_property("Durability", 0));
+        let slot = inv_item_slot(
+            0,
+            INV_MAIN_LABEL,
+            "/Script/Angelscript.ItMi_Orenugget",
+            1,
+            &zero_scalar,
+        );
+        let payload = typed_inventory_private_payload(&[], &[slot]);
+        let root = properties::parse_private_root(&payload).unwrap();
+        let slots = properties::resolve(
+            &root.properties,
+            &properties::parse_path(&inv_slots_prefix(1)).unwrap(),
+        )
+        .unwrap();
+        let properties::PropertyValue::Array { elements } = &slots.value else {
+            panic!("m_Slots is not an array");
+        };
+        assert!(
+            property_carries_state(struct_element_property(&elements[0], "m_Payload").unwrap()),
+            "a zero-valued unknown scalar must be treated as state"
         );
     }
 
@@ -12944,6 +13022,115 @@ mod tests {
         )];
         let main = vec![stateful(0, "/Script/Angelscript.ItMw_Sword")];
         let mut payload = typed_inventory_private_payload(&other, &main);
+        let before = payload.clone();
+        let edit = PrivateInventoryAddItemEdit {
+            path: "/Script/Angelscript.ItMi_Sulfur".to_string(),
+            count: 1,
+        };
+        let err = apply_private_inventory_add_item_to_payload(&mut payload, &edit).unwrap_err();
+        assert!(err.to_string().contains("clean"), "unexpected error: {err}");
+        assert_eq!(payload, before);
+    }
+
+    fn inv_name_property(name: &str, value: &str) -> Vec<u8> {
+        inv_tagged(name, "NameProperty", &[], 0, &fstring(value))
+    }
+
+    /// Native-serialized empty GameplayTagContainer (tag count 0), mirroring
+    /// m_Ownership.OwnedByGuild in a real default ItemPayload.
+    fn inv_empty_gameplay_tag_container(name: &str) -> Vec<u8> {
+        let mut descriptor = 1u32.to_le_bytes().to_vec();
+        descriptor.extend_from_slice(&fstring("GameplayTagContainer"));
+        descriptor.extend_from_slice(&1u32.to_le_bytes());
+        descriptor.extend_from_slice(&fstring("/Script/GameplayTags"));
+        inv_tagged(
+            name,
+            "StructProperty",
+            &descriptor,
+            properties::TAG_FLAG_NATIVE_SERIALIZE,
+            &0u32.to_le_bytes(),
+        )
+    }
+
+    /// A default-initialised ItemPayload as it actually appears in real G1R
+    /// saves: all scalar leaves at default (m_StageLevel=0, m_OptionalObject="",
+    /// TagName="None") AND a nested EMPTY native GameplayTagContainer
+    /// (m_Ownership.OwnedByGuild). This is the genuine "clean" template shape; the
+    /// empty tag container is the leaf the first fix overlooked.
+    fn inv_default_scalar_payload() -> Vec<u8> {
+        let mut ownership_inner = inv_struct_property(
+            "UseOwnershipOfArea",
+            "GameplayTag",
+            &inv_name_property("TagName", "None"),
+        );
+        ownership_inner.extend_from_slice(&inv_empty_gameplay_tag_container("OwnedByGuild"));
+        let ownership = inv_struct_property("m_Ownership", "OwnershipSettings", &ownership_inner);
+        let mut out = int_property("m_StageLevel", 0);
+        out.extend_from_slice(&inv_object_property("m_OptionalObject", ""));
+        out.extend_from_slice(&ownership);
+        out
+    }
+
+    /// Same shape but with a non-default scalar leaf (m_StageLevel set): genuine
+    /// item-specific state the add must refuse to clone.
+    fn inv_nondefault_scalar_payload() -> Vec<u8> {
+        let mut out = int_property("m_StageLevel", 7);
+        out.extend_from_slice(&inv_object_property("m_OptionalObject", ""));
+        out
+    }
+
+    #[test]
+    fn add_item_clones_default_scalar_payload_slot() {
+        // Real G1R item slots carry a default-initialised ItemPayload whose scalar
+        // leaves are all zero/empty/None. These are semantically clean and must be
+        // usable as an addItem template. The old rule flagged ANY scalar leaf as
+        // state, so every real slot looked stateful, has_clean_template was always
+        // false on real saves, and the inventory Add button vanished.
+        let main_slots = vec![
+            inv_item_slot(
+                0,
+                INV_MAIN_LABEL,
+                "/Script/Angelscript.ItMi_Orenugget",
+                3,
+                &inv_default_scalar_payload(),
+            ),
+            inv_item_slot(
+                1,
+                INV_MAIN_LABEL,
+                "/Script/Angelscript.ItFo_Apple",
+                1,
+                &inv_default_scalar_payload(),
+            ),
+        ];
+        let mut payload = typed_inventory_private_payload(&[], &main_slots);
+        let edit = PrivateInventoryAddItemEdit {
+            path: "/Script/Angelscript.ItMi_Sulfur".to_string(),
+            count: 4,
+        };
+        apply_private_inventory_add_item_to_payload(&mut payload, &edit).unwrap();
+        assert_eq!(inv_slot_count(&payload, 1), 3);
+        let refs = scan_fstrings(&payload, 0);
+        let (items, _t, _s) = summarize_private_inventory_items(&payload, &refs, usize::MAX);
+        assert!(
+            items
+                .iter()
+                .any(|it| it["path"] == "/Script/Angelscript.ItMi_Sulfur" && it["count"] == 4)
+        );
+    }
+
+    #[test]
+    fn add_item_rejects_nondefault_scalar_payload_as_state() {
+        // A non-default scalar leaf (m_StageLevel != 0) is genuine item state. If
+        // that is the only payload shape available, there is no clean template —
+        // relaxing the default-value rule must NOT swallow real state.
+        let main = vec![inv_item_slot(
+            0,
+            INV_MAIN_LABEL,
+            "/Script/Angelscript.ItMw_Sword",
+            1,
+            &inv_nondefault_scalar_payload(),
+        )];
+        let mut payload = typed_inventory_private_payload(&[], &main);
         let before = payload.clone();
         let edit = PrivateInventoryAddItemEdit {
             path: "/Script/Angelscript.ItMi_Sulfur".to_string(),
