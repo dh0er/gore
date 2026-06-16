@@ -4,47 +4,41 @@ import 'package:goresave/features/editor/domain/editor_models.dart';
 import 'package:goresave/features/editor/ui/editor_page.dart' show CodecStatusView;
 
 void main() {
-  testWidgets('shows plain message + hint, hides techy detail behind Details',
+  testWidgets('ready status shows the ready indicator and no setup prompt',
       (tester) async {
     const codec = CodecStatus(
-      available: false,
-      status: 'unsupported',
-      message: 'G1R codec host is configured but not available.',
-      userSeverity: 'error',
-      userTitle: "This game version can't be opened yet",
-      userMessage: "Looks like a new game update the editor doesn't recognize yet.",
-      userHint: 'Check for an editor update - a new version usually follows shortly.',
-      profile: 'g1r-23A85CE7',
-      resolutionMode: 'pattern_profile',
+      backend: 'ooz_kraken',
+      available: true,
+      status: 'ready',
+      canDecompress: true,
+      canCompress: true,
+      adapter: 'ooz_kraken',
     );
     await tester.pumpWidget(const MaterialApp(
       home: Scaffold(body: SingleChildScrollView(
         child: CodecStatusView(codec: codec, codecError: null))),
     ));
 
-    expect(find.text("This game version can't be opened yet"), findsOneWidget);
-    expect(find.textContaining('editor update'), findsOneWidget);
-    // Techy field hidden until Details expanded.
-    expect(find.textContaining('pattern_profile'), findsNothing);
+    expect(find.text('Codec ready'), findsOneWidget);
+    expect(find.byIcon(Icons.check_circle_outline), findsOneWidget);
+    // No game-executable / codec-host configuration call to action.
+    expect(find.textContaining('game executable'), findsNothing);
+    expect(find.textContaining('codec host'), findsNothing);
 
+    // Techy backend detail stays hidden until Details is expanded.
+    expect(find.textContaining('ooz_kraken'), findsNothing);
     await tester.tap(find.text('Details'));
     await tester.pumpAndSettle();
-    expect(find.textContaining('pattern_profile'), findsOneWidget);
-    // Details labels the backend as the game codec host, not the internal
-    // pure-Rust fallback, matching the game-codec headline.
-    expect(find.text('Backend: G1R codec host'), findsOneWidget);
-    expect(find.textContaining('pure_rust_kraken'), findsNothing);
+    expect(find.text('Backend: ooz_kraken'), findsOneWidget);
+    expect(find.textContaining('Compress: yes'), findsOneWidget);
   });
 
-  testWidgets('warn severity uses a warning icon, not the success check',
+  testWidgets('decode_only status uses a warning icon, not the success check',
       (tester) async {
     const codec = CodecStatus(
+      backend: 'ooz_kraken',
       available: true,
-      status: 'codec_host_decompress_ready',
-      message: 'decode only',
-      userSeverity: 'warn',
-      userTitle: 'Game codec partly ready',
-      userMessage: "The editor can read this game's saves, but saving isn't verified yet.",
+      status: 'decode_only',
       canDecompress: true,
     );
     await tester.pumpWidget(const MaterialApp(
@@ -52,32 +46,43 @@ void main() {
         child: CodecStatusView(codec: codec, codecError: null))),
     ));
 
-    expect(find.text('Game codec partly ready'), findsOneWidget);
+    expect(find.text('Codec read-only'), findsOneWidget);
     expect(find.byIcon(Icons.warning_amber_rounded), findsOneWidget);
-    // Not the fully-ready success check.
     expect(find.byIcon(Icons.check_circle_outline), findsNothing);
+  });
+
+  testWidgets('unavailable status uses the error icon', (tester) async {
+    const codec = CodecStatus(
+      backend: 'ooz_kraken',
+      available: false,
+      status: 'unavailable',
+    );
+    await tester.pumpWidget(const MaterialApp(
+      home: Scaffold(body: SingleChildScrollView(
+        child: CodecStatusView(codec: codec, codecError: null))),
+    ));
+
+    expect(find.text('Codec unavailable'), findsOneWidget);
+    expect(find.byIcon(Icons.error_outline), findsOneWidget);
   });
 
   testWidgets('renders codecError once when there is no codec status',
       (tester) async {
     await tester.pumpWidget(const MaterialApp(
       home: Scaffold(body: SingleChildScrollView(
-        child: CodecStatusView(codec: null, codecError: 'Codec helper not found'))),
+        child: CodecStatusView(codec: null, codecError: 'Codec check failed'))),
     ));
 
-    // Shown exactly once (the parent settings row no longer duplicates it).
-    expect(find.text('Codec helper not found'), findsOneWidget);
+    expect(find.text('Codec check failed'), findsOneWidget);
     expect(find.byIcon(Icons.error_outline), findsOneWidget);
   });
 
   testWidgets('shows codecError alongside an existing codec status',
       (tester) async {
     const codec = CodecStatus(
+      backend: 'ooz_kraken',
       available: true,
-      status: 'codec_host_ready',
-      message: 'ok',
-      userSeverity: 'ok',
-      userTitle: 'Game codec ready',
+      status: 'ready',
       canCompress: true,
       canDecompress: true,
     );
@@ -85,12 +90,11 @@ void main() {
       home: Scaffold(body: SingleChildScrollView(
         child: CodecStatusView(
           codec: codec,
-          codecError: 'Codec verification failed',
+          codecError: 'Codec roundtrip failed',
         ))),
     ));
 
-    // Both the error (e.g. a failed verifyCodec) and the status are visible.
-    expect(find.text('Codec verification failed'), findsOneWidget);
-    expect(find.text('Game codec ready'), findsOneWidget);
+    expect(find.text('Codec roundtrip failed'), findsOneWidget);
+    expect(find.text('Codec ready'), findsOneWidget);
   });
 }

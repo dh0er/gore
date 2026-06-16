@@ -783,52 +783,39 @@ class BackupEntry {
       (scope == 'save' || scope == 'persistent_data_list') && status == 'ok';
 }
 
+/// Status of the always-on in-process Oodle codec, parsed from the core's
+/// `check_codec` response `data`. The old out-of-process codec-host shape
+/// (per-backend probe arrays, severity, profile and resolution metadata) is
+/// gone — the in-process codec is effectively always ready, so this carries
+/// only the simplified backend/capability fields.
 class CodecStatus {
   const CodecStatus({
+    required this.backend,
     required this.available,
     required this.status,
-    required this.message,
     this.canDecompress = false,
     this.canCompress = false,
     this.adapter,
-    this.selectedBackend,
-    this.profile,
-    this.resolutionMode,
-    this.userTitle,
-    this.userMessage,
-    this.userHint,
-    this.userSeverity,
   });
 
   factory CodecStatus.fromJson(Map<String, Object?> json) {
+    final details = (json['details'] as Map?)?.cast<String, Object?>();
     return CodecStatus(
+      backend: json['backend'] as String? ?? 'unknown',
       available: json['available'] as bool? ?? false,
       status: json['status'] as String? ?? 'unknown',
-      message: json['message'] as String? ?? '',
       canDecompress: json['canDecompress'] as bool? ?? false,
       canCompress: json['canCompress'] as bool? ?? false,
-      adapter: json['adapter'] as String?,
-      selectedBackend: json['selectedBackend'] as String?,
-      profile: json['profile'] as String?,
-      resolutionMode: json['resolutionMode'] as String?,
-      userTitle: json['userTitle'] as String?,
-      userMessage: json['userMessage'] as String?,
-      userHint: json['userHint'] as String?,
-      userSeverity: json['userSeverity'] as String?,
+      adapter: details?['adapter'] as String?,
     );
   }
 
+  final String backend;
   final bool available;
+
+  /// One of `ready` (decode + encode), `decode_only`, or `unavailable`.
   final String status;
-  final String message;
   final bool canDecompress;
   final bool canCompress;
   final String? adapter;
-  final String? selectedBackend;
-  final String? profile;
-  final String? resolutionMode;
-  final String? userTitle;
-  final String? userMessage;
-  final String? userHint;
-  final String? userSeverity;
 }

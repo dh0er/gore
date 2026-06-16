@@ -52,8 +52,6 @@ void _sortByPlaytimeDesc(List<SaveSlot> saves) {
 class EditorState {
   const EditorState({
     required this.saveDir,
-    required this.codecHostPath,
-    required this.gameExePath,
     this.isLoading = false,
     this.saves = const [],
     this.profiles = const [],
@@ -64,7 +62,6 @@ class EditorState {
     this.selectedPath,
     this.inspection,
     this.codecStatus,
-    this.codecVerified = false,
     this.error,
     this.codecError,
     this.lastWriteMessage,
@@ -72,8 +69,6 @@ class EditorState {
   });
 
   final String saveDir;
-  final String codecHostPath;
-  final String gameExePath;
   final bool isLoading;
   final List<SaveSlot> saves;
   final List<ProfileSummary> profiles;
@@ -100,24 +95,12 @@ class EditorState {
   /// immediately) and is never part of the pending set.
   bool get hasUnsavedEdits => pendingEdits.isNotEmpty;
 
-  /// True once the user ran a successful codec round-trip verification this
-  /// session for an executable the probe could not auto-trust (a pattern-
-  /// resolved / unknown game build where canCompress is false). Known-profile
-  /// builds report canCompress directly and never need this.
-  final bool codecVerified;
   final String? error;
 
-  /// Compression-dependent private writes are safe when the probe already
-  /// trusts the codec, or the user verified it this session.
-  bool get codecCompressReady =>
-      (codecStatus?.canCompress ?? false) || codecVerified;
-
-  /// The codec is usable but not yet trusted for compression — a manual
-  /// verification round-trip would unlock writes.
-  bool get codecNeedsVerification =>
-      (codecStatus?.available ?? false) &&
-      !(codecStatus?.canCompress ?? false) &&
-      !codecVerified;
+  /// Compression-dependent private writes are safe when the in-process codec
+  /// reports it can compress. The always-on codec reports this directly, so
+  /// there is no longer a manual per-session verification step.
+  bool get codecCompressReady => codecStatus?.canCompress ?? false;
 
   /// Error from the most recent codec check. Kept separate from [error] so a
   /// save-directory refresh does not wipe a standing codec configuration error.
@@ -178,8 +161,6 @@ class EditorState {
 
   EditorState copyWith({
     String? saveDir,
-    String? codecHostPath,
-    String? gameExePath,
     bool? isLoading,
     List<SaveSlot>? saves,
     List<ProfileSummary>? profiles,
@@ -190,7 +171,6 @@ class EditorState {
     Object? selectedPath = _unchanged,
     SaveInspection? inspection,
     CodecStatus? codecStatus,
-    bool? codecVerified,
     String? error,
     String? codecError,
     String? lastWriteMessage,
@@ -205,8 +185,6 @@ class EditorState {
   }) {
     return EditorState(
       saveDir: saveDir ?? this.saveDir,
-      codecHostPath: codecHostPath ?? this.codecHostPath,
-      gameExePath: gameExePath ?? this.gameExePath,
       isLoading: isLoading ?? this.isLoading,
       saves: saves ?? this.saves,
       profiles: profiles ?? this.profiles,
@@ -225,7 +203,6 @@ class EditorState {
           : selectedPath as String?,
       inspection: clearInspection ? null : inspection ?? this.inspection,
       codecStatus: clearCodecStatus ? null : codecStatus ?? this.codecStatus,
-      codecVerified: codecVerified ?? this.codecVerified,
       error: clearError ? null : error ?? this.error,
       codecError: clearCodecError ? null : codecError ?? this.codecError,
       lastWriteMessage: clearWriteMessage
@@ -242,15 +219,11 @@ class EditorNotifier extends StateNotifier<EditorState> {
   EditorNotifier(
     this._core, {
     String? saveDir,
-    String? codecHostPath,
-    String? gameExePath,
     EditorSettingsStore? settingsStore,
   }) : _settingsStore = settingsStore ?? const NoopEditorSettingsStore(),
        super(
          _initialState(
            saveDir: saveDir,
-           codecHostPath: codecHostPath,
-           gameExePath: gameExePath,
            settingsStore: settingsStore ?? const NoopEditorSettingsStore(),
          ),
        ) {
@@ -619,7 +592,6 @@ class EditorNotifier extends StateNotifier<EditorState> {
           'backup': true,
           if (syncPersistent) 'syncPersistentDataList': true,
           'edits': allEdits,
-          ..._codecPayload(),
         },
       );
       if (response['ok'] != true) {
@@ -658,30 +630,6 @@ class EditorNotifier extends StateNotifier<EditorState> {
     await setSaveDir(selected);
   }
 
-  Future<void> chooseCodecHost() async {
-    final selected = await openFile(
-      confirmButtonText: 'Use helper',
-      initialDirectory: _existingParent(state.codecHostPath),
-      acceptedTypeGroups: const [
-        XTypeGroup(label: 'Windows executable', extensions: ['exe']),
-      ],
-    );
-    if (selected == null) return;
-    await setCodecHostPath(selected.path);
-  }
-
-  Future<void> chooseGameExe() async {
-    final selected = await openFile(
-      confirmButtonText: 'Use game EXE',
-      initialDirectory: _existingParent(state.gameExePath),
-      acceptedTypeGroups: const [
-        XTypeGroup(label: 'Windows executable', extensions: ['exe']),
-      ],
-    );
-    if (selected == null) return;
-    await setGameExePath(selected.path);
-  }
-
   Future<void> setSaveDir(String value) async {
     state = state.copyWith(
       saveDir: value,
@@ -699,18 +647,6 @@ class EditorNotifier extends StateNotifier<EditorState> {
     await refresh();
   }
 
-  Future<void> setCodecHostPath(String value) async {
-    state = state.copyWith(codecHostPath: value, clearError: true);
-    _persistSettings();
-    await checkCodec();
-  }
-
-  Future<void> setGameExePath(String value) async {
-    state = state.copyWith(gameExePath: value, clearError: true);
-    _persistSettings();
-    await checkCodec();
-  }
-
   Future<void> refresh() async {
     final seq = ++_loadSeq;
     _loadStarted();
@@ -718,7 +654,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
     try {
       final response = await _execute(
         'scan_save_dir',
-        payload: {'path': state.saveDir, ..._codecPayload()},
+        payload: {'path': state.saveDir},
       );
       if (seq != _loadSeq) return;
       if (response['ok'] != true) {
@@ -815,7 +751,6 @@ class EditorNotifier extends StateNotifier<EditorState> {
       final payload = <String, Object?>{
         'path': path,
         'includePrivate': true,
-        ..._codecPayload(),
       };
       final response = await _execute('inspect_save', payload: payload);
       // Only the latest load applies results. Core calls are serialized, so a
@@ -963,7 +898,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
 
   Future<void> checkCodec() async {
     try {
-      final response = await _execute('check_codec', payload: _codecPayload());
+      final response = await _execute('check_codec');
       if (response['ok'] != true) {
         // Use the dedicated codec error channel so a concurrent/later refresh
         // does not wipe this message, and drop the now-stale codec status so
@@ -971,20 +906,12 @@ class EditorNotifier extends StateNotifier<EditorState> {
         state = state.copyWith(
           codecError: _errorMessage(response),
           clearCodecStatus: true,
-          codecVerified: false,
         );
         return;
       }
       final data = (response['data'] as Map).cast<String, Object?>();
       final status = CodecStatus.fromJson(data);
-      // A fresh probe supersedes any earlier manual verification (the host
-      // path or executable may have changed), so drop the session flag and let
-      // the new probe — or a new verification — decide compress readiness.
-      state = state.copyWith(
-        codecStatus: status,
-        codecVerified: false,
-        clearCodecError: true,
-      );
+      state = state.copyWith(codecStatus: status, clearCodecError: true);
       // Re-decode the selected save now the codec is available — but only if no
       // load is already running. An in-flight inspect is already the latest load
       // and will populate; spawning another here would just race it.
@@ -997,46 +924,20 @@ class EditorNotifier extends StateNotifier<EditorState> {
       state = state.copyWith(
         codecError: 'Codec check failed: $error',
         clearCodecStatus: true,
-        codecVerified: false,
       );
     }
   }
 
-  /// Verify the configured codec by round-tripping a real private chunk from
-  /// the selected save through decompress → compress → decompress in the game
-  /// executable. On success, compression-dependent edits unlock for the session
-  /// even when the probe could not auto-trust the build (pattern-resolved /
-  /// unknown executable). This is the manual bridge for non-known game builds.
-  Future<void> verifyCodec() async {
-    final path = state.selectedPath;
-    if (path == null) return;
-    await _withLoading(() async {
-      final response = await _execute(
-        'validate_codec_roundtrip',
-        payload: {'path': path, ..._codecPayload()},
-      );
-      if (response['ok'] != true) {
-        state = state.copyWith(
-          codecVerified: false,
-          codecError: _errorMessage(response),
-        );
-        return;
-      }
-      state = state.copyWith(
-        codecVerified: true,
-        lastWriteMessage: 'Codec verified — private edits unlocked',
-        clearCodecError: true,
-      );
-    });
-  }
-
+  /// Round-trip a real private chunk from the selected save through the
+  /// in-process codec (decompress → compress → decompress) and report the
+  /// result. Surfaces a quick confidence check for the always-on codec.
   Future<void> validateCodecRoundtrip() async {
     final path = state.selectedPath;
     if (path == null) return;
     await _withLoading(() async {
       final response = await _execute(
         'validate_codec_roundtrip',
-        payload: {'path': path, ..._codecPayload()},
+        payload: {'path': path},
       );
       if (response['ok'] != true) {
         state = state.copyWith(error: _errorMessage(response));
@@ -1071,7 +972,6 @@ class EditorNotifier extends StateNotifier<EditorState> {
           'query': query,
           'offset': offset,
           'limit': limit,
-          ..._codecPayload(),
         },
       );
       if (response['ok'] != true) {
@@ -1137,7 +1037,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
     try {
       final response = await _execute(
         'query_progression',
-        payload: {'path': path, ...params, ..._codecPayload()},
+        payload: {'path': path, ...params},
       );
       if (response['ok'] != true) {
         onError(_errorMessage(response));
@@ -1272,7 +1172,6 @@ class EditorNotifier extends StateNotifier<EditorState> {
         'path': savePath,
         'backup': true,
         'edits': [edit.toEditJson()],
-        ..._codecPayload(),
       },
       message: (data) => _backupMessage(
         edit.isRemove ? 'Memory event removed' : 'Memory event duplicated',
@@ -1321,7 +1220,6 @@ class EditorNotifier extends StateNotifier<EditorState> {
             'value': {'value': uniqueName.trim()},
           },
         ],
-        ..._codecPayload(),
       },
       message: (data) => _backupMessage('Character added', data),
     );
@@ -1369,43 +1267,17 @@ class EditorNotifier extends StateNotifier<EditorState> {
     );
   }
 
-  Map<String, Object?> _codecPayload() {
-    final helperPath = state.codecHostPath.trim();
-    final exePath = state.gameExePath.trim();
-    if (helperPath.isEmpty || exePath.isEmpty) return const {};
-    return {
-      'binaryHost': {'helperPath': helperPath, 'exePath': exePath},
-    };
-  }
-
-  String? _existingParent(String path) {
-    if (path.trim().isEmpty) return null;
-    final parent = p.dirname(path);
-    return parent == '.' ? null : parent;
-  }
-
   void _persistSettings() {
-    _settingsStore.write(
-      EditorSettings(
-        saveDir: state.saveDir,
-        codecHostPath: state.codecHostPath,
-        gameExePath: state.gameExePath,
-      ),
-    );
+    _settingsStore.write(EditorSettings(saveDir: state.saveDir));
   }
 
   static EditorState _initialState({
     required String? saveDir,
-    required String? codecHostPath,
-    required String? gameExePath,
     required EditorSettingsStore settingsStore,
   }) {
     final stored = settingsStore.read();
     return EditorState(
       saveDir: saveDir ?? stored.saveDir ?? defaultSaveRoot(),
-      codecHostPath:
-          codecHostPath ?? stored.codecHostPath ?? defaultCodecHostPath(),
-      gameExePath: gameExePath ?? stored.gameExePath ?? defaultGameExePath(),
     );
   }
 }
