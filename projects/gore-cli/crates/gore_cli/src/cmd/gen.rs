@@ -6,12 +6,18 @@ use gore_core::{
 };
 use std::{fs, path::PathBuf};
 
+use crate::cmd::validate_mod_name;
+
 pub fn run(overrides_path: PathBuf, mods_dir: PathBuf, model_path: Option<PathBuf>) -> Result<()> {
     // 1. Parse overrides.toml
     let toml_str = fs::read_to_string(&overrides_path)
         .with_context(|| format!("reading overrides '{}'", overrides_path.display()))?;
     let cfg: OverridesConfig = toml::from_str(&toml_str)
         .with_context(|| "parsing overrides.toml")?;
+
+    // 1b. Validate mod name is safe (no path traversal)
+    validate_mod_name(&cfg.meta.name)
+        .with_context(|| "invalid mod name in overrides.toml")?;
 
     // 2. Optionally validate against reflection model
     if let Some(model_path) = model_path {

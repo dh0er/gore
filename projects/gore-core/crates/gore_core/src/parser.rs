@@ -164,6 +164,20 @@ pub fn parse_hpp_reader<R: BufRead>(reader: R) -> Result<ReflectionModel, ParseE
         model.enums.push(b.build());
     }
 
+    // Post-pass: resolve Opaque(name) to Enum(name) for any type name that
+    // matches a parsed enum declaration.
+    let enum_names: std::collections::HashSet<String> =
+        model.enums.iter().map(|e| e.name.clone()).collect();
+    for class in &mut model.classes {
+        for prop in &mut class.properties {
+            if let crate::model::PropType::Opaque(ref type_name) = prop.prop_type {
+                if enum_names.contains(type_name) {
+                    prop.prop_type = crate::model::PropType::Enum(type_name.clone());
+                }
+            }
+        }
+    }
+
     Ok(model)
 }
 
@@ -272,6 +286,76 @@ class UItemDefinition : public UGothicObjectDefinition
         assert!(by.contains_key("m_ItemVisual")); // opaque, but present
         assert!(by.contains_key("m_ReplaceBy")); // opaque pointer member
         assert!(!c.properties.iter().any(|p| p.name.contains("SetItemType")));
+    }
+}
+
+#[cfg(test)]
+mod enum_resolve_tests {
+    use super::*;
+    use crate::model::PropType;
+
+    const SNIPPET_WITH_ENUM: &str = "\
+// Enum Angelscript.EItemQuality
+enum class EItemQuality : uint8_t
+{
+    Low = 0,
+    Medium = 1,
+    High = 2,
+}; // Size: 0x1
+
+// Class Angelscript.UItMi_Orenugget
+class UItMi_Orenugget : public UItemDefinition
+{
+    EItemQuality m_Quality;                          // 0x0100 (size: 0x1)
+    int32 m_Value;                                   // 0x0104 (size: 0x4)
+};
+";
+
+    #[test]
+    fn enum_field_resolved_to_prop_type_enum() {
+        let model = parse_hpp_reader(SNIPPET_WITH_ENUM.as_bytes()).unwrap();
+
+        // Enum must be parsed
+        assert_eq!(model.enums.len(), 1);
+        assert_eq!(model.enums[0].name, "EItemQuality");
+
+        // Class must be parsed
+        assert_eq!(model.classes.len(), 1);
+        let c = &model.classes[0];
+
+        let quality_prop = c.properties.iter().find(|p| p.name == "m_Quality")
+            .expect("m_Quality property must exist");
+
+        // After post-pass, must be Enum(...) not Opaque(...)
+        assert_eq!(
+            quality_prop.prop_type,
+            PropType::Enum("EItemQuality".to_string()),
+            "expected PropType::Enum(\"EItemQuality\"), got {:?}",
+            quality_prop.prop_type
+        );
+
+        // Scalar field must remain Int
+        let value_prop = c.properties.iter().find(|p| p.name == "m_Value")
+            .expect("m_Value property must exist");
+        assert_eq!(value_prop.prop_type, PropType::Int);
+    }
+
+    #[test]
+    fn non_enum_opaque_stays_opaque() {
+        let snippet = "\
+class UFoo : public UBar
+{
+    TSoftClassPtr<AItemVisual> m_Visual;
+};
+";
+        let model = parse_hpp_reader(snippet.as_bytes()).unwrap();
+        let c = &model.classes[0];
+        let prop = c.properties.iter().find(|p| p.name == "m_Visual").unwrap();
+        assert!(
+            matches!(&prop.prop_type, PropType::Opaque(_)),
+            "non-enum type should remain Opaque, got {:?}",
+            prop.prop_type
+        );
     }
 }
 

@@ -1,7 +1,11 @@
 use anyhow::{Context, Result};
 use std::{fs, path::PathBuf};
 
+use crate::cmd::validate_mod_name;
+
 pub fn run(mod_name: String, mods_dir: PathBuf) -> Result<()> {
+    validate_mod_name(&mod_name)
+        .with_context(|| format!("invalid mod name '{mod_name}'"))?;
     let mod_dir = mods_dir.join(&mod_name);
     let scripts_dir = mod_dir.join("Scripts");
     fs::create_dir_all(&scripts_dir)

@@ -60,9 +60,26 @@ impl OverrideValue {
                 }
             }
             OverrideValue::Bool(b) => b.to_string(),
-            OverrideValue::Str(s) => format!(r#""{s}""#),
+            OverrideValue::Str(s) => format!(r#""{}""#, lua_escape(s)),
         }
     }
+}
+
+/// Escape a string for safe interpolation inside a Lua double-quoted string
+/// literal. Escapes backslash, double-quote, newline, carriage return, tab.
+pub fn lua_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '\\' => out.push_str(r"\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            other => out.push(other),
+        }
+    }
+    out
 }
 
 // Manual serde for OverrideValue so it works with #[serde(flatten)] in
@@ -116,6 +133,26 @@ impl Serialize for OverrideValue {
 impl<'de> Deserialize<'de> for OverrideValue {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let h = OverrideValueHelper::deserialize(d)?;
+        // Count how many value_* keys are present; exactly one is required.
+        let count = [
+            h.value_int.is_some(),
+            h.value_float.is_some(),
+            h.value_bool.is_some(),
+            h.value_str.is_some(),
+        ]
+        .iter()
+        .filter(|&&b| b)
+        .count();
+        if count == 0 {
+            return Err(serde::de::Error::custom(
+                "override must have exactly one of: value_int, value_float, value_bool, value_str",
+            ));
+        }
+        if count > 1 {
+            return Err(serde::de::Error::custom(
+                "override must have exactly one of: value_int, value_float, value_bool, value_str (multiple found)",
+            ));
+        }
         if let Some(v) = h.value_int {
             Ok(OverrideValue::Int(v))
         } else if let Some(v) = h.value_float {
@@ -125,9 +162,7 @@ impl<'de> Deserialize<'de> for OverrideValue {
         } else if let Some(v) = h.value_str {
             Ok(OverrideValue::Str(v))
         } else {
-            Err(serde::de::Error::custom(
-                "override must have one of: value_int, value_float, value_bool, value_str",
-            ))
+            unreachable!("count == 1 guarantees one Some above")
         }
     }
 }
@@ -143,8 +178,8 @@ pub fn gen_lua(cfg: &OverridesConfig) -> String {
     for o in &cfg.overrides {
         overrides_rows.push(format!(
             r#"  {{class="{}", field="{}", value={}}}"#,
-            o.class,
-            o.field,
+            lua_escape(&o.class),
+            lua_escape(&o.field),
             o.value.lua_literal()
         ));
     }
@@ -188,4 +223,108 @@ end"#,
         apply_body = apply_body,
         startup = startup
     )
+}
+
+#[cfg(test)]
+mod gen_tests {
+    use super::*;
+
+    // ── Bug 1: lua_escape ────────────────────────────────────────────────────
+
+    #[test]
+    fn lua_escape_plain_string_unchanged() {
+        assert_eq!(lua_escape("hello"), "hello");
+    }
+
+    #[test]
+    fn lua_escape_special_chars() {
+        assert_eq!(lua_escape(r#"say "hi""#), r#"say \"hi\""#);
+        assert_eq!(lua_escape("back\\slash"), r"back\\slash");
+        assert_eq!(lua_escape("new\nline"), r"new\nline");
+        assert_eq!(lua_escape("carriage\rreturn"), r"carriage\rreturn");
+        assert_eq!(lua_escape("tab\there"), r"tab\there");
+    }
+
+    #[test]
+    fn lua_literal_str_escapes_quotes_and_backslash() {
+        let v = OverrideValue::Str(r#"Bob "X""#.to_string());
+        let lit = v.lua_literal();
+        // Must be a valid Lua string literal — no raw unescaped double-quote inside
+        assert_eq!(lit, r#""Bob \"X\"""#);
+    }
+
+    #[test]
+    fn gen_lua_escapes_value_str_with_special_chars() {
+        let cfg = OverridesConfig {
+            meta: MetaConfig { name: "TestMod".to_string(), delay_ms: 0 },
+            overrides: vec![SingleOverride {
+                class: "SomeClass".to_string(),
+                field: "m_Name".to_string(),
+                value: OverrideValue::Str("say \"hello\"\nworld".to_string()),
+            }],
+        };
+        let lua = gen_lua(&cfg);
+        // The value must be escaped — raw quote or newline would break Lua
+        assert!(lua.contains(r#"say \"hello\"\nworld"#));
+        assert!(!lua.contains("say \"hello\"\nworld"));
+    }
+
+    #[test]
+    fn gen_lua_escapes_class_and_field_names() {
+        let cfg = OverridesConfig {
+            meta: MetaConfig { name: "TestMod".to_string(), delay_ms: 0 },
+            overrides: vec![SingleOverride {
+                class: r#"Evil"Class"#.to_string(),
+                field: r#"bad"field"#.to_string(),
+                value: OverrideValue::Int(1),
+            }],
+        };
+        let lua = gen_lua(&cfg);
+        assert!(lua.contains(r#"Evil\"Class"#));
+        assert!(lua.contains(r#"bad\"field"#));
+    }
+
+    // ── Bug 2: reject multiple / zero value_* keys ───────────────────────────
+
+    #[test]
+    fn deserialize_override_value_zero_keys_fails() {
+        let toml_str = r#"
+[meta]
+name = "TestMod"
+[[override]]
+class = "Foo"
+field = "bar"
+"#;
+        let result: Result<OverridesConfig, _> = toml::from_str(toml_str);
+        assert!(result.is_err(), "expected error for zero value_ keys");
+    }
+
+    #[test]
+    fn deserialize_override_value_two_keys_fails() {
+        let toml_str = r#"
+[meta]
+name = "TestMod"
+[[override]]
+class = "Foo"
+field = "bar"
+value_int = 1
+value_float = 1.0
+"#;
+        let result: Result<OverridesConfig, _> = toml::from_str(toml_str);
+        assert!(result.is_err(), "expected error for two value_ keys");
+    }
+
+    #[test]
+    fn deserialize_override_value_exactly_one_key_succeeds() {
+        let toml_str = r#"
+[meta]
+name = "TestMod"
+[[override]]
+class = "Foo"
+field = "bar"
+value_int = 42
+"#;
+        let cfg: OverridesConfig = toml::from_str(toml_str).expect("should succeed");
+        assert!(matches!(cfg.overrides[0].value, OverrideValue::Int(42)));
+    }
 }
