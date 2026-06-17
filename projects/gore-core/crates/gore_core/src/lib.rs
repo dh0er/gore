@@ -11,5 +11,9 @@ pub mod model;
 pub mod parser;
 pub mod validate;
 
-pub use catalog::{item_category_from_id, CatalogEntry, ItemCategory};
-// Re-exports for gen/model/validate are added as Tasks 2/5/6 implement them.
+pub use catalog::{
+    category_for_id, item_category_from_id, CatalogEntry, CatalogJsonEntry, CatalogModel,
+    ItemCategory,
+};
+pub use model::ReflectionModel;
+// Re-exports for gen/validate are added as Tasks 5/6 implement them.
