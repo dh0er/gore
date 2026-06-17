@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build apps/goresave/assets/knowledge_catalog.json from a UE4SS object dump.
+"""Build projects/gore-save/app/assets/knowledge_catalog.json from a UE4SS object dump.
 
 Usage: python tools/build_knowledge_catalog.py <UE4SS_ObjectDump.txt> [-o OUT.json]
 
@@ -45,8 +45,8 @@ def main() -> int:
     parser.add_argument("dump", type=Path)
     parser.add_argument(
         "-o", "--out", type=Path,
-        default=Path(__file__).resolve().parent.parent
-        / "apps" / "goresave" / "assets" / "knowledge_catalog.json",
+        default=Path(__file__).resolve().parents[2]
+        / "gore-save" / "app" / "assets" / "knowledge_catalog.json",
     )
     args = parser.parse_args()
     pairs = parse_dump_classes(

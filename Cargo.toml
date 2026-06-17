@@ -2,5 +2,6 @@
 members = [
     "projects/gore-save/crates/goresave_core",
     "projects/gore-save/crates/goresave_oodle",
+    "projects/gore-core/crates/gore_core",
 ]
 resolver = "2"
