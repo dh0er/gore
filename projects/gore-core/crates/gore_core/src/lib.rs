@@ -1,12 +1,15 @@
 //! Shared domain model for gore-tools modding utilities (gore-cli, gore-mod).
 //!
-//! This crate is the forward home for reflection/catalog logic consumed by the
-//! modding front-ends. It deliberately does NOT contain save-payload parsing —
-//! that stays in `goresave_core`. Today it holds the item catalog model and the
-//! prefix→category mapping (ported from the gore-save Flutter `item_categories`
-//! logic); the reflection model + config→Lua generation engine land here as
-//! gore-cli is built (see docs `gore-cli-design.md`).
+//! Holds the UE reflection model (parsed from UE4SS SDK dumps), the item/npc/
+//! knowledge catalog model + prefix→category mapping, the config→Lua mod
+//! generation engine, and field-level validation. It deliberately does NOT
+//! contain save-payload parsing — that stays in `goresave_core`.
 
 pub mod catalog;
+pub mod gen;
+pub mod model;
+pub mod parser;
+pub mod validate;
 
 pub use catalog::{item_category_from_id, CatalogEntry, ItemCategory};
+// Re-exports for gen/model/validate are added as Tasks 2/5/6 implement them.
