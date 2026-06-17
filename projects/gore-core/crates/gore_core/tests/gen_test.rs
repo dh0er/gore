@@ -1,5 +1,4 @@
 use gore_core::gen::{gen_lua, MetaConfig, OverrideValue, OverridesConfig, SingleOverride};
-use pretty_assertions::assert_eq;
 
 fn apple_config() -> OverridesConfig {
     OverridesConfig {

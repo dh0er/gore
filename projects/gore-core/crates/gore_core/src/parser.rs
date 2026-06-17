@@ -85,11 +85,10 @@ pub fn parse_hpp_reader<R: BufRead>(reader: R) -> Result<ReflectionModel, ParseE
 
         // --- enum class declaration ---------------------------------------
         // "enum class EItemQuality : uint8_t"
-        if trimmed.starts_with("enum class ") {
+        if let Some(rest) = trimmed.strip_prefix("enum class ") {
             if let Some(b) = in_class.take() {
                 model.classes.push(b.build());
             }
-            let rest = &trimmed["enum class ".len()..];
             let name = rest.split(':').next().unwrap_or(rest).trim().to_string();
             in_enum = Some(EnumBuilder { name, members: vec![] });
             continue;
