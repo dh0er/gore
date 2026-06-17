@@ -1,0 +1,18 @@
+[meta]
+name = "TestBalanceMod"
+delay_ms = 0
+
+[[override]]
+class = "ItFo_Apple"
+field = "m_Value"
+value_int = 500
+
+[[override]]
+class = "ItMw_1H_Sword_01"
+field = "m_Weight"
+value_float = 1.5
+
+[[override]]
+class = "ItFo_Cheese"
+field = "m_Value"
+value_int = 777

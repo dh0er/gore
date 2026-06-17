@@ -16,4 +16,5 @@ pub use catalog::{
     ItemCategory,
 };
 pub use model::ReflectionModel;
-// Re-exports for gen/validate are added as Tasks 5/6 implement them.
+pub use gen::{gen_lua, OverridesConfig};
+// Re-exports for validate are added as Task 6 implements it.
