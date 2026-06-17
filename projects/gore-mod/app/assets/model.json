@@ -1,0 +1,20 @@
+{
+  "classes": {
+    "UItMi_Orenugget": {
+      "fields": [
+        {"name": "m_Value",    "type": "int",   "min": 0},
+        {"name": "m_Weight",   "type": "float", "min": 0},
+        {"name": "m_MaxStack", "type": "int",   "min": 1}
+      ]
+    },
+    "UItemDefinition": {
+      "fields": [
+        {"name": "m_Value",    "type": "int",   "min": 0},
+        {"name": "m_Weight",   "type": "float", "min": 0},
+        {"name": "m_MaxStack", "type": "int",   "min": 1},
+        {"name": "m_Mass",     "type": "float", "min": 0}
+      ]
+    }
+  },
+  "enums": []
+}
