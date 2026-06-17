@@ -32,3 +32,17 @@ fn category_amulet() {
 fn category_rune() {
     assert_eq!(category_for_id("ItAr_Rune_Fireball"), ItemCategory::RuneOrScroll);
 }
+
+#[test]
+fn category_key_and_mission() {
+    assert_eq!(category_for_id("ItKe_Lockpick"), ItemCategory::Key);
+    assert_eq!(category_for_id("ItKeyDefault"), ItemCategory::Key);
+    assert_eq!(category_for_id("ItChestKey01"), ItemCategory::Key);
+    assert_eq!(category_for_id("ItDoorKey01"), ItemCategory::Key);
+    assert_eq!(category_for_id("ItMs_Ashes"), ItemCategory::Mission);
+}
+
+#[test]
+fn category_unknown_for_unrecognized() {
+    assert_eq!(category_for_id("Armor_OC_Gomez"), ItemCategory::Unknown);
+}

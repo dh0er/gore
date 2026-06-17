@@ -136,6 +136,16 @@ pub fn category_for_id(id: &str) -> ItemCategory {
     if id.starts_with("ItWr_") {
         return ItemCategory::Document;
     }
+    if id.starts_with("ItMs_") {
+        return ItemCategory::Mission;
+    }
+    if id.starts_with("ItKe_")
+        || id.starts_with("ItKey")
+        || id.starts_with("ItChestKey")
+        || id.starts_with("ItDoorKey")
+    {
+        return ItemCategory::Key;
+    }
     if id.starts_with("ItPo_") || id.starts_with("ItLs_") {
         return ItemCategory::Potion;
     }

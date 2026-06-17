@@ -99,6 +99,32 @@ fn collect_inherited_properties<'a>(
         .collect()
 }
 
+/// Collect the GUI-editable fields for a resolved class: walk the inherited
+/// property chain (base-first), keep only scalar/enum types, and let a derived
+/// class's definition override a shadowed base property (last-wins on the same
+/// name, original field order preserved).
+fn gui_fields_for(model: &ReflectionModel, class_name: &str) -> Vec<GuiField> {
+    let props = collect_inherited_properties(model, class_name);
+    let mut idx_by_name: std::collections::HashMap<&str, usize> =
+        std::collections::HashMap::new();
+    let mut fields: Vec<GuiField> = Vec::new();
+    for prop in props {
+        let Some(type_str) = prop_type_to_gui(&prop.prop_type) else {
+            continue;
+        };
+        if let Some(&i) = idx_by_name.get(prop.name.as_str()) {
+            fields[i].field_type = type_str.to_string();
+        } else {
+            idx_by_name.insert(prop.name.as_str(), fields.len());
+            fields.push(GuiField {
+                name: prop.name.clone(),
+                field_type: type_str.to_string(),
+            });
+        }
+    }
+    fields
+}
+
 pub fn run(model_path: PathBuf, catalog_path: PathBuf, out: PathBuf) -> Result<()> {
     let model_json = fs::read_to_string(&model_path)
         .with_context(|| format!("reading model '{}'", model_path.display()))?;
@@ -119,22 +145,8 @@ pub fn run(model_path: PathBuf, catalog_path: PathBuf, out: PathBuf) -> Result<(
         let Some(class_name) = resolve_class_name(&model, &entry.id) else {
             continue;
         };
-        let props = collect_inherited_properties(&model, &class_name);
-        // Deduplicate property names (derived class can shadow base)
-        let mut seen_names: std::collections::HashSet<&str> = std::collections::HashSet::new();
-        let mut fields: Vec<GuiField> = Vec::new();
-        for prop in props {
-            if !seen_names.insert(prop.name.as_str()) {
-                continue;
-            }
-            if let Some(type_str) = prop_type_to_gui(&prop.prop_type) {
-                fields.push(GuiField {
-                    name: prop.name.clone(),
-                    field_type: type_str.to_string(),
-                });
-            }
-        }
-        gui.classes.insert(entry.id.clone(), GuiClass { fields });
+        gui.classes
+            .insert(entry.id.clone(), GuiClass { fields: gui_fields_for(&model, &class_name) });
     }
 
     if let Some(parent) = out.parent() {
@@ -305,6 +317,39 @@ mod tests {
             Some("UItMi_Orenugget")
         );
         assert_eq!(resolve_class_name(&model, "Nope"), None);
+    }
+
+    #[test]
+    fn derived_class_overrides_base_field_type() {
+        // Base declares m_X as Int; derived re-declares m_X as Float. The
+        // derived definition must win, in the base field's original position.
+        let model = ReflectionModel {
+            classes: vec![
+                Class {
+                    name: "UBase".to_string(),
+                    parent: None,
+                    properties: vec![
+                        Property { name: "m_X".to_string(), prop_type: PropType::Int, offset: None },
+                        Property { name: "m_Y".to_string(), prop_type: PropType::Bool, offset: None },
+                    ],
+                },
+                Class {
+                    name: "UDerived".to_string(),
+                    parent: Some("UBase".to_string()),
+                    properties: vec![Property {
+                        name: "m_X".to_string(),
+                        prop_type: PropType::Float,
+                        offset: None,
+                    }],
+                },
+            ],
+            enums: vec![],
+        };
+        let fields = gui_fields_for(&model, "UDerived");
+        let names: Vec<&str> = fields.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, ["m_X", "m_Y"], "no duplicate m_X; base order kept");
+        let m_x = fields.iter().find(|f| f.name == "m_X").unwrap();
+        assert_eq!(m_x.field_type, "float", "derived Float must override base Int");
     }
 
     #[test]
