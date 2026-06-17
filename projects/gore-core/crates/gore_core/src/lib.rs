@@ -6,6 +6,7 @@
 //! contain save-payload parsing — that stays in `goresave_core`.
 
 pub mod catalog;
+pub mod ffi;
 pub mod gen;
 pub mod model;
 pub mod parser;
