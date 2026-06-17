@@ -116,11 +116,21 @@ GoreCoreFfiService createCoreService() =>
 
 List<String> _candidateLibraryPaths() {
   if (!Platform.isWindows) return const [];
-  final execDir = p.dirname(Platform.resolvedExecutable);
-  final cwd     = Directory.current.path;
-  return [
-    p.join(execDir, 'gore_core.dll'),
-    p.normalize(p.join(cwd, '..', '..', '..', '..', 'target', 'debug',   'gore_core.dll')),
-    p.normalize(p.join(cwd, '..', '..', '..', '..', 'target', 'release', 'gore_core.dll')),
+  final candidates = <String>[
+    // Release/dev bundle: DLL copied next to the exe (see build.py).
+    p.join(p.dirname(Platform.resolvedExecutable), 'gore_core.dll'),
   ];
+  // Dev: the cargo workspace target/ is at the monorepo root. The runtime cwd
+  // depth varies (app dir vs bundle dir), so walk up looking for it rather than
+  // hard-coding a level count.
+  var dir = Directory.current.path;
+  for (var i = 0; i < 6; i++) {
+    for (final profile in const ['debug', 'release']) {
+      candidates.add(p.join(dir, 'target', profile, 'gore_core.dll'));
+    }
+    final parent = p.dirname(dir);
+    if (parent == dir) break;
+    dir = parent;
+  }
+  return candidates;
 }
