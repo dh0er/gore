@@ -17,4 +17,4 @@ pub use catalog::{
 };
 pub use model::ReflectionModel;
 pub use gen::{gen_lua, OverridesConfig};
-// Re-exports for validate are added as Task 6 implements it.
+pub use validate::{validate_config, ValidationError};
