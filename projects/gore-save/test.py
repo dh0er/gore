@@ -12,6 +12,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).parent
 APP = ROOT / "app"
+# The catalog-generation tests live in the shared gore-core project pipeline
+# (sibling of gore-save under projects/).
+PIPELINE_DIR = ROOT.parent / "gore-core" / "pipeline"
 
 
 def _resolve_tool(env_var: str, names: list[str], fallback: Path) -> Path:
@@ -88,6 +91,14 @@ def main() -> int:
             run(
                 "Python tool tests",
                 [sys.executable, "-m", "unittest", "discover", "-s", "tools"],
+            )
+        )
+        # Catalog-pipeline tests moved to projects/gore-core/pipeline/; run them
+        # too so `test.py all` (and thus CI) still covers catalog regressions.
+        codes.append(
+            run(
+                "Python pipeline tests (gore-core)",
+                [sys.executable, "-m", "unittest", "discover", "-s", str(PIPELINE_DIR)],
             )
         )
 

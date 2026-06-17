@@ -1,3 +1,5 @@
+import unittest
+
 from build_knowledge_catalog import build_catalog, parse_dump_classes
 
 DUMP = [
@@ -9,16 +11,24 @@ DUMP = [
     "[6] ASClass /Script/Angelscript.CharacterDefinition_Human_OC_STT_Diego [n: F]",  # ignored
 ]
 
-def test_categories():
-    entries = build_catalog(parse_dump_classes(DUMP))
-    by_id = {e["id"]: e for e in entries}
-    assert by_id["Topic_Diego_209799"]["category"] == "topic"
-    assert by_id["Info_FMORGAreyouok"]["category"] == "info"
-    assert by_id["ChoiceDiegoGamestart"]["category"] == "choice"
 
-def test_dedup_sorted_and_filtered():
-    entries = build_catalog(parse_dump_classes(DUMP))
-    ids = [e["id"] for e in entries]
-    assert ids == sorted(ids)
-    assert ids.count("Topic_Diego_209799") == 1
-    assert all("Sword" not in i and "CharacterDefinition" not in i for i in ids)
+class BuildKnowledgeCatalogTest(unittest.TestCase):
+    def test_categories(self):
+        entries = build_catalog(parse_dump_classes(DUMP))
+        by_id = {e["id"]: e for e in entries}
+        self.assertEqual(by_id["Topic_Diego_209799"]["category"], "topic")
+        self.assertEqual(by_id["Info_FMORGAreyouok"]["category"], "info")
+        self.assertEqual(by_id["ChoiceDiegoGamestart"]["category"], "choice")
+
+    def test_dedup_sorted_and_filtered(self):
+        entries = build_catalog(parse_dump_classes(DUMP))
+        ids = [e["id"] for e in entries]
+        self.assertEqual(ids, sorted(ids))
+        self.assertEqual(ids.count("Topic_Diego_209799"), 1)
+        self.assertTrue(
+            all("Sword" not in i and "CharacterDefinition" not in i for i in ids)
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

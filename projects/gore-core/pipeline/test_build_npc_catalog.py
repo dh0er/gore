@@ -1,3 +1,5 @@
+import unittest
+
 from build_npc_catalog import build_catalog, parse_dump_classes
 
 DUMP = [
@@ -8,23 +10,32 @@ DUMP = [
     "[0005] ASClass /Script/Angelscript.ItMw_Sword01 [n: E]",  # ignored
 ]
 
-def test_human_unique_name_is_map_key_form():
-    entries, _ = build_catalog(parse_dump_classes(DUMP))
-    by_id = {e["id"]: e for e in entries}
-    assert by_id["OC_STT_Diego"]["category"] == "human"
-    assert by_id["OC_STT_Diego"]["class"] == "CharacterDefinition_Human_OC_STT_Diego"
 
-def test_creature_category():
-    entries, _ = build_catalog(parse_dump_classes(DUMP))
-    by_id = {e["id"]: e for e in entries}
-    assert by_id["Creature_Biter"]["category"] == "creature"
+class BuildNpcCatalogTest(unittest.TestCase):
+    def test_human_unique_name_is_map_key_form(self):
+        entries, _ = build_catalog(parse_dump_classes(DUMP))
+        by_id = {e["id"]: e for e in entries}
+        self.assertEqual(by_id["OC_STT_Diego"]["category"], "human")
+        self.assertEqual(
+            by_id["OC_STT_Diego"]["class"],
+            "CharacterDefinition_Human_OC_STT_Diego",
+        )
 
-def test_dedup_and_sorted():
-    entries, _ = build_catalog(parse_dump_classes(DUMP))
-    ids = [e["id"] for e in entries]
-    assert ids == sorted(ids)
-    assert ids.count("OC_STT_Diego") == 1
+    def test_creature_category(self):
+        entries, _ = build_catalog(parse_dump_classes(DUMP))
+        by_id = {e["id"]: e for e in entries}
+        self.assertEqual(by_id["Creature_Biter"]["category"], "creature")
 
-def test_ignores_non_character_classes():
-    entries, _ = build_catalog(parse_dump_classes(DUMP))
-    assert all("Sword" not in e["id"] for e in entries)
+    def test_dedup_and_sorted(self):
+        entries, _ = build_catalog(parse_dump_classes(DUMP))
+        ids = [e["id"] for e in entries]
+        self.assertEqual(ids, sorted(ids))
+        self.assertEqual(ids.count("OC_STT_Diego"), 1)
+
+    def test_ignores_non_character_classes(self):
+        entries, _ = build_catalog(parse_dump_classes(DUMP))
+        self.assertTrue(all("Sword" not in e["id"] for e in entries))
+
+
+if __name__ == "__main__":
+    unittest.main()
