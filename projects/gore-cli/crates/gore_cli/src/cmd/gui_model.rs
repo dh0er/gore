@@ -43,6 +43,19 @@ pub struct GuiModel {
     pub classes: BTreeMap<String, GuiClass>,
 }
 
+/// Resolve a catalog id to the actual class name in the reflection model,
+/// trying the bare id then the UE `U`-prefixed form.
+fn resolve_class_name(model: &ReflectionModel, id: &str) -> Option<String> {
+    if model.find_class(id).is_some() {
+        return Some(id.to_string());
+    }
+    let prefixed = format!("U{id}");
+    if model.find_class(&prefixed).is_some() {
+        return Some(prefixed);
+    }
+    None
+}
+
 fn prop_type_to_gui(pt: &PropType) -> Option<&'static str> {
     match pt {
         PropType::Int => Some("int"),
@@ -100,11 +113,13 @@ pub fn run(model_path: PathBuf, catalog_path: PathBuf, out: PathBuf) -> Result<(
     let mut gui = GuiModel::default();
 
     for entry in &catalog_entries {
-        // Find the class in the model; skip if not present
-        if model.find_class(&entry.id).is_none() {
+        // Catalog ids are Angelscript names (e.g. `ItMi_Orenugget`); the
+        // reflection model (parsed from C++ headers) declares them with the UE
+        // `U` class prefix (`UItMi_Orenugget`). Resolve either spelling.
+        let Some(class_name) = resolve_class_name(&model, &entry.id) else {
             continue;
-        }
-        let props = collect_inherited_properties(&model, &entry.id);
+        };
+        let props = collect_inherited_properties(&model, &class_name);
         // Deduplicate property names (derived class can shadow base)
         let mut seen_names: std::collections::HashSet<&str> = std::collections::HashSet::new();
         let mut fields: Vec<GuiField> = Vec::new();
@@ -268,6 +283,28 @@ mod tests {
         assert!(!fields.iter().any(|f| f.name == "m_Tags"));
         assert!(fields.iter().any(|f| f.name == "m_Saturation"));
         let _ = catalog; // used above for context
+    }
+
+    #[test]
+    fn resolves_u_prefixed_class_from_bare_catalog_id() {
+        // Model declares the class with the UE `U` prefix; catalog id is bare.
+        let model = ReflectionModel {
+            classes: vec![Class {
+                name: "UItMi_Orenugget".to_string(),
+                parent: None,
+                properties: vec![Property {
+                    name: "m_Value".to_string(),
+                    prop_type: PropType::Int,
+                    offset: None,
+                }],
+            }],
+            enums: vec![],
+        };
+        assert_eq!(
+            resolve_class_name(&model, "ItMi_Orenugget").as_deref(),
+            Some("UItMi_Orenugget")
+        );
+        assert_eq!(resolve_class_name(&model, "Nope"), None);
     }
 
     #[test]
