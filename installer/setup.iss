@@ -40,6 +40,14 @@ WizardStyle=modern
 SetupIconFile=..\apps\goresave\windows\runner\resources\app_icon.ico
 LicenseFile=..\LICENSE
 
+; Remove obsolete files from earlier versions before copying the new bundle.
+; Inno only adds/overwrites bundle files; it never prunes files that were
+; dropped from a release, so stale binaries must be deleted explicitly.
+[InstallDelete]
+; The out-of-process G1R codec host was replaced by an in-process codec
+; (linked into goresave_core.dll); remove the now-unused helper on upgrade.
+Type: files; Name: "{app}\goresave_g1r_codec_host.exe"
+
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
