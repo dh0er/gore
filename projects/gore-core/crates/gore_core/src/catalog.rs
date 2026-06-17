@@ -88,8 +88,11 @@ pub fn item_category_from_id(id: &str) -> ItemCategory {
     }
 }
 
-/// One entry in a generated catalog JSON file (item/npc/knowledge share this
-/// shape: id + path + category string).
+/// One entry in the generated **item** catalog JSON (`id` + `path` +
+/// `category`). This shape is item-catalog-specific: the NPC catalog uses
+/// `class` instead of `path` and the knowledge catalog omits `path`, so
+/// [`parse_catalog`] must not be used on those — they are frontend-only assets
+/// with no Rust consumer here.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CatalogEntry {
     pub id: String,
@@ -97,7 +100,7 @@ pub struct CatalogEntry {
     pub category: String,
 }
 
-/// Parse a catalog JSON string (array of [`CatalogEntry`]).
+/// Parse the item catalog JSON string (array of [`CatalogEntry`]).
 pub fn parse_catalog(json: &str) -> serde_json::Result<Vec<CatalogEntry>> {
     serde_json::from_str(json)
 }
