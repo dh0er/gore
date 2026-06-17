@@ -16,7 +16,7 @@ CARGO = Path.home() / ".cargo" / "bin" / "cargo.exe"
 VS_CMAKE_BIN = Path(
     r"C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin"
 )
-NATIVE_ARTIFACTS = ("goresave_core.dll", "goresave_g1r_codec_host.exe")
+NATIVE_ARTIFACTS = ("goresave_core.dll",)
 WINDOWS_BUNDLE_CONFIGS = {
     "debug": "Debug",
     "profile": "Profile",

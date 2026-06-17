@@ -40,6 +40,26 @@ WizardStyle=modern
 SetupIconFile=..\apps\goresave\windows\runner\resources\app_icon.ico
 LicenseFile=..\LICENSE
 
+; Remove obsolete files from earlier versions before copying the new bundle.
+; Inno only adds/overwrites bundle files; it never prunes files that were
+; dropped from a release, so stale binaries must be deleted explicitly.
+[InstallDelete]
+; The out-of-process G1R codec host was replaced by an in-process codec
+; (linked into goresave_core.dll); remove the now-unused helper on upgrade.
+Type: files; Name: "{app}\goresave_g1r_codec_host.exe"
+; ...and its derived-profile cache. The host defaulted to %LOCALAPPDATA%; also
+; clear the %APPDATA% location defensively in case an older build wrote there.
+Type: files; Name: "{localappdata}\goresave\g1r_codec_host_derived_profiles.json"
+Type: files; Name: "{userappdata}\goresave\g1r_codec_host_derived_profiles.json"
+
+[UninstallDelete]
+; Remove goresave's per-user config/data on uninstall (settings.json,
+; ui_settings.json). Save backups live next to the saves, not here.
+Type: filesandordirs; Name: "{userappdata}\goresave"
+; Stale codec-host cache lived under %LOCALAPPDATA%; drop just that file (the
+; rest of %LOCALAPPDATA%\goresave may belong to a different installer).
+Type: files; Name: "{localappdata}\goresave\g1r_codec_host_derived_profiles.json"
+
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 

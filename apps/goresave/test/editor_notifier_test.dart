@@ -8,60 +8,32 @@ import 'package:goresave/features/editor/domain/pending_edits.dart';
 import 'package:goresave/features/editor/domain/progression_models.dart';
 
 void main() {
-  test('uses persisted editor paths before defaults', () {
+  test('uses persisted save dir before defaults', () {
     final core = _RecordingCoreService();
     final store = _MemoryEditorSettingsStore(
-      const EditorSettings(
-        saveDir: r'D:\G1R\Saves',
-        codecHostPath: r'D:\Tools\goresave\goresave_g1r_codec_host.exe',
-        gameExePath:
-            r'D:\SteamLibrary\steamapps\common\Gothic 1 Remake\G1R\Binaries\Win64\G1R-Win64-Shipping.exe',
-      ),
+      const EditorSettings(saveDir: r'D:\G1R\Saves'),
     );
 
     final notifier = EditorNotifier(core, settingsStore: store);
 
     expect(notifier.state.saveDir, r'D:\G1R\Saves');
-    expect(
-      notifier.state.codecHostPath,
-      r'D:\Tools\goresave\goresave_g1r_codec_host.exe',
-    );
-    expect(
-      notifier.state.gameExePath,
-      r'D:\SteamLibrary\steamapps\common\Gothic 1 Remake\G1R\Binaries\Win64\G1R-Win64-Shipping.exe',
-    );
   });
 
-  test('path setters persist editor settings', () async {
+  test('setSaveDir persists editor settings', () async {
     final core = _RecordingCoreService();
     final store = _MemoryEditorSettingsStore();
     final notifier = EditorNotifier(core, settingsStore: store);
 
     await notifier.setSaveDir(r'E:\G1R\Saved\SaveGames');
-    await notifier.setCodecHostPath(r'E:\goresave\goresave_g1r_codec_host.exe');
-    await notifier.setGameExePath(
-      r'E:\SteamLibrary\steamapps\common\Gothic 1 Remake\G1R\Binaries\Win64\G1R-Win64-Shipping.exe',
-    );
 
     expect(store.settings.saveDir, r'E:\G1R\Saved\SaveGames');
-    expect(
-      store.settings.codecHostPath,
-      r'E:\goresave\goresave_g1r_codec_host.exe',
-    );
-    expect(
-      store.settings.gameExePath,
-      r'E:\SteamLibrary\steamapps\common\Gothic 1 Remake\G1R\Binaries\Win64\G1R-Win64-Shipping.exe',
-    );
   });
 
-  test('checkCodec sends configured binary host paths', () async {
+  test('checkCodec sends no codec configuration payload', () async {
     final core = _RecordingCoreService();
     final notifier = EditorNotifier(
       core,
       saveDir: r'C:\Users\Daniel\AppData\Local\G1R\Saved\SaveGames',
-      codecHostPath: r'C:\Program Files\goresave\goresave_g1r_codec_host.exe',
-      gameExePath:
-          r'C:\Program Files (x86)\Steam\steamapps\common\Gothic 1 Remake\G1R\Binaries\Win64\G1R-Win64-Shipping.exe',
     );
 
     await notifier.checkCodec();
@@ -69,15 +41,12 @@ void main() {
     final checkCodec = core.requests.lastWhere(
       (request) => request.command == 'check_codec',
     );
-    expect(checkCodec.payload['binaryHost'], {
-      'helperPath': r'C:\Program Files\goresave\goresave_g1r_codec_host.exe',
-      'exePath':
-          r'C:\Program Files (x86)\Steam\steamapps\common\Gothic 1 Remake\G1R\Binaries\Win64\G1R-Win64-Shipping.exe',
-    });
+    expect(checkCodec.payload.containsKey('binaryHost'), isFalse);
+    expect(checkCodec.payload, isEmpty);
   });
 
   test(
-    'refresh parses profiles, screenshots, and sends scan codec host',
+    'refresh parses profiles, screenshots, and sends no codec config',
     () async {
       final core = _RecordingCoreService(
         scanData: {
@@ -109,22 +78,15 @@ void main() {
           'activeProfileId': 0,
         },
       );
-      final notifier = EditorNotifier(
-        core,
-        saveDir: r'C:\tmp\saves',
-        codecHostPath: r'C:\tools\goresave_g1r_codec_host.exe',
-        gameExePath: r'C:\Games\G1R\G1R-Win64-Shipping.exe',
-      );
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
 
       await pumpEventQueue();
 
       final scan = core.requests.firstWhere(
         (request) => request.command == 'scan_save_dir',
       );
-      expect(scan.payload['binaryHost'], {
-        'helperPath': r'C:\tools\goresave_g1r_codec_host.exe',
-        'exePath': r'C:\Games\G1R\G1R-Win64-Shipping.exe',
-      });
+      expect(scan.payload.containsKey('binaryHost'), isFalse);
+      expect(scan.payload, {'path': r'C:\tmp\saves'});
       expect(notifier.state.profiles.single.displayName, 'Profile 0');
       expect(notifier.state.activeProfile?.profileId, 0);
       expect(notifier.state.selectedSave?.screenshot?.byteLength, 6);
@@ -132,15 +94,12 @@ void main() {
   );
 
   test(
-    'inspect sends configured binary host paths and decodes all chunks',
+    'inspect sends no codec config and decodes all chunks',
     () async {
       final core = _RecordingCoreService();
       final notifier = EditorNotifier(
         core,
         saveDir: r'C:\Users\Daniel\AppData\Local\G1R\Saved\SaveGames',
-        codecHostPath: r'C:\Program Files\goresave\goresave_g1r_codec_host.exe',
-        gameExePath:
-            r'C:\Program Files (x86)\Steam\steamapps\common\Gothic 1 Remake\G1R\Binaries\Win64\G1R-Win64-Shipping.exe',
       );
 
       await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
@@ -149,11 +108,7 @@ void main() {
         (request) => request.command == 'inspect_save',
       );
       expect(inspect.payload.containsKey('privateChunkLimit'), isFalse);
-      expect(inspect.payload['binaryHost'], {
-        'helperPath': r'C:\Program Files\goresave\goresave_g1r_codec_host.exe',
-        'exePath':
-            r'C:\Program Files (x86)\Steam\steamapps\common\Gothic 1 Remake\G1R\Binaries\Win64\G1R-Win64-Shipping.exe',
-      });
+      expect(inspect.payload.containsKey('binaryHost'), isFalse);
       expect(notifier.state.backups.single.fileName, 'G1R-001.sav.bak.200');
       expect(notifier.state.backups.single.playerSaveName, 'Before edit');
       expect(
@@ -170,9 +125,6 @@ void main() {
     final notifier = EditorNotifier(
       core,
       saveDir: r'C:\Users\Daniel\AppData\Local\G1R\Saved\SaveGames',
-      codecHostPath: r'C:\Program Files\goresave\goresave_g1r_codec_host.exe',
-      gameExePath:
-          r'C:\Program Files (x86)\Steam\steamapps\common\Gothic 1 Remake\G1R\Binaries\Win64\G1R-Win64-Shipping.exe',
     );
     await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
 
@@ -241,8 +193,6 @@ void main() {
       final notifier = EditorNotifier(
         core,
         saveDir: r'C:\tmp\saves',
-        codecHostPath: r'C:\tools\goresave_g1r_codec_host.exe',
-        gameExePath: r'C:\Games\G1R\G1R-Win64-Shipping.exe',
       );
       await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
 
@@ -665,51 +615,52 @@ void main() {
   // Other notifier methods (non-write path)
   // ---------------------------------------------------------------------------
 
-  test('verifyCodec unlocks compress edits for an unverified build', () async {
-    final core = _RecordingCoreService(codecCanCompress: false);
+  test('codecCompressReady follows the codec canCompress capability', () async {
+    final core = _RecordingCoreService();
     final notifier = EditorNotifier(
       core,
       saveDir: r'C:\Users\Daniel\AppData\Local\G1R\Saved\SaveGames',
-      codecHostPath: r'C:\Program Files\goresave\goresave_g1r_codec_host.exe',
-      gameExePath:
-          r'C:\Program Files (x86)\Steam\steamapps\common\Gothic 1 Remake\G1R\Binaries\Win64\G1R-Win64-Shipping.exe',
     );
     await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
     await Future<void>.delayed(Duration.zero);
 
-    // Codec decodes but is not auto-trusted for compression yet.
-    expect(notifier.state.codecCompressReady, isFalse);
-    expect(notifier.state.codecNeedsVerification, isTrue);
-
-    await notifier.verifyCodec();
-
-    final verify = core.requests.lastWhere(
-      (request) => request.command == 'validate_codec_roundtrip',
-    );
-    expect(verify.payload['path'], r'C:\tmp\saves\G1R-001.sav');
-    expect(verify.payload['binaryHost'], isNotNull);
-    expect(notifier.state.codecVerified, isTrue);
+    // The always-on in-process codec reports ready, so compress edits are
+    // unlocked directly with no manual verification step.
+    expect(notifier.state.codecStatus?.canCompress, isTrue);
     expect(notifier.state.codecCompressReady, isTrue);
-    expect(notifier.state.codecNeedsVerification, isFalse);
   });
 
-  test('verifyCodec surfaces failure and keeps edits locked', () async {
+  test('validateCodecRoundtrip sends no codec config and reports success',
+      () async {
+    final core = _RecordingCoreService();
+    final notifier = EditorNotifier(
+      core,
+      saveDir: r'C:\Users\Daniel\AppData\Local\G1R\Saved\SaveGames',
+    );
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+    await Future<void>.delayed(Duration.zero);
+
+    await notifier.validateCodecRoundtrip();
+
+    final roundtrip = core.requests.lastWhere(
+      (request) => request.command == 'validate_codec_roundtrip',
+    );
+    expect(roundtrip.payload, {'path': r'C:\tmp\saves\G1R-001.sav'});
+    expect(notifier.state.lastWriteMessage, contains('roundtrip'));
+  });
+
+  test('validateCodecRoundtrip surfaces failure as an error', () async {
     final core = _FailingVerifyCoreService();
     final notifier = EditorNotifier(
       core,
       saveDir: r'C:\Users\Daniel\AppData\Local\G1R\Saved\SaveGames',
-      codecHostPath: r'C:\Program Files\goresave\goresave_g1r_codec_host.exe',
-      gameExePath:
-          r'C:\Program Files (x86)\Steam\steamapps\common\Gothic 1 Remake\G1R\Binaries\Win64\G1R-Win64-Shipping.exe',
     );
     await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
     await Future<void>.delayed(Duration.zero);
 
-    await notifier.verifyCodec();
+    await notifier.validateCodecRoundtrip();
 
-    expect(notifier.state.codecVerified, isFalse);
-    expect(notifier.state.codecCompressReady, isFalse);
-    expect(notifier.state.codecError, contains('roundtrip'));
+    expect(notifier.state.error, contains('roundtrip'));
   });
 
   test('loadHeroAttributes searches the hero attribute subtree', () async {
@@ -763,9 +714,6 @@ void main() {
     final notifier = EditorNotifier(
       core,
       saveDir: r'C:\Users\Daniel\AppData\Local\G1R\Saved\SaveGames',
-      codecHostPath: r'C:\Program Files\goresave\goresave_g1r_codec_host.exe',
-      gameExePath:
-          r'C:\Program Files (x86)\Steam\steamapps\common\Gothic 1 Remake\G1R\Binaries\Win64\G1R-Win64-Shipping.exe',
     );
     await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
 
@@ -825,8 +773,6 @@ void main() {
       final notifier = EditorNotifier(
         core,
         saveDir: r'C:\tmp\saves',
-        codecHostPath: r'C:\tools\goresave_g1r_codec_host.exe',
-        gameExePath: r'C:\Games\G1R\G1R-Win64-Shipping.exe',
       );
       await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
 
@@ -844,33 +790,6 @@ void main() {
       expect(attribute.id, 'MaxHealth');
       expect(attribute.baseValue, 64);
       expect(attribute.currentValue, 64);
-    },
-  );
-
-  test(
-    'validateCodecRoundtrip sends selected save and binary host paths',
-    () async {
-      final core = _RecordingCoreService();
-      final notifier = EditorNotifier(
-        core,
-        saveDir: r'C:\Users\Daniel\AppData\Local\G1R\Saved\SaveGames',
-        codecHostPath: r'C:\Program Files\goresave\goresave_g1r_codec_host.exe',
-        gameExePath:
-            r'C:\Program Files (x86)\Steam\steamapps\common\Gothic 1 Remake\G1R\Binaries\Win64\G1R-Win64-Shipping.exe',
-      );
-      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
-
-      await notifier.validateCodecRoundtrip();
-
-      final validate = core.requests.lastWhere(
-        (request) => request.command == 'validate_codec_roundtrip',
-      );
-      expect(validate.payload['path'], r'C:\tmp\saves\G1R-001.sav');
-      expect(validate.payload['binaryHost'], {
-        'helperPath': r'C:\Program Files\goresave\goresave_g1r_codec_host.exe',
-        'exePath':
-            r'C:\Program Files (x86)\Steam\steamapps\common\Gothic 1 Remake\G1R\Binaries\Win64\G1R-Win64-Shipping.exe',
-      });
     },
   );
 
@@ -907,8 +826,6 @@ void main() {
     final notifier = EditorNotifier(
       core,
       saveDir: r'C:\tmp\saves',
-      codecHostPath: r'C:\tools\goresave_g1r_codec_host.exe',
-      gameExePath: r'C:\Games\G1R\G1R-Win64-Shipping.exe',
     );
     await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
 
@@ -942,8 +859,6 @@ void main() {
       final notifier = EditorNotifier(
         core,
         saveDir: r'C:\tmp\saves',
-        codecHostPath: r'C:\tools\goresave_g1r_codec_host.exe',
-        gameExePath: r'C:\Games\G1R\G1R-Win64-Shipping.exe',
       );
       await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
 
@@ -976,8 +891,6 @@ void main() {
     final notifier = EditorNotifier(
       core,
       saveDir: r'C:\tmp\saves',
-      codecHostPath: r'C:\tools\goresave_g1r_codec_host.exe',
-      gameExePath: r'C:\Games\G1R\G1R-Win64-Shipping.exe',
     );
     await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
 
@@ -996,8 +909,6 @@ void main() {
       final notifier = EditorNotifier(
         core,
         saveDir: r'C:\tmp\saves',
-        codecHostPath: r'C:\tools\goresave_g1r_codec_host.exe',
-        gameExePath: r'C:\Games\G1R\G1R-Win64-Shipping.exe',
       );
       await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
       notifier.setPendingEdit(
@@ -1038,8 +949,6 @@ void main() {
       final notifier = EditorNotifier(
         core,
         saveDir: r'C:\tmp\saves',
-        codecHostPath: r'C:\tools\goresave_g1r_codec_host.exe',
-        gameExePath: r'C:\Games\G1R\G1R-Win64-Shipping.exe',
       );
       await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
 
@@ -1086,8 +995,6 @@ void main() {
       final notifier = EditorNotifier(
         core,
         saveDir: r'C:\tmp\saves',
-        codecHostPath: r'C:\tools\goresave_g1r_codec_host.exe',
-        gameExePath: r'C:\Games\G1R\G1R-Win64-Shipping.exe',
       );
       await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
 
@@ -1113,8 +1020,6 @@ void main() {
       final notifier = EditorNotifier(
         core,
         saveDir: r'C:\tmp\saves',
-        codecHostPath: r'C:\tools\goresave_g1r_codec_host.exe',
-        gameExePath: r'C:\Games\G1R\G1R-Win64-Shipping.exe',
       );
       await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
 
@@ -1563,15 +1468,12 @@ class _RecordingCoreService implements GoresaveCoreService {
         return {
           'ok': true,
           'data': {
-            'selectedBackend': 'g1r_binary_host',
+            'backend': 'ooz_kraken',
             'available': true,
             'canDecompress': true,
             'canCompress': codecCanCompress,
-            'status': codecCanCompress
-                ? 'codec_host_ready'
-                : 'codec_host_supported_needs_runtime_selftest',
-            'adapter': 'g1r_binary_host',
-            'message': 'G1R codec host is configured.',
+            'status': codecCanCompress ? 'ready' : 'decode_only',
+            'details': {'adapter': 'ooz_kraken'},
           },
         };
       case 'query_progression':

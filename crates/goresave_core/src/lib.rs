@@ -1,5 +1,5 @@
 pub mod codec_backend;
-mod kraken;
+mod codec_calibration;
 pub mod properties;
 
 use base64::{Engine as _, engine::general_purpose};
@@ -373,13 +373,8 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
                 .and_then(Value::as_str)
                 .map(PathBuf::from)
                 .unwrap_or_else(default_save_root);
-            let codec_backend = payload
-                .get("binaryHost")
-                .map(ensured_binary_host_from_config)
-                .transpose()?;
-            let codec_backend = codec_backend
-                .as_ref()
-                .map(|backend| backend as &dyn codec_backend::CodecBackend);
+            let ooz_backend = codec_backend::OozKrakenBackend::default();
+            let codec_backend = Some(&ooz_backend as &dyn codec_backend::CodecBackend);
             let summary = scan_save_dir_summary_with_codec_backend(&path, codec_backend)?;
             Ok(json!({
                 "saveRoot": path,
@@ -398,13 +393,8 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
                 .get("privateChunkLimit")
                 .and_then(Value::as_u64)
                 .map(|value| value as usize);
-            let codec_backend = payload
-                .get("binaryHost")
-                .map(ensured_binary_host_from_config)
-                .transpose()?;
-            let codec_backend = codec_backend
-                .as_ref()
-                .map(|backend| backend as &dyn codec_backend::CodecBackend);
+            let ooz_backend = codec_backend::OozKrakenBackend::default();
+            let codec_backend = Some(&ooz_backend as &dyn codec_backend::CodecBackend);
             Ok(inspect_save_with_codec_backend(
                 &path,
                 include_private,
@@ -415,24 +405,14 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
         "check_codec" => check_codec(&payload),
         "search_typed_properties" => {
             let path = required_path(&payload)?;
-            let codec_backend = payload
-                .get("binaryHost")
-                .map(ensured_binary_host_from_config)
-                .transpose()?;
-            let codec_backend = codec_backend
-                .as_ref()
-                .map(|backend| backend as &dyn codec_backend::CodecBackend);
+            let ooz_backend = codec_backend::OozKrakenBackend::default();
+            let codec_backend = Some(&ooz_backend as &dyn codec_backend::CodecBackend);
             search_typed_properties(&path, &payload, codec_backend)
         }
         "query_progression" => {
             let path = required_path(&payload)?;
-            let codec_backend = payload
-                .get("binaryHost")
-                .map(ensured_binary_host_from_config)
-                .transpose()?;
-            let codec_backend = codec_backend
-                .as_ref()
-                .map(|backend| backend as &dyn codec_backend::CodecBackend);
+            let ooz_backend = codec_backend::OozKrakenBackend::default();
+            let codec_backend = Some(&ooz_backend as &dyn codec_backend::CodecBackend);
             query_progression(&path, &payload, codec_backend)
         }
         "validate_roundtrip" => {
@@ -460,12 +440,7 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
         }
         "validate_codec_roundtrip" => {
             let path = required_path(&payload)?;
-            let binary_host = payload.get("binaryHost").ok_or_else(|| {
-                CoreError::InvalidRequest(
-                    "validate_codec_roundtrip requires payload.binaryHost".to_string(),
-                )
-            })?;
-            let backend = ensured_binary_host_from_config(binary_host)?;
+            let backend = codec_backend::OozKrakenBackend::default();
             Ok(validate_codec_roundtrip_with_backend(&path, &backend)?)
         }
         "write_save" => {
@@ -487,13 +462,8 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
                 .get("syncPersistentDataList")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
-            let codec_backend = payload
-                .get("binaryHost")
-                .map(ensured_binary_host_from_config)
-                .transpose()?;
-            let codec_backend = codec_backend
-                .as_ref()
-                .map(|backend| backend as &dyn codec_backend::CodecBackend);
+            let ooz_backend = codec_backend::OozKrakenBackend::default();
+            let codec_backend = Some(&ooz_backend as &dyn codec_backend::CodecBackend);
             Ok(write_save_internal(
                 &path,
                 &edits,
@@ -544,7 +514,11 @@ pub fn scan_save_dir(path: &Path) -> Result<Vec<SaveListItem>, CoreError> {
 }
 
 pub fn scan_save_dir_summary(path: &Path) -> Result<SaveDirSummary, CoreError> {
-    scan_save_dir_summary_with_codec_backend(path, None)
+    // The codec is in-process and always available, so the public Rust scan API
+    // decodes private payloads (e.g. screenshot metadata) just like the FFI
+    // scan command, rather than silently skipping decode.
+    let backend = codec_backend::OozKrakenBackend::default();
+    scan_save_dir_summary_with_codec_backend(path, Some(&backend))
 }
 
 fn scan_save_dir_summary_with_codec_backend(
@@ -2768,7 +2742,16 @@ fn inspect_private_payload(
     private_chunk_limit: Option<usize>,
 ) -> Result<Value, CoreError> {
     let Some(backend) = codec_backend else {
-        return kraken::inspect_private_payload(data, stream);
+        return Ok(json!({
+            "status": "no_codec_backend",
+            "message": "No codec backend was supplied for private payload inspection.",
+            "method": stream.method,
+            "algorithmId": stream.algorithm_id,
+            "chunkCount": stream.chunk_count,
+            "compressedSize": stream.summary_compressed_size,
+            "uncompressedSize": stream.summary_uncompressed_size,
+            "writable": [],
+        }));
     };
     match decompress_private_payload_with_limit(data, stream, backend, private_chunk_limit) {
         Ok((payload, decoded_chunk_count)) => {
@@ -2838,9 +2821,9 @@ fn inspect_private_payload(
             Ok(json!({
                 "status": if preview { "decoded_preview" } else { "decoded" },
                 "message": if preview {
-                    "Private payload preview decoded through the G1R codec host."
+                    "Private payload preview decoded with the in-process Kraken codec."
                 } else {
-                    "Private payload decoded through the G1R codec host."
+                    "Private payload decoded with the in-process Kraken codec."
                 },
                 "method": stream.method,
                 "algorithmId": stream.algorithm_id,
@@ -2861,7 +2844,7 @@ fn inspect_private_payload(
             }))
         }
         Err(err) => Ok(json!({
-            "status": "codec_host_failed",
+            "status": "decode_failed",
             "message": err.to_string(),
             "method": stream.method,
             "algorithmId": stream.algorithm_id,
@@ -3137,7 +3120,7 @@ fn search_typed_properties(
 ) -> Result<Value, CoreError> {
     let backend = backend.ok_or_else(|| {
         CoreError::Codec(
-            "typed property search requires a configured and verified G1R codec host".to_string(),
+            "typed property search requires a working codec backend".to_string(),
         )
     })?;
     let query = payload.get("query").and_then(Value::as_str).unwrap_or("");
@@ -3200,7 +3183,7 @@ fn query_progression(
 ) -> Result<Value, CoreError> {
     let backend = backend.ok_or_else(|| {
         CoreError::Codec(
-            "progression queries require a configured and verified G1R codec host".to_string(),
+            "progression queries require a working codec backend".to_string(),
         )
     })?;
     let section = payload
@@ -4074,400 +4057,20 @@ fn unique_strings<'a>(values: impl Iterator<Item = &'a str>, limit: usize) -> Ve
     out
 }
 
-fn check_codec(payload: &Value) -> Result<Value, CoreError> {
-    let pure_backend = codec_backend::PureRustKrakenBackend;
-    let pure_probe = codec_backend::CodecBackend::probe(&pure_backend)?;
-    let binary_probe = payload.get("binaryHost").map(probe_binary_host_from_config);
-    codec_status_from_probes(pure_probe, binary_probe)
+fn check_codec(_payload: &Value) -> Result<Value, CoreError> {
+    codec_status()
 }
 
-/// Build the user-facing codec fields shown in the UI. `error_text` is the raw
-/// host/probe error string when the binary backend probe failed (used only to
-/// categorize, never shown verbatim to the user).
-fn codec_user_message_for(
-    selected_backend: &str,
-    available: bool,
-    can_compress: bool,
-    can_decompress: bool,
-    error_text: Option<&str>,
-) -> Value {
-    // Pure-Rust backend selected (no game codec needed for read-only flows):
-    // leave user fields empty; callers fall back to existing behavior.
-    if selected_backend != "g1r_binary_host" {
-        return json!({});
-    }
-    if let Some(err) = error_text {
-        let lower = err.to_ascii_lowercase();
-        // Game executable missing (host: "G1R executable not found: <path>").
-        if lower.contains("executable not found") {
-            return json!({
-                "userSeverity": "error",
-                "userTitle": "Gothic 1 Remake not found",
-                "userMessage": "The game executable wasn't found at the saved path.",
-                "userHint": "Set the game path in settings.",
-            });
-        }
-        // The build resolves but its codec can't be verified (new/unknown build
-        // or a failed calibration) -- the genuine "wait for an editor update" case.
-        if lower.contains("could not be resolved")
-            || lower.contains("calibration did not produce")
-            || lower.contains("unsupported")
-        {
-            return json!({
-                "userSeverity": "error",
-                "userTitle": "This game version can't be opened yet",
-                "userMessage": "Looks like a new game update the editor doesn't recognize yet.",
-                "userHint": "Check for an editor update - a new version usually follows shortly.",
-            });
-        }
-        // Anything else (missing/misconfigured codec helper, IO or launch
-        // failures) is a local setup problem the user can fix in Settings, not a
-        // new game build to wait out.
-        return json!({
-            "userSeverity": "error",
-            "userTitle": "Codec helper isn't set up",
-            "userMessage": "The editor couldn't start its codec helper for this game.",
-            "userHint": "Check the codec helper and game paths in settings.",
-        });
-    }
-    if can_compress {
-        return json!({
-            "userSeverity": "ok",
-            "userTitle": "Game codec ready",
-            "userMessage": "The editor can read and write this game version.",
-            "userHint": "",
-        });
-    }
-    if available || can_decompress {
-        // Usable for reading, but compression is not verified so writing stays
-        // gated -- do not claim full "ready".
-        return json!({
-            "userSeverity": "warn",
-            "userTitle": "Game codec partly ready",
-            "userMessage": "The editor can read this game's saves, but saving isn't verified yet.",
-            "userHint": "",
-        });
-    }
-    json!({
-        "userSeverity": "error",
-        "userTitle": "This game version can't be opened yet",
-        "userMessage": "Looks like a new game update the editor doesn't recognize yet.",
-        "userHint": "Check for an editor update - a new version usually follows shortly.",
-    })
-}
-
-fn codec_status_from_probes(
-    pure_probe: codec_backend::CodecBackendProbe,
-    binary_probe: Option<Result<codec_backend::CodecBackendProbe, CoreError>>,
-) -> Result<Value, CoreError> {
-    let mut backends =
-        vec![serde_json::to_value(&pure_probe).map_err(|e| CoreError::Codec(e.to_string()))?];
-    let mut selected_probe = pure_probe.clone();
-    let mut binary_error: Option<String> = None;
-    let mut binary_host_attempted = false;
-    let mut binary_available = false;
-    let mut binary_can_compress = false;
-    let mut binary_can_decompress = false;
-
-    if let Some(binary_probe) = binary_probe {
-        match binary_probe {
-            Ok(probe) => {
-                backends.push(
-                    serde_json::to_value(&probe).map_err(|e| CoreError::Codec(e.to_string()))?,
-                );
-                binary_host_attempted = true;
-                binary_available = probe.available;
-                binary_can_compress = probe.can_compress;
-                binary_can_decompress = probe.can_decompress;
-                if probe.available {
-                    selected_probe = probe;
-                }
-            }
-            Err(err) => {
-                binary_host_attempted = true;
-                binary_error = Some(err.to_string());
-                backends.push(json!({
-                    "backend": "g1r_binary_host",
-                    "available": false,
-                    "canDecompress": false,
-                    "canCompress": false,
-                    "status": "probe_failed",
-                    "profile": null,
-                    "resolutionMode": null,
-                    "details": {},
-                    "error": err.to_string()
-                }));
-            }
-        }
-    }
-
-    let mut value = selected_probe.details.clone();
-    value["selectedBackend"] = json!(selected_probe.backend);
-    value["adapter"] = json!(selected_probe.backend);
-    value["available"] = json!(selected_probe.available);
-    value["canDecompress"] = json!(selected_probe.can_decompress);
-    value["canCompress"] = json!(selected_probe.can_compress);
-    value["profile"] = json!(selected_probe.profile);
-    value["resolutionMode"] = json!(selected_probe.resolution_mode);
-    value["backends"] = json!(backends);
-
-    if value["selectedBackend"] == "g1r_binary_host" {
-        value["status"] = json!(binary_host_status(&selected_probe));
-        value["message"] = json!(binary_host_message(&selected_probe));
-    }
-
-    let user = if binary_host_attempted {
-        codec_user_message_for(
-            "g1r_binary_host",
-            binary_available,
-            binary_can_compress,
-            binary_can_decompress,
-            binary_error.as_deref(),
-        )
-    } else {
-        // No binary host configured: pure-Rust selected, no user-facing codec
-        // message (read-only flows).
-        codec_user_message_for(
-            &selected_probe.backend,
-            selected_probe.available,
-            selected_probe.can_compress,
-            selected_probe.can_decompress,
-            None,
-        )
-    };
-    if let Some(obj) = user.as_object() {
-        for (k, v) in obj {
-            value[k.clone()] = v.clone();
-        }
-    }
-
-    Ok(value)
-}
-
-fn binary_host_status(probe: &codec_backend::CodecBackendProbe) -> &'static str {
-    if probe.can_compress {
-        "codec_host_ready"
-    } else if probe.can_decompress {
-        "codec_host_decompress_ready"
-    } else if probe.available {
-        "codec_host_supported_needs_runtime_selftest"
-    } else {
-        "codec_host_unavailable"
-    }
-}
-
-fn binary_host_message(probe: &codec_backend::CodecBackendProbe) -> &'static str {
-    if probe.can_compress {
-        "G1R codec host is configured and verified for compress/decompress."
-    } else if probe.can_decompress {
-        "G1R codec host is configured and verified for decompression; compression is not enabled yet."
-    } else if probe.available {
-        "G1R codec host resolved the game codec profile. Run a runtime selftest before enabling private writes."
-    } else {
-        "G1R codec host is configured but not available."
-    }
-}
-
-fn probe_binary_host_from_config(
-    config: &Value,
-) -> Result<codec_backend::CodecBackendProbe, CoreError> {
-    let backend = binary_host_backend_from_config(config)?;
-    let probe = codec_backend::CodecBackend::probe(&backend)?;
-    Ok(auto_calibrate_if_pattern_profile(
-        &backend,
-        probe,
-        &host_config_suffix(config),
-    ))
-}
-
-/// The host configuration, besides the executable, that affects codec
-/// resolution: the helper used to run the host and the derived-profile cache it
-/// reads/writes. Used to scope both the ensured-backend cache and the
-/// calibration attempt budget, so changing either (e.g. fixing a bad helper
-/// path) is treated as a fresh configuration rather than reusing stale state.
-fn host_config_suffix(config: &Value) -> String {
-    let field = |name: &str| config.get(name).and_then(Value::as_str).unwrap_or("");
-    format!(
-        "{}\u{1f}{}",
-        field("helperPath"),
-        field("derivedProfileCachePath"),
-    )
-}
-
-/// Executables whose calibration has already been ensured this session, keyed by
-/// exe path. Prevents re-probing (which hashes the whole game executable) on
-/// every codec operation once the build has been calibrated.
-fn binary_host_ensured_exes() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
-    static ENSURED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
-        std::sync::OnceLock::new();
-    ENSURED.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
-}
-
-/// Build the binary host backend for a codec OPERATION (decode/encode), ensuring
-/// a pattern-resolved build has been calibrated first. `check_codec` is not the
-/// only entry point -- `inspect_save` and friends decode too, and on startup the
-/// app inspects in parallel with `check_codec`. Without this, the first inspect
-/// of an unknown build would fail (the host rejects decode for `pattern_profile`)
-/// until a separate `check_codec` happened to write the derived cache. Ensuring
-/// calibration here writes that cache before this backend is used. Runs at most
-/// once per executable per session; a no-op for known profiles or when the probe
-/// fails (e.g. no helper).
-fn ensured_binary_host_from_config(
-    config: &Value,
-) -> Result<codec_backend::G1rBinaryHostBackend, CoreError> {
-    let backend = binary_host_backend_from_config(config)?;
-    // Key by the full host configuration that affects resolution, not just the
-    // exe path: the same executable used with a different derived-profile cache
-    // (or helper) needs its own probe/calibration. (The session cache still
-    // assumes the executable bytes at a given path are stable for the session;
-    // an in-place game update would require an explicit codec re-check.)
-    let exe_key = config
-        .get("exePath")
-        .and_then(Value::as_str)
-        .map(|exe| format!("{exe}\u{1f}{}", host_config_suffix(config)));
-    if let Some(key) = &exe_key {
-        if binary_host_ensured_exes()
-            .lock()
-            .map(|set| set.contains(key))
-            .unwrap_or(false)
-        {
-            return Ok(backend);
-        }
-    }
-    // Probe and (for an untrusted build) calibrate. Only mark the executable
-    // "ensured" -- to skip this re-probe on later operations -- once it is fully
-    // usable: available AND write-capable. A probe failure, an unsupported build,
-    // or a decode-only build (available but not yet compress-verified) is left
-    // unmarked so a later operation retries calibration (e.g. after the user
-    // fixes Settings, within the attempt budget, or to verify compression),
-    // instead of being stuck for the session.
-    let fully_usable = match codec_backend::CodecBackend::probe(&backend) {
-        // Side effect: a pattern-resolved build writes its derived cache here, so
-        // the decode/encode that follows on this backend resolves it.
-        Ok(probe) => {
-            let p = auto_calibrate_if_pattern_profile(&backend, probe, &host_config_suffix(config));
-            p.available && p.can_compress
-        }
-        Err(_) => false,
-    };
-    if fully_usable {
-        if let Some(key) = exe_key {
-            if let Ok(mut set) = binary_host_ensured_exes().lock() {
-                set.insert(key);
-            }
-        }
-    }
-    Ok(backend)
-}
-
-/// Maximum failed calibration attempts per executable per session. A failed
-/// calibration runs the expensive runtime selftest; without a cap, every codec
-/// check on an unpromotable build would re-run it. A small budget still lets a
-/// transient failure -- or a setup the user just fixed -- recover on a retry,
-/// then stops. (Classifying durable vs transient failures by error text is
-/// unreliable; a bounded attempt count is robust and simple.)
-const MAX_CALIBRATION_ATTEMPTS: u32 = 2;
-
-/// Process-global count of failed calibration attempts per executable SHA-256.
-/// The core runs as a long-lived FFI library, so this persists for the session.
-/// Keyed by SHA-256 so a different (e.g. newly patched) build is independent.
-fn calibration_attempts() -> &'static std::sync::Mutex<std::collections::HashMap<String, u32>> {
-    static ATTEMPTS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, u32>>> =
-        std::sync::OnceLock::new();
-    ATTEMPTS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
-}
-
-/// Auto-calibration: an untrusted (pattern-resolved) or decode-only build is
-/// promoted to a verified write-capable derived profile by running one runtime
-/// selftest with the host's embedded sample. Best-effort: a failure leaves the
-/// build unpromoted (the UI shows a plain message). Bounded so an unpromotable
-/// build does not re-run the selftest forever.
-fn auto_calibrate_if_pattern_profile(
-    backend: &codec_backend::G1rBinaryHostBackend,
-    probe: codec_backend::CodecBackendProbe,
-    config_suffix: &str,
-) -> codec_backend::CodecBackendProbe {
-    auto_calibrate_bounded(backend, probe, config_suffix, calibration_attempts())
-}
-
-fn auto_calibrate_bounded(
-    backend: &codec_backend::G1rBinaryHostBackend,
-    probe: codec_backend::CodecBackendProbe,
-    config_suffix: &str,
-    attempts: &std::sync::Mutex<std::collections::HashMap<String, u32>>,
-) -> codec_backend::CodecBackendProbe {
-    // Calibrate an untrusted (pattern-resolved) build OR one usable only for
-    // decompression (a decode-only derived-cache entry that can be promoted to
-    // write-capable). Write-capable supported profiles and the pure-Rust
-    // fallback need no calibration.
-    let needs_calibration = probe.resolution_mode.as_deref() == Some("pattern_profile")
-        || (probe.available && !probe.can_compress);
-    if !needs_calibration {
-        return probe;
-    }
-    // Scope the attempt budget by executable AND host configuration, so fixing a
-    // bad helper/cache path mid-session is a fresh build to retry rather than a
-    // capped one (matching the ensured-backend cache key).
-    let exe_sha = probe
-        .details
-        .get("exeSha256")
-        .and_then(Value::as_str)
-        .map(|sha| format!("{sha}\u{1f}{config_suffix}"));
-    // Give up re-running the expensive selftest once an executable has failed the
-    // capped number of times this session.
-    if let Some(sha) = &exe_sha {
-        if attempts
-            .lock()
-            .map(|m| m.get(sha).copied().unwrap_or(0) >= MAX_CALIBRATION_ATTEMPTS)
-            .unwrap_or(false)
-        {
-            return probe;
-        }
-    }
-    match backend.calibrate() {
-        Ok(calibrated) => calibrated,
-        Err(_) => {
-            // A failed calibration may still have written a decode-only derived
-            // cache. Re-probe so the response reflects that (read-only usable)
-            // instead of the stale pre-calibration probe.
-            let after =
-                codec_backend::CodecBackend::probe(backend).unwrap_or_else(|_| probe.clone());
-            // Count every failed calibration against the budget -- including a
-            // decode-only outcome (available but not write-capable). It still gets
-            // up to MAX_CALIBRATION_ATTEMPTS retries (a transient compress failure
-            // may clear), but a build whose compressor consistently fails will not
-            // re-run the expensive selftest on every operation forever.
-            if let Some(sha) = exe_sha {
-                if let Ok(mut map) = attempts.lock() {
-                    *map.entry(sha).or_insert(0) += 1;
-                }
-            }
-            after
-        }
-    }
-}
-
-fn binary_host_backend_from_config(
-    config: &Value,
-) -> Result<codec_backend::G1rBinaryHostBackend, CoreError> {
-    let helper_path = config
-        .get("helperPath")
-        .and_then(Value::as_str)
-        .ok_or_else(|| {
-            CoreError::InvalidRequest("binaryHost.helperPath is required".to_string())
-        })?;
-    let exe_path = config
-        .get("exePath")
-        .and_then(Value::as_str)
-        .ok_or_else(|| CoreError::InvalidRequest("binaryHost.exePath is required".to_string()))?;
-    let mut backend = codec_backend::G1rBinaryHostBackend::new(helper_path, exe_path);
-    if let Some(cache_path) = config
-        .get("derivedProfileCachePath")
-        .and_then(Value::as_str)
-    {
-        backend = backend.with_derived_profile_cache_path(cache_path);
-    }
-    Ok(backend)
+fn codec_status() -> Result<Value, CoreError> {
+    let probe = codec_backend::CodecBackend::probe(&codec_backend::OozKrakenBackend::default())?;
+    Ok(json!({
+        "backend": probe.backend,
+        "available": probe.available,
+        "canDecompress": probe.can_decompress,
+        "canCompress": probe.can_compress,
+        "status": probe.status,
+        "details": probe.details,
+    }))
 }
 
 fn validate_roundtrip(path: &Path) -> Result<Value, CoreError> {
@@ -4894,7 +4497,7 @@ fn apply_private_edits(
     }
     let backend = codec_backend.ok_or_else(|| {
         CoreError::Codec(
-            "private edits require a configured and verified G1R codec host".to_string(),
+            "private edits require a working codec backend".to_string(),
         )
     })?;
     let parts = split_gsav(data)?;
@@ -10839,430 +10442,18 @@ mod tests {
         let response = execute_json(r#"{"command":"check_codec","payload":{}}"#);
         let value: Value = serde_json::from_str(&response).unwrap();
         assert_eq!(value["ok"], true);
-        assert_eq!(value["data"]["available"], false);
-        assert_eq!(value["data"]["status"], "native_encoder_in_progress");
-        assert!(value["data"].to_string().contains("pure_rust_kraken"));
+        assert_eq!(value["data"]["backend"], "ooz_kraken");
+        assert_eq!(value["data"]["available"], true);
         assert!(!value["data"].to_string().contains("oo2core"));
     }
 
     #[test]
-    fn check_codec_exposes_pure_backend_by_default() {
-        let response = execute_json(r#"{"command":"check_codec","payload":{}}"#);
-        let value: Value = serde_json::from_str(&response).unwrap();
-
-        assert_eq!(value["ok"], true);
-        assert_eq!(value["data"]["selectedBackend"], "pure_rust_kraken");
-        assert_eq!(value["data"]["backends"][0]["backend"], "pure_rust_kraken");
-        assert_eq!(
-            value["data"]["backends"][0]["status"],
-            "native_encoder_in_progress"
-        );
-        assert_eq!(
-            value["data"]["message"],
-            "Native private payload encoder is not available yet."
-        );
-    }
-
-    #[test]
-    fn codec_status_prefers_configured_binary_host_when_available() {
-        let pure_probe = codec_backend::CodecBackendProbe {
-            backend: "pure_rust_kraken".to_string(),
-            available: false,
-            can_decompress: false,
-            can_compress: false,
-            status: "native_encoder_in_progress".to_string(),
-            profile: None,
-            resolution_mode: None,
-            details: json!({
-                "adapter": "pure_rust_kraken",
-                "available": false,
-                "canDecompress": false,
-                "canCompress": false,
-                "status": "native_encoder_in_progress",
-                "message": "native encoder is unavailable"
-            }),
-        };
-        let binary_probe = codec_backend::CodecBackendProbe {
-            backend: "g1r_binary_host".to_string(),
-            available: true,
-            can_decompress: true,
-            can_compress: true,
-            status: "supported".to_string(),
-            profile: Some("g1r-23A85CE7".to_string()),
-            resolution_mode: Some("known_profile".to_string()),
-            details: json!({
-                "supported": true,
-                "canDecompress": true,
-                "canCompress": true,
-                "profile": "g1r-23A85CE7",
-                "resolutionMode": "known_profile"
-            }),
-        };
-
-        let value = codec_status_from_probes(pure_probe, Some(Ok(binary_probe))).unwrap();
-
-        assert_eq!(value["selectedBackend"], "g1r_binary_host");
-        assert_eq!(value["adapter"], "g1r_binary_host");
+    fn codec_status_reports_ooz_backend_ready() {
+        let value = codec_status().unwrap();
+        assert_eq!(value["backend"], "ooz_kraken");
         assert_eq!(value["available"], true);
         assert_eq!(value["canDecompress"], true);
         assert_eq!(value["canCompress"], true);
-        assert_eq!(value["profile"], "g1r-23A85CE7");
-        assert_eq!(value["resolutionMode"], "known_profile");
-        assert_eq!(value["status"], "codec_host_ready");
-        assert!(
-            value["message"]
-                .as_str()
-                .unwrap()
-                .contains("G1R codec host")
-        );
-    }
-
-    #[test]
-    fn check_codec_reports_optional_binary_host_probe_errors_without_selecting_it() {
-        let response = execute_json(
-            r#"{
-                "command": "check_codec",
-                "payload": {
-                    "binaryHost": {
-                        "helperPath": "Z:\\missing\\goresave_g1r_codec_host.exe",
-                        "exePath": "D:\\G1R-Win64-Shipping.exe"
-                    }
-                }
-            }"#,
-        );
-        let value: Value = serde_json::from_str(&response).unwrap();
-
-        assert_eq!(value["ok"], true);
-        assert_eq!(value["data"]["selectedBackend"], "pure_rust_kraken");
-        assert_eq!(value["data"]["backends"][1]["backend"], "g1r_binary_host");
-        assert_eq!(value["data"]["backends"][1]["available"], false);
-        assert_eq!(value["data"]["backends"][1]["status"], "probe_failed");
-        assert!(
-            value["data"]["backends"][1]["error"]
-                .as_str()
-                .unwrap()
-                .contains("io error")
-        );
-    }
-
-    #[test]
-    fn check_codec_auto_calibrates_pattern_profile_then_reports_supported() {
-        let backend = codec_backend::G1rBinaryHostBackend::with_command_dispatch_for_tests(
-            "D:\\G1R-Win64-Shipping.exe",
-            |command| match command {
-                "probe" => Ok(json!({
-                    "supported": false,
-                    "canDecompress": false,
-                    "canCompress": false,
-                    "profile": "g1r-23A85CE7",
-                    "resolutionMode": "pattern_profile"
-                })),
-                "calibrate" => Ok(json!({
-                    "supported": true,
-                    "canDecompress": true,
-                    "canCompress": true,
-                    "profile": "g1r-derived-77f3d48c",
-                    "resolutionMode": "derived_profile_cache",
-                    "calibrationRan": true
-                })),
-                other => Err(CoreError::Codec(format!("unexpected command {other}"))),
-            },
-        );
-
-        let probe = codec_backend::CodecBackend::probe(&backend).unwrap();
-        assert_eq!(probe.resolution_mode.as_deref(), Some("pattern_profile"));
-        assert!(!probe.available);
-
-        let promoted = auto_calibrate_if_pattern_profile(&backend, probe, "");
-
-        assert!(promoted.available);
-        assert!(promoted.can_compress);
-        assert_eq!(
-            promoted.resolution_mode.as_deref(),
-            Some("derived_profile_cache")
-        );
-    }
-
-    #[test]
-    fn auto_calibrate_keeps_unsupported_probe_when_calibrate_errors() {
-        let backend = codec_backend::G1rBinaryHostBackend::with_command_dispatch_for_tests(
-            "D:\\G1R-Win64-Shipping.exe",
-            |command| match command {
-                "probe" => Ok(json!({
-                    "supported": false,
-                    "canDecompress": false,
-                    "canCompress": false,
-                    "profile": "g1r-23A85CE7",
-                    "resolutionMode": "pattern_profile"
-                })),
-                "calibrate" => Err(CoreError::Codec("calibration selftest failed".to_string())),
-                other => Err(CoreError::Codec(format!("unexpected command {other}"))),
-            },
-        );
-
-        let probe = codec_backend::CodecBackend::probe(&backend).unwrap();
-        assert_eq!(probe.resolution_mode.as_deref(), Some("pattern_profile"));
-        assert!(!probe.available);
-
-        let result = auto_calibrate_if_pattern_profile(&backend, probe, "");
-
-        // Best-effort: a calibration failure leaves the original unsupported
-        // probe, not an error.
-        assert!(!result.available);
-        assert_eq!(result.resolution_mode.as_deref(), Some("pattern_profile"));
-    }
-
-    #[test]
-    fn auto_calibrate_skips_rerun_after_failure_in_session() {
-        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let calls_in = calls.clone();
-        let backend = codec_backend::G1rBinaryHostBackend::with_command_dispatch_for_tests(
-            "D:\\G1R-Win64-Shipping.exe",
-            move |command| match command {
-                "calibrate" => {
-                    calls_in.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    Err(CoreError::Codec("calibration selftest failed".to_string()))
-                }
-                other => Err(CoreError::Codec(format!("unexpected command {other}"))),
-            },
-        );
-        let cache = std::sync::Mutex::new(std::collections::HashMap::new());
-        let probe = codec_backend::CodecBackendProbe {
-            backend: "g1r_binary_host".to_string(),
-            available: false,
-            can_decompress: false,
-            can_compress: false,
-            status: "unsupported".to_string(),
-            profile: Some("g1r-23A85CE7".to_string()),
-            resolution_mode: Some("pattern_profile".to_string()),
-            details: json!({ "exeSha256": "deadbeefdeadbeef" }),
-        };
-
-        // Four checks of the same unpromotable build: calibration retries up to
-        // the attempt budget (MAX_CALIBRATION_ATTEMPTS), then stops re-running the
-        // expensive selftest. The build stays unsupported throughout.
-        let mut last = probe.clone();
-        for _ in 0..4 {
-            last = auto_calibrate_bounded(&backend, probe.clone(), "", &cache);
-        }
-        assert!(!last.available);
-        assert_eq!(
-            calls.load(std::sync::atomic::Ordering::SeqCst),
-            MAX_CALIBRATION_ATTEMPTS as usize
-        );
-    }
-
-    #[test]
-    fn auto_calibrate_recalibrates_decompress_only_supported_probe() {
-        // A supported-but-decompress-only derived-cache entry must be
-        // recalibrated so it can be promoted to write-capable.
-        let backend = codec_backend::G1rBinaryHostBackend::with_command_dispatch_for_tests(
-            "D:\\G1R-Win64-Shipping.exe",
-            |command| match command {
-                "calibrate" => Ok(json!({
-                    "supported": true,
-                    "canDecompress": true,
-                    "canCompress": true,
-                    "profile": "g1r-derived-77f3d48c",
-                    "resolutionMode": "derived_profile_cache",
-                    "calibrationRan": true
-                })),
-                other => Err(CoreError::Codec(format!("unexpected command {other}"))),
-            },
-        );
-        let cache = std::sync::Mutex::new(std::collections::HashMap::new());
-        let probe = codec_backend::CodecBackendProbe {
-            backend: "g1r_binary_host".to_string(),
-            available: true,
-            can_decompress: true,
-            can_compress: false,
-            status: "codec_host_decompress_ready".to_string(),
-            profile: Some("g1r-derived-77f3d48c".to_string()),
-            resolution_mode: Some("derived_profile_cache".to_string()),
-            details: json!({ "exeSha256": "cafecafecafecafe" }),
-        };
-
-        let promoted = auto_calibrate_bounded(&backend, probe, "", &cache);
-
-        assert!(promoted.can_compress);
-    }
-
-    #[test]
-    fn auto_calibrate_reprobes_and_retries_after_decode_only_calibration() {
-        // calibrate fails (compress selftest failed) but a decode-only derived
-        // cache now exists, which the re-probe reports.
-        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let calls_in = calls.clone();
-        let backend = codec_backend::G1rBinaryHostBackend::with_command_dispatch_for_tests(
-            "D:\\G1R-Win64-Shipping.exe",
-            move |command| match command {
-                "calibrate" => {
-                    calls_in.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    Err(CoreError::Codec("compress selftest failed".to_string()))
-                }
-                "probe" => Ok(json!({
-                    "supported": true,
-                    "canDecompress": true,
-                    "canCompress": false,
-                    "profile": "g1r-derived-77f3d48c",
-                    "resolutionMode": "derived_profile_cache",
-                    "exeSha256": "feedfacefeedface"
-                })),
-                other => Err(CoreError::Codec(format!("unexpected command {other}"))),
-            },
-        );
-        let cache = std::sync::Mutex::new(std::collections::HashMap::new());
-        let probe = codec_backend::CodecBackendProbe {
-            backend: "g1r_binary_host".to_string(),
-            available: false,
-            can_decompress: false,
-            can_compress: false,
-            status: "unsupported".to_string(),
-            profile: Some("g1r-23A85CE7".to_string()),
-            resolution_mode: Some("pattern_profile".to_string()),
-            details: json!({ "exeSha256": "feedfacefeedface" }),
-        };
-
-        let first = auto_calibrate_bounded(&backend, probe.clone(), "", &cache);
-        // Not stale: reflects the decode-only cache, usable for reading.
-        assert!(first.available);
-        assert!(!first.can_compress);
-
-        // A decode-only build retries the compress selftest (a transient failure
-        // may clear) but is still bounded: after MAX_CALIBRATION_ATTEMPTS it stops
-        // re-running the expensive selftest instead of doing so on every check.
-        for _ in 0..4 {
-            let _ = auto_calibrate_bounded(&backend, probe.clone(), "", &cache);
-        }
-        assert_eq!(
-            calls.load(std::sync::atomic::Ordering::SeqCst),
-            MAX_CALIBRATION_ATTEMPTS as usize
-        );
-    }
-
-    #[test]
-    fn codec_status_unsupported_binary_build_shows_plain_message() {
-        let pure_probe = codec_backend::CodecBackendProbe {
-            backend: "pure_rust_kraken".to_string(),
-            available: false,
-            can_decompress: false,
-            can_compress: false,
-            status: "native_encoder_in_progress".to_string(),
-            profile: None,
-            resolution_mode: None,
-            details: json!({}),
-        };
-        let binary_probe = codec_backend::CodecBackendProbe {
-            backend: "g1r_binary_host".to_string(),
-            available: false,
-            can_decompress: false,
-            can_compress: false,
-            status: "unsupported".to_string(),
-            profile: Some("g1r-23A85CE7".to_string()),
-            resolution_mode: Some("pattern_profile".to_string()),
-            details: json!({}),
-        };
-
-        let value = codec_status_from_probes(pure_probe, Some(Ok(binary_probe))).unwrap();
-
-        assert_eq!(value["userSeverity"], "error");
-        assert_eq!(value["userTitle"], "This game version can't be opened yet");
-    }
-
-    #[test]
-    fn codec_status_ready_binary_build_shows_ready_message() {
-        let pure_probe = codec_backend::CodecBackendProbe {
-            backend: "pure_rust_kraken".to_string(),
-            available: false,
-            can_decompress: false,
-            can_compress: false,
-            status: "native_encoder_in_progress".to_string(),
-            profile: None,
-            resolution_mode: None,
-            details: json!({}),
-        };
-        let binary_probe = codec_backend::CodecBackendProbe {
-            backend: "g1r_binary_host".to_string(),
-            available: true,
-            can_decompress: true,
-            can_compress: true,
-            status: "supported".to_string(),
-            profile: Some("g1r-23A85CE7".to_string()),
-            resolution_mode: Some("known_profile".to_string()),
-            details: json!({}),
-        };
-
-        let value = codec_status_from_probes(pure_probe, Some(Ok(binary_probe))).unwrap();
-
-        assert_eq!(value["userSeverity"], "ok");
-        assert_eq!(value["userTitle"], "Game codec ready");
-    }
-
-    #[test]
-    fn codec_user_message_ready_for_compress_capable_build() {
-        let m = codec_user_message_for("g1r_binary_host", true, true, true, None);
-        assert_eq!(m["userSeverity"], "ok");
-        assert_eq!(m["userTitle"], "Game codec ready");
-    }
-
-    #[test]
-    fn codec_user_message_unsupported_for_unavailable_build() {
-        let m = codec_user_message_for("g1r_binary_host", false, false, false, None);
-        assert_eq!(m["userSeverity"], "error");
-        assert_eq!(m["userTitle"], "This game version can't be opened yet");
-        assert!(m["userHint"].as_str().unwrap().contains("editor update"));
-    }
-
-    #[test]
-    fn codec_user_message_exe_not_found() {
-        let m = codec_user_message_for(
-            "g1r_binary_host",
-            false,
-            false,
-            false,
-            Some("G1R executable not found: D:/x/G1R-Win64-Shipping.exe"),
-        );
-        assert_eq!(m["userTitle"], "Gothic 1 Remake not found");
-        assert!(m["userHint"].as_str().unwrap().contains("game path"));
-    }
-
-    #[test]
-    fn codec_user_message_helper_misconfig_is_setup_error() {
-        let m = codec_user_message_for(
-            "g1r_binary_host",
-            false,
-            false,
-            false,
-            Some("binaryHost.helperPath is required"),
-        );
-        assert_eq!(m["userSeverity"], "error");
-        assert_eq!(m["userTitle"], "Codec helper isn't set up");
-        assert!(m["userHint"].as_str().unwrap().contains("settings"));
-        // Must NOT send the user to wait for a game/editor update.
-        assert_ne!(m["userTitle"], "This game version can't be opened yet");
-    }
-
-    #[test]
-    fn codec_user_message_unresolved_build_waits_for_update() {
-        let m = codec_user_message_for(
-            "g1r_binary_host",
-            false,
-            false,
-            false,
-            Some("G1R executable could not be resolved to verified codec functions"),
-        );
-        assert_eq!(m["userTitle"], "This game version can't be opened yet");
-        assert!(m["userHint"].as_str().unwrap().contains("editor update"));
-    }
-
-    #[test]
-    fn codec_user_message_decode_only_is_not_ready() {
-        // available + decompress but no verified compress: reading works, writing
-        // is gated, so it must not claim full "ready".
-        let m = codec_user_message_for("g1r_binary_host", true, false, true, None);
-        assert_eq!(m["userSeverity"], "warn");
-        assert_eq!(m["userTitle"], "Game codec partly ready");
-        assert_ne!(m["userTitle"], "Game codec ready");
     }
 
     fn private_name_set_property(name: &str, values: &[&str]) -> Vec<u8> {

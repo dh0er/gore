@@ -545,7 +545,6 @@ class _EditorWorkspace extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final isDark = Theme.of(context).brightness == Brightness.dark;
     Widget content;
     if (state.inspection == null) {
       content = state.error != null
@@ -644,31 +643,6 @@ class _EditorWorkspace extends StatelessWidget {
                   ),
                 ],
               ),
-            if (state.codecNeedsVerification)
-              MaterialBanner(
-                backgroundColor: isDark
-                    ? const Color(0xFF3A2E1A)
-                    : const Color(0xFFFFF4E5),
-                leading: Icon(
-                  Icons.shield_outlined,
-                  color: isDark
-                      ? const Color(0xFFE0A95C)
-                      : const Color(0xFFB26A00),
-                ),
-                content: const Text(
-                  'This game build is not auto-trusted for compression. '
-                  'Verify the codec to unlock private edits — it round-trips a '
-                  'real save chunk through the game executable.',
-                ),
-                actions: [
-                  TextButton(
-                    onPressed: state.isLoading || state.selectedPath == null
-                        ? null
-                        : notifier.verifyCodec,
-                    child: const Text('Verify codec'),
-                  ),
-                ],
-              ),
             Expanded(
               child: TabBarView(
                 children: [
@@ -686,13 +660,12 @@ class _EditorWorkspace extends StatelessWidget {
                       inspection: inspection,
                       notifier: notifier,
                       // Private writes recompress the payload, so also require the
-                      // codec host to be compress-ready (auto-trusted or verified
-                      // this session), not just decode-ready.
+                      // codec to be compress-ready, not just decode-ready.
                       editable:
                           inspection.privateEditable &&
                           state.codecCompressReady,
                       lockedBody:
-                          'Private player edits need a verified G1R codec host.',
+                          'Private player edits need a compress-ready codec.',
                     ),
                   ),
                   _KeepAliveTab(
@@ -1480,7 +1453,7 @@ class _InventoryPanel extends StatelessWidget {
         icon: Icons.inventory_2_outlined,
         title: 'Inventory',
         body:
-            'Inventory editing needs decoded private payload data from the G1R codec host.',
+            'Inventory editing needs decoded private payload data from the codec.',
       );
     }
     // Inventory writes recompress the payload too, so require a
@@ -2792,7 +2765,7 @@ class _AllDataPanelState extends State<_AllDataPanel> {
         title: 'All data',
         body:
             'The full property browser needs decoded private payload data from '
-            'the G1R codec host.',
+            'the codec.',
       );
     }
     final theme = Theme.of(context);
@@ -3497,7 +3470,7 @@ class _SettingsPanel extends StatelessWidget {
                     const Icon(Icons.compress_outlined),
                     const SizedBox(width: 8),
                     Text(
-                      'G1R codec host',
+                      'Codec',
                       style: Theme.of(context).textTheme.titleMedium,
                     ),
                     const Spacer(),
@@ -3515,18 +3488,6 @@ class _SettingsPanel extends StatelessWidget {
                           : notifier.validateCodecRoundtrip,
                     ),
                   ],
-                ),
-                const SizedBox(height: 12),
-                _PathSettingRow(
-                  label: 'Helper',
-                  value: state.codecHostPath,
-                  onBrowse: notifier.chooseCodecHost,
-                ),
-                const SizedBox(height: 8),
-                _PathSettingRow(
-                  label: 'Game EXE',
-                  value: state.gameExePath,
-                  onBrowse: notifier.chooseGameExe,
                 ),
                 const SizedBox(height: 12),
                 CodecStatusView(codec: codec, codecError: state.codecError),
@@ -3549,9 +3510,9 @@ class CodecStatusView extends StatelessWidget {
   Widget build(BuildContext context) {
     final codec = this.codec;
     final scheme = Theme.of(context).colorScheme;
-    // A codec error (e.g. a failed verification) can coexist with a status
-    // (verifyCodec sets codecError but keeps codecStatus), so render it whenever
-    // present -- both when there is no status and alongside one.
+    // A codec error (e.g. a failed roundtrip) can coexist with a status, so
+    // render it whenever present -- both when there is no status and alongside
+    // one.
     final error = codecError;
     final errorRow = error == null
         ? null
@@ -3568,20 +3529,26 @@ class CodecStatusView extends StatelessWidget {
     if (codec == null) {
       return errorRow ?? const Text('No codec status');
     }
-    final severity = codec.userSeverity ?? (codec.available ? 'ok' : 'error');
-    final isError = severity == 'error';
-    final isWarn = severity == 'warn';
-    final statusColor = isError
-        ? scheme.error
-        : isWarn
+    // The in-process codec maps to three states: ready (decode + encode),
+    // decode_only (read but not write), and unavailable.
+    final isReady = codec.status == 'ready' && codec.canCompress;
+    final isDecodeOnly =
+        !isReady && (codec.status == 'decode_only' || codec.canDecompress);
+    final statusColor = isReady
+        ? scheme.primary
+        : isDecodeOnly
         ? scheme.tertiary
-        : scheme.primary;
-    final statusIcon = isError
-        ? Icons.error_outline
-        : isWarn
+        : scheme.error;
+    final statusIcon = isReady
+        ? Icons.check_circle_outline
+        : isDecodeOnly
         ? Icons.warning_amber_rounded
-        : Icons.check_circle_outline;
-    final title = codec.userTitle ?? codec.message;
+        : Icons.error_outline;
+    final title = isReady
+        ? 'Codec ready'
+        : isDecodeOnly
+        ? 'Codec read-only'
+        : 'Codec unavailable';
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -3597,18 +3564,10 @@ class CodecStatusView extends StatelessWidget {
             const SizedBox(width: 6),
             Expanded(
               child: Text(title,
-                  style: TextStyle(color: isError || isWarn ? statusColor : null)),
+                  style: TextStyle(color: isReady ? null : statusColor)),
             ),
           ],
         ),
-        if ((codec.userMessage ?? '').isNotEmpty) ...[
-          const SizedBox(height: 4),
-          Text(codec.userMessage!),
-        ],
-        if ((codec.userHint ?? '').isNotEmpty) ...[
-          const SizedBox(height: 4),
-          Text(codec.userHint!, style: Theme.of(context).textTheme.bodySmall),
-        ],
         const SizedBox(height: 8),
         ExpansionTile(
           tilePadding: EdgeInsets.zero,
@@ -3620,20 +3579,10 @@ class CodecStatusView extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(codec.message),
+                  Text('Status: ${codec.status}'),
                   Text('Decompress: ${codec.canDecompress ? 'yes' : 'no'} | '
                       'Compress: ${codec.canCompress ? 'yes' : 'no'}'),
-                  // When a user-facing codec message is present it is always
-                  // about the G1R codec host, so label the backend that way
-                  // rather than the internal active backend (which is the
-                  // pure-Rust fallback when the host probe failed).
-                  if (codec.userTitle != null || codec.selectedBackend != null)
-                    Text(
-                      'Backend: ${codec.userTitle != null ? 'G1R codec host' : codec.selectedBackend}',
-                    ),
-                  if (codec.profile != null) Text('Profile: ${codec.profile}'),
-                  if (codec.resolutionMode != null)
-                    Text('Resolution: ${codec.resolutionMode}'),
+                  Text('Backend: ${codec.adapter ?? codec.backend}'),
                 ],
               ),
             ),

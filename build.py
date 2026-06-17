@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """goresave distribution build.
 
-Builds the native core DLL and codec-host EXE in release mode, builds the
-Flutter Windows release, places the native binaries next to goresave.exe, and
-packages the Release folder into dist/goresave-<version>-windows-x64.zip.
+Builds the native core DLL in release mode (the Oodle codec is linked in-process
+via goresave_oodle), builds the Flutter Windows release, places the native DLL
+next to goresave.exe, and packages the Release folder into
+dist/goresave-<version>-windows-x64.zip.
 
 Usage:
     python build.py            # full distribution build
@@ -27,7 +28,6 @@ TARGET_RELEASE = ROOT / "target" / "release"
 DIST = ROOT / "dist"
 
 CORE_DLL = "goresave_core.dll"
-CODEC_HOST_EXE = "goresave_g1r_codec_host.exe"
 LICENSE_FILE = ROOT / "LICENSE"
 
 
@@ -110,10 +110,6 @@ def copy_license_to_bundle(release_dir: Path) -> Path:
 def dist(version: str, git_sha: str) -> Path:
     run("Build core (release)", [CARGO, "build", "--release", "-p", "goresave_core"])
     run(
-        "Build codec host (release)",
-        [CARGO, "build", "--release", "-p", "goresave_g1r_codec_host"],
-    )
-    run(
         "Flutter Windows release",
         [FLUTTER, "build", "windows", "--release", f"--dart-define=GIT_SHA={git_sha}"],
         cwd=APP,
@@ -121,12 +117,11 @@ def dist(version: str, git_sha: str) -> Path:
 
     if not RELEASE_DIR.exists():
         raise SystemExit(f"missing Flutter release output: {RELEASE_DIR}")
-    for name in (CORE_DLL, CODEC_HOST_EXE):
-        src = TARGET_RELEASE / name
-        if not src.exists():
-            raise SystemExit(f"missing native artifact: {src}")
-        shutil.copy2(src, RELEASE_DIR / name)
-        print(f"copied {name} -> {RELEASE_DIR / name}")
+    src = TARGET_RELEASE / CORE_DLL
+    if not src.exists():
+        raise SystemExit(f"missing native artifact: {src}")
+    shutil.copy2(src, RELEASE_DIR / CORE_DLL)
+    print(f"copied {CORE_DLL} -> {RELEASE_DIR / CORE_DLL}")
 
     copy_license_to_bundle(RELEASE_DIR)
 

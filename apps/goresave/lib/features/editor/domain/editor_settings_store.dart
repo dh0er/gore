@@ -2,25 +2,15 @@ import 'dart:convert';
 import 'dart:io';
 
 class EditorSettings {
-  const EditorSettings({this.saveDir, this.codecHostPath, this.gameExePath});
+  const EditorSettings({this.saveDir});
 
   factory EditorSettings.fromJson(Map<String, Object?> json) {
-    return EditorSettings(
-      saveDir: _stringOrNull(json['saveDir']),
-      codecHostPath: _stringOrNull(json['codecHostPath']),
-      gameExePath: _stringOrNull(json['gameExePath']),
-    );
+    return EditorSettings(saveDir: _stringOrNull(json['saveDir']));
   }
 
   final String? saveDir;
-  final String? codecHostPath;
-  final String? gameExePath;
 
-  Map<String, Object?> toJson() => {
-    if (saveDir != null) 'saveDir': saveDir,
-    if (codecHostPath != null) 'codecHostPath': codecHostPath,
-    if (gameExePath != null) 'gameExePath': gameExePath,
-  };
+  Map<String, Object?> toJson() => {if (saveDir != null) 'saveDir': saveDir};
 
   static String? _stringOrNull(Object? value) {
     if (value is! String || value.trim().isEmpty) return null;

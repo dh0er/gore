@@ -390,21 +390,22 @@ void main() {
     expect(inspection.privateEditable, isFalse);
   });
 
-  test('CodecStatus exposes native adapter without DLL path fields', () {
+  test('CodecStatus exposes the in-process adapter from details', () {
     final codec = CodecStatus.fromJson({
-      'available': false,
-      'canDecompress': false,
-      'canCompress': false,
-      'status': 'native_encoder_in_progress',
-      'adapter': 'pure_rust_kraken',
-      'message': 'Native encoder is unavailable',
+      'backend': 'ooz_kraken',
+      'available': true,
+      'canDecompress': true,
+      'canCompress': true,
+      'status': 'ready',
+      'details': {'adapter': 'ooz_kraken'},
     });
 
-    expect(codec.available, isFalse);
-    expect(codec.status, 'native_encoder_in_progress');
-    expect(codec.adapter, 'pure_rust_kraken');
-    expect(codec.canDecompress, isFalse);
-    expect(codec.canCompress, isFalse);
+    expect(codec.backend, 'ooz_kraken');
+    expect(codec.available, isTrue);
+    expect(codec.status, 'ready');
+    expect(codec.adapter, 'ooz_kraken');
+    expect(codec.canDecompress, isTrue);
+    expect(codec.canCompress, isTrue);
   });
 
   test('BackupEntry reads validated backup metadata', () {

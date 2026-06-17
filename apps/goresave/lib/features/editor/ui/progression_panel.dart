@@ -67,7 +67,7 @@ class _ProgressionPanelState extends State<ProgressionPanel> {
         icon: Icons.flag_outlined,
         title: 'Progression',
         body:
-            'Progression data needs decoded private payload data from the G1R codec host.',
+            'Progression data needs decoded private payload data from the codec.',
       );
     }
     if (!widget.inspection.privateProgression.available) {

@@ -67,8 +67,9 @@ cd ..\..
 python tools\build_native.py --release --bundle-windows
 ```
 
-Release bundles expect `goresave_core.dll` and
-`goresave_g1r_codec_host.exe` next to `goresave.exe`.
+Release bundles expect `goresave_core.dll` next to `goresave.exe`. The Oodle
+codec is linked into the core DLL in-process, so no separate codec helper or
+game executable is required.
 
 ## Safety
 
