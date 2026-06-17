@@ -6,6 +6,11 @@ on:
 jobs:
   test:
     runs-on: windows-latest
+    defaults:
+      run:
+        # gore-save lives under projects/ in the monorepo; test.py + its
+        # relative paths resolve from here. cargo walks up to the workspace root.
+        working-directory: projects/gore-save
     steps:
       - uses: actions/checkout@v4
 

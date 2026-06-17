@@ -11,6 +11,15 @@ permissions:
 jobs:
   windows:
     runs-on: windows-latest
+    defaults:
+      run:
+        # gore-save lives under projects/ in the monorepo. All `run:` steps
+        # execute from here, so build.py, scripts/, installer/, dist/ and
+        # CHANGELOG.md resolve relatively. NOTE: `uses:` action inputs
+        # (upload/release `path:`/`files:`) are relative to the repo root, not
+        # this working-directory, so those carry an explicit projects/gore-save/
+        # prefix below.
+        working-directory: projects/gore-save
     steps:
       - uses: actions/checkout@v4
 
@@ -18,7 +27,7 @@ jobs:
         id: version
         shell: pwsh
         run: |
-          $pubspec = Get-Content apps/goresave/pubspec.yaml -Raw
+          $pubspec = Get-Content app/pubspec.yaml -Raw
           if ($pubspec -notmatch '(?m)^version:\s*([0-9]+\.[0-9]+\.[0-9]+)\s*$') {
             Write-Error 'pubspec.yaml version must be plain X.Y.Z (no build number)'
             exit 1
@@ -79,7 +88,7 @@ jobs:
         run: |
           & "C:\Program Files (x86)\Inno Setup 6\iscc.exe" /Qp `
             "/DAppVersion=${{ steps.version.outputs.version }}" `
-            "/DSourceDir=$PWD\apps\goresave\build\windows\x64\runner\Release" `
+            "/DSourceDir=$PWD\app\build\windows\x64\runner\Release" `
             "/DOutputDir=$PWD\dist" `
             installer\setup.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -101,9 +110,9 @@ jobs:
         with:
           name: goresave-windows-x64
           path: |
-            dist/*.zip
-            dist/*.exe
-            dist/appcast-windows.xml
+            projects/gore-save/dist/*.zip
+            projects/gore-save/dist/*.exe
+            projects/gore-save/dist/appcast-windows.xml
 
       # The installer + appcast must be attached so that
       # releases/latest/download/ serves the update feed.
@@ -112,7 +121,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/*.zip
-            dist/*.exe
-            dist/appcast-windows.xml
-          body_path: dist/RELEASE_NOTES.md
+            projects/gore-save/dist/*.zip
+            projects/gore-save/dist/*.exe
+            projects/gore-save/dist/appcast-windows.xml
+          body_path: projects/gore-save/dist/RELEASE_NOTES.md

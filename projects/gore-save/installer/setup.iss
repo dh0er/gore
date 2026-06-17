@@ -37,8 +37,8 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayIcon={app}\goresave.exe
 WizardStyle=modern
-SetupIconFile=..\apps\goresave\windows\runner\resources\app_icon.ico
-LicenseFile=..\LICENSE
+SetupIconFile=..\app\windows\runner\resources\app_icon.ico
+LicenseFile=..\..\..\LICENSE
 
 ; Remove obsolete files from earlier versions before copying the new bundle.
 ; Inno only adds/overwrites bundle files; it never prunes files that were
