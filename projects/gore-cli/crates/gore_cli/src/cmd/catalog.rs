@@ -1,55 +1,74 @@
-//! `gore-cli catalog` — emit a gore-cli catalog JSON from a model.json.
+//! `gore-cli catalog` — generate a catalog JSON from a UE4SS object dump.
 //!
-//! NOTE: the output format is the gore-cli catalog shape
-//! (`[{id, display_name, category}]`) which differs from the Python pipeline's
-//! bundled `item_catalog.json` (`[{id, path, category}]`). This divergence is
-//! intentional for the modding toolchain; do not use this output as a drop-in
-//! replacement for the Python-generated allow-list.
+//! Usage:
+//!   gore-cli catalog --kind item    <dump.txt> -o item_catalog.json
+//!   gore-cli catalog --kind npc     <dump.txt> -o npc_catalog.json
+//!   gore-cli catalog --kind knowledge <dump.txt> -o knowledge_catalog.json
+//!
+//! Output is byte-identical to the Python pipeline scripts.
 
 use anyhow::{Context, Result};
-use gore_core::{
-    catalog::{category_for_id, CatalogEntry, CatalogModel, ItemCategory},
-    model::ReflectionModel,
-};
+use clap::ValueEnum;
+use gore_core::catalog::pipeline;
 use std::{fs, path::PathBuf};
 
-/// Prefixes that identify concrete item classes (not base definitions or CDOs).
-const ITEM_PREFIXES: &[&str] = &[
-    "ItFo_", "ItMw_", "ItRw_", "ItAm_", "ItAt_",
-    "ItAr_", "ItWr_", "ItPo_", "ItLs_", "ItMi_",
-];
-
-fn is_item_class(name: &str) -> bool {
-    ITEM_PREFIXES.iter().any(|p| name.starts_with(p))
+#[derive(Debug, Clone, ValueEnum)]
+pub enum CatalogKind {
+    Item,
+    Npc,
+    Knowledge,
 }
 
-pub fn run(input: PathBuf, out: PathBuf) -> Result<()> {
-    let json = fs::read_to_string(&input)
-        .with_context(|| format!("reading model.json '{}'", input.display()))?;
-    let model: ReflectionModel = serde_json::from_str(&json)
-        .with_context(|| "parsing model.json")?;
+pub fn run(kind: CatalogKind, dump: PathBuf, out: PathBuf) -> Result<()> {
+    let text = fs::read_to_string(&dump)
+        .with_context(|| format!("reading dump '{}'", dump.display()))?;
+    let lines: Vec<&str> = text.lines().collect();
 
-    let mut catalog = CatalogModel::default();
-    for cls in &model.classes {
-        if is_item_class(&cls.name) {
-            catalog.entries.push(CatalogEntry {
-                id: cls.name.clone(),
-                display_name: cls.name.clone(), // display name = id until object dump provides names
-                category: category_for_id(&cls.name),
-            });
+    let json = match kind {
+        CatalogKind::Item => {
+            let (entries, skipped) = pipeline::build_item_catalog(&lines);
+            if !skipped.is_empty() {
+                eprintln!("skipped {} classes:", skipped.len());
+                for s in &skipped {
+                    eprintln!("  - {s}");
+                }
+            }
+            let count = entries.len();
+            let j = pipeline::to_catalog_json(&entries)
+                .context("serialising item catalog")?;
+            eprintln!("wrote {count} items to {}", out.display());
+            j
         }
-    }
-
-    // Filter Unknown to avoid noise from unprefixed classes that slipped through
-    catalog.entries.retain(|e| e.category != ItemCategory::Unknown);
+        CatalogKind::Npc => {
+            let (entries, skipped) = pipeline::build_npc_catalog(&lines);
+            if !skipped.is_empty() {
+                eprintln!("skipped {} classes:", skipped.len());
+                for s in &skipped {
+                    eprintln!("  - {s}");
+                }
+            }
+            let count = entries.len();
+            let j = pipeline::to_catalog_json(&entries)
+                .context("serialising npc catalog")?;
+            eprintln!("wrote {count} npcs to {}", out.display());
+            j
+        }
+        CatalogKind::Knowledge => {
+            let entries = pipeline::build_knowledge_catalog(&lines);
+            let count = entries.len();
+            let j = pipeline::to_catalog_json(&entries)
+                .context("serialising knowledge catalog")?;
+            eprintln!("wrote {count} knowledge tokens to {}", out.display());
+            j
+        }
+    };
 
     if let Some(parent) = out.parent() {
-        fs::create_dir_all(parent)?;
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
     }
-    let json_out = serde_json::to_string_pretty(&catalog.entries)?;
-    fs::write(&out, json_out)
+    fs::write(&out, json.as_bytes())
         .with_context(|| format!("writing catalog to '{}'", out.display()))?;
-
-    println!("Wrote {} catalog entries -> {}", catalog.entries.len(), out.display());
     Ok(())
 }

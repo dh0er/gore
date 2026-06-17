@@ -1,0 +1,7 @@
+[0001] ASClass /Script/Angelscript.ItFo_Apple [n: 1] [c: 2] [or: 3]
+[0002] ASClass /Script/Angelscript.ItMi_Orenugget [n: 1] [c: 2] [or: 3]
+[0003] ASClass /Script/Angelscript.CharacterDefinition_Human_OC_STT_Diego [n: 1]
+[0004] ASClass /Script/Angelscript.CharacterDefinition_Creature_Biter [n: 1]
+[0005] ASClass /Script/Angelscript.Topic_Diego_209799 [n: 1]
+[0006] ASClass /Script/Angelscript.Info_FMORGAreyouok [n: 1]
+[0007] ASClass /Script/Angelscript.ChoiceDiegoGamestart [n: 1]

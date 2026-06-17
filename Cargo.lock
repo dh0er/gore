@@ -372,6 +372,7 @@ dependencies = [
  "clap",
  "gore_core",
  "predicates 2.1.5",
+ "serde",
  "serde_json",
  "tempfile",
  "thiserror",

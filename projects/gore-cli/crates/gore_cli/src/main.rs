@@ -34,11 +34,26 @@ enum Commands {
         #[arg(long)]
         filter: Option<String>,
     },
-    /// (Re)generate item_catalog.json from model.json or sdk-dir
+    /// Generate a catalog JSON from a UE4SS object dump
     Catalog {
-        /// Path to model.json or CXXHeaderDump/ sdk-dir
-        input: PathBuf,
+        /// Catalog kind to generate
+        #[arg(long, value_name = "KIND")]
+        kind: cmd::catalog::CatalogKind,
+        /// Path to UE4SS_ObjectDump.txt
+        dump: PathBuf,
         /// Output catalog JSON path
+        #[arg(short = 'o', long)]
+        out: PathBuf,
+    },
+    /// Convert a gore-cli reflection model into a gore-mod GUI shape JSON
+    GuiModel {
+        /// Path to model.json (output of `gore-cli dump`)
+        #[arg(long)]
+        model: PathBuf,
+        /// Path to item_catalog.json
+        #[arg(long)]
+        catalog: PathBuf,
+        /// Output GUI model JSON path
         #[arg(short = 'o', long)]
         out: PathBuf,
     },
@@ -78,7 +93,8 @@ fn main() {
             cmd::dump::run(sdk_dir, object_dump, out)
         }
         Commands::Stubs { model, out, filter } => cmd::stubs::run(model, out, filter),
-        Commands::Catalog { input, out } => cmd::catalog::run(input, out),
+        Commands::Catalog { kind, dump, out } => cmd::catalog::run(kind, dump, out),
+        Commands::GuiModel { model, catalog, out } => cmd::gui_model::run(model, catalog, out),
         Commands::Scaffold { mod_name, out } => cmd::scaffold::run(mod_name, out),
         Commands::Gen { overrides, out, model } => cmd::gen::run(overrides, out, model),
         Commands::Package { mod_dir, out } => cmd::package::run(mod_dir, out),
