@@ -12,6 +12,11 @@ a Flutter interface backed by a Rust savegame core.
 - Almost all data can be changed by changing the value of the internal property. Only for experimental use.
 - Automatic backup creation.
 
+## Screenshots
+
+[<img src="docs/images/screenshot_light.png" alt="Screenshot Light" width="600"/>](docs/images/screenshot_light.png)
+[<img src="docs/images/screenshot_dark.png" alt="Screenshot Dark" width="600"/>](docs/images/screenshot_dark.png)
+
 ## Compatibility
 
 Tested with Steam game version CL168781. Should work with all versions.
