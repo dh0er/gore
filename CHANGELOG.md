@@ -6,6 +6,14 @@ notes, so every release needs an entry.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.0] - 2026-06-17
+
+- Codec host is now replaced with an in-process Oodle Kraken codec. This removes
+  the dependency on the game executable and the codec helper executable. Now any
+  game version should work.
+- Any NPC can now be selected from catalog and be added to knowledge list.
+- Fixed a bug where the Add button was missing in inventory tab.
+
 ## [0.2.1] - 2026-06-15
 
 ### Fixed

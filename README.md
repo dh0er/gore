@@ -14,7 +14,7 @@ a Flutter interface backed by a Rust savegame core.
 
 ## Compatibility
 
-Tested with Steam game version CL168781. Other versions probably don't work.
+Tested with Steam game version CL168781. Should work with all versions.
 
 ## Installation & Updates
 
@@ -66,10 +66,6 @@ flutter build windows --release
 cd ..\..
 python tools\build_native.py --release --bundle-windows
 ```
-
-Release bundles expect `goresave_core.dll` next to `goresave.exe`. The Oodle
-codec is linked into the core DLL in-process, so no separate codec helper or
-game executable is required.
 
 ## Safety
 
