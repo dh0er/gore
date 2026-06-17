@@ -1,3 +1,6 @@
 [workspace]
-members = ["crates/goresave_core", "crates/goresave_oodle"]
+members = [
+    "projects/gore-save/crates/goresave_core",
+    "projects/gore-save/crates/goresave_oodle",
+]
 resolver = "2"
