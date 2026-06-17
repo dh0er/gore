@@ -4,6 +4,8 @@
 //! editor and the modding tools classify item ids identically. Prefix set
 //! verified against the UE4SS object dump (see memory `gothic-remake-ue4ss-dump`).
 
+pub mod pipeline;
+
 use serde::{Deserialize, Serialize};
 
 /// Item categories derived from the Angelscript class-name prefix
