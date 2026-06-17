@@ -29,6 +29,9 @@ pub enum OodleError {
     Decompress { expected: usize, got: i32 },
     Compress { got: i32 },
     InputTooLarge(usize),
+    /// The requested decode output buffer could not be sized/allocated (the
+    /// declared uncompressed size overflowed or exceeded available memory).
+    OutputTooLarge(usize),
 }
 
 impl fmt::Display for OodleError {
@@ -39,6 +42,9 @@ impl fmt::Display for OodleError {
             }
             OodleError::Compress { got } => write!(f, "oodle compress returned {got}"),
             OodleError::InputTooLarge(n) => write!(f, "oodle input too large: {n} bytes"),
+            OodleError::OutputTooLarge(n) => {
+                write!(f, "oodle output size unallocatable: {n} bytes")
+            }
         }
     }
 }
@@ -46,8 +52,20 @@ impl fmt::Display for OodleError {
 impl std::error::Error for OodleError {}
 
 /// Decode an Oodle block whose decompressed length is exactly `expected_size`.
+///
+/// `expected_size` comes from the (untrusted) save container, so the output
+/// buffer is sized with a checked add and a fallible allocation: a corrupt or
+/// hostile size returns an error instead of overflowing into a tiny buffer (and
+/// then letting the C++ decoder write `expected_size` bytes into it) or aborting
+/// the process on a giant allocation.
 pub fn kraken_decompress(src: &[u8], expected_size: usize) -> Result<Vec<u8>, OodleError> {
-    let mut dst = vec![0u8; expected_size + DECODE_SAFE_PADDING];
+    let capacity = expected_size
+        .checked_add(DECODE_SAFE_PADDING)
+        .ok_or(OodleError::OutputTooLarge(expected_size))?;
+    let mut dst: Vec<u8> = Vec::new();
+    dst.try_reserve_exact(capacity)
+        .map_err(|_| OodleError::OutputTooLarge(expected_size))?;
+    dst.resize(capacity, 0);
     let got = unsafe {
         goresave_ooz_decompress(src.as_ptr(), src.len(), dst.as_mut_ptr(), expected_size)
     };
@@ -100,6 +118,16 @@ mod tests {
         assert!(comp.len() < input.len());
         let back = kraken_decompress(&comp, input.len()).unwrap();
         assert_eq!(back, input);
+    }
+
+    #[test]
+    fn decompress_rejects_unallocatable_expected_size() {
+        // A hostile/corrupt declared size must not overflow the padding add or
+        // attempt a giant allocation; it returns a clean error.
+        let err = kraken_decompress(&[0u8; 8], usize::MAX).unwrap_err();
+        assert_eq!(err, OodleError::OutputTooLarge(usize::MAX));
+        let err = kraken_decompress(&[0u8; 8], usize::MAX - 8).unwrap_err();
+        assert_eq!(err, OodleError::OutputTooLarge(usize::MAX - 8));
     }
 
     #[test]
