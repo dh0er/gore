@@ -28,6 +28,10 @@ pub fn run(sdk_dir: PathBuf, _object_dump: Option<PathBuf>, out: PathBuf) -> Res
         }
     }
 
+    // Reconcile enum types across the merged model: a class in one .hpp may use
+    // an enum declared in another, which the per-file pass could not resolve.
+    merged.resolve_enum_types();
+
     // Write model.json
     if let Some(parent) = out.parent() {
         fs::create_dir_all(parent)?;

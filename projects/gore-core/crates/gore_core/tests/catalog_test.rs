@@ -1,4 +1,4 @@
-use gore_core::catalog::{category_for_id, CatalogEntry, CatalogModel, ItemCategory};
+use gore_core::catalog::{category_for_id, ItemCategory};
 
 #[test]
 fn category_food() {
@@ -31,16 +31,4 @@ fn category_amulet() {
 #[test]
 fn category_rune() {
     assert_eq!(category_for_id("ItAr_Rune_Fireball"), ItemCategory::RuneOrScroll);
-}
-
-#[test]
-fn catalog_model_lookup() {
-    let mut model = CatalogModel::default();
-    model.entries.push(CatalogEntry {
-        id: "ItFo_Apple".to_string(),
-        display_name: "Apple".to_string(),
-        category: ItemCategory::Food,
-    });
-    assert!(model.find("ItFo_Apple").is_some());
-    assert!(model.find("ItFo_Cheese").is_none());
 }

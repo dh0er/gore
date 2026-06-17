@@ -76,9 +76,10 @@ fn check_type_match(
         (PropType::String, OverrideValue::Str(_)) => true,
         // Opaque fields: we allow any value (we don't know the C++ layout)
         (PropType::Opaque(_), _) => true,
-        // Enum fields: only Str values checked; enum member validation is
-        // a future enhancement (requires enum model lookup + member check).
-        (PropType::Enum(_), OverrideValue::Str(_)) => true,
+        // Enum fields accept a member name (Str) or its backing integer (UE
+        // enums are int-backed, and overrides.toml uses the same value_int key
+        // as elsewhere). Member-name validation is a future enhancement.
+        (PropType::Enum(_), OverrideValue::Str(_) | OverrideValue::Int(_)) => true,
         _ => false,
     };
 
@@ -171,6 +172,40 @@ mod validate_tests {
         assert!(
             errors.iter().any(|e| matches!(e, ValidationError::UnknownClass { .. })),
             "expected UnknownClass error, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn enum_field_accepts_int_and_str() {
+        // UE enums are int-backed; an enum field must accept value_int as well
+        // as a member name (value_str).
+        let model = ReflectionModel {
+            classes: vec![Class {
+                name: "UThing".to_string(),
+                parent: None,
+                properties: vec![Property {
+                    name: "m_Quality".to_string(),
+                    prop_type: PropType::Enum("EQuality".to_string()),
+                    offset: None,
+                }],
+            }],
+            enums: vec![],
+        };
+        let int_cfg = make_config("UThing", "m_Quality", OverrideValue::Int(2));
+        assert!(
+            validate_config(&int_cfg, &model).is_empty(),
+            "enum field must accept an int override"
+        );
+        let str_cfg = make_config("UThing", "m_Quality", OverrideValue::Str("High".into()));
+        assert!(
+            validate_config(&str_cfg, &model).is_empty(),
+            "enum field must accept a string member override"
+        );
+        // A bool is still rejected.
+        let bad = make_config("UThing", "m_Quality", OverrideValue::Bool(true));
+        assert!(
+            !validate_config(&bad, &model).is_empty(),
+            "enum field must reject a bool override"
         );
     }
 }

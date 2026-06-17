@@ -145,39 +145,16 @@ pub fn category_for_id(id: &str) -> ItemCategory {
     ItemCategory::Unknown
 }
 
-/// One entry in a gore-cli catalog (id + display name + category).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CatalogEntry {
-    pub id: String,
-    pub display_name: String,
-    pub category: ItemCategory,
-}
-
-/// One entry in a generated catalog JSON file produced by the Python pipeline.
-/// Shape: id + path + category string (matches `build_item_catalog.py` output).
+/// One entry in a generated catalog JSON file produced by `gore-cli catalog`
+/// (item pipeline). Shape: id + path + category string (matches the historical
+/// `build_item_catalog.py` output, which `gore-cli catalog --kind item`
+/// reproduces byte-for-byte). This is the on-disk catalog shape; there is no
+/// separate in-memory catalog wrapper type.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CatalogJsonEntry {
     pub id: String,
     pub path: String,
     pub category: String,
-}
-
-/// The full item catalog. Loaded from the `item_catalog.json` produced by
-/// `build_item_catalog.py`, or constructed by `gore-cli catalog`.
-#[derive(Debug, Default, Serialize, Deserialize)]
-pub struct CatalogModel {
-    pub entries: Vec<CatalogEntry>,
-}
-
-impl CatalogModel {
-    pub fn find(&self, id: &str) -> Option<&CatalogEntry> {
-        self.entries.iter().find(|e| e.id == id)
-    }
-
-    /// Load from a JSON file written by `gore-cli catalog`.
-    pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
-        serde_json::from_str(json)
-    }
 }
 
 /// Parse a catalog JSON string (array of [`CatalogJsonEntry`]).

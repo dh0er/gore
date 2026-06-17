@@ -11,10 +11,7 @@ pub mod model;
 pub mod parser;
 pub mod validate;
 
-pub use catalog::{
-    category_for_id, item_category_from_id, CatalogEntry, CatalogJsonEntry, CatalogModel,
-    ItemCategory,
-};
+pub use catalog::{category_for_id, item_category_from_id, CatalogJsonEntry, ItemCategory};
 pub use model::ReflectionModel;
 pub use gen::{gen_lua, OverridesConfig};
 pub use validate::{validate_config, ValidationError};

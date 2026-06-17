@@ -164,19 +164,10 @@ pub fn parse_hpp_reader<R: BufRead>(reader: R) -> Result<ReflectionModel, ParseE
         model.enums.push(b.build());
     }
 
-    // Post-pass: resolve Opaque(name) to Enum(name) for any type name that
-    // matches a parsed enum declaration.
-    let enum_names: std::collections::HashSet<String> =
-        model.enums.iter().map(|e| e.name.clone()).collect();
-    for class in &mut model.classes {
-        for prop in &mut class.properties {
-            if let crate::model::PropType::Opaque(ref type_name) = prop.prop_type {
-                if enum_names.contains(type_name) {
-                    prop.prop_type = crate::model::PropType::Enum(type_name.clone());
-                }
-            }
-        }
-    }
+    // Resolve enum-typed fields within this file. The merge step in
+    // `gore-cli dump` runs the same pass again over the combined model so that
+    // enums declared in a different `.hpp` than their using class also resolve.
+    model.resolve_enum_types();
 
     Ok(model)
 }
