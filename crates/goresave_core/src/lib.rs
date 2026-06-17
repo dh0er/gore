@@ -514,7 +514,11 @@ pub fn scan_save_dir(path: &Path) -> Result<Vec<SaveListItem>, CoreError> {
 }
 
 pub fn scan_save_dir_summary(path: &Path) -> Result<SaveDirSummary, CoreError> {
-    scan_save_dir_summary_with_codec_backend(path, None)
+    // The codec is in-process and always available, so the public Rust scan API
+    // decodes private payloads (e.g. screenshot metadata) just like the FFI
+    // scan command, rather than silently skipping decode.
+    let backend = codec_backend::OozKrakenBackend::default();
+    scan_save_dir_summary_with_codec_backend(path, Some(&backend))
 }
 
 fn scan_save_dir_summary_with_codec_backend(
