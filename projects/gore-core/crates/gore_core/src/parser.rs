@@ -69,18 +69,38 @@ pub fn parse_hpp_reader<R: BufRead>(reader: R) -> Result<ReflectionModel, ParseE
 
         // --- class declaration --------------------------------------------
         // "class ItFo_Apple : public UItemDefinition"
-        if trimmed.starts_with("class ") && !trimmed.contains('{') {
-            let rest = &trimmed["class ".len()..];
-            let (name, parent) = if let Some(idx) = rest.find(": public ") {
-                let n = rest[..idx].trim().to_string();
-                let p = rest[idx + ": public ".len()..].trim().to_string();
-                (n, Some(p))
-            } else {
-                (rest.trim().to_string(), None)
+        // Must distinguish a real declaration from a member/method that merely
+        // begins with a `class Foo*`/`class Foo(` token (UE headers write
+        // `class UFoo* m_x;` for forward-declared pointer members). A real decl
+        // has no '{', '*', '(' and does not end with ';'.
+        if trimmed.starts_with("class ") {
+            let decl = match trimmed.find("//") {
+                Some(i) => trimmed[..i].trim(),
+                None => trimmed,
             };
-            in_class = Some(ClassBuilder { name, parent, properties: vec![] });
-            in_public = false;
-            continue;
+            let is_real_decl = !decl.contains('{')
+                && !decl.contains('*')
+                && !decl.contains('(')
+                && !decl.ends_with(';');
+            if is_real_decl {
+                if let Some(b) = in_class.take() {
+                    model.classes.push(b.build());
+                }
+                let rest = &decl["class ".len()..];
+                let (name, parent) = if let Some(idx) = rest.find(": public ") {
+                    let n = rest[..idx].trim().to_string();
+                    let p = rest[idx + ": public ".len()..].trim().to_string();
+                    (n, Some(p))
+                } else {
+                    (rest.trim().to_string(), None)
+                };
+                in_class = Some(ClassBuilder { name, parent, properties: vec![] });
+                // UE4SS headers list members directly after `{` with no
+                // `public:` label, so fields are parsed for the whole body.
+                in_public = true;
+                continue;
+            }
+            // else: a `class Foo* member;` field — fall through to field parsing.
         }
 
         // --- enum class declaration ---------------------------------------
@@ -190,6 +210,10 @@ fn try_parse_field(line: &str) -> Option<Property> {
     };
     // Must end with ';'
     let code = code.strip_suffix(';')?.trim();
+    // Skip method declarations (e.g. "void SetItemType(FGameplayTag x)").
+    if code.contains('(') {
+        return None;
+    }
     // Split on last whitespace to get (type_tokens, name)
     let last_ws = code.rfind(|c: char| c.is_whitespace())?;
     let type_str = code[..last_ws].trim();
@@ -209,11 +233,56 @@ fn try_parse_field(line: &str) -> Option<Property> {
     })
 }
 
+#[cfg(test)]
+mod real_format_tests {
+    use super::*;
+    use crate::model::PropType;
+
+    // Mirrors the real CXXHeaderDump format: no `public:` label, UE int
+    // typedefs (`int32`), methods after fields, `class Foo* member;` members.
+    const SNIPPET: &str = "\
+class UItemDefinition : public UGothicObjectDefinition
+{
+    int32 m_Value;                                  // 0x0080 (size: 0x4)
+    float m_Weight;                                 // 0x008C (size: 0x4)
+    bool m_AutoTarget;                              // 0x0310 (size: 0x1)
+    TSoftClassPtr<AItemVisual> m_ItemVisual;        // 0x0098 (size: 0x28)
+    class UItemDefinition* m_ReplaceBy;             // 0x0308 (size: 0x8)
+    void SetItemType(FGameplayTag GameplayTag);
+}; // Size: 0x320
+";
+
+    #[test]
+    fn parses_real_dump_format() {
+        let model = parse_hpp_reader(SNIPPET.as_bytes()).unwrap();
+        // Exactly one real class — the `class UFoo* member;` line must NOT
+        // become its own class.
+        assert_eq!(model.classes.len(), 1, "classes: {:?}",
+            model.classes.iter().map(|c| &c.name).collect::<Vec<_>>());
+        let c = &model.classes[0];
+        assert_eq!(c.name, "UItemDefinition");
+        assert_eq!(c.parent.as_deref(), Some("UGothicObjectDefinition"));
+        // Scalars parsed without a `public:` label, UE typedefs mapped,
+        // the method skipped.
+        let by: std::collections::HashMap<&str, &PropType> =
+            c.properties.iter().map(|p| (p.name.as_str(), &p.prop_type)).collect();
+        assert_eq!(by.get("m_Value"), Some(&&PropType::Int));
+        assert_eq!(by.get("m_Weight"), Some(&&PropType::Float));
+        assert_eq!(by.get("m_AutoTarget"), Some(&&PropType::Bool));
+        assert!(by.contains_key("m_ItemVisual")); // opaque, but present
+        assert!(by.contains_key("m_ReplaceBy")); // opaque pointer member
+        assert!(!c.properties.iter().any(|p| p.name.contains("SetItemType")));
+    }
+}
+
 fn map_cpp_type(cpp: &str) -> PropType {
     match cpp {
+        // C++ std typedefs and UE typedefs (the dump uses UE names: int32, uint8…)
         "int32_t" | "int64_t" | "int16_t" | "int8_t"
         | "uint32_t" | "uint64_t" | "uint16_t" | "uint8_t"
-        | "int" | "long" | "short" => PropType::Int,
+        | "int32" | "int64" | "int16" | "int8"
+        | "uint32" | "uint64" | "uint16" | "uint8"
+        | "int" | "long" | "short" | "char" | "byte" => PropType::Int,
         "float" | "double" => PropType::Float,
         "bool" => PropType::Bool,
         "FString" | "FName" | "FText" => PropType::String,
