@@ -58,10 +58,25 @@ pub fn kraken_decompress(src: &[u8], expected_size: usize) -> Result<Vec<u8>, Oo
     Ok(dst)
 }
 
+/// Oodle block length (256 KiB) and the per-block worst-case expansion ooz
+/// itself budgets for. Mirrors the vendored `GetCompressedBufferSizeNeeded`
+/// (`compress.cpp`): `raw + 274 * ceil(raw / 0x40000)`.
+const OOZ_BLOCK_LEN: usize = 0x40000;
+const OOZ_BLOCK_OVERHEAD: usize = 274;
+
+/// Worst-case compressed size the vendored encoder may write for `raw_len`.
+///
+/// The C++ writes into the output buffer before Rust can check the returned
+/// length, so the buffer MUST be at least this large or a large input would
+/// corrupt memory. A fixed headroom underflows above ~62 MiB (239 blocks).
+fn compressed_capacity(raw_len: usize) -> usize {
+    raw_len + OOZ_BLOCK_OVERHEAD * raw_len.div_ceil(OOZ_BLOCK_LEN).max(1)
+}
+
 /// Kraken-encode `src`. `level` is clamped to [`MAX_SAFE_COMPRESS_LEVEL`].
 pub fn kraken_compress(src: &[u8], level: u8) -> Result<Vec<u8>, OodleError> {
     let src_len = i32::try_from(src.len()).map_err(|_| OodleError::InputTooLarge(src.len()))?;
-    let capacity = src.len() + 0x10000; // worst-case expansion headroom
+    let capacity = compressed_capacity(src.len());
     let mut dst = vec![0u8; capacity];
     let level = level.min(MAX_SAFE_COMPRESS_LEVEL) as i32;
     let got = unsafe {
@@ -83,6 +98,27 @@ mod tests {
         let input: Vec<u8> = (0..8192u32).map(|i| (i.wrapping_mul(31) >> 3) as u8).collect();
         let comp = kraken_compress(&input, 5).unwrap();
         assert!(comp.len() < input.len());
+        let back = kraken_decompress(&comp, input.len()).unwrap();
+        assert_eq!(back, input);
+    }
+
+    #[test]
+    fn compressed_capacity_matches_ooz_worst_case_formula() {
+        // Mirrors GetCompressedBufferSizeNeeded: raw + 274 * ceil(raw/0x40000),
+        // with a one-block floor so empty input still has headroom.
+        assert_eq!(compressed_capacity(0), 274);
+        assert_eq!(compressed_capacity(0x40000), 0x40000 + 274);
+        assert_eq!(compressed_capacity(0x40000 + 1), (0x40000 + 1) + 274 * 2);
+        // A fixed 64 KiB headroom underflows here; the per-block formula must not.
+        let huge = 240 * 0x40000;
+        assert!(compressed_capacity(huge) - huge > 0x10000);
+    }
+
+    #[test]
+    fn kraken_roundtrips_multi_block_input() {
+        // >256 KiB spans multiple Oodle blocks, exercising the scaled capacity.
+        let input: Vec<u8> = (0..700_000u32).map(|i| (i.wrapping_mul(7) >> 2) as u8).collect();
+        let comp = kraken_compress(&input, 5).unwrap();
         let back = kraken_decompress(&comp, input.len()).unwrap();
         assert_eq!(back, input);
     }
