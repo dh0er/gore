@@ -10,8 +10,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+# This script lives at projects/gore-save/tools/; ROOT is projects/gore-save,
+# but the cargo workspace target/ is at the monorepo root (two levels up).
 ROOT = Path(__file__).resolve().parents[1]
-APP = ROOT / "apps" / "goresave"
+REPO_ROOT = ROOT.parents[1]
+APP = ROOT / "app"
 CARGO = Path.home() / ".cargo" / "bin" / "cargo.exe"
 VS_CMAKE_BIN = Path(
     r"C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin"
@@ -46,7 +49,7 @@ def windows_bundle_dir(app: Path = APP, profile: str = "debug") -> Path:
 
 def copy_native_artifacts_to_windows_bundle(
     *,
-    root: Path = ROOT,
+    root: Path = REPO_ROOT,
     app: Path = APP,
     profile: str = "debug",
 ) -> list[Path]:
@@ -89,14 +92,14 @@ def main() -> int:
 
     profile = "release" if args.release else "debug"
     for artifact in NATIVE_ARTIFACTS:
-        source = ROOT / "target" / profile / artifact
+        source = REPO_ROOT / "target" / profile / artifact
         if not source.exists():
             print(f"Native artifact not found: {source}")
             return 1
 
     if args.copy_debug:
         for artifact in NATIVE_ARTIFACTS:
-            source = ROOT / "target" / profile / artifact
+            source = REPO_ROOT / "target" / profile / artifact
             out = APP / artifact
             shutil.copy2(source, out)
             print(f"Copied {source} -> {out}")

@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).parent
-APP = ROOT / "apps" / "goresave"
+APP = ROOT / "app"
 
 
 def _resolve_tool(env_var: str, names: list[str], fallback: Path) -> Path:

@@ -21,14 +21,17 @@ import shutil
 import subprocess
 from pathlib import Path
 
+# build.py lives at projects/gore-save/; the cargo workspace + LICENSE are at
+# the monorepo root (two levels up).
 ROOT = Path(__file__).parent
-APP = ROOT / "apps" / "goresave"
+REPO_ROOT = ROOT.parent.parent
+APP = ROOT / "app"
 RELEASE_DIR = APP / "build" / "windows" / "x64" / "runner" / "Release"
-TARGET_RELEASE = ROOT / "target" / "release"
+TARGET_RELEASE = REPO_ROOT / "target" / "release"
 DIST = ROOT / "dist"
 
 CORE_DLL = "goresave_core.dll"
-LICENSE_FILE = ROOT / "LICENSE"
+LICENSE_FILE = REPO_ROOT / "LICENSE"
 
 
 def _resolve_tool(env_var: str, names: list[str], fallback: Path) -> Path:
