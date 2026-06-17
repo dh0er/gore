@@ -2840,7 +2840,7 @@ fn inspect_private_payload(
             }))
         }
         Err(err) => Ok(json!({
-            "status": "codec_host_failed",
+            "status": "decode_failed",
             "message": err.to_string(),
             "method": stream.method,
             "algorithmId": stream.algorithm_id,
