@@ -226,8 +226,10 @@ fn try_parse_field(line: &str) -> Option<Property> {
     if name.is_empty() || type_str.is_empty() {
         return None;
     }
-    // Skip function pointers / complex stuff (contain '(' or '*' in name)
-    if name.contains('(') || name.contains('*') {
+    // Skip function pointers / complex declarators: methods ('('), pointer
+    // members ('*'), and fixed-size C array / padding fields ('[', e.g.
+    // `uint8 Pad_00[0x8];`) which are not editable scalar properties.
+    if name.contains('(') || name.contains('*') || name.contains('[') {
         return None;
     }
     let prop_type = map_cpp_type(type_str);
@@ -256,6 +258,22 @@ class UItemDefinition : public UGothicObjectDefinition
     void SetItemType(FGameplayTag GameplayTag);
 }; // Size: 0x320
 ";
+
+    #[test]
+    fn skips_fixed_size_array_and_padding_fields() {
+        let snippet = "\
+class UThing : public UObject
+{
+    int32 m_Value;        // 0x0010 (size: 0x4)
+    uint8 Pad_00[0x8];    // 0x0014 (size: 0x8)
+    float m_Speed[4];     // 0x001C (size: 0x10)
+};
+";
+        let model = parse_hpp_reader(snippet.as_bytes()).unwrap();
+        let c = &model.classes[0];
+        let names: Vec<&str> = c.properties.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["m_Value"], "array/padding declarators must be skipped");
+    }
 
     #[test]
     fn parses_real_dump_format() {

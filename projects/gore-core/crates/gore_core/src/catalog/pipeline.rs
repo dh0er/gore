@@ -238,7 +238,12 @@ pub fn build_knowledge_catalog(lines: &[&str]) -> Vec<KnowledgeEntry> {
                 "topic"
             } else if name.starts_with("Info_") {
                 "info"
-            } else if name.starts_with("Choice") {
+            } else if name
+                .strip_prefix("Choice")
+                .is_some_and(|r| r.chars().next().is_some_and(|c| c.is_ascii_alphanumeric() || c == '_'))
+            {
+                // Python pattern was `Choice[A-Za-z0-9_]+`: a bare abstract
+                // `Choice` class (no trailing word char) is NOT a token.
                 "choice"
             } else {
                 continue;
@@ -388,6 +393,18 @@ mod tests {
         assert_eq!(ids, sorted);
         assert_eq!(ids.iter().filter(|&&id| id == "Topic_Diego_209799").count(), 1);
         assert!(!ids.iter().any(|id| id.contains("Sword") || id.contains("CharacterDefinition")));
+    }
+
+    #[test]
+    fn knowledge_rejects_bare_choice_class() {
+        let lines = [
+            "[1] ASClass /Script/Angelscript.Choice [n: A]", // bare abstract -> excluded
+            "[2] ASClass /Script/Angelscript.ChoiceDiegoStart [n: B]", // concrete -> kept
+        ];
+        let entries = build_knowledge_catalog(&lines);
+        let ids: Vec<&str> = entries.iter().map(|e| e.id.as_str()).collect();
+        assert!(ids.contains(&"ChoiceDiegoStart"), "got: {ids:?}");
+        assert!(!ids.contains(&"Choice"), "bare Choice must be excluded: {ids:?}");
     }
 
     #[test]
