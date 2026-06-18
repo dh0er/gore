@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'app/domain/ui_settings.dart';
+import 'app/ui/app_theme.dart';
 import 'home_page.dart';
 
 class GoreModApp extends ConsumerWidget {
@@ -11,12 +12,8 @@ class GoreModApp extends ConsumerWidget {
     return MaterialApp(
       title: 'gore-mod',
       themeMode: themeMode,
-      theme: ThemeData(colorSchemeSeed: const Color(0xFF8B2500), useMaterial3: true),
-      darkTheme: ThemeData(
-        colorSchemeSeed: const Color(0xFF8B2500),
-        brightness: Brightness.dark,
-        useMaterial3: true,
-      ),
+      theme: buildGoreModTheme(),
+      darkTheme: buildGoreModDarkTheme(),
       home: const HomePage(),
     );
   }

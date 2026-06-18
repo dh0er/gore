@@ -95,6 +95,11 @@ pub enum PropType {
 pub struct Enum {
     pub name: String,
     pub members: Vec<String>,
+    /// Backing integer per member (parallel to `members`). UE enums may have
+    /// explicit/non-contiguous discriminants, so the index is not the value.
+    /// Empty in older models; consumers then fall back to the index.
+    #[serde(default)]
+    pub values: Vec<i64>,
 }
 
 #[cfg(test)]
@@ -126,6 +131,7 @@ mod tests {
             enums: vec![Enum {
                 name: "EQuality".to_string(),
                 members: vec!["Low".into(), "High".into()],
+                values: vec![0, 1],
             }],
         };
         model.resolve_enum_types();

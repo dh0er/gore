@@ -12,6 +12,8 @@ class FieldSchema {
     this.minValue,
     this.maxValue,
     this.enumValues = const [],
+    this.enumBackingValues = const [],
+    this.defaultValue,
   });
 
   final String name;
@@ -25,6 +27,18 @@ class FieldSchema {
 
   /// Non-empty only when [type] == [FieldType.enum_].
   final List<String> enumValues;
+
+  /// Backing integer per enum member (parallel to [enumValues]). The override
+  /// stores this value, not the member index, so non-contiguous discriminants
+  /// (e.g. `Mid = 5`) round-trip. Empty when unknown — callers then fall back
+  /// to the index.
+  final List<int> enumBackingValues;
+
+  /// The field's real CDO default value, when the model came from a runtime
+  /// dump (`gore-cli sync`). null when unknown (header-derived model) — the
+  /// editor then shows a placeholder. For enum fields this is the backing
+  /// integer (member index), matching how overrides are encoded.
+  final Object? defaultValue;
 
   factory FieldSchema.fromJson(Map<String, Object?> json) {
     final rawType = json['type'] as String? ?? 'int';
@@ -44,7 +58,27 @@ class FieldSchema {
                       ?.whereType<String>()
                       .toList() ??
                   const [],
+      enumBackingValues: (json['enum_value_ints'] as List?)
+                      ?.whereType<num>()
+                      .map((n) => n.toInt())
+                      .toList() ??
+                  const [],
+      // A user-loaded dump is read directly (no `gore-cli sync` validation), so
+      // drop a default whose JSON type doesn't match the field — otherwise
+      // _defaultText -> parsedValue would throw on the first edit.
+      defaultValue: _coerceDefault(type, json['default']),
     );
+  }
+
+  static Object? _coerceDefault(FieldType type, Object? d) {
+    if (d == null) return null;
+    return switch (type) {
+      // Enum defaults are the backing integer.
+      FieldType.int_ || FieldType.enum_ => d is int ? d : null,
+      FieldType.float_  => d is num ? d : null,
+      FieldType.bool_   => d is bool ? d : null,
+      FieldType.string_ => d is String ? d : null,
+    };
   }
 }
 

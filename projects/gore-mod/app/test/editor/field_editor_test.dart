@@ -91,6 +91,22 @@ void main() {
     expect(changed?.newValue, 0);
   });
 
+  testWidgets('does not reformat in-progress numeric input on rebuild', (tester) async {
+    // m_Weight is a float (second TextField). Typing "3" then letting the
+    // parent echo the override back (3.0) must NOT rewrite the field to "3.0"
+    // — that would drop a half-typed ".5" and re-select the text.
+    await tester.pumpWidget(buildEditor());
+    final weightField = find.byType(TextField).at(1);
+    await tester.enterText(weightField, '3');
+    await tester.pump();
+    await tester.pumpWidget(buildEditor(pending: {
+      'm_Weight': const OverrideEntry(
+        classId: 'ItFo_Apple', field: 'm_Weight', oldValue: 0.0, newValue: 3.0,
+      ),
+    }));
+    expect(tester.widget<TextField>(weightField).controller!.text, '3');
+  });
+
   testWidgets('resyncs field text when a pending override is removed externally', (tester) async {
     final pending = {
       'm_Value': const OverrideEntry(
@@ -104,6 +120,59 @@ void main() {
     // Parent rebuilds with the override removed (OverridesPanel Clear all).
     await tester.pumpWidget(buildEditor(pending: const {}));
     expect(tester.widget<TextField>(field).controller!.text, '0');
+  });
+
+  testWidgets('shows the real default value and carries it as oldValue', (tester) async {
+    const item = CatalogItem(
+      id: 'ItFo_Apple',
+      displayName: 'Apple',
+      fields: [
+        FieldSchema(name: 'm_Value', type: FieldType.int_, minValue: 0, defaultValue: 4),
+      ],
+    );
+    OverrideEntry? changed;
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: FieldEditor(
+          item: item,
+          pendingOverrides: const {},
+          onOverrideChanged: (e) => changed = e,
+        ),
+      ),
+    ));
+    // Field starts at its real default (4), not the placeholder 0.
+    expect(tester.widget<TextField>(find.byType(TextField).first).controller!.text, '4');
+    await tester.enterText(find.byType(TextField).first, '7');
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.pump();
+    expect(changed?.newValue, 7);
+    expect(changed?.oldValue, 4); // diff reads 4 -> 7
+  });
+
+  testWidgets('rebuilds controllers when the field set changes for the same id', (tester) async {
+    // A loaded dump can add fields to the already-selected item (same id). The
+    // editor must rebuild controllers, not crash force-unwrapping a missing one.
+    const before = CatalogItem(id: 'X', displayName: 'X', fields: [
+      FieldSchema(name: 'm_A', type: FieldType.int_),
+    ]);
+    const after = CatalogItem(id: 'X', displayName: 'X', fields: [
+      FieldSchema(name: 'm_A', type: FieldType.int_),
+      FieldSchema(name: 'm_B', type: FieldType.int_),
+    ]);
+    Widget wrap(CatalogItem item) => MaterialApp(
+          home: Scaffold(
+            body: FieldEditor(
+              item: item,
+              pendingOverrides: const {},
+              onOverrideChanged: (_) {},
+            ),
+          ),
+        );
+    await tester.pumpWidget(wrap(before));
+    expect(find.byType(TextField), findsOneWidget);
+    await tester.pumpWidget(wrap(after));
+    expect(tester.takeException(), isNull);
+    expect(find.byType(TextField), findsNWidgets(2));
   });
 
   testWidgets('enum override stored as backing int displays the member name', (tester) async {
@@ -135,5 +204,37 @@ void main() {
       ),
     ));
     expect(find.text('High'), findsOneWidget);
+  });
+
+  testWidgets('non-contiguous enum: stored backing value shows the right member', (tester) async {
+    const enumItem = CatalogItem(
+      id: 'ItFo_Apple',
+      displayName: 'Apple',
+      fields: [
+        FieldSchema(
+          name: 'm_Quality',
+          type: FieldType.enum_,
+          enumValues: ['Low', 'Mid', 'High'],
+          enumBackingValues: [0, 5, 9],
+        ),
+      ],
+    );
+    // newValue 5 is the backing value of 'Mid' (index 1) — must show 'Mid',
+    // not the member at index 5.
+    final pending = {
+      'm_Quality': const OverrideEntry(
+        classId: 'ItFo_Apple', field: 'm_Quality', oldValue: 0, newValue: 5,
+      ),
+    };
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: FieldEditor(
+          item: enumItem,
+          pendingOverrides: pending,
+          onOverrideChanged: (_) {},
+        ),
+      ),
+    ));
+    expect(find.text('Mid'), findsOneWidget);
   });
 }

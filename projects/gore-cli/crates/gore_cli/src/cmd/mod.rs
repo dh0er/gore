@@ -1,10 +1,12 @@
 pub mod catalog;
 pub mod dump;
+pub mod dump_mod;
 pub mod gen;
 pub mod gui_model;
 pub mod package;
 pub mod scaffold;
 pub mod stubs;
+pub mod sync;
 
 /// Validate that `name` is a safe single-component mod name that can be
 /// appended to a path without escaping the parent directory.

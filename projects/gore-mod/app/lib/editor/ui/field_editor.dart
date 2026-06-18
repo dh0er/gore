@@ -41,7 +41,10 @@ class _FieldEditorState extends State<FieldEditor> {
   @override
   void didUpdateWidget(covariant FieldEditor oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.item.id != widget.item.id) {
+    // Rebuild controllers when the item changes OR when the same item's field
+    // set changes (a freshly loaded dump can add/remove fields). Otherwise a
+    // new field would have no controller and build()'s lookup would crash.
+    if (oldWidget.item.id != widget.item.id || !_sameFieldNames(oldWidget)) {
       for (final c in _controllers.values) {
         c.dispose();
       }
@@ -56,17 +59,33 @@ class _FieldEditorState extends State<FieldEditor> {
     // no longer pending (and won't be exported). Resync each field's text to
     // its current pending value, or back to the default when it was cleared.
     // Skip fields the user is mid-editing with a validation error so we don't
-    // clobber in-progress input.
+    // clobber in-progress input — and skip fields whose text already represents
+    // the desired value, so we never reformat live typing (e.g. "3" -> "3.0",
+    // which would drop a half-typed ".5" and re-select the field).
     for (final field in widget.item.fields) {
       final controller = _controllers[field.name];
       if (controller == null || _errors[field.name] != null) continue;
       final pending = widget.pendingOverrides[field.name];
-      final expected =
+      if (_controllerRepresents(field, controller.text, pending)) continue;
+      controller.text =
           pending != null ? _pendingText(field, pending) : _defaultText(field);
-      if (controller.text != expected) {
-        controller.text = expected;
-      }
     }
+  }
+
+  /// Whether [text] already encodes the value the field should show — the
+  /// pending override's value, or the placeholder default when none is pending.
+  /// Compared by parsed value, not string, so equivalent spellings ("3" vs
+  /// "3.0") and in-progress input are left untouched.
+  bool _controllerRepresents(
+    FieldSchema field,
+    String text,
+    OverrideEntry? pending,
+  ) {
+    if (validateField(field, text) != null) return false;
+    final current = parsedValue(field, text);
+    final expected =
+        pending?.newValue ?? parsedValue(field, _defaultText(field));
+    return current == expected;
   }
 
   @override
@@ -75,6 +94,17 @@ class _FieldEditorState extends State<FieldEditor> {
       c.dispose();
     }
     super.dispose();
+  }
+
+  /// Whether the new widget's field names match the old one's (same set + order).
+  bool _sameFieldNames(FieldEditor oldWidget) {
+    final a = oldWidget.item.fields;
+    final b = widget.item.fields;
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i].name != b[i].name) return false;
+    }
+    return true;
   }
 
   void _rebuildControllers() {
@@ -87,21 +117,42 @@ class _FieldEditorState extends State<FieldEditor> {
     }
   }
 
-  String _defaultText(FieldSchema field) => switch (field.type) {
-    FieldType.bool_  => 'false',
-    FieldType.enum_  => field.enumValues.firstOrNull ?? '',
-    _                => '0',
-  };
+  /// The text a field shows when it has no pending override: its real CDO
+  /// default when the model carries one, otherwise a type placeholder.
+  String _defaultText(FieldSchema field) {
+    final d = field.defaultValue;
+    if (d != null) {
+      if (field.type == FieldType.enum_ && d is int) {
+        return _enumMemberName(field, d);
+      }
+      return d.toString();
+    }
+    return switch (field.type) {
+      FieldType.bool_  => 'false',
+      FieldType.enum_  => field.enumValues.firstOrNull ?? '',
+      _                => '0',
+    };
+  }
 
   /// Display text for a pending override. Enum overrides store the backing
-  /// integer (the member index), so map it back to the member name for the
-  /// dropdown / text field; everything else displays its value directly.
+  /// integer, so map it back to the member name for the dropdown / text field;
+  /// everything else displays its value directly.
   String _pendingText(FieldSchema field, OverrideEntry override) {
     final v = override.newValue;
     if (field.type == FieldType.enum_ && v is int) {
-      if (v >= 0 && v < field.enumValues.length) return field.enumValues[v];
+      return _enumMemberName(field, v);
     }
     return v.toString();
+  }
+
+  /// Member name for a stored enum backing value: look it up in
+  /// [FieldSchema.enumBackingValues] when known, else treat the value as a
+  /// member index. Falls back to the value's string form if unresolved.
+  String _enumMemberName(FieldSchema field, int value) {
+    final byBacking = field.enumBackingValues.indexOf(value);
+    final idx = byBacking >= 0 ? byBacking : value;
+    if (idx >= 0 && idx < field.enumValues.length) return field.enumValues[idx];
+    return value.toString();
   }
 
   void _onChanged(FieldSchema field, String raw) {
@@ -220,7 +271,7 @@ class _FieldRow extends StatelessWidget {
       input = TextField(
         controller: controller,
         decoration: InputDecoration(
-          labelText: schema.name,
+          // The field name is already shown in the left label column.
           errorText: error,
           isDense: true,
           suffixIcon: hasPending
@@ -238,9 +289,9 @@ class _FieldRow extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         SizedBox(
-          width: 130,
+          width: 240,
           child: Padding(
-            padding: const EdgeInsets.only(top: 12),
+            padding: const EdgeInsets.only(top: 8),
             child: Text(
               schema.name,
               style: TextStyle(color: scheme.onSurfaceVariant),

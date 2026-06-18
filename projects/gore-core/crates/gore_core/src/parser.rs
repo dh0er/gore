@@ -120,7 +120,7 @@ pub fn parse_hpp_reader<R: BufRead>(reader: R) -> Result<ReflectionModel, ParseE
                 model.classes.push(b.build());
             }
             let name = rest.split(':').next().unwrap_or(rest).trim().to_string();
-            in_enum = Some(EnumBuilder { name, members: vec![] });
+            in_enum = Some(EnumBuilder::new(name));
             continue;
         }
 
@@ -153,7 +153,28 @@ pub fn parse_hpp_reader<R: BufRead>(reader: R) -> Result<ReflectionModel, ParseE
                     .take_while(|&c| c.is_ascii_alphanumeric() || c == '_')
                     .collect();
                 if !member.is_empty() && !trimmed.starts_with("//") {
-                    eb.members.push(member);
+                    // Capture an explicit `= N` discriminant so non-contiguous
+                    // enums keep their real backing value (the GUI writes the
+                    // value, not the member index). Members without one follow
+                    // C rules: previous value + 1, starting at 0.
+                    //
+                    // Look for the `=` only in the declaration part, before any
+                    // `UMETA(...)` metadata (which also contains `=`). If an
+                    // explicit value is present but is an expression we can't
+                    // evaluate exactly (e.g. `1 << 1`), mark the enum unreliable
+                    // so we omit ALL its backing values rather than emit wrong
+                    // ones — the GUI then falls back to indices.
+                    let decl = trimmed.split("UMETA").next().unwrap_or(trimmed);
+                    match decl.split_once('=') {
+                        Some((_, rhs)) => match parse_enum_value(rhs) {
+                            Some(v) => eb.push(member, Some(v)),
+                            None => {
+                                eb.push(member, None);
+                                eb.reliable = false;
+                            }
+                        },
+                        None => eb.push(member, None),
+                    }
                 }
             }
             continue;
@@ -202,16 +223,66 @@ impl ClassBuilder {
     }
 }
 
+/// Parse an enum discriminant from the text right of `=` (e.g. ` 5,` or
+/// ` 0x10`). Accepts ONLY a single integer literal (decimal or `0x` hex, with
+/// optional leading `-`); anything else — an expression like `1 << 1`, a named
+/// constant, or trailing tokens — yields None so the caller can omit the
+/// enum's backing values instead of recording a wrong one.
+fn parse_enum_value(rhs: &str) -> Option<i64> {
+    // Drop a trailing `// ...` inline comment and anything past the `,`, then
+    // the remaining token must be a single literal (no internal whitespace).
+    let s = rhs
+        .split("//")
+        .next()
+        .unwrap_or(rhs)
+        .split(',')
+        .next()
+        .unwrap_or(rhs)
+        .trim();
+    if s.is_empty() || s.contains(char::is_whitespace) {
+        return None;
+    }
+    let (neg, digits) = match s.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, s),
+    };
+    let magnitude = if let Some(hex) = digits.strip_prefix("0x").or_else(|| digits.strip_prefix("0X")) {
+        i64::from_str_radix(hex, 16).ok()?
+    } else {
+        digits.parse::<i64>().ok()?
+    };
+    Some(if neg { -magnitude } else { magnitude })
+}
+
 struct EnumBuilder {
     name: String,
     members: Vec<String>,
+    values: Vec<i64>,
+    next: i64,
+    /// Cleared when a member has an explicit value we couldn't parse exactly;
+    /// the built enum then carries no backing values (consumers fall back).
+    reliable: bool,
 }
 
 impl EnumBuilder {
+    fn new(name: String) -> Self {
+        Self { name, members: vec![], values: vec![], next: 0, reliable: true }
+    }
+
+    fn push(&mut self, member: String, explicit: Option<i64>) {
+        let value = explicit.unwrap_or(self.next);
+        self.members.push(member);
+        self.values.push(value);
+        self.next = value + 1;
+    }
+
     fn build(self) -> Enum {
         Enum {
             name: self.name,
             members: self.members,
+            // Drop backing values entirely if any explicit value was an
+            // un-parseable expression — better no values than wrong ones.
+            values: if self.reliable { self.values } else { vec![] },
         }
     }
 }
@@ -326,6 +397,42 @@ enum class EQuality : uint8
         let model = parse_hpp_reader(snippet.as_bytes()).unwrap();
         let e = model.enums.iter().find(|e| e.name == "EQuality").unwrap();
         assert_eq!(e.members, ["Low", "High", "Mid"], "got: {:?}", e.members);
+        // Backing values: auto 0, auto 1, explicit 5 (not the index 2).
+        assert_eq!(e.values, [0, 1, 5], "got: {:?}", e.values);
+    }
+
+    #[test]
+    fn enum_with_unparseable_expression_omits_backing_values() {
+        // `1 << 1` can't be evaluated exactly here; rather than record a wrong
+        // value (1), the whole enum drops its backing values so the GUI falls
+        // back to indices instead of writing a wrong discriminant.
+        let snippet = "\
+enum class EFlags : uint8
+{
+    FlagA = 1,
+    FlagB = 1 << 1,
+};
+";
+        let model = parse_hpp_reader(snippet.as_bytes()).unwrap();
+        let e = model.enums.iter().find(|e| e.name == "EFlags").unwrap();
+        assert_eq!(e.members, ["FlagA", "FlagB"]);
+        assert!(e.values.is_empty(), "got: {:?}", e.values);
+    }
+
+    #[test]
+    fn enum_member_with_inline_comment_keeps_value() {
+        // `= 42 // note` (no comma before the comment) must still parse, not
+        // poison the whole enum.
+        let snippet = "\
+enum class EThing : uint8
+{
+    A,
+    B = 42 // hand-tuned
+};
+";
+        let model = parse_hpp_reader(snippet.as_bytes()).unwrap();
+        let e = model.enums.iter().find(|e| e.name == "EThing").unwrap();
+        assert_eq!(e.values, [0, 42], "got: {:?}", e.values);
     }
 
     #[test]
