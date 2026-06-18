@@ -89,7 +89,14 @@ pub fn parse_hpp_reader<R: BufRead>(reader: R) -> Result<ReflectionModel, ParseE
                 let rest = &decl["class ".len()..];
                 let (name, parent) = if let Some(idx) = rest.find(": public ") {
                     let n = rest[..idx].trim().to_string();
-                    let p = rest[idx + ": public ".len()..].trim().to_string();
+                    // Multiple inheritance (`UBase, public IFoo`): keep only the
+                    // first (primary) base; that is the UPROPERTY ancestor chain.
+                    let p = rest[idx + ": public ".len()..]
+                        .split(',')
+                        .next()
+                        .unwrap_or("")
+                        .trim()
+                        .to_string();
                     (n, Some(p))
                 } else {
                     (rest.trim().to_string(), None)
@@ -136,9 +143,13 @@ pub fn parse_hpp_reader<R: BufRead>(reader: R) -> Result<ReflectionModel, ParseE
         // "    Low = 0,"
         if let Some(eb) = in_enum.as_mut() {
             if !trimmed.is_empty() && trimmed != "{" {
-                // member line: "Low = 0," — take the name before '='
-                let member = trimmed.split('=').next().unwrap_or("").trim().to_string();
-                if !member.is_empty() && !member.starts_with("//") {
+                // Member lines: "Low = 0,", "High,", or "Mid UMETA(...)". Take
+                // the leading identifier — stop at '=', ',', whitespace, or '('.
+                let member: String = trimmed
+                    .chars()
+                    .take_while(|&c| c.is_ascii_alphanumeric() || c == '_')
+                    .collect();
+                if !member.is_empty() && !trimmed.starts_with("//") {
                     eb.members.push(member);
                 }
             }
@@ -272,6 +283,33 @@ class UItemDefinition : public UGothicObjectDefinition
     void SetItemType(FGameplayTag GameplayTag);
 }; // Size: 0x320
 ";
+
+    #[test]
+    fn multiple_inheritance_keeps_primary_base() {
+        let snippet = "\
+class UChild : public UBase, public IFoo
+{
+    int32 m_X;   // 0x0010 (size: 0x4)
+};
+";
+        let model = parse_hpp_reader(snippet.as_bytes()).unwrap();
+        assert_eq!(model.classes[0].parent.as_deref(), Some("UBase"));
+    }
+
+    #[test]
+    fn enum_members_strip_commas_and_metadata() {
+        let snippet = "\
+enum class EQuality : uint8
+{
+    Low,
+    High UMETA(DisplayName = \"Very High\"),
+    Mid = 5,
+};
+";
+        let model = parse_hpp_reader(snippet.as_bytes()).unwrap();
+        let e = model.enums.iter().find(|e| e.name == "EQuality").unwrap();
+        assert_eq!(e.members, ["Low", "High", "Mid"], "got: {:?}", e.members);
+    }
 
     #[test]
     fn parses_bitfield_bool_property() {
