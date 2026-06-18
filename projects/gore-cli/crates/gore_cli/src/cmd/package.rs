@@ -19,8 +19,11 @@ pub fn run(mod_dir: PathBuf, out: PathBuf) -> Result<()> {
     }
 
     // The final path component is the mod name, used as the top directory
-    // inside the zip so users can extract straight into ue4ss/Mods/.
-    let mod_name = mod_dir
+    // inside the zip so users can extract straight into ue4ss/Mods/. Canonicalize
+    // first so `package .` / `./` resolves to the real directory name instead of
+    // falling back to "Mod" (file_name() of "." is None).
+    let mod_dir_abs = fs::canonicalize(&mod_dir).unwrap_or_else(|_| mod_dir.clone());
+    let mod_name = mod_dir_abs
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "Mod".to_string());
@@ -122,6 +125,32 @@ mod package_tests {
         assert!(
             !names.iter().any(|n| n == "enabled.txt"),
             "unexpected root-level enabled.txt: {names:?}"
+        );
+    }
+
+    #[test]
+    fn mod_name_derived_via_canonicalize_for_dotted_path() {
+        let tmp = TempDir::new().unwrap();
+        let mod_dir = tmp.path().join("RealName");
+        let scripts_dir = mod_dir.join("Scripts");
+        fs::create_dir_all(&scripts_dir).unwrap();
+        fs::write(mod_dir.join("enabled.txt"), "").unwrap();
+        fs::write(scripts_dir.join("main.lua"), "-- lua").unwrap();
+
+        // A trailing "/." makes file_name() None (like `package .`); the
+        // canonicalize step must still recover "RealName". (No cwd change, so
+        // this is safe under parallel test execution.)
+        let dotted = mod_dir.join(".");
+        let out = tmp.path().join("out.zip");
+        run(dotted, out.clone()).unwrap();
+
+        let mut archive = ZipArchive::new(File::open(&out).unwrap()).unwrap();
+        let names: Vec<String> = (0..archive.len())
+            .map(|i| archive.by_index(i).unwrap().name().to_string())
+            .collect();
+        assert!(
+            names.iter().any(|n| n.starts_with("RealName/")),
+            "archive root must be the real dir name, not 'Mod': {names:?}"
         );
     }
 
