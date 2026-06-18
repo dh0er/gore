@@ -20,8 +20,12 @@ pub enum CatalogKind {
 }
 
 pub fn run(kind: CatalogKind, dump: PathBuf, out: PathBuf) -> Result<()> {
-    let text = fs::read_to_string(&dump)
+    // UE4SS object dumps can contain non-UTF-8 bytes in unrelated object names;
+    // decode lossily (like the original Python builders) so one bad byte doesn't
+    // abort catalog generation. The `ASClass` lines we scan are ASCII.
+    let bytes = fs::read(&dump)
         .with_context(|| format!("reading dump '{}'", dump.display()))?;
+    let text = String::from_utf8_lossy(&bytes);
     let lines: Vec<&str> = text.lines().collect();
 
     let json = match kind {

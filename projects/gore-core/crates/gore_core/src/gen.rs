@@ -169,6 +169,21 @@ impl<'de> Deserialize<'de> for OverrideValue {
 
 // ── Code generation ───────────────────────────────────────────────────────────
 
+/// The runtime AngelScript class name used in `Default__<name>` lookups. The
+/// reflection model spells classes with the UE C++ `U` prefix
+/// (`UItMi_Orenugget`), but the live CDO is the bare AngelScript name
+/// (`Default__ItMi_Orenugget`, proven in-game). Strip a leading `U` that
+/// precedes an uppercase letter (the UE convention); leave bare names untouched
+/// so an override may use either spelling and the emitted Lua is always correct.
+pub fn runtime_class_name(class: &str) -> &str {
+    let b = class.as_bytes();
+    if b.first() == Some(&b'U') && b.get(1).is_some_and(u8::is_ascii_uppercase) {
+        &class[1..]
+    } else {
+        class
+    }
+}
+
 /// Generate a `main.lua` string from the given config.
 pub fn gen_lua(cfg: &OverridesConfig) -> String {
     let mod_name = &cfg.meta.name;
@@ -178,7 +193,7 @@ pub fn gen_lua(cfg: &OverridesConfig) -> String {
     for o in &cfg.overrides {
         overrides_rows.push(format!(
             r#"  {{class="{}", field="{}", value={}}}"#,
-            lua_escape(&o.class),
+            lua_escape(runtime_class_name(&o.class)),
             lua_escape(&o.field),
             o.value.lua_literal()
         ));
@@ -228,6 +243,30 @@ end"#,
 #[cfg(test)]
 mod gen_tests {
     use super::*;
+
+    #[test]
+    fn runtime_class_name_strips_ue_u_prefix() {
+        assert_eq!(runtime_class_name("UItMi_Orenugget"), "ItMi_Orenugget");
+        assert_eq!(runtime_class_name("ItMi_Orenugget"), "ItMi_Orenugget");
+        // Lowercase after U is not the UE class convention — leave untouched.
+        assert_eq!(runtime_class_name("Underground"), "Underground");
+        assert_eq!(runtime_class_name("U"), "U");
+    }
+
+    #[test]
+    fn gen_lua_emits_bare_class_name_for_u_prefixed_override() {
+        let cfg = OverridesConfig {
+            meta: MetaConfig { name: "M".to_string(), delay_ms: 0 },
+            overrides: vec![SingleOverride {
+                class: "UItMi_Orenugget".to_string(),
+                field: "m_Value".to_string(),
+                value: OverrideValue::Int(5),
+            }],
+        };
+        let lua = gen_lua(&cfg);
+        assert!(lua.contains(r#"class="ItMi_Orenugget""#), "must emit bare name: {lua}");
+        assert!(!lua.contains("UItMi_Orenugget"), "must not emit U-prefixed name: {lua}");
+    }
 
     // ── Bug 1: lua_escape ────────────────────────────────────────────────────
 
