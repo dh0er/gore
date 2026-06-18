@@ -13,19 +13,21 @@ pub fn run(sdk_dir: PathBuf, out: PathBuf) -> Result<()> {
 
     let mut merged = ReflectionModel::default();
 
-    // Collect and parse all .hpp files in sdk_dir
-    let entries = fs::read_dir(&sdk_dir)
-        .with_context(|| format!("reading sdk-dir '{}'", sdk_dir.display()))?;
+    // Collect the .hpp paths and SORT them: fs::read_dir order is unspecified,
+    // so without this the merged model.json (and downstream stubs/GUI models)
+    // would churn between runs/machines for the same SDK.
+    let mut hpp_paths: Vec<_> = fs::read_dir(&sdk_dir)
+        .with_context(|| format!("reading sdk-dir '{}'", sdk_dir.display()))?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|e| e == "hpp"))
+        .collect();
+    hpp_paths.sort();
 
-    for entry in entries {
-        let entry = entry?;
-        let path = entry.path();
-        if path.extension().map(|e| e == "hpp").unwrap_or(false) {
-            let partial = parse_hpp_file(&path)
-                .with_context(|| format!("parsing '{}'", path.display()))?;
-            merged.classes.extend(partial.classes);
-            merged.enums.extend(partial.enums);
-        }
+    for path in &hpp_paths {
+        let partial = parse_hpp_file(path)
+            .with_context(|| format!("parsing '{}'", path.display()))?;
+        merged.classes.extend(partial.classes);
+        merged.enums.extend(partial.enums);
     }
 
     // Reconcile enum types across the merged model: a class in one .hpp may use
