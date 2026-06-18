@@ -11,10 +11,12 @@ pub fn run(mod_dir: PathBuf, out: PathBuf) -> Result<()> {
     let enabled_txt = mod_dir.join("enabled.txt");
     let main_lua = mod_dir.join("Scripts").join("main.lua");
 
-    if !enabled_txt.exists() {
+    // is_file() (not exists()): a directory or dangling symlink at these paths
+    // must not pass — UE4SS needs the actual files.
+    if !enabled_txt.is_file() {
         bail!("mod missing required file 'enabled.txt' in '{}'", mod_dir.display());
     }
-    if !main_lua.exists() {
+    if !main_lua.is_file() {
         bail!("mod missing required file 'Scripts/main.lua' in '{}'", mod_dir.display());
     }
 
@@ -95,6 +97,18 @@ mod package_tests {
     use super::*;
     use tempfile::TempDir;
     use zip::ZipArchive;
+
+    #[test]
+    fn rejects_directory_in_place_of_required_file() {
+        let tmp = TempDir::new().unwrap();
+        let mod_dir = tmp.path().join("MyMod");
+        // enabled.txt is a DIRECTORY, not a file.
+        fs::create_dir_all(mod_dir.join("enabled.txt")).unwrap();
+        fs::create_dir_all(mod_dir.join("Scripts")).unwrap();
+        fs::write(mod_dir.join("Scripts").join("main.lua"), "-- lua").unwrap();
+        let out = tmp.path().join("MyMod.zip");
+        assert!(run(mod_dir, out).is_err(), "a directory at enabled.txt must fail");
+    }
 
     #[test]
     fn zip_entries_are_prefixed_with_mod_name() {
