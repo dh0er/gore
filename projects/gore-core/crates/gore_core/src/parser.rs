@@ -219,6 +219,20 @@ fn try_parse_field(line: &str) -> Option<Property> {
     if code.contains('(') {
         return None;
     }
+    // Strip a C++ bitfield width, e.g. "bool bAutoTarget : 1" -> "bool bAutoTarget"
+    // (UE bool UPROPERTYs are often bitfields). Only treat a trailing `: <digits>`
+    // as a width; leave `::` scope-resolution and other colons intact.
+    let code = match code.rfind(':') {
+        Some(i) if !code[..i].ends_with(':') => {
+            let after = code[i + 1..].trim();
+            if !after.is_empty() && after.bytes().all(|b| b.is_ascii_digit()) {
+                code[..i].trim()
+            } else {
+                code
+            }
+        }
+        _ => code,
+    };
     // Split on last whitespace to get (type_tokens, name)
     let last_ws = code.rfind(|c: char| c.is_whitespace())?;
     let type_str = code[..last_ws].trim();
@@ -258,6 +272,25 @@ class UItemDefinition : public UGothicObjectDefinition
     void SetItemType(FGameplayTag GameplayTag);
 }; // Size: 0x320
 ";
+
+    #[test]
+    fn parses_bitfield_bool_property() {
+        let snippet = "\
+class UThing : public UObject
+{
+    bool bAutoTarget : 1;   // 0x0010 (size: 0x1)
+    int32 m_Value;          // 0x0014 (size: 0x4)
+};
+";
+        let model = parse_hpp_reader(snippet.as_bytes()).unwrap();
+        let c = &model.classes[0];
+        let by: std::collections::HashMap<&str, &PropType> =
+            c.properties.iter().map(|p| (p.name.as_str(), &p.prop_type)).collect();
+        assert_eq!(by.get("bAutoTarget"), Some(&&PropType::Bool), "bitfield name/type: {:?}",
+            c.properties.iter().map(|p| &p.name).collect::<Vec<_>>());
+        assert!(!c.properties.iter().any(|p| p.name == "1"), "no bogus '1' field");
+        assert_eq!(by.get("m_Value"), Some(&&PropType::Int));
+    }
 
     #[test]
     fn skips_fixed_size_array_and_padding_fields() {
