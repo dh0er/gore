@@ -30,6 +30,11 @@ pub fn run(mod_dir: PathBuf, out: PathBuf) -> Result<()> {
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "Mod".to_string());
+    // The archive root must be a safe single component: a mod dir literally
+    // named `..\Evil` (legal on Unix) would otherwise produce zip entries that a
+    // Windows extractor normalizes into a traversal.
+    crate::cmd::validate_mod_name(&mod_name)
+        .with_context(|| format!("unsafe mod directory name '{mod_name}'"))?;
 
     // Create zip
     if let Some(parent) = out.parent() {
@@ -150,6 +155,19 @@ mod package_tests {
         fs::write(mod_dir.join("Scripts").join("main.lua"), "-- lua").unwrap();
         let out = tmp.path().join("MyMod.zip");
         assert!(run(mod_dir, out).is_err(), "a directory at enabled.txt must fail");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unsafe_mod_dir_name_is_rejected() {
+        let tmp = TempDir::new().unwrap();
+        // Mod dir whose final component contains a backslash (legal on Unix).
+        let mod_dir = tmp.path().join(r"..\Evil");
+        fs::create_dir_all(mod_dir.join("Scripts")).unwrap();
+        fs::write(mod_dir.join("enabled.txt"), "").unwrap();
+        fs::write(mod_dir.join("Scripts").join("main.lua"), "-- lua").unwrap();
+        let out = tmp.path().join("out.zip");
+        assert!(run(mod_dir, out).is_err(), "unsafe archive-root name must be rejected");
     }
 
     #[cfg(unix)]
