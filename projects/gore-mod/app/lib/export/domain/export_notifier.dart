@@ -99,29 +99,34 @@ class ExportNotifier extends StateNotifier<ExportState> {
     }
 
     final modDir = Directory(p.join(request.targetDir, request.modName));
-    final zipFile = File(p.join(request.targetDir, '${request.modName}.zip'));
-    // Remember what already existed so a failure-cleanup never deletes a prior
-    // good export the user is overwriting — only output we created ourselves.
-    final modDirPreexisted = modDir.existsSync();
-    final zipPreexisted = zipFile.existsSync();
+    // Stage every file in a sibling temp directory and only swap it into place
+    // once all writes succeed. Writing straight into an existing <modName>
+    // would, on a mid-way failure (locked Scripts/main.lua, disk full), leave a
+    // partially overwritten mod that UE4SS might still load.
+    final staging = Directory(p.join(request.targetDir, '${request.modName}.tmp-export'));
     String outputPath = modDir.path;
     try {
+      if (staging.existsSync()) staging.deleteSync(recursive: true);
       for (final entry in files.entries) {
-        final outFile = File(p.join(modDir.path, entry.key));
+        final outFile = File(p.join(staging.path, entry.key));
         outFile.parent.createSync(recursive: true);
         outFile.writeAsStringSync(entry.value as String? ?? '');
       }
+      // Promote: replace any prior export, then move the completed staging dir
+      // into place. The old mod is only removed after staging is fully written.
+      if (modDir.existsSync()) modDir.deleteSync(recursive: true);
+      staging.renameSync(modDir.path);
       if (request.packageAsZip) {
         outputPath = _writeZip(request, files);
       }
     } on FileSystemException catch (e) {
-      // Don't leave a half-written mod tree that looks like a real export.
-      _cleanupPartial(
-        modDir: modDir,
-        zipFile: zipFile,
-        removeModDir: !modDirPreexisted,
-        removeZip: request.packageAsZip && !zipPreexisted,
-      );
+      // Drop the incomplete staging dir; a pre-existing mod is left untouched
+      // because we never wrote into it directly.
+      try {
+        if (staging.existsSync()) staging.deleteSync(recursive: true);
+      } on FileSystemException {
+        // best-effort
+      }
       state = state.copyWith(
         isExporting: false,
         result: ExportResult(error: 'Failed to write mod files: ${e.message}'),
@@ -151,30 +156,18 @@ class ExportNotifier extends StateNotifier<ExportState> {
     if (zipBytes == null) {
       throw const FileSystemException('zip encoding failed');
     }
+    // Write to a temp file and rename over the target so a failed/partial write
+    // never clobbers a previously good archive.
     final zipPath = p.join(request.targetDir, '${request.modName}.zip');
-    File(zipPath).writeAsBytesSync(zipBytes);
-    return zipPath;
-  }
-
-  /// Best-effort removal of partial output after a failed write, so a failed
-  /// export doesn't leave a tree that looks successful. Only removes output we
-  /// created this run (never a pre-existing folder/zip the user overwrote).
-  void _cleanupPartial({
-    required Directory modDir,
-    required File zipFile,
-    required bool removeModDir,
-    required bool removeZip,
-  }) {
+    final tmpZip = File('$zipPath.tmp-export');
     try {
-      if (removeModDir && modDir.existsSync()) {
-        modDir.deleteSync(recursive: true);
-      }
-      if (removeZip && zipFile.existsSync()) {
-        zipFile.deleteSync();
-      }
+      tmpZip.writeAsBytesSync(zipBytes);
+      tmpZip.renameSync(zipPath);
     } on FileSystemException {
-      // Cleanup is best-effort; surface the original failure regardless.
+      if (tmpZip.existsSync()) tmpZip.deleteSync();
+      rethrow;
     }
+    return zipPath;
   }
 
   void clearResult() => state = state.copyWith(clearResult: true);

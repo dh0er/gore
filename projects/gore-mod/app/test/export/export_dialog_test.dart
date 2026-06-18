@@ -177,6 +177,35 @@ void main() {
     expect(Directory(p.join(tmp.path, 'PartialMod')).existsSync(), isFalse);
   }, skip: !Platform.isWindows);
 
+  testWidgets('a failed re-export leaves the existing mod intact', (tester) async {
+    final fake = FakeGoreCoreFfiService(responses: {
+      'generate_mod': {
+        'ok': true,
+        'files': {'enabled.txt': '', 'bad?name.txt': 'x'},
+      },
+    });
+    final tmp = Directory.systemTemp.createTempSync('gore_mod_atomic_');
+    addTearDown(() => tmp.deleteSync(recursive: true));
+    // A previously-good export already on disk.
+    final existing = Directory(p.join(tmp.path, 'AtomicMod'))
+      ..createSync(recursive: true);
+    File(p.join(existing.path, 'enabled.txt')).writeAsStringSync('OLD');
+
+    final container = ProviderContainer(
+      overrides: [coreServiceProvider.overrideWithValue(fake)],
+    );
+    addTearDown(container.dispose);
+
+    await container.read(exportProvider.notifier).export(
+      request: ExportRequest(modName: 'AtomicMod', targetDir: tmp.path),
+      overrides: [apple500],
+    );
+
+    expect(container.read(exportProvider).result?.success, isFalse);
+    // The old mod must be untouched (staged write never reached it).
+    expect(File(p.join(existing.path, 'enabled.txt')).readAsStringSync(), 'OLD');
+  }, skip: !Platform.isWindows);
+
   testWidgets('export surfaces a generation error and writes nothing', (tester) async {
     final fake = FakeGoreCoreFfiService(responses: {
       'generate_mod': {
