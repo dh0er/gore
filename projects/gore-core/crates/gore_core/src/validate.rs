@@ -84,10 +84,11 @@ fn check_type_match(
         (PropType::String, OverrideValue::Str(_)) => true,
         // Opaque fields: we allow any value (we don't know the C++ layout)
         (PropType::Opaque(_), _) => true,
-        // Enum fields accept a member name (Str) or its backing integer (UE
-        // enums are int-backed, and overrides.toml uses the same value_int key
-        // as elsewhere). Member-name validation is a future enhancement.
-        (PropType::Enum(_), OverrideValue::Str(_) | OverrideValue::Int(_)) => true,
+        // Enum fields accept ONLY the backing integer (value_int). UE enums are
+        // int-backed and gen_lua has no member-name→int mapping, so a value_str
+        // like "High" would emit a Lua string assigned to an int-backed CDO.
+        // Accepting member names is a future enhancement gated on that mapping.
+        (PropType::Enum(_), OverrideValue::Int(_)) => true,
         _ => false,
     };
 
@@ -206,9 +207,9 @@ mod validate_tests {
     }
 
     #[test]
-    fn enum_field_accepts_int_and_str() {
-        // UE enums are int-backed; an enum field must accept value_int as well
-        // as a member name (value_str).
+    fn enum_field_accepts_int_rejects_str_and_bool() {
+        // UE enums are int-backed and gen has no member-name->int mapping, so an
+        // enum field accepts only value_int; value_str / value_bool are rejected.
         let model = ReflectionModel {
             classes: vec![Class {
                 name: "UThing".to_string(),
@@ -228,10 +229,9 @@ mod validate_tests {
         );
         let str_cfg = make_config("UThing", "m_Quality", OverrideValue::Str("High".into()));
         assert!(
-            validate_config(&str_cfg, &model).is_empty(),
-            "enum field must accept a string member override"
+            !validate_config(&str_cfg, &model).is_empty(),
+            "enum field must reject a string override (no member->int mapping yet)"
         );
-        // A bool is still rejected.
         let bad = make_config("UThing", "m_Quality", OverrideValue::Bool(true));
         assert!(
             !validate_config(&bad, &model).is_empty(),
