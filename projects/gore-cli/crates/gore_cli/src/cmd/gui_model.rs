@@ -20,11 +20,13 @@
 
 use anyhow::{Context, Result};
 use gore_core::{catalog::parse_catalog, model::{PropType, ReflectionModel}};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, fs, path::PathBuf};
 
-/// A single GUI-editable field.
-#[derive(Debug, Clone, Serialize)]
+/// A single GUI-editable field. This is the on-disk gore-mod model shape;
+/// `gore-cli sync` reads the same shape from a runtime dump and re-emits it,
+/// so the struct is both serialized and deserialized.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GuiField {
     pub name: String,
     #[serde(rename = "type")]
@@ -32,18 +34,24 @@ pub struct GuiField {
     /// Member names of an `enum` field, in declaration order (the GUI maps a
     /// selection to its backing integer = index). Empty for non-enum fields;
     /// skipped from the JSON so non-enum output stays byte-identical.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub enum_values: Vec<String>,
+    /// The field's real default value, read from the live CDO by the runtime
+    /// dumper (`gore-cli sync`). Absent for header-derived models (`gui-model`),
+    /// in which case the GUI falls back to a placeholder. Skipped from JSON when
+    /// absent so header-derived output stays byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<serde_json::Value>,
 }
 
 /// GUI shape for one item class.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GuiClass {
     pub fields: Vec<GuiField>,
 }
 
 /// Top-level GUI model output.
-#[derive(Debug, Default, Serialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct GuiModel {
     pub classes: BTreeMap<String, GuiClass>,
 }
@@ -142,6 +150,7 @@ fn gui_fields_for(model: &ReflectionModel, class_name: &str) -> Vec<GuiField> {
                 name: name.to_string(),
                 field_type: field_type.to_string(),
                 enum_values,
+                default: None,
             })
         })
         .collect()
@@ -264,6 +273,7 @@ mod tests {
                         name: prop.name.clone(),
                         field_type: t.to_string(),
                         enum_values: Vec::new(),
+                        default: None,
                     });
                 }
             }
@@ -318,6 +328,7 @@ mod tests {
                     name: prop.name.clone(),
                     field_type: t.to_string(),
                     enum_values: Vec::new(),
+                    default: None,
                 });
             }
         }
@@ -428,12 +439,18 @@ mod tests {
     #[test]
     fn enum_values_omitted_from_json_for_non_enum_fields() {
         // skip_serializing_if keeps non-enum output byte-identical (no key).
-        let f = GuiField { name: "m_Value".into(), field_type: "int".into(), enum_values: vec![] };
+        let f = GuiField {
+            name: "m_Value".into(),
+            field_type: "int".into(),
+            enum_values: vec![],
+            default: None,
+        };
         assert_eq!(serde_json::to_string(&f).unwrap(), r#"{"name":"m_Value","type":"int"}"#);
         let e = GuiField {
             name: "m_Quality".into(),
             field_type: "enum".into(),
             enum_values: vec!["Low".into(), "High".into()],
+            default: None,
         };
         assert_eq!(
             serde_json::to_string(&e).unwrap(),

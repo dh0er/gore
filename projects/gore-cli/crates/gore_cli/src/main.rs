@@ -54,6 +54,19 @@ enum Commands {
         #[arg(short = 'o', long)]
         out: PathBuf,
     },
+    /// Refresh the gore-mod GUI model from a runtime game-data dump (with real
+    /// default values), produced in-game by the gore-dump UE4SS mod
+    Sync {
+        /// Path to game_data.json (output of the gore-dump mod)
+        #[arg(long)]
+        dump: PathBuf,
+        /// Path to item_catalog.json (the item allow-list)
+        #[arg(long)]
+        catalog: PathBuf,
+        /// Output GUI model JSON path
+        #[arg(short = 'o', long)]
+        out: PathBuf,
+    },
     /// Create a UE4SS Lua mod skeleton directory
     Scaffold {
         /// Mod name (becomes the directory name under mods-dir)
@@ -90,6 +103,7 @@ fn main() {
         Commands::Stubs { model, out, filter } => cmd::stubs::run(model, out, filter),
         Commands::Catalog { kind, dump, out } => cmd::catalog::run(kind, dump, out),
         Commands::GuiModel { model, catalog, out } => cmd::gui_model::run(model, catalog, out),
+        Commands::Sync { dump, catalog, out } => cmd::sync::run(dump, catalog, out),
         Commands::Scaffold { mod_name, out } => cmd::scaffold::run(mod_name, out),
         Commands::Gen { overrides, out, model } => cmd::gen::run(overrides, out, model),
         Commands::Package { mod_dir, out } => cmd::package::run(mod_dir, out),
