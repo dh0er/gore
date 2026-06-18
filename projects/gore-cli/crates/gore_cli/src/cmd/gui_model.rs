@@ -104,25 +104,30 @@ fn collect_inherited_properties<'a>(
 /// class's definition override a shadowed base property (last-wins on the same
 /// name, original field order preserved).
 fn gui_fields_for(model: &ReflectionModel, class_name: &str) -> Vec<GuiField> {
+    // Resolve each property name to its MOST-DERIVED type first (last-wins over
+    // the base-first chain), preserving first-seen order. Only then filter to
+    // GUI-editable types — so a base editable field shadowed by a derived
+    // non-editable type (e.g. base Int -> derived FString/opaque) is dropped,
+    // not left behind as a stale editable field.
     let props = collect_inherited_properties(model, class_name);
-    let mut idx_by_name: std::collections::HashMap<&str, usize> =
+    let mut order: Vec<&str> = Vec::new();
+    let mut type_by_name: std::collections::HashMap<&str, &PropType> =
         std::collections::HashMap::new();
-    let mut fields: Vec<GuiField> = Vec::new();
-    for prop in props {
-        let Some(type_str) = prop_type_to_gui(&prop.prop_type) else {
-            continue;
-        };
-        if let Some(&i) = idx_by_name.get(prop.name.as_str()) {
-            fields[i].field_type = type_str.to_string();
-        } else {
-            idx_by_name.insert(prop.name.as_str(), fields.len());
-            fields.push(GuiField {
-                name: prop.name.clone(),
-                field_type: type_str.to_string(),
-            });
+    for prop in &props {
+        if !type_by_name.contains_key(prop.name.as_str()) {
+            order.push(prop.name.as_str());
         }
+        type_by_name.insert(prop.name.as_str(), &prop.prop_type);
     }
-    fields
+    order
+        .into_iter()
+        .filter_map(|name| {
+            prop_type_to_gui(type_by_name[name]).map(|t| GuiField {
+                name: name.to_string(),
+                field_type: t.to_string(),
+            })
+        })
+        .collect()
 }
 
 pub fn run(model_path: PathBuf, catalog_path: PathBuf, out: PathBuf) -> Result<()> {
@@ -350,6 +355,37 @@ mod tests {
         assert_eq!(names, ["m_X", "m_Y"], "no duplicate m_X; base order kept");
         let m_x = fields.iter().find(|f| f.name == "m_X").unwrap();
         assert_eq!(m_x.field_type, "float", "derived Float must override base Int");
+    }
+
+    #[test]
+    fn derived_nonenum_shadow_drops_base_editable_field() {
+        // Base m_X is editable (Int); derived re-declares m_X as a String
+        // (non-GUI). The field must NOT appear as editable in the GUI model.
+        let model = ReflectionModel {
+            classes: vec![
+                Class {
+                    name: "UBase".to_string(),
+                    parent: None,
+                    properties: vec![
+                        Property { name: "m_X".to_string(), prop_type: PropType::Int, offset: None },
+                        Property { name: "m_Y".to_string(), prop_type: PropType::Bool, offset: None },
+                    ],
+                },
+                Class {
+                    name: "UDerived".to_string(),
+                    parent: Some("UBase".to_string()),
+                    properties: vec![Property {
+                        name: "m_X".to_string(),
+                        prop_type: PropType::String,
+                        offset: None,
+                    }],
+                },
+            ],
+            enums: vec![],
+        };
+        let fields = gui_fields_for(&model, "UDerived");
+        let names: Vec<&str> = fields.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, ["m_Y"], "shadowed-by-String m_X must be dropped: {names:?}");
     }
 
     #[test]
