@@ -41,7 +41,10 @@ class _FieldEditorState extends State<FieldEditor> {
   @override
   void didUpdateWidget(covariant FieldEditor oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.item.id != widget.item.id) {
+    // Rebuild controllers when the item changes OR when the same item's field
+    // set changes (a freshly loaded dump can add/remove fields). Otherwise a
+    // new field would have no controller and build()'s lookup would crash.
+    if (oldWidget.item.id != widget.item.id || !_sameFieldNames(oldWidget)) {
       for (final c in _controllers.values) {
         c.dispose();
       }
@@ -91,6 +94,17 @@ class _FieldEditorState extends State<FieldEditor> {
       c.dispose();
     }
     super.dispose();
+  }
+
+  /// Whether the new widget's field names match the old one's (same set + order).
+  bool _sameFieldNames(FieldEditor oldWidget) {
+    final a = oldWidget.item.fields;
+    final b = widget.item.fields;
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i].name != b[i].name) return false;
+    }
+    return true;
   }
 
   void _rebuildControllers() {

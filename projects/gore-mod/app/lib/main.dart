@@ -10,8 +10,10 @@ Future<void> main() async {
   await windowManager.ensureInitialized();
   windowManager.waitUntilReadyToShow(
     const WindowOptions(
-      size: Size(1280, 800),
-      minimumSize: Size(900, 600),
+      // Sized so the three fixed panes (catalog + editor + overrides) plus the
+      // editor's label column always fit without horizontal overflow.
+      size: Size(1600, 900),
+      minimumSize: Size(1340, 640),
       title: 'gore-mod',
       titleBarStyle: TitleBarStyle.hidden,
     ),

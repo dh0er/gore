@@ -149,6 +149,32 @@ void main() {
     expect(changed?.oldValue, 4); // diff reads 4 -> 7
   });
 
+  testWidgets('rebuilds controllers when the field set changes for the same id', (tester) async {
+    // A loaded dump can add fields to the already-selected item (same id). The
+    // editor must rebuild controllers, not crash force-unwrapping a missing one.
+    const before = CatalogItem(id: 'X', displayName: 'X', fields: [
+      FieldSchema(name: 'm_A', type: FieldType.int_),
+    ]);
+    const after = CatalogItem(id: 'X', displayName: 'X', fields: [
+      FieldSchema(name: 'm_A', type: FieldType.int_),
+      FieldSchema(name: 'm_B', type: FieldType.int_),
+    ]);
+    Widget wrap(CatalogItem item) => MaterialApp(
+          home: Scaffold(
+            body: FieldEditor(
+              item: item,
+              pendingOverrides: const {},
+              onOverrideChanged: (_) {},
+            ),
+          ),
+        );
+    await tester.pumpWidget(wrap(before));
+    expect(find.byType(TextField), findsOneWidget);
+    await tester.pumpWidget(wrap(after));
+    expect(tester.takeException(), isNull);
+    expect(find.byType(TextField), findsNWidgets(2));
+  });
+
   testWidgets('enum override stored as backing int displays the member name', (tester) async {
     const enumItem = CatalogItem(
       id: 'ItFo_Apple',

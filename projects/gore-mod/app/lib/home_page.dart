@@ -1,3 +1,4 @@
+import 'package:collection/collection.dart';
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -5,6 +6,7 @@ import 'package:flutter_riverpod/legacy.dart';
 import 'package:path/path.dart' as p;
 import 'app/domain/ui_settings.dart';
 import 'app/ui/window_chrome.dart';
+import 'catalog/domain/catalog_provider.dart';
 import 'catalog/domain/item_entry.dart';
 import 'catalog/ui/catalog_browser.dart';
 import 'editor/domain/overrides_notifier.dart';
@@ -19,7 +21,15 @@ class HomePage extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final selected       = ref.watch(_selectedItemProvider);
+    final selectedRaw    = ref.watch(_selectedItemProvider);
+    // Re-resolve the selection against the current catalog so that loading or
+    // resetting a dump re-renders the editor with the refreshed item (same id,
+    // new fields/defaults) instead of the stale CatalogItem object.
+    final selected = selectedRaw == null
+        ? null
+        : (ref.watch(catalogProvider).value
+                ?.firstWhereOrNull((i) => i.id == selectedRaw.id) ??
+            selectedRaw);
     final overridesState = ref.watch(overridesProvider);
     final themeModeNotifier = ref.read(themeModeProvider.notifier);
     final scheme         = Theme.of(context).colorScheme;
