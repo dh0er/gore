@@ -86,6 +86,15 @@ enum Commands {
         #[arg(short = 'o', long)]
         out: PathBuf,
     },
+    /// Merge per-language gore_loc_<lang>.json dumps into one loc_catalog.json
+    Loc {
+        /// Directory of gore_loc_*.json files (or a single file)
+        #[arg(long = "in")]
+        input: PathBuf,
+        /// Output merged loc_catalog.json
+        #[arg(short = 'o', long)]
+        out: PathBuf,
+    },
     /// Create a UE4SS Lua mod skeleton directory
     Scaffold {
         /// Mod name (becomes the directory name under mods-dir)
@@ -126,6 +135,7 @@ fn main() {
         Commands::DumpMod { model, catalog, npc_catalog, knowledge_catalog, out } => {
             cmd::dump_mod::run(model, catalog, npc_catalog, knowledge_catalog, out)
         }
+        Commands::Loc { input, out } => cmd::loc::run(input, out),
         Commands::Scaffold { mod_name, out } => cmd::scaffold::run(mod_name, out),
         Commands::Gen { overrides, out, model } => cmd::gen::run(overrides, out, model),
         Commands::Package { mod_dir, out } => cmd::package::run(mod_dir, out),
