@@ -34,7 +34,11 @@ pub fn run(sdk_dir: PathBuf, out: PathBuf) -> Result<()> {
 
     // Write model.json
     if let Some(parent) = out.parent() {
-        fs::create_dir_all(parent)?;
+        // out.parent() is Some("") for a bare filename like `-o model.json`;
+        // create_dir_all("") errors, so only create a non-empty parent.
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
     }
     let json = serde_json::to_string_pretty(&merged)?;
     fs::write(&out, json)

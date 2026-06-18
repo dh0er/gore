@@ -27,7 +27,10 @@ pub fn run(mod_dir: PathBuf, out: PathBuf) -> Result<()> {
 
     // Create zip
     if let Some(parent) = out.parent() {
-        fs::create_dir_all(parent)?;
+        // Some("") for a bare filename like `-o MyMod.zip`; skip empty parents.
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
     }
     let zip_file = File::create(&out)
         .with_context(|| format!("creating zip '{}'", out.display()))?;
