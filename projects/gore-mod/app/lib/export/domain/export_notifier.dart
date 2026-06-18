@@ -105,6 +105,8 @@ class ExportNotifier extends StateNotifier<ExportState> {
     // partially overwritten mod that UE4SS might still load.
     final staging = Directory(p.join(request.targetDir, '${request.modName}.tmp-export'));
     final backup = Directory(p.join(request.targetDir, '${request.modName}.bak-export'));
+    final zipPath = p.join(request.targetDir, '${request.modName}.zip');
+    final zipTmp = File('$zipPath.tmp-export');
     String outputPath = modDir.path;
     try {
       if (staging.existsSync()) staging.deleteSync(recursive: true);
@@ -113,6 +115,12 @@ class ExportNotifier extends StateNotifier<ExportState> {
         outFile.parent.createSync(recursive: true);
         outFile.writeAsStringSync(entry.value as String? ?? '');
       }
+      // Do the fallible zip work (encode + temp write) BEFORE any promotion, so
+      // a zip failure aborts the whole export cleanly with the old mod intact —
+      // rather than leaving the folder updated while reporting failure. After
+      // this point only near-atomic renames remain.
+      if (request.packageAsZip) _stageZip(request, files, zipTmp);
+
       // Promote with a safe swap: move any prior export aside to a backup,
       // rename the completed staging dir into place, then drop the backup. If
       // the promotion rename fails (lock, antivirus, cross-volume), the backup
@@ -120,16 +128,18 @@ class ExportNotifier extends StateNotifier<ExportState> {
       if (backup.existsSync()) backup.deleteSync(recursive: true);
       if (modDir.existsSync()) modDir.renameSync(backup.path);
       staging.renameSync(modDir.path);
-      if (backup.existsSync()) backup.deleteSync(recursive: true);
       if (request.packageAsZip) {
-        outputPath = _writeZip(request, files);
+        zipTmp.renameSync(zipPath);
+        outputPath = zipPath;
       }
+      if (backup.existsSync()) backup.deleteSync(recursive: true);
     } on FileSystemException catch (e) {
-      // Drop the incomplete staging dir, and if the old mod was moved aside but
-      // not yet restored, put it back. The backup is never deleted on failure —
-      // it holds the user's prior export.
+      // Drop the incomplete staging dir and any temp zip, and if the old mod was
+      // moved aside but not yet restored, put it back. The backup is never
+      // deleted on failure — it holds the user's prior export.
       try {
         if (staging.existsSync()) staging.deleteSync(recursive: true);
+        if (zipTmp.existsSync()) zipTmp.deleteSync();
       } on FileSystemException {
         // best-effort
       }
@@ -153,11 +163,13 @@ class ExportNotifier extends StateNotifier<ExportState> {
     );
   }
 
-  /// Package the returned files into `<targetDir>/<modName>.zip`, with every
-  /// entry nested under `<modName>/` (the same layout `gore-cli package`
-  /// produces, so UE4SS sees a single mod folder when the archive is extracted
-  /// into the Mods directory). Returns the zip path.
-  String _writeZip(ExportRequest request, Map<String, Object?> files) {
+  /// Encode the returned files into a temp zip at [zipTmp], with every entry
+  /// nested under `<modName>/` (the same layout `gore-cli package` produces, so
+  /// UE4SS sees a single mod folder when the archive is extracted into the Mods
+  /// directory). The caller renames the temp into place only after the folder
+  /// promotion succeeds, so a failed/partial archive never clobbers a prior
+  /// good zip or leaves the export half-applied.
+  void _stageZip(ExportRequest request, Map<String, Object?> files, File zipTmp) {
     final archive = Archive();
     for (final entry in files.entries) {
       final bytes = utf8.encode(entry.value as String? ?? '');
@@ -169,18 +181,7 @@ class ExportNotifier extends StateNotifier<ExportState> {
     if (zipBytes == null) {
       throw const FileSystemException('zip encoding failed');
     }
-    // Write to a temp file and rename over the target so a failed/partial write
-    // never clobbers a previously good archive.
-    final zipPath = p.join(request.targetDir, '${request.modName}.zip');
-    final tmpZip = File('$zipPath.tmp-export');
-    try {
-      tmpZip.writeAsBytesSync(zipBytes);
-      tmpZip.renameSync(zipPath);
-    } on FileSystemException {
-      if (tmpZip.existsSync()) tmpZip.deleteSync();
-      rethrow;
-    }
-    return zipPath;
+    zipTmp.writeAsBytesSync(zipBytes);
   }
 
   void clearResult() => state = state.copyWith(clearResult: true);
