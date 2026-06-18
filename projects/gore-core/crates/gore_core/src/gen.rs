@@ -159,6 +159,13 @@ impl<'de> Deserialize<'de> for OverrideValue {
         if let Some(v) = h.value_int {
             Ok(OverrideValue::Int(v))
         } else if let Some(v) = h.value_float {
+            // Non-finite floats (TOML allows nan/inf/-inf) would serialize to
+            // invalid Lua like `NaN.0`/`inf.0`; reject them at parse time.
+            if !v.is_finite() {
+                return Err(serde::de::Error::custom(
+                    "value_float must be a finite number (nan/inf are not allowed)",
+                ));
+            }
             Ok(OverrideValue::Float(v))
         } else if let Some(v) = h.value_bool {
             Ok(OverrideValue::Bool(v))
@@ -416,6 +423,17 @@ value_float = 1.0
 "#;
         let result: Result<OverridesConfig, _> = toml::from_str(toml_str);
         assert!(result.is_err(), "expected error for two value_ keys");
+    }
+
+    #[test]
+    fn deserialize_non_finite_float_fails() {
+        for bad in ["inf", "-inf", "nan"] {
+            let toml_str = format!(
+                "[meta]\nname = \"TestMod\"\n[[override]]\nclass = \"Foo\"\nfield = \"bar\"\nvalue_float = {bad}\n"
+            );
+            let result: Result<OverridesConfig, _> = toml::from_str(&toml_str);
+            assert!(result.is_err(), "expected error for value_float = {bad}");
+        }
     }
 
     #[test]
