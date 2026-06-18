@@ -43,5 +43,29 @@ List<FieldSchema> _fieldsFor(
       .whereType<Map<String, Object?>>()
       .map(FieldSchema.fromJson)
       .toList();
-  return parsed.isEmpty ? kDefaultItemFields : parsed;
+  return parsed.isEmpty ? kDefaultItemFields : mergeDefaultBounds(parsed);
+}
+
+/// Overlay the [kDefaultItemFields] min/max bounds onto matching parsed model
+/// fields. The bundled model.json carries only name/type per field, so without
+/// this the well-known scalar fields (m_Value, m_MaxStack, m_Weight, m_Mass)
+/// would have null bounds and validateField would accept out-of-range values
+/// like m_MaxStack = 0 or a negative weight — and since export no longer runs
+/// native range validation, those would reach the generated mod. A bound that
+/// the parsed field already specifies is left untouched.
+List<FieldSchema> mergeDefaultBounds(List<FieldSchema> parsed) {
+  final defaultsByName = {for (final f in kDefaultItemFields) f.name: f};
+  return [
+    for (final f in parsed)
+      if (defaultsByName[f.name] case final def?)
+        FieldSchema(
+          name: f.name,
+          type: f.type,
+          minValue: f.minValue ?? def.minValue,
+          maxValue: f.maxValue ?? def.maxValue,
+          enumValues: f.enumValues,
+        )
+      else
+        f,
+  ];
 }
