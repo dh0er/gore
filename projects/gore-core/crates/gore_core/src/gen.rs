@@ -207,6 +207,10 @@ pub fn gen_lua(cfg: &OverridesConfig) -> String {
     }
     let overrides_table = overrides_rows.join(",\n");
 
+    // In the string.format template the mod name must also have its `%` doubled
+    // (Lua treats `%` as a format directive); the plain concat below must not.
+    let mod_fmt = mod_name.replace('%', "%%");
+
     // Build apply() body
     let apply_body = format!(
         r#"local function apply()
@@ -215,13 +219,14 @@ pub fn gen_lua(cfg: &OverridesConfig) -> String {
     if cdo and cdo:IsValid() then
       local before = cdo[o.field]
       cdo[o.field] = o.value
-      print(string.format("[{mod}] %s.%s %s -> %s\n",
+      print(string.format("[{mod_fmt}] %s.%s %s -> %s\n",
         o.class, o.field, tostring(before), tostring(cdo[o.field])))
     else
       print("[{mod}] CDO not found: " .. o.class .. "\n")
     end
   end
 end"#,
+        mod_fmt = mod_fmt,
         mod = mod_name
     );
 
@@ -278,6 +283,23 @@ mod gen_tests {
     // Mirror of the gen.rs guard, for the exponent-form assertion above.
     fn lua_literal_appends_dot_to(s: &str) -> bool {
         !(s.contains('.') || s.contains('e') || s.contains('E'))
+    }
+
+    #[test]
+    fn gen_lua_doubles_percent_in_mod_name_format_template() {
+        let cfg = OverridesConfig {
+            meta: MetaConfig { name: "100%Balance".to_string(), delay_ms: 0 },
+            overrides: vec![SingleOverride {
+                class: "ItFo_Apple".to_string(),
+                field: "m_Value".to_string(),
+                value: OverrideValue::Int(1),
+            }],
+        };
+        let lua = gen_lua(&cfg);
+        // In the string.format template the % must be doubled (%%); the plain
+        // concat ("CDO not found") keeps the single %.
+        assert!(lua.contains("[100%%Balance] %s.%s"), "format template must double %: {lua}");
+        assert!(lua.contains(r#"[100%Balance] CDO not found"#), "concat keeps single %: {lua}");
     }
 
     #[test]
