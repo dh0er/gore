@@ -1,10 +1,13 @@
+import 'dart:convert';
 import 'dart:io';
+import 'package:archive/archive.dart';
 import 'package:flutter_riverpod/legacy.dart';
 import 'package:path/path.dart' as p;
 import '../../core/core_service.dart';
 import '../../core/providers.dart';
 import '../../editor/domain/override_entry.dart';
 import 'export_request.dart';
+import 'mod_name.dart';
 
 class ExportState {
   const ExportState({
@@ -47,6 +50,18 @@ class ExportNotifier extends StateNotifier<ExportState> {
       clearResult: true,
     );
 
+    // The mod name becomes a directory component under the user-chosen folder
+    // (and an entry prefix inside the .zip). Reject path-escaping names before
+    // building any path with it.
+    final nameError = validateModName(request.modName);
+    if (nameError != null) {
+      state = state.copyWith(
+        isExporting: false,
+        result: ExportResult(error: 'Invalid mod name: $nameError'),
+      );
+      return;
+    }
+
     // Generate the mod. Field-level validation already happened client-side in
     // the editor (only valid OverrideEntry values reach here), and the native
     // `validate` command needs a full ReflectionModel the GUI does not carry,
@@ -84,11 +99,15 @@ class ExportNotifier extends StateNotifier<ExportState> {
     }
 
     final modDir = p.join(request.targetDir, request.modName);
+    String outputPath = modDir;
     try {
       for (final entry in files.entries) {
         final outFile = File(p.join(modDir, entry.key));
         outFile.parent.createSync(recursive: true);
         outFile.writeAsStringSync(entry.value as String? ?? '');
+      }
+      if (request.packageAsZip) {
+        outputPath = _writeZip(request, files);
       }
     } on FileSystemException catch (e) {
       state = state.copyWith(
@@ -100,8 +119,29 @@ class ExportNotifier extends StateNotifier<ExportState> {
 
     state = state.copyWith(
       isExporting: false,
-      result: ExportResult(outputPath: modDir),
+      result: ExportResult(outputPath: outputPath),
     );
+  }
+
+  /// Package the returned files into `<targetDir>/<modName>.zip`, with every
+  /// entry nested under `<modName>/` (the same layout `gore-cli package`
+  /// produces, so UE4SS sees a single mod folder when the archive is extracted
+  /// into the Mods directory). Returns the zip path.
+  String _writeZip(ExportRequest request, Map<String, Object?> files) {
+    final archive = Archive();
+    for (final entry in files.entries) {
+      final bytes = utf8.encode(entry.value as String? ?? '');
+      archive.addFile(
+        ArchiveFile('${request.modName}/${entry.key}', bytes.length, bytes),
+      );
+    }
+    final zipBytes = ZipEncoder().encode(archive);
+    if (zipBytes == null) {
+      throw const FileSystemException('zip encoding failed');
+    }
+    final zipPath = p.join(request.targetDir, '${request.modName}.zip');
+    File(zipPath).writeAsBytesSync(zipBytes);
+    return zipPath;
   }
 
   void clearResult() => state = state.copyWith(clearResult: true);

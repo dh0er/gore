@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:archive/archive.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gore_mod/core/core_service.dart';
@@ -84,6 +85,66 @@ void main() {
     final result = container.read(exportProvider).result;
     expect(result?.success, isTrue);
     expect(result?.outputPath, modDir);
+  });
+
+  testWidgets('packageAsZip writes a .zip nested under the mod name', (tester) async {
+    final fake = FakeGoreCoreFfiService(responses: {
+      'generate_mod': {
+        'ok': true,
+        'files': {
+          'enabled.txt': '',
+          'Scripts/main.lua': '-- mod\n',
+        },
+      },
+    });
+    final tmp = Directory.systemTemp.createTempSync('gore_mod_zip_');
+    addTearDown(() => tmp.deleteSync(recursive: true));
+
+    final container = ProviderContainer(
+      overrides: [coreServiceProvider.overrideWithValue(fake)],
+    );
+    addTearDown(container.dispose);
+
+    await container.read(exportProvider.notifier).export(
+      request: ExportRequest(
+        modName: 'ZipMod',
+        targetDir: tmp.path,
+        packageAsZip: true,
+      ),
+      overrides: [apple500],
+    );
+
+    final zipPath = p.join(tmp.path, 'ZipMod.zip');
+    expect(File(zipPath).existsSync(), isTrue);
+    expect(container.read(exportProvider).result?.outputPath, zipPath);
+
+    final archive = ZipDecoder().decodeBytes(File(zipPath).readAsBytesSync());
+    final names = archive.files.map((f) => f.name).toSet();
+    expect(names, contains('ZipMod/enabled.txt'));
+    expect(names, contains('ZipMod/Scripts/main.lua'));
+  });
+
+  testWidgets('rejects a path-escaping mod name without writing', (tester) async {
+    final fake = FakeGoreCoreFfiService(responses: {
+      'generate_mod': {'ok': true, 'files': {'enabled.txt': ''}},
+    });
+    final tmp = Directory.systemTemp.createTempSync('gore_mod_escape_');
+    addTearDown(() => tmp.deleteSync(recursive: true));
+
+    final container = ProviderContainer(
+      overrides: [coreServiceProvider.overrideWithValue(fake)],
+    );
+    addTearDown(container.dispose);
+
+    await container.read(exportProvider.notifier).export(
+      request: ExportRequest(modName: '../evil', targetDir: tmp.path),
+      overrides: [apple500],
+    );
+
+    expect(container.read(exportProvider).result?.success, isFalse);
+    expect(container.read(exportProvider).result?.error, contains('Invalid mod name'));
+    // generate_mod must not even be called for an invalid name.
+    expect(fake.calls, isEmpty);
   });
 
   testWidgets('export surfaces a generation error and writes nothing', (tester) async {

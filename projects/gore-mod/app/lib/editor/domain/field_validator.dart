@@ -47,7 +47,14 @@ String? validateField(FieldSchema schema, String raw) {
 }
 
 /// Converts a validated raw string to the JSON-serialisable value that
-/// gore_core's validate_override / generate_mod expect.
+/// gore_core's `generate_mod` expects.
+///
+/// Enum fields resolve to their backing integer (the member's index in
+/// declaration order), NOT the member name: gore_core treats UE enum CDO
+/// fields as int-backed and only accepts `value_int` for them, so emitting the
+/// name as `value_str` would generate Lua that assigns a string to an int
+/// field. `validateField` has already confirmed membership, so `indexOf` is
+/// always ≥ 0 here.
 Object parsedValue(FieldSchema schema, String raw) {
   final trimmed = raw.trim();
   return switch (schema.type) {
@@ -55,6 +62,6 @@ Object parsedValue(FieldSchema schema, String raw) {
     FieldType.float_  => double.parse(trimmed),
     FieldType.bool_   => trimmed == 'true',
     FieldType.string_ => trimmed,
-    FieldType.enum_   => trimmed,
+    FieldType.enum_   => schema.enumValues.indexOf(trimmed),
   };
 }

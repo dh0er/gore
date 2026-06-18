@@ -39,6 +39,11 @@ void main() {
     test('int', ()    => expect(parsedValue(intSchema,   '500'), 500));
     test('float', ()  => expect(parsedValue(floatSchema, '1.5'), 1.5));
     test('bool', ()   => expect(parsedValue(boolSchema,  'true'), true));
-    test('enum', ()   => expect(parsedValue(enumSchema,  'High'), 'High'));
+    // Enum resolves to the member's backing int (index), not the name —
+    // gore_core only accepts value_int for int-backed enum CDO fields.
+    test('enum -> backing int', () {
+      expect(parsedValue(enumSchema, 'Low'), 0);
+      expect(parsedValue(enumSchema, 'High'), 2);
+    });
   });
 }

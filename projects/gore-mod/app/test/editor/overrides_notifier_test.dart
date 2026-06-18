@@ -75,4 +75,27 @@ void main() {
     expect(json['field'], 'm_Value');
     expect(json['value'], 500);
   });
+
+  test('OverrideEntry.toFfiJson uses gore_core typed value keys', () {
+    final intJson = const OverrideEntry(
+      classId: 'C', field: 'f', oldValue: 0, newValue: 7,
+    ).toFfiJson();
+    expect(intJson['value_int'], 7);
+    expect(intJson.containsKey('value'), isFalse);
+
+    final floatJson = const OverrideEntry(
+      classId: 'C', field: 'f', oldValue: 0.0, newValue: 1.5,
+    ).toFfiJson();
+    expect(floatJson['value_float'], 1.5);
+
+    final boolJson = const OverrideEntry(
+      classId: 'C', field: 'f', oldValue: false, newValue: true,
+    ).toFfiJson();
+    expect(boolJson['value_bool'], true);
+
+    final strJson = const OverrideEntry(
+      classId: 'C', field: 'f', oldValue: '', newValue: 'x',
+    ).toFfiJson();
+    expect(strJson['value_str'], 'x');
+  });
 }

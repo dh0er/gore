@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../editor/domain/overrides_notifier.dart';
 import '../domain/export_notifier.dart';
 import '../domain/export_request.dart';
+import '../domain/mod_name.dart';
 
 class ExportDialog extends ConsumerStatefulWidget {
   const ExportDialog({super.key});
@@ -36,7 +37,7 @@ class _ExportDialogState extends ConsumerState<ExportDialog> {
 
   void _validateName(String v) {
     setState(() {
-      _nameError = v.trim().isEmpty ? 'Required' : null;
+      _nameError = validateModName(v);
     });
   }
 
