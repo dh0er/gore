@@ -72,7 +72,7 @@ class HomePage extends ConsumerWidget {
         children: [
           // Left: catalog browser
           SizedBox(
-            width: 420,
+            width: 560,
             child: CatalogBrowser(
               selected: selected,
               onItemSelected: (item) =>
@@ -111,7 +111,7 @@ class HomePage extends ConsumerWidget {
           const VerticalDivider(width: 1),
           // Right: overrides panel
           SizedBox(
-            width: 400,
+            width: 460,
             child: const OverridesPanel(),
           ),
         ],

@@ -254,7 +254,7 @@ class _FieldRow extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         SizedBox(
-          width: 200,
+          width: 240,
           child: Padding(
             padding: const EdgeInsets.only(top: 8),
             child: Text(
