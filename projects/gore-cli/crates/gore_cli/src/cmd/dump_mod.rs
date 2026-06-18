@@ -164,12 +164,18 @@ local function current_culture()
   return nil
 end
 
+-- Drop empties and the loc system's not-found sentinel ("<MISSING STRING TABLE
+-- ENTRY>", emitted for ids with no localized text, e.g. unnamed creatures).
+local function clean_text(s)
+  if not s or s == "" then return nil end
+  if string.find(s, "MISSING STRING TABLE", 1, true) then return nil end
+  return s
+end
+
 local function read_ftext(cdo, field)
   local ok, val = pcall(function() return cdo[field] end)
   if not ok then return nil end
-  local s = to_str(val)
-  if s and s ~= "" then return s end
-  return nil
+  return clean_text(to_str(val))
 end
 
 -- Filename-safe form of a language label (zh-Hans, pt-BR -> kept; junk dropped).
@@ -207,9 +213,7 @@ local function dump_loc(lang, kinds)
     if not (locsub and id and id ~= "") then return nil end
     local ok, v = pcall(function() return locsub:GetText(id) end)
     if not ok then return nil end
-    local s = to_str(v)
-    if s and s ~= "" then return s end
-    return nil
+    return clean_text(to_str(v))
   end
 
   -- per-kind diagnostics: distinguish "CDO not loaded" from "found but no text".
