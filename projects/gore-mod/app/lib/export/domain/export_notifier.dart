@@ -98,11 +98,16 @@ class ExportNotifier extends StateNotifier<ExportState> {
       return;
     }
 
-    final modDir = p.join(request.targetDir, request.modName);
-    String outputPath = modDir;
+    final modDir = Directory(p.join(request.targetDir, request.modName));
+    final zipFile = File(p.join(request.targetDir, '${request.modName}.zip'));
+    // Remember what already existed so a failure-cleanup never deletes a prior
+    // good export the user is overwriting — only output we created ourselves.
+    final modDirPreexisted = modDir.existsSync();
+    final zipPreexisted = zipFile.existsSync();
+    String outputPath = modDir.path;
     try {
       for (final entry in files.entries) {
-        final outFile = File(p.join(modDir, entry.key));
+        final outFile = File(p.join(modDir.path, entry.key));
         outFile.parent.createSync(recursive: true);
         outFile.writeAsStringSync(entry.value as String? ?? '');
       }
@@ -110,6 +115,13 @@ class ExportNotifier extends StateNotifier<ExportState> {
         outputPath = _writeZip(request, files);
       }
     } on FileSystemException catch (e) {
+      // Don't leave a half-written mod tree that looks like a real export.
+      _cleanupPartial(
+        modDir: modDir,
+        zipFile: zipFile,
+        removeModDir: !modDirPreexisted,
+        removeZip: request.packageAsZip && !zipPreexisted,
+      );
       state = state.copyWith(
         isExporting: false,
         result: ExportResult(error: 'Failed to write mod files: ${e.message}'),
@@ -142,6 +154,27 @@ class ExportNotifier extends StateNotifier<ExportState> {
     final zipPath = p.join(request.targetDir, '${request.modName}.zip');
     File(zipPath).writeAsBytesSync(zipBytes);
     return zipPath;
+  }
+
+  /// Best-effort removal of partial output after a failed write, so a failed
+  /// export doesn't leave a tree that looks successful. Only removes output we
+  /// created this run (never a pre-existing folder/zip the user overwrote).
+  void _cleanupPartial({
+    required Directory modDir,
+    required File zipFile,
+    required bool removeModDir,
+    required bool removeZip,
+  }) {
+    try {
+      if (removeModDir && modDir.existsSync()) {
+        modDir.deleteSync(recursive: true);
+      }
+      if (removeZip && zipFile.existsSync()) {
+        zipFile.deleteSync();
+      }
+    } on FileSystemException {
+      // Cleanup is best-effort; surface the original failure regardless.
+    }
   }
 
   void clearResult() => state = state.copyWith(clearResult: true);

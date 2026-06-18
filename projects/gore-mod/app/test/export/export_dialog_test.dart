@@ -147,6 +147,36 @@ void main() {
     expect(fake.calls, isEmpty);
   });
 
+  testWidgets('a failed write removes the partial mod tree', (tester) async {
+    // The second file name is invalid on Windows, so the first file writes
+    // (creating the mod dir) and the second throws — the partial tree must be
+    // cleaned up rather than left looking like a real export.
+    final fake = FakeGoreCoreFfiService(responses: {
+      'generate_mod': {
+        'ok': true,
+        'files': {
+          'enabled.txt': '',
+          'bad?name.txt': 'x',
+        },
+      },
+    });
+    final tmp = Directory.systemTemp.createTempSync('gore_mod_partial_');
+    addTearDown(() => tmp.deleteSync(recursive: true));
+
+    final container = ProviderContainer(
+      overrides: [coreServiceProvider.overrideWithValue(fake)],
+    );
+    addTearDown(container.dispose);
+
+    await container.read(exportProvider.notifier).export(
+      request: ExportRequest(modName: 'PartialMod', targetDir: tmp.path),
+      overrides: [apple500],
+    );
+
+    expect(container.read(exportProvider).result?.success, isFalse);
+    expect(Directory(p.join(tmp.path, 'PartialMod')).existsSync(), isFalse);
+  }, skip: !Platform.isWindows);
+
   testWidgets('export surfaces a generation error and writes nothing', (tester) async {
     final fake = FakeGoreCoreFfiService(responses: {
       'generate_mod': {
