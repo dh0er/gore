@@ -78,6 +78,9 @@ pub fn parse_hpp_reader<R: BufRead>(reader: R) -> Result<ReflectionModel, ParseE
                 Some(i) => trimmed[..i].trim(),
                 None => trimmed,
             };
+            // Tolerate an opening brace on the same line ("class X : public Y {")
+            // by stripping it before the member/method checks.
+            let decl = decl.strip_suffix('{').map(str::trim).unwrap_or(decl);
             let is_real_decl = !decl.contains('{')
                 && !decl.contains('*')
                 && !decl.contains('(')
@@ -283,6 +286,20 @@ class UItemDefinition : public UGothicObjectDefinition
     void SetItemType(FGameplayTag GameplayTag);
 }; // Size: 0x320
 ";
+
+    #[test]
+    fn parses_class_with_same_line_opening_brace() {
+        let snippet = "\
+class UThing : public UBase {
+    int32 m_X;   // 0x0010 (size: 0x4)
+};
+";
+        let model = parse_hpp_reader(snippet.as_bytes()).unwrap();
+        assert_eq!(model.classes.len(), 1);
+        assert_eq!(model.classes[0].name, "UThing");
+        assert_eq!(model.classes[0].parent.as_deref(), Some("UBase"));
+        assert!(model.classes[0].properties.iter().any(|p| p.name == "m_X"));
+    }
 
     #[test]
     fn multiple_inheritance_keeps_primary_base() {

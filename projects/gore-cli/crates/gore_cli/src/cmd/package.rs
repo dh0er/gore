@@ -70,8 +70,9 @@ fn add_dir_to_zip(
                 continue;
             }
         }
-        let relative = path.strip_prefix(base)
-            .expect("path must be under base");
+        let relative = path
+            .strip_prefix(base)
+            .with_context(|| format!("'{}' is not under '{}'", path.display(), base.display()))?;
         // Use forward slashes inside zip (cross-platform), prefixed with mod_name/
         let relative_str = relative.to_string_lossy().replace('\\', "/");
         let zip_name = format!("{mod_name}/{relative_str}");
