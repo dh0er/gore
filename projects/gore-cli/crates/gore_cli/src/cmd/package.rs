@@ -38,6 +38,22 @@ pub fn run(mod_dir: PathBuf, out: PathBuf) -> Result<()> {
             fs::create_dir_all(parent)?;
         }
     }
+    // Refuse an output path inside the mod dir: File::create would truncate a
+    // source file (e.g. `-o MyMod/Scripts/main.lua`) before the walk, corrupting
+    // the mod while still "succeeding".
+    let out_parent = out
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let out_parent_abs = fs::canonicalize(&out_parent).unwrap_or(out_parent);
+    if out_parent_abs.starts_with(&mod_dir_abs) {
+        bail!(
+            "output path '{}' is inside the mod directory '{}'; choose a location outside it",
+            out.display(),
+            mod_dir.display()
+        );
+    }
     let zip_file = File::create(&out)
         .with_context(|| format!("creating zip '{}'", out.display()))?;
     let mut zip = ZipWriter::new(zip_file);
@@ -257,7 +273,7 @@ mod package_tests {
     }
 
     #[test]
-    fn output_zip_inside_mod_dir_is_not_packaged_into_itself() {
+    fn output_inside_mod_dir_is_rejected() {
         let tmp = TempDir::new().unwrap();
         let mod_dir = tmp.path().join("MyMod");
         let scripts_dir = mod_dir.join("Scripts");
@@ -265,18 +281,25 @@ mod package_tests {
         fs::write(mod_dir.join("enabled.txt"), "").unwrap();
         fs::write(scripts_dir.join("main.lua"), "-- lua").unwrap();
 
-        // Output zip lives INSIDE the mod directory.
+        // Output inside the mod dir must be rejected BEFORE any file is created
+        // (otherwise File::create could truncate a source file).
         let out_zip = mod_dir.join("MyMod.zip");
-        run(mod_dir.clone(), out_zip.clone()).unwrap();
+        assert!(run(mod_dir.clone(), out_zip.clone()).is_err(), "in-mod-dir output must be rejected");
+        assert!(!out_zip.exists(), "no archive should have been created");
+        // A source file inside the mod dir must remain intact.
+        assert_eq!(fs::read_to_string(scripts_dir.join("main.lua")).unwrap(), "-- lua");
+    }
 
-        let mut archive = ZipArchive::new(File::open(&out_zip).unwrap()).unwrap();
-        let names: Vec<String> = (0..archive.len())
-            .map(|i| archive.by_index(i).unwrap().name().to_string())
-            .collect();
-        assert!(
-            !names.iter().any(|n| n.ends_with("MyMod.zip")),
-            "archive must not contain itself: {names:?}"
-        );
-        assert!(names.iter().any(|n| n == "MyMod/enabled.txt"));
+    #[test]
+    fn output_outside_mod_dir_succeeds() {
+        let tmp = TempDir::new().unwrap();
+        let mod_dir = tmp.path().join("MyMod");
+        let scripts_dir = mod_dir.join("Scripts");
+        fs::create_dir_all(&scripts_dir).unwrap();
+        fs::write(mod_dir.join("enabled.txt"), "").unwrap();
+        fs::write(scripts_dir.join("main.lua"), "-- lua").unwrap();
+        let out_zip = tmp.path().join("MyMod.zip"); // sibling of mod_dir, outside it
+        run(mod_dir, out_zip.clone()).unwrap();
+        assert!(out_zip.is_file());
     }
 }
