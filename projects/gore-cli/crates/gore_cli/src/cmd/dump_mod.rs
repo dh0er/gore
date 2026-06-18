@@ -197,11 +197,16 @@ local function dump_loc(lang, kinds)
   local cur = current_culture()
   log("loc: dumping language '" .. label .. "' (engine reports " .. tostring(cur) .. ")")
 
+  -- per-kind diagnostics: distinguish "CDO not loaded" from "found but no text".
+  local total, found, textful = {}, {}, {}
+
   local parts, n = {}, 0
   for _, t in ipairs(LOC.targets) do
     if kindset[t.kind] then
+      total[t.kind] = (total[t.kind] or 0) + 1
       local cdo = StaticFindObject("/Script/Angelscript.Default__" .. t.id)
       if cdo and cdo:IsValid() then
+        found[t.kind] = (found[t.kind] or 0) + 1
         local fparts = {}
         for _, field in ipairs(LOC.fields_by_kind[t.kind] or {}) do
           local s = read_ftext(cdo, field)
@@ -210,11 +215,19 @@ local function dump_loc(lang, kinds)
           end
         end
         if #fparts > 0 then
+          textful[t.kind] = (textful[t.kind] or 0) + 1
           parts[#parts + 1] = string.format('"%s":{"kind":"%s","text":{%s}}',
             json_escape(t.id), json_escape(t.kind), table.concat(fparts, ","))
           n = n + 1
         end
       end
+    end
+  end
+
+  for _, k in ipairs({"item", "npc", "knowledge"}) do
+    if total[k] then
+      log(string.format("loc: %s: %d/%d CDOs found, %d with text",
+        k, found[k] or 0, total[k], textful[k] or 0))
     end
   end
 
@@ -241,9 +254,40 @@ local function parse_csv(s)
   return t
 end
 
+-- Diagnostic: inspect one CDO's candidate name fields. Reports found/empty/value
+-- for each, to learn where a kind's display name actually lives.
+local PROBE_FIELDS = {
+  "m_Name", "m_Description", "m_UniqueName", "m_CharacterName",
+  "CharacterName", "m_DisplayName", "Caption", "NameText",
+}
+local function probe_cdo(class, out)
+  if not class or class == "" then
+    out("probe: usage: gore-dump probe <ClassName>  (e.g. CharacterDefinition_Human_OC_STT_Diego)")
+    return
+  end
+  local cdo = StaticFindObject("/Script/Angelscript.Default__" .. class)
+  if not (cdo and cdo:IsValid()) then
+    out("probe: CDO NOT FOUND/loaded: " .. class)
+    return
+  end
+  out("probe: " .. class .. " found. fields:")
+  for _, field in ipairs(PROBE_FIELDS) do
+    local ok, val = pcall(function() return cdo[field] end)
+    if not ok then
+      out("  " .. field .. " = <no such field>")
+    elseif val == nil then
+      out("  " .. field .. " = <nil>")
+    else
+      local s = to_str(val)
+      out("  " .. field .. " = " .. (s == nil and "<not text>" or (s == "" and "<empty>" or '"' .. s .. '"')))
+    end
+  end
+end
+
 -- gore-dump stats
 -- gore-dump loc <lang> [item,npc,knowledge]   (set the menu language first)
 -- gore-dump all <lang> [item,npc,knowledge]
+-- gore-dump probe <ClassName>                 (inspect one CDO's name fields)
 RegisterConsoleCommandHandler("gore-dump", function(_, Parameters, Ar)
   local function out(m)
     if Ar then pcall(function() Ar:Log(m) end) end
@@ -260,8 +304,10 @@ RegisterConsoleCommandHandler("gore-dump", function(_, Parameters, Ar)
     local kinds = parse_csv(Parameters[3]) or CONFIG.loc.kinds
     dump_loc(Parameters[2], kinds)
     out("all: done")
+  elseif sub == "probe" then
+    probe_cdo(Parameters[2], out)
   else
-    out("usage: gore-dump <stats | loc <lang> | all <lang>> [item,npc,knowledge]")
+    out("usage: gore-dump <stats | loc <lang> | all <lang> | probe <Class>> [item,npc,knowledge]")
   end
   return true
 end)
