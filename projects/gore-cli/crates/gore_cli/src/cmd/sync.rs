@@ -92,20 +92,14 @@ fn validate_field(class: &str, f: &GuiField) -> Result<GuiField> {
             "int" => d.is_i64() || d.is_u64(),
             "float" => d.is_number(),
             "bool" => d.is_boolean(),
-            // Enum default is the backing integer. When backing values are
-            // known, it must be one of them. When the enum has no members at
-            // all (unresolved in the model), the GUI hides the field anyway, so
-            // tolerate the value rather than failing the whole sync — only
-            // require an integer.
-            "enum" => match (d.as_i64(), f.enum_values.is_empty()) {
-                (Some(v), false) if !f.enum_value_ints.is_empty() => {
-                    f.enum_value_ints.contains(&v)
-                }
-                // No backing values recorded: fall back to a member-index check.
-                (Some(v), false) => v >= 0 && (v as usize) < f.enum_values.len(),
-                // Member-less enum: accept any integer (field will be dropped).
-                (Some(_), true) => true,
-                (None, _) => false,
+            // Enum default is the backing integer (the CDO discriminant the
+            // dumper read), NOT a member index. When the backing values are
+            // known we can verify it's one of them; when they're absent we
+            // cannot cross-check (and must not assume 0..n-1 indices), so accept
+            // any integer rather than reject a correct dump.
+            "enum" => match d.as_i64() {
+                Some(v) => f.enum_value_ints.is_empty() || f.enum_value_ints.contains(&v),
+                None => false,
             },
             _ => false,
         };
@@ -194,14 +188,18 @@ mod tests {
     }
 
     #[test]
-    fn rejects_enum_default_out_of_range() {
-        let bad = parse_dump(
+    fn enum_default_not_assumed_to_be_an_index_without_backing_values() {
+        // No enum_value_ints -> we can't cross-check; the value is a real CDO
+        // discriminant, not an index, so it must be accepted (not index-range
+        // checked). Rejection only happens when backing values are known
+        // (see enum_default_must_match_a_backing_value).
+        let d = parse_dump(
             &json!({"classes": {"ItFo_Apple": {"fields": [
                 {"name": "m_Q", "type": "enum", "enum_values": ["A", "B"], "default": 5}
             ]}}})
             .to_string(),
         );
-        assert!(build_model(&bad, ["ItFo_Apple"].into_iter()).is_err());
+        assert!(build_model(&d, ["ItFo_Apple"].into_iter()).is_ok());
     }
 
     #[test]
