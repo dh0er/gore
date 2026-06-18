@@ -29,6 +29,11 @@ pub struct GuiField {
     pub name: String,
     #[serde(rename = "type")]
     pub field_type: String,
+    /// Member names of an `enum` field, in declaration order (the GUI maps a
+    /// selection to its backing integer = index). Empty for non-enum fields;
+    /// skipped from the JSON so non-enum output stays byte-identical.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub enum_values: Vec<String>,
 }
 
 /// GUI shape for one item class.
@@ -122,9 +127,21 @@ fn gui_fields_for(model: &ReflectionModel, class_name: &str) -> Vec<GuiField> {
     order
         .into_iter()
         .filter_map(|name| {
-            prop_type_to_gui(type_by_name[name]).map(|t| GuiField {
+            let pt = type_by_name[name];
+            let field_type = prop_type_to_gui(pt)?;
+            // For enum fields, resolve the named enum's members so the GUI can
+            // offer a dropdown (and map a choice to its backing int = index).
+            let enum_values = match pt {
+                PropType::Enum(enum_name) => model
+                    .find_enum(enum_name)
+                    .map(|e| e.members.clone())
+                    .unwrap_or_default(),
+                _ => Vec::new(),
+            };
+            Some(GuiField {
                 name: name.to_string(),
-                field_type: t.to_string(),
+                field_type: field_type.to_string(),
+                enum_values,
             })
         })
         .collect()
@@ -243,7 +260,11 @@ mod tests {
                     continue;
                 }
                 if let Some(t) = prop_type_to_gui(&prop.prop_type) {
-                    fields.push(GuiField { name: prop.name.clone(), field_type: t.to_string() });
+                    fields.push(GuiField {
+                        name: prop.name.clone(),
+                        field_type: t.to_string(),
+                        enum_values: Vec::new(),
+                    });
                 }
             }
             gui.classes.insert(entry.id.clone(), GuiClass { fields });
@@ -293,7 +314,11 @@ mod tests {
         let mut fields = Vec::new();
         for prop in props {
             if let Some(t) = prop_type_to_gui(&prop.prop_type) {
-                fields.push(GuiField { name: prop.name.clone(), field_type: t.to_string() });
+                fields.push(GuiField {
+                    name: prop.name.clone(),
+                    field_type: t.to_string(),
+                    enum_values: Vec::new(),
+                });
             }
         }
         // m_Tags (Opaque) must be excluded
@@ -386,6 +411,55 @@ mod tests {
         let fields = gui_fields_for(&model, "UDerived");
         let names: Vec<&str> = fields.iter().map(|f| f.name.as_str()).collect();
         assert_eq!(names, ["m_Y"], "shadowed-by-String m_X must be dropped: {names:?}");
+    }
+
+    #[test]
+    fn enum_field_carries_members_in_declaration_order() {
+        let model = make_model();
+        let fields = gui_fields_for(&model, "ItMi_Gold");
+        let quality = fields.iter().find(|f| f.name == "m_Quality").unwrap();
+        assert_eq!(quality.field_type, "enum");
+        assert_eq!(quality.enum_values, ["Low", "Medium"]);
+        // Non-enum fields carry no choices.
+        let value = fields.iter().find(|f| f.name == "m_Value").unwrap();
+        assert!(value.enum_values.is_empty());
+    }
+
+    #[test]
+    fn enum_values_omitted_from_json_for_non_enum_fields() {
+        // skip_serializing_if keeps non-enum output byte-identical (no key).
+        let f = GuiField { name: "m_Value".into(), field_type: "int".into(), enum_values: vec![] };
+        assert_eq!(serde_json::to_string(&f).unwrap(), r#"{"name":"m_Value","type":"int"}"#);
+        let e = GuiField {
+            name: "m_Quality".into(),
+            field_type: "enum".into(),
+            enum_values: vec!["Low".into(), "High".into()],
+        };
+        assert_eq!(
+            serde_json::to_string(&e).unwrap(),
+            r#"{"name":"m_Quality","type":"enum","enum_values":["Low","High"]}"#
+        );
+    }
+
+    #[test]
+    fn unresolved_enum_yields_no_choices() {
+        // Enum field whose named enum isn't in the model -> empty members, which
+        // the GUI then skips rather than rendering an empty dropdown.
+        let model = ReflectionModel {
+            classes: vec![Class {
+                name: "UThing".to_string(),
+                parent: None,
+                properties: vec![Property {
+                    name: "m_Q".to_string(),
+                    prop_type: PropType::Enum("EMissing".to_string()),
+                    offset: None,
+                }],
+            }],
+            enums: vec![],
+        };
+        let fields = gui_fields_for(&model, "UThing");
+        assert_eq!(fields[0].field_type, "enum");
+        assert!(fields[0].enum_values.is_empty());
     }
 
     #[test]
