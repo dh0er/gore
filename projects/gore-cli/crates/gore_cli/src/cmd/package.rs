@@ -52,9 +52,16 @@ pub fn run(mod_dir: PathBuf, out: PathBuf) -> Result<()> {
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
     let out_parent_abs = fs::canonicalize(&out_parent).unwrap_or(out_parent);
-    if out_parent_abs.starts_with(&mod_dir_abs) {
+    // Resolve the actual write target: if `out` already exists (e.g. it is a
+    // symlink whose target is inside the mod dir), canonicalize follows it; a
+    // non-existent `out` resolves to its canonical parent + filename. Either
+    // landing inside the mod dir would let File::create truncate a source file.
+    let resolved_out = fs::canonicalize(&out).unwrap_or_else(|_| {
+        out_parent_abs.join(out.file_name().unwrap_or_default())
+    });
+    if out_parent_abs.starts_with(&mod_dir_abs) || resolved_out.starts_with(&mod_dir_abs) {
         bail!(
-            "output path '{}' is inside the mod directory '{}'; choose a location outside it",
+            "output path '{}' resolves inside the mod directory '{}'; choose a location outside it",
             out.display(),
             mod_dir.display()
         );
@@ -155,6 +162,25 @@ mod package_tests {
         fs::write(mod_dir.join("Scripts").join("main.lua"), "-- lua").unwrap();
         let out = tmp.path().join("MyMod.zip");
         assert!(run(mod_dir, out).is_err(), "a directory at enabled.txt must fail");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_output_targeting_inside_mod_dir_is_rejected() {
+        let tmp = TempDir::new().unwrap();
+        let mod_dir = tmp.path().join("MyMod");
+        fs::create_dir_all(mod_dir.join("Scripts")).unwrap();
+        fs::write(mod_dir.join("enabled.txt"), "").unwrap();
+        fs::write(mod_dir.join("Scripts").join("main.lua"), "-- lua").unwrap();
+        // out.zip lives OUTSIDE mod_dir but symlinks to a source file INSIDE it.
+        let out = tmp.path().join("out.zip");
+        std::os::unix::fs::symlink(mod_dir.join("Scripts").join("main.lua"), &out).unwrap();
+        assert!(run(mod_dir.clone(), out).is_err(), "symlinked output into mod dir must be rejected");
+        assert_eq!(
+            fs::read_to_string(mod_dir.join("Scripts").join("main.lua")).unwrap(),
+            "-- lua",
+            "source file must not be truncated"
+        );
     }
 
     #[cfg(unix)]
