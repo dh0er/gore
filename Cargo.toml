@@ -3,5 +3,6 @@ members = [
     "projects/gore-save/crates/goresave_core",
     "projects/gore-save/crates/goresave_oodle",
     "projects/gore-core/crates/gore_core",
+    "projects/gore-cli/crates/gore_cli",
 ]
 resolver = "2"

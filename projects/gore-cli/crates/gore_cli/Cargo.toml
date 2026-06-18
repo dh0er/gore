@@ -1,0 +1,50 @@
+[package]
+name = "gore_cli"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[[bin]]
+name = "gore-cli"
+path = "src/main.rs"
+
+[dependencies]
+gore_core = { path = "../../../gore-core/crates/gore_core" }
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+thiserror = "2"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+anyhow = "1"
+
+[dev-dependencies]
+tempfile = "3"
+assert_cmd = "2"
+predicates = "2"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+serde_json = "1"
+
+[[test]]
+name = "dump_test"
+path = "tests/integration/dump_test.rs"
+
+[[test]]
+name = "stubs_test"
+path = "tests/integration/stubs_test.rs"
+
+[[test]]
+name = "catalog_test"
+path = "tests/integration/catalog_test.rs"
+
+[[test]]
+name = "scaffold_test"
+path = "tests/integration/scaffold_test.rs"
+
+[[test]]
+name = "gen_test"
+path = "tests/integration/gen_test.rs"
+
+[[test]]
+name = "package_test"
+path = "tests/integration/package_test.rs"

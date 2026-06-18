@@ -1,0 +1,13 @@
+[meta]
+name = "IntegrationTestMod"
+delay_ms = 0
+
+[[override]]
+class = "ItFo_Apple"
+field = "m_Value"
+value_int = 500
+
+[[override]]
+class = "ItFo_Apple"
+field = "m_Weight"
+value_float = 0.1

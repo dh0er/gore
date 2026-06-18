@@ -4,6 +4,8 @@
 //! editor and the modding tools classify item ids identically. Prefix set
 //! verified against the UE4SS object dump (see memory `gothic-remake-ue4ss-dump`).
 
+pub mod pipeline;
+
 use serde::{Deserialize, Serialize};
 
 /// Item categories derived from the Angelscript class-name prefix
@@ -15,15 +17,25 @@ pub enum ItemCategory {
     Ammunition,
     Rune,
     Scroll,
+    /// Combined rune+scroll category (used by gore-cli category_for_id).
+    RuneOrScroll,
     Food,
     Misc,
     Amulet,
     Ring,
+    /// Combined amulet+ring category (used by gore-cli category_for_id).
+    Jewelry,
     Trophy,
     Writing,
+    /// Writing/document category alias (used by gore-cli category_for_id).
+    Document,
     Mission,
     Key,
+    /// Potions and liquid substances (ItPo_*, ItLs_*).
+    Potion,
     Other,
+    /// Unknown prefix — not in the known prefix table.
+    Unknown,
 }
 
 impl ItemCategory {
@@ -35,15 +47,20 @@ impl ItemCategory {
             ItemCategory::Ammunition => "Ammunition",
             ItemCategory::Rune => "Runes",
             ItemCategory::Scroll => "Spell scrolls",
+            ItemCategory::RuneOrScroll => "Runes & scrolls",
             ItemCategory::Food => "Food & potions",
             ItemCategory::Misc => "Miscellaneous",
             ItemCategory::Amulet => "Amulets",
             ItemCategory::Ring => "Rings",
+            ItemCategory::Jewelry => "Jewelry",
             ItemCategory::Trophy => "Animal trophies",
             ItemCategory::Writing => "Writings",
+            ItemCategory::Document => "Documents",
             ItemCategory::Mission => "Mission items",
             ItemCategory::Key => "Keys",
+            ItemCategory::Potion => "Potions",
             ItemCategory::Other => "Other",
+            ItemCategory::Unknown => "Unknown",
         }
     }
 }
@@ -51,6 +68,8 @@ impl ItemCategory {
 /// Classify an item id by its Angelscript class-name prefix. The ordering of
 /// checks is significant (`ItAm_`, `ItAr_Rune_`/`ItAr_Scroll_`, and the
 /// `ItAt_Amulet_`/`ItAt_Ring_` specializations before the generic `ItAt_`).
+///
+/// This is the original fine-grained classification used by gore-save.
 pub fn item_category_from_id(id: &str) -> ItemCategory {
     if id.starts_with("ItMw_") {
         ItemCategory::MeleeWeapon
@@ -88,20 +107,68 @@ pub fn item_category_from_id(id: &str) -> ItemCategory {
     }
 }
 
-/// One entry in the generated **item** catalog JSON (`id` + `path` +
-/// `category`). This shape is item-catalog-specific: the NPC catalog uses
-/// `class` instead of `path` and the knowledge catalog omits `path`, so
-/// [`parse_catalog`] must not be used on those — they are frontend-only assets
-/// with no Rust consumer here.
+/// Classify an item id using the gore-cli coarser category set.
+///
+/// Uses combined categories (RuneOrScroll, Jewelry, Potion) suited to the
+/// modding toolchain. Returns `ItemCategory::Unknown` for unrecognized prefixes.
+pub fn category_for_id(id: &str) -> ItemCategory {
+    if id.starts_with("ItFo_") {
+        return ItemCategory::Food;
+    }
+    if id.starts_with("ItMw_") {
+        return ItemCategory::MeleeWeapon;
+    }
+    if id.starts_with("ItRw_") {
+        return ItemCategory::RangedWeapon;
+    }
+    if id.starts_with("ItAm_") {
+        return ItemCategory::Ammunition;
+    }
+    if id.starts_with("ItAt_Amulet_") || id.starts_with("ItAt_Ring_") {
+        return ItemCategory::Jewelry;
+    }
+    if id.starts_with("ItAt_") {
+        return ItemCategory::Trophy;
+    }
+    if id.starts_with("ItAr_") {
+        return ItemCategory::RuneOrScroll;
+    }
+    if id.starts_with("ItWr_") {
+        return ItemCategory::Document;
+    }
+    if id.starts_with("ItMs_") {
+        return ItemCategory::Mission;
+    }
+    if id.starts_with("ItKe_")
+        || id.starts_with("ItKey")
+        || id.starts_with("ItChestKey")
+        || id.starts_with("ItDoorKey")
+    {
+        return ItemCategory::Key;
+    }
+    if id.starts_with("ItPo_") || id.starts_with("ItLs_") {
+        return ItemCategory::Potion;
+    }
+    if id.starts_with("ItMi_") {
+        return ItemCategory::Misc;
+    }
+    ItemCategory::Unknown
+}
+
+/// One entry in a generated catalog JSON file produced by `gore-cli catalog`
+/// (item pipeline). Shape: id + path + category string (matches the historical
+/// `build_item_catalog.py` output, which `gore-cli catalog --kind item`
+/// reproduces byte-for-byte). This is the on-disk catalog shape; there is no
+/// separate in-memory catalog wrapper type.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CatalogEntry {
+pub struct CatalogJsonEntry {
     pub id: String,
     pub path: String,
     pub category: String,
 }
 
-/// Parse the item catalog JSON string (array of [`CatalogEntry`]).
-pub fn parse_catalog(json: &str) -> serde_json::Result<Vec<CatalogEntry>> {
+/// Parse a catalog JSON string (array of [`CatalogJsonEntry`]).
+pub fn parse_catalog(json: &str) -> serde_json::Result<Vec<CatalogJsonEntry>> {
     serde_json::from_str(json)
 }
 
