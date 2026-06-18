@@ -1,18 +1,15 @@
 -- gore-dump config — safe to edit your deployed copy.
 return {
-  -- Auto-dump when the game finishes loading (main menu is enough).
+  -- Auto stats-dump when the game finishes loading (main menu is enough).
   auto = {
     enabled  = true,
     delay_ms = 15000,
     stats    = true,   -- write gore_game_data.json (item stat defaults)
-    loc      = false,  -- loc dump freezes the game ~80s; run it on demand via
-                       -- the `gore-dump loc` console command instead.
   },
-  -- Loc dump scope.
+  -- Default kinds for the loc dump (override per call: `gore-dump loc de item`).
+  -- The loc dump is manual: the engine language does not drive the Alkimia text,
+  -- so set the language in the options menu, then run `gore-dump loc <lang>`.
   loc = {
-    kinds    = {"item", "npc", "knowledge"},
-    -- "all" = every culture the game ships (auto-discovered). Or pin a list,
-    -- e.g. {"en", "de", "fr"} — useful if culture auto-switch misbehaves.
-    cultures = "all",
+    kinds = {"item", "npc", "knowledge"},
   },
 }
