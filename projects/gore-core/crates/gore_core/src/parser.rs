@@ -120,7 +120,7 @@ pub fn parse_hpp_reader<R: BufRead>(reader: R) -> Result<ReflectionModel, ParseE
                 model.classes.push(b.build());
             }
             let name = rest.split(':').next().unwrap_or(rest).trim().to_string();
-            in_enum = Some(EnumBuilder { name, members: vec![] });
+            in_enum = Some(EnumBuilder::new(name));
             continue;
         }
 
@@ -153,7 +153,12 @@ pub fn parse_hpp_reader<R: BufRead>(reader: R) -> Result<ReflectionModel, ParseE
                     .take_while(|&c| c.is_ascii_alphanumeric() || c == '_')
                     .collect();
                 if !member.is_empty() && !trimmed.starts_with("//") {
-                    eb.members.push(member);
+                    // Capture an explicit `= N` discriminant so non-contiguous
+                    // enums keep their real backing value (the GUI writes the
+                    // value, not the member index). Members without one follow
+                    // C rules: previous value + 1, starting at 0.
+                    let explicit = trimmed.split_once('=').and_then(|(_, rhs)| parse_enum_value(rhs));
+                    eb.push(member, explicit);
                 }
             }
             continue;
@@ -202,16 +207,46 @@ impl ClassBuilder {
     }
 }
 
+/// Parse an enum discriminant from the text right of `=` (e.g. ` 5,` or
+/// ` 0x10 UMETA(...)`). Stops at the first non-numeric token, so a UMETA
+/// `DisplayName = "..."` (whose `=` may be matched first) yields None.
+fn parse_enum_value(rhs: &str) -> Option<i64> {
+    let tok: String = rhs
+        .trim()
+        .chars()
+        .take_while(|&c| c.is_ascii_alphanumeric() || c == '-')
+        .collect();
+    if let Some(hex) = tok.strip_prefix("0x").or_else(|| tok.strip_prefix("0X")) {
+        i64::from_str_radix(hex, 16).ok()
+    } else {
+        tok.parse::<i64>().ok()
+    }
+}
+
 struct EnumBuilder {
     name: String,
     members: Vec<String>,
+    values: Vec<i64>,
+    next: i64,
 }
 
 impl EnumBuilder {
+    fn new(name: String) -> Self {
+        Self { name, members: vec![], values: vec![], next: 0 }
+    }
+
+    fn push(&mut self, member: String, explicit: Option<i64>) {
+        let value = explicit.unwrap_or(self.next);
+        self.members.push(member);
+        self.values.push(value);
+        self.next = value + 1;
+    }
+
     fn build(self) -> Enum {
         Enum {
             name: self.name,
             members: self.members,
+            values: self.values,
         }
     }
 }
@@ -326,6 +361,8 @@ enum class EQuality : uint8
         let model = parse_hpp_reader(snippet.as_bytes()).unwrap();
         let e = model.enums.iter().find(|e| e.name == "EQuality").unwrap();
         assert_eq!(e.members, ["Low", "High", "Mid"], "got: {:?}", e.members);
+        // Backing values: auto 0, auto 1, explicit 5 (not the index 2).
+        assert_eq!(e.values, [0, 1, 5], "got: {:?}", e.values);
     }
 
     #[test]

@@ -88,6 +88,7 @@ List<FieldSchema> mergeDefaultBounds(List<FieldSchema> parsed) {
           minValue: f.minValue ?? def.minValue,
           maxValue: f.maxValue ?? def.maxValue,
           enumValues: f.enumValues,
+          enumBackingValues: f.enumBackingValues,
           defaultValue: f.defaultValue,
         )
       else

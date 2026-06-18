@@ -67,6 +67,16 @@ Object parsedValue(FieldSchema schema, String raw) {
     FieldType.float_  => double.parse(trimmed),
     FieldType.bool_   => trimmed == 'true',
     FieldType.string_ => trimmed,
-    FieldType.enum_   => schema.enumValues.indexOf(trimmed),
+    FieldType.enum_   => _enumBackingValue(schema, trimmed),
   };
+}
+
+/// The backing integer for an enum member name: its declared discriminant when
+/// known ([FieldSchema.enumBackingValues]), else the member index as a fallback
+/// (contiguous 0-based enums). `validateField` has already confirmed membership.
+int _enumBackingValue(FieldSchema schema, String member) {
+  final i = schema.enumValues.indexOf(member);
+  if (i < 0) return 0;
+  if (i < schema.enumBackingValues.length) return schema.enumBackingValues[i];
+  return i;
 }

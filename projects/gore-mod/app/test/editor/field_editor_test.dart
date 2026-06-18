@@ -179,4 +179,36 @@ void main() {
     ));
     expect(find.text('High'), findsOneWidget);
   });
+
+  testWidgets('non-contiguous enum: stored backing value shows the right member', (tester) async {
+    const enumItem = CatalogItem(
+      id: 'ItFo_Apple',
+      displayName: 'Apple',
+      fields: [
+        FieldSchema(
+          name: 'm_Quality',
+          type: FieldType.enum_,
+          enumValues: ['Low', 'Mid', 'High'],
+          enumBackingValues: [0, 5, 9],
+        ),
+      ],
+    );
+    // newValue 5 is the backing value of 'Mid' (index 1) — must show 'Mid',
+    // not the member at index 5.
+    final pending = {
+      'm_Quality': const OverrideEntry(
+        classId: 'ItFo_Apple', field: 'm_Quality', oldValue: 0, newValue: 5,
+      ),
+    };
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: FieldEditor(
+          item: enumItem,
+          pendingOverrides: pending,
+          onOverrideChanged: (_) {},
+        ),
+      ),
+    ));
+    expect(find.text('Mid'), findsOneWidget);
+  });
 }

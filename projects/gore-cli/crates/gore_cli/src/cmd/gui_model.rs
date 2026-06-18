@@ -31,11 +31,16 @@ pub struct GuiField {
     pub name: String,
     #[serde(rename = "type")]
     pub field_type: String,
-    /// Member names of an `enum` field, in declaration order (the GUI maps a
-    /// selection to its backing integer = index). Empty for non-enum fields;
-    /// skipped from the JSON so non-enum output stays byte-identical.
+    /// Member names of an `enum` field, in declaration order. Empty for
+    /// non-enum fields; skipped from the JSON so non-enum output stays
+    /// byte-identical.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub enum_values: Vec<String>,
+    /// Backing integer per enum member (parallel to `enum_values`). The GUI
+    /// writes this value, not the member index, so non-contiguous discriminants
+    /// (e.g. `Mid = 5`) round-trip correctly. Skipped when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub enum_value_ints: Vec<i64>,
     /// The field's real default value, read from the live CDO by the runtime
     /// dumper (`gore-cli sync`). Absent for header-derived models (`gui-model`),
     /// in which case the GUI falls back to a placeholder. Skipped from JSON when
@@ -137,19 +142,20 @@ fn gui_fields_for(model: &ReflectionModel, class_name: &str) -> Vec<GuiField> {
         .filter_map(|name| {
             let pt = type_by_name[name];
             let field_type = prop_type_to_gui(pt)?;
-            // For enum fields, resolve the named enum's members so the GUI can
-            // offer a dropdown (and map a choice to its backing int = index).
-            let enum_values = match pt {
-                PropType::Enum(enum_name) => model
-                    .find_enum(enum_name)
-                    .map(|e| e.members.clone())
-                    .unwrap_or_default(),
-                _ => Vec::new(),
+            // For enum fields, resolve the named enum's members + backing values
+            // so the GUI can offer a dropdown and write the real discriminant.
+            let (enum_values, enum_value_ints) = match pt {
+                PropType::Enum(enum_name) => match model.find_enum(enum_name) {
+                    Some(e) => (e.members.clone(), e.values.clone()),
+                    None => (Vec::new(), Vec::new()),
+                },
+                _ => (Vec::new(), Vec::new()),
             };
             Some(GuiField {
                 name: name.to_string(),
                 field_type: field_type.to_string(),
                 enum_values,
+                enum_value_ints,
                 default: None,
             })
         })
@@ -242,6 +248,7 @@ mod tests {
             enums: vec![Enum {
                 name: "EItemQuality".to_string(),
                 members: vec!["Low".to_string(), "Medium".to_string()],
+                values: vec![0, 1],
             }],
         }
     }
@@ -273,6 +280,7 @@ mod tests {
                         name: prop.name.clone(),
                         field_type: t.to_string(),
                         enum_values: Vec::new(),
+                        enum_value_ints: Vec::new(),
                         default: None,
                     });
                 }
@@ -328,6 +336,7 @@ mod tests {
                     name: prop.name.clone(),
                     field_type: t.to_string(),
                     enum_values: Vec::new(),
+                    enum_value_ints: Vec::new(),
                     default: None,
                 });
             }
@@ -431,6 +440,7 @@ mod tests {
         let quality = fields.iter().find(|f| f.name == "m_Quality").unwrap();
         assert_eq!(quality.field_type, "enum");
         assert_eq!(quality.enum_values, ["Low", "Medium"]);
+        assert_eq!(quality.enum_value_ints, [0, 1]);
         // Non-enum fields carry no choices.
         let value = fields.iter().find(|f| f.name == "m_Value").unwrap();
         assert!(value.enum_values.is_empty());
@@ -443,6 +453,7 @@ mod tests {
             name: "m_Value".into(),
             field_type: "int".into(),
             enum_values: vec![],
+            enum_value_ints: vec![],
             default: None,
         };
         assert_eq!(serde_json::to_string(&f).unwrap(), r#"{"name":"m_Value","type":"int"}"#);
@@ -450,11 +461,12 @@ mod tests {
             name: "m_Quality".into(),
             field_type: "enum".into(),
             enum_values: vec!["Low".into(), "High".into()],
+            enum_value_ints: vec![5, 9],
             default: None,
         };
         assert_eq!(
             serde_json::to_string(&e).unwrap(),
-            r#"{"name":"m_Quality","type":"enum","enum_values":["Low","High"]}"#
+            r#"{"name":"m_Quality","type":"enum","enum_values":["Low","High"],"enum_value_ints":[5,9]}"#
         );
     }
 

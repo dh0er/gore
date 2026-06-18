@@ -92,11 +92,21 @@ fn validate_field(class: &str, f: &GuiField) -> Result<GuiField> {
             "int" => d.is_i64() || d.is_u64(),
             "float" => d.is_number(),
             "bool" => d.is_boolean(),
-            // Enum defaults are the backing integer (member index); it must
-            // address a real member.
-            "enum" => d
-                .as_u64()
-                .is_some_and(|i| (i as usize) < f.enum_values.len()),
+            // Enum default is the backing integer. When backing values are
+            // known, it must be one of them. When the enum has no members at
+            // all (unresolved in the model), the GUI hides the field anyway, so
+            // tolerate the value rather than failing the whole sync — only
+            // require an integer.
+            "enum" => match (d.as_i64(), f.enum_values.is_empty()) {
+                (Some(v), false) if !f.enum_value_ints.is_empty() => {
+                    f.enum_value_ints.contains(&v)
+                }
+                // No backing values recorded: fall back to a member-index check.
+                (Some(v), false) => v >= 0 && (v as usize) < f.enum_values.len(),
+                // Member-less enum: accept any integer (field will be dropped).
+                (Some(_), true) => true,
+                (None, _) => false,
+            },
             _ => false,
         };
         if !ok {
@@ -192,6 +202,39 @@ mod tests {
             .to_string(),
         );
         assert!(build_model(&bad, ["ItFo_Apple"].into_iter()).is_err());
+    }
+
+    #[test]
+    fn enum_default_must_match_a_backing_value() {
+        let ok = parse_dump(
+            &json!({"classes": {"C": {"fields": [
+                {"name": "q", "type": "enum", "enum_values": ["Low", "Mid"], "enum_value_ints": [0, 5], "default": 5}
+            ]}}})
+            .to_string(),
+        );
+        assert!(build_model(&ok, ["C"].into_iter()).is_ok());
+
+        let bad = parse_dump(
+            &json!({"classes": {"C": {"fields": [
+                {"name": "q", "type": "enum", "enum_values": ["Low", "Mid"], "enum_value_ints": [0, 5], "default": 2}
+            ]}}})
+            .to_string(),
+        );
+        // 2 is a member index but not a backing value -> rejected.
+        assert!(build_model(&bad, ["C"].into_iter()).is_err());
+    }
+
+    #[test]
+    fn member_less_enum_default_is_tolerated() {
+        // gore-dump can write a numeric CDO value for an enum the model never
+        // resolved (no members); sync must not fail the whole run over it.
+        let d = parse_dump(
+            &json!({"classes": {"C": {"fields": [
+                {"name": "q", "type": "enum", "default": 7}
+            ]}}})
+            .to_string(),
+        );
+        assert!(build_model(&d, ["C"].into_iter()).is_ok());
     }
 
     #[test]

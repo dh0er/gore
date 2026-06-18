@@ -19,16 +19,18 @@ void main() {
       expect(f.defaultValue, isNull);
     });
 
-    test('enum default is the backing index alongside enum_values', () {
+    test('enum parses members, backing values and default', () {
       final f = FieldSchema.fromJson({
         'name': 'm_Quality',
         'type': 'enum',
-        'enum_values': ['Low', 'Medium', 'High'],
-        'default': 2,
+        'enum_values': ['Low', 'Mid', 'High'],
+        'enum_value_ints': [0, 5, 9],
+        'default': 5,
       });
       expect(f.type, FieldType.enum_);
-      expect(f.enumValues, ['Low', 'Medium', 'High']);
-      expect(f.defaultValue, 2);
+      expect(f.enumValues, ['Low', 'Mid', 'High']);
+      expect(f.enumBackingValues, [0, 5, 9]);
+      expect(f.defaultValue, 5);
     });
   });
 }

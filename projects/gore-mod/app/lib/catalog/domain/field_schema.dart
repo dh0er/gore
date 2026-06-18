@@ -12,6 +12,7 @@ class FieldSchema {
     this.minValue,
     this.maxValue,
     this.enumValues = const [],
+    this.enumBackingValues = const [],
     this.defaultValue,
   });
 
@@ -26,6 +27,12 @@ class FieldSchema {
 
   /// Non-empty only when [type] == [FieldType.enum_].
   final List<String> enumValues;
+
+  /// Backing integer per enum member (parallel to [enumValues]). The override
+  /// stores this value, not the member index, so non-contiguous discriminants
+  /// (e.g. `Mid = 5`) round-trip. Empty when unknown — callers then fall back
+  /// to the index.
+  final List<int> enumBackingValues;
 
   /// The field's real CDO default value, when the model came from a runtime
   /// dump (`gore-cli sync`). null when unknown (header-derived model) — the
@@ -49,6 +56,11 @@ class FieldSchema {
       maxValue:   json['max'] as num?,
       enumValues: (json['enum_values'] as List?)
                       ?.whereType<String>()
+                      .toList() ??
+                  const [],
+      enumBackingValues: (json['enum_value_ints'] as List?)
+                      ?.whereType<num>()
+                      .map((n) => n.toInt())
                       .toList() ??
                   const [],
       defaultValue: json['default'],

@@ -109,10 +109,9 @@ class _FieldEditorState extends State<FieldEditor> {
     final d = field.defaultValue;
     if (d != null) {
       if (field.type == FieldType.enum_ && d is int) {
-        if (d >= 0 && d < field.enumValues.length) return field.enumValues[d];
-      } else {
-        return d.toString();
+        return _enumMemberName(field, d);
       }
+      return d.toString();
     }
     return switch (field.type) {
       FieldType.bool_  => 'false',
@@ -122,14 +121,24 @@ class _FieldEditorState extends State<FieldEditor> {
   }
 
   /// Display text for a pending override. Enum overrides store the backing
-  /// integer (the member index), so map it back to the member name for the
-  /// dropdown / text field; everything else displays its value directly.
+  /// integer, so map it back to the member name for the dropdown / text field;
+  /// everything else displays its value directly.
   String _pendingText(FieldSchema field, OverrideEntry override) {
     final v = override.newValue;
     if (field.type == FieldType.enum_ && v is int) {
-      if (v >= 0 && v < field.enumValues.length) return field.enumValues[v];
+      return _enumMemberName(field, v);
     }
     return v.toString();
+  }
+
+  /// Member name for a stored enum backing value: look it up in
+  /// [FieldSchema.enumBackingValues] when known, else treat the value as a
+  /// member index. Falls back to the value's string form if unresolved.
+  String _enumMemberName(FieldSchema field, int value) {
+    final byBacking = field.enumBackingValues.indexOf(value);
+    final idx = byBacking >= 0 ? byBacking : value;
+    if (idx >= 0 && idx < field.enumValues.length) return field.enumValues[idx];
+    return value.toString();
   }
 
   void _onChanged(FieldSchema field, String raw) {

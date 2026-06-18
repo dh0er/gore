@@ -42,11 +42,22 @@ void main() {
     test('int', ()    => expect(parsedValue(intSchema,   '500'), 500));
     test('float', ()  => expect(parsedValue(floatSchema, '1.5'), 1.5));
     test('bool', ()   => expect(parsedValue(boolSchema,  'true'), true));
-    // Enum resolves to the member's backing int (index), not the name —
-    // gore_core only accepts value_int for int-backed enum CDO fields.
-    test('enum -> backing int', () {
+    // Enum resolves to the member's backing int — the index as a fallback when
+    // no explicit backing values are known.
+    test('enum -> index when no backing values', () {
       expect(parsedValue(enumSchema, 'Low'), 0);
       expect(parsedValue(enumSchema, 'High'), 2);
+    });
+
+    test('enum -> declared backing value (non-contiguous)', () {
+      const s = FieldSchema(
+        name: 'm_Q',
+        type: FieldType.enum_,
+        enumValues: ['Low', 'Mid', 'High'],
+        enumBackingValues: [0, 5, 9],
+      );
+      expect(parsedValue(s, 'Mid'), 5);
+      expect(parsedValue(s, 'High'), 9);
     });
   });
 }
