@@ -142,12 +142,15 @@ fn gui_fields_for(model: &ReflectionModel, class_name: &str) -> Vec<GuiField> {
         .filter_map(|name| {
             let pt = type_by_name[name];
             let field_type = prop_type_to_gui(pt)?;
-            // For enum fields, resolve the named enum's members + backing values
-            // so the GUI can offer a dropdown and write the real discriminant.
+            // For enum fields, expose the dropdown ONLY when the backing values
+            // are known — the GUI writes the discriminant, so without it we'd
+            // emit member names the editor would (wrongly) encode as indices.
+            // Enums with no/unreliable values (unparsed expressions) get no
+            // choices and the GUI hides them.
             let (enum_values, enum_value_ints) = match pt {
                 PropType::Enum(enum_name) => match model.find_enum(enum_name) {
-                    Some(e) => (e.members.clone(), e.values.clone()),
-                    None => (Vec::new(), Vec::new()),
+                    Some(e) if !e.values.is_empty() => (e.members.clone(), e.values.clone()),
+                    _ => (Vec::new(), Vec::new()),
                 },
                 _ => (Vec::new(), Vec::new()),
             };
@@ -431,6 +434,32 @@ mod tests {
         let fields = gui_fields_for(&model, "UDerived");
         let names: Vec<&str> = fields.iter().map(|f| f.name.as_str()).collect();
         assert_eq!(names, ["m_Y"], "shadowed-by-String m_X must be dropped: {names:?}");
+    }
+
+    #[test]
+    fn unreliable_enum_without_values_is_not_exposed() {
+        // An enum whose backing values couldn't be parsed (empty values) must
+        // emit no choices, so the GUI hides it rather than writing wrong indices.
+        let model = ReflectionModel {
+            classes: vec![Class {
+                name: "UThing".to_string(),
+                parent: None,
+                properties: vec![Property {
+                    name: "m_Q".to_string(),
+                    prop_type: PropType::Enum("EFlags".to_string()),
+                    offset: None,
+                }],
+            }],
+            enums: vec![Enum {
+                name: "EFlags".to_string(),
+                members: vec!["A".to_string(), "B".to_string()],
+                values: vec![], // unreliable -> dropped by the parser
+            }],
+        };
+        let fields = gui_fields_for(&model, "UThing");
+        let q = fields.iter().find(|f| f.name == "m_Q").unwrap();
+        assert!(q.enum_values.is_empty());
+        assert!(q.enum_value_ints.is_empty());
     }
 
     #[test]
