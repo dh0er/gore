@@ -229,7 +229,16 @@ impl ClassBuilder {
 /// constant, or trailing tokens — yields None so the caller can omit the
 /// enum's backing values instead of recording a wrong one.
 fn parse_enum_value(rhs: &str) -> Option<i64> {
-    let s = rhs.split(',').next().unwrap_or(rhs).trim();
+    // Drop a trailing `// ...` inline comment and anything past the `,`, then
+    // the remaining token must be a single literal (no internal whitespace).
+    let s = rhs
+        .split("//")
+        .next()
+        .unwrap_or(rhs)
+        .split(',')
+        .next()
+        .unwrap_or(rhs)
+        .trim();
     if s.is_empty() || s.contains(char::is_whitespace) {
         return None;
     }
@@ -408,6 +417,22 @@ enum class EFlags : uint8
         let e = model.enums.iter().find(|e| e.name == "EFlags").unwrap();
         assert_eq!(e.members, ["FlagA", "FlagB"]);
         assert!(e.values.is_empty(), "got: {:?}", e.values);
+    }
+
+    #[test]
+    fn enum_member_with_inline_comment_keeps_value() {
+        // `= 42 // note` (no comma before the comment) must still parse, not
+        // poison the whole enum.
+        let snippet = "\
+enum class EThing : uint8
+{
+    A,
+    B = 42 // hand-tuned
+};
+";
+        let model = parse_hpp_reader(snippet.as_bytes()).unwrap();
+        let e = model.enums.iter().find(|e| e.name == "EThing").unwrap();
+        assert_eq!(e.values, [0, 42], "got: {:?}", e.values);
     }
 
     #[test]
