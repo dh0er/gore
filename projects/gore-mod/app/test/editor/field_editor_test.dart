@@ -19,7 +19,6 @@ void main() {
   Widget buildEditor({
     Map<String, OverrideEntry> pending = const {},
     void Function(OverrideEntry)? onChanged,
-    void Function(String)? onCleared,
   }) {
     return MaterialApp(
       home: Scaffold(
@@ -27,7 +26,6 @@ void main() {
           item: apple,
           pendingOverrides: pending,
           onOverrideChanged: onChanged ?? (_) {},
-          onOverrideCleared: onCleared ?? (_) {},
         ),
       ),
     );
@@ -75,24 +73,22 @@ void main() {
     expect(find.byIcon(Icons.edit), findsOneWidget);
   });
 
-  testWidgets('reverting a pending field to default clears the override', (tester) async {
+  testWidgets('entering 0 emits an override (not treated as a clear)', (tester) async {
+    // Start from a pending non-zero so typing 0 is a real change.
     final pending = {
       'm_Value': const OverrideEntry(
         classId: 'ItFo_Apple', field: 'm_Value', oldValue: 0, newValue: 500,
       ),
     };
-    String? cleared;
     OverrideEntry? changed;
-    await tester.pumpWidget(buildEditor(
-      pending: pending,
-      onCleared: (f) => cleared = f,
-      onChanged: (e) => changed = e,
-    ));
-    // Type the catalog default back into the (already overridden) field.
+    await tester.pumpWidget(buildEditor(pending: pending, onChanged: (e) => changed = e));
+    // 0 is a valid value (m_Value minValue is 0); it must be exportable, not
+    // swallowed as a "revert to default".
     await tester.enterText(find.byType(TextField).first, '0');
+    await tester.testTextInput.receiveAction(TextInputAction.done);
     await tester.pump();
-    expect(cleared, 'm_Value');
-    expect(changed, isNull);
+    expect(changed?.field, 'm_Value');
+    expect(changed?.newValue, 0);
   });
 
   testWidgets('resyncs field text when a pending override is removed externally', (tester) async {
@@ -108,5 +104,36 @@ void main() {
     // Parent rebuilds with the override removed (OverridesPanel Clear all).
     await tester.pumpWidget(buildEditor(pending: const {}));
     expect(tester.widget<TextField>(field).controller!.text, '0');
+  });
+
+  testWidgets('enum override stored as backing int displays the member name', (tester) async {
+    const enumItem = CatalogItem(
+      id: 'ItFo_Apple',
+      displayName: 'Apple',
+      fields: [
+        FieldSchema(
+          name: 'm_Quality',
+          type: FieldType.enum_,
+          enumValues: ['Low', 'Medium', 'High'],
+        ),
+      ],
+    );
+    // Pending override holds the backing int (2 == 'High'), as parsedValue
+    // produces — the dropdown must show 'High', not '2'.
+    final pending = {
+      'm_Quality': const OverrideEntry(
+        classId: 'ItFo_Apple', field: 'm_Quality', oldValue: 0, newValue: 2,
+      ),
+    };
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: FieldEditor(
+          item: enumItem,
+          pendingOverrides: pending,
+          onOverrideChanged: (_) {},
+        ),
+      ),
+    ));
+    expect(find.text('High'), findsOneWidget);
   });
 }

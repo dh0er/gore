@@ -5,16 +5,16 @@ import '../domain/field_validator.dart';
 import '../domain/override_entry.dart';
 
 /// Per-item field editor: renders each [FieldSchema] as a typed input.
-/// Calls [onOverrideChanged] with a valid [OverrideEntry] on every
-/// committed valid change; calls [onOverrideCleared] when the user
-/// reverts a field to the catalog default.
+/// Calls [onOverrideChanged] with a valid [OverrideEntry] on every committed
+/// valid change — including values that equal the placeholder default (e.g.
+/// `0`), since the model carries no real CDO default to compare against.
+/// Removing an override is done explicitly from the OverridesPanel.
 class FieldEditor extends StatefulWidget {
   const FieldEditor({
     super.key,
     required this.item,
     required this.pendingOverrides,
     required this.onOverrideChanged,
-    required this.onOverrideCleared,
   });
 
   final CatalogItem item;
@@ -22,7 +22,6 @@ class FieldEditor extends StatefulWidget {
   /// Existing pending overrides for this item (keyed by field name).
   final Map<String, OverrideEntry> pendingOverrides;
   final void Function(OverrideEntry) onOverrideChanged;
-  final void Function(String fieldName) onOverrideCleared;
 
   @override
   State<FieldEditor> createState() => _FieldEditorState();
@@ -63,7 +62,7 @@ class _FieldEditorState extends State<FieldEditor> {
       if (controller == null || _errors[field.name] != null) continue;
       final pending = widget.pendingOverrides[field.name];
       final expected =
-          pending != null ? pending.newValue.toString() : _defaultText(field);
+          pending != null ? _pendingText(field, pending) : _defaultText(field);
       if (controller.text != expected) {
         controller.text = expected;
       }
@@ -82,7 +81,7 @@ class _FieldEditorState extends State<FieldEditor> {
     for (final field in widget.item.fields) {
       final pending = widget.pendingOverrides[field.name];
       final text = pending != null
-          ? pending.newValue.toString()
+          ? _pendingText(field, pending)
           : _defaultText(field);
       _controllers[field.name] = TextEditingController(text: text);
     }
@@ -94,26 +93,33 @@ class _FieldEditorState extends State<FieldEditor> {
     _                => '0',
   };
 
+  /// Display text for a pending override. Enum overrides store the backing
+  /// integer (the member index), so map it back to the member name for the
+  /// dropdown / text field; everything else displays its value directly.
+  String _pendingText(FieldSchema field, OverrideEntry override) {
+    final v = override.newValue;
+    if (field.type == FieldType.enum_ && v is int) {
+      if (v >= 0 && v < field.enumValues.length) return field.enumValues[v];
+    }
+    return v.toString();
+  }
+
   void _onChanged(FieldSchema field, String raw) {
     final error = validateField(field, raw);
     setState(() => _errors[field.name] = error);
     if (error != null) return;
 
-    final value = parsedValue(field, raw);
-    // If reverted to the default, clear the override instead of emitting one —
-    // including when a pending override already exists for this field (the
-    // common edit→revert flow), otherwise the no-op default assignment would
-    // stay in the export payload.
-    final defaultStr = _defaultText(field);
-    if (raw.trim() == defaultStr) {
-      widget.onOverrideCleared(field.name);
-      return;
-    }
+    // Emit an override for every valid value, including the placeholder
+    // default (0 / false / first enum member). The model carries no real CDO
+    // default to compare against — the placeholder is only a display guess
+    // (the true default of m_Value may be 4, not 0) — so treating "value ==
+    // placeholder" as a revert both mis-fires and makes it impossible to set a
+    // field to 0. Override removal is done from the OverridesPanel.
     widget.onOverrideChanged(OverrideEntry(
       classId:  widget.item.id,
       field:    field.name,
-      oldValue: parsedValue(field, defaultStr),
-      newValue: value,
+      oldValue: parsedValue(field, _defaultText(field)),
+      newValue: parsedValue(field, raw),
     ));
   }
 

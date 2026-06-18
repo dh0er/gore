@@ -99,10 +99,6 @@ class HomePage extends ConsumerWidget {
                     },
                     onOverrideChanged: (entry) =>
                         ref.read(overridesProvider.notifier).setOverride(entry),
-                    onOverrideCleared: (field) =>
-                        ref.read(overridesProvider.notifier).removeOverride(
-                              '${selected.id}.$field',
-                            ),
                   ),
           ),
           const VerticalDivider(width: 1),
