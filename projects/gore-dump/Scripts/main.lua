@@ -143,6 +143,21 @@ local function dump_loc(lang, kinds)
   local cur = current_culture()
   log("loc: dumping language '" .. label .. "' (engine reports " .. tostring(cur) .. ")")
 
+  -- NPC names are not baked into the CharacterDefinition CDO (m_Name is empty);
+  -- they resolve via the Alkimia loc subsystem keyed by the unique name
+  -- (GetText("OC_STT_Diego") -> "Diego"). GetText is the only subsystem call
+  -- proven crash-safe in-game (the TArray/TMap getters and the language-set
+  -- mutators crash), so we use just that, in the current menu language.
+  local locsub = FindFirstOf("AlkimiaLocalizationSubsystem")
+  local function loc_get(id)
+    if not (locsub and id and id ~= "") then return nil end
+    local ok, v = pcall(function() return locsub:GetText(id) end)
+    if not ok then return nil end
+    local s = to_str(v)
+    if s and s ~= "" then return s end
+    return nil
+  end
+
   -- per-kind diagnostics: distinguish "CDO not loaded" from "found but no text".
   local total, found, textful = {}, {}, {}
 
@@ -154,10 +169,21 @@ local function dump_loc(lang, kinds)
       if cdo and cdo:IsValid() then
         found[t.kind] = (found[t.kind] or 0) + 1
         local fparts = {}
-        for _, field in ipairs(LOC.fields_by_kind[t.kind] or {}) do
-          local s = read_ftext(cdo, field)
-          if s then
-            fparts[#fparts + 1] = string.format('"%s":"%s"', json_escape(field), json_escape(s))
+        if t.kind == "npc" then
+          -- name via subsystem(m_UniqueName); description via subsystem too.
+          local uid
+          local ok, raw = pcall(function() return cdo.m_UniqueName end)
+          if ok then uid = to_str(raw) end
+          local nm = loc_get(uid)
+          if nm then
+            fparts[#fparts + 1] = string.format('"m_Name":"%s"', json_escape(nm))
+          end
+        else
+          for _, field in ipairs(LOC.fields_by_kind[t.kind] or {}) do
+            local s = read_ftext(cdo, field)
+            if s then
+              fparts[#fparts + 1] = string.format('"%s":"%s"', json_escape(field), json_escape(s))
+            end
           end
         end
         if #fparts > 0 then
@@ -230,10 +256,41 @@ local function probe_cdo(class, out)
   end
 end
 
+-- Probe the Alkimia loc subsystem: language-set names + whether it can read text
+-- by id/language directly (which would let one run cover every language).
+local function locapi_probe(arg, out)
+  local sub = FindFirstOf("AlkimiaLocalizationSubsystem")
+  if not (sub and sub:IsValid()) then
+    out("locapi: AlkimiaLocalizationSubsystem NOT found")
+    return
+  end
+  out("locapi: subsystem found")
+
+  -- WARNING: pcall does NOT catch native access violations. The TArray/TMap
+  -- field iterators and the language-set mutators (SetActiveDisplayLanguageSet /
+  -- ReloadLocalization) AV-crash the game, so this probe only uses GetText
+  -- (proven safe) and a single FName field read. GetTextAsString is tried only
+  -- when you pass an explicit language id: `gore-dump locapi <langId>`.
+  local ok, active = pcall(function() return sub.ActiveDisplayLanguageSet end)
+  out("  ActiveDisplayLanguageSet = " .. tostring(ok and to_str(active) or "<err>"))
+
+  for _, id in ipairs({"OC_STT_Diego", "OC_STT_Gorn_699"}) do
+    local g = pcall(function() return sub:GetText(id) end)
+    local v = g and to_str(sub:GetText(id)) or "<err>"
+    out("  GetText('" .. id .. "') = " .. tostring(v))
+  end
+
+  if arg and arg ~= "" then
+    local ok2, v = pcall(function() return sub:GetTextAsString("OC_STT_Diego", arg) end)
+    out("  GetTextAsString('OC_STT_Diego','" .. arg .. "') = " .. (ok2 and tostring(to_str(v) or v) or "<err/crash-risk>"))
+  end
+end
+
 -- gore-dump stats
 -- gore-dump loc <lang> [item,npc,knowledge]   (set the menu language first)
 -- gore-dump all <lang> [item,npc,knowledge]
 -- gore-dump probe <ClassName>                 (inspect one CDO's name fields)
+-- gore-dump locapi [langSet]                  (probe the Alkimia loc subsystem)
 RegisterConsoleCommandHandler("gore-dump", function(_, Parameters, Ar)
   local function out(m)
     if Ar then pcall(function() Ar:Log(m) end) end
@@ -252,8 +309,10 @@ RegisterConsoleCommandHandler("gore-dump", function(_, Parameters, Ar)
     out("all: done")
   elseif sub == "probe" then
     probe_cdo(Parameters[2], out)
+  elseif sub == "locapi" then
+    locapi_probe(Parameters[2], out)
   else
-    out("usage: gore-dump <stats | loc <lang> | all <lang> | probe <Class>> [item,npc,knowledge]")
+    out("usage: gore-dump <stats | loc <lang> | all <lang> | probe <Class> | locapi [set]> [item,npc,knowledge]")
   end
   return true
 end)
