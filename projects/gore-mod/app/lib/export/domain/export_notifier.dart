@@ -86,9 +86,9 @@ class ExportNotifier extends StateNotifier<ExportState> {
     }
 
     // gore_core returns the mod as an in-memory `files` map (relative path ->
-    // contents); it does not touch the filesystem. Materialize those files
-    // under <targetDir>/<modName>/ before reporting success — otherwise the
-    // chosen folder stays empty.
+    // contents); it does not touch the filesystem. Materialize it before
+    // reporting success — either as a single <modName>.zip or as the
+    // <modName>/ folder — otherwise the chosen folder stays empty.
     final files = (res['files'] as Map?)?.cast<String, Object?>();
     if (files == null) {
       state = state.copyWith(
@@ -98,78 +98,77 @@ class ExportNotifier extends StateNotifier<ExportState> {
       return;
     }
 
-    final modDir = Directory(p.join(request.targetDir, request.modName));
-    // Stage every file in a sibling temp directory and only swap it into place
-    // once all writes succeed. Writing straight into an existing <modName>
-    // would, on a mid-way failure (locked Scripts/main.lua, disk full), leave a
-    // partially overwritten mod that UE4SS might still load.
-    final staging = Directory(p.join(request.targetDir, '${request.modName}.tmp-export'));
-    final backup = Directory(p.join(request.targetDir, '${request.modName}.bak-export'));
-    final zipPath = p.join(request.targetDir, '${request.modName}.zip');
-    final zipTmp = File('$zipPath.tmp-export');
-    String outputPath = modDir.path;
+    // Every temp/backup path gets a unique suffix so a retry never collides
+    // with (and deletes) a backup a previous failed export left behind.
+    final uid = DateTime.now().microsecondsSinceEpoch.toString();
     try {
-      if (staging.existsSync()) staging.deleteSync(recursive: true);
+      final outputPath = request.packageAsZip
+          ? _writeZipAtomically(request, files, uid)
+          : _writeFolderAtomically(request, files, uid);
+      state = state.copyWith(
+        isExporting: false,
+        result: ExportResult(outputPath: outputPath),
+      );
+    } on FileSystemException catch (e) {
+      state = state.copyWith(
+        isExporting: false,
+        result: ExportResult(error: 'Failed to write mod files: ${e.message}'),
+      );
+    }
+  }
+
+  /// Write the mod as the `<targetDir>/<modName>/` folder. All files are staged
+  /// in a unique sibling dir; only once they are all written is the prior
+  /// export swapped out (moved to a unique backup, staging renamed in, backup
+  /// dropped). Any failure rolls back to the prior state and throws.
+  String _writeFolderAtomically(
+    ExportRequest request,
+    Map<String, Object?> files,
+    String uid,
+  ) {
+    final modDir = Directory(p.join(request.targetDir, request.modName));
+    final staging = Directory('${modDir.path}.staging-$uid');
+    final backup = Directory('${modDir.path}.backup-$uid');
+    var oldMoved = false;
+    var promoted = false;
+    try {
       for (final entry in files.entries) {
         final outFile = File(p.join(staging.path, entry.key));
         outFile.parent.createSync(recursive: true);
         outFile.writeAsStringSync(entry.value as String? ?? '');
       }
-      // Do the fallible zip work (encode + temp write) BEFORE any promotion, so
-      // a zip failure aborts the whole export cleanly with the old mod intact —
-      // rather than leaving the folder updated while reporting failure. After
-      // this point only near-atomic renames remain.
-      if (request.packageAsZip) _stageZip(request, files, zipTmp);
-
-      // Promote with a safe swap: move any prior export aside to a backup,
-      // rename the completed staging dir into place, then drop the backup. If
-      // the promotion rename fails (lock, antivirus, cross-volume), the backup
-      // is restored below so neither the old nor the new mod is lost.
-      if (backup.existsSync()) backup.deleteSync(recursive: true);
-      if (modDir.existsSync()) modDir.renameSync(backup.path);
+      if (modDir.existsSync()) {
+        modDir.renameSync(backup.path);
+        oldMoved = true;
+      }
       staging.renameSync(modDir.path);
-      if (request.packageAsZip) {
-        zipTmp.renameSync(zipPath);
-        outputPath = zipPath;
-      }
-      if (backup.existsSync()) backup.deleteSync(recursive: true);
-    } on FileSystemException catch (e) {
-      // Drop the incomplete staging dir and any temp zip, and if the old mod was
-      // moved aside but not yet restored, put it back. The backup is never
-      // deleted on failure — it holds the user's prior export.
-      try {
-        if (staging.existsSync()) staging.deleteSync(recursive: true);
-        if (zipTmp.existsSync()) zipTmp.deleteSync();
-      } on FileSystemException {
-        // best-effort
-      }
-      try {
-        if (backup.existsSync() && !modDir.existsSync()) {
-          backup.renameSync(modDir.path);
-        }
-      } on FileSystemException {
-        // best-effort; surface the original failure regardless
-      }
-      state = state.copyWith(
-        isExporting: false,
-        result: ExportResult(error: 'Failed to write mod files: ${e.message}'),
+      promoted = true;
+      if (oldMoved) backup.deleteSync(recursive: true);
+      return modDir.path;
+    } on FileSystemException {
+      _rollback(
+        promotedTarget: promoted ? modDir : null,
+        staging: staging,
+        oldMoved: oldMoved,
+        backup: backup,
+        target: modDir,
       );
-      return;
+      rethrow;
     }
-
-    state = state.copyWith(
-      isExporting: false,
-      result: ExportResult(outputPath: outputPath),
-    );
   }
 
-  /// Encode the returned files into a temp zip at [zipTmp], with every entry
-  /// nested under `<modName>/` (the same layout `gore-cli package` produces, so
-  /// UE4SS sees a single mod folder when the archive is extracted into the Mods
-  /// directory). The caller renames the temp into place only after the folder
-  /// promotion succeeds, so a failed/partial archive never clobbers a prior
-  /// good zip or leaves the export half-applied.
-  void _stageZip(ExportRequest request, Map<String, Object?> files, File zipTmp) {
+  /// Write the mod as a single `<targetDir>/<modName>.zip`, every entry nested
+  /// under `<modName>/` (the layout `gore-cli package` produces). Encoding and
+  /// the temp write happen first; the prior zip is only swapped out via
+  /// rename once the new archive is complete, with rollback on any failure.
+  String _writeZipAtomically(
+    ExportRequest request,
+    Map<String, Object?> files,
+    String uid,
+  ) {
+    final zipFile = File(p.join(request.targetDir, '${request.modName}.zip'));
+    final staging = File('${zipFile.path}.staging-$uid');
+    final backup = File('${zipFile.path}.backup-$uid');
     final archive = Archive();
     for (final entry in files.entries) {
       final bytes = utf8.encode(entry.value as String? ?? '');
@@ -181,7 +180,56 @@ class ExportNotifier extends StateNotifier<ExportState> {
     if (zipBytes == null) {
       throw const FileSystemException('zip encoding failed');
     }
-    zipTmp.writeAsBytesSync(zipBytes);
+    var oldMoved = false;
+    var promoted = false;
+    try {
+      staging.writeAsBytesSync(zipBytes);
+      if (zipFile.existsSync()) {
+        zipFile.renameSync(backup.path);
+        oldMoved = true;
+      }
+      staging.renameSync(zipFile.path);
+      promoted = true;
+      if (oldMoved) backup.deleteSync();
+      return zipFile.path;
+    } on FileSystemException {
+      _rollback(
+        promotedTarget: promoted ? zipFile : null,
+        staging: staging,
+        oldMoved: oldMoved,
+        backup: backup,
+        target: zipFile,
+      );
+      rethrow;
+    }
+  }
+
+  /// Restore the prior state after a failed atomic write: undo a completed
+  /// promotion, restore the moved-aside backup, and drop the staging artifact.
+  /// [target]/[staging]/[backup]/[promotedTarget] are all File or Directory
+  /// (FileSystemEntity). Backups are never deleted here — they hold the user's
+  /// prior export. Each step is best-effort so the original error still
+  /// surfaces.
+  void _rollback({
+    required FileSystemEntity? promotedTarget,
+    required FileSystemEntity staging,
+    required bool oldMoved,
+    required FileSystemEntity backup,
+    required FileSystemEntity target,
+  }) {
+    if (promotedTarget != null && promotedTarget.existsSync()) {
+      try {
+        promotedTarget.renameSync(staging.path);
+      } on FileSystemException {/* best-effort */}
+    }
+    if (oldMoved && backup.existsSync() && !target.existsSync()) {
+      try {
+        backup.renameSync(target.path);
+      } on FileSystemException {/* best-effort */}
+    }
+    try {
+      if (staging.existsSync()) staging.deleteSync(recursive: true);
+    } on FileSystemException {/* best-effort */}
   }
 
   void clearResult() => state = state.copyWith(clearResult: true);
