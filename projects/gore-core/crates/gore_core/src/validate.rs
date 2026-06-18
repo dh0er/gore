@@ -26,21 +26,29 @@ pub fn validate_config(cfg: &OverridesConfig, model: &ReflectionModel) -> Vec<Va
     let mut errors = Vec::new();
 
     for o in &cfg.overrides {
-        // 1. Class exists? — try the bare id first, then the UE U-prefix variant
-        //    (gui-model stores classes as "UFoo" but overrides may say "Foo").
-        let resolved_class = if model.find_class(&o.class).is_some() {
-            o.class.clone()
-        } else {
-            let u_prefixed = format!("U{}", o.class);
-            if model.find_class(&u_prefixed).is_some() {
-                u_prefixed
-            } else {
-                errors.push(ValidationError::UnknownClass {
-                    class: o.class.clone(),
-                });
-                // Can't check field without a class — skip to next override
-                continue;
-            }
+        // 1. Class exists? Resolve the bare/UE spellings symmetrically: the
+        //    model may carry either the UE `U`-prefixed name (`UItMi_Orenugget`)
+        //    or the bare AngelScript name (`ItMi_Orenugget`, as some SDK fixtures
+        //    parse), and the override may use either, so try the name as-is, with
+        //    a `U` added, and with a leading `U` stripped.
+        let stripped = o.class.strip_prefix('U').filter(|r| {
+            r.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+        });
+        let candidates = [
+            o.class.clone(),
+            format!("U{}", o.class),
+            stripped.map(str::to_string).unwrap_or_default(),
+        ];
+        let resolved_class = candidates
+            .iter()
+            .find(|c| !c.is_empty() && model.find_class(c).is_some())
+            .cloned();
+        let Some(resolved_class) = resolved_class else {
+            errors.push(ValidationError::UnknownClass {
+                class: o.class.clone(),
+            });
+            // Can't check field without a class — skip to next override
+            continue;
         };
 
         // 2. Field exists (on class or ancestor)?
@@ -172,6 +180,28 @@ mod validate_tests {
         assert!(
             errors.iter().any(|e| matches!(e, ValidationError::UnknownClass { .. })),
             "expected UnknownClass error, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn u_prefixed_override_resolves_against_bare_model() {
+        // Model carries the bare AngelScript name; override uses the UE spelling.
+        let model = ReflectionModel {
+            classes: vec![Class {
+                name: "ItFo_Apple".to_string(),
+                parent: None,
+                properties: vec![Property {
+                    name: "m_Value".to_string(),
+                    prop_type: PropType::Int,
+                    offset: None,
+                }],
+            }],
+            enums: vec![],
+        };
+        let cfg = make_config("UItFo_Apple", "m_Value", OverrideValue::Int(7));
+        assert!(
+            validate_config(&cfg, &model).is_empty(),
+            "U-spelled override must resolve against a bare model class"
         );
     }
 

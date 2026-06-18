@@ -186,7 +186,11 @@ pub fn runtime_class_name(class: &str) -> &str {
 
 /// Generate a `main.lua` string from the given config.
 pub fn gen_lua(cfg: &OverridesConfig) -> String {
-    let mod_name = &cfg.meta.name;
+    // The mod name is embedded in Lua log string literals below, so it must be
+    // Lua-escaped (validate_mod_name only guarantees path-safety, not that the
+    // name is free of Lua delimiters like `"`).
+    let mod_name = lua_escape(&cfg.meta.name);
+    let mod_name = mod_name.as_str();
 
     // Build OVERRIDES table
     let mut overrides_rows = Vec::new();
@@ -251,6 +255,22 @@ mod gen_tests {
         // Lowercase after U is not the UE class convention — leave untouched.
         assert_eq!(runtime_class_name("Underground"), "Underground");
         assert_eq!(runtime_class_name("U"), "U");
+    }
+
+    #[test]
+    fn gen_lua_escapes_mod_name_in_log_strings() {
+        let cfg = OverridesConfig {
+            meta: MetaConfig { name: r#"Bad"Mod"#.to_string(), delay_ms: 0 },
+            overrides: vec![SingleOverride {
+                class: "ItFo_Apple".to_string(),
+                field: "m_Value".to_string(),
+                value: OverrideValue::Int(1),
+            }],
+        };
+        let lua = gen_lua(&cfg);
+        // The raw unescaped delimiter must not appear; the escaped form must.
+        assert!(lua.contains(r#"[Bad\"Mod]"#), "mod name must be Lua-escaped: {lua}");
+        assert!(!lua.contains(r#"[Bad"Mod]"#), "raw quote must not leak: {lua}");
     }
 
     #[test]

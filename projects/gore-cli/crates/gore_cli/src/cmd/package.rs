@@ -35,8 +35,12 @@ pub fn run(mod_dir: PathBuf, out: PathBuf) -> Result<()> {
     let options = SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated);
 
+    // The zip was just created; if it lives inside mod_dir, exclude it from the
+    // walk so the archive doesn't try to package itself.
+    let out_canon = fs::canonicalize(&out).ok();
+
     // Walk mod_dir recursively and add every file, prefixed with mod_name/
-    add_dir_to_zip(&mut zip, &mod_dir, &mod_dir, &mod_name, options)?;
+    add_dir_to_zip(&mut zip, &mod_dir, &mod_dir, &mod_name, options, out_canon.as_deref())?;
 
     zip.finish().context("finalizing zip")?;
     println!("Packaged mod -> {}", out.display());
@@ -49,10 +53,17 @@ fn add_dir_to_zip(
     dir: &Path,
     mod_name: &str,
     options: zip::write::SimpleFileOptions,
+    out_skip: Option<&Path>,
 ) -> Result<()> {
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
+        // Never package the output archive into itself.
+        if let Some(skip) = out_skip {
+            if fs::canonicalize(&path).ok().as_deref() == Some(skip) {
+                continue;
+            }
+        }
         let relative = path.strip_prefix(base)
             .expect("path must be under base");
         // Use forward slashes inside zip (cross-platform), prefixed with mod_name/
@@ -61,7 +72,7 @@ fn add_dir_to_zip(
 
         if path.is_dir() {
             zip.add_directory(&zip_name, options)?;
-            add_dir_to_zip(zip, base, &path, mod_name, options)?;
+            add_dir_to_zip(zip, base, &path, mod_name, options, out_skip)?;
         } else {
             zip.start_file(&zip_name, options)?;
             let content = fs::read(&path)
@@ -109,5 +120,29 @@ mod package_tests {
             !names.iter().any(|n| n == "enabled.txt"),
             "unexpected root-level enabled.txt: {names:?}"
         );
+    }
+
+    #[test]
+    fn output_zip_inside_mod_dir_is_not_packaged_into_itself() {
+        let tmp = TempDir::new().unwrap();
+        let mod_dir = tmp.path().join("MyMod");
+        let scripts_dir = mod_dir.join("Scripts");
+        fs::create_dir_all(&scripts_dir).unwrap();
+        fs::write(mod_dir.join("enabled.txt"), "").unwrap();
+        fs::write(scripts_dir.join("main.lua"), "-- lua").unwrap();
+
+        // Output zip lives INSIDE the mod directory.
+        let out_zip = mod_dir.join("MyMod.zip");
+        run(mod_dir.clone(), out_zip.clone()).unwrap();
+
+        let mut archive = ZipArchive::new(File::open(&out_zip).unwrap()).unwrap();
+        let names: Vec<String> = (0..archive.len())
+            .map(|i| archive.by_index(i).unwrap().name().to_string())
+            .collect();
+        assert!(
+            !names.iter().any(|n| n.ends_with("MyMod.zip")),
+            "archive must not contain itself: {names:?}"
+        );
+        assert!(names.iter().any(|n| n == "MyMod/enabled.txt"));
     }
 }
