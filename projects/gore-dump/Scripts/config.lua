@@ -5,7 +5,8 @@ return {
     enabled  = true,
     delay_ms = 15000,
     stats    = true,   -- write gore_game_data.json (item stat defaults)
-    loc      = true,   -- write gore_loc.json (localized names, all cultures)
+    loc      = false,  -- loc dump freezes the game ~80s; run it on demand via
+                       -- the `gore-dump loc` console command instead.
   },
   -- Loc dump scope.
   loc = {

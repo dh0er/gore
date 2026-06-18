@@ -38,7 +38,8 @@ return {
     enabled  = true,
     delay_ms = 15000,
     stats    = true,   -- write gore_game_data.json (item stat defaults)
-    loc      = true,   -- write gore_loc.json (localized names, all cultures)
+    loc      = false,  -- loc dump freezes the game ~80s; run it on demand via
+                       -- the `gore-dump loc` console command instead.
   },
   -- Loc dump scope.
   loc = {
@@ -150,16 +151,30 @@ local function to_str(v)
   return nil
 end
 
+-- The game's text (Alkimia loc) follows the engine *language*, not the culture
+-- (a run showed culture=en-US while text rendered German). Read/write language
+-- first; fall back to culture for older builds.
 local function current_culture()
   local o = intl(); if not o then return nil end
-  local ok, c = pcall(function() return o:GetCurrentCulture() end)
-  if ok then return to_str(c) end
+  for _, fn in ipairs({"GetCurrentLanguage", "GetCurrentCulture"}) do
+    local ok, c = pcall(function() return o[fn](o) end)
+    if ok then
+      local s = to_str(c)
+      if s and s ~= "" then return s end
+    end
+  end
   return nil
 end
 
 local function set_culture(c)
   local o = intl(); if not o then return false end
-  return (pcall(function() o:SetCurrentCulture(c, false) end))
+  -- Fire every lever; whichever the build honors takes effect (don't stop at
+  -- the first that merely doesn't error — it may be a silent no-op).
+  local any = false
+  for _, fn in ipairs({"SetCurrentLanguageAndLocale", "SetCurrentLanguage", "SetCurrentCulture"}) do
+    if pcall(function() o[fn](o, c, false) end) then any = true end
+  end
+  return any
 end
 
 -- Best-effort enumerate the cultures the game ships (Game + Additional).
@@ -353,8 +368,14 @@ RegisterConsoleCommandHandler("gore-dump", function(_, Parameters, Ar)
 end)
 
 do
-  local cur = current_culture()
-  if cur then log("active culture = " .. cur) end
+  local o = intl()
+  if o then
+    local function try(fn)
+      local ok, v = pcall(function() return o[fn](o) end)
+      return ok and to_str(v) or "?"
+    end
+    log("language = " .. try("GetCurrentLanguage") .. ", culture = " .. try("GetCurrentCulture"))
+  end
   local found = discover_cultures()
   if #found > 0 then log("GetLocalizedCultures: " .. table.concat(found, ", ")) end
 end
@@ -615,6 +636,15 @@ mod tests {
         // loc dump switches culture and resolves FText to a string
         assert!(MAIN_LUA.contains("SetCurrentCulture"));
         assert!(MAIN_LUA.contains("gore_loc.json"));
+    }
+
+    #[test]
+    fn main_lua_switches_language_not_just_culture() {
+        // Alkimia text follows the engine language, so the switch must try the
+        // language setters, not only SetCurrentCulture.
+        assert!(MAIN_LUA.contains("SetCurrentLanguageAndLocale"));
+        assert!(MAIN_LUA.contains("SetCurrentLanguage"));
+        assert!(MAIN_LUA.contains("GetCurrentLanguage"));
     }
 
     #[test]
