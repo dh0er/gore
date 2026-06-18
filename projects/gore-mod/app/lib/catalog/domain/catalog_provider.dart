@@ -1,15 +1,27 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../app/domain/ui_settings.dart';
 import 'item_entry.dart';
 import 'field_schema.dart';
 
-/// Loads item_catalog.json + model.json from assets and builds the
-/// [CatalogItem] list. The model provides per-class field lists; when a class
-/// is absent from the model, [kDefaultItemFields] is used.
+/// Loads the item allow-list (bundled item_catalog.json) + the field/value
+/// model and builds the [CatalogItem] list. The model is the bundled
+/// model.json unless the user has loaded a fresh game-data dump
+/// ([dumpPathProvider]), in which case that file is read instead — that's how a
+/// post-release dump refreshes the editor without a rebuild. When a class is
+/// absent from the model, [kDefaultItemFields] is used.
 final catalogProvider = FutureProvider<List<CatalogItem>>((ref) async {
   final catalogJson = await rootBundle.loadString('assets/item_catalog.json');
-  final modelJson   = await rootBundle.loadString('assets/model.json');
+
+  final dumpPath = ref.watch(dumpPathProvider);
+  final String modelJson;
+  if (dumpPath != null) {
+    modelJson = await File(dumpPath).readAsString();
+  } else {
+    modelJson = await rootBundle.loadString('assets/model.json');
+  }
 
   final catalogList = (jsonDecode(catalogJson) as List)
       .whereType<Map<String, Object?>>()
@@ -76,6 +88,7 @@ List<FieldSchema> mergeDefaultBounds(List<FieldSchema> parsed) {
           minValue: f.minValue ?? def.minValue,
           maxValue: f.maxValue ?? def.maxValue,
           enumValues: f.enumValues,
+          defaultValue: f.defaultValue,
         )
       else
         f,

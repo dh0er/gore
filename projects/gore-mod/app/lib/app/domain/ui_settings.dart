@@ -12,6 +12,7 @@ class UiSettings {
     this.uiScale = 1.0,
     this.windowSize,
     this.windowMaximized = false,
+    this.dumpPath,
   });
 
   factory UiSettings.fromJson(Map<String, Object?> json) {
@@ -31,6 +32,10 @@ class UiSettings {
         _ => null,
       },
       windowMaximized: json['windowMaximized'] == true,
+      dumpPath: switch (json['dumpPath']) {
+        final String path when path.isNotEmpty => path,
+        _ => null,
+      },
     );
   }
 
@@ -41,17 +46,24 @@ class UiSettings {
   final Size? windowSize;
   final bool windowMaximized;
 
+  /// Path to a user-loaded game-data dump that overrides the bundled model;
+  /// null means use the bundled assets.
+  final String? dumpPath;
+
   UiSettings copyWith({
     ThemeMode? themeMode,
     double? uiScale,
     Size? windowSize,
     bool? windowMaximized,
+    String? dumpPath,
+    bool clearDumpPath = false,
   }) {
     return UiSettings(
       themeMode: themeMode ?? this.themeMode,
       uiScale: uiScale ?? this.uiScale,
       windowSize: windowSize ?? this.windowSize,
       windowMaximized: windowMaximized ?? this.windowMaximized,
+      dumpPath: clearDumpPath ? null : dumpPath ?? this.dumpPath,
     );
   }
 
@@ -67,6 +79,7 @@ class UiSettings {
       'windowHeight': size.height,
     },
     'windowMaximized': windowMaximized,
+    if (dumpPath != null) 'dumpPath': dumpPath,
   };
 }
 
@@ -181,4 +194,26 @@ class UiScaleNotifier extends StateNotifier<double> {
   void increase({double step = 0.05}) => set(state + step);
   void decrease({double step = 0.05}) => set(state - step);
   void reset() => set(1.0);
+}
+
+/// Path to a user-loaded game-data dump (overrides the bundled model), or null
+/// for the bundled assets. Persisted so a loaded dump survives restarts.
+final dumpPathProvider = StateNotifierProvider<DumpPathNotifier, String?>((ref) {
+  return DumpPathNotifier(ref.watch(uiSettingsStoreProvider));
+});
+
+class DumpPathNotifier extends StateNotifier<String?> {
+  DumpPathNotifier(this._store) : super(_store.read().dumpPath);
+
+  final UiSettingsStore _store;
+
+  void set(String path) {
+    state = path;
+    _store.write(_store.read().copyWith(dumpPath: path));
+  }
+
+  void clear() {
+    state = null;
+    _store.write(_store.read().copyWith(clearDumpPath: true));
+  }
 }
