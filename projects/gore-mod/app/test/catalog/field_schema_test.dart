@@ -19,6 +19,29 @@ void main() {
       expect(f.defaultValue, isNull);
     });
 
+    test('drops a default whose type mismatches the field', () {
+      // int field with a string default (unvalidated user dump) -> dropped.
+      expect(
+        FieldSchema.fromJson({'name': 'a', 'type': 'int', 'default': '4.0'}).defaultValue,
+        isNull,
+      );
+      // int field with a double default -> dropped (would crash int.parse).
+      expect(
+        FieldSchema.fromJson({'name': 'b', 'type': 'int', 'default': 4.0}).defaultValue,
+        isNull,
+      );
+      // float accepts an int default.
+      expect(
+        FieldSchema.fromJson({'name': 'c', 'type': 'float', 'default': 4}).defaultValue,
+        4,
+      );
+      // bool with a string default -> dropped.
+      expect(
+        FieldSchema.fromJson({'name': 'd', 'type': 'bool', 'default': 'true'}).defaultValue,
+        isNull,
+      );
+    });
+
     test('enum parses members, backing values and default', () {
       final f = FieldSchema.fromJson({
         'name': 'm_Quality',

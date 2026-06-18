@@ -63,8 +63,22 @@ class FieldSchema {
                       .map((n) => n.toInt())
                       .toList() ??
                   const [],
-      defaultValue: json['default'],
+      // A user-loaded dump is read directly (no `gore-cli sync` validation), so
+      // drop a default whose JSON type doesn't match the field — otherwise
+      // _defaultText -> parsedValue would throw on the first edit.
+      defaultValue: _coerceDefault(type, json['default']),
     );
+  }
+
+  static Object? _coerceDefault(FieldType type, Object? d) {
+    if (d == null) return null;
+    return switch (type) {
+      // Enum defaults are the backing integer.
+      FieldType.int_ || FieldType.enum_ => d is int ? d : null,
+      FieldType.float_  => d is num ? d : null,
+      FieldType.bool_   => d is bool ? d : null,
+      FieldType.string_ => d is String ? d : null,
+    };
   }
 }
 
