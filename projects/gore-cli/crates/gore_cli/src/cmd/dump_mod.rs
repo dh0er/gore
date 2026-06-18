@@ -188,9 +188,59 @@ local function read_ftext(cdo, field)
   return nil
 end
 
+-- Broad UE culture codes to probe when cultures = "all". GetLocalizedCultures'
+-- TArray return is unreliable through UE4SS, so we discover by switching to each
+-- candidate and checking it sticks + yields distinct text.
+local CANDIDATE_CULTURES = {
+  "en", "de", "fr", "it", "es", "es-419", "pl", "ru", "pt-BR", "pt-PT",
+  "zh-Hans", "zh-Hant", "ja", "ko", "tr", "uk", "cs", "hu", "nl",
+}
+
+local function culture_eq(a, b)
+  if not a or not b then return false end
+  a, b = string.lower(a), string.lower(b)
+  return a == b or string.sub(a, 1, #b) == b or string.sub(b, 1, #a) == a
+end
+
+-- Signature of a culture = the m_Name of the first few item CDOs. Cultures that
+-- fall back to the same text (i.e. no real translation) share a signature and
+-- collapse to the first; genuine translations differ and are kept.
+local function culture_signature()
+  local s, n = {}, 0
+  for _, t in ipairs(LOC.targets) do
+    if t.kind == "item" then
+      local cdo = StaticFindObject("/Script/Angelscript.Default__" .. t.id)
+      if cdo and cdo:IsValid() then
+        local v = read_ftext(cdo, "m_Name")
+        if v then s[#s + 1] = v; n = n + 1 end
+      end
+      if n >= 8 then break end
+    end
+  end
+  return table.concat(s, "|")
+end
+
+local function probe_cultures()
+  local orig = current_culture()
+  local seen, out = {}, {}
+  for _, c in ipairs(CANDIDATE_CULTURES) do
+    if set_culture(c) and culture_eq(current_culture(), c) then
+      local sig = culture_signature()
+      if sig ~= "" and not seen[sig] then
+        seen[sig] = c
+        out[#out + 1] = c
+      end
+    end
+  end
+  if orig then set_culture(orig) end
+  return out
+end
+
 local function resolve_cultures(want)
   if type(want) == "table" then return want end
-  return discover_cultures()
+  local d = discover_cultures()
+  if #d == 0 then d = probe_cultures() end
+  return d
 end
 
 local function dump_loc(kinds, cultures_want)
@@ -303,8 +353,10 @@ RegisterConsoleCommandHandler("gore-dump", function(_, Parameters, Ar)
 end)
 
 do
+  local cur = current_culture()
+  if cur then log("active culture = " .. cur) end
   local found = discover_cultures()
-  if #found > 0 then log("cultures available: " .. table.concat(found, ", ")) end
+  if #found > 0 then log("GetLocalizedCultures: " .. table.concat(found, ", ")) end
 end
 
 if CONFIG.auto and CONFIG.auto.enabled then
@@ -563,6 +615,15 @@ mod tests {
         // loc dump switches culture and resolves FText to a string
         assert!(MAIN_LUA.contains("SetCurrentCulture"));
         assert!(MAIN_LUA.contains("gore_loc.json"));
+    }
+
+    #[test]
+    fn main_lua_probes_cultures_when_discovery_fails() {
+        // GetLocalizedCultures is unreliable through UE4SS, so "all" falls back
+        // to probing candidate codes and de-duping by item-name signature.
+        assert!(MAIN_LUA.contains("CANDIDATE_CULTURES"));
+        assert!(MAIN_LUA.contains("probe_cultures"));
+        assert!(MAIN_LUA.contains("culture_signature"));
     }
 
     #[test]
