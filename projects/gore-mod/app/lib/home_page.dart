@@ -21,6 +21,17 @@ class HomePage extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // Switching the model data source invalidates pending overrides and the
+    // current selection: fields may be removed/renamed or enum backing values
+    // may change, so exporting old assignments could be wrong. Clear both when
+    // the dump source changes.
+    ref.listen(dumpPathProvider, (prev, next) {
+      if (prev != next) {
+        ref.read(overridesProvider.notifier).clearAll();
+        ref.read(_selectedItemProvider.notifier).state = null;
+      }
+    });
+
     final selectedRaw    = ref.watch(_selectedItemProvider);
     // Re-resolve the selection against the current catalog so that loading or
     // resetting a dump re-renders the editor with the refreshed item (same id,
