@@ -11,13 +11,14 @@ pub fn run(mod_dir: PathBuf, out: PathBuf) -> Result<()> {
     let enabled_txt = mod_dir.join("enabled.txt");
     let main_lua = mod_dir.join("Scripts").join("main.lua");
 
-    // is_file() (not exists()): a directory or dangling symlink at these paths
-    // must not pass — UE4SS needs the actual files.
-    if !enabled_txt.is_file() {
-        bail!("mod missing required file 'enabled.txt' in '{}'", mod_dir.display());
+    // Require REAL files (non-following metadata): a directory, dangling, or
+    // symlinked path must not pass. The walker skips symlinks, so a symlinked
+    // required file would otherwise validate but be omitted from the zip.
+    if !is_real_file(&enabled_txt) {
+        bail!("mod missing required real file 'enabled.txt' in '{}'", mod_dir.display());
     }
-    if !main_lua.is_file() {
-        bail!("mod missing required file 'Scripts/main.lua' in '{}'", mod_dir.display());
+    if !is_real_file(&main_lua) {
+        bail!("mod missing required real file 'Scripts/main.lua' in '{}'", mod_dir.display());
     }
 
     // The final path component is the mod name, used as the top directory
@@ -53,6 +54,12 @@ pub fn run(mod_dir: PathBuf, out: PathBuf) -> Result<()> {
     zip.finish().context("finalizing zip")?;
     println!("Packaged mod -> {}", out.display());
     Ok(())
+}
+
+/// True only for a real regular file (not a directory, not a symlink). Uses
+/// symlink_metadata so a symlinked path is rejected (the walker skips symlinks).
+fn is_real_file(path: &Path) -> bool {
+    fs::symlink_metadata(path).map(|m| m.is_file()).unwrap_or(false)
 }
 
 fn add_dir_to_zip(
@@ -115,6 +122,21 @@ mod package_tests {
         fs::write(mod_dir.join("Scripts").join("main.lua"), "-- lua").unwrap();
         let out = tmp.path().join("MyMod.zip");
         assert!(run(mod_dir, out).is_err(), "a directory at enabled.txt must fail");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_required_file_is_rejected() {
+        let tmp = TempDir::new().unwrap();
+        let mod_dir = tmp.path().join("MyMod");
+        fs::create_dir_all(mod_dir.join("Scripts")).unwrap();
+        // enabled.txt is a symlink to a real file elsewhere.
+        let real = tmp.path().join("real_enabled.txt");
+        fs::write(&real, "").unwrap();
+        std::os::unix::fs::symlink(&real, mod_dir.join("enabled.txt")).unwrap();
+        fs::write(mod_dir.join("Scripts").join("main.lua"), "-- lua").unwrap();
+        let out = tmp.path().join("MyMod.zip");
+        assert!(run(mod_dir, out).is_err(), "a symlinked enabled.txt must be rejected");
     }
 
     #[cfg(unix)]
