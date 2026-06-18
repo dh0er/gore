@@ -74,5 +74,10 @@ void main() {
     final arrow = items.firstWhere((i) => i.id == 'ItAm_Arrow');
     final mValue = arrow.fields.firstWhere((f) => f.name == 'm_Value');
     expect(mValue.defaultValue, 99);
+
+    // A catalog item NOT in this (sparse) dump must get no fields — not the
+    // kDefaultItemFields fallback — so it isn't editable with a guessed schema.
+    final absent = items.firstWhere((i) => i.id != 'ItAm_Arrow');
+    expect(absent.fields, isEmpty);
   });
 }

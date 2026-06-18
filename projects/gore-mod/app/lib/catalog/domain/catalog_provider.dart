@@ -34,30 +34,43 @@ final catalogProvider = FutureProvider<List<CatalogItem>>((ref) async {
         as Map<String, Object?>?
   ) ?? {};
 
+  // The bundled model is complete, so a class with no listed fields falls back
+  // to the default scalar set. A user-loaded dump is sparse (the dumper skips
+  // CDOs it can't find, and a version-mismatched dump omits items), so a class
+  // missing there must NOT fall back to fake fields — it gets none and is not
+  // editable, rather than exporting a stale/guessed schema.
+  final allowFallback = dumpPath == null;
+
   return [
     for (final entry in catalogList)
       if ((entry['id'] as String?)?.isNotEmpty == true)
         CatalogItem.fromCatalogEntry(
           entry,
-          fields: _fieldsFor(entry['id'] as String, modelClasses),
+          fields: _fieldsFor(
+            entry['id'] as String,
+            modelClasses,
+            allowFallback: allowFallback,
+          ),
         ),
   ]..sort((a, b) => a.id.compareTo(b.id));
 });
 
 List<FieldSchema> _fieldsFor(
   String classId,
-  Map<String, Object?> modelClasses,
-) {
+  Map<String, Object?> modelClasses, {
+  required bool allowFallback,
+}) {
+  final fallback = allowFallback ? kDefaultItemFields : const <FieldSchema>[];
   final classData = modelClasses[classId] as Map<String, Object?>?;
   final rawFields = classData?['fields'] as List?;
-  if (rawFields == null || rawFields.isEmpty) return kDefaultItemFields;
+  if (rawFields == null || rawFields.isEmpty) return fallback;
   final parsed = editableFields(
     rawFields
         .whereType<Map<String, Object?>>()
         .map(FieldSchema.fromJson)
         .toList(),
   );
-  return parsed.isEmpty ? kDefaultItemFields : mergeDefaultBounds(parsed);
+  return parsed.isEmpty ? fallback : mergeDefaultBounds(parsed);
 }
 
 /// Drop fields the editor cannot present a working control for. An enum field
