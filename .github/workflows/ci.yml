@@ -28,6 +28,18 @@ jobs:
           cache: true
 
       # test.py resolves cargo/flutter from PATH (provided above), so no FVM
-      # fallback is needed on CI.
+      # fallback is needed on CI. The Rust suite (`cargo test`) walks up to the
+      # workspace root, so it already covers gore_core + gore_cli; only the
+      # Flutter analyze/test here are scoped to gore-save/app.
       - name: Run all tests (rust, tools, analyze, flutter)
         run: python test.py all
+
+      # The gore-mod GUI is a separate Flutter package; test.py's APP points at
+      # gore-save/app, so its analyze/test never reach it. Run it explicitly so
+      # regressions in the GUI can't merge unnoticed.
+      - name: gore-mod analyze + test
+        working-directory: projects/gore-mod/app
+        run: |
+          flutter pub get
+          flutter analyze
+          flutter test
