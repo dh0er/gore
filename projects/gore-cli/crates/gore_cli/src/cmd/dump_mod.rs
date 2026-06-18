@@ -68,6 +68,13 @@ local function dump()
           end
           parts[#parts + 1] = '"enum_values":[' .. table.concat(evs, ",") .. ']'
         end
+        if f.enum_value_ints then
+          local ivs = {}
+          for _, n in ipairs(f.enum_value_ints) do
+            ivs[#ivs + 1] = string.format("%d", n)
+          end
+          parts[#parts + 1] = '"enum_value_ints":[' .. table.concat(ivs, ",") .. ']'
+        end
         local dj = ok and value_json(f.type, raw) or nil
         if dj then parts[#parts + 1] = '"default":' .. dj end
         fields[#fields + 1] = "{" .. table.concat(parts, ",") .. "}"
@@ -164,6 +171,10 @@ fn render_items_lua<'a>(model: &GuiModel, catalog_ids: impl Iterator<Item = &'a 
                     .collect();
                 out.push_str(&format!(", enum_values={{{}}}", members.join(", ")));
             }
+            if !f.enum_value_ints.is_empty() {
+                let ints: Vec<String> = f.enum_value_ints.iter().map(|v| v.to_string()).collect();
+                out.push_str(&format!(", enum_value_ints={{{}}}", ints.join(", ")));
+            }
             out.push_str("},\n");
         }
         out.push_str("  }},\n");
@@ -182,7 +193,7 @@ mod tests {
             "classes": {
                 "ItFo_Apple": {"fields": [
                     {"name": "m_Value", "type": "int"},
-                    {"name": "m_Quality", "type": "enum", "enum_values": ["Low", "High"]}
+                    {"name": "m_Quality", "type": "enum", "enum_values": ["Low", "High"], "enum_value_ints": [0, 5]}
                 ]},
                 "NotInCatalog": {"fields": [{"name": "x", "type": "int"}]}
             }
@@ -195,7 +206,9 @@ mod tests {
         let lua = render_items_lua(&model(), ["ItFo_Apple"].into_iter());
         assert!(lua.contains(r#"{id="ItFo_Apple", fields={"#));
         assert!(lua.contains(r#"{name="m_Value", type="int"},"#));
-        assert!(lua.contains(r#"{name="m_Quality", type="enum", enum_values={"Low", "High"}},"#));
+        assert!(lua.contains(
+            r#"{name="m_Quality", type="enum", enum_values={"Low", "High"}, enum_value_ints={0, 5}},"#
+        ));
         // valid Lua table delimiters
         assert!(lua.trim_end().ends_with('}'));
     }
@@ -211,6 +224,14 @@ mod tests {
         assert!(MAIN_LUA.contains(r#"StaticFindObject("/Script/Angelscript.Default__" .. cls.id)"#));
         assert!(MAIN_LUA.contains("gore_game_data.json"));
         assert!(MAIN_LUA.contains("ExecuteWithDelay"));
+    }
+
+    #[test]
+    fn main_lua_emits_enum_backing_values() {
+        // The in-game writer must copy enum_value_ints so sync can validate the
+        // CDO's backing-value default against the real discriminants.
+        assert!(MAIN_LUA.contains("f.enum_value_ints"));
+        assert!(MAIN_LUA.contains(r#""enum_value_ints":["#));
     }
 
     #[test]

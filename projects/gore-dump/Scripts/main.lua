@@ -48,6 +48,13 @@ local function dump()
           end
           parts[#parts + 1] = '"enum_values":[' .. table.concat(evs, ",") .. ']'
         end
+        if f.enum_value_ints then
+          local ivs = {}
+          for _, n in ipairs(f.enum_value_ints) do
+            ivs[#ivs + 1] = string.format("%d", n)
+          end
+          parts[#parts + 1] = '"enum_value_ints":[' .. table.concat(ivs, ",") .. ']'
+        end
         local dj = ok and value_json(f.type, raw) or nil
         if dj then parts[#parts + 1] = '"default":' .. dj end
         fields[#fields + 1] = "{" .. table.concat(parts, ",") .. "}"
