@@ -262,11 +262,22 @@ mod gen_tests {
 
     #[test]
     fn float_lua_literal_is_valid_for_all_forms() {
+        // Integer-valued float gets a decimal point.
         assert_eq!(OverrideValue::Float(100.0).lua_literal(), "100.0");
         assert_eq!(OverrideValue::Float(1.5).lua_literal(), "1.5");
-        // Scientific notation must stay a valid Lua number (no trailing `.0`).
-        let sci = OverrideValue::Float(1e-8).lua_literal();
-        assert!(sci.contains('e') && !sci.ends_with(".0"), "got: {sci}");
+        // A tiny value: Rust's Display renders full decimal ("0.00000001"), so
+        // it already has a '.' and is a valid Lua number — never `<x>.0` twice.
+        let tiny = OverrideValue::Float(1e-8).lua_literal();
+        assert!(tiny.contains('.') && !tiny.ends_with(".0.0"), "got: {tiny}");
+        // The guard also keeps any exponent form valid (defensive: append `.0`
+        // only when there is neither a '.' nor an exponent).
+        assert!(!lua_literal_appends_dot_to("1e-8"));
+        assert!(lua_literal_appends_dot_to("100"));
+    }
+
+    // Mirror of the gen.rs guard, for the exponent-form assertion above.
+    fn lua_literal_appends_dot_to(s: &str) -> bool {
+        !(s.contains('.') || s.contains('e') || s.contains('E'))
     }
 
     #[test]
