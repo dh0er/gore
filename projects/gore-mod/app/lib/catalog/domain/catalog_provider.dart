@@ -34,43 +34,37 @@ final catalogProvider = FutureProvider<List<CatalogItem>>((ref) async {
         as Map<String, Object?>?
   ) ?? {};
 
-  // The bundled model is complete, so a class with no listed fields falls back
-  // to the default scalar set. A user-loaded dump is sparse (the dumper skips
-  // CDOs it can't find, and a version-mismatched dump omits items), so a class
-  // missing there must NOT fall back to fake fields — it gets none and is not
-  // editable, rather than exporting a stale/guessed schema.
-  final allowFallback = dumpPath == null;
-
   return [
     for (final entry in catalogList)
       if ((entry['id'] as String?)?.isNotEmpty == true)
         CatalogItem.fromCatalogEntry(
           entry,
-          fields: _fieldsFor(
-            entry['id'] as String,
-            modelClasses,
-            allowFallback: allowFallback,
-          ),
+          fields: _fieldsFor(entry['id'] as String, modelClasses),
         ),
   ]..sort((a, b) => a.id.compareTo(b.id));
 });
 
+/// Editable fields for a catalog class, taken from the model. A class absent
+/// from the model (or with no listed fields) gets NO fields and is therefore
+/// not editable — the model is the single source of truth for the schema, and
+/// guessing a default field set would let skipped or version-mismatched items
+/// export a stale/wrong schema. Both gui-model and sync emit per-class fields,
+/// and the bundled model covers every catalog id, so this is not a fallback
+/// path in practice — it only guards genuinely-missing classes.
 List<FieldSchema> _fieldsFor(
   String classId,
-  Map<String, Object?> modelClasses, {
-  required bool allowFallback,
-}) {
-  final fallback = allowFallback ? kDefaultItemFields : const <FieldSchema>[];
+  Map<String, Object?> modelClasses,
+) {
   final classData = modelClasses[classId] as Map<String, Object?>?;
   final rawFields = classData?['fields'] as List?;
-  if (rawFields == null || rawFields.isEmpty) return fallback;
+  if (rawFields == null || rawFields.isEmpty) return const [];
   final parsed = editableFields(
     rawFields
         .whereType<Map<String, Object?>>()
         .map(FieldSchema.fromJson)
         .toList(),
   );
-  return parsed.isEmpty ? fallback : mergeDefaultBounds(parsed);
+  return parsed.isEmpty ? const [] : mergeDefaultBounds(parsed);
 }
 
 /// Drop fields the editor cannot present a working control for. An enum field
