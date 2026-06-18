@@ -16,6 +16,12 @@ pub fn validate_mod_name(name: &str) -> anyhow::Result<()> {
     if name.is_empty() {
         anyhow::bail!("mod name must not be empty");
     }
+    // Control characters (newline, tab, …) are never valid in a mod/dir name,
+    // and a newline embedded in generated Lua/scaffold output could terminate a
+    // comment and inject executable code.
+    if name.chars().any(char::is_control) {
+        anyhow::bail!("mod name must not contain control characters: {name:?}");
+    }
     if name.contains('/') || name.contains('\\') {
         anyhow::bail!("mod name must not contain path separators: '{name}'");
     }
@@ -44,6 +50,14 @@ mod mod_name_tests {
     #[test]
     fn empty_name_rejected() {
         assert!(validate_mod_name("").is_err());
+    }
+
+    #[test]
+    fn control_chars_rejected() {
+        // A newline could break out of a `--` comment in scaffolded/generated Lua.
+        assert!(validate_mod_name("Bad\nMod").is_err());
+        assert!(validate_mod_name("Bad\tMod").is_err());
+        assert!(validate_mod_name("Bad\rMod").is_err());
     }
 
     #[test]
