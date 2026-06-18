@@ -20,6 +20,9 @@ local function value_json(field_type, v)
     return nil
   end
   if type(v) ~= "number" then return nil end
+  -- JSON has no inf/nan; skip non-finite values so the file stays valid JSON
+  -- (the field is then emitted without a default -> GUI shows a placeholder).
+  if v ~= v or v == math.huge or v == -math.huge then return nil end
   if field_type == "int" or field_type == "enum" then
     return string.format("%d", math.floor(v + 0.5))
   end
