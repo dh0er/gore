@@ -8,11 +8,13 @@ fn apple_config() -> OverridesConfig {
         },
         overrides: vec![
             SingleOverride {
+                module: "Angelscript".to_string(),
                 class: "ItFo_Apple".to_string(),
                 field: "m_Value".to_string(),
                 value: OverrideValue::Int(500),
             },
             SingleOverride {
+                module: "Angelscript".to_string(),
                 class: "ItMw_1H_Sword_01".to_string(),
                 field: "m_Weight".to_string(),
                 value: OverrideValue::Float(1.5),
@@ -24,9 +26,12 @@ fn apple_config() -> OverridesConfig {
 #[test]
 fn gen_lua_contains_static_find_object_pattern() {
     let lua = gen_lua(&apple_config());
+    // The CDO path is built at runtime from the per-override module, so check
+    // the StaticFindObject call + the runtime path template.
+    assert!(lua.contains("StaticFindObject"), "must use StaticFindObject");
     assert!(
-        lua.contains(r#"/Script/Angelscript.Default__"#),
-        "must use StaticFindObject CDO pattern"
+        lua.contains(r#"".Default__" .. o.class"#),
+        "must build the CDO path from the module + class at runtime"
     );
 }
 

@@ -145,6 +145,7 @@ mod validate_tests {
         OverridesConfig {
             meta: MetaConfig { name: "TestMod".to_string(), delay_ms: 0 },
             overrides: vec![SingleOverride {
+                module: "Angelscript".to_string(),
                 class: class.to_string(),
                 field: field.to_string(),
                 value,

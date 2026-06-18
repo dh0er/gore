@@ -28,7 +28,10 @@ fn gen_creates_mod_dir_and_main_lua() {
     let main_lua = mod_dir.join("Scripts").join("main.lua");
     assert!(main_lua.exists(), "Scripts/main.lua must exist");
     let content = std::fs::read_to_string(&main_lua).unwrap();
-    assert!(content.contains(r#"/Script/Angelscript.Default__"#));
+    // The CDO path is built at runtime from the per-override module (default
+    // Angelscript), so assert the runtime template + the module field.
+    assert!(content.contains(r#"".Default__" .. o.class"#));
+    assert!(content.contains(r#"module="Angelscript""#));
     assert!(content.contains("ItFo_Apple"));
     assert!(content.contains("m_Value"));
     assert!(content.contains("500"));

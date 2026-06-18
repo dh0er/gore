@@ -27,8 +27,18 @@ pub struct MetaConfig {
 pub struct SingleOverride {
     pub class: String,
     pub field: String,
+    /// UE module/package the class lives in, used as `/Script/<module>.Default__`.
+    /// Defaults to `Angelscript` (where the moddable item classes live); set it
+    /// for classes from another package (e.g. `G1R`) so the generated CDO lookup
+    /// targets the right module instead of silently missing it.
+    #[serde(default = "default_module")]
+    pub module: String,
     #[serde(flatten)]
     pub value: OverrideValue,
+}
+
+fn default_module() -> String {
+    "Angelscript".to_string()
 }
 
 /// A typed override value. Variants correspond to TOML keys
@@ -206,7 +216,8 @@ pub fn gen_lua(cfg: &OverridesConfig) -> String {
     let mut overrides_rows = Vec::new();
     for o in &cfg.overrides {
         overrides_rows.push(format!(
-            r#"  {{class="{}", field="{}", value={}}}"#,
+            r#"  {{module="{}", class="{}", field="{}", value={}}}"#,
+            lua_escape(&o.module),
             lua_escape(runtime_class_name(&o.class)),
             lua_escape(&o.field),
             o.value.lua_literal()
@@ -222,7 +233,7 @@ pub fn gen_lua(cfg: &OverridesConfig) -> String {
     let apply_body = format!(
         r#"local function apply()
   for _, o in ipairs(OVERRIDES) do
-    local cdo = StaticFindObject("/Script/Angelscript.Default__" .. o.class)
+    local cdo = StaticFindObject("/Script/" .. o.module .. ".Default__" .. o.class)
     if cdo and cdo:IsValid() then
       local before = cdo[o.field]
       cdo[o.field] = o.value
@@ -297,6 +308,7 @@ mod gen_tests {
         let cfg = OverridesConfig {
             meta: MetaConfig { name: "100%Balance".to_string(), delay_ms: 0 },
             overrides: vec![SingleOverride {
+                module: "Angelscript".to_string(),
                 class: "ItFo_Apple".to_string(),
                 field: "m_Value".to_string(),
                 value: OverrideValue::Int(1),
@@ -314,6 +326,7 @@ mod gen_tests {
         let cfg = OverridesConfig {
             meta: MetaConfig { name: r#"Bad"Mod"#.to_string(), delay_ms: 0 },
             overrides: vec![SingleOverride {
+                module: "Angelscript".to_string(),
                 class: "ItFo_Apple".to_string(),
                 field: "m_Value".to_string(),
                 value: OverrideValue::Int(1),
@@ -330,6 +343,7 @@ mod gen_tests {
         let cfg = OverridesConfig {
             meta: MetaConfig { name: "M".to_string(), delay_ms: 0 },
             overrides: vec![SingleOverride {
+                module: "Angelscript".to_string(),
                 class: "UItMi_Orenugget".to_string(),
                 field: "m_Value".to_string(),
                 value: OverrideValue::Int(5),
@@ -369,6 +383,7 @@ mod gen_tests {
         let cfg = OverridesConfig {
             meta: MetaConfig { name: "TestMod".to_string(), delay_ms: 0 },
             overrides: vec![SingleOverride {
+                module: "Angelscript".to_string(),
                 class: "SomeClass".to_string(),
                 field: "m_Name".to_string(),
                 value: OverrideValue::Str("say \"hello\"\nworld".to_string()),
@@ -385,6 +400,7 @@ mod gen_tests {
         let cfg = OverridesConfig {
             meta: MetaConfig { name: "TestMod".to_string(), delay_ms: 0 },
             overrides: vec![SingleOverride {
+                module: "Angelscript".to_string(),
                 class: r#"Evil"Class"#.to_string(),
                 field: r#"bad"field"#.to_string(),
                 value: OverrideValue::Int(1),
