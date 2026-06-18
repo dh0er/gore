@@ -104,6 +104,7 @@ class ExportNotifier extends StateNotifier<ExportState> {
     // would, on a mid-way failure (locked Scripts/main.lua, disk full), leave a
     // partially overwritten mod that UE4SS might still load.
     final staging = Directory(p.join(request.targetDir, '${request.modName}.tmp-export'));
+    final backup = Directory(p.join(request.targetDir, '${request.modName}.bak-export'));
     String outputPath = modDir.path;
     try {
       if (staging.existsSync()) staging.deleteSync(recursive: true);
@@ -112,20 +113,32 @@ class ExportNotifier extends StateNotifier<ExportState> {
         outFile.parent.createSync(recursive: true);
         outFile.writeAsStringSync(entry.value as String? ?? '');
       }
-      // Promote: replace any prior export, then move the completed staging dir
-      // into place. The old mod is only removed after staging is fully written.
-      if (modDir.existsSync()) modDir.deleteSync(recursive: true);
+      // Promote with a safe swap: move any prior export aside to a backup,
+      // rename the completed staging dir into place, then drop the backup. If
+      // the promotion rename fails (lock, antivirus, cross-volume), the backup
+      // is restored below so neither the old nor the new mod is lost.
+      if (backup.existsSync()) backup.deleteSync(recursive: true);
+      if (modDir.existsSync()) modDir.renameSync(backup.path);
       staging.renameSync(modDir.path);
+      if (backup.existsSync()) backup.deleteSync(recursive: true);
       if (request.packageAsZip) {
         outputPath = _writeZip(request, files);
       }
     } on FileSystemException catch (e) {
-      // Drop the incomplete staging dir; a pre-existing mod is left untouched
-      // because we never wrote into it directly.
+      // Drop the incomplete staging dir, and if the old mod was moved aside but
+      // not yet restored, put it back. The backup is never deleted on failure —
+      // it holds the user's prior export.
       try {
         if (staging.existsSync()) staging.deleteSync(recursive: true);
       } on FileSystemException {
         // best-effort
+      }
+      try {
+        if (backup.existsSync() && !modDir.existsSync()) {
+          backup.renameSync(modDir.path);
+        }
+      } on FileSystemException {
+        // best-effort; surface the original failure regardless
       }
       state = state.copyWith(
         isExporting: false,
