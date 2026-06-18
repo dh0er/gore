@@ -76,6 +76,12 @@ enum Commands {
         /// Path to item_catalog.json (the item allow-list)
         #[arg(long)]
         catalog: PathBuf,
+        /// Path to npc_catalog.json (adds NPC names to the loc dump)
+        #[arg(long)]
+        npc_catalog: Option<PathBuf>,
+        /// Path to knowledge_catalog.json (adds dialog text to the loc dump)
+        #[arg(long)]
+        knowledge_catalog: Option<PathBuf>,
         /// Mods directory to write the gore-dump/ folder into
         #[arg(short = 'o', long)]
         out: PathBuf,
@@ -117,7 +123,9 @@ fn main() {
         Commands::Catalog { kind, dump, out } => cmd::catalog::run(kind, dump, out),
         Commands::GuiModel { model, catalog, out } => cmd::gui_model::run(model, catalog, out),
         Commands::Sync { dump, catalog, out } => cmd::sync::run(dump, catalog, out),
-        Commands::DumpMod { model, catalog, out } => cmd::dump_mod::run(model, catalog, out),
+        Commands::DumpMod { model, catalog, npc_catalog, knowledge_catalog, out } => {
+            cmd::dump_mod::run(model, catalog, npc_catalog, knowledge_catalog, out)
+        }
         Commands::Scaffold { mod_name, out } => cmd::scaffold::run(mod_name, out),
         Commands::Gen { overrides, out, model } => cmd::gen::run(overrides, out, model),
         Commands::Package { mod_dir, out } => cmd::package::run(mod_dir, out),
