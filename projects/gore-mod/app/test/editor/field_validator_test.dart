@@ -22,6 +22,9 @@ void main() {
     test('accepts whole number', ()    => expect(validateField(floatSchema, '2'), isNull));
     test('rejects non-numeric', ()     => expect(validateField(floatSchema, 'abc'), isNotNull));
     test('rejects negative min', ()    => expect(validateField(floatSchema, '-0.1'), isNotNull));
+    test('rejects NaN', ()             => expect(validateField(floatSchema, 'NaN'), isNotNull));
+    test('rejects Infinity', ()        => expect(validateField(floatSchema, 'Infinity'), isNotNull));
+    test('rejects overflow literal', () => expect(validateField(floatSchema, '1e309'), isNotNull));
   });
 
   group('bool field', () {

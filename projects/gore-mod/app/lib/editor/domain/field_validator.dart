@@ -21,6 +21,11 @@ String? validateField(FieldSchema schema, String raw) {
     case FieldType.float_:
       final f = double.tryParse(trimmed);
       if (f == null) return 'Must be a number';
+      // double.tryParse accepts NaN / Infinity / overflowing literals like
+      // 1e309. Those slip past the min/max checks below (NaN compares false to
+      // everything) and then crash jsonEncode when the override is sent to the
+      // native FFI, so reject them up front.
+      if (!f.isFinite) return 'Must be a finite number';
       if (schema.minValue != null && f < schema.minValue!) {
         return 'Must be ≥ ${schema.minValue}';
       }
