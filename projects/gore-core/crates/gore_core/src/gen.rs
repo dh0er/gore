@@ -51,9 +51,12 @@ impl OverrideValue {
         match self {
             OverrideValue::Int(n) => n.to_string(),
             OverrideValue::Float(f) => {
-                // Ensure there is always a decimal point so Lua treats it as a float
+                // Emit a valid Lua number. `{f}` may render as `100` (needs a
+                // decimal point to read as a float), `1.5` (already fine), or
+                // `1e-8` (scientific — already a valid Lua float, and appending
+                // `.0` would make `1e-8.0`, which is invalid).
                 let s = format!("{f}");
-                if s.contains('.') {
+                if s.contains('.') || s.contains('e') || s.contains('E') {
                     s
                 } else {
                     format!("{s}.0")
@@ -255,6 +258,15 @@ mod gen_tests {
         // Lowercase after U is not the UE class convention — leave untouched.
         assert_eq!(runtime_class_name("Underground"), "Underground");
         assert_eq!(runtime_class_name("U"), "U");
+    }
+
+    #[test]
+    fn float_lua_literal_is_valid_for_all_forms() {
+        assert_eq!(OverrideValue::Float(100.0).lua_literal(), "100.0");
+        assert_eq!(OverrideValue::Float(1.5).lua_literal(), "1.5");
+        // Scientific notation must stay a valid Lua number (no trailing `.0`).
+        let sci = OverrideValue::Float(1e-8).lua_literal();
+        assert!(sci.contains('e') && !sci.ends_with(".0"), "got: {sci}");
     }
 
     #[test]
