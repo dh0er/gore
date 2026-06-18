@@ -89,9 +89,21 @@ fn add_dir_to_zip(
         let relative = path
             .strip_prefix(base)
             .with_context(|| format!("'{}' is not under '{}'", path.display(), base.display()))?;
-        // Use forward slashes inside zip (cross-platform), prefixed with mod_name/
-        let relative_str = relative.to_string_lossy().replace('\\', "/");
-        let zip_name = format!("{mod_name}/{relative_str}");
+        // Build the forward-slash zip path from real path COMPONENTS rather than
+        // string-replacing '\\' -> '/'. On Unix a filename may legally contain a
+        // backslash; naive replacement could manufacture a `..` traversal token
+        // (zip-slip). Reject anything that isn't a normal component.
+        let mut parts = Vec::new();
+        for comp in relative.components() {
+            match comp {
+                std::path::Component::Normal(s) => parts.push(s.to_string_lossy().into_owned()),
+                _ => bail!(
+                    "refusing to package unsafe path component in '{}'",
+                    relative.display()
+                ),
+            }
+        }
+        let zip_name = format!("{mod_name}/{}", parts.join("/"));
 
         if file_type.is_dir() {
             zip.add_directory(&zip_name, options)?;
@@ -122,6 +134,26 @@ mod package_tests {
         fs::write(mod_dir.join("Scripts").join("main.lua"), "-- lua").unwrap();
         let out = tmp.path().join("MyMod.zip");
         assert!(run(mod_dir, out).is_err(), "a directory at enabled.txt must fail");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn backslash_filename_does_not_become_traversal() {
+        let tmp = TempDir::new().unwrap();
+        let mod_dir = tmp.path().join("MyMod");
+        fs::create_dir_all(mod_dir.join("Scripts")).unwrap();
+        fs::write(mod_dir.join("enabled.txt"), "").unwrap();
+        fs::write(mod_dir.join("Scripts").join("main.lua"), "-- lua").unwrap();
+        // A regular file whose name literally contains a backslash (legal on Unix).
+        fs::write(mod_dir.join(r"..\escape.lua"), "x").unwrap();
+        let out = tmp.path().join("MyMod.zip");
+        run(mod_dir, out.clone()).unwrap();
+        let mut archive = ZipArchive::new(File::open(&out).unwrap()).unwrap();
+        let names: Vec<String> = (0..archive.len())
+            .map(|i| archive.by_index(i).unwrap().name().to_string())
+            .collect();
+        assert!(!names.iter().any(|n| n.contains("../")),
+            "backslash must not be normalized into a traversal: {names:?}");
     }
 
     #[cfg(unix)]
