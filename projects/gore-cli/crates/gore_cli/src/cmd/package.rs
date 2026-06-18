@@ -66,6 +66,13 @@ fn add_dir_to_zip(
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
+        // Skip symlinks: is_dir() would follow them and could walk outside the
+        // mod dir or loop back into it. Use the entry's own (non-following) type.
+        let file_type = entry.file_type()?;
+        if file_type.is_symlink() {
+            eprintln!("skipping symlink in mod dir: {}", path.display());
+            continue;
+        }
         // Never package the output archive into itself.
         if let Some(skip) = out_skip {
             if fs::canonicalize(&path).ok().as_deref() == Some(skip) {
@@ -79,7 +86,7 @@ fn add_dir_to_zip(
         let relative_str = relative.to_string_lossy().replace('\\', "/");
         let zip_name = format!("{mod_name}/{relative_str}");
 
-        if path.is_dir() {
+        if file_type.is_dir() {
             zip.add_directory(&zip_name, options)?;
             add_dir_to_zip(zip, base, &path, mod_name, options, out_skip)?;
         } else {
@@ -108,6 +115,32 @@ mod package_tests {
         fs::write(mod_dir.join("Scripts").join("main.lua"), "-- lua").unwrap();
         let out = tmp.path().join("MyMod.zip");
         assert!(run(mod_dir, out).is_err(), "a directory at enabled.txt must fail");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_dir_is_skipped_not_followed() {
+        let tmp = TempDir::new().unwrap();
+        let mod_dir = tmp.path().join("MyMod");
+        fs::create_dir_all(mod_dir.join("Scripts")).unwrap();
+        fs::write(mod_dir.join("enabled.txt"), "").unwrap();
+        fs::write(mod_dir.join("Scripts").join("main.lua"), "-- lua").unwrap();
+        // A symlink inside the mod dir pointing outside it.
+        let outside = tmp.path().join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("secret.txt"), "x").unwrap();
+        std::os::unix::fs::symlink(&outside, mod_dir.join("link")).unwrap();
+
+        let out = tmp.path().join("MyMod.zip");
+        run(mod_dir, out.clone()).unwrap();
+        let mut archive = ZipArchive::new(File::open(&out).unwrap()).unwrap();
+        let names: Vec<String> = (0..archive.len())
+            .map(|i| archive.by_index(i).unwrap().name().to_string())
+            .collect();
+        assert!(!names.iter().any(|n| n.contains("secret.txt")),
+            "must not follow the symlink: {names:?}");
+        assert!(!names.iter().any(|n| n.contains("/link")),
+            "symlink itself must not be archived: {names:?}");
     }
 
     #[test]
