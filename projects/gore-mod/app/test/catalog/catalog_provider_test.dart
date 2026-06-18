@@ -31,6 +31,24 @@ void main() {
     });
   });
 
+  group('editableFields', () {
+    test('drops enum fields with no choices', () {
+      const parsed = [
+        FieldSchema(name: 'm_Value', type: FieldType.int_),
+        FieldSchema(name: 'm_Quality', type: FieldType.enum_), // no enumValues
+      ];
+      final usable = editableFields(parsed);
+      expect(usable.map((f) => f.name), ['m_Value']);
+    });
+
+    test('keeps enum fields that have choices', () {
+      const parsed = [
+        FieldSchema(name: 'm_Quality', type: FieldType.enum_, enumValues: ['Low', 'High']),
+      ];
+      expect(editableFields(parsed), hasLength(1));
+    });
+  });
+
   group('_fieldsFor (via CatalogItem.fromCatalogEntry)', () {
     test('uses kDefaultItemFields when class absent from model', () {
       final item = CatalogItem.fromCatalogEntry({'id': 'ItFo_Apple'});

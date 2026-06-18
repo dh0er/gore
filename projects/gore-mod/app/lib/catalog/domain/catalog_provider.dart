@@ -39,12 +39,24 @@ List<FieldSchema> _fieldsFor(
   final classData = modelClasses[classId] as Map<String, Object?>?;
   final rawFields = classData?['fields'] as List?;
   if (rawFields == null || rawFields.isEmpty) return kDefaultItemFields;
-  final parsed = rawFields
-      .whereType<Map<String, Object?>>()
-      .map(FieldSchema.fromJson)
-      .toList();
+  final parsed = editableFields(
+    rawFields
+        .whereType<Map<String, Object?>>()
+        .map(FieldSchema.fromJson)
+        .toList(),
+  );
   return parsed.isEmpty ? kDefaultItemFields : mergeDefaultBounds(parsed);
 }
+
+/// Drop fields the editor cannot present a working control for. An enum field
+/// with no choices (the gore-cli gui-model currently records only name/type
+/// for enum fields, omitting the members) would render an empty dropdown that
+/// validateField rejects for every value — i.e. visible but impossible to
+/// edit or export. Skip those rather than show a broken control.
+List<FieldSchema> editableFields(List<FieldSchema> fields) => [
+      for (final f in fields)
+        if (f.type != FieldType.enum_ || f.enumValues.isNotEmpty) f,
+    ];
 
 /// Overlay the [kDefaultItemFields] min/max bounds onto matching parsed model
 /// fields. The bundled model.json carries only name/type per field, so without
