@@ -16,9 +16,6 @@ enum Commands {
     Dump {
         /// Path to the CXXHeaderDump/ directory
         sdk_dir: PathBuf,
-        /// Path to UE4SS_ObjectDump.txt (optional)
-        #[arg(long = "object-dump")]
-        object_dump: Option<PathBuf>,
         /// Output model.json path
         #[arg(short = 'o', long)]
         out: PathBuf,
@@ -89,9 +86,7 @@ enum Commands {
 fn main() {
     let cli = Cli::parse();
     let result = match cli.command {
-        Commands::Dump { sdk_dir, object_dump, out } => {
-            cmd::dump::run(sdk_dir, object_dump, out)
-        }
+        Commands::Dump { sdk_dir, out } => cmd::dump::run(sdk_dir, out),
         Commands::Stubs { model, out, filter } => cmd::stubs::run(model, out, filter),
         Commands::Catalog { kind, dump, out } => cmd::catalog::run(kind, dump, out),
         Commands::GuiModel { model, catalog, out } => cmd::gui_model::run(model, catalog, out),

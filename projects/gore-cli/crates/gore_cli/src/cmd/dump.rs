@@ -8,7 +8,7 @@ use std::{
     path::PathBuf,
 };
 
-pub fn run(sdk_dir: PathBuf, _object_dump: Option<PathBuf>, out: PathBuf) -> Result<()> {
+pub fn run(sdk_dir: PathBuf, out: PathBuf) -> Result<()> {
     anyhow::ensure!(sdk_dir.is_dir(), "sdk-dir '{}' is not a directory", sdk_dir.display());
 
     let mut merged = ReflectionModel::default();
