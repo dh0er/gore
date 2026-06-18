@@ -122,6 +122,33 @@ void main() {
     expect(tester.widget<TextField>(field).controller!.text, '0');
   });
 
+  testWidgets('shows the real default value and carries it as oldValue', (tester) async {
+    const item = CatalogItem(
+      id: 'ItFo_Apple',
+      displayName: 'Apple',
+      fields: [
+        FieldSchema(name: 'm_Value', type: FieldType.int_, minValue: 0, defaultValue: 4),
+      ],
+    );
+    OverrideEntry? changed;
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: FieldEditor(
+          item: item,
+          pendingOverrides: const {},
+          onOverrideChanged: (e) => changed = e,
+        ),
+      ),
+    ));
+    // Field starts at its real default (4), not the placeholder 0.
+    expect(tester.widget<TextField>(find.byType(TextField).first).controller!.text, '4');
+    await tester.enterText(find.byType(TextField).first, '7');
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.pump();
+    expect(changed?.newValue, 7);
+    expect(changed?.oldValue, 4); // diff reads 4 -> 7
+  });
+
   testWidgets('enum override stored as backing int displays the member name', (tester) async {
     const enumItem = CatalogItem(
       id: 'ItFo_Apple',

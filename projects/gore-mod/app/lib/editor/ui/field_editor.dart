@@ -103,11 +103,23 @@ class _FieldEditorState extends State<FieldEditor> {
     }
   }
 
-  String _defaultText(FieldSchema field) => switch (field.type) {
-    FieldType.bool_  => 'false',
-    FieldType.enum_  => field.enumValues.firstOrNull ?? '',
-    _                => '0',
-  };
+  /// The text a field shows when it has no pending override: its real CDO
+  /// default when the model carries one, otherwise a type placeholder.
+  String _defaultText(FieldSchema field) {
+    final d = field.defaultValue;
+    if (d != null) {
+      if (field.type == FieldType.enum_ && d is int) {
+        if (d >= 0 && d < field.enumValues.length) return field.enumValues[d];
+      } else {
+        return d.toString();
+      }
+    }
+    return switch (field.type) {
+      FieldType.bool_  => 'false',
+      FieldType.enum_  => field.enumValues.firstOrNull ?? '',
+      _                => '0',
+    };
+  }
 
   /// Display text for a pending override. Enum overrides store the backing
   /// integer (the member index), so map it back to the member name for the

@@ -12,6 +12,7 @@ class FieldSchema {
     this.minValue,
     this.maxValue,
     this.enumValues = const [],
+    this.defaultValue,
   });
 
   final String name;
@@ -25,6 +26,12 @@ class FieldSchema {
 
   /// Non-empty only when [type] == [FieldType.enum_].
   final List<String> enumValues;
+
+  /// The field's real CDO default value, when the model came from a runtime
+  /// dump (`gore-cli sync`). null when unknown (header-derived model) — the
+  /// editor then shows a placeholder. For enum fields this is the backing
+  /// integer (member index), matching how overrides are encoded.
+  final Object? defaultValue;
 
   factory FieldSchema.fromJson(Map<String, Object?> json) {
     final rawType = json['type'] as String? ?? 'int';
@@ -44,6 +51,7 @@ class FieldSchema {
                       ?.whereType<String>()
                       .toList() ??
                   const [],
+      defaultValue: json['default'],
     );
   }
 }
