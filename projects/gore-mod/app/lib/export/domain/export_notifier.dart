@@ -1,4 +1,6 @@
+import 'dart:io';
 import 'package:flutter_riverpod/legacy.dart';
+import 'package:path/path.dart' as p;
 import '../../core/core_service.dart';
 import '../../core/providers.dart';
 import '../../editor/domain/override_entry.dart';
@@ -45,38 +47,17 @@ class ExportNotifier extends StateNotifier<ExportState> {
       clearResult: true,
     );
 
-    // 1. Per-override validation via gore_core.
-    final errors = <String>[];
-    for (final override in overrides) {
-      final res = await _core.execute('validate_override', payload: {
-        'class': override.classId,
-        'field': override.field,
-        'value': override.newValue,
-      });
-      if (res['ok'] != true) {
-        final msg = (res['error'] as Map?)
-            ?['message'] as String? ?? 'Unknown validation error';
-        errors.add('${override.classId}.${override.field}: $msg');
-      }
-    }
-
-    if (errors.isNotEmpty) {
-      state = state.copyWith(
-        isExporting: false,
-        validationErrors: errors,
-      );
-      return;
-    }
-
-    // 2. Generate the mod.
+    // Generate the mod. Field-level validation already happened client-side in
+    // the editor (only valid OverrideEntry values reach here), and the native
+    // `validate` command needs a full ReflectionModel the GUI does not carry,
+    // so we go straight to generation with the schema gore_core accepts:
+    // `{meta, override:[{class, field, value_int|value_float|value_bool|value_str}]}`.
     final res = await _core.execute('generate_mod', payload: {
       'meta': {
         'name':     request.modName,
         'delay_ms': request.delayMs,
       },
-      'overrides':   [for (final o in overrides) o.toJson()],
-      'target_dir':  request.targetDir,
-      'package_zip': request.packageAsZip,
+      'override': [for (final o in overrides) o.toFfiJson()],
     });
 
     if (res['ok'] != true) {
@@ -89,11 +70,37 @@ class ExportNotifier extends StateNotifier<ExportState> {
       return;
     }
 
-    final outputPath = (res['data'] as Map?)
-        ?['output_path'] as String? ?? request.targetDir;
+    // gore_core returns the mod as an in-memory `files` map (relative path ->
+    // contents); it does not touch the filesystem. Materialize those files
+    // under <targetDir>/<modName>/ before reporting success — otherwise the
+    // chosen folder stays empty.
+    final files = (res['files'] as Map?)?.cast<String, Object?>();
+    if (files == null) {
+      state = state.copyWith(
+        isExporting: false,
+        result: const ExportResult(error: 'gore_core returned no files'),
+      );
+      return;
+    }
+
+    final modDir = p.join(request.targetDir, request.modName);
+    try {
+      for (final entry in files.entries) {
+        final outFile = File(p.join(modDir, entry.key));
+        outFile.parent.createSync(recursive: true);
+        outFile.writeAsStringSync(entry.value as String? ?? '');
+      }
+    } on FileSystemException catch (e) {
+      state = state.copyWith(
+        isExporting: false,
+        result: ExportResult(error: 'Failed to write mod files: ${e.message}'),
+      );
+      return;
+    }
+
     state = state.copyWith(
       isExporting: false,
-      result: ExportResult(outputPath: outputPath),
+      result: ExportResult(outputPath: modDir),
     );
   }
 

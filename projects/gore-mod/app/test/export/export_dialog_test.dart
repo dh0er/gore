@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gore_mod/core/core_service.dart';
@@ -6,77 +8,94 @@ import 'package:gore_mod/editor/domain/override_entry.dart';
 import 'package:gore_mod/editor/domain/overrides_notifier.dart';
 import 'package:gore_mod/export/domain/export_notifier.dart';
 import 'package:gore_mod/export/domain/export_request.dart';
+import 'package:path/path.dart' as p;
 
 void main() {
   const apple500 = OverrideEntry(
     classId: 'ItFo_Apple', field: 'm_Value', oldValue: 4, newValue: 500,
   );
   const sword = OverrideEntry(
-    classId: 'ItMw_1H_Sword_01', field: 'm_Value', oldValue: 50, newValue: 200,
+    classId: 'ItMw_1H_Sword_01', field: 'm_Weight', oldValue: 5.0, newValue: 1.5,
   );
 
-  testWidgets('ExportNotifier passes correct override list to validate_override and generate_mod', (tester) async {
+  testWidgets('export sends the gore_core schema and writes returned files', (tester) async {
     final fake = FakeGoreCoreFfiService(responses: {
-      'validate_override': {'ok': true},
       'generate_mod': {
         'ok': true,
-        'data': {'output_path': 'C:/mods/MyBalanceMod'},
+        'files': {
+          'enabled.txt': '',
+          'Scripts/main.lua': '-- generated mod\n',
+        },
       },
     });
 
-    // Test via ExportNotifier directly (no full dialog pump needed for the core assertion)
+    final tmp = Directory.systemTemp.createTempSync('gore_mod_export_');
+    addTearDown(() => tmp.deleteSync(recursive: true));
+
     final container = ProviderContainer(
       overrides: [coreServiceProvider.overrideWithValue(fake)],
     );
     addTearDown(container.dispose);
 
-    // Seed overrides
     final overridesNotifier = container.read(overridesProvider.notifier);
     overridesNotifier.setOverride(apple500);
     overridesNotifier.setOverride(sword);
 
     final exportNotifier = container.read(exportProvider.notifier);
     await exportNotifier.export(
-      request: const ExportRequest(
+      request: ExportRequest(
         modName: 'MyBalanceMod',
-        targetDir: 'C:/mods',
+        targetDir: tmp.path,
         delayMs: 0,
       ),
       overrides: container.read(overridesProvider).entries,
     );
 
-    // validate_override called once per override
-    final validateCalls = fake.calls.where((c) => c.command == 'validate_override').toList();
-    expect(validateCalls, hasLength(2));
-
-    // Check first validate_override call carries correct payload shape
-    final appleCall = validateCalls.firstWhere(
-      (c) => c.payload['class'] == 'ItFo_Apple',
-    );
-    expect(appleCall.payload['field'], 'm_Value');
-    expect(appleCall.payload['value'], 500);
-
-    // generate_mod called once with full override list
+    // generate_mod called once with the schema gore_core accepts: `override`
+    // (not `overrides`) and typed value keys.
     final genCalls = fake.calls.where((c) => c.command == 'generate_mod').toList();
     expect(genCalls, hasLength(1));
+    // The non-existent validate_override command must not be called.
+    expect(fake.calls.where((c) => c.command == 'validate_override'), isEmpty);
+
     final genPayload = genCalls.first.payload;
     expect(genPayload['meta'], containsPair('name', 'MyBalanceMod'));
     expect(genPayload['meta'], containsPair('delay_ms', 0));
-    final sentOverrides = genPayload['overrides'] as List;
+    final sentOverrides = genPayload['override'] as List;
     expect(sentOverrides, hasLength(2));
-    expect(sentOverrides.map((o) => (o as Map)['class']), containsAll(['ItFo_Apple', 'ItMw_1H_Sword_01']));
+    final appleEntry = sentOverrides
+        .cast<Map>()
+        .firstWhere((o) => o['class'] == 'ItFo_Apple');
+    expect(appleEntry['value_int'], 500);
+    expect(appleEntry.containsKey('value'), isFalse);
+    final swordEntry = sentOverrides
+        .cast<Map>()
+        .firstWhere((o) => o['class'] == 'ItMw_1H_Sword_01');
+    expect(swordEntry['value_float'], 1.5);
 
-    // Result
-    expect(container.read(exportProvider).result?.success, isTrue);
+    // Files were materialized under <targetDir>/<modName>/.
+    final modDir = p.join(tmp.path, 'MyBalanceMod');
+    expect(File(p.join(modDir, 'enabled.txt')).existsSync(), isTrue);
+    expect(
+      File(p.join(modDir, 'Scripts/main.lua')).readAsStringSync(),
+      '-- generated mod\n',
+    );
+
+    final result = container.read(exportProvider).result;
+    expect(result?.success, isTrue);
+    expect(result?.outputPath, modDir);
   });
 
-  testWidgets('ExportNotifier surfaces validation errors and does not call generate_mod', (tester) async {
+  testWidgets('export surfaces a generation error and writes nothing', (tester) async {
     final fake = FakeGoreCoreFfiService(responses: {
-      'validate_override': {
+      'generate_mod': {
         'ok': false,
-        'error': {'message': 'Unknown field'},
+        'error': {'code': 'BAD_CONFIG', 'message': 'invalid overrides config'},
       },
     });
+
+    final tmp = Directory.systemTemp.createTempSync('gore_mod_export_err_');
+    addTearDown(() => tmp.deleteSync(recursive: true));
 
     final container = ProviderContainer(
       overrides: [coreServiceProvider.overrideWithValue(fake)],
@@ -84,11 +103,13 @@ void main() {
     addTearDown(container.dispose);
 
     await container.read(exportProvider.notifier).export(
-      request: const ExportRequest(modName: 'Test', targetDir: 'C:/mods'),
+      request: ExportRequest(modName: 'Test', targetDir: tmp.path),
       overrides: [apple500],
     );
 
-    expect(container.read(exportProvider).validationErrors, isNotEmpty);
-    expect(fake.calls.where((c) => c.command == 'generate_mod'), isEmpty);
+    final result = container.read(exportProvider).result;
+    expect(result?.success, isFalse);
+    expect(result?.error, contains('invalid overrides config'));
+    expect(Directory(p.join(tmp.path, 'Test')).existsSync(), isFalse);
   });
 }

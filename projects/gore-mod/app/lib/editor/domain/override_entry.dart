@@ -28,6 +28,30 @@ class OverrideEntry {
     'value': newValue,
   };
 
+  /// Serialize as one `SingleOverride` for the gore_core `generate_mod` FFI:
+  /// the value goes under a typed key (`value_int` / `value_float` /
+  /// `value_bool` / `value_str`) that matches the Rust `OverrideValue` flatten
+  /// representation. Sending a generic `value` key makes gore_core reject the
+  /// config with `BAD_CONFIG`.
+  Map<String, Object?> toFfiJson() {
+    final v = newValue;
+    final String valueKey;
+    if (v is bool) {
+      valueKey = 'value_bool';
+    } else if (v is int) {
+      valueKey = 'value_int';
+    } else if (v is double) {
+      valueKey = 'value_float';
+    } else {
+      valueKey = 'value_str';
+    }
+    return {
+      'class': classId,
+      'field': field,
+      valueKey: v,
+    };
+  }
+
   OverrideEntry copyWith({Object? newValue}) =>
       OverrideEntry(
         classId:  classId,

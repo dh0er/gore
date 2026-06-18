@@ -19,8 +19,12 @@ use crate::gen::{gen_lua, OverridesConfig};
 use crate::model::ReflectionModel;
 use crate::validate::validate_config;
 
+/// # Safety
+/// `request_json` must be null or a valid, NUL-terminated C string pointer that
+/// stays valid for the duration of the call. The returned pointer is owned by
+/// the caller and must be released with [`gore_core_free`].
 #[unsafe(no_mangle)]
-pub extern "C" fn gore_core_execute(request_json: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn gore_core_execute(request_json: *const c_char) -> *mut c_char {
     if request_json.is_null() {
         return cstring_ptr(execute_json(r#"{"command":null}"#));
     }
@@ -30,8 +34,12 @@ pub extern "C" fn gore_core_execute(request_json: *const c_char) -> *mut c_char 
     cstring_ptr(execute_json(&input))
 }
 
+/// # Safety
+/// `ptr` must be null or a pointer previously returned by [`gore_core_execute`]
+/// that has not already been freed. Passing any other pointer is undefined
+/// behavior.
 #[unsafe(no_mangle)]
-pub extern "C" fn gore_core_free(ptr: *mut c_char) {
+pub unsafe extern "C" fn gore_core_free(ptr: *mut c_char) {
     if ptr.is_null() {
         return;
     }

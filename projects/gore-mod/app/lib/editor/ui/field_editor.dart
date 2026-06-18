@@ -49,6 +49,24 @@ class _FieldEditorState extends State<FieldEditor> {
       _controllers.clear();
       _errors.clear();
       _rebuildControllers();
+      return;
+    }
+    // Same item, but the pending overrides may have changed externally — the
+    // right-hand OverridesPanel can remove a single override or Clear all. The
+    // controllers would otherwise keep showing the old overridden value that is
+    // no longer pending (and won't be exported). Resync each field's text to
+    // its current pending value, or back to the default when it was cleared.
+    // Skip fields the user is mid-editing with a validation error so we don't
+    // clobber in-progress input.
+    for (final field in widget.item.fields) {
+      final controller = _controllers[field.name];
+      if (controller == null || _errors[field.name] != null) continue;
+      final pending = widget.pendingOverrides[field.name];
+      final expected =
+          pending != null ? pending.newValue.toString() : _defaultText(field);
+      if (controller.text != expected) {
+        controller.text = expected;
+      }
     }
   }
 
@@ -82,9 +100,12 @@ class _FieldEditorState extends State<FieldEditor> {
     if (error != null) return;
 
     final value = parsedValue(field, raw);
-    // If reverted to the default, clear the override instead of emitting one.
+    // If reverted to the default, clear the override instead of emitting one —
+    // including when a pending override already exists for this field (the
+    // common edit→revert flow), otherwise the no-op default assignment would
+    // stay in the export payload.
     final defaultStr = _defaultText(field);
-    if (raw.trim() == defaultStr && !widget.pendingOverrides.containsKey(field.name)) {
+    if (raw.trim() == defaultStr) {
       widget.onOverrideCleared(field.name);
       return;
     }

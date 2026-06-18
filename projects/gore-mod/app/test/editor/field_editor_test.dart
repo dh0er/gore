@@ -74,4 +74,39 @@ void main() {
     await tester.pumpWidget(buildEditor(pending: pending));
     expect(find.byIcon(Icons.edit), findsOneWidget);
   });
+
+  testWidgets('reverting a pending field to default clears the override', (tester) async {
+    final pending = {
+      'm_Value': const OverrideEntry(
+        classId: 'ItFo_Apple', field: 'm_Value', oldValue: 0, newValue: 500,
+      ),
+    };
+    String? cleared;
+    OverrideEntry? changed;
+    await tester.pumpWidget(buildEditor(
+      pending: pending,
+      onCleared: (f) => cleared = f,
+      onChanged: (e) => changed = e,
+    ));
+    // Type the catalog default back into the (already overridden) field.
+    await tester.enterText(find.byType(TextField).first, '0');
+    await tester.pump();
+    expect(cleared, 'm_Value');
+    expect(changed, isNull);
+  });
+
+  testWidgets('resyncs field text when a pending override is removed externally', (tester) async {
+    final pending = {
+      'm_Value': const OverrideEntry(
+        classId: 'ItFo_Apple', field: 'm_Value', oldValue: 0, newValue: 500,
+      ),
+    };
+    await tester.pumpWidget(buildEditor(pending: pending));
+    final field = find.byType(TextField).first;
+    expect(tester.widget<TextField>(field).controller!.text, '500');
+
+    // Parent rebuilds with the override removed (OverridesPanel Clear all).
+    await tester.pumpWidget(buildEditor(pending: const {}));
+    expect(tester.widget<TextField>(field).controller!.text, '0');
+  });
 }
