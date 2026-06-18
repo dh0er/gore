@@ -72,7 +72,7 @@ class HomePage extends ConsumerWidget {
         children: [
           // Left: catalog browser
           SizedBox(
-            width: 320,
+            width: 420,
             child: CatalogBrowser(
               selected: selected,
               onItemSelected: (item) =>
@@ -80,9 +80,9 @@ class HomePage extends ConsumerWidget {
             ),
           ),
           const VerticalDivider(width: 1),
-          // Centre: field editor
+          // Centre: field editor. Cap the editing column width and centre it so
+          // the inputs don't stretch across the whole window on wide displays.
           Expanded(
-            flex: 3,
             child: selected == null
                 ? Center(
                     child: Text(
@@ -90,21 +90,28 @@ class HomePage extends ConsumerWidget {
                       style: TextStyle(color: scheme.onSurfaceVariant),
                     ),
                   )
-                : FieldEditor(
-                    item: selected,
-                    pendingOverrides: {
-                      for (final e in overridesState.entries
-                          .where((e) => e.classId == selected.id))
-                        e.field: e,
-                    },
-                    onOverrideChanged: (entry) =>
-                        ref.read(overridesProvider.notifier).setOverride(entry),
+                : Align(
+                    alignment: Alignment.topCenter,
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 720),
+                      child: FieldEditor(
+                        item: selected,
+                        pendingOverrides: {
+                          for (final e in overridesState.entries
+                              .where((e) => e.classId == selected.id))
+                            e.field: e,
+                        },
+                        onOverrideChanged: (entry) => ref
+                            .read(overridesProvider.notifier)
+                            .setOverride(entry),
+                      ),
+                    ),
                   ),
           ),
           const VerticalDivider(width: 1),
           // Right: overrides panel
           SizedBox(
-            width: 320,
+            width: 400,
             child: const OverridesPanel(),
           ),
         ],

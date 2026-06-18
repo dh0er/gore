@@ -91,6 +91,22 @@ void main() {
     expect(changed?.newValue, 0);
   });
 
+  testWidgets('does not reformat in-progress numeric input on rebuild', (tester) async {
+    // m_Weight is a float (second TextField). Typing "3" then letting the
+    // parent echo the override back (3.0) must NOT rewrite the field to "3.0"
+    // — that would drop a half-typed ".5" and re-select the text.
+    await tester.pumpWidget(buildEditor());
+    final weightField = find.byType(TextField).at(1);
+    await tester.enterText(weightField, '3');
+    await tester.pump();
+    await tester.pumpWidget(buildEditor(pending: {
+      'm_Weight': const OverrideEntry(
+        classId: 'ItFo_Apple', field: 'm_Weight', oldValue: 0.0, newValue: 3.0,
+      ),
+    }));
+    expect(tester.widget<TextField>(weightField).controller!.text, '3');
+  });
+
   testWidgets('resyncs field text when a pending override is removed externally', (tester) async {
     final pending = {
       'm_Value': const OverrideEntry(

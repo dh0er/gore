@@ -56,17 +56,33 @@ class _FieldEditorState extends State<FieldEditor> {
     // no longer pending (and won't be exported). Resync each field's text to
     // its current pending value, or back to the default when it was cleared.
     // Skip fields the user is mid-editing with a validation error so we don't
-    // clobber in-progress input.
+    // clobber in-progress input — and skip fields whose text already represents
+    // the desired value, so we never reformat live typing (e.g. "3" -> "3.0",
+    // which would drop a half-typed ".5" and re-select the field).
     for (final field in widget.item.fields) {
       final controller = _controllers[field.name];
       if (controller == null || _errors[field.name] != null) continue;
       final pending = widget.pendingOverrides[field.name];
-      final expected =
+      if (_controllerRepresents(field, controller.text, pending)) continue;
+      controller.text =
           pending != null ? _pendingText(field, pending) : _defaultText(field);
-      if (controller.text != expected) {
-        controller.text = expected;
-      }
     }
+  }
+
+  /// Whether [text] already encodes the value the field should show — the
+  /// pending override's value, or the placeholder default when none is pending.
+  /// Compared by parsed value, not string, so equivalent spellings ("3" vs
+  /// "3.0") and in-progress input are left untouched.
+  bool _controllerRepresents(
+    FieldSchema field,
+    String text,
+    OverrideEntry? pending,
+  ) {
+    if (validateField(field, text) != null) return false;
+    final current = parsedValue(field, text);
+    final expected =
+        pending?.newValue ?? parsedValue(field, _defaultText(field));
+    return current == expected;
   }
 
   @override
@@ -220,7 +236,7 @@ class _FieldRow extends StatelessWidget {
       input = TextField(
         controller: controller,
         decoration: InputDecoration(
-          labelText: schema.name,
+          // The field name is already shown in the left label column.
           errorText: error,
           isDense: true,
           suffixIcon: hasPending
@@ -238,9 +254,9 @@ class _FieldRow extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         SizedBox(
-          width: 130,
+          width: 200,
           child: Padding(
-            padding: const EdgeInsets.only(top: 12),
+            padding: const EdgeInsets.only(top: 8),
             child: Text(
               schema.name,
               style: TextStyle(color: scheme.onSurfaceVariant),

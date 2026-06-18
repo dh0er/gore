@@ -82,7 +82,7 @@ class _CatalogBrowserState extends ConsumerState<CatalogBrowser> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     if (!searching) SizedBox(
-                      width: 180,
+                      width: 210,
                       child: DecoratedBox(
                         decoration: BoxDecoration(
                           color: theme.colorScheme.surfaceContainerLow,
