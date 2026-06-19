@@ -6,7 +6,8 @@ build logic (Flutter apps, Rust crates) and adds debug builds, tests, and a
 flag-driven release pipeline.
 
 Usage:
-    python build.py <project|all> build      [--debug|--release]
+    python build.py <project|all> build      [--debug|--release] [--run]
+    python build.py <project>     run        [--debug|--release]  # build if missing, launch
     python build.py <project|all> dist                  # build + package
     python build.py <project|all> installer             # dist + setup.exe
     python build.py <project|all> test
@@ -88,6 +89,7 @@ PROJECTS: dict[str, dict] = {
         "changelog": "CHANGELOG.md",
         "installer": "installer/setup.iss",
         "installer_name": "GoresaveSetup",  # -> GoresaveSetup-X.Y.Z.exe
+        "exe": "goresave.exe",  # CMake BINARY_NAME
         "core_dll": "goresave_core",  # cargo crate + dll basename
         "dist_zip": "goresave-{version}-windows-x64",
         "releasable": True,
@@ -100,6 +102,7 @@ PROJECTS: dict[str, dict] = {
         "changelog": "CHANGELOG.md",
         "installer": "installer/setup.iss",
         "installer_name": "GoreModSetup",
+        "exe": "gore_mod.exe",  # CMake BINARY_NAME
         "core_dll": "gore_core",
         "dist_zip": "gore-mod-{version}-windows-x64",
         "releasable": True,
@@ -226,8 +229,13 @@ def resolve_git_sha() -> str:
 # --------------------------------------------------------------------------- #
 # Build recipes                                                               #
 # --------------------------------------------------------------------------- #
+def flutter_build_dir(project: str, release: bool = True) -> Path:
+    mode = "Release" if release else "Debug"
+    return pdir(project) / "app" / "build" / "windows" / "x64" / "runner" / mode
+
+
 def flutter_release_dir(project: str) -> Path:
-    return pdir(project) / "app" / "build" / "windows" / "x64" / "runner" / "Release"
+    return flutter_build_dir(project, release=True)
 
 
 def target_dir(release: bool) -> Path:
@@ -257,11 +265,7 @@ def build_project(project: str, release: bool, dry: bool) -> None:
 
     if dry:
         return
-    rel = (
-        flutter_release_dir(project)
-        if release
-        else pdir(project) / "app" / "build" / "windows" / "x64" / "runner" / "Debug"
-    )
+    rel = flutter_build_dir(project, release)
     if not rel.exists():
         raise SystemExit(f"missing flutter output: {rel}")
     dll = f"{crate}.dll"
@@ -270,6 +274,32 @@ def build_project(project: str, release: bool, dry: bool) -> None:
         raise SystemExit(f"missing native artifact: {src}")
     shutil.copy2(src, rel / dll)
     print(f"copied {dll} -> {rel / dll}")
+
+
+def runnable_exe(project: str, release: bool) -> Path:
+    cfg = PROJECTS[project]
+    if cfg["kind"] == "flutter":
+        return flutter_build_dir(project, release) / cfg["exe"]
+    if cfg["kind"] == "rust-bin":
+        return target_dir(release) / f"{cfg['bin']}.exe"
+    raise SystemExit(f"{project} is not runnable")
+
+
+def run_project(project: str, release: bool) -> None:
+    """Launch the built program, building it first if it is missing."""
+    exe = runnable_exe(project, release)
+    if not exe.exists():
+        mode = "release" if release else "debug"
+        print(f"{exe.name} ({mode}) not built yet; building first...")
+        build_project(project, release=release, dry=False)
+    if not exe.exists():
+        raise SystemExit(f"build did not produce {exe}")
+    # Run from the exe's own directory so a Flutter app finds its bundled DLLs.
+    # Propagate the program's own exit code rather than framing a nonzero exit
+    # as a build failure (a CLI may exit nonzero, e.g. usage with no args).
+    print(f"\nlaunching {exe}")
+    completed = subprocess.run([str(exe)], cwd=exe.parent, env=env())
+    raise SystemExit(completed.returncode)
 
 
 def dist_project(project: str, dry: bool) -> Path | None:
@@ -432,6 +462,11 @@ def main() -> int:
     b = sub.add_parser("build", help="compile")
     b.add_argument("--release", action="store_true")
     b.add_argument("--debug", action="store_true")
+    b.add_argument("--run", action="store_true", help="launch right after building")
+
+    rn = sub.add_parser("run", help="launch the built program (builds if missing)")
+    rn.add_argument("--release", action="store_true")
+    rn.add_argument("--debug", action="store_true")
 
     sub.add_parser("dist", help="build + package")
     sub.add_parser("installer", help="dist + installer exe")
@@ -470,6 +505,24 @@ def main() -> int:
                 "--installer/--changelog/--tag/--push) or --all"
             )
         release_project(targets[0], args.version, steps, dry=args.dry_run)
+        return 0
+
+    if args.command == "run":
+        targets = expand_targets(args.target, for_release=False)
+        if len(targets) != 1:
+            raise SystemExit("run takes exactly one project (not 'all')")
+        run_project(targets[0], release=args.release or not args.debug)
+        return 0
+
+    if args.command == "build" and args.run:
+        targets = expand_targets(args.target, for_release=False)
+        if len(targets) != 1:
+            raise SystemExit("build --run takes exactly one project (not 'all')")
+        t = targets[0]
+        release = args.release or not args.debug
+        runnable_exe(t, release)  # rejects non-runnable before the rebuild
+        build_project(t, release=release, dry=False)
+        run_project(t, release=release)  # exe just built, so this only launches
         return 0
 
     targets = expand_targets(args.target, for_release=args.command in ("dist", "installer"))
