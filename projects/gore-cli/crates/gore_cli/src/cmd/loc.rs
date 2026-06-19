@@ -58,6 +58,13 @@ pub fn status() -> Result<()> {
             println!("  extracted:  {} (unix)", m.extracted_at);
             println!("  path:       {}", m.catalog_path);
         }
+        None if loc_store::catalog_present() => {
+            // Catalog file exists but its metadata doesn't (e.g. a catalog write
+            // that succeeded before the meta write failed). The apps still treat
+            // the catalog as available, so report it as present.
+            println!("loc catalog: present (no metadata)");
+            println!("  path:       {}", paths::loc_catalog_path().display());
+        }
         None => println!(
             "no loc catalog extracted yet -> run `gore-cli loc extract` (shared dir: {})",
             paths::shared_data_dir().display()

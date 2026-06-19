@@ -136,7 +136,9 @@ class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver
                 : () => runLocExtractFlow(context, ref),
           ),
           _LanguageMenu(
-            current: ref.watch(localeProvider),
+            // Normalize through gameLangByCode so the checkmark matches the
+            // language MaterialApp actually shows for an unknown/obsolete code.
+            current: gameLangByCode(ref.watch(localeProvider)).code,
             onSelected: (code) =>
                 ref.read(localeProvider.notifier).setLocale(code),
             tooltip: l10n.language,
