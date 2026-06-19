@@ -81,7 +81,9 @@ class LocalizationController extends StateNotifier<LocalizationState> {
     try {
       final response = await _core.execute('loc_status');
       if (response['ok'] != true) {
-        state = state.copyWith(present: false, message: _errorMessage(response));
+        // Leave `present` untouched: a catalog may still exist from an earlier
+        // extraction. The first-run prompt keys off the null return, not this.
+        state = state.copyWith(message: _errorMessage(response));
         return null;
       }
       final data = (response['data'] as Map?)?.cast<String, Object?>();
@@ -90,8 +92,8 @@ class LocalizationController extends StateNotifier<LocalizationState> {
       state = state.copyWith(present: present, meta: meta);
       return present;
     } catch (error) {
+      // Leave `present` untouched (a catalog may still exist on disk).
       state = state.copyWith(
-        present: false,
         message: 'Localization status failed: $error',
       );
       return null;
