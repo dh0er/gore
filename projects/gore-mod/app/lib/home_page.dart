@@ -13,14 +13,66 @@ import 'editor/domain/overrides_notifier.dart';
 import 'editor/ui/field_editor.dart';
 import 'editor/ui/overrides_panel.dart';
 import 'export/ui/export_dialog.dart';
+import 'l10n/app_localizations.dart';
+import 'loc/domain/loc_catalog_provider.dart';
+import 'loc/domain/loc_notifier.dart';
+import 'loc/game_lang.dart';
+import 'loc/ui/loc_extract_flow.dart';
 
 final _selectedItemProvider = StateProvider<CatalogItem?>((ref) => null);
 
-class HomePage extends ConsumerWidget {
+class HomePage extends ConsumerStatefulWidget {
   const HomePage({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<HomePage> createState() => _HomePageState();
+}
+
+class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    // First-run, optional: after the first frame, if no localized text has
+    // been extracted yet and the user hasn't been prompted before, offer to
+    // extract it.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _maybeFirstRunPrompt());
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Another tool (or `gore-cli loc extract`) may have written the shared
+    // loc_catalog.json while this app was in the background. Re-read it on
+    // resume so item names pick up a catalog that appeared after first load.
+    if (state == AppLifecycleState.resumed) {
+      ref.invalidate(locCatalogProvider);
+    }
+  }
+
+  Future<void> _maybeFirstRunPrompt() async {
+    if (ref.read(locExtractPromptedProvider)) return;
+    final present = await ref.read(locProvider.notifier).status();
+    // Only prompt when the catalog is definitively absent: a null status means
+    // the query failed (e.g. core unavailable), where extraction can't work, so
+    // don't nag with the dialog.
+    if (!mounted || present != false) return;
+    final shouldExtract = await showLocFirstRunDialog(context);
+    if (!mounted || !shouldExtract) return;
+    // Record only once the user actually chose to extract, so the prompt isn't
+    // marked as shown when the dialog never appeared, and deferring ("Not now")
+    // lets the optional prompt offer again on a later launch.
+    ref.read(locExtractPromptedProvider.notifier).markPrompted();
+    await runLocExtractFlow(context, ref);
+  }
+
+  @override
+  Widget build(BuildContext context) {
     // Switching the model data source invalidates pending overrides and the
     // current selection: fields may be removed/renamed or enum backing values
     // may change, so exporting old assignments could be wrong. Clear both when
@@ -45,6 +97,7 @@ class HomePage extends ConsumerWidget {
     final themeModeNotifier = ref.read(themeModeProvider.notifier);
     final scheme         = Theme.of(context).colorScheme;
     final isDark         = Theme.of(context).brightness == Brightness.dark;
+    final l10n           = AppLocalizations.of(context);
 
     return Scaffold(
       appBar: AppBar(
@@ -64,7 +117,10 @@ class HomePage extends ConsumerWidget {
           _DumpMenu(
             dumpPath: ref.watch(dumpPathProvider),
             onLoad: () async {
-              const group = XTypeGroup(label: 'game data', extensions: ['json']);
+              final group = XTypeGroup(
+                label: l10n.gameDataFileGroupLabel,
+                extensions: const ['json'],
+              );
               final file = await openFile(acceptedTypeGroups: [group]);
               if (file != null) {
                 ref.read(dumpPathProvider.notifier).set(file.path);
@@ -73,8 +129,23 @@ class HomePage extends ConsumerWidget {
             onReset: () => ref.read(dumpPathProvider.notifier).clear(),
           ),
           IconButton(
+            icon: const Icon(Icons.translate),
+            tooltip: l10n.extractLocalizedText,
+            onPressed: ref.watch(locProvider).isRunning
+                ? null
+                : () => runLocExtractFlow(context, ref),
+          ),
+          _LanguageMenu(
+            // Normalize through gameLangByCode so the checkmark matches the
+            // language MaterialApp actually shows for an unknown/obsolete code.
+            current: gameLangByCode(ref.watch(localeProvider)).code,
+            onSelected: (code) =>
+                ref.read(localeProvider.notifier).setLocale(code),
+            tooltip: l10n.language,
+          ),
+          IconButton(
             icon: Icon(isDark ? Icons.light_mode : Icons.dark_mode),
-            tooltip: isDark ? 'Light mode' : 'Dark mode',
+            tooltip: isDark ? l10n.lightMode : l10n.darkMode,
             onPressed: () {
               themeModeNotifier.setThemeMode(
                 isDark ? ThemeMode.light : ThemeMode.dark,
@@ -87,8 +158,8 @@ class HomePage extends ConsumerWidget {
               icon: const Icon(Icons.upload_outlined, size: 18),
               label: Text(
                 overridesState.count == 0
-                    ? 'Export mod'
-                    : 'Export mod (${overridesState.count})',
+                    ? l10n.exportMod
+                    : l10n.exportModWithCount(overridesState.count),
               ),
               onPressed: overridesState.count == 0
                   ? null
@@ -120,7 +191,7 @@ class HomePage extends ConsumerWidget {
             child: selected == null
                 ? Center(
                     child: Text(
-                      'Select an item to edit its fields.',
+                      l10n.selectAnItemToEdit,
                       style: TextStyle(color: scheme.onSurfaceVariant),
                     ),
                   )
@@ -130,6 +201,11 @@ class HomePage extends ConsumerWidget {
                       constraints: const BoxConstraints(maxWidth: 720),
                       child: FieldEditor(
                         item: selected,
+                        displayName: displayNameForItem(
+                          selected,
+                          ref.watch(locCatalogProvider).value ?? const {},
+                          gameLangByCode(ref.watch(localeProvider)),
+                        ),
                         pendingOverrides: {
                           for (final e in overridesState.entries
                               .where((e) => e.classId == selected.id))
@@ -172,8 +248,11 @@ class _DumpMenu extends StatelessWidget {
   Widget build(BuildContext context) {
     final active = dumpPath != null;
     final scheme = Theme.of(context).colorScheme;
+    final l10n = AppLocalizations.of(context);
     return PopupMenuButton<String>(
-      tooltip: active ? 'Game data: ${p.basename(dumpPath!)}' : 'Game data: bundled',
+      tooltip: active
+          ? l10n.gameDataActiveTooltip(p.basename(dumpPath!))
+          : l10n.gameDataBundledTooltip,
       icon: Icon(
         active ? Icons.dataset : Icons.dataset_outlined,
         color: active ? scheme.primary : null,
@@ -186,12 +265,12 @@ class _DumpMenu extends StatelessWidget {
         }
       },
       itemBuilder: (context) => [
-        const PopupMenuItem(
+        PopupMenuItem(
           value: 'load',
           child: ListTile(
-            leading: Icon(Icons.upload_file),
-            title: Text('Load game-data dump…'),
-            subtitle: Text('gore_game_data.json from the gore-dump mod'),
+            leading: const Icon(Icons.upload_file),
+            title: Text(l10n.loadGameDataDump),
+            subtitle: Text(l10n.loadGameDataDumpSubtitle),
             contentPadding: EdgeInsets.zero,
           ),
         ),
@@ -200,11 +279,50 @@ class _DumpMenu extends StatelessWidget {
           enabled: active,
           child: ListTile(
             leading: const Icon(Icons.restore),
-            title: const Text('Use bundled data'),
-            subtitle: Text(active ? p.basename(dumpPath!) : 'already bundled'),
+            title: Text(l10n.useBundledData),
+            subtitle:
+                Text(active ? p.basename(dumpPath!) : l10n.alreadyBundled),
             contentPadding: EdgeInsets.zero,
           ),
         ),
+      ],
+    );
+  }
+}
+
+/// AppBar control for picking the app / game language. Lists [kGameLangs] by
+/// endonym; selecting one updates [localeProvider] (which persists and drives
+/// both the UI locale and which extracted game-text names are shown).
+class _LanguageMenu extends StatelessWidget {
+  const _LanguageMenu({
+    required this.current,
+    required this.onSelected,
+    required this.tooltip,
+  });
+
+  final String current;
+  final void Function(String code) onSelected;
+  final String tooltip;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return PopupMenuButton<String>(
+      tooltip: tooltip,
+      icon: const Icon(Icons.language),
+      onSelected: onSelected,
+      itemBuilder: (context) => [
+        for (final lang in kGameLangs)
+          PopupMenuItem(
+            value: lang.code,
+            child: Row(
+              children: [
+                Expanded(child: Text(lang.endonym)),
+                if (lang.code == current)
+                  Icon(Icons.check, size: 18, color: scheme.primary),
+              ],
+            ),
+          ),
       ],
     );
   }

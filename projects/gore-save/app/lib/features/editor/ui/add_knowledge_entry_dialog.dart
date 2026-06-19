@@ -1,6 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:goresave/features/editor/domain/knowledge_catalog.dart';
 import 'package:goresave/features/editor/ui/sidebar_tile.dart';
+import 'package:goresave/l10n/app_localizations.dart';
+import 'package:goresave/loc/game_lang.dart';
+import 'package:goresave/loc/loc_catalog_provider.dart';
 
 /// Shows a picker dialog over [catalog] that lets the user choose a knowledge
 /// entry to add.
@@ -19,7 +23,7 @@ Future<String?> showAddKnowledgeEntryDialog(
   );
 }
 
-class _AddKnowledgeEntryDialog extends StatefulWidget {
+class _AddKnowledgeEntryDialog extends ConsumerStatefulWidget {
   const _AddKnowledgeEntryDialog({
     required this.catalog,
     required this.exclude,
@@ -29,7 +33,7 @@ class _AddKnowledgeEntryDialog extends StatefulWidget {
   final Set<String> exclude;
 
   @override
-  State<_AddKnowledgeEntryDialog> createState() =>
+  ConsumerState<_AddKnowledgeEntryDialog> createState() =>
       _AddKnowledgeEntryDialogState();
 }
 
@@ -41,7 +45,8 @@ const _kAllCategory = '';
 
 typedef _EntryGroup = ({String category, List<KnowledgeCatalogEntry> entries});
 
-class _AddKnowledgeEntryDialogState extends State<_AddKnowledgeEntryDialog> {
+class _AddKnowledgeEntryDialogState
+    extends ConsumerState<_AddKnowledgeEntryDialog> {
   String _query = '';
   // Empty string means "All".
   String _selectedCategory = _kAllCategory;
@@ -68,6 +73,10 @@ class _AddKnowledgeEntryDialogState extends State<_AddKnowledgeEntryDialog> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final l10n = AppLocalizations.of(context);
+    final lang = ref.watch(currentGameLangProvider);
+    final catalog =
+        ref.watch(locCatalogProvider).asData?.value ?? const {};
 
     final available = widget.catalog.entries
         .where((e) => !widget.exclude.contains(e.id.toLowerCase()))
@@ -82,9 +91,11 @@ class _AddKnowledgeEntryDialogState extends State<_AddKnowledgeEntryDialog> {
     final searching = query.isNotEmpty;
     final List<KnowledgeCatalogEntry> shown;
     if (searching) {
-      shown = available
-          .where((e) => e.id.toLowerCase().contains(query))
-          .toList();
+      shown = available.where((e) {
+        final name = localizedGameName(catalog, lang, e.id) ?? e.id;
+        return e.id.toLowerCase().contains(query) ||
+            name.toLowerCase().contains(query);
+      }).toList();
     } else if (selectedCategory == _kAllCategory) {
       shown = available;
     } else {
@@ -96,7 +107,7 @@ class _AddKnowledgeEntryDialogState extends State<_AddKnowledgeEntryDialog> {
     }
 
     return AlertDialog(
-      title: const Text('Add knowledge entry'),
+      title: Text(l10n.addKnowledgeEntryDialogTitle),
       contentPadding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
       content: SizedBox(
         width: 720,
@@ -106,9 +117,9 @@ class _AddKnowledgeEntryDialogState extends State<_AddKnowledgeEntryDialog> {
           children: [
             TextField(
               controller: _searchController,
-              decoration: const InputDecoration(
-                labelText: 'Search entries',
-                prefixIcon: Icon(Icons.search),
+              decoration: InputDecoration(
+                labelText: l10n.searchEntries,
+                prefixIcon: const Icon(Icons.search),
                 isDense: true,
               ),
               onChanged: (v) => setState(() {
@@ -118,8 +129,7 @@ class _AddKnowledgeEntryDialogState extends State<_AddKnowledgeEntryDialog> {
             const SizedBox(height: 8),
             Expanded(
               child: groups.isEmpty
-                  ? const Center(
-                      child: Text('No knowledge entries available to add'))
+                  ? Center(child: Text(l10n.noKnowledgeEntriesAvailableToAdd))
                   : Row(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
@@ -137,7 +147,7 @@ class _AddKnowledgeEntryDialogState extends State<_AddKnowledgeEntryDialog> {
                                 children: [
                                   SidebarTile(
                                     icon: Icons.list_outlined,
-                                    label: 'All (${available.length})',
+                                    label: l10n.allWithCount(available.length),
                                     selected: !searching &&
                                         selectedCategory == _kAllCategory,
                                     onTap: () => setState(() {
@@ -150,8 +160,8 @@ class _AddKnowledgeEntryDialogState extends State<_AddKnowledgeEntryDialog> {
                                     SidebarTile(
                                       icon:
                                           _iconForKnowledgeCategory(g.category),
-                                      label:
-                                          '${_cap(g.category)} (${g.entries.length})',
+                                      label: l10n.categoryWithCount(
+                                          _cap(g.category), g.entries.length),
                                       selected: !searching &&
                                           g.category == selectedCategory,
                                       onTap: () => setState(() {
@@ -168,12 +178,11 @@ class _AddKnowledgeEntryDialogState extends State<_AddKnowledgeEntryDialog> {
                         const SizedBox(width: 16),
                         Expanded(
                           child: shown.isEmpty
-                              ? const Center(
-                                  child: Text('No entries match'))
+                              ? Center(child: Text(l10n.noEntriesMatch))
                               : ListView.builder(
                                   itemCount: shown.length,
                                   itemBuilder: (context, index) =>
-                                      _entryTile(shown[index]),
+                                      _entryTile(shown[index], catalog, lang),
                                 ),
                         ),
                       ],
@@ -185,18 +194,25 @@ class _AddKnowledgeEntryDialogState extends State<_AddKnowledgeEntryDialog> {
       actions: [
         TextButton(
           onPressed: () => Navigator.of(context).pop(null),
-          child: const Text('Cancel'),
+          child: Text(AppLocalizations.of(context).cancel),
         ),
       ],
     );
   }
 
-  Widget _entryTile(KnowledgeCatalogEntry entry) {
+  Widget _entryTile(
+    KnowledgeCatalogEntry entry,
+    Map<String, Map<String, String>> catalog,
+    GameLang lang,
+  ) {
+    // Localized knowledge name from the id (lowercased); fall back to the raw
+    // id when no extracted catalog entry exists.
+    final name = localizedGameName(catalog, lang, entry.id) ?? entry.id;
     return ListTile(
       dense: true,
       leading: Icon(_iconForKnowledgeCategory(entry.category)),
       title: Text(
-        entry.id,
+        name,
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
       ),

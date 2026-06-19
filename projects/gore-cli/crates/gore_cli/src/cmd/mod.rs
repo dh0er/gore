@@ -3,6 +3,7 @@ pub mod dump;
 pub mod dump_mod;
 pub mod gen;
 pub mod gui_model;
+pub mod loc;
 pub mod package;
 pub mod scaffold;
 pub mod stubs;

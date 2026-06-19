@@ -16,3 +16,6 @@ gore-mod editor with real defaults.
 
 Regenerate this mod (`gore-cli dump-mod`) after the item set changes so
 `items.lua` covers new classes/fields.
+
+Localized names/descriptions are not produced here — use `gore-cli loc export`
+to read them straight from the game's `.lcache`.

@@ -142,7 +142,12 @@ void main() {
     );
 
     expect(container.read(exportProvider).result?.success, isFalse);
-    expect(container.read(exportProvider).result?.error, contains('Invalid mod name'));
+    // '../evil' contains a path separator and is rejected with a human-readable
+    // message (not the raw enum name).
+    expect(
+      container.read(exportProvider).result?.error,
+      contains('must not contain'),
+    );
     // generate_mod must not even be called for an invalid name.
     expect(fake.calls, isEmpty);
   });

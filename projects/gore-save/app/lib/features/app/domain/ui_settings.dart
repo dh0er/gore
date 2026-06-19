@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
+import 'package:goresave/utils/gore_tools_paths.dart';
 import 'package:path/path.dart' as p;
 
 class UiSettings {
@@ -13,6 +14,8 @@ class UiSettings {
     this.windowSize,
     this.windowMaximized = false,
     this.autoUpdateCheck = true,
+    this.locExtractPrompted = false,
+    this.appLocale = 'en',
   });
 
   factory UiSettings.fromJson(Map<String, Object?> json) {
@@ -21,6 +24,12 @@ class UiSettings {
         'dark' => ThemeMode.dark,
         'system' => ThemeMode.system,
         _ => ThemeMode.light,
+      },
+      appLocale: switch (json['appLocale']) {
+        // Store the trimmed code so a persisted " de " still matches kGameLangs
+        // instead of silently falling back to English.
+        final String code when code.trim().isNotEmpty => code.trim(),
+        _ => 'en',
       },
       uiScale: switch (json['uiScale']) {
         final num value => UiScaleNotifier.clampScale(value.toDouble()),
@@ -33,6 +42,7 @@ class UiSettings {
       },
       windowMaximized: json['windowMaximized'] == true,
       autoUpdateCheck: json['autoUpdateCheck'] != false,
+      locExtractPrompted: json['locExtractPrompted'] == true,
     );
   }
 
@@ -46,12 +56,24 @@ class UiSettings {
   /// Whether the app checks for updates automatically (on by default).
   final bool autoUpdateCheck;
 
+  /// Whether the one-time first-run prompt to extract localized game text has
+  /// already been shown. Keeps the auto-prompt from reappearing every launch;
+  /// the manual Settings button stays available regardless.
+  final bool locExtractPrompted;
+
+  /// Selected UI + game-text language code (one of [kGameLangs], default 'en').
+  /// Drives both the MaterialApp locale and which extracted game-text names
+  /// (items, NPCs, knowledge) are shown.
+  final String appLocale;
+
   UiSettings copyWith({
     ThemeMode? themeMode,
     double? uiScale,
     Size? windowSize,
     bool? windowMaximized,
     bool? autoUpdateCheck,
+    bool? locExtractPrompted,
+    String? appLocale,
   }) {
     return UiSettings(
       themeMode: themeMode ?? this.themeMode,
@@ -59,6 +81,8 @@ class UiSettings {
       windowSize: windowSize ?? this.windowSize,
       windowMaximized: windowMaximized ?? this.windowMaximized,
       autoUpdateCheck: autoUpdateCheck ?? this.autoUpdateCheck,
+      locExtractPrompted: locExtractPrompted ?? this.locExtractPrompted,
+      appLocale: appLocale ?? this.appLocale,
     );
   }
 
@@ -75,6 +99,8 @@ class UiSettings {
     },
     'windowMaximized': windowMaximized,
     'autoUpdateCheck': autoUpdateCheck,
+    'locExtractPrompted': locExtractPrompted,
+    'appLocale': appLocale,
   };
 }
 
@@ -100,6 +126,17 @@ class JsonFileUiSettingsStore implements UiSettingsStore {
     Map<String, String>? environment,
   }) {
     final env = environment ?? Platform.environment;
+    const fileName = 'ui_settings.json';
+    final file = File(
+      p.join(goreSaveSettingsDir(environment: env), fileName),
+    );
+    migrateLegacySettingsFile(_legacyFile(env, fileName), file);
+    return JsonFileUiSettingsStore(file);
+  }
+
+  /// Previous per-app config location used before settings moved under the
+  /// shared `gore-tools` umbrella. Kept only to migrate old files once.
+  static File _legacyFile(Map<String, String> env, String fileName) {
     final String root;
     if (Platform.isWindows) {
       root = env['APPDATA'] ?? env['LOCALAPPDATA'] ?? Directory.current.path;
@@ -114,9 +151,7 @@ class JsonFileUiSettingsStore implements UiSettingsStore {
           env['XDG_CONFIG_HOME'] ??
           (home == null ? Directory.current.path : p.join(home, '.config'));
     }
-    return JsonFileUiSettingsStore(
-      File(p.join(root, 'goresave', 'ui_settings.json')),
-    );
+    return File(p.join(root, 'goresave', fileName));
   }
 
   final File file;
@@ -163,6 +198,24 @@ class ThemeModeNotifier extends StateNotifier<ThemeMode> {
   void setThemeMode(ThemeMode themeMode) {
     state = themeMode;
     _store.write(_store.read().copyWith(themeMode: themeMode));
+  }
+}
+
+/// Selected language code (one of [kGameLangs]). Persisted through the shared
+/// Ui settings store, mirroring [themeModeProvider]. Drives both the app UI
+/// locale and which extracted game-text names are shown.
+final localeProvider = StateNotifierProvider<LocaleNotifier, String>((ref) {
+  return LocaleNotifier(ref.watch(uiSettingsStoreProvider));
+});
+
+class LocaleNotifier extends StateNotifier<String> {
+  LocaleNotifier(this._store) : super(_store.read().appLocale);
+
+  final UiSettingsStore _store;
+
+  void setLocale(String code) {
+    state = code;
+    _store.write(_store.read().copyWith(appLocale: code));
   }
 }
 

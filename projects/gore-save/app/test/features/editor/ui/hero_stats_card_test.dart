@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:goresave/features/editor/domain/hero_attributes.dart';
 import 'package:goresave/features/editor/ui/hero_stats_card.dart';
+import 'package:goresave/l10n/app_localizations.dart';
+
+import '../../../support/l10n_test_app.dart';
 
 /// Stateful probe standing in for the transform editor: its TextField draft
 /// lives in widget state, so losing state across sidebar switches is visible.
@@ -54,7 +57,12 @@ HeroAttribute _attribute(String id, String setClass, double value) {
 }
 
 // Wrap in a constrained box so LayoutBuilder in rows has a finite width.
+// Supplies the app's localization delegates so HeroStatsCard's
+// AppLocalizations.of(context) calls resolve (English values in tests).
 Widget _wrap(Widget child) => MaterialApp(
+      locale: const Locale('en'),
+      localizationsDelegates: testLocalizationsDelegates,
+      supportedLocales: AppLocalizations.supportedLocales,
       home: Scaffold(
         body: SizedBox(
           width: 800,

@@ -9,6 +9,9 @@
 //! the proven `StaticFindObject(Default__<id>)[field]` path — no fragile
 //! reflection. Brand-new items/fields introduced by a game patch need the model
 //! regenerated (`dump` + `gui-model`/`sync`) before they appear here.
+//!
+//! Localized names/descriptions are NOT dumped here — they live in the encrypted
+//! AlkimiaLocalization `.lcache`, which `gore-cli loc` reads directly offline.
 
 use anyhow::{Context, Result};
 use gore_core::{catalog::parse_catalog, gen::lua_escape};
@@ -118,6 +121,9 @@ gore-mod editor with real defaults.
 
 Regenerate this mod (`gore-cli dump-mod`) after the item set changes so
 `items.lua` covers new classes/fields.
+
+Localized names/descriptions are not produced here — use `gore-cli loc export`
+to read them straight from the game's `.lcache`.
 "#;
 
 pub fn run(model_path: PathBuf, catalog_path: PathBuf, out: PathBuf) -> Result<()> {

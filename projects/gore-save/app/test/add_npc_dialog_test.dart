@@ -3,6 +3,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:goresave/features/editor/domain/npc_catalog.dart';
 import 'package:goresave/features/editor/ui/add_npc_dialog.dart';
 
+import 'support/l10n_test_app.dart';
+
 void main() {
   final catalog = NpcCatalog.fromJsonString(
     '[{"id":"OC_STT_Diego","class":"c1","category":"human"},'
@@ -13,8 +15,8 @@ void main() {
   testWidgets('lists catalog NPCs, excludes existing, returns selection',
       (tester) async {
     String? picked;
-    await tester.pumpWidget(MaterialApp(
-      home: Scaffold(
+    await tester.pumpWidget(wrapWithL10n(
+      Scaffold(
         body: Builder(builder: (context) {
           return ElevatedButton(
             onPressed: () async {

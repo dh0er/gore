@@ -1,9 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:goresave/features/editor/domain/editor_models.dart';
 import 'package:goresave/features/editor/domain/item_catalog.dart';
 import 'package:goresave/features/editor/domain/item_categories.dart';
 import 'package:goresave/features/editor/ui/sidebar_tile.dart';
+import 'package:goresave/l10n/app_localizations.dart';
+import 'package:goresave/loc/game_lang.dart';
+import 'package:goresave/loc/loc_catalog_provider.dart';
 
 /// Dialog that lets the user pick an item from the bundled catalog and specify
 /// a count to add to the inventory.
@@ -15,7 +19,7 @@ import 'package:goresave/features/editor/ui/sidebar_tile.dart';
 /// [catalogOverride] is an optional future that provides a fake catalog for
 /// widget tests; production callers leave it null to use
 /// [ItemCatalog.loadBundled].
-class AddInventoryItemDialog extends StatefulWidget {
+class AddInventoryItemDialog extends ConsumerStatefulWidget {
   const AddInventoryItemDialog({
     super.key,
     required this.excludePaths,
@@ -30,12 +34,14 @@ class AddInventoryItemDialog extends StatefulWidget {
   final Future<ItemCatalog>? catalogOverride;
 
   @override
-  State<AddInventoryItemDialog> createState() => _AddInventoryItemDialogState();
+  ConsumerState<AddInventoryItemDialog> createState() =>
+      _AddInventoryItemDialogState();
 }
 
 typedef _CatalogGroup = ({ItemCategory category, List<ItemCatalogEntry> entries});
 
-class _AddInventoryItemDialogState extends State<AddInventoryItemDialog> {
+class _AddInventoryItemDialogState
+    extends ConsumerState<AddInventoryItemDialog> {
   // The core rejects addItem counts above i32::MAX (saving would fail with an
   // invalid-request error), so the dialog mirrors that upper bound.
   static const int _maxCount = 2147483647; // i32::MAX
@@ -60,16 +66,27 @@ class _AddInventoryItemDialogState extends State<AddInventoryItemDialog> {
   }
 
   void _onCountChanged(String value) {
+    final l10n = AppLocalizations.of(context);
     final parsed = int.tryParse(value.trim());
     setState(() {
       if (parsed == null || parsed < 1) {
-        _countError = 'Must be ≥ 1';
+        _countError = l10n.countMustBeAtLeast1;
       } else if (parsed > _maxCount) {
-        _countError = 'Must be ≤ $_maxCount';
+        _countError = l10n.countMustBeAtMost(_maxCount);
       } else {
         _countError = null;
       }
     });
+  }
+
+  /// Localized game name for [id] when the loc_catalog has it; falls back to the
+  /// derived id-only name (legal posture preserved when no catalog is present).
+  String _displayName(
+    Map<String, Map<String, String>> catalog,
+    GameLang lang,
+    String id,
+  ) {
+    return localizedGameName(catalog, lang, id) ?? itemDisplayNameFromId(id);
   }
 
   bool get _canAdd {
@@ -100,8 +117,12 @@ class _AddInventoryItemDialogState extends State<AddInventoryItemDialog> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final l10n = AppLocalizations.of(context);
+    final lang = ref.watch(currentGameLangProvider);
+    final locCatalog =
+        ref.watch(locCatalogProvider).asData?.value ?? const {};
     return AlertDialog(
-      title: const Text('Add item'),
+      title: Text(l10n.addItemDialogTitle),
       contentPadding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
       content: SizedBox(
         width: 720,
@@ -114,7 +135,7 @@ class _AddInventoryItemDialogState extends State<AddInventoryItemDialog> {
             }
             if (snapshot.hasError) {
               return Center(
-                child: Text('Failed to load catalog: ${snapshot.error}'),
+                child: Text(l10n.failedToLoadCatalog('${snapshot.error}')),
               );
             }
             final catalog = snapshot.data!;
@@ -137,7 +158,10 @@ class _AddInventoryItemDialogState extends State<AddInventoryItemDialog> {
             if (searching) {
               shown = available.where((e) {
                 return e.id.toLowerCase().contains(query) ||
-                    e.path.toLowerCase().contains(query);
+                    e.path.toLowerCase().contains(query) ||
+                    _displayName(locCatalog, lang, e.id)
+                        .toLowerCase()
+                        .contains(query);
               }).toList();
             } else {
               shown = groups
@@ -152,9 +176,9 @@ class _AddInventoryItemDialogState extends State<AddInventoryItemDialog> {
               children: [
                 TextField(
                   controller: _searchController,
-                  decoration: const InputDecoration(
-                    labelText: 'Search items',
-                    prefixIcon: Icon(Icons.search),
+                  decoration: InputDecoration(
+                    labelText: l10n.searchItems,
+                    prefixIcon: const Icon(Icons.search),
                     isDense: true,
                   ),
                   onChanged: (v) => setState(() {
@@ -169,7 +193,10 @@ class _AddInventoryItemDialogState extends State<AddInventoryItemDialog> {
                       }
                     } else if (_selected != null &&
                         !(_selected!.id.toLowerCase().contains(q) ||
-                            _selected!.path.toLowerCase().contains(q))) {
+                            _selected!.path.toLowerCase().contains(q) ||
+                            _displayName(locCatalog, lang, _selected!.id)
+                                .toLowerCase()
+                                .contains(q))) {
                       // A search that no longer matches the selection drops it.
                       _selected = null;
                     }
@@ -181,7 +208,7 @@ class _AddInventoryItemDialogState extends State<AddInventoryItemDialog> {
                     children: [
                       Expanded(
                         child: Text(
-                          itemDisplayNameFromId(_selected!.id),
+                          _displayName(locCatalog, lang, _selected!.id),
                           style: theme.textTheme.bodyMedium,
                           overflow: TextOverflow.ellipsis,
                         ),
@@ -192,7 +219,7 @@ class _AddInventoryItemDialogState extends State<AddInventoryItemDialog> {
                         child: TextField(
                           controller: _countController,
                           decoration: InputDecoration(
-                            labelText: 'Count',
+                            labelText: l10n.count,
                             isDense: true,
                             errorText: _countError,
                           ),
@@ -209,7 +236,7 @@ class _AddInventoryItemDialogState extends State<AddInventoryItemDialog> {
                 ],
                 Expanded(
                   child: groups.isEmpty
-                      ? const Center(child: Text('No items available to add'))
+                      ? Center(child: Text(l10n.noItemsAvailableToAdd))
                       : Row(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
@@ -228,8 +255,10 @@ class _AddInventoryItemDialogState extends State<AddInventoryItemDialog> {
                                       for (final g in groups)
                                         SidebarTile(
                                           icon: iconForItemCategory(g.category),
-                                          label:
-                                              '${g.category.label} (${g.entries.length})',
+                                          label: l10n.categoryWithCount(
+                                              localizedItemCategoryLabel(
+                                                  l10n, g.category),
+                                              g.entries.length),
                                           selected:
                                               !searching && g.category == selectedCat,
                                           onTap: () => setState(() {
@@ -246,11 +275,16 @@ class _AddInventoryItemDialogState extends State<AddInventoryItemDialog> {
                             const SizedBox(width: 16),
                             Expanded(
                               child: shown.isEmpty
-                                  ? const Center(child: Text('No items match'))
+                                  ? Center(child: Text(l10n.noItemsMatch))
                                   : ListView.builder(
                                       itemCount: shown.length,
                                       itemBuilder: (context, index) =>
-                                          _entryTile(theme, shown[index]),
+                                          _entryTile(
+                                        theme,
+                                        shown[index],
+                                        locCatalog,
+                                        lang,
+                                      ),
                                     ),
                             ),
                           ],
@@ -264,18 +298,23 @@ class _AddInventoryItemDialogState extends State<AddInventoryItemDialog> {
       actions: [
         TextButton(
           onPressed: () => Navigator.of(context).pop(null),
-          child: const Text('Cancel'),
+          child: Text(l10n.cancel),
         ),
         FilledButton(
           onPressed: _canAdd ? _confirm : null,
-          child: const Text('Add'),
+          child: Text(l10n.add),
         ),
       ],
     );
   }
 
 
-  Widget _entryTile(ThemeData theme, ItemCatalogEntry entry) {
+  Widget _entryTile(
+    ThemeData theme,
+    ItemCatalogEntry entry,
+    Map<String, Map<String, String>> catalog,
+    GameLang lang,
+  ) {
     final isSelected = _selected == entry;
     return ListTile(
       dense: true,
@@ -283,7 +322,7 @@ class _AddInventoryItemDialogState extends State<AddInventoryItemDialog> {
       selectedTileColor: theme.colorScheme.primaryContainer,
       leading: Icon(iconForItemCategory(itemCategoryFromId(entry.id))),
       title: Text(
-        itemDisplayNameFromId(entry.id),
+        _displayName(catalog, lang, entry.id),
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
       ),

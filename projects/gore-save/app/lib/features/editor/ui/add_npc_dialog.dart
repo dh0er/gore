@@ -1,6 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:goresave/features/editor/domain/npc_catalog.dart';
 import 'package:goresave/features/editor/ui/sidebar_tile.dart';
+import 'package:goresave/l10n/app_localizations.dart';
+import 'package:goresave/loc/game_lang.dart';
+import 'package:goresave/loc/loc_catalog_provider.dart';
 
 /// Shows a picker dialog over [catalog] that lets the user choose an NPC.
 ///
@@ -17,14 +21,14 @@ Future<String?> showAddNpcDialog(
   );
 }
 
-class _AddNpcDialog extends StatefulWidget {
+class _AddNpcDialog extends ConsumerStatefulWidget {
   const _AddNpcDialog({required this.catalog, required this.exclude});
 
   final NpcCatalog catalog;
   final Set<String> exclude;
 
   @override
-  State<_AddNpcDialog> createState() => _AddNpcDialogState();
+  ConsumerState<_AddNpcDialog> createState() => _AddNpcDialogState();
 }
 
 typedef _NpcGroup = ({String category, List<NpcCatalogEntry> entries});
@@ -32,7 +36,7 @@ typedef _NpcGroup = ({String category, List<NpcCatalogEntry> entries});
 // Sentinel value for the "All" sidebar entry.
 const _kAllCategory = '';
 
-class _AddNpcDialogState extends State<_AddNpcDialog> {
+class _AddNpcDialogState extends ConsumerState<_AddNpcDialog> {
   String _query = '';
   // Empty string means "All".
   String _selectedCategory = _kAllCategory;
@@ -67,6 +71,10 @@ class _AddNpcDialogState extends State<_AddNpcDialog> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final l10n = AppLocalizations.of(context);
+    final lang = ref.watch(currentGameLangProvider);
+    final catalog =
+        ref.watch(locCatalogProvider).asData?.value ?? const {};
 
     final available = widget.catalog.entries
         .where((e) => !widget.exclude.contains(e.id.toLowerCase()))
@@ -81,9 +89,11 @@ class _AddNpcDialogState extends State<_AddNpcDialog> {
     final searching = query.isNotEmpty;
     final List<NpcCatalogEntry> shown;
     if (searching) {
-      shown = available
-          .where((e) => e.id.toLowerCase().contains(query))
-          .toList();
+      shown = available.where((e) {
+        final name = localizedGameName(catalog, lang, e.id) ?? e.id;
+        return e.id.toLowerCase().contains(query) ||
+            name.toLowerCase().contains(query);
+      }).toList();
     } else if (selectedCategory == _kAllCategory) {
       shown = available;
     } else {
@@ -95,7 +105,7 @@ class _AddNpcDialogState extends State<_AddNpcDialog> {
     }
 
     return AlertDialog(
-      title: const Text('Add NPC'),
+      title: Text(l10n.addNpcDialogTitle),
       contentPadding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
       content: SizedBox(
         width: 720,
@@ -105,9 +115,9 @@ class _AddNpcDialogState extends State<_AddNpcDialog> {
           children: [
             TextField(
               controller: _searchController,
-              decoration: const InputDecoration(
-                labelText: 'Search NPCs',
-                prefixIcon: Icon(Icons.search),
+              decoration: InputDecoration(
+                labelText: l10n.searchNpcs,
+                prefixIcon: const Icon(Icons.search),
                 isDense: true,
               ),
               onChanged: (v) => setState(() {
@@ -117,7 +127,7 @@ class _AddNpcDialogState extends State<_AddNpcDialog> {
             const SizedBox(height: 8),
             Expanded(
               child: groups.isEmpty
-                  ? const Center(child: Text('No NPCs available to add'))
+                  ? Center(child: Text(l10n.noNpcsAvailableToAdd))
                   : Row(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
@@ -135,7 +145,7 @@ class _AddNpcDialogState extends State<_AddNpcDialog> {
                                 children: [
                                   SidebarTile(
                                     icon: Icons.people_outline,
-                                    label: 'All (${available.length})',
+                                    label: l10n.allWithCount(available.length),
                                     selected: !searching &&
                                         selectedCategory == _kAllCategory,
                                     onTap: () => setState(() {
@@ -147,8 +157,8 @@ class _AddNpcDialogState extends State<_AddNpcDialog> {
                                   for (final g in groups)
                                     SidebarTile(
                                       icon: _iconForNpcCategory(g.category),
-                                      label:
-                                          '${_cap(g.category)} (${g.entries.length})',
+                                      label: l10n.categoryWithCount(
+                                          _cap(g.category), g.entries.length),
                                       selected: !searching &&
                                           g.category == selectedCategory,
                                       onTap: () => setState(() {
@@ -165,11 +175,11 @@ class _AddNpcDialogState extends State<_AddNpcDialog> {
                         const SizedBox(width: 16),
                         Expanded(
                           child: shown.isEmpty
-                              ? const Center(child: Text('No NPCs match'))
+                              ? Center(child: Text(l10n.noNpcsMatch))
                               : ListView.builder(
                                   itemCount: shown.length,
                                   itemBuilder: (context, index) =>
-                                      _entryTile(shown[index]),
+                                      _entryTile(shown[index], catalog, lang),
                                 ),
                         ),
                       ],
@@ -181,19 +191,26 @@ class _AddNpcDialogState extends State<_AddNpcDialog> {
       actions: [
         TextButton(
           onPressed: () => Navigator.of(context).pop(null),
-          child: const Text('Cancel'),
+          child: Text(l10n.cancel),
         ),
       ],
     );
   }
 
-  Widget _entryTile(NpcCatalogEntry entry) {
+  Widget _entryTile(
+    NpcCatalogEntry entry,
+    Map<String, Map<String, String>> catalog,
+    GameLang lang,
+  ) {
     final theme = Theme.of(context);
+    // Localized NPC name from the catalog id (lowercased); fall back to the raw
+    // id when no extracted catalog entry exists.
+    final name = localizedGameName(catalog, lang, entry.id) ?? entry.id;
     return ListTile(
       dense: true,
       leading: Icon(_iconForNpcCategory(entry.category)),
       title: Text(
-        entry.id,
+        name,
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
       ),

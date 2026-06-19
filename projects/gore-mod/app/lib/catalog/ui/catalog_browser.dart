@@ -1,5 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../app/domain/ui_settings.dart';
+import '../../l10n/app_localizations.dart';
+import '../../loc/domain/loc_catalog_provider.dart';
+import '../../loc/game_lang.dart';
 import '../domain/catalog_provider.dart';
 import '../domain/item_categories.dart';
 import '../domain/item_entry.dart';
@@ -31,22 +35,29 @@ class _CatalogBrowserState extends ConsumerState<CatalogBrowser> {
   @override
   Widget build(BuildContext context) {
     final catalogAsync = ref.watch(catalogProvider);
+    final l10n = AppLocalizations.of(context);
     return catalogAsync.when(
       loading: () => const Center(child: CircularProgressIndicator()),
-      error:   (e, _) => Center(child: Text('Failed to load catalog: $e')),
+      error:   (e, _) => Center(child: Text(l10n.failedToLoadCatalog('$e'))),
       data:    (items) => _buildBrowser(context, items),
     );
   }
 
   Widget _buildBrowser(BuildContext context, List<CatalogItem> items) {
     final theme = Theme.of(context);
+    final l10n = AppLocalizations.of(context);
+    final locCatalog = ref.watch(locCatalogProvider).value ?? const {};
+    final lang = gameLangByCode(ref.watch(localeProvider));
+    String nameOf(CatalogItem i) => displayNameForItem(i, locCatalog, lang);
+
     final query = _query.trim().toLowerCase();
     final searching = query.isNotEmpty;
 
-    // Filter
+    // Filter — match the raw class id, the derived name, and the localized name.
     final filtered = searching
         ? items.where((i) => i.id.toLowerCase().contains(query) ||
-                             i.displayName.toLowerCase().contains(query)).toList()
+                             i.displayName.toLowerCase().contains(query) ||
+                             nameOf(i).toLowerCase().contains(query)).toList()
         : items;
 
     final groups = groupCatalogItems(filtered);
@@ -67,9 +78,9 @@ class _CatalogBrowserState extends ConsumerState<CatalogBrowser> {
           padding: const EdgeInsets.all(12),
           child: TextField(
             controller: _searchController,
-            decoration: const InputDecoration(
-              labelText: 'Search items',
-              prefixIcon: Icon(Icons.search),
+            decoration: InputDecoration(
+              labelText: l10n.searchItems,
+              prefixIcon: const Icon(Icons.search),
               isDense: true,
             ),
             onChanged: (v) => setState(() => _query = v),
@@ -77,7 +88,7 @@ class _CatalogBrowserState extends ConsumerState<CatalogBrowser> {
         ),
         Expanded(
           child: groups.isEmpty
-              ? const Center(child: Text('No items match'))
+              ? Center(child: Text(l10n.noItemsMatch))
               : Row(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
@@ -93,7 +104,9 @@ class _CatalogBrowserState extends ConsumerState<CatalogBrowser> {
                             for (final g in groups)
                               SidebarTile(
                                 icon:     iconForItemCategory(g.category),
-                                label:    '${g.category.label} (${g.items.length})',
+                                label:    l10n.categoryWithCount(
+                                    g.category.localizedLabel(l10n),
+                                    g.items.length),
                                 selected: g.category == selectedCat,
                                 onTap: () => setState(() {
                                   _selectedCategory = g.category;
@@ -115,7 +128,7 @@ class _CatalogBrowserState extends ConsumerState<CatalogBrowser> {
                             selected: isSelected,
                             selectedTileColor: theme.colorScheme.primaryContainer,
                             leading: Icon(iconForItemCategory(itemCategoryFromId(item.id))),
-                            title: Text(item.displayName, maxLines: 1, overflow: TextOverflow.ellipsis),
+                            title: Text(nameOf(item), maxLines: 1, overflow: TextOverflow.ellipsis),
                             subtitle: Text(item.id, maxLines: 1, overflow: TextOverflow.ellipsis),
                             onTap: () => widget.onItemSelected(item),
                           );

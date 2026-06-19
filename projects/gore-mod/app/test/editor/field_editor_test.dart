@@ -4,6 +4,14 @@ import 'package:gore_mod/catalog/domain/field_schema.dart';
 import 'package:gore_mod/catalog/domain/item_entry.dart';
 import 'package:gore_mod/editor/domain/override_entry.dart';
 import 'package:gore_mod/editor/ui/field_editor.dart';
+import 'package:gore_mod/l10n/app_localizations.dart';
+
+/// Wraps [child] in a localized MaterialApp so AppLocalizations.of works.
+Widget _localizedApp(Widget child) => MaterialApp(
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      supportedLocales: AppLocalizations.supportedLocales,
+      home: Scaffold(body: child),
+    );
 
 void main() {
   const apple = CatalogItem(
@@ -20,13 +28,11 @@ void main() {
     Map<String, OverrideEntry> pending = const {},
     void Function(OverrideEntry)? onChanged,
   }) {
-    return MaterialApp(
-      home: Scaffold(
-        body: FieldEditor(
-          item: apple,
-          pendingOverrides: pending,
-          onOverrideChanged: onChanged ?? (_) {},
-        ),
+    return _localizedApp(
+      FieldEditor(
+        item: apple,
+        pendingOverrides: pending,
+        onOverrideChanged: onChanged ?? (_) {},
       ),
     );
   }
@@ -131,13 +137,11 @@ void main() {
       ],
     );
     OverrideEntry? changed;
-    await tester.pumpWidget(MaterialApp(
-      home: Scaffold(
-        body: FieldEditor(
-          item: item,
-          pendingOverrides: const {},
-          onOverrideChanged: (e) => changed = e,
-        ),
+    await tester.pumpWidget(_localizedApp(
+      FieldEditor(
+        item: item,
+        pendingOverrides: const {},
+        onOverrideChanged: (e) => changed = e,
       ),
     ));
     // Field starts at its real default (4), not the placeholder 0.
@@ -159,13 +163,11 @@ void main() {
       FieldSchema(name: 'm_A', type: FieldType.int_),
       FieldSchema(name: 'm_B', type: FieldType.int_),
     ]);
-    Widget wrap(CatalogItem item) => MaterialApp(
-          home: Scaffold(
-            body: FieldEditor(
-              item: item,
-              pendingOverrides: const {},
-              onOverrideChanged: (_) {},
-            ),
+    Widget wrap(CatalogItem item) => _localizedApp(
+          FieldEditor(
+            item: item,
+            pendingOverrides: const {},
+            onOverrideChanged: (_) {},
           ),
         );
     await tester.pumpWidget(wrap(before));
@@ -194,13 +196,11 @@ void main() {
         classId: 'ItFo_Apple', field: 'm_Quality', oldValue: 0, newValue: 2,
       ),
     };
-    await tester.pumpWidget(MaterialApp(
-      home: Scaffold(
-        body: FieldEditor(
-          item: enumItem,
-          pendingOverrides: pending,
-          onOverrideChanged: (_) {},
-        ),
+    await tester.pumpWidget(_localizedApp(
+      FieldEditor(
+        item: enumItem,
+        pendingOverrides: pending,
+        onOverrideChanged: (_) {},
       ),
     ));
     expect(find.text('High'), findsOneWidget);
@@ -226,13 +226,11 @@ void main() {
         classId: 'ItFo_Apple', field: 'm_Quality', oldValue: 0, newValue: 5,
       ),
     };
-    await tester.pumpWidget(MaterialApp(
-      home: Scaffold(
-        body: FieldEditor(
-          item: enumItem,
-          pendingOverrides: pending,
-          onOverrideChanged: (_) {},
-        ),
+    await tester.pumpWidget(_localizedApp(
+      FieldEditor(
+        item: enumItem,
+        pendingOverrides: pending,
+        onOverrideChanged: (_) {},
       ),
     ));
     expect(find.text('Mid'), findsOneWidget);

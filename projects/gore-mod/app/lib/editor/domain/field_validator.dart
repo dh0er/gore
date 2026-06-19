@@ -1,42 +1,83 @@
 import '../../catalog/domain/field_schema.dart';
 
+/// A field validation failure, decoupled from any language. The UI maps each
+/// case to a localized message via `AppLocalizations` (see `fieldErrorText`).
+sealed class FieldError {
+  const FieldError();
+}
+
+class RequiredFieldError extends FieldError {
+  const RequiredFieldError();
+}
+
+class NotWholeNumberError extends FieldError {
+  const NotWholeNumberError();
+}
+
+class NotANumberError extends FieldError {
+  const NotANumberError();
+}
+
+class NotFiniteError extends FieldError {
+  const NotFiniteError();
+}
+
+class BelowMinimumError extends FieldError {
+  const BelowMinimumError(this.minValue);
+  final num minValue;
+}
+
+class AboveMaximumError extends FieldError {
+  const AboveMaximumError(this.maxValue);
+  final num maxValue;
+}
+
+class NotBoolError extends FieldError {
+  const NotBoolError();
+}
+
+class NotInEnumError extends FieldError {
+  const NotInEnumError(this.allowed);
+  final List<String> allowed;
+}
+
 /// Validates [raw] (user-entered string) against [schema].
-/// Returns null when valid, an error message when invalid.
-String? validateField(FieldSchema schema, String raw) {
+/// Returns null when valid, a [FieldError] describing the problem otherwise.
+FieldError? validateField(FieldSchema schema, String raw) {
   final trimmed = raw.trim();
-  if (trimmed.isEmpty) return 'Required';
+  if (trimmed.isEmpty) return const RequiredFieldError();
 
   switch (schema.type) {
     case FieldType.int_:
       final n = int.tryParse(trimmed);
-      if (n == null) return 'Must be a whole number';
+      if (n == null) return const NotWholeNumberError();
       if (schema.minValue != null && n < schema.minValue!) {
-        return 'Must be ≥ ${schema.minValue}';
+        return BelowMinimumError(schema.minValue!);
       }
       if (schema.maxValue != null && n > schema.maxValue!) {
-        return 'Must be ≤ ${schema.maxValue}';
+        return AboveMaximumError(schema.maxValue!);
       }
       return null;
 
     case FieldType.float_:
       final f = double.tryParse(trimmed);
-      if (f == null) return 'Must be a number';
+      if (f == null) return const NotANumberError();
       // double.tryParse accepts NaN / Infinity / overflowing literals like
       // 1e309. Those slip past the min/max checks below (NaN compares false to
       // everything) and then crash jsonEncode when the override is sent to the
       // native FFI, so reject them up front.
-      if (!f.isFinite) return 'Must be a finite number';
+      if (!f.isFinite) return const NotFiniteError();
       if (schema.minValue != null && f < schema.minValue!) {
-        return 'Must be ≥ ${schema.minValue}';
+        return BelowMinimumError(schema.minValue!);
       }
       if (schema.maxValue != null && f > schema.maxValue!) {
-        return 'Must be ≤ ${schema.maxValue}';
+        return AboveMaximumError(schema.maxValue!);
       }
       return null;
 
     case FieldType.bool_:
       if (trimmed != 'true' && trimmed != 'false') {
-        return 'Must be true or false';
+        return const NotBoolError();
       }
       return null;
 
@@ -45,7 +86,7 @@ String? validateField(FieldSchema schema, String raw) {
 
     case FieldType.enum_:
       if (!schema.enumValues.contains(trimmed)) {
-        return 'Must be one of: ${schema.enumValues.join(', ')}';
+        return NotInEnumError(schema.enumValues);
       }
       return null;
   }

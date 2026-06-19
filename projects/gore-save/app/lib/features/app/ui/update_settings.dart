@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:goresave/features/app/domain/desktop_updater.dart';
 import 'package:goresave/features/app/domain/ui_settings.dart';
+import 'package:goresave/l10n/app_localizations.dart';
 
 /// Update settings (auto-check toggle, manual check) shown in the Settings
 /// tab. Controls are disabled for builds that cannot update themselves
@@ -11,6 +12,7 @@ class UpdateSettingsCard extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final l10n = AppLocalizations.of(context);
     final autoCheck = ref.watch(autoUpdateCheckProvider);
     final available = isDesktopUpdaterAvailable;
     final textTheme = Theme.of(context).textTheme;
@@ -24,13 +26,13 @@ class UpdateSettingsCard extends ConsumerWidget {
               children: [
                 const Icon(Icons.system_update_alt_outlined),
                 const SizedBox(width: 8),
-                Text('Updates', style: textTheme.titleMedium),
+                Text(l10n.updatesTitle, style: textTheme.titleMedium),
               ],
             ),
             const SizedBox(height: 8),
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
-              title: const Text('Check for updates automatically'),
+              title: Text(l10n.checkForUpdatesAutomatically),
               value: autoCheck,
               onChanged: available
                   ? (enabled) {
@@ -45,15 +47,14 @@ class UpdateSettingsCard extends ConsumerWidget {
                 FilledButton.tonalIcon(
                   onPressed: available ? checkForUpdatesManually : null,
                   icon: const Icon(Icons.refresh),
-                  label: const Text('Check for updates now'),
+                  label: Text(l10n.checkForUpdatesNow),
                 ),
               ],
             ),
             if (!available) ...[
               const SizedBox(height: 8),
               Text(
-                'Updates are available only for installed builds. The '
-                'portable version must be updated manually.',
+                l10n.updatesPortableNotice,
                 style: textTheme.bodySmall,
               ),
             ],

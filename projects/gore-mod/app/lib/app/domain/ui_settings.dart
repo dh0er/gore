@@ -13,6 +13,8 @@ class UiSettings {
     this.windowSize,
     this.windowMaximized = false,
     this.dumpPath,
+    this.locExtractPrompted = false,
+    this.appLocale = 'en',
   });
 
   factory UiSettings.fromJson(Map<String, Object?> json) {
@@ -21,6 +23,12 @@ class UiSettings {
         'dark' => ThemeMode.dark,
         'system' => ThemeMode.system,
         _ => ThemeMode.light,
+      },
+      appLocale: switch (json['appLocale']) {
+        // Trim so a stored " de " still matches kGameLangs (else the picker
+        // would silently fall back to English).
+        final String code when code.trim().isNotEmpty => code.trim(),
+        _ => 'en',
       },
       uiScale: switch (json['uiScale']) {
         final num value => UiScaleNotifier.clampScale(value.toDouble()),
@@ -36,6 +44,7 @@ class UiSettings {
         final String path when path.isNotEmpty => path,
         _ => null,
       },
+      locExtractPrompted: json['locExtractPrompted'] == true,
     );
   }
 
@@ -50,6 +59,14 @@ class UiSettings {
   /// null means use the bundled assets.
   final String? dumpPath;
 
+  /// Whether the first-run localized-text extraction prompt has been shown.
+  /// Persisted so the optional auto-prompt only fires once.
+  final bool locExtractPrompted;
+
+  /// Selected app/game language code (one of [kGameLangs]); drives both the
+  /// MaterialApp locale and which extracted game-text names are shown.
+  final String appLocale;
+
   UiSettings copyWith({
     ThemeMode? themeMode,
     double? uiScale,
@@ -57,6 +74,8 @@ class UiSettings {
     bool? windowMaximized,
     String? dumpPath,
     bool clearDumpPath = false,
+    bool? locExtractPrompted,
+    String? appLocale,
   }) {
     return UiSettings(
       themeMode: themeMode ?? this.themeMode,
@@ -64,6 +83,8 @@ class UiSettings {
       windowSize: windowSize ?? this.windowSize,
       windowMaximized: windowMaximized ?? this.windowMaximized,
       dumpPath: clearDumpPath ? null : dumpPath ?? this.dumpPath,
+      locExtractPrompted: locExtractPrompted ?? this.locExtractPrompted,
+      appLocale: appLocale ?? this.appLocale,
     );
   }
 
@@ -80,6 +101,8 @@ class UiSettings {
     },
     'windowMaximized': windowMaximized,
     if (dumpPath != null) 'dumpPath': dumpPath,
+    'locExtractPrompted': locExtractPrompted,
+    'appLocale': appLocale,
   };
 }
 
@@ -98,6 +121,52 @@ class NoopUiSettingsStore implements UiSettingsStore {
   void write(UiSettings settings) {}
 }
 
+/// Resolves the shared `gore-tools` umbrella data directory, matching the Rust
+/// side (`gore_core::paths::shared_data_dir`) exactly:
+/// - Windows: `%LOCALAPPDATA%` (fallback `%APPDATA%`) then `\gore-tools`
+/// - macOS:   `$HOME/Library/Application Support/gore-tools`
+/// - Linux:   `$XDG_DATA_HOME/gore-tools` else `$HOME/.local/share/gore-tools`
+String sharedDataDir(Map<String, String> env) {
+  final String base;
+  if (Platform.isWindows) {
+    base = env['LOCALAPPDATA'] ?? env['APPDATA'] ?? Directory.current.path;
+  } else if (Platform.isMacOS) {
+    final home = env['HOME'];
+    base = home == null
+        ? Directory.current.path
+        : p.join(home, 'Library', 'Application Support');
+  } else {
+    final home = env['HOME'];
+    final xdg = env['XDG_DATA_HOME'];
+    base = (xdg != null && xdg.isNotEmpty)
+        ? xdg
+        : (home == null
+              ? Directory.current.path
+              : p.join(home, '.local', 'share'));
+  }
+  return p.join(base, 'gore-tools');
+}
+
+/// The previous per-app config directory (`<config>/gore-mod`), kept only so a
+/// one-time migration can copy old files into the shared umbrella directory.
+String _legacyAppDir(Map<String, String> env) {
+  final String root;
+  if (Platform.isWindows) {
+    root = env['APPDATA'] ?? env['LOCALAPPDATA'] ?? Directory.current.path;
+  } else if (Platform.isMacOS) {
+    final home = env['HOME'];
+    root = home == null
+        ? Directory.current.path
+        : p.join(home, 'Library', 'Application Support');
+  } else {
+    final home = env['HOME'];
+    root =
+        env['XDG_CONFIG_HOME'] ??
+        (home == null ? Directory.current.path : p.join(home, '.config'));
+  }
+  return p.join(root, 'gore-mod');
+}
+
 class JsonFileUiSettingsStore implements UiSettingsStore {
   const JsonFileUiSettingsStore(this.file);
 
@@ -105,23 +174,30 @@ class JsonFileUiSettingsStore implements UiSettingsStore {
     Map<String, String>? environment,
   }) {
     final env = environment ?? Platform.environment;
-    final String root;
-    if (Platform.isWindows) {
-      root = env['APPDATA'] ?? env['LOCALAPPDATA'] ?? Directory.current.path;
-    } else if (Platform.isMacOS) {
-      final home = env['HOME'];
-      root = home == null
-          ? Directory.current.path
-          : p.join(home, 'Library', 'Application Support');
-    } else {
-      final home = env['HOME'];
-      root =
-          env['XDG_CONFIG_HOME'] ??
-          (home == null ? Directory.current.path : p.join(home, '.config'));
-    }
-    return JsonFileUiSettingsStore(
-      File(p.join(root, 'gore-mod', 'ui_settings.json')),
+    const fileName = 'ui_settings.json';
+    final file = File(p.join(sharedDataDir(env), 'gore-mod', fileName));
+    _migrateLegacyFile(
+      newFile: file,
+      oldFile: File(p.join(_legacyAppDir(env), fileName)),
     );
+    return JsonFileUiSettingsStore(file);
+  }
+
+  /// One-time, best-effort migration: if the new file is missing but a legacy
+  /// one exists, copy it into the shared umbrella dir. The old file is left in
+  /// place as a backup. Any failure is swallowed so startup falls back to
+  /// defaults rather than crashing.
+  static void _migrateLegacyFile({
+    required File newFile,
+    required File oldFile,
+  }) {
+    try {
+      if (newFile.existsSync() || !oldFile.existsSync()) return;
+      newFile.parent.createSync(recursive: true);
+      oldFile.copySync(newFile.path);
+    } catch (_) {
+      // Ignore: a failed migration must never block startup.
+    }
   }
 
   final File file;
@@ -215,5 +291,45 @@ class DumpPathNotifier extends StateNotifier<String?> {
   void clear() {
     state = null;
     _store.write(_store.read().copyWith(clearDumpPath: true));
+  }
+}
+
+/// Whether the optional first-run localized-text extraction prompt has already
+/// been shown. Persisted so the auto-prompt only fires once; the manual extract
+/// action stays available regardless.
+final locExtractPromptedProvider =
+    StateNotifierProvider<LocExtractPromptedNotifier, bool>((ref) {
+  return LocExtractPromptedNotifier(ref.watch(uiSettingsStoreProvider));
+});
+
+class LocExtractPromptedNotifier extends StateNotifier<bool> {
+  LocExtractPromptedNotifier(this._store)
+      : super(_store.read().locExtractPrompted);
+
+  final UiSettingsStore _store;
+
+  void markPrompted() {
+    if (state) return;
+    state = true;
+    _store.write(_store.read().copyWith(locExtractPrompted: true));
+  }
+}
+
+/// Selected app/game language code (one of [kGameLangs.code]). Drives both the
+/// MaterialApp locale and which extracted game-text names are shown. Persisted
+/// so the choice survives restarts.
+final localeProvider =
+    StateNotifierProvider<LocaleNotifier, String>((ref) {
+  return LocaleNotifier(ref.watch(uiSettingsStoreProvider));
+});
+
+class LocaleNotifier extends StateNotifier<String> {
+  LocaleNotifier(this._store) : super(_store.read().appLocale);
+
+  final UiSettingsStore _store;
+
+  void setLocale(String code) {
+    state = code;
+    _store.write(_store.read().copyWith(appLocale: code));
   }
 }

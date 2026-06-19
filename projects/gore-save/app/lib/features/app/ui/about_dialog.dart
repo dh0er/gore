@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:goresave/l10n/app_localizations.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -24,6 +25,7 @@ class _GoresaveAboutDialogState extends State<GoresaveAboutDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     final textTheme = Theme.of(context).textTheme;
     return Dialog(
       child: SizedBox(
@@ -45,13 +47,15 @@ class _GoresaveAboutDialogState extends State<GoresaveAboutDialog> {
               FutureBuilder<PackageInfo>(
                 future: _packageInfo,
                 builder: (context, snapshot) {
-                  final version = aboutVersionLabel(snapshot.data);
+                  final info = snapshot.data;
+                  final version =
+                      info == null ? '' : l10n.aboutVersion(info.version, _gitSha);
                   return Text(version, style: textTheme.bodySmall);
                 },
               ),
               const SizedBox(height: 16),
               Text(
-                'Gothic Remake Savegame Editor',
+                l10n.aboutSubtitle,
                 textAlign: TextAlign.center,
                 style: textTheme.bodyMedium,
               ),
@@ -63,19 +67,19 @@ class _GoresaveAboutDialogState extends State<GoresaveAboutDialog> {
               ),
               const SizedBox(height: 12),
               Text(
-                aboutCopyrightNotice,
+                l10n.aboutCopyright,
                 textAlign: TextAlign.center,
                 style: textTheme.bodySmall,
               ),
               Text(
-                aboutLicenseNotice,
+                l10n.aboutLicense,
                 textAlign: TextAlign.center,
                 style: textTheme.bodySmall,
               ),
               const SizedBox(height: 12),
               TextButton(
                 onPressed: () => Navigator.of(context).pop(),
-                child: const Text('Close'),
+                child: Text(l10n.close),
               ),
             ],
           ),

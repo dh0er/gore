@@ -1,6 +1,9 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:goresave/utils/gore_tools_paths.dart';
+import 'package:path/path.dart' as p;
+
 class EditorSettings {
   const EditorSettings({this.saveDir});
 
@@ -40,9 +43,20 @@ class JsonFileEditorSettingsStore implements EditorSettingsStore {
     Map<String, String>? environment,
   }) {
     final env = environment ?? Platform.environment;
+    const fileName = 'settings.json';
+    final file = File(
+      p.join(goreSaveSettingsDir(environment: env), fileName),
+    );
+    migrateLegacySettingsFile(_legacyFile(env, fileName), file);
+    return JsonFileEditorSettingsStore(file);
+  }
+
+  /// Previous per-app config location used before settings moved under the
+  /// shared `gore-tools` umbrella. Kept only to migrate old files once.
+  static File _legacyFile(Map<String, String> env, String fileName) {
     final root =
         env['APPDATA'] ?? env['LOCALAPPDATA'] ?? Directory.current.path;
-    return JsonFileEditorSettingsStore(File('$root\\goresave\\settings.json'));
+    return File('$root\\goresave\\$fileName');
   }
 
   final File file;

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import '../../catalog/domain/field_schema.dart';
 import '../../catalog/domain/item_entry.dart';
+import '../../l10n/app_localizations.dart';
+import '../../l10n/l10n_errors.dart';
 import '../domain/field_validator.dart';
 import '../domain/override_entry.dart';
 
@@ -15,9 +17,15 @@ class FieldEditor extends StatefulWidget {
     required this.item,
     required this.pendingOverrides,
     required this.onOverrideChanged,
+    this.displayName,
   });
 
   final CatalogItem item;
+
+  /// Name shown in the editor header. When null, falls back to the item's
+  /// derived [CatalogItem.displayName]. Callers pass the locale-resolved game
+  /// name here so the header follows the chosen language.
+  final String? displayName;
 
   /// Existing pending overrides for this item (keyed by field name).
   final Map<String, OverrideEntry> pendingOverrides;
@@ -30,7 +38,7 @@ class FieldEditor extends StatefulWidget {
 class _FieldEditorState extends State<FieldEditor> {
   // Text controllers keyed by field name.
   final Map<String, TextEditingController> _controllers = {};
-  final Map<String, String?> _errors = {};
+  final Map<String, FieldError?> _errors = {};
 
   @override
   void initState() {
@@ -177,6 +185,7 @@ class _FieldEditorState extends State<FieldEditor> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final l10n = AppLocalizations.of(context);
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
@@ -188,7 +197,7 @@ class _FieldEditorState extends State<FieldEditor> {
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  widget.item.displayName,
+                  widget.displayName ?? widget.item.displayName,
                   style: theme.textTheme.titleMedium,
                 ),
               ),
@@ -207,7 +216,10 @@ class _FieldEditorState extends State<FieldEditor> {
             child: _FieldRow(
               schema:     field,
               controller: _controllers[field.name]!,
-              error:      _errors[field.name],
+              error:      switch (_errors[field.name]) {
+                final err? => fieldErrorText(l10n, err),
+                _ => null,
+              },
               hasPending: widget.pendingOverrides.containsKey(field.name),
               onChanged:  (raw) => _onChanged(field, raw),
             ),

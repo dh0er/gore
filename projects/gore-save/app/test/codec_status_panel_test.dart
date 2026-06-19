@@ -3,6 +3,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:goresave/features/editor/domain/editor_models.dart';
 import 'package:goresave/features/editor/ui/editor_page.dart' show CodecStatusView;
 
+import 'support/l10n_test_app.dart';
+
 void main() {
   testWidgets('ready status shows the ready indicator and no setup prompt',
       (tester) async {
@@ -14,10 +16,10 @@ void main() {
       canCompress: true,
       adapter: 'ooz_kraken',
     );
-    await tester.pumpWidget(const MaterialApp(
-      home: Scaffold(body: SingleChildScrollView(
-        child: CodecStatusView(codec: codec, codecError: null))),
-    ));
+    await tester.pumpWidget(wrapWithL10n(const Scaffold(
+      body: SingleChildScrollView(
+        child: CodecStatusView(codec: codec, codecError: null)),
+    )));
 
     expect(find.text('Codec ready'), findsOneWidget);
     expect(find.byIcon(Icons.check_circle_outline), findsOneWidget);
@@ -41,10 +43,10 @@ void main() {
       status: 'decode_only',
       canDecompress: true,
     );
-    await tester.pumpWidget(const MaterialApp(
-      home: Scaffold(body: SingleChildScrollView(
-        child: CodecStatusView(codec: codec, codecError: null))),
-    ));
+    await tester.pumpWidget(wrapWithL10n(const Scaffold(
+      body: SingleChildScrollView(
+        child: CodecStatusView(codec: codec, codecError: null)),
+    )));
 
     expect(find.text('Codec read-only'), findsOneWidget);
     expect(find.byIcon(Icons.warning_amber_rounded), findsOneWidget);
@@ -57,10 +59,10 @@ void main() {
       available: false,
       status: 'unavailable',
     );
-    await tester.pumpWidget(const MaterialApp(
-      home: Scaffold(body: SingleChildScrollView(
-        child: CodecStatusView(codec: codec, codecError: null))),
-    ));
+    await tester.pumpWidget(wrapWithL10n(const Scaffold(
+      body: SingleChildScrollView(
+        child: CodecStatusView(codec: codec, codecError: null)),
+    )));
 
     expect(find.text('Codec unavailable'), findsOneWidget);
     expect(find.byIcon(Icons.error_outline), findsOneWidget);
@@ -68,10 +70,10 @@ void main() {
 
   testWidgets('renders codecError once when there is no codec status',
       (tester) async {
-    await tester.pumpWidget(const MaterialApp(
-      home: Scaffold(body: SingleChildScrollView(
-        child: CodecStatusView(codec: null, codecError: 'Codec check failed'))),
-    ));
+    await tester.pumpWidget(wrapWithL10n(const Scaffold(
+      body: SingleChildScrollView(
+        child: CodecStatusView(codec: null, codecError: 'Codec check failed')),
+    )));
 
     expect(find.text('Codec check failed'), findsOneWidget);
     expect(find.byIcon(Icons.error_outline), findsOneWidget);
@@ -86,13 +88,13 @@ void main() {
       canCompress: true,
       canDecompress: true,
     );
-    await tester.pumpWidget(const MaterialApp(
-      home: Scaffold(body: SingleChildScrollView(
+    await tester.pumpWidget(wrapWithL10n(const Scaffold(
+      body: SingleChildScrollView(
         child: CodecStatusView(
           codec: codec,
           codecError: 'Codec roundtrip failed',
-        ))),
-    ));
+        )),
+    )));
 
     expect(find.text('Codec roundtrip failed'), findsOneWidget);
     expect(find.text('Codec ready'), findsOneWidget);

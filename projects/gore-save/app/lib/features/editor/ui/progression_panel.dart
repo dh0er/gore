@@ -1,4 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:goresave/l10n/app_localizations.dart';
+import 'package:goresave/loc/game_lang.dart';
+import 'package:goresave/loc/loc_catalog_provider.dart';
 
 import '../domain/editor_models.dart';
 import '../domain/editor_notifier.dart';
@@ -32,6 +36,45 @@ String shortStateLabel(String state) {
   return idx < 0 ? state : state.substring(idx + 2);
 }
 
+/// Localized game name for a progression class/character id, or [fallback] when
+/// the extracted loc catalog has no entry for it.
+String _localizedProgressionName(
+  Map<String, Map<String, String>> catalog,
+  GameLang lang,
+  String id,
+  String fallback,
+) {
+  return localizedGameName(catalog, lang, id) ?? fallback;
+}
+
+/// Maps an English short state label to its localized form, defaulting to the
+/// input itself for unknown values.
+String _localizedShortLabel(AppLocalizations l10n, String label) {
+  switch (label) {
+    case 'None':
+      return l10n.questStateNone;
+    case 'Available':
+      return l10n.questStateAvailable;
+    case 'Running':
+      return l10n.questStateRunning;
+    case 'Succeeded':
+      return l10n.questStateSucceeded;
+    case 'Failed':
+      return l10n.questStateFailed;
+    default:
+      return label;
+  }
+}
+
+/// Localizes a raw EQuestState string (or null) for display. The 'unknown'
+/// fallback maps to a dedicated localized label.
+String _localizedState(AppLocalizations l10n, String? rawState) {
+  final raw = rawState ?? 'unknown';
+  final label = shortStateLabel(raw);
+  if (label == 'unknown') return l10n.questStateUnknown;
+  return _localizedShortLabel(l10n, label);
+}
+
 /// Sidebar section entries for the Progression tab.
 enum _ProgSection { quests, knowledge, events }
 
@@ -62,21 +105,19 @@ class _ProgressionPanelState extends State<ProgressionPanel> {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     if (!widget.inspection.privateDecoded) {
-      return const _MessagePane(
+      return _MessagePane(
         icon: Icons.flag_outlined,
-        title: 'Progression',
-        body:
-            'Progression data needs decoded private payload data from the codec.',
+        title: l10n.tabProgression,
+        body: l10n.progressionLockedBody,
       );
     }
     if (!widget.inspection.privateProgression.available) {
-      return const _MessagePane(
+      return _MessagePane(
         icon: Icons.flag_outlined,
-        title: 'Progression',
-        body:
-            'Structured progression data needs a fully decoded save with a '
-            'verified typed parse.',
+        title: l10n.tabProgression,
+        body: l10n.progressionNeedsTyped,
       );
     }
 
@@ -102,21 +143,21 @@ class _ProgressionPanelState extends State<ProgressionPanel> {
                   children: [
                     _SidebarTile(
                       icon: Icons.flag_outlined,
-                      label: 'Quests',
+                      label: l10n.sectionQuests,
                       selected: _selected == _ProgSection.quests,
                       onTap: () =>
                           setState(() => _selected = _ProgSection.quests),
                     ),
                     _SidebarTile(
                       icon: Icons.school_outlined,
-                      label: 'Knowledge',
+                      label: l10n.sectionKnowledge,
                       selected: _selected == _ProgSection.knowledge,
                       onTap: () =>
                           setState(() => _selected = _ProgSection.knowledge),
                     ),
                     _SidebarTile(
                       icon: Icons.history_outlined,
-                      label: 'Events',
+                      label: l10n.sectionEvents,
                       selected: _selected == _ProgSection.events,
                       onTap: () =>
                           setState(() => _selected = _ProgSection.events),
@@ -268,6 +309,7 @@ class _PaginationBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (total == 0) return const SizedBox.shrink();
+    final l10n = AppLocalizations.of(context);
     final theme = Theme.of(context);
     final muted = theme.textTheme.bodySmall?.copyWith(
       color: theme.colorScheme.onSurfaceVariant,
@@ -285,13 +327,13 @@ class _PaginationBar extends StatelessWidget {
       runSpacing: 4,
       children: [
         IconButton(
-          tooltip: 'First page',
+          tooltip: l10n.firstPage,
           visualDensity: VisualDensity.compact,
           icon: const Icon(Icons.first_page),
           onPressed: busy || !_hasPrevious ? null : () => onPage(0),
         ),
         IconButton(
-          tooltip: 'Previous page',
+          tooltip: l10n.previousPage,
           visualDensity: VisualDensity.compact,
           icon: const Icon(Icons.chevron_left),
           onPressed: busy || !_hasPrevious
@@ -299,7 +341,7 @@ class _PaginationBar extends StatelessWidget {
               : () => onPage((_pageIndex - 1) * pageSize),
         ),
         IconButton(
-          tooltip: 'Next page',
+          tooltip: l10n.nextPage,
           visualDensity: VisualDensity.compact,
           icon: const Icon(Icons.chevron_right),
           onPressed: busy || !_hasNext
@@ -307,7 +349,7 @@ class _PaginationBar extends StatelessWidget {
               : () => onPage((_pageIndex + 1) * pageSize),
         ),
         IconButton(
-          tooltip: 'Last page',
+          tooltip: l10n.lastPage,
           visualDensity: VisualDensity.compact,
           icon: const Icon(Icons.last_page),
           onPressed: busy || !_hasNext
@@ -315,11 +357,11 @@ class _PaginationBar extends StatelessWidget {
               : () => onPage((_pageCount - 1) * pageSize),
         ),
         const SizedBox(width: 4),
-        Text('Page ${_pageIndex + 1} / $_pageCount', style: muted),
+        Text(l10n.pageOfPages(_pageIndex + 1, _pageCount), style: muted),
         const SizedBox(width: 8),
-        Text('$first–$last of $total', style: muted),
+        Text(l10n.rangeOfTotal(first, last, total), style: muted),
         const SizedBox(width: 8),
-        Text('Per page:', style: muted),
+        Text(l10n.perPage, style: muted),
         const SizedBox(width: 6),
         DropdownButton<int>(
           value: effectivePageSize,
@@ -340,7 +382,7 @@ class _PaginationBar extends StatelessWidget {
 // Quests detail (stateful, pending-edit pattern)
 // ---------------------------------------------------------------------------
 
-class _QuestsDetail extends StatefulWidget {
+class _QuestsDetail extends ConsumerStatefulWidget {
   const _QuestsDetail({
     super.key,
     required this.notifier,
@@ -355,10 +397,10 @@ class _QuestsDetail extends StatefulWidget {
   final ThemeData theme;
 
   @override
-  State<_QuestsDetail> createState() => _QuestsDetailState();
+  ConsumerState<_QuestsDetail> createState() => _QuestsDetailState();
 }
 
-class _QuestsDetailState extends State<_QuestsDetail> {
+class _QuestsDetailState extends ConsumerState<_QuestsDetail> {
   static const _defaultPageSize = 50;
 
   final TextEditingController _search = TextEditingController();
@@ -450,6 +492,10 @@ class _QuestsDetailState extends State<_QuestsDetail> {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    final lang = ref.watch(currentGameLangProvider);
+    final locCatalog =
+        ref.watch(locCatalogProvider).asData?.value ?? const {};
     final scheme = widget.theme.colorScheme;
     return Card(
       child: Padding(
@@ -464,13 +510,13 @@ class _QuestsDetailState extends State<_QuestsDetail> {
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    'Quests',
+                    l10n.sectionQuests,
                     style: widget.theme.textTheme.titleMedium,
                   ),
                 ),
                 if (widget.editable && _pending.isNotEmpty)
                   Tooltip(
-                    message: 'Reset quest changes',
+                    message: l10n.resetQuestChanges,
                     child: IconButton(
                       icon: const Icon(Icons.undo_outlined),
                       onPressed: () {
@@ -486,7 +532,7 @@ class _QuestsDetailState extends State<_QuestsDetail> {
             TextField(
               controller: _search,
               decoration: InputDecoration(
-                labelText: 'Search quests',
+                labelText: l10n.searchQuests,
                 prefixIcon: const Icon(Icons.search),
                 suffixIcon: _loading
                     ? const Padding(
@@ -556,7 +602,12 @@ class _QuestsDetailState extends State<_QuestsDetail> {
                           dense: true,
                           leading: const Icon(Icons.flag_outlined),
                           title: SelectableText(
-                            quest.name.isEmpty ? quest.id : quest.name,
+                            _localizedProgressionName(
+                              locCatalog,
+                              lang,
+                              quest.id,
+                              quest.name.isEmpty ? quest.id : quest.name,
+                            ),
                             maxLines: 1,
                           ),
                           subtitle: SelectableText(quest.group, maxLines: 1),
@@ -569,16 +620,14 @@ class _QuestsDetailState extends State<_QuestsDetail> {
                                       .map(
                                         (s) => DropdownMenuItem(
                                           value: s,
-                                          child: Text(shortStateLabel(s)),
+                                          child: Text(_localizedState(l10n, s)),
                                         ),
                                       )
                                       .toList(),
                                   onChanged: (s) => _setQuestState(quest, s),
                                 )
                               : Text(
-                                  shortStateLabel(
-                                    quest.currentState ?? 'unknown',
-                                  ),
+                                  _localizedState(l10n, quest.currentState),
                                 ),
                         );
                       },
@@ -595,7 +644,7 @@ class _QuestsDetailState extends State<_QuestsDetail> {
 // Knowledge detail — two-pane: NPC list left, entries right
 // ---------------------------------------------------------------------------
 
-class _KnowledgeDetail extends StatefulWidget {
+class _KnowledgeDetail extends ConsumerStatefulWidget {
   const _KnowledgeDetail({
     super.key,
     required this.notifier,
@@ -610,10 +659,10 @@ class _KnowledgeDetail extends StatefulWidget {
   final ThemeData theme;
 
   @override
-  State<_KnowledgeDetail> createState() => _KnowledgeDetailState();
+  ConsumerState<_KnowledgeDetail> createState() => _KnowledgeDetailState();
 }
 
-class _KnowledgeDetailState extends State<_KnowledgeDetail> {
+class _KnowledgeDetailState extends ConsumerState<_KnowledgeDetail> {
   static const _defaultPageSize = 50;
 
   final TextEditingController _characterSearch = TextEditingController();
@@ -829,6 +878,7 @@ class _KnowledgeDetailState extends State<_KnowledgeDetail> {
   }
 
   Future<void> _addEntry(String entry) async {
+    final l10n = AppLocalizations.of(context);
     // Issue C: defense-in-depth guard — setPath not yet loaded → reject.
     if (_entries.setPath.isEmpty) return;
     final trimmed = entry.trim();
@@ -837,7 +887,7 @@ class _KnowledgeDetailState extends State<_KnowledgeDetail> {
     // UE Names compare case-insensitively, so case-variants are duplicates.
     final trimmedLower = trimmed.toLowerCase();
     if (_entries.entries.any((e) => e.toLowerCase() == trimmedLower)) {
-      setState(() => _addError = 'Already exists for this character.');
+      setState(() => _addError = l10n.alreadyExistsForCharacter);
       return;
     }
     final character = _selectedCharacter!;
@@ -845,7 +895,7 @@ class _KnowledgeDetailState extends State<_KnowledgeDetail> {
     // already case-insensitive.
     final key = _pendingKey(character, trimmed);
     if (_pending.containsKey(key)) {
-      setState(() => _addError = 'Already in pending changes.');
+      setState(() => _addError = l10n.alreadyInPendingChanges);
       return;
     }
 
@@ -897,12 +947,12 @@ class _KnowledgeDetailState extends State<_KnowledgeDetail> {
     // A failed query must NOT fall through to a pending add.
     if (checkError != null) {
       setState(() {
-        _addError = 'Duplicate check failed — try again: $checkError';
+        _addError = l10n.duplicateCheckFailed(checkError ?? '');
       });
       return;
     }
     if (exists) {
-      setState(() => _addError = 'Already exists for this character.');
+      setState(() => _addError = l10n.alreadyExistsForCharacter);
       return;
     }
 
@@ -925,6 +975,10 @@ class _KnowledgeDetailState extends State<_KnowledgeDetail> {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    final lang = ref.watch(currentGameLangProvider);
+    final locCatalog =
+        ref.watch(locCatalogProvider).asData?.value ?? const {};
     final scheme = widget.theme.colorScheme;
     final character = _selectedCharacter;
 
@@ -955,13 +1009,13 @@ class _KnowledgeDetailState extends State<_KnowledgeDetail> {
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    'Dialog Knowledge',
+                    l10n.dialogKnowledge,
                     style: widget.theme.textTheme.titleMedium,
                   ),
                 ),
                 if (widget.editable && _pending.isNotEmpty)
                   Tooltip(
-                    message: 'Reset knowledge changes',
+                    message: l10n.resetKnowledgeChanges,
                     child: IconButton(
                       icon: const Icon(Icons.undo_outlined),
                       onPressed: () {
@@ -991,7 +1045,7 @@ class _KnowledgeDetailState extends State<_KnowledgeDetail> {
                             alignment: Alignment.centerLeft,
                             child: OutlinedButton.icon(
                               icon: const Icon(Icons.person_add_alt_1, size: 18),
-                              label: const Text('Add NPC'),
+                              label: Text(l10n.addNpc),
                               onPressed: _npcCatalog == null ? null : _addNpc,
                             ),
                           ),
@@ -1000,7 +1054,7 @@ class _KnowledgeDetailState extends State<_KnowledgeDetail> {
                         TextField(
                           controller: _characterSearch,
                           decoration: InputDecoration(
-                            labelText: 'Search NPCs',
+                            labelText: l10n.searchNpcs,
                             isDense: true,
                             prefixIcon: const Icon(Icons.search, size: 18),
                             suffixIcon: _searchingCharacters
@@ -1065,7 +1119,15 @@ class _KnowledgeDetailState extends State<_KnowledgeDetail> {
                                       dense: true,
                                       selected: isSelected,
                                       title: Text(
-                                        '${c.name} (${c.entryCount})',
+                                        l10n.characterWithCount(
+                                          _localizedProgressionName(
+                                            locCatalog,
+                                            lang,
+                                            c.name,
+                                            c.name,
+                                          ),
+                                          c.entryCount,
+                                        ),
                                       ),
                                       onTap: () => _selectCharacter(c.name),
                                     );
@@ -1085,8 +1147,15 @@ class _KnowledgeDetailState extends State<_KnowledgeDetail> {
                       children: [
                         Text(
                           character != null
-                              ? 'Entries — $character'
-                              : 'Select an NPC to see entries',
+                              ? l10n.entriesForCharacter(
+                                  _localizedProgressionName(
+                                    locCatalog,
+                                    lang,
+                                    character,
+                                    character,
+                                  ),
+                                )
+                              : l10n.selectNpcToSeeEntries,
                           style: widget.theme.textTheme.labelLarge,
                         ),
                         if (character != null) ...[
@@ -1106,8 +1175,8 @@ class _KnowledgeDetailState extends State<_KnowledgeDetail> {
                                       child: TextField(
                                         controller: _addController,
                                         enabled: !addDisabled,
-                                        decoration: const InputDecoration(
-                                          labelText: 'Add knowledge entry',
+                                        decoration: InputDecoration(
+                                          labelText: l10n.addKnowledgeEntry,
                                           isDense: true,
                                         ),
                                         onSubmitted: addDisabled
@@ -1130,7 +1199,7 @@ class _KnowledgeDetailState extends State<_KnowledgeDetail> {
                                           )
                                         : IconButton(
                                             icon: const Icon(Icons.add),
-                                            tooltip: 'Add',
+                                            tooltip: l10n.add,
                                             onPressed: addDisabled
                                                 ? null
                                                 : () => _addEntry(
@@ -1142,7 +1211,7 @@ class _KnowledgeDetailState extends State<_KnowledgeDetail> {
                                     // fallback for non-catalog tokens.
                                     IconButton(
                                       icon: const Icon(Icons.menu_book_outlined),
-                                      tooltip: 'Browse catalog',
+                                      tooltip: l10n.browseCatalog,
                                       onPressed:
                                           addDisabled || _knowledgeCatalog == null
                                           ? null
@@ -1187,7 +1256,7 @@ class _KnowledgeDetailState extends State<_KnowledgeDetail> {
                             Padding(
                               padding: const EdgeInsets.symmetric(vertical: 4),
                               child: Text(
-                                'Pending adds (${addedEntries.length})',
+                                l10n.pendingAddsCount(addedEntries.length),
                                 style: widget.theme.textTheme.labelSmall
                                     ?.copyWith(color: scheme.onSurfaceVariant),
                               ),
@@ -1207,7 +1276,7 @@ class _KnowledgeDetailState extends State<_KnowledgeDetail> {
                                 trailing: widget.editable
                                     ? IconButton(
                                         icon: const Icon(Icons.undo, size: 18),
-                                        tooltip: 'Undo add',
+                                        tooltip: l10n.undoAdd,
                                         onPressed: () => _undoAdd(entry),
                                       )
                                     : null,
@@ -1250,8 +1319,8 @@ class _KnowledgeDetailState extends State<_KnowledgeDetail> {
                                                   size: 18,
                                                 ),
                                                 tooltip: isRemoved
-                                                    ? 'Undo remove'
-                                                    : 'Remove entry',
+                                                    ? l10n.undoRemove
+                                                    : l10n.removeEntry,
                                                 onPressed: () =>
                                                     _removeEntry(entry),
                                               )
@@ -1265,7 +1334,7 @@ class _KnowledgeDetailState extends State<_KnowledgeDetail> {
                           Expanded(
                             child: Center(
                               child: Text(
-                                'Select an NPC from the list',
+                                l10n.selectNpcFromList,
                                 style: TextStyle(
                                   color: scheme.onSurfaceVariant,
                                 ),
@@ -1289,7 +1358,7 @@ class _KnowledgeDetailState extends State<_KnowledgeDetail> {
 // Events detail — two-pane: character list left, events right
 // ---------------------------------------------------------------------------
 
-class _EventsDetail extends StatefulWidget {
+class _EventsDetail extends ConsumerStatefulWidget {
   const _EventsDetail({
     super.key,
     required this.notifier,
@@ -1304,10 +1373,10 @@ class _EventsDetail extends StatefulWidget {
   final ThemeData theme;
 
   @override
-  State<_EventsDetail> createState() => _EventsDetailState();
+  ConsumerState<_EventsDetail> createState() => _EventsDetailState();
 }
 
-class _EventsDetailState extends State<_EventsDetail> {
+class _EventsDetailState extends ConsumerState<_EventsDetail> {
   static const _defaultPageSize = 50;
 
   final TextEditingController _characterSearch = TextEditingController();
@@ -1434,6 +1503,7 @@ class _EventsDetailState extends State<_EventsDetail> {
     String title,
     String message,
   ) async {
+    final l10n = AppLocalizations.of(context);
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -1442,11 +1512,11 @@ class _EventsDetailState extends State<_EventsDetail> {
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('Cancel'),
+            child: Text(l10n.cancel),
           ),
           FilledButton(
             onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('Confirm'),
+            child: Text(l10n.confirm),
           ),
         ],
       ),
@@ -1460,6 +1530,10 @@ class _EventsDetailState extends State<_EventsDetail> {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    final lang = ref.watch(currentGameLangProvider);
+    final locCatalog =
+        ref.watch(locCatalogProvider).asData?.value ?? const {};
     final scheme = widget.theme.colorScheme;
     final character = _selectedCharacter;
 
@@ -1476,7 +1550,7 @@ class _EventsDetailState extends State<_EventsDetail> {
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    'Memory Events',
+                    l10n.memoryEvents,
                     style: widget.theme.textTheme.titleMedium,
                   ),
                 ),
@@ -1497,7 +1571,7 @@ class _EventsDetailState extends State<_EventsDetail> {
                         TextField(
                           controller: _characterSearch,
                           decoration: InputDecoration(
-                            labelText: 'Search characters',
+                            labelText: l10n.searchCharacters,
                             isDense: true,
                             prefixIcon: const Icon(Icons.search, size: 18),
                             suffixIcon: _searchingCharacters
@@ -1561,7 +1635,17 @@ class _EventsDetailState extends State<_EventsDetail> {
                                     return ListTile(
                                       dense: true,
                                       selected: isSelected,
-                                      title: Text('${c.id} (${c.eventCount})'),
+                                      title: Text(
+                                        l10n.characterWithCount(
+                                          _localizedProgressionName(
+                                            locCatalog,
+                                            lang,
+                                            c.id,
+                                            c.id,
+                                          ),
+                                          c.eventCount,
+                                        ),
+                                      ),
                                       onTap: () => _selectCharacter(c.id),
                                     );
                                   },
@@ -1580,8 +1664,15 @@ class _EventsDetailState extends State<_EventsDetail> {
                       children: [
                         Text(
                           character != null
-                              ? 'Events — $character'
-                              : 'Select a character to see events',
+                              ? l10n.eventsForCharacter(
+                                  _localizedProgressionName(
+                                    locCatalog,
+                                    lang,
+                                    character,
+                                    character,
+                                  ),
+                                )
+                              : l10n.selectCharacterToSeeEvents,
                           style: widget.theme.textTheme.labelLarge,
                         ),
                         if (character != null) ...[
@@ -1617,7 +1708,7 @@ class _EventsDetailState extends State<_EventsDetail> {
                                     itemBuilder: (context, index) {
                                       final event = _events.events[index];
                                       final tagLabel = event.tags.isEmpty
-                                          ? '(no tags)'
+                                          ? l10n.noTags
                                           : event.tags.join(', ');
                                       final timeStr = event.timeSeconds != null
                                           ? event.timeSeconds!.toStringAsFixed(
@@ -1632,7 +1723,7 @@ class _EventsDetailState extends State<_EventsDetail> {
                                           maxLines: 1,
                                         ),
                                         subtitle: SelectableText(
-                                          't=${timeStr}s  $affected',
+                                          l10n.eventSubtitle(timeStr, affected),
                                           maxLines: 1,
                                         ),
                                         trailing: widget.editable
@@ -1644,7 +1735,7 @@ class _EventsDetailState extends State<_EventsDetail> {
                                                       Icons.delete_outline,
                                                       size: 20,
                                                     ),
-                                                    tooltip: 'Remove event',
+                                                    tooltip: l10n.removeEvent,
                                                     onPressed: _loadingEvents
                                                         ? null
                                                         : () => _confirmAndApply(
@@ -1655,9 +1746,8 @@ class _EventsDetailState extends State<_EventsDetail> {
                                                               index:
                                                                   event.index,
                                                             ),
-                                                            'Remove memory event?',
-                                                            'Remove this memory event? '
-                                                                'A backup is written first.',
+                                                            l10n.removeMemoryEventTitle,
+                                                            l10n.removeMemoryEventBody,
                                                           ),
                                                   ),
                                                   IconButton(
@@ -1665,7 +1755,7 @@ class _EventsDetailState extends State<_EventsDetail> {
                                                       Icons.copy_outlined,
                                                       size: 20,
                                                     ),
-                                                    tooltip: 'Duplicate event',
+                                                    tooltip: l10n.duplicateEvent,
                                                     onPressed: _loadingEvents
                                                         ? null
                                                         : () => _confirmAndApply(
@@ -1676,9 +1766,8 @@ class _EventsDetailState extends State<_EventsDetail> {
                                                               index:
                                                                   event.index,
                                                             ),
-                                                            'Duplicate memory event?',
-                                                            'Duplicate this memory event? '
-                                                                'A backup is written first.',
+                                                            l10n.duplicateMemoryEventTitle,
+                                                            l10n.duplicateMemoryEventBody,
                                                           ),
                                                   ),
                                                 ],
@@ -1693,7 +1782,7 @@ class _EventsDetailState extends State<_EventsDetail> {
                           Expanded(
                             child: Center(
                               child: Text(
-                                'Select a character from the list',
+                                l10n.selectCharacterFromList,
                                 style: TextStyle(
                                   color: scheme.onSurfaceVariant,
                                 ),
@@ -1736,6 +1825,7 @@ class _QuestFilterRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     // Status FilterChips — show labels with count > 0 OR currently selected
     // (so a selected chip whose count dropped to 0 stays visible for deselect).
     final chips = [
@@ -1743,9 +1833,12 @@ class _QuestFilterRow extends StatelessWidget {
         if ((page.stateCounts[label] ?? 0) > 0 || stateFilter == label)
           FilterChip(
             label: Text(
-              stateFilter == label && (page.stateCounts[label] ?? 0) == 0
-                  ? '$label 0'
-                  : '$label ${page.stateCounts[label] ?? 0}',
+              l10n.stateLabelWithCount(
+                _localizedShortLabel(l10n, label),
+                stateFilter == label && (page.stateCounts[label] ?? 0) == 0
+                    ? 0
+                    : page.stateCounts[label] ?? 0,
+              ),
             ),
             selected: stateFilter == label,
             onSelected: busy ? null : (_) => onStateChanged(label),
@@ -1758,17 +1851,17 @@ class _QuestFilterRow extends StatelessWidget {
     // (prevents DropdownButton crash on value not in items).
     final sortedGroups = page.groupCounts.keys.toList()..sort();
     final groupItems = <DropdownMenuItem<String?>>[
-      const DropdownMenuItem<String?>(value: null, child: Text('All groups')),
+      DropdownMenuItem<String?>(value: null, child: Text(l10n.allGroups)),
       for (final g in sortedGroups)
         DropdownMenuItem<String?>(
           value: g,
-          child: Text('$g (${page.groupCounts[g]})'),
+          child: Text(l10n.groupWithCount(g, page.groupCounts[g] ?? 0)),
         ),
       // Ensure selected group is present even when its count is 0.
       if (groupFilter != null && !page.groupCounts.containsKey(groupFilter))
         DropdownMenuItem<String?>(
           value: groupFilter,
-          child: Text('$groupFilter (0)'),
+          child: Text(l10n.groupWithCount(groupFilter!, 0)),
         ),
     ];
 
@@ -1782,7 +1875,7 @@ class _QuestFilterRow extends StatelessWidget {
           value: groupFilter,
           isDense: true,
           underline: const SizedBox.shrink(),
-          hint: const Text('All groups'),
+          hint: Text(l10n.allGroups),
           onChanged: busy ? null : onGroupChanged,
           items: groupItems,
         ),

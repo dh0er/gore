@@ -4,6 +4,8 @@ import 'package:goresave/features/editor/domain/editor_models.dart';
 import 'package:goresave/features/editor/domain/item_catalog.dart';
 import 'package:goresave/features/editor/ui/add_inventory_item_dialog.dart';
 
+import '../../../support/l10n_test_app.dart';
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -64,8 +66,8 @@ Widget _wrap({
   required Set<String> excludePaths,
   void Function(InventoryItemAdd?)? onResult,
 }) {
-  return MaterialApp(
-    home: Scaffold(
+  return wrapWithL10n(
+    Scaffold(
       body: _DialogHost(
         excludePaths: excludePaths,
         onResult: onResult ?? (_) {},
