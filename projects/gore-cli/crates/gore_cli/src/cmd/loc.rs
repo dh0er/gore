@@ -49,6 +49,15 @@ pub fn extract(lcache: Option<PathBuf>, yes: bool) -> Result<()> {
 
 /// Print whether a shared catalog exists and its provenance.
 pub fn status() -> Result<()> {
+    // Key off the catalog file (like the apps), so a leftover loc_meta.json
+    // without its catalog isn't reported as an extracted catalog.
+    if !loc_store::catalog_present() {
+        println!(
+            "no loc catalog extracted yet -> run `gore-cli loc extract` (shared dir: {})",
+            paths::shared_data_dir().display()
+        );
+        return Ok(());
+    }
     match loc_store::status() {
         Some(m) => {
             println!("loc catalog: present");
@@ -58,17 +67,12 @@ pub fn status() -> Result<()> {
             println!("  extracted:  {} (unix)", m.extracted_at);
             println!("  path:       {}", m.catalog_path);
         }
-        None if loc_store::catalog_present() => {
-            // Catalog file exists but its metadata doesn't (e.g. a catalog write
-            // that succeeded before the meta write failed). The apps still treat
-            // the catalog as available, so report it as present.
+        None => {
+            // Catalog exists but its metadata doesn't (e.g. a catalog write that
+            // succeeded before the meta write failed).
             println!("loc catalog: present (no metadata)");
             println!("  path:       {}", paths::loc_catalog_path().display());
         }
-        None => println!(
-            "no loc catalog extracted yet -> run `gore-cli loc extract` (shared dir: {})",
-            paths::shared_data_dir().display()
-        ),
     }
     Ok(())
 }
