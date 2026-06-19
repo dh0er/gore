@@ -9,9 +9,62 @@
 
 use anyhow::{Context, Result};
 use gore_core::loc::Lcache;
+use gore_core::{loc_store, paths};
+use std::io::Write as _;
 use std::{collections::BTreeMap, fs, path::PathBuf};
 
 type LocMap = BTreeMap<String, BTreeMap<String, String>>;
+
+/// Auto-detect (or use `--lcache`) the game's localization cache and write the
+/// shared `gore-tools/loc_catalog.json`. Prompts for confirmation unless `--yes`.
+pub fn extract(lcache: Option<PathBuf>, yes: bool) -> Result<()> {
+    let resolved = loc_store::resolve_lcache(lcache.as_deref())
+        .ok_or_else(|| anyhow::anyhow!(
+            "no AlkimiaLocalization .lcache found (Steam auto-detect failed). \
+             Pass --lcache <path-to-.lcache or game dir>."
+        ))?;
+
+    if !yes {
+        println!("Extract localized text from:\n  {}", resolved.display());
+        println!("into shared catalog:\n  {}", paths::loc_catalog_path().display());
+        print!("Proceed? [y/N] ");
+        std::io::stdout().flush().ok();
+        let mut line = String::new();
+        std::io::stdin().read_line(&mut line)?;
+        if !line.trim().eq_ignore_ascii_case("y") {
+            println!("Aborted.");
+            return Ok(());
+        }
+    }
+
+    let meta = loc_store::extract(Some(&resolved)).context("extracting localization")?;
+    println!(
+        "Extracted {} ids across {} languages -> {}",
+        meta.id_count,
+        meta.languages.len(),
+        meta.catalog_path
+    );
+    Ok(())
+}
+
+/// Print whether a shared catalog exists and its provenance.
+pub fn status() -> Result<()> {
+    match loc_store::status() {
+        Some(m) => {
+            println!("loc catalog: present");
+            println!("  ids:        {}", m.id_count);
+            println!("  languages:  {} [{}]", m.languages.len(), m.languages.join(", "));
+            println!("  source:     {} ({} bytes)", m.source_path, m.source_bytes);
+            println!("  extracted:  {} (unix)", m.extracted_at);
+            println!("  path:       {}", m.catalog_path);
+        }
+        None => println!(
+            "no loc catalog extracted yet -> run `gore-cli loc extract` (shared dir: {})",
+            paths::shared_data_dir().display()
+        ),
+    }
+    Ok(())
+}
 
 pub fn export(lcache: PathBuf, out: PathBuf, keep_empty: bool) -> Result<()> {
     let enc = fs::read(&lcache)

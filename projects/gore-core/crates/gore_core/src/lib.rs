@@ -6,11 +6,14 @@
 //! contain save-payload parsing — that stays in `goresave_core`.
 
 pub mod catalog;
+pub mod discover;
 pub mod ffi;
 pub mod gen;
 pub mod loc;
+pub mod loc_store;
 pub mod model;
 pub mod parser;
+pub mod paths;
 pub mod validate;
 
 pub use catalog::{category_for_id, item_category_from_id, CatalogJsonEntry, ItemCategory};

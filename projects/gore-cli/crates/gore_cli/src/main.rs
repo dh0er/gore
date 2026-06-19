@@ -116,6 +116,18 @@ enum Commands {
 
 #[derive(Subcommand)]
 enum LocAction {
+    /// Auto-detect (or --lcache) the game's .lcache and write the shared
+    /// gore-tools/loc_catalog.json (used by gore-save and gore-mod too)
+    Extract {
+        /// Path to the .lcache, the game dir, or a Steam library (else auto-detect)
+        #[arg(long)]
+        lcache: Option<PathBuf>,
+        /// Skip the confirmation prompt
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
+    /// Show the shared loc catalog's status (ids, languages, source)
+    Status,
     /// Decrypt the .lcache and write {id:{language:value}} JSON (all languages)
     Export {
         /// Path to AlkimiaLocalization_*.lcache
@@ -152,6 +164,8 @@ fn main() {
         Commands::Sync { dump, catalog, out } => cmd::sync::run(dump, catalog, out),
         Commands::DumpMod { model, catalog, out } => cmd::dump_mod::run(model, catalog, out),
         Commands::Loc { action } => match action {
+            LocAction::Extract { lcache, yes } => cmd::loc::extract(lcache, yes),
+            LocAction::Status => cmd::loc::status(),
             LocAction::Export { lcache, out, keep_empty } => cmd::loc::export(lcache, out, keep_empty),
             LocAction::Import { lcache, edits, out } => cmd::loc::import(lcache, edits, out),
         },

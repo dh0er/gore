@@ -17,5 +17,8 @@ thiserror = "2"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 aes = "0.8"
 
+[target.'cfg(windows)'.dependencies]
+winreg = "0.52"
+
 [dev-dependencies]
 pretty_assertions = "1"
