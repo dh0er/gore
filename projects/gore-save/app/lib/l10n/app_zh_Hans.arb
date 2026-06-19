@@ -1,14 +1,11 @@
 {
   "@@locale": "zh_Hans",
-
   "appTitle": "Gothic Remake 存档编辑器",
   "appLogoSemanticLabel": "goresave 标志",
-
   "zoomTooltip": "按 Ctrl +/- 放大/缩小",
   "switchToLightMode": "切换到浅色模式",
   "switchToDarkMode": "切换到深色模式",
   "about": "关于",
-
   "tabOverview": "概览",
   "tabPlayer": "玩家",
   "tabInventory": "物品栏",
@@ -16,7 +13,6 @@
   "tabAllData": "全部数据",
   "tabBackups": "备份",
   "tabSettings": "设置",
-
   "reset": "重置",
   "save": "保存",
   "saveWithCount": "保存（{count}）",
@@ -26,7 +22,6 @@
   "close": "关闭",
   "add": "添加",
   "browse": "浏览",
-
   "noSavFilesFound": "未找到 .sav 文件",
   "profile": "存档配置",
   "profileWithSaves": "{name}（{count} 个存档）",
@@ -35,16 +30,13 @@
   "discardUnsavedChangesTitle": "放弃未保存的更改？",
   "rescanDiscardBody": "重新扫描将重新加载每个存档，并放弃你 {count} 项未保存的{count, plural, =1{更改} other{更改}}。",
   "discardAndRescan": "放弃并重新扫描",
-
   "chapterLabel": "第 {id} 章",
   "quickSave": "快速存档",
   "autoSave": "自动存档",
   "manualSave": "手动存档",
-
   "errorTitle": "错误",
   "selectASaveTitle": "选择存档",
   "selectASaveBody": "存档详情将显示在此处。",
-
   "diagnosticsTitle": "诊断与详情",
   "diagnosticsSubtitle": "只读格式检查",
   "metricFormat": "格式",
@@ -63,17 +55,13 @@
   "metricPrivateStrings": "私有字符串",
   "metricSha1": "SHA-1",
   "bytesValue": "{count} 字节",
-
   "inspectionJsonTitle": "检查 JSON",
   "inspectionJsonSubtitle": "原始存档检查数据",
   "copy": "复制",
-
   "savegameFallbackTitle": "存档",
   "screenshotForSlot": "{slot} 的截图",
-
   "publicSaveName": "公开存档名称",
   "required": "必填",
-
   "playerLockedBody": "编辑私有玩家数据需要支持压缩的编解码器。",
   "heroTransform": "主角变换",
   "locationX": "位置 X",
@@ -86,7 +74,6 @@
   "heroAttributes": "主角属性",
   "attributeBase": "{name} 基础值",
   "attributeCurrent": "{name} 当前值",
-
   "inventoryTitle": "物品栏",
   "inventoryNeedsDecoded": "编辑物品栏需要来自编解码器的已解码私有负载数据。",
   "inventoryNoStacks": "已解码的私有负载中未找到物品堆叠。",
@@ -104,7 +91,6 @@
   "noItemsMatchQuery": "没有物品匹配“{query}”。",
   "pendingRemovalHidesAll": "待处理的移除隐藏了所有物品 — 请保存以应用。",
   "categoryWithCount": "{label}（{count}）",
-
   "itemCategoryMeleeWeapon": "近战武器",
   "itemCategoryRangedWeapon": "远程武器",
   "itemCategoryAmmunition": "弹药",
@@ -119,14 +105,12 @@
   "itemCategoryMission": "任务物品",
   "itemCategoryKey": "钥匙",
   "itemCategoryOther": "其他",
-
   "count": "数量",
   "min1": "最少 1",
   "countTimes": "×{count}",
   "deleteEquippedTooltip": "无法删除：该物品可能已装备或已分配到快捷键槽位",
   "removeBlockedTooltip": "请先保存或重置待处理的物品栏更改 — 添加或移除必须单独保存",
   "removeItemFromInventory": "从物品栏移除物品",
-
   "progressionLockedBody": "进度数据需要来自编解码器的已解码私有负载数据。",
   "progressionNeedsTyped": "结构化进度数据需要完全解码且已验证类型解析的存档。",
   "sectionQuests": "任务",
@@ -150,7 +134,6 @@
   "questStateSucceeded": "已完成",
   "questStateFailed": "已失败",
   "questStateUnknown": "未知",
-
   "dialogKnowledge": "对话知识",
   "resetKnowledgeChanges": "重置知识更改",
   "addNpc": "添加 NPC",
@@ -168,7 +151,6 @@
   "removeEntry": "移除条目",
   "selectNpcFromList": "从列表中选择一个 NPC",
   "characterWithCount": "{name}（{count}）",
-
   "memoryEvents": "记忆事件",
   "searchCharacters": "搜索角色",
   "eventsForCharacter": "事件 — {name}",
@@ -182,7 +164,6 @@
   "duplicateMemoryEventTitle": "复制记忆事件？",
   "duplicateMemoryEventBody": "复制此记忆事件？将先写入一份备份。",
   "selectCharacterFromList": "从列表中选择一个角色",
-
   "allDataLockedBody": "完整的属性浏览器需要来自编解码器的已解码私有负载数据。",
   "allDataDescription": "按名称或路径搜索每个类型化属性。标量、字符串、枚举和对象路径可编辑；结构体目前以只读方式显示。",
   "searchPropertiesLabel": "搜索属性（留空 = 列出全部） — 例如 Health、GameTime",
@@ -194,7 +175,6 @@
   "noMatchesTitle": "无匹配项",
   "noMatchesBody": "没有属性路径包含所有这些词条。",
   "value": "值",
-
   "backupsTitle": "备份",
   "refreshBackups": "刷新备份",
   "noBackupsTitle": "无备份",
@@ -208,7 +188,6 @@
   "backupFactStatus": "状态",
   "backupFactSha1": "SHA-1",
   "restoreBackupTooltip": "恢复 {fileName}",
-
   "appearanceTitle": "外观",
   "theme": "主题",
   "themeLight": "浅色",
@@ -218,12 +197,10 @@
   "resetZoomTooltip": "重置缩放（Ctrl+0）",
   "zoomTip": "提示：在应用内任意位置按 Ctrl + / Ctrl - 均可调整缩放。",
   "language": "语言",
-
   "updatesTitle": "更新",
   "checkForUpdatesAutomatically": "自动检查更新",
   "checkForUpdatesNow": "立即检查更新",
   "updatesPortableNotice": "更新仅适用于已安装的版本。便携版需要手动更新。",
-
   "gameTextTitle": "游戏文本",
   "gameTextExtractedWithCounts": "已提取：{languages} 种语言共 {ids} 个 ID。",
   "gameTextExtracted": "本地化游戏文本已提取。",
@@ -237,10 +214,8 @@
   "extractionComplete": "提取完成",
   "extractionFailed": "提取失败",
   "localizationCacheFileType": "本地化缓存",
-
   "savegameDirectoryTitle": "存档目录",
   "folder": "文件夹",
-
   "codecTitle": "编解码器",
   "check": "检查",
   "roundtrip": "往返测试",
@@ -254,12 +229,10 @@
   "codecBackendLine": "后端：{backend}",
   "yes": "是",
   "no": "否",
-
   "aboutSubtitle": "Gothic Remake 存档编辑器",
   "aboutVersion": "版本 {version}（{sha}）",
   "aboutCopyright": "© 2026 goresave 贡献者",
   "aboutLicense": "基于 MIT 许可证授权。",
-
   "difficultyTitle": "难度 — {profile}",
   "difficultyNoProfile": "无存档配置",
   "difficultyNoDifficulty": "无难度",
@@ -281,7 +254,6 @@
   "levelProgression": "进度",
   "difficultyAppliesToAllSaves": "难度将应用于此存档配置中的所有存档。",
   "savingDifficultyFailed": "保存难度失败。",
-
   "addItemDialogTitle": "添加物品",
   "searchItems": "搜索物品",
   "failedToLoadCatalog": "加载目录失败：{error}",
@@ -289,18 +261,15 @@
   "noItemsMatch": "没有匹配的物品",
   "countMustBeAtLeast1": "必须 ≥ 1",
   "countMustBeAtMost": "必须 ≤ {max}",
-
   "addNpcDialogTitle": "添加 NPC",
   "noNpcsAvailableToAdd": "没有可添加的 NPC",
   "noNpcsMatch": "没有匹配的 NPC",
   "categoryAll": "全部",
   "allWithCount": "全部（{count}）",
-
   "addKnowledgeEntryDialogTitle": "添加知识条目",
   "searchEntries": "搜索条目",
   "noKnowledgeEntriesAvailableToAdd": "没有可添加的知识条目",
   "noEntriesMatch": "没有匹配的条目",
-
   "heroGroupMainStats": "主要属性",
   "heroGroupCombatSkills": "战斗技能",
   "heroGroupResistances": "抗性",
@@ -309,6 +278,6 @@
   "heroEntryHeroTransform": "主角变换",
   "attributeEmpty": "{name} 为空 — 请输入一个值，或在保存前恢复原始值。",
   "attributeInvalidNumber": "{name} 的数字无效：“{text}”",
-
-  "loadingEditorData": "正在加载编辑器数据"
+  "loadingEditorData": "正在加载编辑器数据",
+  "localizedTextExtractedCount": "已提取 {idCount} 个 ID，涵盖 {languageCount} 种语言"
 }

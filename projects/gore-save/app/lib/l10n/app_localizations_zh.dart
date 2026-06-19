@@ -921,6 +921,11 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get loadingEditorData => '正在加载编辑器数据';
+
+  @override
+  String localizedTextExtractedCount(int idCount, int languageCount) {
+    return '已提取 $idCount 个 ID，涵盖 $languageCount 种语言';
+  }
 }
 
 /// The translations for Chinese, using the Han script (`zh_Hans`).
@@ -1840,4 +1845,9 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get loadingEditorData => '正在加载编辑器数据';
+
+  @override
+  String localizedTextExtractedCount(int idCount, int languageCount) {
+    return '已提取 $idCount 个 ID，涵盖 $languageCount 种语言';
+  }
 }

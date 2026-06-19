@@ -1,14 +1,11 @@
 {
   "@@locale": "es",
-
   "appTitle": "Editor de partidas guardadas de Gothic Remake",
   "appLogoSemanticLabel": "Logotipo de goresave",
-
   "zoomTooltip": "Pulsa Ctrl +/- para acercar o alejar",
   "switchToLightMode": "Cambiar al modo claro",
   "switchToDarkMode": "Cambiar al modo oscuro",
   "about": "Acerca de",
-
   "tabOverview": "Resumen",
   "tabPlayer": "Personaje",
   "tabInventory": "Inventario",
@@ -16,7 +13,6 @@
   "tabAllData": "Todos los datos",
   "tabBackups": "Copias de seguridad",
   "tabSettings": "Ajustes",
-
   "reset": "Restablecer",
   "save": "Guardar",
   "saveWithCount": "Guardar ({count})",
@@ -26,7 +22,6 @@
   "close": "Cerrar",
   "add": "Añadir",
   "browse": "Examinar",
-
   "noSavFilesFound": "No se encontraron archivos .sav",
   "profile": "Perfil",
   "profileWithSaves": "{name} ({count} partidas)",
@@ -35,16 +30,13 @@
   "discardUnsavedChangesTitle": "¿Descartar los cambios sin guardar?",
   "rescanDiscardBody": "Al volver a examinar se recargan todas las partidas y se descartan tus {count} {count, plural, =1{cambio sin guardar} other{cambios sin guardar}}.",
   "discardAndRescan": "Descartar y volver a examinar",
-
   "chapterLabel": "Capítulo {id}",
   "quickSave": "Guardado rápido",
   "autoSave": "Guardado automático",
   "manualSave": "Guardado manual",
-
   "errorTitle": "Error",
   "selectASaveTitle": "Selecciona una partida",
   "selectASaveBody": "Los detalles de la partida aparecerán aquí.",
-
   "diagnosticsTitle": "Diagnóstico y detalles",
   "diagnosticsSubtitle": "Inspección de formato (solo lectura)",
   "metricFormat": "Formato",
@@ -63,17 +55,13 @@
   "metricPrivateStrings": "Cadenas privadas",
   "metricSha1": "SHA-1",
   "bytesValue": "{count} bytes",
-
   "inspectionJsonTitle": "JSON de inspección",
   "inspectionJsonSubtitle": "Datos de inspección sin procesar de la partida",
   "copy": "Copiar",
-
   "savegameFallbackTitle": "Partida guardada",
   "screenshotForSlot": "Captura de {slot}",
-
   "publicSaveName": "Nombre público de la partida",
   "required": "Obligatorio",
-
   "playerLockedBody": "La edición de datos privados del personaje requiere un códec capaz de comprimir.",
   "heroTransform": "Posición del héroe",
   "locationX": "Posición X",
@@ -86,7 +74,6 @@
   "heroAttributes": "Atributos del héroe",
   "attributeBase": "{name} base",
   "attributeCurrent": "{name} actual",
-
   "inventoryTitle": "Inventario",
   "inventoryNeedsDecoded": "Para editar el inventario se necesitan los datos privados decodificados por el códec.",
   "inventoryNoStacks": "No se encontraron pilas de objetos en los datos privados decodificados.",
@@ -104,7 +91,6 @@
   "noItemsMatchQuery": "Ningún objeto coincide con «{query}».",
   "pendingRemovalHidesAll": "La eliminación pendiente oculta todos los objetos: guarda para aplicarla.",
   "categoryWithCount": "{label} ({count})",
-
   "itemCategoryMeleeWeapon": "Armas cuerpo a cuerpo",
   "itemCategoryRangedWeapon": "Armas a distancia",
   "itemCategoryAmmunition": "Munición",
@@ -119,14 +105,12 @@
   "itemCategoryMission": "Objetos de misión",
   "itemCategoryKey": "Llaves",
   "itemCategoryOther": "Otros",
-
   "count": "Cantidad",
   "min1": "Mín. 1",
   "countTimes": "×{count}",
   "deleteEquippedTooltip": "No se puede eliminar: es probable que este objeto esté equipado o asignado a un acceso rápido",
   "removeBlockedTooltip": "Guarda o restablece primero los cambios pendientes del inventario: una adición o eliminación debe guardarse por separado",
   "removeItemFromInventory": "Quitar objeto del inventario",
-
   "progressionLockedBody": "Los datos de progreso necesitan los datos privados decodificados por el códec.",
   "progressionNeedsTyped": "Los datos de progreso estructurados requieren una partida totalmente decodificada con un análisis tipado verificado.",
   "sectionQuests": "Misiones",
@@ -150,7 +134,6 @@
   "questStateSucceeded": "Completada",
   "questStateFailed": "Fallida",
   "questStateUnknown": "desconocido",
-
   "dialogKnowledge": "Conocimiento de diálogos",
   "resetKnowledgeChanges": "Restablecer cambios de conocimientos",
   "addNpc": "Añadir NPC",
@@ -168,7 +151,6 @@
   "removeEntry": "Quitar entrada",
   "selectNpcFromList": "Selecciona un NPC de la lista",
   "characterWithCount": "{name} ({count})",
-
   "memoryEvents": "Eventos de memoria",
   "searchCharacters": "Buscar personajes",
   "eventsForCharacter": "Eventos — {name}",
@@ -182,7 +164,6 @@
   "duplicateMemoryEventTitle": "¿Duplicar el evento de memoria?",
   "duplicateMemoryEventBody": "¿Quieres duplicar este evento de memoria? Primero se crea una copia de seguridad.",
   "selectCharacterFromList": "Selecciona un personaje de la lista",
-
   "allDataLockedBody": "El explorador completo de propiedades necesita los datos privados decodificados por el códec.",
   "allDataDescription": "Busca cualquier propiedad tipada por nombre o ruta. Los valores numéricos, las cadenas, las enumeraciones y las rutas de objeto son editables; las estructuras se muestran de solo lectura por ahora.",
   "searchPropertiesLabel": "Buscar propiedades (vacío = mostrar todo); p. ej. Health, GameTime",
@@ -194,7 +175,6 @@
   "noMatchesTitle": "Sin coincidencias",
   "noMatchesBody": "Ninguna ruta de propiedad contenía todos esos términos.",
   "value": "Valor",
-
   "backupsTitle": "Copias de seguridad",
   "refreshBackups": "Actualizar copias de seguridad",
   "noBackupsTitle": "Sin copias de seguridad",
@@ -208,7 +188,6 @@
   "backupFactStatus": "Estado",
   "backupFactSha1": "SHA-1",
   "restoreBackupTooltip": "Restaurar {fileName}",
-
   "appearanceTitle": "Apariencia",
   "theme": "Tema",
   "themeLight": "Claro",
@@ -218,12 +197,10 @@
   "resetZoomTooltip": "Restablecer el zoom (Ctrl+0)",
   "zoomTip": "Consejo: Ctrl + / Ctrl - cambia el zoom en cualquier parte de la aplicación.",
   "language": "Idioma",
-
   "updatesTitle": "Actualizaciones",
   "checkForUpdatesAutomatically": "Buscar actualizaciones automáticamente",
   "checkForUpdatesNow": "Buscar actualizaciones ahora",
   "updatesPortableNotice": "Las actualizaciones solo están disponibles para las versiones instaladas. La versión portátil debe actualizarse manualmente.",
-
   "gameTextTitle": "Texto del juego",
   "gameTextExtractedWithCounts": "Extraído: {ids} identificadores en {languages} idiomas.",
   "gameTextExtracted": "El texto localizado del juego está extraído.",
@@ -237,10 +214,8 @@
   "extractionComplete": "Extracción completada",
   "extractionFailed": "La extracción falló",
   "localizationCacheFileType": "Caché de localización",
-
   "savegameDirectoryTitle": "Carpeta de partidas guardadas",
   "folder": "Carpeta",
-
   "codecTitle": "Códec",
   "check": "Comprobar",
   "roundtrip": "Ida y vuelta",
@@ -254,12 +229,10 @@
   "codecBackendLine": "Backend: {backend}",
   "yes": "sí",
   "no": "no",
-
   "aboutSubtitle": "Editor de partidas guardadas de Gothic Remake",
   "aboutVersion": "Versión {version} ({sha})",
   "aboutCopyright": "© 2026 colaboradores de goresave",
   "aboutLicense": "Distribuido bajo la licencia MIT.",
-
   "difficultyTitle": "Dificultad — {profile}",
   "difficultyNoProfile": "Sin perfil",
   "difficultyNoDifficulty": "Sin dificultad",
@@ -281,7 +254,6 @@
   "levelProgression": "Progreso",
   "difficultyAppliesToAllSaves": "La dificultad se aplica a todas las partidas de este perfil.",
   "savingDifficultyFailed": "No se pudo guardar la dificultad.",
-
   "addItemDialogTitle": "Añadir objeto",
   "searchItems": "Buscar objetos",
   "failedToLoadCatalog": "No se pudo cargar el catálogo: {error}",
@@ -289,18 +261,15 @@
   "noItemsMatch": "Ningún objeto coincide",
   "countMustBeAtLeast1": "Debe ser ≥ 1",
   "countMustBeAtMost": "Debe ser ≤ {max}",
-
   "addNpcDialogTitle": "Añadir NPC",
   "noNpcsAvailableToAdd": "No hay NPC disponibles para añadir",
   "noNpcsMatch": "Ningún NPC coincide",
   "categoryAll": "Todos",
   "allWithCount": "Todos ({count})",
-
   "addKnowledgeEntryDialogTitle": "Añadir entrada de conocimiento",
   "searchEntries": "Buscar entradas",
   "noKnowledgeEntriesAvailableToAdd": "No hay entradas de conocimiento disponibles para añadir",
   "noEntriesMatch": "Ninguna entrada coincide",
-
   "heroGroupMainStats": "Estadísticas principales",
   "heroGroupCombatSkills": "Habilidades de combate",
   "heroGroupResistances": "Resistencias",
@@ -309,6 +278,6 @@
   "heroEntryHeroTransform": "Posición del héroe",
   "attributeEmpty": "{name} está vacío: introduce un valor o restaura el original antes de guardar.",
   "attributeInvalidNumber": "Número no válido para {name}: «{text}»",
-
-  "loadingEditorData": "Cargando los datos del editor"
+  "loadingEditorData": "Cargando los datos del editor",
+  "localizedTextExtractedCount": "{idCount} ID extraídos en {languageCount} idiomas"
 }

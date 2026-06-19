@@ -59,11 +59,15 @@ class LocalizationExtractResult {
     required this.success,
     this.notFound = false,
     this.message,
+    this.idCount,
+    this.languageCount,
   });
 
   final bool success;
   final bool notFound;
   final String? message;
+  final int? idCount;
+  final int? languageCount;
 }
 
 /// Wraps the three localized-text core commands (`loc_status`, `loc_find`,
@@ -152,10 +156,13 @@ class LocalizationController extends StateNotifier<LocalizationState> {
       );
       final idCount = (meta?['id_count'] as num?)?.toInt() ?? 0;
       final languageCount = (meta?['languages'] as List?)?.length ?? 0;
-      final message =
-          'Extracted $idCount ids across $languageCount languages';
-      state = state.copyWith(message: message);
-      return LocalizationExtractResult(success: true, message: message);
+      // Return the counts and let the UI format them with AppLocalizations,
+      // rather than embedding an English sentence here.
+      return LocalizationExtractResult(
+        success: true,
+        idCount: idCount,
+        languageCount: languageCount,
+      );
     } catch (error) {
       final message = 'Extraction failed: $error';
       state = state.copyWith(phase: LocalizationPhase.error, message: message);

@@ -91,7 +91,6 @@
   "noItemsMatchQuery": "没有物品匹配“{query}”。",
   "pendingRemovalHidesAll": "待处理的移除隐藏了所有物品 — 请保存以应用。",
   "categoryWithCount": "{label}（{count}）",
-
   "itemCategoryMeleeWeapon": "近战武器",
   "itemCategoryRangedWeapon": "远程武器",
   "itemCategoryAmmunition": "弹药",
@@ -106,7 +105,6 @@
   "itemCategoryMission": "任务物品",
   "itemCategoryKey": "钥匙",
   "itemCategoryOther": "其他",
-
   "count": "数量",
   "min1": "最少 1",
   "countTimes": "×{count}",
@@ -280,5 +278,6 @@
   "heroEntryHeroTransform": "主角变换",
   "attributeEmpty": "{name} 为空 — 请输入一个值，或在保存前恢复原始值。",
   "attributeInvalidNumber": "{name} 的数字无效：“{text}”",
-  "loadingEditorData": "正在加载编辑器数据"
+  "loadingEditorData": "正在加载编辑器数据",
+  "localizedTextExtractedCount": "已提取 {idCount} 个 ID，涵盖 {languageCount} 种语言"
 }

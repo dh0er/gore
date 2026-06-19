@@ -48,7 +48,15 @@ Future<void> runLocalizationExtractFlow(
 
   final messenger = ScaffoldMessenger.of(context);
   final l10n = AppLocalizations.of(context);
-  final message = result.message ??
-      (result.success ? l10n.extractionComplete : l10n.extractionFailed);
+  final String message;
+  if (result.success) {
+    final ids = result.idCount;
+    final langs = result.languageCount;
+    message = (ids != null && langs != null)
+        ? l10n.localizedTextExtractedCount(ids, langs)
+        : l10n.extractionComplete;
+  } else {
+    message = result.message ?? l10n.extractionFailed;
+  }
   messenger.showSnackBar(SnackBar(content: Text(message)));
 }

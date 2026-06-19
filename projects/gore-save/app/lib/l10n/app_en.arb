@@ -1,14 +1,11 @@
 {
   "@@locale": "en",
-
   "appTitle": "Gothic Remake Savegame Editor",
   "appLogoSemanticLabel": "goresave logo",
-
   "zoomTooltip": "Press Ctrl +/- to zoom in/out",
   "switchToLightMode": "Switch to light mode",
   "switchToDarkMode": "Switch to dark mode",
   "about": "About",
-
   "tabOverview": "Overview",
   "tabPlayer": "Player",
   "tabInventory": "Inventory",
@@ -16,13 +13,14 @@
   "tabAllData": "All data",
   "tabBackups": "Backups",
   "tabSettings": "Settings",
-
   "reset": "Reset",
   "save": "Save",
   "saveWithCount": "Save ({count})",
   "@saveWithCount": {
     "placeholders": {
-      "count": { "type": "int" }
+      "count": {
+        "type": "int"
+      }
     }
   },
   "ok": "OK",
@@ -31,14 +29,17 @@
   "close": "Close",
   "add": "Add",
   "browse": "Browse",
-
   "noSavFilesFound": "No .sav files found",
   "profile": "Profile",
   "profileWithSaves": "{name} ({count} saves)",
   "@profileWithSaves": {
     "placeholders": {
-      "name": { "type": "String" },
-      "count": { "type": "int" }
+      "name": {
+        "type": "String"
+      },
+      "count": {
+        "type": "int"
+      }
     }
   },
   "switchProfile": "Switch profile",
@@ -47,25 +48,26 @@
   "rescanDiscardBody": "Rescanning reloads every save and discards your {count} unsaved {count, plural, =1{change} other{changes}}.",
   "@rescanDiscardBody": {
     "placeholders": {
-      "count": { "type": "int" }
+      "count": {
+        "type": "int"
+      }
     }
   },
   "discardAndRescan": "Discard and rescan",
-
   "chapterLabel": "Chapter {id}",
   "@chapterLabel": {
     "placeholders": {
-      "id": { "type": "Object" }
+      "id": {
+        "type": "Object"
+      }
     }
   },
   "quickSave": "Quick save",
   "autoSave": "Auto save",
   "manualSave": "Manual save",
-
   "errorTitle": "Error",
   "selectASaveTitle": "Select a save",
   "selectASaveBody": "The save details will appear here.",
-
   "diagnosticsTitle": "Diagnostics & details",
   "diagnosticsSubtitle": "Read-only format inspection",
   "metricFormat": "Format",
@@ -86,25 +88,25 @@
   "bytesValue": "{count} bytes",
   "@bytesValue": {
     "placeholders": {
-      "count": { "type": "String" }
+      "count": {
+        "type": "String"
+      }
     }
   },
-
   "inspectionJsonTitle": "Inspection JSON",
   "inspectionJsonSubtitle": "Raw save inspection data",
   "copy": "Copy",
-
   "savegameFallbackTitle": "Savegame",
   "screenshotForSlot": "Screenshot for {slot}",
   "@screenshotForSlot": {
     "placeholders": {
-      "slot": { "type": "String" }
+      "slot": {
+        "type": "String"
+      }
     }
   },
-
   "publicSaveName": "Public save name",
   "required": "Required",
-
   "playerLockedBody": "Private player edits need a compress-ready codec.",
   "heroTransform": "Hero transform",
   "locationX": "Location X",
@@ -118,16 +120,19 @@
   "attributeBase": "{name} base",
   "@attributeBase": {
     "placeholders": {
-      "name": { "type": "String" }
+      "name": {
+        "type": "String"
+      }
     }
   },
   "attributeCurrent": "{name} current",
   "@attributeCurrent": {
     "placeholders": {
-      "name": { "type": "String" }
+      "name": {
+        "type": "String"
+      }
     }
   },
-
   "inventoryTitle": "Inventory",
   "inventoryNeedsDecoded": "Inventory editing needs decoded private payload data from the codec.",
   "inventoryNoStacks": "No item stacks found in the decoded private payload.",
@@ -140,7 +145,9 @@
   "pendingAddSubtitle": "×{count} — pending add (not yet saved)",
   "@pendingAddSubtitle": {
     "placeholders": {
-      "count": { "type": "int" }
+      "count": {
+        "type": "int"
+      }
     }
   },
   "cancelPendingAdd": "Cancel pending add",
@@ -150,18 +157,23 @@
   "noItemsMatchQuery": "No items match \"{query}\".",
   "@noItemsMatchQuery": {
     "placeholders": {
-      "query": { "type": "String" }
+      "query": {
+        "type": "String"
+      }
     }
   },
   "pendingRemovalHidesAll": "The pending removal hides every item — save to apply it.",
   "categoryWithCount": "{label} ({count})",
   "@categoryWithCount": {
     "placeholders": {
-      "label": { "type": "String" },
-      "count": { "type": "int" }
+      "label": {
+        "type": "String"
+      },
+      "count": {
+        "type": "int"
+      }
     }
   },
-
   "itemCategoryMeleeWeapon": "Melee weapons",
   "itemCategoryRangedWeapon": "Ranged weapons",
   "itemCategoryAmmunition": "Ammunition",
@@ -176,19 +188,19 @@
   "itemCategoryMission": "Mission items",
   "itemCategoryKey": "Keys",
   "itemCategoryOther": "Other",
-
   "count": "Count",
   "min1": "Min 1",
   "countTimes": "×{count}",
   "@countTimes": {
     "placeholders": {
-      "count": { "type": "String" }
+      "count": {
+        "type": "String"
+      }
     }
   },
   "deleteEquippedTooltip": "Can't delete: this item is likely equipped or assigned to a hotkey slot",
   "removeBlockedTooltip": "Save or reset your pending inventory changes first — an add or remove must be saved on its own",
   "removeItemFromInventory": "Remove item from inventory",
-
   "progressionLockedBody": "Progression data needs decoded private payload data from the codec.",
   "progressionNeedsTyped": "Structured progression data needs a fully decoded save with a verified typed parse.",
   "sectionQuests": "Quests",
@@ -201,16 +213,26 @@
   "pageOfPages": "Page {page} / {total}",
   "@pageOfPages": {
     "placeholders": {
-      "page": { "type": "int" },
-      "total": { "type": "int" }
+      "page": {
+        "type": "int"
+      },
+      "total": {
+        "type": "int"
+      }
     }
   },
   "rangeOfTotal": "{first}–{last} of {total}",
   "@rangeOfTotal": {
     "placeholders": {
-      "first": { "type": "int" },
-      "last": { "type": "int" },
-      "total": { "type": "int" }
+      "first": {
+        "type": "int"
+      },
+      "last": {
+        "type": "int"
+      },
+      "total": {
+        "type": "int"
+      }
     }
   },
   "perPage": "Per page:",
@@ -220,15 +242,23 @@
   "groupWithCount": "{group} ({count})",
   "@groupWithCount": {
     "placeholders": {
-      "group": { "type": "String" },
-      "count": { "type": "Object" }
+      "group": {
+        "type": "String"
+      },
+      "count": {
+        "type": "Object"
+      }
     }
   },
   "stateLabelWithCount": "{label} {count}",
   "@stateLabelWithCount": {
     "placeholders": {
-      "label": { "type": "String" },
-      "count": { "type": "int" }
+      "label": {
+        "type": "String"
+      },
+      "count": {
+        "type": "int"
+      }
     }
   },
   "questStateNone": "None",
@@ -237,7 +267,6 @@
   "questStateSucceeded": "Succeeded",
   "questStateFailed": "Failed",
   "questStateUnknown": "unknown",
-
   "dialogKnowledge": "Dialog Knowledge",
   "resetKnowledgeChanges": "Reset knowledge changes",
   "addNpc": "Add NPC",
@@ -245,7 +274,9 @@
   "entriesForCharacter": "Entries — {name}",
   "@entriesForCharacter": {
     "placeholders": {
-      "name": { "type": "String" }
+      "name": {
+        "type": "String"
+      }
     }
   },
   "selectNpcToSeeEntries": "Select an NPC to see entries",
@@ -256,13 +287,17 @@
   "duplicateCheckFailed": "Duplicate check failed — try again: {error}",
   "@duplicateCheckFailed": {
     "placeholders": {
-      "error": { "type": "String" }
+      "error": {
+        "type": "String"
+      }
     }
   },
   "pendingAddsCount": "Pending adds ({count})",
   "@pendingAddsCount": {
     "placeholders": {
-      "count": { "type": "int" }
+      "count": {
+        "type": "int"
+      }
     }
   },
   "undoAdd": "Undo add",
@@ -272,17 +307,22 @@
   "characterWithCount": "{name} ({count})",
   "@characterWithCount": {
     "placeholders": {
-      "name": { "type": "String" },
-      "count": { "type": "int" }
+      "name": {
+        "type": "String"
+      },
+      "count": {
+        "type": "int"
+      }
     }
   },
-
   "memoryEvents": "Memory Events",
   "searchCharacters": "Search characters",
   "eventsForCharacter": "Events — {name}",
   "@eventsForCharacter": {
     "placeholders": {
-      "name": { "type": "String" }
+      "name": {
+        "type": "String"
+      }
     }
   },
   "selectCharacterToSeeEvents": "Select a character to see events",
@@ -290,8 +330,12 @@
   "eventSubtitle": "t={time}s  {affected}",
   "@eventSubtitle": {
     "placeholders": {
-      "time": { "type": "String" },
-      "affected": { "type": "String" }
+      "time": {
+        "type": "String"
+      },
+      "affected": {
+        "type": "String"
+      }
     }
   },
   "removeEvent": "Remove event",
@@ -301,7 +345,6 @@
   "duplicateMemoryEventTitle": "Duplicate memory event?",
   "duplicateMemoryEventBody": "Duplicate this memory event? A backup is written first.",
   "selectCharacterFromList": "Select a character from the list",
-
   "allDataLockedBody": "The full property browser needs decoded private payload data from the codec.",
   "allDataDescription": "Search every typed property by name or path. Scalars, strings, enums and object paths are editable; structs are shown read-only for now.",
   "searchPropertiesLabel": "Search properties (empty = list everything) — e.g. Health, GameTime",
@@ -313,7 +356,6 @@
   "noMatchesTitle": "No matches",
   "noMatchesBody": "No property path contained all of those terms.",
   "value": "Value",
-
   "backupsTitle": "Backups",
   "refreshBackups": "Refresh backups",
   "noBackupsTitle": "No backups",
@@ -329,10 +371,11 @@
   "restoreBackupTooltip": "Restore {fileName}",
   "@restoreBackupTooltip": {
     "placeholders": {
-      "fileName": { "type": "String" }
+      "fileName": {
+        "type": "String"
+      }
     }
   },
-
   "appearanceTitle": "Appearance",
   "theme": "Theme",
   "themeLight": "Light",
@@ -342,18 +385,20 @@
   "resetZoomTooltip": "Reset zoom (Ctrl+0)",
   "zoomTip": "Tip: Ctrl + / Ctrl - changes the zoom anywhere in the app.",
   "language": "Language",
-
   "updatesTitle": "Updates",
   "checkForUpdatesAutomatically": "Check for updates automatically",
   "checkForUpdatesNow": "Check for updates now",
   "updatesPortableNotice": "Updates are available only for installed builds. The portable version must be updated manually.",
-
   "gameTextTitle": "Game text",
   "gameTextExtractedWithCounts": "Extracted: {ids} ids across {languages} languages.",
   "@gameTextExtractedWithCounts": {
     "placeholders": {
-      "ids": { "type": "int" },
-      "languages": { "type": "int" }
+      "ids": {
+        "type": "int"
+      },
+      "languages": {
+        "type": "int"
+      }
     }
   },
   "gameTextExtracted": "Localized game text is extracted.",
@@ -367,10 +412,8 @@
   "extractionComplete": "Extraction complete",
   "extractionFailed": "Extraction failed",
   "localizationCacheFileType": "Localization cache",
-
   "savegameDirectoryTitle": "Savegame directory",
   "folder": "Folder",
-
   "codecTitle": "Codec",
   "check": "Check",
   "roundtrip": "Roundtrip",
@@ -382,40 +425,52 @@
   "codecStatusLine": "Status: {status}",
   "@codecStatusLine": {
     "placeholders": {
-      "status": { "type": "String" }
+      "status": {
+        "type": "String"
+      }
     }
   },
   "codecCapabilityLine": "Decompress: {decompress} | Compress: {compress}",
   "@codecCapabilityLine": {
     "placeholders": {
-      "decompress": { "type": "String" },
-      "compress": { "type": "String" }
+      "decompress": {
+        "type": "String"
+      },
+      "compress": {
+        "type": "String"
+      }
     }
   },
   "codecBackendLine": "Backend: {backend}",
   "@codecBackendLine": {
     "placeholders": {
-      "backend": { "type": "String" }
+      "backend": {
+        "type": "String"
+      }
     }
   },
   "yes": "yes",
   "no": "no",
-
   "aboutSubtitle": "Gothic Remake Savegame Editor",
   "aboutVersion": "Version {version} ({sha})",
   "@aboutVersion": {
     "placeholders": {
-      "version": { "type": "String" },
-      "sha": { "type": "String" }
+      "version": {
+        "type": "String"
+      },
+      "sha": {
+        "type": "String"
+      }
     }
   },
   "aboutCopyright": "© 2026 goresave contributors",
   "aboutLicense": "Licensed under the MIT License.",
-
   "difficultyTitle": "Difficulty — {profile}",
   "@difficultyTitle": {
     "placeholders": {
-      "profile": { "type": "String" }
+      "profile": {
+        "type": "String"
+      }
     }
   },
   "difficultyNoProfile": "No profile",
@@ -432,7 +487,9 @@
   "unrecognisedPreset": "Stored preset is unrecognised ({preset}). You can still save Flow Helper / Permadeath changes, or pick a preset above to overwrite it.",
   "@unrecognisedPreset": {
     "placeholders": {
-      "preset": { "type": "Object" }
+      "preset": {
+        "type": "Object"
+      }
     }
   },
   "closeCombatFlowHelper": "Close Combat Flow Helper",
@@ -443,13 +500,14 @@
   "levelProgression": "Progression",
   "difficultyAppliesToAllSaves": "Difficulty applies to all saves in this profile.",
   "savingDifficultyFailed": "Saving difficulty failed.",
-
   "addItemDialogTitle": "Add item",
   "searchItems": "Search items",
   "failedToLoadCatalog": "Failed to load catalog: {error}",
   "@failedToLoadCatalog": {
     "placeholders": {
-      "error": { "type": "String" }
+      "error": {
+        "type": "String"
+      }
     }
   },
   "noItemsAvailableToAdd": "No items available to add",
@@ -458,10 +516,11 @@
   "countMustBeAtMost": "Must be ≤ {max}",
   "@countMustBeAtMost": {
     "placeholders": {
-      "max": { "type": "int" }
+      "max": {
+        "type": "int"
+      }
     }
   },
-
   "addNpcDialogTitle": "Add NPC",
   "noNpcsAvailableToAdd": "No NPCs available to add",
   "noNpcsMatch": "No NPCs match",
@@ -469,15 +528,15 @@
   "allWithCount": "All ({count})",
   "@allWithCount": {
     "placeholders": {
-      "count": { "type": "int" }
+      "count": {
+        "type": "int"
+      }
     }
   },
-
   "addKnowledgeEntryDialogTitle": "Add knowledge entry",
   "searchEntries": "Search entries",
   "noKnowledgeEntriesAvailableToAdd": "No knowledge entries available to add",
   "noEntriesMatch": "No entries match",
-
   "heroGroupMainStats": "Main stats",
   "heroGroupCombatSkills": "Combat skills",
   "heroGroupResistances": "Resistances",
@@ -487,16 +546,32 @@
   "attributeEmpty": "{name} is empty — enter a value or restore the original before saving.",
   "@attributeEmpty": {
     "placeholders": {
-      "name": { "type": "String" }
+      "name": {
+        "type": "String"
+      }
     }
   },
   "attributeInvalidNumber": "Invalid number for {name}: \"{text}\"",
   "@attributeInvalidNumber": {
     "placeholders": {
-      "name": { "type": "String" },
-      "text": { "type": "String" }
+      "name": {
+        "type": "String"
+      },
+      "text": {
+        "type": "String"
+      }
     }
   },
-
-  "loadingEditorData": "Loading editor data"
+  "loadingEditorData": "Loading editor data",
+  "localizedTextExtractedCount": "Extracted {idCount} ids across {languageCount} languages",
+  "@localizedTextExtractedCount": {
+    "placeholders": {
+      "idCount": {
+        "type": "int"
+      },
+      "languageCount": {
+        "type": "int"
+      }
+    }
+  }
 }

@@ -1,14 +1,11 @@
 {
   "@@locale": "ru",
-
   "appTitle": "Редактор сохранений Gothic Remake",
   "appLogoSemanticLabel": "Логотип goresave",
-
   "zoomTooltip": "Нажмите Ctrl +/- для увеличения или уменьшения",
   "switchToLightMode": "Переключить на светлую тему",
   "switchToDarkMode": "Переключить на тёмную тему",
   "about": "О программе",
-
   "tabOverview": "Обзор",
   "tabPlayer": "Персонаж",
   "tabInventory": "Инвентарь",
@@ -16,7 +13,6 @@
   "tabAllData": "Все данные",
   "tabBackups": "Резервные копии",
   "tabSettings": "Настройки",
-
   "reset": "Сбросить",
   "save": "Сохранить",
   "saveWithCount": "Сохранить ({count})",
@@ -26,7 +22,6 @@
   "close": "Закрыть",
   "add": "Добавить",
   "browse": "Обзор",
-
   "noSavFilesFound": "Файлы .sav не найдены",
   "profile": "Профиль",
   "profileWithSaves": "{name} (сохранений: {count})",
@@ -35,16 +30,13 @@
   "discardUnsavedChangesTitle": "Отменить несохранённые изменения?",
   "rescanDiscardBody": "Повторное сканирование перезагрузит все сохранения и отменит {count, plural, =1{ваше {count} несохранённое изменение} other{ваши несохранённые изменения ({count})}}.",
   "discardAndRescan": "Отменить и пересканировать",
-
   "chapterLabel": "Глава {id}",
   "quickSave": "Быстрое сохранение",
   "autoSave": "Автосохранение",
   "manualSave": "Ручное сохранение",
-
   "errorTitle": "Ошибка",
   "selectASaveTitle": "Выберите сохранение",
   "selectASaveBody": "Здесь появятся сведения о сохранении.",
-
   "diagnosticsTitle": "Диагностика и сведения",
   "diagnosticsSubtitle": "Просмотр формата (только чтение)",
   "metricFormat": "Формат",
@@ -63,17 +55,13 @@
   "metricPrivateStrings": "Приватные строки",
   "metricSha1": "SHA-1",
   "bytesValue": "{count} байт",
-
   "inspectionJsonTitle": "JSON проверки",
   "inspectionJsonSubtitle": "Необработанные данные проверки сохранения",
   "copy": "Копировать",
-
   "savegameFallbackTitle": "Сохранение",
   "screenshotForSlot": "Снимок экрана для {slot}",
-
   "publicSaveName": "Публичное имя сохранения",
   "required": "Обязательно",
-
   "playerLockedBody": "Для редактирования приватных данных персонажа нужен кодек с поддержкой сжатия.",
   "heroTransform": "Положение героя",
   "locationX": "Координата X",
@@ -86,7 +74,6 @@
   "heroAttributes": "Атрибуты героя",
   "attributeBase": "{name} (базовое)",
   "attributeCurrent": "{name} (текущее)",
-
   "inventoryTitle": "Инвентарь",
   "inventoryNeedsDecoded": "Для редактирования инвентаря нужны декодированные приватные данные из кодека.",
   "inventoryNoStacks": "В декодированных приватных данных не найдено стопок предметов.",
@@ -104,7 +91,6 @@
   "noItemsMatchQuery": "Ни один предмет не соответствует «{query}».",
   "pendingRemovalHidesAll": "Ожидающее удаление скрывает все предметы — сохраните, чтобы применить его.",
   "categoryWithCount": "{label} ({count})",
-
   "itemCategoryMeleeWeapon": "Оружие ближнего боя",
   "itemCategoryRangedWeapon": "Дальнобойное оружие",
   "itemCategoryAmmunition": "Боеприпасы",
@@ -119,14 +105,12 @@
   "itemCategoryMission": "Квестовые предметы",
   "itemCategoryKey": "Ключи",
   "itemCategoryOther": "Прочее",
-
   "count": "Количество",
   "min1": "Мин. 1",
   "countTimes": "×{count}",
   "deleteEquippedTooltip": "Нельзя удалить: этот предмет, вероятно, надет или назначен на ячейку быстрого доступа",
   "removeBlockedTooltip": "Сначала сохраните или сбросьте ожидающие изменения инвентаря — добавление или удаление нужно сохранять отдельно",
   "removeItemFromInventory": "Убрать предмет из инвентаря",
-
   "progressionLockedBody": "Для данных прогресса нужны декодированные приватные данные из кодека.",
   "progressionNeedsTyped": "Для структурированных данных прогресса нужно полностью декодированное сохранение с подтверждённым типизированным разбором.",
   "sectionQuests": "Задания",
@@ -150,7 +134,6 @@
   "questStateSucceeded": "Выполнено",
   "questStateFailed": "Провалено",
   "questStateUnknown": "неизвестно",
-
   "dialogKnowledge": "Знания из диалогов",
   "resetKnowledgeChanges": "Сбросить изменения знаний",
   "addNpc": "Добавить NPC",
@@ -168,7 +151,6 @@
   "removeEntry": "Удалить запись",
   "selectNpcFromList": "Выберите NPC из списка",
   "characterWithCount": "{name} ({count})",
-
   "memoryEvents": "События памяти",
   "searchCharacters": "Поиск персонажей",
   "eventsForCharacter": "События — {name}",
@@ -182,7 +164,6 @@
   "duplicateMemoryEventTitle": "Дублировать событие памяти?",
   "duplicateMemoryEventBody": "Дублировать это событие памяти? Сначала будет создана резервная копия.",
   "selectCharacterFromList": "Выберите персонажа из списка",
-
   "allDataLockedBody": "Для полного обозревателя свойств нужны декодированные приватные данные из кодека.",
   "allDataDescription": "Ищите любое типизированное свойство по имени или пути. Числа, строки, перечисления и пути объектов доступны для редактирования; структуры пока отображаются только для чтения.",
   "searchPropertiesLabel": "Поиск свойств (пусто = показать всё) — например, Health, GameTime",
@@ -194,7 +175,6 @@
   "noMatchesTitle": "Совпадений нет",
   "noMatchesBody": "Ни один путь свойства не содержал всех этих терминов.",
   "value": "Значение",
-
   "backupsTitle": "Резервные копии",
   "refreshBackups": "Обновить резервные копии",
   "noBackupsTitle": "Резервных копий нет",
@@ -208,7 +188,6 @@
   "backupFactStatus": "Состояние",
   "backupFactSha1": "SHA-1",
   "restoreBackupTooltip": "Восстановить {fileName}",
-
   "appearanceTitle": "Внешний вид",
   "theme": "Тема",
   "themeLight": "Светлая",
@@ -218,12 +197,10 @@
   "resetZoomTooltip": "Сбросить масштаб (Ctrl+0)",
   "zoomTip": "Совет: Ctrl + / Ctrl - меняет масштаб в любом месте приложения.",
   "language": "Язык",
-
   "updatesTitle": "Обновления",
   "checkForUpdatesAutomatically": "Проверять обновления автоматически",
   "checkForUpdatesNow": "Проверить обновления сейчас",
   "updatesPortableNotice": "Обновления доступны только для установленных сборок. Портативную версию нужно обновлять вручную.",
-
   "gameTextTitle": "Текст игры",
   "gameTextExtractedWithCounts": "Извлечено: {ids} идентификаторов на {languages} языках.",
   "gameTextExtracted": "Локализованный текст игры извлечён.",
@@ -237,10 +214,8 @@
   "extractionComplete": "Извлечение завершено",
   "extractionFailed": "Извлечение не удалось",
   "localizationCacheFileType": "Кеш локализации",
-
   "savegameDirectoryTitle": "Папка сохранений",
   "folder": "Папка",
-
   "codecTitle": "Кодек",
   "check": "Проверить",
   "roundtrip": "Полный цикл",
@@ -254,12 +229,10 @@
   "codecBackendLine": "Бэкенд: {backend}",
   "yes": "да",
   "no": "нет",
-
   "aboutSubtitle": "Редактор сохранений Gothic Remake",
   "aboutVersion": "Версия {version} ({sha})",
   "aboutCopyright": "© 2026 участники проекта goresave",
   "aboutLicense": "Распространяется по лицензии MIT.",
-
   "difficultyTitle": "Сложность — {profile}",
   "difficultyNoProfile": "Нет профиля",
   "difficultyNoDifficulty": "Нет сложности",
@@ -281,7 +254,6 @@
   "levelProgression": "Прогресс",
   "difficultyAppliesToAllSaves": "Сложность применяется ко всем сохранениям этого профиля.",
   "savingDifficultyFailed": "Не удалось сохранить сложность.",
-
   "addItemDialogTitle": "Добавить предмет",
   "searchItems": "Поиск предметов",
   "failedToLoadCatalog": "Не удалось загрузить каталог: {error}",
@@ -289,18 +261,15 @@
   "noItemsMatch": "Нет подходящих предметов",
   "countMustBeAtLeast1": "Должно быть ≥ 1",
   "countMustBeAtMost": "Должно быть ≤ {max}",
-
   "addNpcDialogTitle": "Добавить NPC",
   "noNpcsAvailableToAdd": "Нет NPC для добавления",
   "noNpcsMatch": "Нет подходящих NPC",
   "categoryAll": "Все",
   "allWithCount": "Все ({count})",
-
   "addKnowledgeEntryDialogTitle": "Добавить запись знаний",
   "searchEntries": "Поиск записей",
   "noKnowledgeEntriesAvailableToAdd": "Нет записей знаний для добавления",
   "noEntriesMatch": "Нет подходящих записей",
-
   "heroGroupMainStats": "Основные характеристики",
   "heroGroupCombatSkills": "Боевые навыки",
   "heroGroupResistances": "Сопротивления",
@@ -309,6 +278,6 @@
   "heroEntryHeroTransform": "Положение героя",
   "attributeEmpty": "{name} не заполнено — введите значение или восстановите исходное перед сохранением.",
   "attributeInvalidNumber": "Недопустимое число для {name}: «{text}»",
-
-  "loadingEditorData": "Загрузка данных редактора"
+  "loadingEditorData": "Загрузка данных редактора",
+  "localizedTextExtractedCount": "Извлечено {idCount} идентификаторов на {languageCount} языках"
 }

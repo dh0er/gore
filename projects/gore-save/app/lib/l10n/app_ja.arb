@@ -1,14 +1,11 @@
 {
   "@@locale": "ja",
-
   "appTitle": "Gothic Remake セーブデータエディター",
   "appLogoSemanticLabel": "goresave ロゴ",
-
   "zoomTooltip": "Ctrl +/- で拡大・縮小",
   "switchToLightMode": "ライトモードに切り替え",
   "switchToDarkMode": "ダークモードに切り替え",
   "about": "このアプリについて",
-
   "tabOverview": "概要",
   "tabPlayer": "プレイヤー",
   "tabInventory": "インベントリ",
@@ -16,7 +13,6 @@
   "tabAllData": "全データ",
   "tabBackups": "バックアップ",
   "tabSettings": "設定",
-
   "reset": "リセット",
   "save": "保存",
   "saveWithCount": "保存（{count}）",
@@ -26,7 +22,6 @@
   "close": "閉じる",
   "add": "追加",
   "browse": "参照",
-
   "noSavFilesFound": ".sav ファイルが見つかりません",
   "profile": "プロファイル",
   "profileWithSaves": "{name}（セーブ {count} 件）",
@@ -35,16 +30,13 @@
   "discardUnsavedChangesTitle": "未保存の変更を破棄しますか？",
   "rescanDiscardBody": "再スキャンするとすべてのセーブが読み込み直され、未保存の{count}件の{count, plural, =1{変更} other{変更}}が破棄されます。",
   "discardAndRescan": "破棄して再スキャン",
-
   "chapterLabel": "第 {id} 章",
   "quickSave": "クイックセーブ",
   "autoSave": "オートセーブ",
   "manualSave": "手動セーブ",
-
   "errorTitle": "エラー",
   "selectASaveTitle": "セーブを選択",
   "selectASaveBody": "セーブの詳細がここに表示されます。",
-
   "diagnosticsTitle": "診断と詳細",
   "diagnosticsSubtitle": "読み取り専用のフォーマット検査",
   "metricFormat": "フォーマット",
@@ -63,17 +55,13 @@
   "metricPrivateStrings": "プライベート文字列",
   "metricSha1": "SHA-1",
   "bytesValue": "{count} バイト",
-
   "inspectionJsonTitle": "検査 JSON",
   "inspectionJsonSubtitle": "生のセーブ検査データ",
   "copy": "コピー",
-
   "savegameFallbackTitle": "セーブデータ",
   "screenshotForSlot": "{slot} のスクリーンショット",
-
   "publicSaveName": "公開セーブ名",
   "required": "必須",
-
   "playerLockedBody": "プライベートプレイヤーの編集には圧縮対応のコーデックが必要です。",
   "heroTransform": "ヒーローのトランスフォーム",
   "locationX": "位置 X",
@@ -86,7 +74,6 @@
   "heroAttributes": "ヒーローの属性",
   "attributeBase": "{name} 基本値",
   "attributeCurrent": "{name} 現在値",
-
   "inventoryTitle": "インベントリ",
   "inventoryNeedsDecoded": "インベントリの編集には、コーデックでデコードされたプライベートペイロードデータが必要です。",
   "inventoryNoStacks": "デコードされたプライベートペイロードにアイテムスタックが見つかりません。",
@@ -104,7 +91,6 @@
   "noItemsMatchQuery": "「{query}」に一致するアイテムはありません。",
   "pendingRemovalHidesAll": "保留中の削除によりすべてのアイテムが非表示になっています — 保存して適用してください。",
   "categoryWithCount": "{label}（{count}）",
-
   "itemCategoryMeleeWeapon": "近接武器",
   "itemCategoryRangedWeapon": "遠隔武器",
   "itemCategoryAmmunition": "弾薬",
@@ -119,14 +105,12 @@
   "itemCategoryMission": "クエストアイテム",
   "itemCategoryKey": "鍵",
   "itemCategoryOther": "その他",
-
   "count": "数量",
   "min1": "最小 1",
   "countTimes": "×{count}",
   "deleteEquippedTooltip": "削除できません: このアイテムは装備中か、ホットキースロットに割り当てられている可能性があります",
   "removeBlockedTooltip": "先に保留中のインベントリ変更を保存またはリセットしてください — 追加と削除は単独で保存する必要があります",
   "removeItemFromInventory": "インベントリからアイテムを削除",
-
   "progressionLockedBody": "進行状況データには、コーデックでデコードされたプライベートペイロードデータが必要です。",
   "progressionNeedsTyped": "構造化された進行状況データには、型付き解析が検証された完全にデコード済みのセーブが必要です。",
   "sectionQuests": "クエスト",
@@ -150,7 +134,6 @@
   "questStateSucceeded": "成功",
   "questStateFailed": "失敗",
   "questStateUnknown": "不明",
-
   "dialogKnowledge": "会話知識",
   "resetKnowledgeChanges": "知識の変更をリセット",
   "addNpc": "NPC を追加",
@@ -168,7 +151,6 @@
   "removeEntry": "エントリを削除",
   "selectNpcFromList": "リストから NPC を選択してください",
   "characterWithCount": "{name}（{count}）",
-
   "memoryEvents": "メモリイベント",
   "searchCharacters": "キャラクターを検索",
   "eventsForCharacter": "イベント — {name}",
@@ -182,7 +164,6 @@
   "duplicateMemoryEventTitle": "メモリイベントを複製しますか？",
   "duplicateMemoryEventBody": "このメモリイベントを複製しますか？ 事前にバックアップが作成されます。",
   "selectCharacterFromList": "リストからキャラクターを選択してください",
-
   "allDataLockedBody": "完全なプロパティブラウザには、コーデックでデコードされたプライベートペイロードデータが必要です。",
   "allDataDescription": "すべての型付きプロパティを名前またはパスで検索できます。スカラー、文字列、列挙型、オブジェクトパスは編集可能です。構造体は現時点では読み取り専用で表示されます。",
   "searchPropertiesLabel": "プロパティを検索（空欄ですべて表示） — 例: Health、GameTime",
@@ -194,7 +175,6 @@
   "noMatchesTitle": "一致なし",
   "noMatchesBody": "それらの語句をすべて含むプロパティパスはありませんでした。",
   "value": "値",
-
   "backupsTitle": "バックアップ",
   "refreshBackups": "バックアップを更新",
   "noBackupsTitle": "バックアップなし",
@@ -208,7 +188,6 @@
   "backupFactStatus": "ステータス",
   "backupFactSha1": "SHA-1",
   "restoreBackupTooltip": "{fileName} を復元",
-
   "appearanceTitle": "外観",
   "theme": "テーマ",
   "themeLight": "ライト",
@@ -218,12 +197,10 @@
   "resetZoomTooltip": "ズームをリセット（Ctrl+0）",
   "zoomTip": "ヒント: アプリ内のどこでも Ctrl + / Ctrl - でズームを変更できます。",
   "language": "言語",
-
   "updatesTitle": "アップデート",
   "checkForUpdatesAutomatically": "自動的にアップデートを確認",
   "checkForUpdatesNow": "今すぐアップデートを確認",
   "updatesPortableNotice": "アップデートはインストール版でのみ利用できます。ポータブル版は手動で更新する必要があります。",
-
   "gameTextTitle": "ゲームテキスト",
   "gameTextExtractedWithCounts": "抽出済み: {languages} 言語にわたり {ids} 件の ID。",
   "gameTextExtracted": "ローカライズされたゲームテキストが抽出されています。",
@@ -237,10 +214,8 @@
   "extractionComplete": "抽出が完了しました",
   "extractionFailed": "抽出に失敗しました",
   "localizationCacheFileType": "ローカライズキャッシュ",
-
   "savegameDirectoryTitle": "セーブデータディレクトリ",
   "folder": "フォルダ",
-
   "codecTitle": "コーデック",
   "check": "チェック",
   "roundtrip": "ラウンドトリップ",
@@ -254,12 +229,10 @@
   "codecBackendLine": "バックエンド: {backend}",
   "yes": "はい",
   "no": "いいえ",
-
   "aboutSubtitle": "Gothic Remake セーブデータエディター",
   "aboutVersion": "バージョン {version}（{sha}）",
   "aboutCopyright": "© 2026 goresave コントリビューター",
   "aboutLicense": "MIT ライセンスの下で提供されています。",
-
   "difficultyTitle": "難易度 — {profile}",
   "difficultyNoProfile": "プロファイルなし",
   "difficultyNoDifficulty": "難易度なし",
@@ -281,7 +254,6 @@
   "levelProgression": "進行",
   "difficultyAppliesToAllSaves": "難易度はこのプロファイルのすべてのセーブに適用されます。",
   "savingDifficultyFailed": "難易度の保存に失敗しました。",
-
   "addItemDialogTitle": "アイテムを追加",
   "searchItems": "アイテムを検索",
   "failedToLoadCatalog": "カタログの読み込みに失敗しました: {error}",
@@ -289,18 +261,15 @@
   "noItemsMatch": "一致するアイテムがありません",
   "countMustBeAtLeast1": "≥ 1 である必要があります",
   "countMustBeAtMost": "≤ {max} である必要があります",
-
   "addNpcDialogTitle": "NPC を追加",
   "noNpcsAvailableToAdd": "追加できる NPC がありません",
   "noNpcsMatch": "一致する NPC がありません",
   "categoryAll": "すべて",
   "allWithCount": "すべて（{count}）",
-
   "addKnowledgeEntryDialogTitle": "知識エントリを追加",
   "searchEntries": "エントリを検索",
   "noKnowledgeEntriesAvailableToAdd": "追加できる知識エントリがありません",
   "noEntriesMatch": "一致するエントリがありません",
-
   "heroGroupMainStats": "主要ステータス",
   "heroGroupCombatSkills": "戦闘スキル",
   "heroGroupResistances": "耐性",
@@ -309,6 +278,6 @@
   "heroEntryHeroTransform": "ヒーローのトランスフォーム",
   "attributeEmpty": "{name} が空です — 値を入力するか、保存前に元の値を復元してください。",
   "attributeInvalidNumber": "{name} の数値が無効です: 「{text}」",
-
-  "loadingEditorData": "エディターデータを読み込み中"
+  "loadingEditorData": "エディターデータを読み込み中",
+  "localizedTextExtractedCount": "{languageCount}言語で{idCount}個のIDを抽出しました"
 }

@@ -1,14 +1,11 @@
 {
   "@@locale": "pl",
-
   "appTitle": "Edytor zapisów gry Gothic Remake",
   "appLogoSemanticLabel": "Logo goresave",
-
   "zoomTooltip": "Naciśnij Ctrl +/-, aby przybliżyć lub oddalić",
   "switchToLightMode": "Przełącz na tryb jasny",
   "switchToDarkMode": "Przełącz na tryb ciemny",
   "about": "O programie",
-
   "tabOverview": "Przegląd",
   "tabPlayer": "Postać",
   "tabInventory": "Ekwipunek",
@@ -16,7 +13,6 @@
   "tabAllData": "Wszystkie dane",
   "tabBackups": "Kopie zapasowe",
   "tabSettings": "Ustawienia",
-
   "reset": "Resetuj",
   "save": "Zapisz",
   "saveWithCount": "Zapisz ({count})",
@@ -26,7 +22,6 @@
   "close": "Zamknij",
   "add": "Dodaj",
   "browse": "Przeglądaj",
-
   "noSavFilesFound": "Nie znaleziono plików .sav",
   "profile": "Profil",
   "profileWithSaves": "{name} (zapisy: {count})",
@@ -35,16 +30,13 @@
   "discardUnsavedChangesTitle": "Odrzucić niezapisane zmiany?",
   "rescanDiscardBody": "Ponowne skanowanie przeładuje wszystkie zapisy i odrzuci {count, plural, =1{Twoją {count} niezapisaną zmianę} other{Twoje niezapisane zmiany ({count})}}.",
   "discardAndRescan": "Odrzuć i przeskanuj ponownie",
-
   "chapterLabel": "Rozdział {id}",
   "quickSave": "Szybki zapis",
   "autoSave": "Autozapis",
   "manualSave": "Zapis ręczny",
-
   "errorTitle": "Błąd",
   "selectASaveTitle": "Wybierz zapis",
   "selectASaveBody": "Szczegóły zapisu pojawią się tutaj.",
-
   "diagnosticsTitle": "Diagnostyka i szczegóły",
   "diagnosticsSubtitle": "Podgląd formatu (tylko do odczytu)",
   "metricFormat": "Format",
@@ -63,17 +55,13 @@
   "metricPrivateStrings": "Ciągi prywatne",
   "metricSha1": "SHA-1",
   "bytesValue": "{count} B",
-
   "inspectionJsonTitle": "JSON inspekcji",
   "inspectionJsonSubtitle": "Surowe dane inspekcji zapisu",
   "copy": "Kopiuj",
-
   "savegameFallbackTitle": "Zapis gry",
   "screenshotForSlot": "Zrzut ekranu dla {slot}",
-
   "publicSaveName": "Publiczna nazwa zapisu",
   "required": "Wymagane",
-
   "playerLockedBody": "Edycja prywatnych danych postaci wymaga kodeka obsługującego kompresję.",
   "heroTransform": "Pozycja bohatera",
   "locationX": "Pozycja X",
@@ -86,7 +74,6 @@
   "heroAttributes": "Atrybuty bohatera",
   "attributeBase": "{name} – bazowa",
   "attributeCurrent": "{name} – bieżąca",
-
   "inventoryTitle": "Ekwipunek",
   "inventoryNeedsDecoded": "Edycja ekwipunku wymaga odkodowanych prywatnych danych z kodeka.",
   "inventoryNoStacks": "Nie znaleziono stosów przedmiotów w odkodowanych danych prywatnych.",
@@ -104,7 +91,6 @@
   "noItemsMatchQuery": "Żaden przedmiot nie pasuje do „{query}”.",
   "pendingRemovalHidesAll": "Oczekujące usunięcie ukrywa wszystkie przedmioty — zapisz, aby je zastosować.",
   "categoryWithCount": "{label} ({count})",
-
   "itemCategoryMeleeWeapon": "Broń biała",
   "itemCategoryRangedWeapon": "Broń dystansowa",
   "itemCategoryAmmunition": "Amunicja",
@@ -119,14 +105,12 @@
   "itemCategoryMission": "Przedmioty zadań",
   "itemCategoryKey": "Klucze",
   "itemCategoryOther": "Inne",
-
   "count": "Liczba",
   "min1": "Min. 1",
   "countTimes": "×{count}",
   "deleteEquippedTooltip": "Nie można usunąć: ten przedmiot jest prawdopodobnie założony lub przypisany do slotu skrótu",
   "removeBlockedTooltip": "Najpierw zapisz lub zresetuj oczekujące zmiany w ekwipunku — dodanie lub usunięcie trzeba zapisać osobno",
   "removeItemFromInventory": "Usuń przedmiot z ekwipunku",
-
   "progressionLockedBody": "Dane postępów wymagają odkodowanych prywatnych danych z kodeka.",
   "progressionNeedsTyped": "Uporządkowane dane postępów wymagają w pełni odkodowanego zapisu ze zweryfikowaną analizą typowaną.",
   "sectionQuests": "Zadania",
@@ -150,7 +134,6 @@
   "questStateSucceeded": "Ukończone",
   "questStateFailed": "Nieudane",
   "questStateUnknown": "nieznany",
-
   "dialogKnowledge": "Wiedza z dialogów",
   "resetKnowledgeChanges": "Resetuj zmiany w wiedzy",
   "addNpc": "Dodaj NPC",
@@ -168,7 +151,6 @@
   "removeEntry": "Usuń wpis",
   "selectNpcFromList": "Wybierz NPC z listy",
   "characterWithCount": "{name} ({count})",
-
   "memoryEvents": "Zdarzenia z pamięci",
   "searchCharacters": "Szukaj postaci",
   "eventsForCharacter": "Zdarzenia — {name}",
@@ -182,7 +164,6 @@
   "duplicateMemoryEventTitle": "Powielić zdarzenie z pamięci?",
   "duplicateMemoryEventBody": "Powielić to zdarzenie z pamięci? Najpierw zostanie utworzona kopia zapasowa.",
   "selectCharacterFromList": "Wybierz postać z listy",
-
   "allDataLockedBody": "Pełna przeglądarka właściwości wymaga odkodowanych prywatnych danych z kodeka.",
   "allDataDescription": "Przeszukuj wszystkie typowane właściwości według nazwy lub ścieżki. Wartości liczbowe, ciągi, wyliczenia i ścieżki obiektów można edytować; struktury są na razie wyświetlane tylko do odczytu.",
   "searchPropertiesLabel": "Szukaj właściwości (puste = pokaż wszystko) — np. Health, GameTime",
@@ -194,7 +175,6 @@
   "noMatchesTitle": "Brak wyników",
   "noMatchesBody": "Żadna ścieżka właściwości nie zawierała wszystkich tych terminów.",
   "value": "Wartość",
-
   "backupsTitle": "Kopie zapasowe",
   "refreshBackups": "Odśwież kopie zapasowe",
   "noBackupsTitle": "Brak kopii zapasowych",
@@ -208,7 +188,6 @@
   "backupFactStatus": "Stan",
   "backupFactSha1": "SHA-1",
   "restoreBackupTooltip": "Przywróć {fileName}",
-
   "appearanceTitle": "Wygląd",
   "theme": "Motyw",
   "themeLight": "Jasny",
@@ -218,12 +197,10 @@
   "resetZoomTooltip": "Resetuj powiększenie (Ctrl+0)",
   "zoomTip": "Wskazówka: Ctrl + / Ctrl - zmienia powiększenie w dowolnym miejscu aplikacji.",
   "language": "Język",
-
   "updatesTitle": "Aktualizacje",
   "checkForUpdatesAutomatically": "Sprawdzaj aktualizacje automatycznie",
   "checkForUpdatesNow": "Sprawdź aktualizacje teraz",
   "updatesPortableNotice": "Aktualizacje są dostępne tylko dla wersji zainstalowanych. Wersję przenośną trzeba aktualizować ręcznie.",
-
   "gameTextTitle": "Tekst gry",
   "gameTextExtractedWithCounts": "Wyodrębniono: {ids} identyfikatorów w {languages} językach.",
   "gameTextExtracted": "Zlokalizowany tekst gry został wyodrębniony.",
@@ -237,10 +214,8 @@
   "extractionComplete": "Wyodrębnianie zakończone",
   "extractionFailed": "Wyodrębnianie nie powiodło się",
   "localizationCacheFileType": "Pamięć podręczna lokalizacji",
-
   "savegameDirectoryTitle": "Folder zapisów gry",
   "folder": "Folder",
-
   "codecTitle": "Kodek",
   "check": "Sprawdź",
   "roundtrip": "Test obiegu",
@@ -254,12 +229,10 @@
   "codecBackendLine": "Backend: {backend}",
   "yes": "tak",
   "no": "nie",
-
   "aboutSubtitle": "Edytor zapisów gry Gothic Remake",
   "aboutVersion": "Wersja {version} ({sha})",
   "aboutCopyright": "© 2026 współtwórcy goresave",
   "aboutLicense": "Udostępniane na licencji MIT.",
-
   "difficultyTitle": "Poziom trudności — {profile}",
   "difficultyNoProfile": "Brak profilu",
   "difficultyNoDifficulty": "Brak poziomu trudności",
@@ -281,7 +254,6 @@
   "levelProgression": "Postępy",
   "difficultyAppliesToAllSaves": "Poziom trudności dotyczy wszystkich zapisów w tym profilu.",
   "savingDifficultyFailed": "Zapisanie poziomu trudności nie powiodło się.",
-
   "addItemDialogTitle": "Dodaj przedmiot",
   "searchItems": "Szukaj przedmiotów",
   "failedToLoadCatalog": "Nie udało się wczytać katalogu: {error}",
@@ -289,18 +261,15 @@
   "noItemsMatch": "Żaden przedmiot nie pasuje",
   "countMustBeAtLeast1": "Musi być ≥ 1",
   "countMustBeAtMost": "Musi być ≤ {max}",
-
   "addNpcDialogTitle": "Dodaj NPC",
   "noNpcsAvailableToAdd": "Brak NPC do dodania",
   "noNpcsMatch": "Żaden NPC nie pasuje",
   "categoryAll": "Wszystkie",
   "allWithCount": "Wszystkie ({count})",
-
   "addKnowledgeEntryDialogTitle": "Dodaj wpis wiedzy",
   "searchEntries": "Szukaj wpisów",
   "noKnowledgeEntriesAvailableToAdd": "Brak wpisów wiedzy do dodania",
   "noEntriesMatch": "Żaden wpis nie pasuje",
-
   "heroGroupMainStats": "Główne statystyki",
   "heroGroupCombatSkills": "Umiejętności bojowe",
   "heroGroupResistances": "Odporności",
@@ -309,6 +278,6 @@
   "heroEntryHeroTransform": "Pozycja bohatera",
   "attributeEmpty": "{name} jest puste — wpisz wartość lub przywróć oryginał przed zapisem.",
   "attributeInvalidNumber": "Nieprawidłowa liczba dla {name}: „{text}”",
-
-  "loadingEditorData": "Wczytywanie danych edytora"
+  "loadingEditorData": "Wczytywanie danych edytora",
+  "localizedTextExtractedCount": "Wyodrębniono {idCount} identyfikatorów w {languageCount} językach"
 }

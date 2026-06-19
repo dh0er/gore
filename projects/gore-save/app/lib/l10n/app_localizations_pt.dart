@@ -953,6 +953,11 @@ class AppLocalizationsPt extends AppLocalizations {
 
   @override
   String get loadingEditorData => 'Carregando os dados do editor';
+
+  @override
+  String localizedTextExtractedCount(int idCount, int languageCount) {
+    return '$idCount IDs extraídos em $languageCount idiomas';
+  }
 }
 
 /// The translations for Portuguese, as used in Brazil (`pt_BR`).
@@ -1904,4 +1909,9 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
 
   @override
   String get loadingEditorData => 'Carregando os dados do editor';
+
+  @override
+  String localizedTextExtractedCount(int idCount, int languageCount) {
+    return '$idCount IDs extraídos em $languageCount idiomas';
+  }
 }

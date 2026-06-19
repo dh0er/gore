@@ -1789,6 +1789,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Loading editor data'**
   String get loadingEditorData;
+
+  /// No description provided for @localizedTextExtractedCount.
+  ///
+  /// In en, this message translates to:
+  /// **'Extracted {idCount} ids across {languageCount} languages'**
+  String localizedTextExtractedCount(int idCount, int languageCount);
 }
 
 class _AppLocalizationsDelegate

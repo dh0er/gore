@@ -1,14 +1,11 @@
 {
   "@@locale": "de",
-
   "appTitle": "Gothic Remake Spielstand-Editor",
   "appLogoSemanticLabel": "goresave-Logo",
-
   "zoomTooltip": "Strg +/- zum Vergrößern/Verkleinern drücken",
   "switchToLightMode": "Zum hellen Modus wechseln",
   "switchToDarkMode": "Zum dunklen Modus wechseln",
   "about": "Über",
-
   "tabOverview": "Übersicht",
   "tabPlayer": "Spieler",
   "tabInventory": "Inventar",
@@ -16,7 +13,6 @@
   "tabAllData": "Alle Daten",
   "tabBackups": "Sicherungen",
   "tabSettings": "Einstellungen",
-
   "reset": "Zurücksetzen",
   "save": "Speichern",
   "saveWithCount": "Speichern ({count})",
@@ -26,7 +22,6 @@
   "close": "Schließen",
   "add": "Hinzufügen",
   "browse": "Durchsuchen",
-
   "noSavFilesFound": "Keine .sav-Dateien gefunden",
   "profile": "Profil",
   "profileWithSaves": "{name} ({count} Spielstände)",
@@ -35,16 +30,13 @@
   "discardUnsavedChangesTitle": "Ungespeicherte Änderungen verwerfen?",
   "rescanDiscardBody": "Beim erneuten Einlesen wird jeder Spielstand neu geladen und {count} ungespeicherte {count, plural, =1{Änderung} other{Änderungen}} verworfen.",
   "discardAndRescan": "Verwerfen und neu einlesen",
-
   "chapterLabel": "Kapitel {id}",
   "quickSave": "Schnellspeicherung",
   "autoSave": "Automatische Speicherung",
   "manualSave": "Manuelle Speicherung",
-
   "errorTitle": "Fehler",
   "selectASaveTitle": "Spielstand auswählen",
   "selectASaveBody": "Die Spielstanddetails werden hier angezeigt.",
-
   "diagnosticsTitle": "Diagnose & Details",
   "diagnosticsSubtitle": "Schreibgeschützte Formatprüfung",
   "metricFormat": "Format",
@@ -63,17 +55,13 @@
   "metricPrivateStrings": "Private Strings",
   "metricSha1": "SHA-1",
   "bytesValue": "{count} Bytes",
-
   "inspectionJsonTitle": "Inspektions-JSON",
   "inspectionJsonSubtitle": "Rohdaten der Spielstandprüfung",
   "copy": "Kopieren",
-
   "savegameFallbackTitle": "Spielstand",
   "screenshotForSlot": "Screenshot für {slot}",
-
   "publicSaveName": "Öffentlicher Speichername",
   "required": "Erforderlich",
-
   "playerLockedBody": "Private Spielerbearbeitungen benötigen einen komprimierfähigen Codec.",
   "heroTransform": "Helden-Transform",
   "locationX": "Position X",
@@ -86,7 +74,6 @@
   "heroAttributes": "Heldenattribute",
   "attributeBase": "{name} Basiswert",
   "attributeCurrent": "{name} aktuell",
-
   "inventoryTitle": "Inventar",
   "inventoryNeedsDecoded": "Die Inventarbearbeitung benötigt entschlüsselte private Nutzdaten vom Codec.",
   "inventoryNoStacks": "Keine Item-Stapel in den entschlüsselten privaten Nutzdaten gefunden.",
@@ -104,7 +91,6 @@
   "noItemsMatchQuery": "Keine Items entsprechen „{query}“.",
   "pendingRemovalHidesAll": "Die ausstehende Entfernung blendet jedes Item aus — zum Anwenden speichern.",
   "categoryWithCount": "{label} ({count})",
-
   "itemCategoryMeleeWeapon": "Nahkampfwaffen",
   "itemCategoryRangedWeapon": "Fernkampfwaffen",
   "itemCategoryAmmunition": "Munition",
@@ -119,14 +105,12 @@
   "itemCategoryMission": "Questgegenstände",
   "itemCategoryKey": "Schlüssel",
   "itemCategoryOther": "Sonstiges",
-
   "count": "Anzahl",
   "min1": "Min. 1",
   "countTimes": "×{count}",
   "deleteEquippedTooltip": "Löschen nicht möglich: Dieses Item ist wahrscheinlich ausgerüstet oder einem Schnelltasten-Slot zugewiesen",
   "removeBlockedTooltip": "Ausstehende Inventaränderungen zuerst speichern oder zurücksetzen — eine Hinzufügung oder Entfernung muss separat gespeichert werden",
   "removeItemFromInventory": "Item aus Inventar entfernen",
-
   "progressionLockedBody": "Fortschrittsdaten benötigen entschlüsselte private Nutzdaten vom Codec.",
   "progressionNeedsTyped": "Strukturierte Fortschrittsdaten benötigen einen vollständig entschlüsselten Spielstand mit verifizierter typisierter Auswertung.",
   "sectionQuests": "Quests",
@@ -150,7 +134,6 @@
   "questStateSucceeded": "Abgeschlossen",
   "questStateFailed": "Fehlgeschlagen",
   "questStateUnknown": "unbekannt",
-
   "dialogKnowledge": "Dialogwissen",
   "resetKnowledgeChanges": "Wissensänderungen zurücksetzen",
   "addNpc": "NPC hinzufügen",
@@ -168,7 +151,6 @@
   "removeEntry": "Eintrag entfernen",
   "selectNpcFromList": "Wähle einen NPC aus der Liste",
   "characterWithCount": "{name} ({count})",
-
   "memoryEvents": "Erinnerungsereignisse",
   "searchCharacters": "Charaktere suchen",
   "eventsForCharacter": "Ereignisse — {name}",
@@ -182,7 +164,6 @@
   "duplicateMemoryEventTitle": "Erinnerungsereignis duplizieren?",
   "duplicateMemoryEventBody": "Dieses Erinnerungsereignis duplizieren? Zuvor wird eine Sicherung erstellt.",
   "selectCharacterFromList": "Wähle einen Charakter aus der Liste",
-
   "allDataLockedBody": "Der vollständige Eigenschaften-Browser benötigt entschlüsselte private Nutzdaten vom Codec.",
   "allDataDescription": "Durchsuche jede typisierte Eigenschaft nach Name oder Pfad. Skalare, Strings, Enums und Objektpfade sind bearbeitbar; Structs werden vorerst schreibgeschützt angezeigt.",
   "searchPropertiesLabel": "Eigenschaften suchen (leer = alles anzeigen) — z. B. Health, GameTime",
@@ -194,7 +175,6 @@
   "noMatchesTitle": "Keine Treffer",
   "noMatchesBody": "Kein Eigenschaftspfad enthielt all diese Begriffe.",
   "value": "Wert",
-
   "backupsTitle": "Sicherungen",
   "refreshBackups": "Sicherungen aktualisieren",
   "noBackupsTitle": "Keine Sicherungen",
@@ -208,7 +188,6 @@
   "backupFactStatus": "Status",
   "backupFactSha1": "SHA-1",
   "restoreBackupTooltip": "{fileName} wiederherstellen",
-
   "appearanceTitle": "Erscheinungsbild",
   "theme": "Design",
   "themeLight": "Hell",
@@ -218,12 +197,10 @@
   "resetZoomTooltip": "Zoom zurücksetzen (Strg+0)",
   "zoomTip": "Tipp: Strg + / Strg - ändert den Zoom überall in der App.",
   "language": "Sprache",
-
   "updatesTitle": "Updates",
   "checkForUpdatesAutomatically": "Automatisch nach Updates suchen",
   "checkForUpdatesNow": "Jetzt nach Updates suchen",
   "updatesPortableNotice": "Updates sind nur für installierte Versionen verfügbar. Die portable Version muss manuell aktualisiert werden.",
-
   "gameTextTitle": "Spieltext",
   "gameTextExtractedWithCounts": "Extrahiert: {ids} IDs über {languages} Sprachen.",
   "gameTextExtracted": "Lokalisierter Spieltext ist extrahiert.",
@@ -237,10 +214,8 @@
   "extractionComplete": "Extraktion abgeschlossen",
   "extractionFailed": "Extraktion fehlgeschlagen",
   "localizationCacheFileType": "Lokalisierungs-Cache",
-
   "savegameDirectoryTitle": "Spielstandverzeichnis",
   "folder": "Ordner",
-
   "codecTitle": "Codec",
   "check": "Prüfen",
   "roundtrip": "Roundtrip",
@@ -254,12 +229,10 @@
   "codecBackendLine": "Backend: {backend}",
   "yes": "ja",
   "no": "nein",
-
   "aboutSubtitle": "Gothic Remake Spielstand-Editor",
   "aboutVersion": "Version {version} ({sha})",
   "aboutCopyright": "© 2026 goresave-Mitwirkende",
   "aboutLicense": "Lizenziert unter der MIT-Lizenz.",
-
   "difficultyTitle": "Schwierigkeit — {profile}",
   "difficultyNoProfile": "Kein Profil",
   "difficultyNoDifficulty": "Keine Schwierigkeit",
@@ -281,7 +254,6 @@
   "levelProgression": "Fortschritt",
   "difficultyAppliesToAllSaves": "Die Schwierigkeit gilt für alle Spielstände in diesem Profil.",
   "savingDifficultyFailed": "Speichern der Schwierigkeit fehlgeschlagen.",
-
   "addItemDialogTitle": "Item hinzufügen",
   "searchItems": "Items suchen",
   "failedToLoadCatalog": "Katalog konnte nicht geladen werden: {error}",
@@ -289,18 +261,15 @@
   "noItemsMatch": "Keine passenden Items",
   "countMustBeAtLeast1": "Muss ≥ 1 sein",
   "countMustBeAtMost": "Muss ≤ {max} sein",
-
   "addNpcDialogTitle": "NPC hinzufügen",
   "noNpcsAvailableToAdd": "Keine NPCs zum Hinzufügen verfügbar",
   "noNpcsMatch": "Keine passenden NPCs",
   "categoryAll": "Alle",
   "allWithCount": "Alle ({count})",
-
   "addKnowledgeEntryDialogTitle": "Wissenseintrag hinzufügen",
   "searchEntries": "Einträge suchen",
   "noKnowledgeEntriesAvailableToAdd": "Keine Wissenseinträge zum Hinzufügen verfügbar",
   "noEntriesMatch": "Keine passenden Einträge",
-
   "heroGroupMainStats": "Hauptwerte",
   "heroGroupCombatSkills": "Kampffertigkeiten",
   "heroGroupResistances": "Widerstände",
@@ -309,6 +278,6 @@
   "heroEntryHeroTransform": "Helden-Transform",
   "attributeEmpty": "{name} ist leer — gib einen Wert ein oder stelle den ursprünglichen Wert wieder her, bevor du speicherst.",
   "attributeInvalidNumber": "Ungültige Zahl für {name}: „{text}“",
-
-  "loadingEditorData": "Editordaten werden geladen"
+  "loadingEditorData": "Editordaten werden geladen",
+  "localizedTextExtractedCount": "{idCount} IDs in {languageCount} Sprachen extrahiert"
 }

@@ -959,4 +959,9 @@ class AppLocalizationsIt extends AppLocalizations {
 
   @override
   String get loadingEditorData => 'Caricamento dei dati dell\'editor';
+
+  @override
+  String localizedTextExtractedCount(int idCount, int languageCount) {
+    return '$idCount ID estratti in $languageCount lingue';
+  }
 }
