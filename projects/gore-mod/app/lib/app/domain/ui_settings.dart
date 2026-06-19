@@ -107,6 +107,52 @@ class NoopUiSettingsStore implements UiSettingsStore {
   void write(UiSettings settings) {}
 }
 
+/// Resolves the shared `gore-tools` umbrella data directory, matching the Rust
+/// side (`gore_core::paths::shared_data_dir`) exactly:
+/// - Windows: `%LOCALAPPDATA%` (fallback `%APPDATA%`) then `\gore-tools`
+/// - macOS:   `$HOME/Library/Application Support/gore-tools`
+/// - Linux:   `$XDG_DATA_HOME/gore-tools` else `$HOME/.local/share/gore-tools`
+String sharedDataDir(Map<String, String> env) {
+  final String base;
+  if (Platform.isWindows) {
+    base = env['LOCALAPPDATA'] ?? env['APPDATA'] ?? Directory.current.path;
+  } else if (Platform.isMacOS) {
+    final home = env['HOME'];
+    base = home == null
+        ? Directory.current.path
+        : p.join(home, 'Library', 'Application Support');
+  } else {
+    final home = env['HOME'];
+    final xdg = env['XDG_DATA_HOME'];
+    base = (xdg != null && xdg.isNotEmpty)
+        ? xdg
+        : (home == null
+              ? Directory.current.path
+              : p.join(home, '.local', 'share'));
+  }
+  return p.join(base, 'gore-tools');
+}
+
+/// The previous per-app config directory (`<config>/gore-mod`), kept only so a
+/// one-time migration can copy old files into the shared umbrella directory.
+String _legacyAppDir(Map<String, String> env) {
+  final String root;
+  if (Platform.isWindows) {
+    root = env['APPDATA'] ?? env['LOCALAPPDATA'] ?? Directory.current.path;
+  } else if (Platform.isMacOS) {
+    final home = env['HOME'];
+    root = home == null
+        ? Directory.current.path
+        : p.join(home, 'Library', 'Application Support');
+  } else {
+    final home = env['HOME'];
+    root =
+        env['XDG_CONFIG_HOME'] ??
+        (home == null ? Directory.current.path : p.join(home, '.config'));
+  }
+  return p.join(root, 'gore-mod');
+}
+
 class JsonFileUiSettingsStore implements UiSettingsStore {
   const JsonFileUiSettingsStore(this.file);
 
@@ -114,23 +160,30 @@ class JsonFileUiSettingsStore implements UiSettingsStore {
     Map<String, String>? environment,
   }) {
     final env = environment ?? Platform.environment;
-    final String root;
-    if (Platform.isWindows) {
-      root = env['APPDATA'] ?? env['LOCALAPPDATA'] ?? Directory.current.path;
-    } else if (Platform.isMacOS) {
-      final home = env['HOME'];
-      root = home == null
-          ? Directory.current.path
-          : p.join(home, 'Library', 'Application Support');
-    } else {
-      final home = env['HOME'];
-      root =
-          env['XDG_CONFIG_HOME'] ??
-          (home == null ? Directory.current.path : p.join(home, '.config'));
-    }
-    return JsonFileUiSettingsStore(
-      File(p.join(root, 'gore-mod', 'ui_settings.json')),
+    const fileName = 'ui_settings.json';
+    final file = File(p.join(sharedDataDir(env), 'gore-mod', fileName));
+    _migrateLegacyFile(
+      newFile: file,
+      oldFile: File(p.join(_legacyAppDir(env), fileName)),
     );
+    return JsonFileUiSettingsStore(file);
+  }
+
+  /// One-time, best-effort migration: if the new file is missing but a legacy
+  /// one exists, copy it into the shared umbrella dir. The old file is left in
+  /// place as a backup. Any failure is swallowed so startup falls back to
+  /// defaults rather than crashing.
+  static void _migrateLegacyFile({
+    required File newFile,
+    required File oldFile,
+  }) {
+    try {
+      if (newFile.existsSync() || !oldFile.existsSync()) return;
+      newFile.parent.createSync(recursive: true);
+      oldFile.copySync(newFile.path);
+    } catch (_) {
+      // Ignore: a failed migration must never block startup.
+    }
   }
 
   final File file;

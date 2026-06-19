@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
+import 'package:goresave/utils/gore_tools_paths.dart';
 import 'package:path/path.dart' as p;
 
 class UiSettings {
@@ -110,6 +111,17 @@ class JsonFileUiSettingsStore implements UiSettingsStore {
     Map<String, String>? environment,
   }) {
     final env = environment ?? Platform.environment;
+    const fileName = 'ui_settings.json';
+    final file = File(
+      p.join(goreSaveSettingsDir(environment: env), fileName),
+    );
+    migrateLegacySettingsFile(_legacyFile(env, fileName), file);
+    return JsonFileUiSettingsStore(file);
+  }
+
+  /// Previous per-app config location used before settings moved under the
+  /// shared `gore-tools` umbrella. Kept only to migrate old files once.
+  static File _legacyFile(Map<String, String> env, String fileName) {
     final String root;
     if (Platform.isWindows) {
       root = env['APPDATA'] ?? env['LOCALAPPDATA'] ?? Directory.current.path;
@@ -124,9 +136,7 @@ class JsonFileUiSettingsStore implements UiSettingsStore {
           env['XDG_CONFIG_HOME'] ??
           (home == null ? Directory.current.path : p.join(home, '.config'));
     }
-    return JsonFileUiSettingsStore(
-      File(p.join(root, 'goresave', 'ui_settings.json')),
-    );
+    return File(p.join(root, 'goresave', fileName));
   }
 
   final File file;
