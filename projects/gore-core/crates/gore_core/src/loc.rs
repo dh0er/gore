@@ -194,7 +194,9 @@ impl<'a> Reader<'a> {
             let text = String::from_utf8_lossy(trimmed).into_owned();
             Ok(FString { raw: self.data[start..self.off].to_vec(), text, changed: false })
         } else {
-            let units = (-count) as usize;
+            // `count.unsigned_abs()` avoids the `-count` overflow when count is
+            // i32::MIN (which would panic in debug builds).
+            let units = count.unsigned_abs() as usize;
             let bytes = units * 2;
             if self.off + bytes > self.data.len() {
                 return Err(LcacheError::Invalid("FString wide length"));
@@ -255,6 +257,12 @@ impl Lcache {
         }
         let group_count = r.read_i32()?;
         if group_count < 0 {
+            return Err(LcacheError::Invalid("group count"));
+        }
+        // Each group is two records of at least 8 bytes (key length + pair
+        // count), so a count exceeding what the remaining bytes allow is a
+        // malformed/hostile file — reject before allocating or looping.
+        if group_count as usize > (plain.len() - r.off) / 16 {
             return Err(LcacheError::Invalid("group count"));
         }
         let mut groups = Vec::with_capacity(group_count as usize);
