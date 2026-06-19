@@ -381,6 +381,10 @@ def test_project(project: str, dry: bool) -> None:
     if cfg["kind"] in ("rust-bin", "rust-lib"):
         run(f"cargo test {project}", [CARGO, "test", "-p", cfg["crate"]], dry=dry)
         return
+    # A Flutter app is backed by a native Rust cdylib (core_dll crate); its
+    # unit tests live there, so cover them too — analyze/test alone would skip
+    # all the native logic the app depends on.
+    run(f"cargo test {cfg['core_dll']}", [CARGO, "test", "-p", cfg["core_dll"]], dry=dry)
     app = pdir(project) / "app"
     run(f"flutter pub get {project}", [FLUTTER, "pub", "get"], cwd=app, dry=dry)
     run(f"flutter analyze {project}", [FLUTTER, "analyze"], cwd=app, dry=dry)
