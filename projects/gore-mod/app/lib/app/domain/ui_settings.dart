@@ -14,6 +14,7 @@ class UiSettings {
     this.windowMaximized = false,
     this.dumpPath,
     this.locExtractPrompted = false,
+    this.appLocale = 'en',
   });
 
   factory UiSettings.fromJson(Map<String, Object?> json) {
@@ -22,6 +23,10 @@ class UiSettings {
         'dark' => ThemeMode.dark,
         'system' => ThemeMode.system,
         _ => ThemeMode.light,
+      },
+      appLocale: switch (json['appLocale']) {
+        final String code when code.isNotEmpty => code,
+        _ => 'en',
       },
       uiScale: switch (json['uiScale']) {
         final num value => UiScaleNotifier.clampScale(value.toDouble()),
@@ -56,6 +61,10 @@ class UiSettings {
   /// Persisted so the optional auto-prompt only fires once.
   final bool locExtractPrompted;
 
+  /// Selected app/game language code (one of [kGameLangs]); drives both the
+  /// MaterialApp locale and which extracted game-text names are shown.
+  final String appLocale;
+
   UiSettings copyWith({
     ThemeMode? themeMode,
     double? uiScale,
@@ -64,6 +73,7 @@ class UiSettings {
     String? dumpPath,
     bool clearDumpPath = false,
     bool? locExtractPrompted,
+    String? appLocale,
   }) {
     return UiSettings(
       themeMode: themeMode ?? this.themeMode,
@@ -72,6 +82,7 @@ class UiSettings {
       windowMaximized: windowMaximized ?? this.windowMaximized,
       dumpPath: clearDumpPath ? null : dumpPath ?? this.dumpPath,
       locExtractPrompted: locExtractPrompted ?? this.locExtractPrompted,
+      appLocale: appLocale ?? this.appLocale,
     );
   }
 
@@ -89,6 +100,7 @@ class UiSettings {
     'windowMaximized': windowMaximized,
     if (dumpPath != null) 'dumpPath': dumpPath,
     'locExtractPrompted': locExtractPrompted,
+    'appLocale': appLocale,
   };
 }
 
@@ -298,5 +310,24 @@ class LocExtractPromptedNotifier extends StateNotifier<bool> {
     if (state) return;
     state = true;
     _store.write(_store.read().copyWith(locExtractPrompted: true));
+  }
+}
+
+/// Selected app/game language code (one of [kGameLangs.code]). Drives both the
+/// MaterialApp locale and which extracted game-text names are shown. Persisted
+/// so the choice survives restarts.
+final localeProvider =
+    StateNotifierProvider<LocaleNotifier, String>((ref) {
+  return LocaleNotifier(ref.watch(uiSettingsStoreProvider));
+});
+
+class LocaleNotifier extends StateNotifier<String> {
+  LocaleNotifier(this._store) : super(_store.read().appLocale);
+
+  final UiSettingsStore _store;
+
+  void setLocale(String code) {
+    state = code;
+    _store.write(_store.read().copyWith(appLocale: code));
   }
 }

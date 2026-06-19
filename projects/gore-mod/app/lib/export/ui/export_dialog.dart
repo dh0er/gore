@@ -2,6 +2,8 @@ import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../l10n/app_localizations.dart';
+import '../../l10n/l10n_errors.dart';
 import '../../editor/domain/overrides_notifier.dart';
 import '../domain/export_notifier.dart';
 import '../domain/export_request.dart';
@@ -36,20 +38,26 @@ class _ExportDialogState extends ConsumerState<ExportDialog> {
       _targetDir != null;
 
   void _validateName(String v) {
+    final l10n = AppLocalizations.of(context);
+    final error = validateModName(v);
     setState(() {
-      _nameError = validateModName(v);
+      _nameError = error == null ? null : modNameErrorText(l10n, error);
     });
   }
 
   void _validateDelay(String v) {
+    final l10n = AppLocalizations.of(context);
     final n = int.tryParse(v.trim());
     setState(() {
-      _delayError = (n == null || n < 0) ? 'Must be a non-negative integer' : null;
+      _delayError =
+          (n == null || n < 0) ? l10n.mustBeNonNegativeInteger : null;
     });
   }
 
   Future<void> _pickTargetDir() async {
-    final dir = await getDirectoryPath(confirmButtonText: 'Export here');
+    final dir = await getDirectoryPath(
+      confirmButtonText: AppLocalizations.of(context).exportHere,
+    );
     if (dir != null) setState(() => _targetDir = dir);
   }
 
@@ -71,6 +79,7 @@ class _ExportDialogState extends ConsumerState<ExportDialog> {
   @override
   Widget build(BuildContext context) {
     final exportState = ref.watch(exportProvider);
+    final l10n = AppLocalizations.of(context);
 
     // Close on success
     ref.listen<ExportState>(exportProvider, (_, next) {
@@ -80,7 +89,7 @@ class _ExportDialogState extends ConsumerState<ExportDialog> {
     });
 
     return AlertDialog(
-      title: const Text('Export mod'),
+      title: Text(l10n.exportMod),
       content: SizedBox(
         width: 480,
         child: Column(
@@ -90,7 +99,7 @@ class _ExportDialogState extends ConsumerState<ExportDialog> {
             TextField(
               controller: _nameController,
               decoration: InputDecoration(
-                labelText: 'Mod name',
+                labelText: l10n.modName,
                 errorText: _nameError,
               ),
               onChanged: _validateName,
@@ -99,7 +108,7 @@ class _ExportDialogState extends ConsumerState<ExportDialog> {
             TextField(
               controller: _delayController,
               decoration: InputDecoration(
-                labelText: 'Load delay (ms, 0 = instant)',
+                labelText: l10n.loadDelayLabel,
                 errorText: _delayError,
               ),
               keyboardType: TextInputType.number,
@@ -111,7 +120,7 @@ class _ExportDialogState extends ConsumerState<ExportDialog> {
               children: [
                 Expanded(
                   child: Text(
-                    _targetDir ?? 'No folder selected',
+                    _targetDir ?? l10n.noFolderSelected,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -119,13 +128,13 @@ class _ExportDialogState extends ConsumerState<ExportDialog> {
                 const SizedBox(width: 8),
                 OutlinedButton(
                   onPressed: _pickTargetDir,
-                  child: const Text('Choose folder'),
+                  child: Text(l10n.chooseFolder),
                 ),
               ],
             ),
             const SizedBox(height: 12),
             CheckboxListTile(
-              title: const Text('Package as .zip'),
+              title: Text(l10n.packageAsZip),
               value: _packageAsZip,
               contentPadding: EdgeInsets.zero,
               onChanged: (v) => setState(() => _packageAsZip = v ?? false),
@@ -164,7 +173,7 @@ class _ExportDialogState extends ConsumerState<ExportDialog> {
           onPressed: exportState.isExporting
               ? null
               : () => Navigator.of(context).pop(null),
-          child: const Text('Cancel'),
+          child: Text(l10n.cancel),
         ),
         FilledButton(
           onPressed: (!_isValid || exportState.isExporting) ? null : _confirm,
@@ -174,7 +183,7 @@ class _ExportDialogState extends ConsumerState<ExportDialog> {
                   height: 16,
                   child: CircularProgressIndicator(strokeWidth: 2),
                 )
-              : const Text('Export'),
+              : Text(l10n.export),
         ),
       ],
     );

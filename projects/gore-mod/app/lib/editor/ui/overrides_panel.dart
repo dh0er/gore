@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../l10n/app_localizations.dart';
 import '../domain/override_entry.dart';
 import '../domain/overrides_notifier.dart';
 
@@ -14,6 +15,7 @@ class OverridesPanel extends ConsumerWidget {
     final entries  = state.entries;
     final theme    = Theme.of(context);
     final scheme   = theme.colorScheme;
+    final l10n     = AppLocalizations.of(context);
 
     return Column(
       children: [
@@ -26,14 +28,14 @@ class OverridesPanel extends ConsumerWidget {
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  'Pending overrides (${state.count})',
+                  l10n.pendingOverridesWithCount(state.count),
                   style: theme.textTheme.titleSmall,
                 ),
               ),
               if (entries.isNotEmpty)
                 TextButton.icon(
                   icon: const Icon(Icons.clear_all, size: 18),
-                  label: const Text('Clear all'),
+                  label: Text(l10n.clearAll),
                   onPressed: notifier.clearAll,
                 ),
             ],
@@ -44,7 +46,7 @@ class OverridesPanel extends ConsumerWidget {
           child: entries.isEmpty
               ? Center(
                   child: Text(
-                    'No pending overrides.\nEdit item fields to add some.',
+                    l10n.noPendingOverrides,
                     textAlign: TextAlign.center,
                     style: TextStyle(color: scheme.onSurfaceVariant),
                   ),
@@ -100,7 +102,7 @@ class _OverrideRow extends StatelessWidget {
           ),
           IconButton(
             icon: const Icon(Icons.remove_circle_outline, size: 18),
-            tooltip: 'Remove override',
+            tooltip: AppLocalizations.of(context).removeOverride,
             onPressed: () => notifier.removeOverride(entry.key),
           ),
         ],

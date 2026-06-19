@@ -3,6 +3,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:goresave/features/app/ui/about_dialog.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
+import 'support/l10n_test_app.dart';
+
 void main() {
   test('aboutVersionLabel shows version and git sha, no build number', () {
     final info = PackageInfo(
@@ -21,7 +23,7 @@ void main() {
 
   testWidgets('about dialog shows copyright and license notice', (tester) async {
     await tester.pumpWidget(
-      const MaterialApp(home: Scaffold(body: GoresaveAboutDialog())),
+      wrapWithL10n(const Scaffold(body: GoresaveAboutDialog())),
     );
     await tester.pump();
 

@@ -1,3 +1,4 @@
+import '../../l10n/app_localizations.dart';
 import 'item_entry.dart';
 
 // ItemCategory and itemCategoryFromId/itemDisplayNameFromId are identical
@@ -19,7 +20,28 @@ enum ItemCategory {
   other('Other');
 
   const ItemCategory(this.label);
+
+  /// English label, kept as a stable identifier / fallback. Use
+  /// [localizedLabel] for anything user-facing.
   final String label;
+
+  /// Localized category name for display, resolved via [AppLocalizations].
+  String localizedLabel(AppLocalizations l10n) => switch (this) {
+        ItemCategory.meleeWeapon => l10n.categoryMeleeWeapons,
+        ItemCategory.rangedWeapon => l10n.categoryRangedWeapons,
+        ItemCategory.ammunition => l10n.categoryAmmunition,
+        ItemCategory.rune => l10n.categoryRunes,
+        ItemCategory.scroll => l10n.categorySpellScrolls,
+        ItemCategory.food => l10n.categoryFoodAndPotions,
+        ItemCategory.misc => l10n.categoryMiscellaneous,
+        ItemCategory.amulet => l10n.categoryAmulets,
+        ItemCategory.ring => l10n.categoryRings,
+        ItemCategory.trophy => l10n.categoryAnimalTrophies,
+        ItemCategory.writing => l10n.categoryWritings,
+        ItemCategory.mission => l10n.categoryMissionItems,
+        ItemCategory.key => l10n.categoryKeys,
+        ItemCategory.other => l10n.categoryOther,
+      };
 }
 
 ItemCategory itemCategoryFromId(String id) {

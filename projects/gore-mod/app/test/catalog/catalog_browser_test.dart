@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:gore_mod/catalog/domain/catalog_provider.dart';
 import 'package:gore_mod/catalog/domain/item_entry.dart';
 import 'package:gore_mod/catalog/ui/catalog_browser.dart';
+import 'package:gore_mod/l10n/app_localizations.dart';
 
 void main() {
   final apple  = CatalogItem(id: 'ItFo_Apple',       displayName: 'Apple',  fields: []);
@@ -19,6 +20,8 @@ void main() {
         catalogProvider.overrideWith((ref) async => catalog),
       ],
       child: MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: Scaffold(
           body: CatalogBrowser(
             onItemSelected: onSelected ?? (_) {},

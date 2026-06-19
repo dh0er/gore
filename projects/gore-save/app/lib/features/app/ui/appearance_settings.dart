@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:goresave/features/app/domain/ui_settings.dart';
+import 'package:goresave/l10n/app_localizations.dart';
+import 'package:goresave/loc/game_lang.dart';
 
-/// Appearance settings (theme mode, UI scale) shown in the Settings tab.
+/// Appearance settings (theme mode, UI scale, language) shown in the Settings
+/// tab.
 class AppearanceSettingsCard extends ConsumerWidget {
   const AppearanceSettingsCard({super.key});
 
@@ -10,6 +13,8 @@ class AppearanceSettingsCard extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final themeMode = ref.watch(themeModeProvider);
     final uiScale = ref.watch(uiScaleProvider);
+    final localeCode = ref.watch(localeProvider);
+    final l10n = AppLocalizations.of(context);
     final textTheme = Theme.of(context).textTheme;
     return Card(
       child: Padding(
@@ -21,7 +26,7 @@ class AppearanceSettingsCard extends ConsumerWidget {
               children: [
                 const Icon(Icons.palette_outlined),
                 const SizedBox(width: 8),
-                Text('Appearance', style: textTheme.titleMedium),
+                Text(l10n.appearanceTitle, style: textTheme.titleMedium),
               ],
             ),
             const SizedBox(height: 16),
@@ -29,24 +34,24 @@ class AppearanceSettingsCard extends ConsumerWidget {
               children: [
                 SizedBox(
                   width: 90,
-                  child: Text('Theme', style: textTheme.labelLarge),
+                  child: Text(l10n.theme, style: textTheme.labelLarge),
                 ),
                 SegmentedButton<ThemeMode>(
-                  segments: const [
+                  segments: [
                     ButtonSegment(
                       value: ThemeMode.light,
-                      icon: Icon(Icons.light_mode_outlined),
-                      label: Text('Light'),
+                      icon: const Icon(Icons.light_mode_outlined),
+                      label: Text(l10n.themeLight),
                     ),
                     ButtonSegment(
                       value: ThemeMode.dark,
-                      icon: Icon(Icons.dark_mode_outlined),
-                      label: Text('Dark'),
+                      icon: const Icon(Icons.dark_mode_outlined),
+                      label: Text(l10n.themeDark),
                     ),
                     ButtonSegment(
                       value: ThemeMode.system,
-                      icon: Icon(Icons.brightness_auto_outlined),
-                      label: Text('System'),
+                      icon: const Icon(Icons.brightness_auto_outlined),
+                      label: Text(l10n.themeSystem),
                     ),
                   ],
                   selected: {themeMode},
@@ -61,7 +66,36 @@ class AppearanceSettingsCard extends ConsumerWidget {
               children: [
                 SizedBox(
                   width: 90,
-                  child: Text('UI scale', style: textTheme.labelLarge),
+                  child: Text(l10n.language, style: textTheme.labelLarge),
+                ),
+                Expanded(
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: DropdownButton<String>(
+                      value: localeCode,
+                      onChanged: (code) {
+                        if (code != null) {
+                          ref.read(localeProvider.notifier).setLocale(code);
+                        }
+                      },
+                      items: [
+                        for (final lang in kGameLangs)
+                          DropdownMenuItem(
+                            value: lang.code,
+                            child: Text(lang.endonym),
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                SizedBox(
+                  width: 90,
+                  child: Text(l10n.uiScale, style: textTheme.labelLarge),
                 ),
                 Expanded(
                   child: Slider(
@@ -83,7 +117,7 @@ class AppearanceSettingsCard extends ConsumerWidget {
                   ),
                 ),
                 IconButton(
-                  tooltip: 'Reset zoom (Ctrl+0)',
+                  tooltip: l10n.resetZoomTooltip,
                   icon: const Icon(Icons.restart_alt),
                   onPressed: () => ref.read(uiScaleProvider.notifier).reset(),
                 ),
@@ -91,7 +125,7 @@ class AppearanceSettingsCard extends ConsumerWidget {
             ),
             const SizedBox(height: 4),
             Text(
-              'Tip: Ctrl + / Ctrl - changes the zoom anywhere in the app.',
+              l10n.zoomTip,
               style: textTheme.bodySmall,
             ),
           ],

@@ -17,6 +17,8 @@ import 'package:goresave/features/editor/domain/pending_edits.dart';
 import 'package:goresave/features/localization/domain/localization_controller.dart';
 import 'package:goresave/features/localization/ui/localization_flow.dart';
 import 'package:goresave/features/localization/ui/localization_settings.dart';
+import 'package:goresave/l10n/app_localizations.dart';
+import 'package:goresave/loc/loc_catalog_provider.dart';
 import 'package:goresave/providers/data_providers.dart';
 import 'package:intl/intl.dart';
 import 'add_inventory_item_dialog.dart';
@@ -61,23 +63,23 @@ class _EditorPageState extends ConsumerState<EditorPage> {
 
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Extract localized game text?'),
-        content: const Text(
-          "Localized game text isn't extracted yet. Extract it now from "
-          'your game install? (optional)',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Not now'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Extract'),
-          ),
-        ],
-      ),
+      builder: (context) {
+        final l10n = AppLocalizations.of(context);
+        return AlertDialog(
+          title: Text(l10n.extractLocalizedTextTitle),
+          content: Text(l10n.extractLocalizedTextBody),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: Text(l10n.notNow),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: Text(l10n.extract),
+            ),
+          ],
+        );
+      },
     );
     if (confirmed != true || !mounted) return;
     await runLocalizationExtractFlow(context, ref);
@@ -91,6 +93,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     final zoomPct = (uiScale * 100).round();
     final scheme = Theme.of(context).colorScheme;
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final l10n = AppLocalizations.of(context);
 
     return Scaffold(
       // The AppBar doubles as the window title bar: dragging the empty space
@@ -103,14 +106,14 @@ class _EditorPageState extends ConsumerState<EditorPage> {
               Image.asset(
                 'assets/goresave_icon.png',
                 height: 32,
-                semanticLabel: 'goresave logo',
+                semanticLabel: l10n.appLogoSemanticLabel,
               ),
               const SizedBox(width: 10),
               // Flexible + ellipsis: at narrow window widths the long title
               // must truncate instead of overflowing the title bar row.
-              const Flexible(
+              Flexible(
                 child: Text(
-                  'Gothic Remake Savegame Editor',
+                  l10n.appTitle,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -126,7 +129,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
         actions: [
           const SizedBox(width: 8),
           Tooltip(
-            message: 'Press Ctrl +/- to zoom in/out',
+            message: l10n.zoomTooltip,
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
               decoration: BoxDecoration(
@@ -154,7 +157,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
                   .read(themeModeProvider.notifier)
                   .setThemeMode(isDark ? ThemeMode.light : ThemeMode.dark);
             },
-            tooltip: isDark ? 'Switch to light mode' : 'Switch to dark mode',
+            tooltip: isDark ? l10n.switchToLightMode : l10n.switchToDarkMode,
           ),
           IconButton(
             icon: const Icon(Icons.info_outline),
@@ -164,7 +167,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
                 builder: (_) => const GoresaveAboutDialog(),
               );
             },
-            tooltip: 'About',
+            tooltip: l10n.about,
           ),
           const SizedBox(width: 16),
           const WindowControls(),
@@ -207,6 +210,7 @@ class _SaveSidebar extends StatelessWidget {
     // Use the notifier-computed visible saves so the list, header count, and
     // Quick/Auto stats all agree.
     final saves = state.visibleSaves;
+    final l10n = AppLocalizations.of(context);
     return DecoratedBox(
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surfaceContainerLow,
@@ -221,11 +225,11 @@ class _SaveSidebar extends StatelessWidget {
           ),
           Expanded(
             child: saves.isEmpty
-                ? const Center(
+                ? Center(
                     child: Padding(
-                      padding: EdgeInsets.all(24),
+                      padding: const EdgeInsets.all(24),
                       child: Text(
-                        'No .sav files found',
+                        l10n.noSavFilesFound,
                         textAlign: TextAlign.center,
                       ),
                     ),
@@ -273,6 +277,7 @@ class _ProfileHeader extends StatelessWidget {
     final textTheme = Theme.of(context).textTheme;
     final scheme = Theme.of(context).colorScheme;
     final multiProfile = profiles.length > 1;
+    final l10n = AppLocalizations.of(context);
     return Container(
       width: double.infinity,
       // Match the icon+text TabBar row in the workspace next door (72 tab
@@ -309,7 +314,7 @@ class _ProfileHeader extends StatelessWidget {
                           isLoading: isLoading,
                         )
                       : Text(
-                          profile?.displayName ?? 'Profile',
+                          profile?.displayName ?? l10n.profile,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: textTheme.titleMedium,
@@ -328,7 +333,7 @@ class _ProfileHeader extends StatelessWidget {
           ),
           IconButton(
             icon: const Icon(Icons.refresh),
-            tooltip: 'Rescan save folder',
+            tooltip: l10n.rescanSaveFolder,
             visualDensity: VisualDensity.compact,
             iconSize: 20,
             onPressed: isLoading ? null : () => _confirmRefresh(context),
@@ -348,23 +353,23 @@ class _ProfileHeader extends StatelessWidget {
       final pendingCount = notifier.pendingEditCount;
       final confirmed = await showDialog<bool>(
         context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('Discard unsaved changes?'),
-          content: Text(
-            'Rescanning reloads every save and discards your $pendingCount '
-            'unsaved change${pendingCount == 1 ? '' : 's'}.',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(false),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(context).pop(true),
-              child: const Text('Discard and rescan'),
-            ),
-          ],
-        ),
+        builder: (context) {
+          final l10n = AppLocalizations.of(context);
+          return AlertDialog(
+            title: Text(l10n.discardUnsavedChangesTitle),
+            content: Text(l10n.rescanDiscardBody(pendingCount)),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(false),
+                child: Text(l10n.cancel),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(context).pop(true),
+                child: Text(l10n.discardAndRescan),
+              ),
+            ],
+          );
+        },
       );
       if (confirmed != true) return;
       // The user chose to discard. refresh() centrally clears all pending edits
@@ -394,8 +399,9 @@ class _ProfileSwitcher extends StatelessWidget {
     final textTheme = Theme.of(context).textTheme;
     final scheme = Theme.of(context).colorScheme;
     final currentId = profile?.profileId;
+    final l10n = AppLocalizations.of(context);
     return PopupMenuButton<int>(
-      tooltip: 'Switch profile',
+      tooltip: l10n.switchProfile,
       enabled: !isLoading,
       onSelected: (id) => notifier.selectProfile(id),
       itemBuilder: (context) => [
@@ -411,7 +417,7 @@ class _ProfileSwitcher extends StatelessWidget {
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    '${p.displayName} (${p.savedSlots.length} saves)',
+                    l10n.profileWithSaves(p.displayName, p.savedSlots.length),
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
@@ -424,7 +430,7 @@ class _ProfileSwitcher extends StatelessWidget {
         children: [
           Flexible(
             child: Text(
-              profile?.displayName ?? 'Profile',
+              profile?.displayName ?? l10n.profile,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: textTheme.titleMedium,
@@ -458,6 +464,7 @@ class _SaveSlotCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final accent = selected ? scheme.primary : scheme.outline;
+    final l10n = AppLocalizations.of(context);
     return Material(
       color: selected ? scheme.primaryContainer : scheme.surfaceContainerLowest,
       shape: RoundedRectangleBorder(
@@ -511,7 +518,7 @@ class _SaveSlotCard extends StatelessWidget {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      _saveSlotSubtitle(save),
+                      _saveSlotSubtitle(l10n, save),
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
@@ -542,7 +549,12 @@ class _SaveKindIcon extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final label = _formatSaveKind(quickSave: quickSave, autoSave: autoSave);
+    final l10n = AppLocalizations.of(context);
+    final label = _formatSaveKind(
+      l10n,
+      quickSave: quickSave,
+      autoSave: autoSave,
+    );
     if (label == '-') return const SizedBox(height: 16);
     final icon = quickSave == true
         ? Icons.flash_on_outlined
@@ -565,10 +577,10 @@ class _SaveKindIcon extends StatelessWidget {
   }
 }
 
-String _saveSlotSubtitle(SaveSlot save) {
+String _saveSlotSubtitle(AppLocalizations l10n, SaveSlot save) {
   final parts = <String>[];
   if (save.chapterId != null) {
-    parts.add('Chapter ${save.chapterId}');
+    parts.add(l10n.chapterLabel(save.chapterId!));
   }
   final timePlayed = _formatDurationSeconds(save.timePlayedSeconds);
   if (timePlayed != '-') {
@@ -587,10 +599,14 @@ String _formatDurationSeconds(double? seconds) {
   return '${hours}h ${minutes}m';
 }
 
-String _formatSaveKind({required bool? quickSave, required bool? autoSave}) {
-  if (quickSave == true) return 'Quick save';
-  if (autoSave == true) return 'Auto save';
-  if (quickSave == false || autoSave == false) return 'Manual save';
+String _formatSaveKind(
+  AppLocalizations l10n, {
+  required bool? quickSave,
+  required bool? autoSave,
+}) {
+  if (quickSave == true) return l10n.quickSave;
+  if (autoSave == true) return l10n.autoSave;
+  if (quickSave == false || autoSave == false) return l10n.manualSave;
   return '-';
 }
 
@@ -603,18 +619,19 @@ class _EditorWorkspace extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final l10n = AppLocalizations.of(context);
     Widget content;
     if (state.inspection == null) {
       content = state.error != null
           ? _MessagePane(
               icon: Icons.error_outline,
-              title: 'Error',
+              title: l10n.errorTitle,
               body: state.error!,
             )
-          : const _MessagePane(
+          : _MessagePane(
               icon: Icons.search,
-              title: 'Select a save',
-              body: 'The save details will appear here.',
+              title: l10n.selectASaveTitle,
+              body: l10n.selectASaveBody,
             );
     } else {
       final inspection = state.inspection!;
@@ -627,28 +644,34 @@ class _EditorWorkspace extends StatelessWidget {
               color: scheme.surfaceContainerLowest,
               child: Row(
                 children: [
-                  const Expanded(
+                  Expanded(
                     child: TabBar(
                       isScrollable: true,
                       tabs: [
                         Tab(
-                          icon: Icon(Icons.dashboard_outlined),
-                          text: 'Overview',
-                        ),
-                        Tab(icon: Icon(Icons.person_outline), text: 'Player'),
-                        Tab(
-                          icon: Icon(Icons.inventory_2_outlined),
-                          text: 'Inventory',
+                          icon: const Icon(Icons.dashboard_outlined),
+                          text: l10n.tabOverview,
                         ),
                         Tab(
-                          icon: Icon(Icons.flag_outlined),
-                          text: 'Progression',
+                          icon: const Icon(Icons.person_outline),
+                          text: l10n.tabPlayer,
                         ),
-                        Tab(icon: Icon(Icons.tune), text: 'All data'),
-                        Tab(icon: Icon(Icons.history), text: 'Backups'),
                         Tab(
-                          icon: Icon(Icons.settings_outlined),
-                          text: 'Settings',
+                          icon: const Icon(Icons.inventory_2_outlined),
+                          text: l10n.tabInventory,
+                        ),
+                        Tab(
+                          icon: const Icon(Icons.flag_outlined),
+                          text: l10n.tabProgression,
+                        ),
+                        Tab(icon: const Icon(Icons.tune), text: l10n.tabAllData),
+                        Tab(
+                          icon: const Icon(Icons.history),
+                          text: l10n.tabBackups,
+                        ),
+                        Tab(
+                          icon: const Icon(Icons.settings_outlined),
+                          text: l10n.tabSettings,
                         ),
                       ],
                     ),
@@ -657,7 +680,7 @@ class _EditorWorkspace extends StatelessWidget {
                     padding: const EdgeInsets.only(right: 8),
                     child: OutlinedButton.icon(
                       icon: const Icon(Icons.undo),
-                      label: const Text('Reset'),
+                      label: Text(l10n.reset),
                       onPressed: pendingCount > 0 && !state.isLoading
                           ? notifier.refresh
                           : null,
@@ -668,7 +691,9 @@ class _EditorWorkspace extends StatelessWidget {
                     child: FilledButton.icon(
                       icon: const Icon(Icons.save_outlined),
                       label: Text(
-                        pendingCount == 0 ? 'Save' : 'Save ($pendingCount)',
+                        pendingCount == 0
+                            ? l10n.save
+                            : l10n.saveWithCount(pendingCount),
                       ),
                       onPressed: pendingCount > 0 && !state.isLoading
                           ? notifier.saveAllPending
@@ -686,7 +711,7 @@ class _EditorWorkspace extends StatelessWidget {
                 actions: [
                   TextButton(
                     onPressed: notifier.dismissError,
-                    child: const Text('OK'),
+                    child: Text(l10n.ok),
                   ),
                 ],
               ),
@@ -697,7 +722,7 @@ class _EditorWorkspace extends StatelessWidget {
                 actions: [
                   TextButton(
                     onPressed: notifier.dismissWriteMessage,
-                    child: const Text('OK'),
+                    child: Text(l10n.ok),
                   ),
                 ],
               ),
@@ -714,7 +739,8 @@ class _EditorWorkspace extends StatelessWidget {
                   _KeepAliveTab(
                     child: _PrivatePanel(
                       icon: Icons.person_outline,
-                      title: 'Player',
+                      title: l10n.tabPlayer,
+                      isPlayer: true,
                       inspection: inspection,
                       notifier: notifier,
                       // Private writes recompress the payload, so also require the
@@ -722,8 +748,7 @@ class _EditorWorkspace extends StatelessWidget {
                       editable:
                           inspection.privateEditable &&
                           state.codecCompressReady,
-                      lockedBody:
-                          'Private player edits need a compress-ready codec.',
+                      lockedBody: l10n.playerLockedBody,
                     ),
                   ),
                   _KeepAliveTab(
@@ -778,7 +803,7 @@ class _EditorWorkspace extends StatelessWidget {
               color: scheme.surface.withValues(alpha: 0.6),
               child: Center(
                 child: Semantics(
-                  label: 'Loading editor data',
+                  label: l10n.loadingEditorData,
                   child: const SizedBox(
                     width: 44,
                     height: 44,
@@ -879,6 +904,7 @@ class _OverviewInspectionJsonState extends State<_OverviewInspectionJson> {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     return Card(
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -887,8 +913,8 @@ class _OverviewInspectionJsonState extends State<_OverviewInspectionJson> {
           children: [
             _CollapsibleCardHeader(
               icon: Icons.data_object,
-              title: 'Inspection JSON',
-              subtitle: 'Raw save inspection data',
+              title: l10n.inspectionJsonTitle,
+              subtitle: l10n.inspectionJsonSubtitle,
               expanded: _expanded,
               onToggle: () => setState(() => _expanded = !_expanded),
             ),
@@ -898,7 +924,7 @@ class _OverviewInspectionJsonState extends State<_OverviewInspectionJson> {
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
                   IconButton(
-                    tooltip: 'Copy',
+                    tooltip: l10n.copy,
                     icon: const Icon(Icons.copy),
                     onPressed: () =>
                         Clipboard.setData(ClipboardData(text: _getJson())),
@@ -932,6 +958,7 @@ class _OverviewDiagnosticsState extends State<_OverviewDiagnostics> {
   @override
   Widget build(BuildContext context) {
     final inspection = widget.inspection;
+    final l10n = AppLocalizations.of(context);
     return Card(
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -940,8 +967,8 @@ class _OverviewDiagnosticsState extends State<_OverviewDiagnostics> {
           children: [
             _CollapsibleCardHeader(
               icon: Icons.science_outlined,
-              title: 'Diagnostics & details',
-              subtitle: 'Read-only format inspection',
+              title: l10n.diagnosticsTitle,
+              subtitle: l10n.diagnosticsSubtitle,
               expanded: _expanded,
               onToggle: () => setState(() => _expanded = !_expanded),
             ),
@@ -953,27 +980,35 @@ class _OverviewDiagnosticsState extends State<_OverviewDiagnostics> {
                   Expanded(
                     child: _MetricGrid(
                       metrics: {
-                        'Format': inspection.format,
-                        'Slot': inspection.slot ?? '-',
+                        l10n.metricFormat: inspection.format,
+                        l10n.metricSlot: inspection.slot ?? '-',
                         if (inspection.chapterId != null)
-                          'Chapter': inspection.chapterId.toString(),
+                          l10n.metricChapter: inspection.chapterId.toString(),
                         if (inspection.timePlayedSeconds != null)
-                          'Time played': _formatDurationSeconds(
+                          l10n.metricTimePlayed: _formatDurationSeconds(
                             inspection.timePlayedSeconds,
                           ),
                         if (inspection.quickSave != null ||
                             inspection.autoSave != null)
-                          'Save kind': _formatSaveKind(
+                          l10n.metricSaveKind: _formatSaveKind(
+                            l10n,
                             quickSave: inspection.quickSave,
                             autoSave: inspection.autoSave,
                           ),
-                        'File size': '${_bytes.format(inspection.size)} bytes',
-                        'Compression': inspection.compressionMethod ?? '-',
-                        'Chunks': inspection.chunkCount?.toString() ?? '-',
-                        'Uncompressed': inspection.uncompressedSize == null
+                        l10n.metricFileSize: l10n.bytesValue(
+                          _bytes.format(inspection.size),
+                        ),
+                        l10n.metricCompression:
+                            inspection.compressionMethod ?? '-',
+                        l10n.metricChunks:
+                            inspection.chunkCount?.toString() ?? '-',
+                        l10n.metricUncompressed:
+                            inspection.uncompressedSize == null
                             ? '-'
-                            : '${_bytes.format(inspection.uncompressedSize)} bytes',
-                        'Private': inspection.privateStatus ?? '-',
+                            : l10n.bytesValue(
+                                _bytes.format(inspection.uncompressedSize),
+                              ),
+                        l10n.metricPrivate: inspection.privateStatus ?? '-',
                       },
                     ),
                   ),
@@ -981,17 +1016,21 @@ class _OverviewDiagnosticsState extends State<_OverviewDiagnostics> {
                   Expanded(
                     child: _MetricGrid(
                       metrics: {
-                        'Slot name': inspection.slotName ?? '-',
-                        'Trailer': inspection.trailerSize == null
+                        l10n.metricSlotName: inspection.slotName ?? '-',
+                        l10n.metricTrailer: inspection.trailerSize == null
                             ? '-'
-                            : '${inspection.trailerSize} bytes',
-                        'Decoded private':
+                            : l10n.bytesValue('${inspection.trailerSize}'),
+                        l10n.metricDecodedPrivate:
                             inspection.privateDecompressedSize == null
                             ? '-'
-                            : '${_bytes.format(inspection.privateDecompressedSize)} bytes',
-                        'Private strings':
+                            : l10n.bytesValue(
+                                _bytes.format(
+                                  inspection.privateDecompressedSize,
+                                ),
+                              ),
+                        l10n.metricPrivateStrings:
                             inspection.privateStringCount?.toString() ?? '-',
-                        'SHA-1': inspection.sha1,
+                        l10n.metricSha1: inspection.sha1,
                       },
                     ),
                   ),
@@ -1013,13 +1052,14 @@ class _HeaderCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     final screenshot = save?.screenshot ?? inspection.screenshot;
     final title =
         save?.displayName ??
         inspection.playerSaveName ??
         inspection.slot ??
-        'Savegame';
-    final slot = save?.slot ?? inspection.slot ?? 'Savegame';
+        l10n.savegameFallbackTitle;
+    final slot = save?.slot ?? inspection.slot ?? l10n.savegameFallbackTitle;
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -1076,7 +1116,7 @@ class _HeaderCard extends StatelessWidget {
                             if (inspection.chapterId != null)
                               _InfoPill(
                                 icon: Icons.flag_outlined,
-                                label: 'Chapter ${inspection.chapterId}',
+                                label: l10n.chapterLabel(inspection.chapterId!),
                               ),
                             if (inspection.timePlayedSeconds != null)
                               _InfoPill(
@@ -1125,6 +1165,7 @@ class _ScreenshotPreview extends StatelessWidget {
     final bytes = _decodeScreenshot(screenshot);
     final radius = BorderRadius.circular(compact ? 6 : 8);
     final scheme = Theme.of(context).colorScheme;
+    final l10n = AppLocalizations.of(context);
     final placeholder = ColoredBox(
       color: scheme.surfaceContainerHighest,
       child: Center(
@@ -1143,7 +1184,7 @@ class _ScreenshotPreview extends StatelessWidget {
               bytes,
               fit: BoxFit.cover,
               gaplessPlayback: true,
-              semanticLabel: 'Screenshot for $slot',
+              semanticLabel: l10n.screenshotForSlot(slot),
               errorBuilder: (_, _, _) => placeholder,
             ),
     );
@@ -1252,7 +1293,8 @@ class _MetadataEditorState extends State<_MetadataEditor> {
   void _updatePending(String fieldText) {
     final value = fieldText.trim();
     if (value.isEmpty) {
-      setState(() => _error = 'Required');
+      final required = AppLocalizations.of(context).required;
+      setState(() => _error = required);
       widget.notifier.clearPendingEdit('publicName');
       return;
     }
@@ -1281,7 +1323,7 @@ class _MetadataEditorState extends State<_MetadataEditor> {
         child: TextField(
           controller: _controller,
           decoration: InputDecoration(
-            labelText: 'Public save name',
+            labelText: AppLocalizations.of(context).publicSaveName,
             prefixIcon: const Icon(Icons.edit_outlined),
             errorText: _error,
           ),
@@ -1335,6 +1377,7 @@ class _PrivatePanel extends StatelessWidget {
   const _PrivatePanel({
     required this.icon,
     required this.title,
+    required this.isPlayer,
     required this.inspection,
     required this.notifier,
     required this.editable,
@@ -1343,6 +1386,7 @@ class _PrivatePanel extends StatelessWidget {
 
   final IconData icon;
   final String title;
+  final bool isPlayer;
   final SaveInspection inspection;
   final EditorNotifier notifier;
   final bool editable;
@@ -1387,7 +1431,7 @@ class _PrivatePanel extends StatelessWidget {
       // Typed path: HeroStatsCard manages its own internal scroll for the
       // detail area and pins the sidebar. Give it the full pane via Padding
       // (not ListView) so it has a finite height to work with.
-      if (title == 'Player' && inspection.privateTypedVerified) {
+      if (isPlayer && inspection.privateTypedVerified) {
         return Padding(
           padding: const EdgeInsets.all(20),
           child: HeroStatsCard(
@@ -1427,7 +1471,7 @@ class _PrivatePanel extends StatelessWidget {
       return ListView(
         padding: const EdgeInsets.all(20),
         children: [
-          if (title == 'Player') ...[
+          if (isPlayer) ...[
             // Typed parse failed or not verified: stacked legacy layout —
             // no sidebar, no typed load call.
             if (inspection.privatePlayer.attributes.isNotEmpty) ...[
@@ -1506,12 +1550,12 @@ class _InventoryPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     if (!inspection.privateDecoded) {
-      return const _MessagePane(
+      return _MessagePane(
         icon: Icons.inventory_2_outlined,
-        title: 'Inventory',
-        body:
-            'Inventory editing needs decoded private payload data from the codec.',
+        title: l10n.inventoryTitle,
+        body: l10n.inventoryNeedsDecoded,
       );
     }
     // Inventory writes recompress the payload too, so require a
@@ -1544,10 +1588,10 @@ class _InventoryPanel extends StatelessWidget {
     if (!hasItems && !canAddItem && !canRemoveItem) {
       // Decoded fine, nothing recognised and nothing addable — say so instead
       // of leaving the tab blank.
-      return const _MessagePane(
+      return _MessagePane(
         icon: Icons.inventory_2_outlined,
-        title: 'Inventory',
-        body: 'No item stacks found in the decoded private payload.',
+        title: l10n.inventoryTitle,
+        body: l10n.inventoryNoStacks,
       );
     }
     return Padding(
@@ -1563,7 +1607,7 @@ class _InventoryPanel extends StatelessWidget {
   }
 }
 
-class _PrivateInventorySummaryCard extends StatefulWidget {
+class _PrivateInventorySummaryCard extends ConsumerStatefulWidget {
   const _PrivateInventorySummaryCard({
     required this.inventory,
     required this.notifier,
@@ -1579,12 +1623,12 @@ class _PrivateInventorySummaryCard extends StatefulWidget {
   final bool canRemoveItem;
 
   @override
-  State<_PrivateInventorySummaryCard> createState() =>
+  ConsumerState<_PrivateInventorySummaryCard> createState() =>
       _PrivateInventorySummaryCardState();
 }
 
 class _PrivateInventorySummaryCardState
-    extends State<_PrivateInventorySummaryCard> {
+    extends ConsumerState<_PrivateInventorySummaryCard> {
   String _query = '';
   final TextEditingController _searchController = TextEditingController();
   final Map<String, InventoryItemCountChange> _pendingCountChanges = {};
@@ -1679,6 +1723,10 @@ class _PrivateInventorySummaryCardState
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final l10n = AppLocalizations.of(context);
+    final lang = ref.watch(currentGameLangProvider);
+    final locCatalog =
+        ref.watch(locCatalogProvider).asData?.value ?? const {};
     final inventory = widget.inventory;
     final query = _query.trim().toLowerCase();
     final items = inventory.items.where((item) {
@@ -1739,13 +1787,13 @@ class _PrivateInventorySummaryCardState
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    'Inventory',
+                    l10n.inventoryTitle,
                     style: theme.textTheme.titleMedium,
                   ),
                 ),
                 if (widget.editable && hasPendingChanges) ...[
                   Tooltip(
-                    message: 'Reset inventory changes',
+                    message: l10n.resetInventoryChanges,
                     child: IconButton(
                       icon: const Icon(Icons.undo_outlined),
                       onPressed: () {
@@ -1763,15 +1811,15 @@ class _PrivateInventorySummaryCardState
                   const SizedBox(width: 8),
                   Tooltip(
                     message: hasPendingAdd
-                        ? 'Save pending changes first — one new item per save'
+                        ? l10n.addItemTooltipPendingAdd
                         : hasPendingRemove
-                            ? 'Save the pending removal first — one structural change per save'
+                            ? l10n.addItemTooltipPendingRemove
                             : hasPendingCount
-                                ? 'Save or reset pending count changes first — a structural edit must be saved on its own'
-                                : 'Add item to inventory',
+                                ? l10n.addItemTooltipPendingCount
+                                : l10n.addItemTooltipDefault,
                     child: FilledButton.icon(
                       icon: const Icon(Icons.add, size: 18),
-                      label: const Text('Add item'),
+                      label: Text(l10n.addItemButton),
                       onPressed: structuralBlocked ? null : _openAddDialog,
                     ),
                   ),
@@ -1784,8 +1832,8 @@ class _PrivateInventorySummaryCardState
                 tone: _PendingTone.add,
                 icon: Icons.add_circle_outline,
                 title: _itemDisplayFromPath(_pendingAdd!.path),
-                subtitle: '×${_pendingAdd!.count} — pending add (not yet saved)',
-                cancelTooltip: 'Cancel pending add',
+                subtitle: l10n.pendingAddSubtitle(_pendingAdd!.count),
+                cancelTooltip: l10n.cancelPendingAdd,
                 onCancel: () {
                   setState(() => _pendingAdd = null);
                   _pushInventoryPending();
@@ -1798,8 +1846,8 @@ class _PrivateInventorySummaryCardState
                 tone: _PendingTone.remove,
                 icon: Icons.delete_outline,
                 title: _itemDisplayFromPath(_pendingRemovePath!),
-                subtitle: 'pending removal (not yet saved)',
-                cancelTooltip: 'Cancel pending removal',
+                subtitle: l10n.pendingRemovalSubtitle,
+                cancelTooltip: l10n.cancelPendingRemoval,
                 onCancel: _undoRemove,
               ),
             ],
@@ -1807,9 +1855,9 @@ class _PrivateInventorySummaryCardState
               const SizedBox(height: 12),
               TextField(
                 controller: _searchController,
-                decoration: const InputDecoration(
-                  labelText: 'Filter items',
-                  prefixIcon: Icon(Icons.search),
+                decoration: InputDecoration(
+                  labelText: l10n.filterItems,
+                  prefixIcon: const Icon(Icons.search),
                 ),
                 onChanged: (value) => setState(() => _query = value),
               ),
@@ -1822,9 +1870,8 @@ class _PrivateInventorySummaryCardState
                           // hid the last item(s) — not a filter miss, so don't
                           // claim "no items match".
                           searching
-                              ? 'No items match "$_query".'
-                              : 'The pending removal hides every item — '
-                                  'save to apply it.',
+                              ? l10n.noItemsMatchQuery(_query)
+                              : l10n.pendingRemovalHidesAll,
                           style: theme.textTheme.bodyMedium,
                         ),
                       )
@@ -1848,8 +1895,10 @@ class _PrivateInventorySummaryCardState
                                         icon: iconForItemCategory(
                                           group.category,
                                         ),
-                                        label:
-                                            '${group.category.label} (${group.items.length})',
+                                        label: l10n.categoryWithCount(
+                                          group.category.label,
+                                          group.items.length,
+                                        ),
                                         selected: !searching &&
                                             group.category == selected,
                                         onTap: () => setState(() {
@@ -1879,7 +1928,14 @@ class _PrivateInventorySummaryCardState
                                           Icons.category_outlined,
                                         ),
                                         title: Text(
-                                          item.id.isEmpty ? item.path : item.id,
+                                          localizedGameName(
+                                                locCatalog,
+                                                lang,
+                                                item.id,
+                                              ) ??
+                                              (item.id.isEmpty
+                                                  ? item.path
+                                                  : item.id),
                                           maxLines: 1,
                                           overflow: TextOverflow.ellipsis,
                                         ),
@@ -1892,6 +1948,7 @@ class _PrivateInventorySummaryCardState
                                               ),
                                         trailing: _inventoryItemTrailing(
                                           theme,
+                                          l10n,
                                           item,
                                           canRemove: canRemove,
                                           countEditable: countEditable,
@@ -1929,6 +1986,7 @@ class _PrivateInventorySummaryCardState
   /// Trailing widget for an inventory row: count editor + a delete button.
   Widget _inventoryItemTrailing(
     ThemeData theme,
+    AppLocalizations l10n,
     PrivateInventoryItem item, {
     required bool canRemove,
     required bool countEditable,
@@ -1953,19 +2011,17 @@ class _PrivateInventorySummaryCardState
           )
         else
           Text(
-            '×${item.count ?? '?'}',
+            l10n.countTimes('${item.count ?? '?'}'),
             style: theme.textTheme.bodyMedium,
           ),
         if (canRemove && item.path.isNotEmpty) ...[
           const SizedBox(width: 4),
           Tooltip(
             message: !item.removable
-                ? "Can't delete: this item is likely equipped or "
-                    'assigned to a hotkey slot'
+                ? l10n.deleteEquippedTooltip
                 : removeBlocked
-                ? 'Save or reset your pending inventory changes first — '
-                    'an add or remove must be saved on its own'
-                : 'Remove item from inventory',
+                ? l10n.removeBlockedTooltip
+                : l10n.removeItemFromInventory,
             child: IconButton(
               icon: const Icon(Icons.delete_outline),
               // A non-removable item shows the trash icon disabled (its asset
@@ -2126,7 +2182,7 @@ class _InventoryItemCountEditorState extends State<_InventoryItemCountEditor> {
         keyboardType: TextInputType.number,
         onChanged: _onCountTextChanged,
         decoration: InputDecoration(
-          labelText: 'Count',
+          labelText: AppLocalizations.of(context).count,
           errorText: _error,
           // Compact the field so it fits inside the dense ListTile row. A
           // reserved helper line would steal the input box's vertical space
@@ -2149,7 +2205,8 @@ class _InventoryItemCountEditorState extends State<_InventoryItemCountEditor> {
     if (parsed == null || parsed < 1) {
       // Min 1: a count of 0 would leave a ghost slot (invisible in-game but
       // still in the save). Use the remove button to delete an item.
-      setState(() => _error = 'Min 1');
+      final min1 = AppLocalizations.of(context).min1;
+      setState(() => _error = min1);
       widget.onPendingCountChanged(null);
       return;
     }
@@ -2277,6 +2334,7 @@ class _PrivatePlayerTransformEditorState
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -2286,7 +2344,7 @@ class _PrivatePlayerTransformEditorState
             const SizedBox(width: 8),
             Expanded(
               child: Text(
-                'Hero transform',
+                l10n.heroTransform,
                 style: Theme.of(context).textTheme.titleSmall,
               ),
             ),
@@ -2306,37 +2364,37 @@ class _PrivatePlayerTransformEditorState
             final fields = [
               _TransformNumberField(
                 controller: _locationXController,
-                label: 'Location X',
+                label: l10n.locationX,
                 enabled: widget.editable,
                 onChanged: (_) => _updatePending(),
               ),
               _TransformNumberField(
                 controller: _locationYController,
-                label: 'Location Y',
+                label: l10n.locationY,
                 enabled: widget.editable,
                 onChanged: (_) => _updatePending(),
               ),
               _TransformNumberField(
                 controller: _locationZController,
-                label: 'Location Z',
+                label: l10n.locationZ,
                 enabled: widget.editable,
                 onChanged: (_) => _updatePending(),
               ),
               _TransformNumberField(
                 controller: _rotationPitchController,
-                label: 'Rotation pitch',
+                label: l10n.rotationPitch,
                 enabled: widget.editable,
                 onChanged: (_) => _updatePending(),
               ),
               _TransformNumberField(
                 controller: _rotationYawController,
-                label: 'Rotation yaw',
+                label: l10n.rotationYaw,
                 enabled: widget.editable,
                 onChanged: (_) => _updatePending(),
               ),
               _TransformNumberField(
                 controller: _rotationRollController,
-                label: 'Rotation roll',
+                label: l10n.rotationRoll,
                 enabled: widget.editable,
                 onChanged: (_) => _updatePending(),
               ),
@@ -2392,7 +2450,8 @@ class _PrivatePlayerTransformEditorState
         rotationPitch == null ||
         rotationYaw == null ||
         rotationRoll == null) {
-      setState(() => _error = 'Invalid');
+      final invalid = AppLocalizations.of(context).invalid;
+      setState(() => _error = invalid);
       widget.notifier.clearPendingEdit('transform');
       return;
     }
@@ -2474,6 +2533,7 @@ class _PrivatePlayerAttributesEditor extends StatelessWidget {
     final editable =
         this.editable &&
         player.writable.contains('private.player.setAttribute');
+    final l10n = AppLocalizations.of(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -2482,7 +2542,7 @@ class _PrivatePlayerAttributesEditor extends StatelessWidget {
             const Icon(Icons.monitor_heart_outlined),
             const SizedBox(width: 8),
             Text(
-              'Hero attributes',
+              l10n.heroAttributes,
               style: Theme.of(context).textTheme.titleSmall,
             ),
           ],
@@ -2588,20 +2648,24 @@ class _PrivatePlayerAttributeRowState
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     final name = widget.attribute.id;
     final baseField = TextField(
       controller: _baseController,
       enabled: widget.editable,
       keyboardType: const TextInputType.numberWithOptions(decimal: true),
       onChanged: (_) => _updatePending(),
-      decoration: InputDecoration(labelText: '$name base', errorText: _error),
+      decoration: InputDecoration(
+        labelText: l10n.attributeBase(name),
+        errorText: _error,
+      ),
     );
     final currentField = TextField(
       controller: _currentController,
       enabled: widget.editable,
       keyboardType: const TextInputType.numberWithOptions(decimal: true),
       onChanged: (_) => _updatePending(),
-      decoration: InputDecoration(labelText: '$name current'),
+      decoration: InputDecoration(labelText: l10n.attributeCurrent(name)),
     );
     final label = SizedBox(
       width: 116,
@@ -2642,7 +2706,8 @@ class _PrivatePlayerAttributeRowState
     final baseValue = double.tryParse(_baseController.text.trim());
     final currentValue = double.tryParse(_currentController.text.trim());
     if (baseValue == null || currentValue == null) {
-      setState(() => _error = 'Invalid');
+      final invalid = AppLocalizations.of(context).invalid;
+      setState(() => _error = invalid);
       widget.notifier.clearPendingEdit('attr:$id');
       return;
     }
@@ -2817,13 +2882,12 @@ class _AllDataPanelState extends State<_AllDataPanel> {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     if (!widget.inspection.privateDecoded) {
-      return const _MessagePane(
+      return _MessagePane(
         icon: Icons.tune,
-        title: 'All data',
-        body:
-            'The full property browser needs decoded private payload data from '
-            'the codec.',
+        title: l10n.tabAllData,
+        body: l10n.allDataLockedBody,
       );
     }
     final theme = Theme.of(context);
@@ -2840,15 +2904,16 @@ class _AllDataPanelState extends State<_AllDataPanel> {
                   const Icon(Icons.tune),
                   const SizedBox(width: 8),
                   Expanded(
-                    child: Text('All data', style: theme.textTheme.titleMedium),
+                    child: Text(
+                      l10n.tabAllData,
+                      style: theme.textTheme.titleMedium,
+                    ),
                   ),
                 ],
               ),
               const SizedBox(height: 4),
               Text(
-                'Search every typed property by name or path. Scalars, strings, '
-                'enums and object paths are editable; structs are shown '
-                'read-only for now.',
+                l10n.allDataDescription,
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: theme.colorScheme.onSurfaceVariant,
                 ),
@@ -2857,8 +2922,7 @@ class _AllDataPanelState extends State<_AllDataPanel> {
               TextField(
                 controller: _controller,
                 decoration: InputDecoration(
-                  labelText:
-                      'Search properties (empty = list everything) — e.g. Health, GameTime',
+                  labelText: l10n.searchPropertiesLabel,
                   prefixIcon: const Icon(Icons.search),
                   suffixIcon: _searching
                       ? const Padding(
@@ -2888,37 +2952,34 @@ class _AllDataPanelState extends State<_AllDataPanel> {
   }
 
   Widget _buildResults(ThemeData theme) {
+    final l10n = AppLocalizations.of(context);
     final result = _result;
     if (result == null) {
       if (_searching) {
-        return const _MessagePane(
+        return _MessagePane(
           icon: Icons.hourglass_empty,
-          title: 'Decoding save…',
-          body:
-              'Decoding the full private payload for the first search. This '
-              'runs once per save, then searches are instant.',
+          title: l10n.decodingSaveTitle,
+          body: l10n.decodingSaveBody,
         );
       }
-      return const _MessagePane(
+      return _MessagePane(
         icon: Icons.search,
-        title: 'Search the save',
-        body:
-            'Type a property name and press enter. Leave it empty to list '
-            'everything.',
+        title: l10n.searchTheSaveTitle,
+        body: l10n.searchTheSaveBody,
       );
     }
     if (result.error != null) {
       return _MessagePane(
         icon: Icons.error_outline,
-        title: 'Search failed',
+        title: l10n.searchFailedTitle,
         body: result.error!,
       );
     }
     if (result.results.isEmpty) {
-      return const _MessagePane(
+      return _MessagePane(
         icon: Icons.search_off,
-        title: 'No matches',
-        body: 'No property path contained all of those terms.',
+        title: l10n.noMatchesTitle,
+        body: l10n.noMatchesBody,
       );
     }
     return ListView.separated(
@@ -2939,6 +3000,7 @@ class _AllDataPanelState extends State<_AllDataPanel> {
   }
 
   Widget _buildPaginationBar(ThemeData theme) {
+    final l10n = AppLocalizations.of(context);
     final result = _result;
     if (result == null || (result.error != null) || result.total == 0) {
       return const SizedBox.shrink();
@@ -2955,13 +3017,13 @@ class _AllDataPanelState extends State<_AllDataPanel> {
       runSpacing: 4,
       children: [
         IconButton(
-          tooltip: 'First page',
+          tooltip: l10n.firstPage,
           visualDensity: VisualDensity.compact,
           icon: const Icon(Icons.first_page),
           onPressed: busy || !result.hasPrevious ? null : () => _goToPage(0),
         ),
         IconButton(
-          tooltip: 'Previous page',
+          tooltip: l10n.previousPage,
           visualDensity: VisualDensity.compact,
           icon: const Icon(Icons.chevron_left),
           onPressed: busy || !result.hasPrevious
@@ -2969,7 +3031,7 @@ class _AllDataPanelState extends State<_AllDataPanel> {
               : () => _goToPage(result.pageIndex - 1),
         ),
         IconButton(
-          tooltip: 'Next page',
+          tooltip: l10n.nextPage,
           visualDensity: VisualDensity.compact,
           icon: const Icon(Icons.chevron_right),
           onPressed: busy || !result.hasNext
@@ -2977,7 +3039,7 @@ class _AllDataPanelState extends State<_AllDataPanel> {
               : () => _goToPage(result.pageIndex + 1),
         ),
         IconButton(
-          tooltip: 'Last page',
+          tooltip: l10n.lastPage,
           visualDensity: VisualDensity.compact,
           icon: const Icon(Icons.last_page),
           onPressed: busy || !result.hasNext
@@ -2986,13 +3048,16 @@ class _AllDataPanelState extends State<_AllDataPanel> {
         ),
         const SizedBox(width: 4),
         Text(
-          'Page ${result.pageIndex + 1} / ${result.pageCount}',
+          l10n.pageOfPages(result.pageIndex + 1, result.pageCount),
           style: muted,
         ),
         const SizedBox(width: 8),
-        Text('$first–$last of ${result.total}', style: muted),
+        Text(
+          l10n.rangeOfTotal(first, last, result.total),
+          style: muted,
+        ),
         const SizedBox(width: 8),
-        Text('Per page:', style: muted),
+        Text(l10n.perPage, style: muted),
         DropdownButton<int>(
           value: _pageSize,
           isDense: true,
@@ -3203,9 +3268,9 @@ class _TypedPropertyRowState extends State<_TypedPropertyRow> {
               child: TextField(
                 controller: _controller,
                 onChanged: _updatePending,
-                decoration: const InputDecoration(
+                decoration: InputDecoration(
                   isDense: true,
-                  labelText: 'Value',
+                  labelText: AppLocalizations.of(context).value,
                 ),
               ),
             ),
@@ -3243,6 +3308,7 @@ class _BackupsPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     final backups = state.backups;
     final companionBackups = state.companionBackups;
+    final l10n = AppLocalizations.of(context);
     return ListView(
       padding: const EdgeInsets.all(20),
       children: [
@@ -3250,10 +3316,10 @@ class _BackupsPanel extends StatelessWidget {
           children: [
             const Icon(Icons.history),
             const SizedBox(width: 8),
-            Text('Backups', style: Theme.of(context).textTheme.titleLarge),
+            Text(l10n.backupsTitle, style: Theme.of(context).textTheme.titleLarge),
             const Spacer(),
             Tooltip(
-              message: 'Refresh backups',
+              message: l10n.refreshBackups,
               child: IconButton(
                 icon: const Icon(Icons.refresh),
                 onPressed: state.isLoading ? null : notifier.refreshBackups,
@@ -3263,13 +3329,13 @@ class _BackupsPanel extends StatelessWidget {
         ),
         const SizedBox(height: 12),
         if (backups.isEmpty && companionBackups.isEmpty)
-          const _InlineNotice(
+          _InlineNotice(
             icon: Icons.info_outline,
-            title: 'No backups',
-            body: 'Edited saves create backup files next to the selected slot.',
+            title: l10n.noBackupsTitle,
+            body: l10n.noBackupsBody,
           ),
         if (backups.isNotEmpty) ...[
-          Text('Slot backups', style: Theme.of(context).textTheme.titleMedium),
+          Text(l10n.slotBackups, style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 8),
           ...backups.map(
             (backup) => _BackupCard(
@@ -3283,7 +3349,7 @@ class _BackupsPanel extends StatelessWidget {
         if (companionBackups.isNotEmpty) ...[
           if (backups.isNotEmpty) const SizedBox(height: 8),
           Text(
-            'Profile backups',
+            l10n.profileBackups,
             style: Theme.of(context).textTheme.titleMedium,
           ),
           const SizedBox(height: 8),
@@ -3317,6 +3383,7 @@ class _BackupCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final canRestore = showRestoreAction && backup.canRestore;
+    final l10n = AppLocalizations.of(context);
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: Card(
@@ -3349,22 +3416,28 @@ class _BackupCard extends StatelessWidget {
                       runSpacing: 6,
                       children: [
                         _SmallFact(
-                          label: 'Name',
+                          label: l10n.backupFactName,
                           value: backup.playerSaveName ?? '-',
                         ),
                         if (backup.slotName != null)
-                          _SmallFact(label: 'Slot', value: backup.slotName!),
+                          _SmallFact(
+                            label: l10n.backupFactSlot,
+                            value: backup.slotName!,
+                          ),
                         _SmallFact(
-                          label: 'Created',
+                          label: l10n.backupFactCreated,
                           value: _formatBackupTime(backup.createdEpoch),
                         ),
                         _SmallFact(
-                          label: 'Size',
-                          value: '${_bytes.format(backup.fileSize)} bytes',
+                          label: l10n.backupFactSize,
+                          value: l10n.bytesValue(_bytes.format(backup.fileSize)),
                         ),
-                        _SmallFact(label: 'Status', value: backup.status),
                         _SmallFact(
-                          label: 'SHA-1',
+                          label: l10n.backupFactStatus,
+                          value: backup.status,
+                        ),
+                        _SmallFact(
+                          label: l10n.backupFactSha1,
                           value: _shortSha(backup.sha1),
                         ),
                       ],
@@ -3375,7 +3448,7 @@ class _BackupCard extends StatelessWidget {
               if (showRestoreAction) ...[
                 const SizedBox(width: 12),
                 Tooltip(
-                  message: 'Restore ${backup.fileName}',
+                  message: l10n.restoreBackupTooltip(backup.fileName),
                   child: IconButton.filledTonal(
                     icon: const Icon(Icons.restore),
                     onPressed: isLoading || !canRestore ? null : onRestore,
@@ -3483,6 +3556,7 @@ class _SettingsPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final codec = state.codecStatus;
+    final l10n = AppLocalizations.of(context);
     return ListView(
       padding: const EdgeInsets.all(20),
       children: [
@@ -3503,14 +3577,14 @@ class _SettingsPanel extends StatelessWidget {
                     const Icon(Icons.folder_outlined),
                     const SizedBox(width: 8),
                     Text(
-                      'Savegame directory',
+                      l10n.savegameDirectoryTitle,
                       style: Theme.of(context).textTheme.titleMedium,
                     ),
                   ],
                 ),
                 const SizedBox(height: 12),
                 _PathSettingRow(
-                  label: 'Folder',
+                  label: l10n.folder,
                   value: state.saveDir,
                   onBrowse: notifier.chooseSaveDir,
                 ),
@@ -3530,19 +3604,19 @@ class _SettingsPanel extends StatelessWidget {
                     const Icon(Icons.compress_outlined),
                     const SizedBox(width: 8),
                     Text(
-                      'Codec',
+                      l10n.codecTitle,
                       style: Theme.of(context).textTheme.titleMedium,
                     ),
                     const Spacer(),
                     OutlinedButton.icon(
                       icon: const Icon(Icons.refresh),
-                      label: const Text('Check'),
+                      label: Text(l10n.check),
                       onPressed: () => notifier.checkCodec(),
                     ),
                     const SizedBox(width: 8),
                     OutlinedButton.icon(
                       icon: const Icon(Icons.verified_outlined),
-                      label: const Text('Roundtrip'),
+                      label: Text(l10n.roundtrip),
                       onPressed: state.selectedPath == null || state.isLoading
                           ? null
                           : notifier.validateCodecRoundtrip,
@@ -3570,6 +3644,7 @@ class CodecStatusView extends StatelessWidget {
   Widget build(BuildContext context) {
     final codec = this.codec;
     final scheme = Theme.of(context).colorScheme;
+    final l10n = AppLocalizations.of(context);
     // A codec error (e.g. a failed roundtrip) can coexist with a status, so
     // render it whenever present -- both when there is no status and alongside
     // one.
@@ -3587,7 +3662,7 @@ class CodecStatusView extends StatelessWidget {
             ],
           );
     if (codec == null) {
-      return errorRow ?? const Text('No codec status');
+      return errorRow ?? Text(l10n.noCodecStatus);
     }
     // The in-process codec maps to three states: ready (decode + encode),
     // decode_only (read but not write), and unavailable.
@@ -3605,10 +3680,10 @@ class CodecStatusView extends StatelessWidget {
         ? Icons.warning_amber_rounded
         : Icons.error_outline;
     final title = isReady
-        ? 'Codec ready'
+        ? l10n.codecReady
         : isDecodeOnly
-        ? 'Codec read-only'
-        : 'Codec unavailable';
+        ? l10n.codecReadOnly
+        : l10n.codecUnavailable;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -3632,17 +3707,19 @@ class CodecStatusView extends StatelessWidget {
         ExpansionTile(
           tilePadding: EdgeInsets.zero,
           childrenPadding: const EdgeInsets.only(bottom: 8),
-          title: const Text('Details'),
+          title: Text(l10n.details),
           children: [
             Align(
               alignment: Alignment.centerLeft,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('Status: ${codec.status}'),
-                  Text('Decompress: ${codec.canDecompress ? 'yes' : 'no'} | '
-                      'Compress: ${codec.canCompress ? 'yes' : 'no'}'),
-                  Text('Backend: ${codec.adapter ?? codec.backend}'),
+                  Text(l10n.codecStatusLine(codec.status)),
+                  Text(l10n.codecCapabilityLine(
+                    codec.canDecompress ? l10n.yes : l10n.no,
+                    codec.canCompress ? l10n.yes : l10n.no,
+                  )),
+                  Text(l10n.codecBackendLine(codec.adapter ?? codec.backend)),
                 ],
               ),
             ),
@@ -3666,6 +3743,7 @@ class _PathSettingRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -3695,7 +3773,7 @@ class _PathSettingRow extends StatelessWidget {
         ),
         const SizedBox(width: 8),
         IconButton(
-          tooltip: 'Browse',
+          tooltip: l10n.browse,
           icon: const Icon(Icons.folder_open),
           onPressed: onBrowse,
         ),

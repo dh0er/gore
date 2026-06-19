@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:gore_mod/editor/domain/override_entry.dart';
 import 'package:gore_mod/editor/domain/overrides_notifier.dart';
 import 'package:gore_mod/editor/ui/overrides_panel.dart';
+import 'package:gore_mod/l10n/app_localizations.dart';
 
 void main() {
   const apple500 = OverrideEntry(
@@ -16,6 +17,8 @@ void main() {
   Widget buildPanel({List<OverrideEntry> initial = const []}) {
     return ProviderScope(
       child: MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: Scaffold(
           body: Consumer(
             builder: (context, ref, _) {

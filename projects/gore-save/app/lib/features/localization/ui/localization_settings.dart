@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:goresave/features/localization/domain/localization_controller.dart';
 import 'package:goresave/features/localization/ui/localization_flow.dart';
+import 'package:goresave/l10n/app_localizations.dart';
 
 /// Settings-tab card that lets the user extract / refresh the localized game
 /// text on demand. Mirrors [UpdateSettingsCard]'s layout. The extraction itself
@@ -12,6 +13,7 @@ class LocalizationSettingsCard extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final l10n = AppLocalizations.of(context);
     final loc = ref.watch(localizationControllerProvider);
     final textTheme = Theme.of(context).textTheme;
     final scheme = Theme.of(context).colorScheme;
@@ -21,10 +23,10 @@ class LocalizationSettingsCard extends ConsumerWidget {
       final ids = loc.idCount;
       final langs = loc.languageCount;
       statusLine = (ids != null && langs != null)
-          ? 'Extracted: $ids ids across $langs languages.'
-          : 'Localized game text is extracted.';
+          ? l10n.gameTextExtractedWithCounts(ids, langs)
+          : l10n.gameTextExtracted;
     } else {
-      statusLine = 'Localized game text is not extracted yet.';
+      statusLine = l10n.gameTextNotExtracted;
     }
 
     return Card(
@@ -37,7 +39,7 @@ class LocalizationSettingsCard extends ConsumerWidget {
               children: [
                 const Icon(Icons.translate_outlined),
                 const SizedBox(width: 8),
-                Text('Game text', style: textTheme.titleMedium),
+                Text(l10n.gameTextTitle, style: textTheme.titleMedium),
               ],
             ),
             const SizedBox(height: 8),
@@ -58,8 +60,8 @@ class LocalizationSettingsCard extends ConsumerWidget {
                       : const Icon(Icons.refresh),
                   label: Text(
                     loc.isRunning
-                        ? 'Extracting…'
-                        : 'Extract / refresh localized text',
+                        ? l10n.extracting
+                        : l10n.extractRefreshLocalizedText,
                   ),
                 ),
               ],

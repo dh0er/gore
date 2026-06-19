@@ -53,11 +53,15 @@ class ExportNotifier extends StateNotifier<ExportState> {
     // The mod name becomes a directory component under the user-chosen folder
     // (and an entry prefix inside the .zip). Reject path-escaping names before
     // building any path with it.
+    // The dialog validates the name live (with localized messages) before
+    // enabling Export, so this is a safety net. It surfaces an English string
+    // because the notifier has no BuildContext; the live dialog error is the
+    // one users normally see.
     final nameError = validateModName(request.modName);
     if (nameError != null) {
       state = state.copyWith(
         isExporting: false,
-        result: ExportResult(error: 'Invalid mod name: $nameError'),
+        result: ExportResult(error: 'Invalid mod name: ${nameError.name}'),
       );
       return;
     }

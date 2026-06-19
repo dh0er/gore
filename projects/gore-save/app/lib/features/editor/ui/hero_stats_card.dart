@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:goresave/l10n/app_localizations.dart';
 
 import '../domain/hero_attributes.dart';
 
@@ -77,12 +78,12 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
   // Epoch counter used to discard results from superseded reload calls.
   int _reloadEpoch = 0;
 
-  static const _groupTitles = {
-    HeroAttributeGroup.core: 'Main stats',
-    HeroAttributeGroup.combat: 'Combat skills',
-    HeroAttributeGroup.resistances: 'Resistances',
-    HeroAttributeGroup.thieving: 'Thieving',
-    HeroAttributeGroup.advanced: 'Advanced',
+  String _groupTitle(AppLocalizations l10n, HeroAttributeGroup g) => switch (g) {
+    HeroAttributeGroup.core => l10n.heroGroupMainStats,
+    HeroAttributeGroup.combat => l10n.heroGroupCombatSkills,
+    HeroAttributeGroup.resistances => l10n.heroGroupResistances,
+    HeroAttributeGroup.thieving => l10n.heroGroupThieving,
+    HeroAttributeGroup.advanced => l10n.heroGroupAdvanced,
   };
 
   @override
@@ -168,6 +169,7 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
   /// On any validation error, notifies with empty edits + the error message
   /// so the parent can clear the 'heroStats' pending contribution.
   void _recomputePending() {
+    final l10n = AppLocalizations.of(context);
     final edits = <TypedValueEdit>[];
     for (final attribute in _attributes) {
       for (final (path, original) in [
@@ -180,16 +182,14 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
         if (text == null) continue;
         // A cleared field is almost certainly an accident.
         if (text.trim().isEmpty) {
-          final errMsg =
-              '${attribute.id} is empty — enter a value or restore the '
-              'original before saving.';
+          final errMsg = l10n.attributeEmpty(attribute.id);
           setState(() => _error = errMsg);
           widget.onPendingChanged(const [], errMsg);
           return;
         }
         final value = double.tryParse(text.trim());
         if (value == null) {
-          final errMsg = 'Invalid number for ${attribute.id}: "$text"';
+          final errMsg = l10n.attributeInvalidNumber(attribute.id, text);
           setState(() => _error = errMsg);
           widget.onPendingChanged(const [], errMsg);
           return;
@@ -334,7 +334,7 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
                       Icon(_entryIcon(entry)),
                       const SizedBox(width: 8),
                       Text(
-                        _groupTitles[group]!,
+                        _groupTitle(AppLocalizations.of(context), group),
                         style: theme.textTheme.titleSmall,
                       ),
                     ],
@@ -371,7 +371,7 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
                 children: [
                   for (final entry in sidebarEntries)
                     _SidebarTile(
-                      label: _entryLabel(entry),
+                      label: _entryLabel(AppLocalizations.of(context), entry),
                       icon: _entryIcon(entry),
                       selected: entry == effectiveSelected,
                       onTap: () {
@@ -418,14 +418,14 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
     };
   }
 
-  String _entryLabel(_SidebarEntry entry) {
+  String _entryLabel(AppLocalizations l10n, _SidebarEntry entry) {
     return switch (entry) {
-      _SidebarEntry.transform => 'Hero transform',
-      _SidebarEntry.core => 'Main stats',
-      _SidebarEntry.combat => 'Combat skills',
-      _SidebarEntry.resistances => 'Resistances',
-      _SidebarEntry.thieving => 'Thieving',
-      _SidebarEntry.advanced => 'Advanced',
+      _SidebarEntry.transform => l10n.heroEntryHeroTransform,
+      _SidebarEntry.core => l10n.heroGroupMainStats,
+      _SidebarEntry.combat => l10n.heroGroupCombatSkills,
+      _SidebarEntry.resistances => l10n.heroGroupResistances,
+      _SidebarEntry.thieving => l10n.heroGroupThieving,
+      _SidebarEntry.advanced => l10n.heroGroupAdvanced,
     };
   }
 
@@ -596,7 +596,9 @@ class _HeroAttributeRowState extends State<_HeroAttributeRow> {
               decimal: true,
               signed: true,
             ),
-            decoration: InputDecoration(labelText: '$_label base'),
+            decoration: InputDecoration(
+              labelText: AppLocalizations.of(context).attributeBase(_label),
+            ),
           );
           final currentField = TextField(
             controller: _currentController,
@@ -607,7 +609,9 @@ class _HeroAttributeRowState extends State<_HeroAttributeRow> {
               decimal: true,
               signed: true,
             ),
-            decoration: InputDecoration(labelText: '$_label current'),
+            decoration: InputDecoration(
+              labelText: AppLocalizations.of(context).attributeCurrent(_label),
+            ),
           );
           final rowLabel = Text(
             _label,

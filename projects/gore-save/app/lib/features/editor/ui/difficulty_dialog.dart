@@ -1,6 +1,24 @@
 import 'package:flutter/material.dart';
 import 'package:goresave/features/editor/domain/editor_models.dart';
 import 'package:goresave/features/editor/domain/editor_notifier.dart';
+import 'package:goresave/l10n/app_localizations.dart';
+
+/// Maps a logical preset value to its localized display label.
+String _presetLabel(AppLocalizations l10n, String p) => switch (p) {
+  'Novice' => l10n.presetNovice,
+  'Gothic' => l10n.presetGothic,
+  'Hard' => l10n.presetHard,
+  'Custom' => l10n.presetCustom,
+  _ => p,
+};
+
+/// Maps a logical sub-level value to its localized display label.
+String _levelLabel(AppLocalizations l10n, String lvl) => switch (lvl) {
+  'Novice' => l10n.presetNovice,
+  'Gothic' => l10n.presetGothic,
+  'Hard' => l10n.presetHard,
+  _ => lvl,
+};
 
 /// The four difficulty presets, in the order the in-game screen lists them.
 /// These are the exact label strings the core's `write_difficulty` maps back to
@@ -73,6 +91,7 @@ class ProfileDifficultyChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     final theme = Theme.of(context);
     final hasProfile = profile != null;
     // A profile carries editable difficulty when it has ANY difficulty field —
@@ -87,10 +106,12 @@ class ProfileDifficultyChip extends StatelessWidget {
     final known = preset != _unknownPreset;
     final color = known ? _presetColor(preset) : _presetColor(_unknownPreset);
     final label = known
-        ? preset
+        ? _presetLabel(l10n, preset)
         : (hasDifficulty
-              ? 'Difficulty'
-              : (hasProfile ? 'No difficulty' : 'No profile'));
+              ? l10n.difficultyLabel
+              : (hasProfile
+                    ? l10n.difficultyNoDifficulty
+                    : l10n.difficultyNoProfile));
     final enabled = hasDifficulty && !isLoading;
 
     final chip = AnimatedContainer(
@@ -143,10 +164,10 @@ class ProfileDifficultyChip extends StatelessWidget {
 
     return Tooltip(
       message: !hasProfile
-          ? 'No profile selected'
+          ? l10n.difficultyTooltipNoProfile
           : (hasDifficulty
-                ? 'Edit difficulty for this profile'
-                : 'This profile has no editable difficulty'),
+                ? l10n.difficultyTooltipEdit
+                : l10n.difficultyTooltipNoEditable),
       child: Material(
         color: Colors.transparent,
         child: InkWell(
@@ -275,6 +296,7 @@ class _DifficultyDialogState extends State<DifficultyDialog> {
   }
 
   Future<void> _save() async {
+    final l10n = AppLocalizations.of(context);
     setState(() {
       _saving = true;
       _error = null;
@@ -290,7 +312,7 @@ class _DifficultyDialogState extends State<DifficultyDialog> {
       // Surface the failure INSIDE the dialog — the workspace banner is hidden
       // behind the modal. Capture the notifier's error and clear it there so it
       // is shown in one place; keep the dialog open to retry or cancel.
-      final message = widget.notifier.lastError ?? 'Saving difficulty failed.';
+      final message = widget.notifier.lastError ?? l10n.savingDifficultyFailed;
       widget.notifier.dismissError();
       setState(() {
         _saving = false;
@@ -301,6 +323,7 @@ class _DifficultyDialogState extends State<DifficultyDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
     final known = _preset != _unknownPreset;
@@ -313,7 +336,7 @@ class _DifficultyDialogState extends State<DifficultyDialog> {
           Icon(Icons.local_fire_department, color: _presetColor(_preset)),
           const SizedBox(width: 8),
           Expanded(
-            child: Text('Difficulty — ${widget.profile.displayName}'),
+            child: Text(l10n.difficultyTitle(widget.profile.displayName)),
           ),
         ],
       ),
@@ -324,12 +347,15 @@ class _DifficultyDialogState extends State<DifficultyDialog> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('Preset', style: theme.textTheme.labelLarge),
+              Text(l10n.preset, style: theme.textTheme.labelLarge),
               const SizedBox(height: 6),
               SegmentedButton<String>(
                 segments: [
                   for (final preset in _presets)
-                    ButtonSegment<String>(value: preset, label: Text(preset)),
+                    ButtonSegment<String>(
+                      value: preset,
+                      label: Text(_presetLabel(l10n, preset)),
+                    ),
                 ],
                 emptySelectionAllowed: !known,
                 selected: known ? {_preset} : const <String>{},
@@ -342,9 +368,7 @@ class _DifficultyDialogState extends State<DifficultyDialog> {
                 Padding(
                   padding: const EdgeInsets.only(top: 6),
                   child: Text(
-                    'Stored preset is unrecognised (${_stored.presetLabel}). '
-                    'You can still save Flow Helper / Permadeath changes, or '
-                    'pick a preset above to overwrite it.',
+                    l10n.unrecognisedPreset(_stored.presetLabel),
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: scheme.error,
                     ),
@@ -354,16 +378,16 @@ class _DifficultyDialogState extends State<DifficultyDialog> {
               SwitchListTile(
                 contentPadding: EdgeInsets.zero,
                 dense: true,
-                title: const Text('Close Combat Flow Helper'),
+                title: Text(l10n.closeCombatFlowHelper),
                 value: _flow,
                 onChanged: _saving ? null : (v) => setState(() => _flow = v),
               ),
               SwitchListTile(
                 contentPadding: EdgeInsets.zero,
                 dense: true,
-                title: const Text('Permadeath'),
+                title: Text(l10n.permadeath),
                 subtitle: _preset == 'Novice'
-                    ? const Text('Not available on Novice')
+                    ? Text(l10n.notAvailableOnNovice)
                     : null,
                 value: _perma,
                 onChanged: permaEnabled
@@ -372,7 +396,7 @@ class _DifficultyDialogState extends State<DifficultyDialog> {
               ),
               const SizedBox(height: 8),
               _LevelPicker(
-                label: 'Combat',
+                label: l10n.levelCombat,
                 value: _displayedLevel('combat'),
                 enabled: levelsEnabled,
                 onChanged: (v) => setState(() {
@@ -382,7 +406,7 @@ class _DifficultyDialogState extends State<DifficultyDialog> {
               ),
               const SizedBox(height: 8),
               _LevelPicker(
-                label: 'Resources',
+                label: l10n.levelResources,
                 value: _displayedLevel('resources'),
                 enabled: levelsEnabled,
                 onChanged: (v) => setState(() {
@@ -392,7 +416,7 @@ class _DifficultyDialogState extends State<DifficultyDialog> {
               ),
               const SizedBox(height: 8),
               _LevelPicker(
-                label: 'Progression',
+                label: l10n.levelProgression,
                 value: _displayedLevel('progression'),
                 enabled: levelsEnabled,
                 onChanged: (v) => setState(() {
@@ -417,7 +441,7 @@ class _DifficultyDialogState extends State<DifficultyDialog> {
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
-                        'Difficulty applies to all saves in this profile.',
+                        l10n.difficultyAppliesToAllSaves,
                         style: theme.textTheme.bodySmall,
                       ),
                     ),
@@ -459,7 +483,7 @@ class _DifficultyDialogState extends State<DifficultyDialog> {
       actions: [
         TextButton(
           onPressed: _saving ? null : () => Navigator.of(context).pop(),
-          child: const Text('Cancel'),
+          child: Text(l10n.cancel),
         ),
         FilledButton(
           // Save is allowed even with an unrecognised stored preset: an
@@ -472,7 +496,7 @@ class _DifficultyDialogState extends State<DifficultyDialog> {
                   height: 16,
                   child: CircularProgressIndicator(strokeWidth: 2),
                 )
-              : const Text('Save'),
+              : Text(l10n.save),
         ),
       ],
     );
@@ -497,6 +521,7 @@ class _LevelPicker extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     final theme = Theme.of(context);
     return Row(
       children: [
@@ -508,7 +533,10 @@ class _LevelPicker extends StatelessWidget {
           child: SegmentedButton<String>(
             segments: [
               for (final level in _levels)
-                ButtonSegment<String>(value: level, label: Text(level)),
+                ButtonSegment<String>(
+                  value: level,
+                  label: Text(_levelLabel(l10n, level)),
+                ),
             ],
             emptySelectionAllowed: value == null,
             selected: value == null ? const <String>{} : {value!},

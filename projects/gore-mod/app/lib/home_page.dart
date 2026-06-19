@@ -13,7 +13,10 @@ import 'editor/domain/overrides_notifier.dart';
 import 'editor/ui/field_editor.dart';
 import 'editor/ui/overrides_panel.dart';
 import 'export/ui/export_dialog.dart';
+import 'l10n/app_localizations.dart';
+import 'loc/domain/loc_catalog_provider.dart';
 import 'loc/domain/loc_notifier.dart';
+import 'loc/game_lang.dart';
 import 'loc/ui/loc_extract_flow.dart';
 
 final _selectedItemProvider = StateProvider<CatalogItem?>((ref) => null);
@@ -71,6 +74,7 @@ class _HomePageState extends ConsumerState<HomePage> {
     final themeModeNotifier = ref.read(themeModeProvider.notifier);
     final scheme         = Theme.of(context).colorScheme;
     final isDark         = Theme.of(context).brightness == Brightness.dark;
+    final l10n           = AppLocalizations.of(context);
 
     return Scaffold(
       appBar: AppBar(
@@ -90,7 +94,10 @@ class _HomePageState extends ConsumerState<HomePage> {
           _DumpMenu(
             dumpPath: ref.watch(dumpPathProvider),
             onLoad: () async {
-              const group = XTypeGroup(label: 'game data', extensions: ['json']);
+              final group = XTypeGroup(
+                label: l10n.gameDataFileGroupLabel,
+                extensions: const ['json'],
+              );
               final file = await openFile(acceptedTypeGroups: [group]);
               if (file != null) {
                 ref.read(dumpPathProvider.notifier).set(file.path);
@@ -100,14 +107,20 @@ class _HomePageState extends ConsumerState<HomePage> {
           ),
           IconButton(
             icon: const Icon(Icons.translate),
-            tooltip: 'Extract localized text',
+            tooltip: l10n.extractLocalizedText,
             onPressed: ref.watch(locProvider).isRunning
                 ? null
                 : () => runLocExtractFlow(context, ref),
           ),
+          _LanguageMenu(
+            current: ref.watch(localeProvider),
+            onSelected: (code) =>
+                ref.read(localeProvider.notifier).setLocale(code),
+            tooltip: l10n.language,
+          ),
           IconButton(
             icon: Icon(isDark ? Icons.light_mode : Icons.dark_mode),
-            tooltip: isDark ? 'Light mode' : 'Dark mode',
+            tooltip: isDark ? l10n.lightMode : l10n.darkMode,
             onPressed: () {
               themeModeNotifier.setThemeMode(
                 isDark ? ThemeMode.light : ThemeMode.dark,
@@ -120,8 +133,8 @@ class _HomePageState extends ConsumerState<HomePage> {
               icon: const Icon(Icons.upload_outlined, size: 18),
               label: Text(
                 overridesState.count == 0
-                    ? 'Export mod'
-                    : 'Export mod (${overridesState.count})',
+                    ? l10n.exportMod
+                    : l10n.exportModWithCount(overridesState.count),
               ),
               onPressed: overridesState.count == 0
                   ? null
@@ -153,7 +166,7 @@ class _HomePageState extends ConsumerState<HomePage> {
             child: selected == null
                 ? Center(
                     child: Text(
-                      'Select an item to edit its fields.',
+                      l10n.selectAnItemToEdit,
                       style: TextStyle(color: scheme.onSurfaceVariant),
                     ),
                   )
@@ -163,6 +176,11 @@ class _HomePageState extends ConsumerState<HomePage> {
                       constraints: const BoxConstraints(maxWidth: 720),
                       child: FieldEditor(
                         item: selected,
+                        displayName: displayNameForItem(
+                          selected,
+                          ref.watch(locCatalogProvider).value ?? const {},
+                          gameLangByCode(ref.watch(localeProvider)),
+                        ),
                         pendingOverrides: {
                           for (final e in overridesState.entries
                               .where((e) => e.classId == selected.id))
@@ -205,8 +223,11 @@ class _DumpMenu extends StatelessWidget {
   Widget build(BuildContext context) {
     final active = dumpPath != null;
     final scheme = Theme.of(context).colorScheme;
+    final l10n = AppLocalizations.of(context);
     return PopupMenuButton<String>(
-      tooltip: active ? 'Game data: ${p.basename(dumpPath!)}' : 'Game data: bundled',
+      tooltip: active
+          ? l10n.gameDataActiveTooltip(p.basename(dumpPath!))
+          : l10n.gameDataBundledTooltip,
       icon: Icon(
         active ? Icons.dataset : Icons.dataset_outlined,
         color: active ? scheme.primary : null,
@@ -219,12 +240,12 @@ class _DumpMenu extends StatelessWidget {
         }
       },
       itemBuilder: (context) => [
-        const PopupMenuItem(
+        PopupMenuItem(
           value: 'load',
           child: ListTile(
-            leading: Icon(Icons.upload_file),
-            title: Text('Load game-data dump…'),
-            subtitle: Text('gore_game_data.json from the gore-dump mod'),
+            leading: const Icon(Icons.upload_file),
+            title: Text(l10n.loadGameDataDump),
+            subtitle: Text(l10n.loadGameDataDumpSubtitle),
             contentPadding: EdgeInsets.zero,
           ),
         ),
@@ -233,11 +254,50 @@ class _DumpMenu extends StatelessWidget {
           enabled: active,
           child: ListTile(
             leading: const Icon(Icons.restore),
-            title: const Text('Use bundled data'),
-            subtitle: Text(active ? p.basename(dumpPath!) : 'already bundled'),
+            title: Text(l10n.useBundledData),
+            subtitle:
+                Text(active ? p.basename(dumpPath!) : l10n.alreadyBundled),
             contentPadding: EdgeInsets.zero,
           ),
         ),
+      ],
+    );
+  }
+}
+
+/// AppBar control for picking the app / game language. Lists [kGameLangs] by
+/// endonym; selecting one updates [localeProvider] (which persists and drives
+/// both the UI locale and which extracted game-text names are shown).
+class _LanguageMenu extends StatelessWidget {
+  const _LanguageMenu({
+    required this.current,
+    required this.onSelected,
+    required this.tooltip,
+  });
+
+  final String current;
+  final void Function(String code) onSelected;
+  final String tooltip;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return PopupMenuButton<String>(
+      tooltip: tooltip,
+      icon: const Icon(Icons.language),
+      onSelected: onSelected,
+      itemBuilder: (context) => [
+        for (final lang in kGameLangs)
+          PopupMenuItem(
+            value: lang.code,
+            child: Row(
+              children: [
+                Expanded(child: Text(lang.endonym)),
+                if (lang.code == current)
+                  Icon(Icons.check, size: 18, color: scheme.primary),
+              ],
+            ),
+          ),
       ],
     );
   }

@@ -15,6 +15,7 @@ class UiSettings {
     this.windowMaximized = false,
     this.autoUpdateCheck = true,
     this.locExtractPrompted = false,
+    this.appLocale = 'en',
   });
 
   factory UiSettings.fromJson(Map<String, Object?> json) {
@@ -23,6 +24,10 @@ class UiSettings {
         'dark' => ThemeMode.dark,
         'system' => ThemeMode.system,
         _ => ThemeMode.light,
+      },
+      appLocale: switch (json['appLocale']) {
+        final String code when code.trim().isNotEmpty => code,
+        _ => 'en',
       },
       uiScale: switch (json['uiScale']) {
         final num value => UiScaleNotifier.clampScale(value.toDouble()),
@@ -54,6 +59,11 @@ class UiSettings {
   /// the manual Settings button stays available regardless.
   final bool locExtractPrompted;
 
+  /// Selected UI + game-text language code (one of [kGameLangs], default 'en').
+  /// Drives both the MaterialApp locale and which extracted game-text names
+  /// (items, NPCs, knowledge) are shown.
+  final String appLocale;
+
   UiSettings copyWith({
     ThemeMode? themeMode,
     double? uiScale,
@@ -61,6 +71,7 @@ class UiSettings {
     bool? windowMaximized,
     bool? autoUpdateCheck,
     bool? locExtractPrompted,
+    String? appLocale,
   }) {
     return UiSettings(
       themeMode: themeMode ?? this.themeMode,
@@ -69,6 +80,7 @@ class UiSettings {
       windowMaximized: windowMaximized ?? this.windowMaximized,
       autoUpdateCheck: autoUpdateCheck ?? this.autoUpdateCheck,
       locExtractPrompted: locExtractPrompted ?? this.locExtractPrompted,
+      appLocale: appLocale ?? this.appLocale,
     );
   }
 
@@ -86,6 +98,7 @@ class UiSettings {
     'windowMaximized': windowMaximized,
     'autoUpdateCheck': autoUpdateCheck,
     'locExtractPrompted': locExtractPrompted,
+    'appLocale': appLocale,
   };
 }
 
@@ -183,6 +196,24 @@ class ThemeModeNotifier extends StateNotifier<ThemeMode> {
   void setThemeMode(ThemeMode themeMode) {
     state = themeMode;
     _store.write(_store.read().copyWith(themeMode: themeMode));
+  }
+}
+
+/// Selected language code (one of [kGameLangs]). Persisted through the shared
+/// Ui settings store, mirroring [themeModeProvider]. Drives both the app UI
+/// locale and which extracted game-text names are shown.
+final localeProvider = StateNotifierProvider<LocaleNotifier, String>((ref) {
+  return LocaleNotifier(ref.watch(uiSettingsStoreProvider));
+});
+
+class LocaleNotifier extends StateNotifier<String> {
+  LocaleNotifier(this._store) : super(_store.read().appLocale);
+
+  final UiSettingsStore _store;
+
+  void setLocale(String code) {
+    state = code;
+    _store.write(_store.read().copyWith(appLocale: code));
   }
 }
 

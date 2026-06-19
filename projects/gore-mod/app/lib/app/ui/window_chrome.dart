@@ -4,6 +4,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:window_manager/window_manager.dart';
 
+import '../../l10n/app_localizations.dart';
+
 /// Whether the custom window chrome (frameless window, drag area, window
 /// buttons) is active. Disabled in widget tests, where the window_manager
 /// plugin is not available.
@@ -101,19 +103,20 @@ class _WindowControlsState extends State<WindowControls> with WindowListener {
     if (!windowChromeEnabled) return const SizedBox.shrink();
 
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final l10n = AppLocalizations.of(context);
 
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
         _WindowControlButton(
           icon: Icons.remove,
-          tooltip: 'Minimize',
+          tooltip: l10n.minimize,
           onPressed: () => windowManager.minimize(),
           isDark: isDark,
         ),
         _WindowControlButton(
           icon: _isMaximized ? Icons.filter_none : Icons.crop_square,
-          tooltip: _isMaximized ? 'Restore' : 'Maximize',
+          tooltip: _isMaximized ? l10n.restore : l10n.maximize,
           onPressed: () async {
             if (_isMaximized) {
               await windowManager.unmaximize();
@@ -126,7 +129,7 @@ class _WindowControlsState extends State<WindowControls> with WindowListener {
         ),
         _WindowControlButton(
           icon: Icons.close,
-          tooltip: 'Close',
+          tooltip: l10n.close,
           onPressed: () => windowManager.close(),
           isDark: isDark,
           isCloseButton: true,

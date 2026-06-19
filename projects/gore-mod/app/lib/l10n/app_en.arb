@@ -1,0 +1,110 @@
+{
+  "@@locale": "en",
+
+  "extractLocalizedText": "Extract localized text",
+  "lightMode": "Light mode",
+  "darkMode": "Dark mode",
+  "language": "Language",
+  "exportMod": "Export mod",
+  "exportModWithCount": "Export mod ({count})",
+  "@exportModWithCount": {
+    "placeholders": { "count": { "type": "int" } }
+  },
+  "selectAnItemToEdit": "Select an item to edit its fields.",
+
+  "gameDataActiveTooltip": "Game data: {name}",
+  "@gameDataActiveTooltip": {
+    "placeholders": { "name": { "type": "String" } }
+  },
+  "gameDataBundledTooltip": "Game data: bundled",
+  "loadGameDataDump": "Load game-data dump…",
+  "loadGameDataDumpSubtitle": "gore_game_data.json from the gore-dump mod",
+  "useBundledData": "Use bundled data",
+  "alreadyBundled": "already bundled",
+  "gameDataFileGroupLabel": "game data",
+
+  "minimize": "Minimize",
+  "restore": "Restore",
+  "maximize": "Maximize",
+  "close": "Close",
+
+  "categoryMeleeWeapons": "Melee weapons",
+  "categoryRangedWeapons": "Ranged weapons",
+  "categoryAmmunition": "Ammunition",
+  "categoryRunes": "Runes",
+  "categorySpellScrolls": "Spell scrolls",
+  "categoryFoodAndPotions": "Food & potions",
+  "categoryMiscellaneous": "Miscellaneous",
+  "categoryAmulets": "Amulets",
+  "categoryRings": "Rings",
+  "categoryAnimalTrophies": "Animal trophies",
+  "categoryWritings": "Writings",
+  "categoryMissionItems": "Mission items",
+  "categoryKeys": "Keys",
+  "categoryOther": "Other",
+
+  "categoryWithCount": "{label} ({count})",
+  "@categoryWithCount": {
+    "placeholders": {
+      "label": { "type": "String" },
+      "count": { "type": "int" }
+    }
+  },
+  "searchItems": "Search items",
+  "noItemsMatch": "No items match",
+  "failedToLoadCatalog": "Failed to load catalog: {error}",
+  "@failedToLoadCatalog": {
+    "placeholders": { "error": { "type": "String" } }
+  },
+
+  "pendingOverridesWithCount": "Pending overrides ({count})",
+  "@pendingOverridesWithCount": {
+    "placeholders": { "count": { "type": "int" } }
+  },
+  "clearAll": "Clear all",
+  "noPendingOverrides": "No pending overrides.\nEdit item fields to add some.",
+  "removeOverride": "Remove override",
+
+  "modName": "Mod name",
+  "loadDelayLabel": "Load delay (ms, 0 = instant)",
+  "noFolderSelected": "No folder selected",
+  "chooseFolder": "Choose folder",
+  "packageAsZip": "Package as .zip",
+  "cancel": "Cancel",
+  "export": "Export",
+  "exportHere": "Export here",
+  "mustBeNonNegativeInteger": "Must be a non-negative integer",
+
+  "extractingLocalizedText": "Extracting localized game text…",
+  "localizedTextExtractionCancelled": "Localized text extraction cancelled.",
+  "localizedTextExtracted": "Localized text extracted.",
+  "extractionFailed": "Extraction failed.",
+  "localizationCacheFileGroupLabel": "localization cache",
+  "extractLocalizedTextQuestion": "Extract localized game text?",
+  "extractLocalizedTextBody": "Localized game text isn't extracted yet. Extract it now from your game install? (optional)",
+  "notNow": "Not now",
+  "extract": "Extract",
+
+  "validationRequired": "Required",
+  "validationMustBeWholeNumber": "Must be a whole number",
+  "validationMustBeNumber": "Must be a number",
+  "validationMustBeFinite": "Must be a finite number",
+  "validationMustBeAtLeast": "Must be ≥ {min}",
+  "@validationMustBeAtLeast": {
+    "placeholders": { "min": { "type": "String" } }
+  },
+  "validationMustBeAtMost": "Must be ≤ {max}",
+  "@validationMustBeAtMost": {
+    "placeholders": { "max": { "type": "String" } }
+  },
+  "validationMustBeBool": "Must be true or false",
+  "validationMustBeOneOf": "Must be one of: {options}",
+  "@validationMustBeOneOf": {
+    "placeholders": { "options": { "type": "String" } }
+  },
+
+  "modNameRequired": "Required",
+  "modNameControlCharacters": "Must not contain control characters",
+  "modNamePathSeparators": "Must not contain path separators",
+  "modNameNotAFolderName": "Not a valid folder name"
+}
