@@ -13,6 +13,7 @@ class UiSettings {
     this.windowSize,
     this.windowMaximized = false,
     this.autoUpdateCheck = true,
+    this.locExtractPrompted = false,
   });
 
   factory UiSettings.fromJson(Map<String, Object?> json) {
@@ -33,6 +34,7 @@ class UiSettings {
       },
       windowMaximized: json['windowMaximized'] == true,
       autoUpdateCheck: json['autoUpdateCheck'] != false,
+      locExtractPrompted: json['locExtractPrompted'] == true,
     );
   }
 
@@ -46,12 +48,18 @@ class UiSettings {
   /// Whether the app checks for updates automatically (on by default).
   final bool autoUpdateCheck;
 
+  /// Whether the one-time first-run prompt to extract localized game text has
+  /// already been shown. Keeps the auto-prompt from reappearing every launch;
+  /// the manual Settings button stays available regardless.
+  final bool locExtractPrompted;
+
   UiSettings copyWith({
     ThemeMode? themeMode,
     double? uiScale,
     Size? windowSize,
     bool? windowMaximized,
     bool? autoUpdateCheck,
+    bool? locExtractPrompted,
   }) {
     return UiSettings(
       themeMode: themeMode ?? this.themeMode,
@@ -59,6 +67,7 @@ class UiSettings {
       windowSize: windowSize ?? this.windowSize,
       windowMaximized: windowMaximized ?? this.windowMaximized,
       autoUpdateCheck: autoUpdateCheck ?? this.autoUpdateCheck,
+      locExtractPrompted: locExtractPrompted ?? this.locExtractPrompted,
     );
   }
 
@@ -75,6 +84,7 @@ class UiSettings {
     },
     'windowMaximized': windowMaximized,
     'autoUpdateCheck': autoUpdateCheck,
+    'locExtractPrompted': locExtractPrompted,
   };
 }
 

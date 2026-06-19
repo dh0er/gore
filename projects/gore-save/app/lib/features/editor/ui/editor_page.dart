@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -13,6 +14,9 @@ import 'package:goresave/features/editor/domain/editor_models.dart';
 import 'package:goresave/features/editor/domain/item_categories.dart';
 import 'package:goresave/features/editor/ui/sidebar_tile.dart';
 import 'package:goresave/features/editor/domain/pending_edits.dart';
+import 'package:goresave/features/localization/domain/localization_controller.dart';
+import 'package:goresave/features/localization/ui/localization_flow.dart';
+import 'package:goresave/features/localization/ui/localization_settings.dart';
 import 'package:goresave/providers/data_providers.dart';
 import 'package:intl/intl.dart';
 import 'add_inventory_item_dialog.dart';
@@ -22,11 +26,65 @@ import 'progression_panel.dart';
 
 final _bytes = NumberFormat.decimalPattern();
 
-class EditorPage extends ConsumerWidget {
+class EditorPage extends ConsumerStatefulWidget {
   const EditorPage({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<EditorPage> createState() => _EditorPageState();
+}
+
+class _EditorPageState extends ConsumerState<EditorPage> {
+  @override
+  void initState() {
+    super.initState();
+    // First-run, optional localized-text extraction prompt. Runs after the
+    // first frame so the Scaffold (SnackBar host) and Navigator (dialog host)
+    // exist. Guarded by a persisted flag so it only auto-prompts once; the
+    // manual Settings button stays available regardless.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(_maybePromptLocalizationExtract());
+    });
+  }
+
+  Future<void> _maybePromptLocalizationExtract() async {
+    final store = ref.read(uiSettingsStoreProvider);
+    if (store.read().locExtractPrompted) return;
+
+    final present = await ref
+        .read(localizationControllerProvider.notifier)
+        .status();
+    if (present || !mounted) return;
+
+    // Mark prompted up front so a cancel (or a close mid-extract) doesn't make
+    // the dialog reappear on the next launch.
+    store.write(store.read().copyWith(locExtractPrompted: true));
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Extract localized game text?'),
+        content: const Text(
+          "Localized game text isn't extracted yet. Extract it now from "
+          'your game install? (optional)',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Not now'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Extract'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    await runLocalizationExtractFlow(context, ref);
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final state = ref.watch(editorProvider);
     final notifier = ref.read(editorProvider.notifier);
     final uiScale = ref.watch(uiScaleProvider);
@@ -3431,6 +3489,8 @@ class _SettingsPanel extends StatelessWidget {
         const AppearanceSettingsCard(),
         const SizedBox(height: 16),
         const UpdateSettingsCard(),
+        const SizedBox(height: 16),
+        const LocalizationSettingsCard(),
         const SizedBox(height: 16),
         Card(
           child: Padding(

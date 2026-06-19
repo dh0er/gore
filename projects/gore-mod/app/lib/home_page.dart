@@ -13,14 +13,40 @@ import 'editor/domain/overrides_notifier.dart';
 import 'editor/ui/field_editor.dart';
 import 'editor/ui/overrides_panel.dart';
 import 'export/ui/export_dialog.dart';
+import 'loc/domain/loc_notifier.dart';
+import 'loc/ui/loc_extract_flow.dart';
 
 final _selectedItemProvider = StateProvider<CatalogItem?>((ref) => null);
 
-class HomePage extends ConsumerWidget {
+class HomePage extends ConsumerStatefulWidget {
   const HomePage({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<HomePage> createState() => _HomePageState();
+}
+
+class _HomePageState extends ConsumerState<HomePage> {
+  @override
+  void initState() {
+    super.initState();
+    // First-run, optional: after the first frame, if no localized text has
+    // been extracted yet and the user hasn't been prompted before, offer to
+    // extract it. Records the prompt so it only auto-fires once.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _maybeFirstRunPrompt());
+  }
+
+  Future<void> _maybeFirstRunPrompt() async {
+    if (ref.read(locExtractPromptedProvider)) return;
+    final present = await ref.read(locProvider.notifier).status();
+    if (!mounted || present) return;
+    ref.read(locExtractPromptedProvider.notifier).markPrompted();
+    final shouldExtract = await showLocFirstRunDialog(context);
+    if (!mounted || !shouldExtract) return;
+    await runLocExtractFlow(context, ref);
+  }
+
+  @override
+  Widget build(BuildContext context) {
     // Switching the model data source invalidates pending overrides and the
     // current selection: fields may be removed/renamed or enum backing values
     // may change, so exporting old assignments could be wrong. Clear both when
@@ -71,6 +97,13 @@ class HomePage extends ConsumerWidget {
               }
             },
             onReset: () => ref.read(dumpPathProvider.notifier).clear(),
+          ),
+          IconButton(
+            icon: const Icon(Icons.translate),
+            tooltip: 'Extract localized text',
+            onPressed: ref.watch(locProvider).isRunning
+                ? null
+                : () => runLocExtractFlow(context, ref),
           ),
           IconButton(
             icon: Icon(isDark ? Icons.light_mode : Icons.dark_mode),

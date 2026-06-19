@@ -13,6 +13,7 @@ class UiSettings {
     this.windowSize,
     this.windowMaximized = false,
     this.dumpPath,
+    this.locExtractPrompted = false,
   });
 
   factory UiSettings.fromJson(Map<String, Object?> json) {
@@ -36,6 +37,7 @@ class UiSettings {
         final String path when path.isNotEmpty => path,
         _ => null,
       },
+      locExtractPrompted: json['locExtractPrompted'] == true,
     );
   }
 
@@ -50,6 +52,10 @@ class UiSettings {
   /// null means use the bundled assets.
   final String? dumpPath;
 
+  /// Whether the first-run localized-text extraction prompt has been shown.
+  /// Persisted so the optional auto-prompt only fires once.
+  final bool locExtractPrompted;
+
   UiSettings copyWith({
     ThemeMode? themeMode,
     double? uiScale,
@@ -57,6 +63,7 @@ class UiSettings {
     bool? windowMaximized,
     String? dumpPath,
     bool clearDumpPath = false,
+    bool? locExtractPrompted,
   }) {
     return UiSettings(
       themeMode: themeMode ?? this.themeMode,
@@ -64,6 +71,7 @@ class UiSettings {
       windowSize: windowSize ?? this.windowSize,
       windowMaximized: windowMaximized ?? this.windowMaximized,
       dumpPath: clearDumpPath ? null : dumpPath ?? this.dumpPath,
+      locExtractPrompted: locExtractPrompted ?? this.locExtractPrompted,
     );
   }
 
@@ -80,6 +88,7 @@ class UiSettings {
     },
     'windowMaximized': windowMaximized,
     if (dumpPath != null) 'dumpPath': dumpPath,
+    'locExtractPrompted': locExtractPrompted,
   };
 }
 
@@ -215,5 +224,26 @@ class DumpPathNotifier extends StateNotifier<String?> {
   void clear() {
     state = null;
     _store.write(_store.read().copyWith(clearDumpPath: true));
+  }
+}
+
+/// Whether the optional first-run localized-text extraction prompt has already
+/// been shown. Persisted so the auto-prompt only fires once; the manual extract
+/// action stays available regardless.
+final locExtractPromptedProvider =
+    StateNotifierProvider<LocExtractPromptedNotifier, bool>((ref) {
+  return LocExtractPromptedNotifier(ref.watch(uiSettingsStoreProvider));
+});
+
+class LocExtractPromptedNotifier extends StateNotifier<bool> {
+  LocExtractPromptedNotifier(this._store)
+      : super(_store.read().locExtractPrompted);
+
+  final UiSettingsStore _store;
+
+  void markPrompted() {
+    if (state) return;
+    state = true;
+    _store.write(_store.read().copyWith(locExtractPrompted: true));
   }
 }
