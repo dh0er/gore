@@ -78,10 +78,6 @@ class _EditorPageState extends ConsumerState<EditorPage>
     final store = ref.read(uiSettingsStoreProvider);
     if (store.read().locExtractPrompted) return;
 
-    // Mark prompted up front so a cancel (or a close mid-extract) doesn't make
-    // the dialog reappear on the next launch.
-    store.write(store.read().copyWith(locExtractPrompted: true));
-
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) {
@@ -103,6 +99,10 @@ class _EditorPageState extends ConsumerState<EditorPage>
       },
     );
     if (confirmed != true || !mounted) return;
+    // Record only once the user chose to extract, so the flag isn't set when the
+    // dialog never appeared and deferring ("Not now") lets the optional prompt
+    // offer again on a later launch (matching gore-mod).
+    store.write(store.read().copyWith(locExtractPrompted: true));
     await runLocalizationExtractFlow(context, ref);
   }
 
