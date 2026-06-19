@@ -53,13 +53,14 @@ class LocState {
     int? idCount,
     int? languageCount,
     bool clearMessage = false,
+    bool clearCounts = false,
   }) =>
       LocState(
         phase: phase ?? this.phase,
         present: present ?? this.present,
         message: clearMessage ? null : message ?? this.message,
-        idCount: idCount ?? this.idCount,
-        languageCount: languageCount ?? this.languageCount,
+        idCount: clearCounts ? null : idCount ?? this.idCount,
+        languageCount: clearCounts ? null : languageCount ?? this.languageCount,
       );
 }
 
@@ -80,12 +81,14 @@ class LocNotifier extends StateNotifier<LocState> {
       return null;
     }
     final present = res['present'] == true;
-    final meta = (res['present'] == true ? res['meta'] : null) as Map?;
+    final meta = (present ? res['meta'] : null) as Map?;
+    // Clear the cached counts when there's no metadata (catalog absent or its
+    // sidecar missing) so they don't reflect a previous extraction.
     state = state.copyWith(
       present: present,
-      idCount: (meta?['id_count'] as num?)?.toInt() ?? state.idCount,
-      languageCount:
-          (meta?['languages'] as List?)?.length ?? state.languageCount,
+      idCount: (meta?['id_count'] as num?)?.toInt(),
+      languageCount: (meta?['languages'] as List?)?.length,
+      clearCounts: meta == null,
     );
     return present;
   }
