@@ -8,6 +8,7 @@
 pub mod catalog;
 pub mod ffi;
 pub mod gen;
+pub mod loc;
 pub mod model;
 pub mod parser;
 pub mod validate;

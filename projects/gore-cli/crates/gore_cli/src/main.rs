@@ -67,7 +67,7 @@ enum Commands {
         #[arg(short = 'o', long)]
         out: PathBuf,
     },
-    /// Generate the gore-dump UE4SS mod (reads live CDO values in-game ->
+    /// Generate the gore-dump UE4SS mod (reads live CDO stat values in-game ->
     /// gore_game_data.json, the input to `sync`)
     DumpMod {
         /// Path to model.json (field schema; output of `dump`+`gui-model`)
@@ -76,24 +76,14 @@ enum Commands {
         /// Path to item_catalog.json (the item allow-list)
         #[arg(long)]
         catalog: PathBuf,
-        /// Path to npc_catalog.json (adds NPC names to the loc dump)
-        #[arg(long)]
-        npc_catalog: Option<PathBuf>,
-        /// Path to knowledge_catalog.json (adds dialog text to the loc dump)
-        #[arg(long)]
-        knowledge_catalog: Option<PathBuf>,
         /// Mods directory to write the gore-dump/ folder into
         #[arg(short = 'o', long)]
         out: PathBuf,
     },
-    /// Merge per-language gore_loc_<lang>.json dumps into one loc_catalog.json
+    /// Read/edit localized text from the encrypted AlkimiaLocalization .lcache
     Loc {
-        /// Directory of gore_loc_*.json files (or a single file)
-        #[arg(long = "in")]
-        input: PathBuf,
-        /// Output merged loc_catalog.json
-        #[arg(short = 'o', long)]
-        out: PathBuf,
+        #[command(subcommand)]
+        action: LocAction,
     },
     /// Create a UE4SS Lua mod skeleton directory
     Scaffold {
@@ -124,6 +114,34 @@ enum Commands {
     },
 }
 
+#[derive(Subcommand)]
+enum LocAction {
+    /// Decrypt the .lcache and write {id:{language:value}} JSON (all languages)
+    Export {
+        /// Path to AlkimiaLocalization_*.lcache
+        #[arg(long)]
+        lcache: PathBuf,
+        /// Output loc_catalog.json
+        #[arg(short = 'o', long)]
+        out: PathBuf,
+        /// Keep empty values / ids with no text
+        #[arg(long)]
+        keep_empty: bool,
+    },
+    /// Apply {id:{language:value}} edits and re-encrypt the .lcache
+    Import {
+        /// Path to the .lcache to edit
+        #[arg(long)]
+        lcache: PathBuf,
+        /// Path to edits JSON ({id:{language:value}})
+        #[arg(long)]
+        edits: PathBuf,
+        /// Output .lcache (defaults to overwriting --lcache)
+        #[arg(short = 'o', long)]
+        out: Option<PathBuf>,
+    },
+}
+
 fn main() {
     let cli = Cli::parse();
     let result = match cli.command {
@@ -132,10 +150,11 @@ fn main() {
         Commands::Catalog { kind, dump, out } => cmd::catalog::run(kind, dump, out),
         Commands::GuiModel { model, catalog, out } => cmd::gui_model::run(model, catalog, out),
         Commands::Sync { dump, catalog, out } => cmd::sync::run(dump, catalog, out),
-        Commands::DumpMod { model, catalog, npc_catalog, knowledge_catalog, out } => {
-            cmd::dump_mod::run(model, catalog, npc_catalog, knowledge_catalog, out)
-        }
-        Commands::Loc { input, out } => cmd::loc::run(input, out),
+        Commands::DumpMod { model, catalog, out } => cmd::dump_mod::run(model, catalog, out),
+        Commands::Loc { action } => match action {
+            LocAction::Export { lcache, out, keep_empty } => cmd::loc::export(lcache, out, keep_empty),
+            LocAction::Import { lcache, edits, out } => cmd::loc::import(lcache, edits, out),
+        },
         Commands::Scaffold { mod_name, out } => cmd::scaffold::run(mod_name, out),
         Commands::Gen { overrides, out, model } => cmd::gen::run(overrides, out, model),
         Commands::Package { mod_dir, out } => cmd::package::run(mod_dir, out),
