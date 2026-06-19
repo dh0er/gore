@@ -149,6 +149,11 @@ pub struct Lcache {
     group_count: i32,
     groups: Vec<Group>,
     tail: Vec<u8>,
+    /// Set once any value is edited. Keeps the original alignment `tail` only on
+    /// an unedited round trip; once the serialized length changes, the tail is
+    /// dropped and padding is recomputed (so repeated imports don't accrete
+    /// extra trailing blocks).
+    dirty: bool,
 }
 
 struct Reader<'a> {
@@ -287,6 +292,7 @@ impl Lcache {
             group_count,
             groups,
             tail,
+            dirty: false,
         })
     }
 
@@ -305,7 +311,13 @@ impl Lcache {
             out.extend_from_slice(&g.main.to_bytes());
             out.extend_from_slice(&g.meta.to_bytes());
         }
-        out.extend_from_slice(&self.tail);
+        // Keep the original alignment tail only for an unedited round trip (byte
+        // identical). Once a value changed, the serialized length differs, so the
+        // old tail no longer aligns — drop it and let padding be recomputed below,
+        // mirroring the game writer and avoiding extra blocks on repeat imports.
+        if !self.dirty {
+            out.extend_from_slice(&self.tail);
+        }
         let pad = (16 - (out.len() % 16)) % 16;
         out.extend(std::iter::repeat(0u8).take(pad));
         aes_ecb(&out, true)
@@ -356,6 +368,7 @@ impl Lcache {
             })?;
         pair.value.text = text.to_string();
         pair.value.changed = true;
+        self.dirty = true;
         Ok(())
     }
 }
@@ -431,6 +444,19 @@ mod tests {
         lc.set_value("itfo_cheese", "english", "").unwrap();
         let re = Lcache::decode(&lc.encode().unwrap()).unwrap();
         assert_eq!(re.export(true)["itfo_cheese"]["english"], "");
+    }
+
+    #[test]
+    fn repeated_import_of_an_edited_file_is_stable() {
+        // A length-changing edit must not accrete trailing padding blocks when
+        // the file is decoded and re-encoded again (dropping the stale tail).
+        let mut lc = Lcache::decode(&synthetic()).unwrap();
+        lc.set_value("itfo_cheese", "english", "A considerably longer cheese name")
+            .unwrap();
+        let once = lc.encode().unwrap();
+        let twice = Lcache::decode(&once).unwrap().encode().unwrap();
+        assert_eq!(once, twice, "re-importing must not grow or alter the file");
+        assert_eq!(once.len() % 16, 0);
     }
 
     #[test]
