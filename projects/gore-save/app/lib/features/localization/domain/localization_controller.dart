@@ -80,8 +80,8 @@ class LocalizationController extends StateNotifier<LocalizationState> {
     try {
       final response = await _core.execute('loc_status');
       if (response['ok'] != true) {
-        state = state.copyWith(message: _errorMessage(response));
-        return state.present;
+        state = state.copyWith(present: false, message: _errorMessage(response));
+        return false;
       }
       final data = (response['data'] as Map?)?.cast<String, Object?>();
       final present = data?['present'] == true;
@@ -89,8 +89,11 @@ class LocalizationController extends StateNotifier<LocalizationState> {
       state = state.copyWith(present: present, meta: meta);
       return present;
     } catch (error) {
-      state = state.copyWith(message: 'Localization status failed: $error');
-      return state.present;
+      state = state.copyWith(
+        present: false,
+        message: 'Localization status failed: $error',
+      );
+      return false;
     }
   }
 
