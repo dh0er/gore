@@ -90,10 +90,14 @@ fn dispatch(input: &str) -> Value {
 
 /// `{ok, present, meta?, catalog_path, dir}` — is the shared catalog extracted?
 fn loc_status() -> Value {
+    let present = loc_store::catalog_present();
+    // Only report metadata while the catalog file is present, so stale sidecar
+    // meta can't describe a catalog that no longer exists.
+    let meta = if present { loc_store::status() } else { None };
     json!({
         "ok": true,
-        "present": loc_store::catalog_present(),
-        "meta": loc_store::status(),
+        "present": present,
+        "meta": meta,
         "catalog_path": paths::loc_catalog_path().display().to_string(),
         "dir": paths::shared_data_dir().display().to_string(),
     })

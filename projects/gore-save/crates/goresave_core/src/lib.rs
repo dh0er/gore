@@ -497,12 +497,18 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
         }
         // Localized game text: extracted offline from the encrypted .lcache into
         // the shared `gore-tools` dir (see gore_core::loc_store). User-local only.
-        "loc_status" => Ok(json!({
-            "present": gore_core::loc_store::catalog_present(),
-            "meta": gore_core::loc_store::status(),
-            "catalogPath": gore_core::paths::loc_catalog_path().display().to_string(),
-            "dir": gore_core::paths::shared_data_dir().display().to_string(),
-        })),
+        "loc_status" => {
+            let present = gore_core::loc_store::catalog_present();
+            // Only report metadata while the catalog file is present, so stale
+            // sidecar meta can't describe a catalog that no longer exists.
+            let meta = if present { gore_core::loc_store::status() } else { None };
+            Ok(json!({
+                "present": present,
+                "meta": meta,
+                "catalogPath": gore_core::paths::loc_catalog_path().display().to_string(),
+                "dir": gore_core::paths::shared_data_dir().display().to_string(),
+            }))
+        }
         "loc_find" => {
             let hint = payload
                 .get("lcache")

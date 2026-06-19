@@ -36,13 +36,14 @@ class LocalizationState {
     LocalizationPhase? phase,
     bool? present,
     Map<String, Object?>? meta,
+    bool clearMeta = false,
     String? message,
     bool clearMessage = false,
   }) {
     return LocalizationState(
       phase: phase ?? this.phase,
       present: present ?? this.present,
-      meta: meta ?? this.meta,
+      meta: clearMeta ? null : (meta ?? this.meta),
       message: clearMessage ? null : (message ?? this.message),
     );
   }
@@ -89,7 +90,9 @@ class LocalizationController extends StateNotifier<LocalizationState> {
       final data = (response['data'] as Map?)?.cast<String, Object?>();
       final present = data?['present'] == true;
       final meta = (data?['meta'] as Map?)?.cast<String, Object?>();
-      state = state.copyWith(present: present, meta: meta);
+      // Only keep metadata while a catalog is present, so id/language counts
+      // never reflect an old extraction after the catalog is gone.
+      state = state.copyWith(present: present, meta: present ? meta : null, clearMeta: !present);
       return present;
     } catch (error) {
       // Leave `present` untouched (a catalog may still exist on disk).
