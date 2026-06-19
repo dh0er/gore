@@ -28,3 +28,19 @@ ModNameError? validateModName(String name) {
   }
   return null;
 }
+
+/// Plain-English message for a [ModNameError], for the rare path with no
+/// BuildContext (the export safety net). The UI normally shows the localized
+/// version via `AppLocalizations`.
+String modNameErrorEnglish(ModNameError error) {
+  switch (error) {
+    case ModNameError.required:
+      return 'Enter a mod name.';
+    case ModNameError.controlCharacters:
+      return 'The mod name must not contain control characters.';
+    case ModNameError.pathSeparators:
+      return 'The mod name must not contain "/" or "\\".';
+    case ModNameError.notAFolderName:
+      return 'The mod name is not a valid folder name.';
+  }
+}

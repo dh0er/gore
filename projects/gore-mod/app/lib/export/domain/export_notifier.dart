@@ -61,7 +61,7 @@ class ExportNotifier extends StateNotifier<ExportState> {
     if (nameError != null) {
       state = state.copyWith(
         isExporting: false,
-        result: ExportResult(error: 'Invalid mod name: ${nameError.name}'),
+        result: ExportResult(error: modNameErrorEnglish(nameError)),
       );
       return;
     }

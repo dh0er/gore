@@ -68,8 +68,12 @@ fn lcache_in_dir(dir: &Path) -> Option<PathBuf> {
         .map(|e| e.path())
         .filter(|p| p.is_file() && is_lcache(p))
         .collect();
+    // When several caches exist, prefer the most recently modified (the active
+    // one) rather than an arbitrary first-by-name match. Name order is the
+    // stable tiebreak when mtimes are equal/unavailable.
     found.sort();
-    found.into_iter().next()
+    found.sort_by_key(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok());
+    found.into_iter().last()
 }
 
 fn join(base: &Path, parts: &[&str]) -> PathBuf {
