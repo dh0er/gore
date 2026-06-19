@@ -52,14 +52,15 @@ pub struct LocMeta {
     pub catalog_path: String,
 }
 
-/// Resolve the `.lcache`: an explicit hint (file/dir) first, else Steam auto-detect.
+/// Resolve the `.lcache`. A caller-supplied hint is authoritative: it is
+/// resolved on its own and, if it doesn't point at an `.lcache`, the result is
+/// `None` (no silent Steam fallback to a possibly-different install). Steam
+/// auto-detect runs only when no hint is given.
 pub fn resolve_lcache(hint: Option<&Path>) -> Option<PathBuf> {
-    if let Some(h) = hint {
-        if let Some(found) = discover::lcache_from_hint(h) {
-            return Some(found);
-        }
+    match hint {
+        Some(h) => discover::lcache_from_hint(h),
+        None => discover::find_lcache(),
     }
-    discover::find_lcache()
 }
 
 /// Read the sidecar metadata, if a previous extraction exists.

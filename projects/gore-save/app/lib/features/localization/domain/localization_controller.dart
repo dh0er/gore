@@ -113,10 +113,20 @@ class LocalizationController extends StateNotifier<LocalizationState> {
         // auto-detect came up empty); treat that as the file-picker fallback
         // signal rather than a hard error.
         final notFound = code == 'INVALID_REQUEST' && lcacheHint == null;
-        state = state.copyWith(
-          phase: LocalizationPhase.error,
-          message: message,
-        );
+        if (notFound) {
+          // Expected case: auto-detect came up empty and the caller will open
+          // the file picker. Stay idle and clear the message so cancelling the
+          // picker leaves no red error line (matches gore-mod).
+          state = state.copyWith(
+            phase: LocalizationPhase.idle,
+            clearMessage: true,
+          );
+        } else {
+          state = state.copyWith(
+            phase: LocalizationPhase.error,
+            message: message,
+          );
+        }
         return LocalizationExtractResult(
           success: false,
           notFound: notFound,
