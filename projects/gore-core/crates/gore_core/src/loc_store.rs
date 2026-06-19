@@ -92,8 +92,10 @@ pub fn extract(hint: Option<&Path>) -> Result<LocMeta, LocStoreError> {
         source,
     })?;
 
+    // Write via a temp file + rename so a failed/partial write (disk full,
+    // interruption) never truncates the previous usable catalog in place.
     let catalog_path = paths::loc_catalog_path();
-    fs::write(&catalog_path, serde_json::to_vec(&catalog)?).map_err(|source| {
+    write_atomic(&catalog_path, &serde_json::to_vec(&catalog)?).map_err(|source| {
         LocStoreError::Write {
             path: catalog_path.display().to_string(),
             source,
@@ -109,9 +111,8 @@ pub fn extract(hint: Option<&Path>) -> Result<LocMeta, LocStoreError> {
         catalog_path: catalog_path.display().to_string(),
     };
     let meta_path = paths::loc_meta_path();
-    let meta_bytes = serde_json::to_vec_pretty(&meta)?;
-    if let Err(source) = fs::write(&meta_path, meta_bytes) {
-        // The fresh catalog is already written; a leftover meta would describe
+    if let Err(source) = write_atomic(&meta_path, &serde_json::to_vec_pretty(&meta)?) {
+        // The fresh catalog is already in place; a leftover meta would describe
         // the *previous* extraction (stale source/counts/timestamp). Drop it so
         // status() reports no metadata rather than wrong provenance.
         let _ = fs::remove_file(&meta_path);
@@ -121,6 +122,15 @@ pub fn extract(hint: Option<&Path>) -> Result<LocMeta, LocStoreError> {
         });
     }
     Ok(meta)
+}
+
+/// Write `bytes` to `path` atomically: to a sibling temp file, then rename over
+/// `path` (same directory, so the rename stays on one volume). A failed write
+/// leaves the existing file untouched.
+fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let tmp = path.with_extension("tmp");
+    fs::write(&tmp, bytes)?;
+    fs::rename(&tmp, path)
 }
 
 fn now_unix() -> u64 {
