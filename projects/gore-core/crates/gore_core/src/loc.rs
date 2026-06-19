@@ -83,9 +83,13 @@ impl FString {
     }
 }
 
-/// Mirror of the game's writer: ASCII -> UTF-8 + NUL (positive byte count);
-/// otherwise UTF-16LE + NUL (negative unit count).
+/// Mirror of the game's writer: empty -> a lone `0` count (no payload, matching
+/// how the decoder represents empty); ASCII -> UTF-8 + NUL (positive byte
+/// count); otherwise UTF-16LE + NUL (negative unit count).
 fn encode_fstring(text: &str) -> Vec<u8> {
+    if text.is_empty() {
+        return 0i32.to_le_bytes().to_vec();
+    }
     let mut out = Vec::new();
     if text.is_ascii() {
         let mut raw = text.as_bytes().to_vec();
@@ -415,6 +419,18 @@ mod tests {
         assert_eq!(re.export(false)["itfo_cheese"]["english"], "Stinky Cheese");
         // untouched value preserved
         assert_eq!(re.export(false)["itfo_cheese"]["german"], "Käse");
+    }
+
+    #[test]
+    fn empty_edit_encodes_as_zero_count_like_the_game() {
+        // The decoder reads count==0 as empty, so clearing a value must encode
+        // the same lone-zero-count form, not a length-1 NUL field.
+        assert_eq!(super::encode_fstring(""), 0i32.to_le_bytes().to_vec());
+
+        let mut lc = Lcache::decode(&synthetic()).unwrap();
+        lc.set_value("itfo_cheese", "english", "").unwrap();
+        let re = Lcache::decode(&lc.encode().unwrap()).unwrap();
+        assert_eq!(re.export(true)["itfo_cheese"]["english"], "");
     }
 
     #[test]
