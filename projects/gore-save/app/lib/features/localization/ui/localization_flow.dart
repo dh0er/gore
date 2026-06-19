@@ -38,11 +38,10 @@ Future<void> runLocalizationExtractFlow(
     result = await controller.extract(lcacheHint: file.path);
   }
 
-  // A successful extraction wrote a fresh loc_catalog.json — invalidate the
-  // cached catalog so localized game names reload.
-  if (result.success) {
-    ref.read(locCatalogReloadProvider.notifier).state++;
-  }
+  // Reload the cached catalog after any extract attempt: the catalog file can
+  // be (re)written even when extraction reports an error (e.g. the catalog was
+  // written but the meta write then failed), so the new names should still show.
+  ref.read(locCatalogReloadProvider.notifier).state++;
 
   if (!context.mounted) return;
   final messenger = ScaffoldMessenger.of(context);

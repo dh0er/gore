@@ -43,9 +43,11 @@ Future<void> runLocExtractFlow(BuildContext context, WidgetRef ref) async {
   }
 
   messenger.hideCurrentSnackBar();
+  // Reload the catalog after any extract attempt: the catalog file can be
+  // (re)written even when extraction reports an error (e.g. the catalog was
+  // written but the meta write then failed), so the new names should still show.
+  ref.invalidate(locCatalogProvider);
   if (outcome.success) {
-    // Reload the catalog so newly extracted names show immediately.
-    ref.invalidate(locCatalogProvider);
     messenger.showSnackBar(
       SnackBar(
         content: Text(
