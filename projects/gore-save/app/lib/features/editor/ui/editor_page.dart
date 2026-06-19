@@ -49,13 +49,16 @@ class _EditorPageState extends ConsumerState<EditorPage> {
   }
 
   Future<void> _maybePromptLocalizationExtract() async {
-    final store = ref.read(uiSettingsStoreProvider);
-    if (store.read().locExtractPrompted) return;
-
+    // Always refresh status first, so the Settings localization card reflects a
+    // catalog extracted earlier (or via `gore-cli loc extract`). The persisted
+    // flag only suppresses the one-time prompt dialog, not the status refresh.
     final present = await ref
         .read(localizationControllerProvider.notifier)
         .status();
     if (present || !mounted) return;
+
+    final store = ref.read(uiSettingsStoreProvider);
+    if (store.read().locExtractPrompted) return;
 
     // Mark prompted up front so a cancel (or a close mid-extract) doesn't make
     // the dialog reappear on the next launch.
