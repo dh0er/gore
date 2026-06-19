@@ -109,12 +109,17 @@ pub fn extract(hint: Option<&Path>) -> Result<LocMeta, LocStoreError> {
         catalog_path: catalog_path.display().to_string(),
     };
     let meta_path = paths::loc_meta_path();
-    fs::write(&meta_path, serde_json::to_vec_pretty(&meta)?).map_err(|source| {
-        LocStoreError::Write {
+    let meta_bytes = serde_json::to_vec_pretty(&meta)?;
+    if let Err(source) = fs::write(&meta_path, meta_bytes) {
+        // The fresh catalog is already written; a leftover meta would describe
+        // the *previous* extraction (stale source/counts/timestamp). Drop it so
+        // status() reports no metadata rather than wrong provenance.
+        let _ = fs::remove_file(&meta_path);
+        return Err(LocStoreError::Write {
             path: meta_path.display().to_string(),
             source,
-        }
-    })?;
+        });
+    }
     Ok(meta)
 }
 
