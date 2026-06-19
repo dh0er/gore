@@ -38,12 +38,14 @@ Future<void> runLocalizationExtractFlow(
     result = await controller.extract(lcacheHint: file.path);
   }
 
+  // The widget may have been disposed during the extraction await(s); don't
+  // touch ref/context if so.
+  if (!context.mounted) return;
   // Reload the cached catalog after any extract attempt: the catalog file can
   // be (re)written even when extraction reports an error (e.g. the catalog was
   // written but the meta write then failed), so the new names should still show.
   ref.read(locCatalogReloadProvider.notifier).state++;
 
-  if (!context.mounted) return;
   final messenger = ScaffoldMessenger.of(context);
   final l10n = AppLocalizations.of(context);
   final message = result.message ??

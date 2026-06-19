@@ -42,6 +42,9 @@ Future<void> runLocExtractFlow(BuildContext context, WidgetRef ref) async {
     outcome = await notifier.extract(lcacheHint: file.path);
   }
 
+  // The widget may have been disposed during the extraction await(s); don't
+  // touch ref/messenger if so.
+  if (!context.mounted) return;
   messenger.hideCurrentSnackBar();
   // Reload the catalog after any extract attempt: the catalog file can be
   // (re)written even when extraction reports an error (e.g. the catalog was
