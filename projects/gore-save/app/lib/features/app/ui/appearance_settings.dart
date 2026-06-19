@@ -13,7 +13,10 @@ class AppearanceSettingsCard extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final themeMode = ref.watch(themeModeProvider);
     final uiScale = ref.watch(uiScaleProvider);
-    final localeCode = ref.watch(localeProvider);
+    // Normalize through gameLangByCode so an unknown/typo'd persisted code maps
+    // to a real kGameLangs entry; otherwise the DropdownButton (whose items are
+    // the kGameLangs codes) asserts on a value with no matching item.
+    final localeCode = gameLangByCode(ref.watch(localeProvider)).code;
     final l10n = AppLocalizations.of(context);
     final textTheme = Theme.of(context).textTheme;
     return Card(
