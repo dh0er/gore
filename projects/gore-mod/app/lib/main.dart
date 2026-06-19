@@ -23,8 +23,6 @@ Future<void> main() async {
     () async {
       await windowManager.show();
       await windowManager.focus();
-      // WinSparkle attaches to the existing window, so init only after show.
-      unawaited(initDesktopUpdater());
     },
   );
   runApp(
@@ -33,4 +31,9 @@ Future<void> main() async {
       child: const GoreModApp(),
     ),
   );
+  // WinSparkle attaches its update UI to the main window, so initialize it
+  // only after the first frame; earlier init can show an unowned dialog.
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    unawaited(initDesktopUpdater());
+  });
 }
