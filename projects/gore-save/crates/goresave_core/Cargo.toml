@@ -9,6 +9,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 base64 = "0.22"
+gore_core = { path = "../../../gore-core/crates/gore_core" }
 goresave_oodle = { path = "../goresave_oodle" }
 hex = "0.4"
 serde = { version = "1", features = ["derive"] }

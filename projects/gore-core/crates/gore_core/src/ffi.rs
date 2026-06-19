@@ -15,9 +15,12 @@ use std::ptr;
 
 use serde_json::{json, Value};
 
+use std::path::PathBuf;
+
 use crate::gen::{gen_lua, OverridesConfig};
 use crate::model::ReflectionModel;
 use crate::validate::validate_config;
+use crate::{loc_store, paths};
 
 /// # Safety
 /// `request_json` must be null or a valid, NUL-terminated C string pointer that
@@ -78,7 +81,45 @@ fn dispatch(input: &str) -> Value {
     match command {
         "generate_mod" => generate_mod(payload),
         "validate" => validate(payload),
+        "loc_status" => loc_status(),
+        "loc_find" => loc_find(payload),
+        "loc_extract" => loc_extract(payload),
         other => err("UNKNOWN_COMMAND", format!("unknown command: {other}")),
+    }
+}
+
+/// `{ok, present, meta?, catalog_path, dir}` — is the shared catalog extracted?
+fn loc_status() -> Value {
+    json!({
+        "ok": true,
+        "present": loc_store::catalog_present(),
+        "meta": loc_store::status(),
+        "catalog_path": paths::loc_catalog_path().display().to_string(),
+        "dir": paths::shared_data_dir().display().to_string(),
+    })
+}
+
+/// `{ok, found, path?}` — auto-detect (or resolve `payload.lcache`) the .lcache.
+fn loc_find(payload: Value) -> Value {
+    let hint = payload.get("lcache").and_then(Value::as_str).map(PathBuf::from);
+    let found = loc_store::resolve_lcache(hint.as_deref());
+    json!({
+        "ok": true,
+        "found": found.is_some(),
+        "path": found.map(|p| p.display().to_string()),
+    })
+}
+
+/// Extract to the shared catalog. `payload.lcache` is an optional path hint.
+fn loc_extract(payload: Value) -> Value {
+    let hint = payload.get("lcache").and_then(Value::as_str).map(PathBuf::from);
+    match loc_store::extract(hint.as_deref()) {
+        Ok(meta) => json!({ "ok": true, "meta": meta }),
+        Err(crate::loc_store::LocStoreError::NotFound) => err(
+            "LCACHE_NOT_FOUND",
+            "could not find AlkimiaLocalization .lcache (auto-detect failed); pick it manually",
+        ),
+        Err(e) => err("EXTRACT_FAILED", e.to_string()),
     }
 }
 
@@ -137,6 +178,14 @@ mod tests {
         assert!(lua.contains("ItFo_Apple"));
         assert!(lua.contains("Default__"));
         assert_eq!(v["files"]["enabled.txt"], "");
+    }
+
+    #[test]
+    fn loc_status_reports_shared_catalog_path() {
+        let v: Value = serde_json::from_str(&execute_json(r#"{"command":"loc_status"}"#)).unwrap();
+        assert_eq!(v["ok"], true);
+        assert!(v["catalog_path"].as_str().unwrap().contains("gore-tools"));
+        assert!(v.get("present").is_some());
     }
 
     #[test]

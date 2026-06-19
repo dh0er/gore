@@ -420,6 +420,7 @@ name = "goresave_core"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "gore_core",
  "goresave_oodle",
  "hex",
  "serde",

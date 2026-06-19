@@ -495,6 +495,39 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
             };
             Ok(write_difficulty_internal(&req, &targets, backup)?)
         }
+        // Localized game text: extracted offline from the encrypted .lcache into
+        // the shared `gore-tools` dir (see gore_core::loc_store). User-local only.
+        "loc_status" => Ok(json!({
+            "present": gore_core::loc_store::catalog_present(),
+            "meta": gore_core::loc_store::status(),
+            "catalogPath": gore_core::paths::loc_catalog_path().display().to_string(),
+            "dir": gore_core::paths::shared_data_dir().display().to_string(),
+        })),
+        "loc_find" => {
+            let hint = payload
+                .get("lcache")
+                .and_then(Value::as_str)
+                .map(PathBuf::from);
+            let found = gore_core::loc_store::resolve_lcache(hint.as_deref());
+            Ok(json!({
+                "found": found.is_some(),
+                "path": found.map(|p| p.display().to_string()),
+            }))
+        }
+        "loc_extract" => {
+            let hint = payload
+                .get("lcache")
+                .and_then(Value::as_str)
+                .map(PathBuf::from);
+            match gore_core::loc_store::extract(hint.as_deref()) {
+                Ok(meta) => Ok(json!({ "meta": meta })),
+                Err(gore_core::loc_store::LocStoreError::NotFound) => Err(CoreError::InvalidRequest(
+                    "could not find AlkimiaLocalization .lcache (auto-detect failed); pick it manually"
+                        .to_string(),
+                )),
+                Err(e) => Err(CoreError::Io(e.to_string())),
+            }
+        }
         other => Err(CoreError::InvalidRequest(format!(
             "unknown command {other:?}"
         ))),
