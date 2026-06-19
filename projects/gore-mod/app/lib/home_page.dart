@@ -28,23 +28,43 @@ class HomePage extends ConsumerStatefulWidget {
   ConsumerState<HomePage> createState() => _HomePageState();
 }
 
-class _HomePageState extends ConsumerState<HomePage> {
+class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     // First-run, optional: after the first frame, if no localized text has
     // been extracted yet and the user hasn't been prompted before, offer to
-    // extract it. Records the prompt so it only auto-fires once.
+    // extract it.
     WidgetsBinding.instance.addPostFrameCallback((_) => _maybeFirstRunPrompt());
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Another tool (or `gore-cli loc extract`) may have written the shared
+    // loc_catalog.json while this app was in the background. Re-read it on
+    // resume so item names pick up a catalog that appeared after first load.
+    if (state == AppLifecycleState.resumed) {
+      ref.invalidate(locCatalogProvider);
+    }
   }
 
   Future<void> _maybeFirstRunPrompt() async {
     if (ref.read(locExtractPromptedProvider)) return;
     final present = await ref.read(locProvider.notifier).status();
     if (!mounted || present) return;
-    ref.read(locExtractPromptedProvider.notifier).markPrompted();
     final shouldExtract = await showLocFirstRunDialog(context);
     if (!mounted || !shouldExtract) return;
+    // Record only once the user actually chose to extract, so the prompt isn't
+    // marked as shown when the dialog never appeared, and deferring ("Not now")
+    // lets the optional prompt offer again on a later launch.
+    ref.read(locExtractPromptedProvider.notifier).markPrompted();
     await runLocExtractFlow(context, ref);
   }
 
