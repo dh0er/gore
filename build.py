@@ -385,14 +385,24 @@ def release_project(project: str, version: str, steps: dict, dry: bool) -> None:
     if steps["installer"]:
         installer_project(project, dry=dry)
     if steps["tag"]:
-        # commit only this project's manifest + changelog so the release tag
-        # never sweeps in unrelated monorepo changes.
         manifest = cfg["pubspec"] if cfg["kind"] == "flutter" else cfg["manifest"]
         rel_paths = [f"{cfg['dir']}/{manifest}"]
         if cfg.get("changelog"):
             rel_paths.append(f"{cfg['dir']}/{cfg['changelog']}")
-        git(["add", *rel_paths], dry)
-        git(["commit", "-m", f"release({project}): {version}"], dry)
+        # Commit only this project's files via pathspec, so unrelated staged
+        # work never rides along on the release tag. Skip the commit entirely
+        # when those files are already at the target version (nothing to
+        # commit would otherwise abort and the tag would never be created).
+        if dry:
+            changed = True
+        else:
+            changed = subprocess.run(
+                ["git", "diff", "--quiet", "HEAD", "--", *rel_paths], cwd=ROOT
+            ).returncode != 0
+        if changed:
+            git(["commit", "-m", f"release({project}): {version}", "--", *rel_paths], dry)
+        else:
+            print(f"no changes in {rel_paths}; skipping release commit")
         git(["tag", tag], dry)
     if steps["push"]:
         git(["push"], dry)

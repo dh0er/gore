@@ -201,17 +201,25 @@ jobs:
             projects/gore-mod/dist/GoreModSetup-${{ steps.version.outputs.version }}.exe
           body_path: projects/gore-mod/dist/RELEASE_NOTES.md
 
-      # gore-mod's updater polls this fixed-tag release. Overwrite its appcast
-      # asset each release so the feed URL is stable across releases.
+      # gore-mod's updater polls this fixed-tag release. The asset name is the
+      # same every release, so use `gh release upload --clobber` to replace it
+      # in place — a plain upload errors on the second release and the feed
+      # would stay stuck on the first appcast.
       - name: Update gore-mod appcast feed
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: gore-mod-appcast
-          name: gore-mod update feed
-          make_latest: "false"
-          body: "Stable WinSparkle feed for gore-mod. Assets overwritten each release."
-          files: projects/gore-mod/dist/appcast-windows.xml
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view gore-mod-appcast 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create gore-mod-appcast `
+              --title "gore-mod update feed" `
+              --notes "Stable WinSparkle feed for gore-mod. Assets overwritten each release." `
+              --latest=false
+          }
+          gh release upload gore-mod-appcast `
+            projects/gore-mod/dist/appcast-windows.xml --clobber
 
   gore-cli:
     if: startsWith(github.ref_name, 'gore-cli-v') || (github.event_name == 'workflow_dispatch' && inputs.project == 'gore-cli')
