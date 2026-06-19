@@ -241,4 +241,9 @@ class AppLocalizationsFr extends AppLocalizations {
 
   @override
   String get modNameNotAFolderName => 'Nom de dossier invalide';
+
+  @override
+  String localizedTextExtractedCount(int idCount, int languageCount) {
+    return '$idCount identifiants extraits dans $languageCount langues';
+  }
 }

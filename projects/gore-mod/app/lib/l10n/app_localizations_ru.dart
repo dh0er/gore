@@ -241,4 +241,9 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get modNameNotAFolderName => 'Недопустимое имя папки';
+
+  @override
+  String localizedTextExtractedCount(int idCount, int languageCount) {
+    return 'Извлечено $idCount идентификаторов на $languageCount языках';
+  }
 }

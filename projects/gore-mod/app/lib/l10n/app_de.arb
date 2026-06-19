@@ -1,6 +1,5 @@
 {
   "@@locale": "de",
-
   "extractLocalizedText": "Lokalisierte Texte extrahieren",
   "lightMode": "Heller Modus",
   "darkMode": "Dunkler Modus",
@@ -8,7 +7,6 @@
   "exportMod": "Mod exportieren",
   "exportModWithCount": "Mod exportieren ({count})",
   "selectAnItemToEdit": "Wähle einen Gegenstand, um seine Felder zu bearbeiten.",
-
   "gameDataActiveTooltip": "Spieldaten: {name}",
   "gameDataBundledTooltip": "Spieldaten: mitgeliefert",
   "loadGameDataDump": "Spieldaten-Dump laden…",
@@ -16,12 +14,10 @@
   "useBundledData": "Mitgelieferte Daten verwenden",
   "alreadyBundled": "bereits mitgeliefert",
   "gameDataFileGroupLabel": "Spieldaten",
-
   "minimize": "Minimieren",
   "restore": "Wiederherstellen",
   "maximize": "Maximieren",
   "close": "Schließen",
-
   "categoryMeleeWeapons": "Nahkampfwaffen",
   "categoryRangedWeapons": "Fernkampfwaffen",
   "categoryAmmunition": "Munition",
@@ -36,17 +32,14 @@
   "categoryMissionItems": "Questgegenstände",
   "categoryKeys": "Schlüssel",
   "categoryOther": "Sonstiges",
-
   "categoryWithCount": "{label} ({count})",
   "searchItems": "Gegenstände suchen",
   "noItemsMatch": "Keine passenden Gegenstände",
   "failedToLoadCatalog": "Katalog konnte nicht geladen werden: {error}",
-
   "pendingOverridesWithCount": "Ausstehende Änderungen ({count})",
   "clearAll": "Alle löschen",
   "noPendingOverrides": "Keine ausstehenden Änderungen.\nBearbeite Felder, um welche hinzuzufügen.",
   "removeOverride": "Änderung entfernen",
-
   "modName": "Mod-Name",
   "loadDelayLabel": "Ladeverzögerung (ms, 0 = sofort)",
   "noFolderSelected": "Kein Ordner ausgewählt",
@@ -56,7 +49,6 @@
   "export": "Exportieren",
   "exportHere": "Hierher exportieren",
   "mustBeNonNegativeInteger": "Muss eine nicht-negative Ganzzahl sein",
-
   "extractingLocalizedText": "Lokalisierte Spieltexte werden extrahiert…",
   "localizedTextExtractionCancelled": "Extraktion der lokalisierten Texte abgebrochen.",
   "localizedTextExtracted": "Lokalisierte Texte extrahiert.",
@@ -66,7 +58,6 @@
   "extractLocalizedTextBody": "Lokalisierte Spieltexte wurden noch nicht extrahiert. Jetzt aus deiner Spielinstallation extrahieren? (optional)",
   "notNow": "Nicht jetzt",
   "extract": "Extrahieren",
-
   "validationRequired": "Erforderlich",
   "validationMustBeWholeNumber": "Muss eine ganze Zahl sein",
   "validationMustBeNumber": "Muss eine Zahl sein",
@@ -75,9 +66,9 @@
   "validationMustBeAtMost": "Muss ≤ {max} sein",
   "validationMustBeBool": "Muss true oder false sein",
   "validationMustBeOneOf": "Muss einer von: {options} sein",
-
   "modNameRequired": "Erforderlich",
   "modNameControlCharacters": "Darf keine Steuerzeichen enthalten",
   "modNamePathSeparators": "Darf keine Pfadtrennzeichen enthalten",
-  "modNameNotAFolderName": "Kein gültiger Ordnername"
+  "modNameNotAFolderName": "Kein gültiger Ordnername",
+  "localizedTextExtractedCount": "{idCount} IDs in {languageCount} Sprachen extrahiert"
 }

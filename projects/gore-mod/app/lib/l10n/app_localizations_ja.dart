@@ -234,4 +234,9 @@ class AppLocalizationsJa extends AppLocalizations {
 
   @override
   String get modNameNotAFolderName => '有効なフォルダ名ではありません';
+
+  @override
+  String localizedTextExtractedCount(int idCount, int languageCount) {
+    return '$languageCount言語で$idCount個のIDを抽出しました';
+  }
 }

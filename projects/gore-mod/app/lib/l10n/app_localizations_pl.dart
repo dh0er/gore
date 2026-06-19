@@ -238,4 +238,9 @@ class AppLocalizationsPl extends AppLocalizations {
 
   @override
   String get modNameNotAFolderName => 'Nieprawidłowa nazwa folderu';
+
+  @override
+  String localizedTextExtractedCount(int idCount, int languageCount) {
+    return 'Wyodrębniono $idCount identyfikatorów w $languageCount językach';
+  }
 }

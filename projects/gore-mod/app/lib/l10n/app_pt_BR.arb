@@ -1,6 +1,5 @@
 {
   "@@locale": "pt_BR",
-
   "extractLocalizedText": "Extrair textos localizados",
   "lightMode": "Modo claro",
   "darkMode": "Modo escuro",
@@ -8,7 +7,6 @@
   "exportMod": "Exportar mod",
   "exportModWithCount": "Exportar mod ({count})",
   "selectAnItemToEdit": "Selecione um item para editar seus campos.",
-
   "gameDataActiveTooltip": "Dados do jogo: {name}",
   "gameDataBundledTooltip": "Dados do jogo: incluídos",
   "loadGameDataDump": "Carregar dump de dados do jogo…",
@@ -16,12 +14,10 @@
   "useBundledData": "Usar dados incluídos",
   "alreadyBundled": "já incluídos",
   "gameDataFileGroupLabel": "dados do jogo",
-
   "minimize": "Minimizar",
   "restore": "Restaurar",
   "maximize": "Maximizar",
   "close": "Fechar",
-
   "categoryMeleeWeapons": "Armas corpo a corpo",
   "categoryRangedWeapons": "Armas à distância",
   "categoryAmmunition": "Munição",
@@ -36,17 +32,14 @@
   "categoryMissionItems": "Itens de missão",
   "categoryKeys": "Chaves",
   "categoryOther": "Outros",
-
   "categoryWithCount": "{label} ({count})",
   "searchItems": "Pesquisar itens",
   "noItemsMatch": "Nenhum item corresponde",
   "failedToLoadCatalog": "Falha ao carregar o catálogo: {error}",
-
   "pendingOverridesWithCount": "Alterações pendentes ({count})",
   "clearAll": "Limpar tudo",
   "noPendingOverrides": "Nenhuma alteração pendente.\nEdite os campos dos itens para adicionar algumas.",
   "removeOverride": "Remover alteração",
-
   "modName": "Nome do mod",
   "loadDelayLabel": "Atraso de carregamento (ms, 0 = imediato)",
   "noFolderSelected": "Nenhuma pasta selecionada",
@@ -56,7 +49,6 @@
   "export": "Exportar",
   "exportHere": "Exportar aqui",
   "mustBeNonNegativeInteger": "Deve ser um inteiro não negativo",
-
   "extractingLocalizedText": "Extraindo textos localizados do jogo…",
   "localizedTextExtractionCancelled": "Extração de textos localizados cancelada.",
   "localizedTextExtracted": "Textos localizados extraídos.",
@@ -66,7 +58,6 @@
   "extractLocalizedTextBody": "Os textos localizados do jogo ainda não foram extraídos. Extraí-los agora da sua instalação do jogo? (opcional)",
   "notNow": "Agora não",
   "extract": "Extrair",
-
   "validationRequired": "Obrigatório",
   "validationMustBeWholeNumber": "Deve ser um número inteiro",
   "validationMustBeNumber": "Deve ser um número",
@@ -75,9 +66,9 @@
   "validationMustBeAtMost": "Deve ser ≤ {max}",
   "validationMustBeBool": "Deve ser true ou false",
   "validationMustBeOneOf": "Deve ser um de: {options}",
-
   "modNameRequired": "Obrigatório",
   "modNameControlCharacters": "Não deve conter caracteres de controle",
   "modNamePathSeparators": "Não deve conter separadores de caminho",
-  "modNameNotAFolderName": "Nome de pasta inválido"
+  "modNameNotAFolderName": "Nome de pasta inválido",
+  "localizedTextExtractedCount": "{idCount} IDs extraídos em {languageCount} idiomas"
 }

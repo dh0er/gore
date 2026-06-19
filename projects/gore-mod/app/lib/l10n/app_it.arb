@@ -1,6 +1,5 @@
 {
   "@@locale": "it",
-
   "extractLocalizedText": "Estrai testi localizzati",
   "lightMode": "Modalità chiara",
   "darkMode": "Modalità scura",
@@ -8,7 +7,6 @@
   "exportMod": "Esporta mod",
   "exportModWithCount": "Esporta mod ({count})",
   "selectAnItemToEdit": "Seleziona un oggetto per modificarne i campi.",
-
   "gameDataActiveTooltip": "Dati di gioco: {name}",
   "gameDataBundledTooltip": "Dati di gioco: inclusi",
   "loadGameDataDump": "Carica dump dei dati di gioco…",
@@ -16,12 +14,10 @@
   "useBundledData": "Usa i dati inclusi",
   "alreadyBundled": "già inclusi",
   "gameDataFileGroupLabel": "dati di gioco",
-
   "minimize": "Riduci a icona",
   "restore": "Ripristina",
   "maximize": "Ingrandisci",
   "close": "Chiudi",
-
   "categoryMeleeWeapons": "Armi da mischia",
   "categoryRangedWeapons": "Armi a distanza",
   "categoryAmmunition": "Munizioni",
@@ -36,17 +32,14 @@
   "categoryMissionItems": "Oggetti della missione",
   "categoryKeys": "Chiavi",
   "categoryOther": "Altro",
-
   "categoryWithCount": "{label} ({count})",
   "searchItems": "Cerca oggetti",
   "noItemsMatch": "Nessun oggetto corrispondente",
   "failedToLoadCatalog": "Impossibile caricare il catalogo: {error}",
-
   "pendingOverridesWithCount": "Modifiche in sospeso ({count})",
   "clearAll": "Cancella tutto",
   "noPendingOverrides": "Nessuna modifica in sospeso.\nModifica i campi degli oggetti per aggiungerne.",
   "removeOverride": "Rimuovi modifica",
-
   "modName": "Nome della mod",
   "loadDelayLabel": "Ritardo di caricamento (ms, 0 = immediato)",
   "noFolderSelected": "Nessuna cartella selezionata",
@@ -56,7 +49,6 @@
   "export": "Esporta",
   "exportHere": "Esporta qui",
   "mustBeNonNegativeInteger": "Deve essere un intero non negativo",
-
   "extractingLocalizedText": "Estrazione dei testi localizzati del gioco…",
   "localizedTextExtractionCancelled": "Estrazione dei testi localizzati annullata.",
   "localizedTextExtracted": "Testi localizzati estratti.",
@@ -66,7 +58,6 @@
   "extractLocalizedTextBody": "I testi localizzati del gioco non sono ancora stati estratti. Estrarli ora dalla tua installazione del gioco? (facoltativo)",
   "notNow": "Non ora",
   "extract": "Estrai",
-
   "validationRequired": "Obbligatorio",
   "validationMustBeWholeNumber": "Deve essere un numero intero",
   "validationMustBeNumber": "Deve essere un numero",
@@ -75,9 +66,9 @@
   "validationMustBeAtMost": "Deve essere ≤ {max}",
   "validationMustBeBool": "Deve essere true o false",
   "validationMustBeOneOf": "Deve essere uno tra: {options}",
-
   "modNameRequired": "Obbligatorio",
   "modNameControlCharacters": "Non deve contenere caratteri di controllo",
   "modNamePathSeparators": "Non deve contenere separatori di percorso",
-  "modNameNotAFolderName": "Nome cartella non valido"
+  "modNameNotAFolderName": "Nome cartella non valido",
+  "localizedTextExtractedCount": "{idCount} ID estratti in {languageCount} lingue"
 }

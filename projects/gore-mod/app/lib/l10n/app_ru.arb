@@ -1,6 +1,5 @@
 {
   "@@locale": "ru",
-
   "extractLocalizedText": "Извлечь локализованные тексты",
   "lightMode": "Светлая тема",
   "darkMode": "Тёмная тема",
@@ -8,7 +7,6 @@
   "exportMod": "Экспорт мода",
   "exportModWithCount": "Экспорт мода ({count})",
   "selectAnItemToEdit": "Выберите предмет, чтобы изменить его поля.",
-
   "gameDataActiveTooltip": "Данные игры: {name}",
   "gameDataBundledTooltip": "Данные игры: встроенные",
   "loadGameDataDump": "Загрузить дамп данных игры…",
@@ -16,12 +14,10 @@
   "useBundledData": "Использовать встроенные данные",
   "alreadyBundled": "уже встроены",
   "gameDataFileGroupLabel": "данные игры",
-
   "minimize": "Свернуть",
   "restore": "Восстановить",
   "maximize": "Развернуть",
   "close": "Закрыть",
-
   "categoryMeleeWeapons": "Оружие ближнего боя",
   "categoryRangedWeapons": "Оружие дальнего боя",
   "categoryAmmunition": "Боеприпасы",
@@ -36,17 +32,14 @@
   "categoryMissionItems": "Квестовые предметы",
   "categoryKeys": "Ключи",
   "categoryOther": "Прочее",
-
   "categoryWithCount": "{label} ({count})",
   "searchItems": "Поиск предметов",
   "noItemsMatch": "Нет подходящих предметов",
   "failedToLoadCatalog": "Не удалось загрузить каталог: {error}",
-
   "pendingOverridesWithCount": "Ожидающие изменения ({count})",
   "clearAll": "Очистить всё",
   "noPendingOverrides": "Нет ожидающих изменений.\nИзмените поля предметов, чтобы добавить.",
   "removeOverride": "Удалить изменение",
-
   "modName": "Название мода",
   "loadDelayLabel": "Задержка загрузки (мс, 0 = мгновенно)",
   "noFolderSelected": "Папка не выбрана",
@@ -56,7 +49,6 @@
   "export": "Экспорт",
   "exportHere": "Экспортировать сюда",
   "mustBeNonNegativeInteger": "Должно быть неотрицательным целым числом",
-
   "extractingLocalizedText": "Извлечение локализованных текстов игры…",
   "localizedTextExtractionCancelled": "Извлечение локализованных текстов отменено.",
   "localizedTextExtracted": "Локализованные тексты извлечены.",
@@ -66,7 +58,6 @@
   "extractLocalizedTextBody": "Локализованные тексты игры ещё не извлечены. Извлечь их сейчас из установленной игры? (необязательно)",
   "notNow": "Не сейчас",
   "extract": "Извлечь",
-
   "validationRequired": "Обязательно",
   "validationMustBeWholeNumber": "Должно быть целым числом",
   "validationMustBeNumber": "Должно быть числом",
@@ -75,9 +66,9 @@
   "validationMustBeAtMost": "Должно быть ≤ {max}",
   "validationMustBeBool": "Должно быть true или false",
   "validationMustBeOneOf": "Должно быть одним из: {options}",
-
   "modNameRequired": "Обязательно",
   "modNameControlCharacters": "Не должно содержать управляющих символов",
   "modNamePathSeparators": "Не должно содержать разделителей пути",
-  "modNameNotAFolderName": "Недопустимое имя папки"
+  "modNameNotAFolderName": "Недопустимое имя папки",
+  "localizedTextExtractedCount": "Извлечено {idCount} идентификаторов на {languageCount} языках"
 }

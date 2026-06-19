@@ -1,6 +1,5 @@
 {
   "@@locale": "fr",
-
   "extractLocalizedText": "Extraire les textes localisés",
   "lightMode": "Mode clair",
   "darkMode": "Mode sombre",
@@ -8,7 +7,6 @@
   "exportMod": "Exporter le mod",
   "exportModWithCount": "Exporter le mod ({count})",
   "selectAnItemToEdit": "Sélectionnez un objet pour modifier ses champs.",
-
   "gameDataActiveTooltip": "Données du jeu : {name}",
   "gameDataBundledTooltip": "Données du jeu : intégrées",
   "loadGameDataDump": "Charger un dump de données du jeu…",
@@ -16,12 +14,10 @@
   "useBundledData": "Utiliser les données intégrées",
   "alreadyBundled": "déjà intégrées",
   "gameDataFileGroupLabel": "données du jeu",
-
   "minimize": "Réduire",
   "restore": "Restaurer",
   "maximize": "Agrandir",
   "close": "Fermer",
-
   "categoryMeleeWeapons": "Armes de mêlée",
   "categoryRangedWeapons": "Armes à distance",
   "categoryAmmunition": "Munitions",
@@ -36,17 +32,14 @@
   "categoryMissionItems": "Objets de quête",
   "categoryKeys": "Clés",
   "categoryOther": "Autre",
-
   "categoryWithCount": "{label} ({count})",
   "searchItems": "Rechercher des objets",
   "noItemsMatch": "Aucun objet correspondant",
   "failedToLoadCatalog": "Échec du chargement du catalogue : {error}",
-
   "pendingOverridesWithCount": "Modifications en attente ({count})",
   "clearAll": "Tout effacer",
   "noPendingOverrides": "Aucune modification en attente.\nModifiez des champs pour en ajouter.",
   "removeOverride": "Supprimer la modification",
-
   "modName": "Nom du mod",
   "loadDelayLabel": "Délai de chargement (ms, 0 = immédiat)",
   "noFolderSelected": "Aucun dossier sélectionné",
@@ -56,7 +49,6 @@
   "export": "Exporter",
   "exportHere": "Exporter ici",
   "mustBeNonNegativeInteger": "Doit être un entier non négatif",
-
   "extractingLocalizedText": "Extraction des textes localisés du jeu…",
   "localizedTextExtractionCancelled": "Extraction des textes localisés annulée.",
   "localizedTextExtracted": "Textes localisés extraits.",
@@ -66,7 +58,6 @@
   "extractLocalizedTextBody": "Les textes localisés du jeu ne sont pas encore extraits. Les extraire maintenant depuis votre installation du jeu ? (facultatif)",
   "notNow": "Pas maintenant",
   "extract": "Extraire",
-
   "validationRequired": "Requis",
   "validationMustBeWholeNumber": "Doit être un nombre entier",
   "validationMustBeNumber": "Doit être un nombre",
@@ -75,9 +66,9 @@
   "validationMustBeAtMost": "Doit être ≤ {max}",
   "validationMustBeBool": "Doit être true ou false",
   "validationMustBeOneOf": "Doit être l'un de : {options}",
-
   "modNameRequired": "Requis",
   "modNameControlCharacters": "Ne doit pas contenir de caractères de contrôle",
   "modNamePathSeparators": "Ne doit pas contenir de séparateurs de chemin",
-  "modNameNotAFolderName": "Nom de dossier invalide"
+  "modNameNotAFolderName": "Nom de dossier invalide",
+  "localizedTextExtractedCount": "{idCount} identifiants extraits dans {languageCount} langues"
 }

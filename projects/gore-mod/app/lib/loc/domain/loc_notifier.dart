@@ -106,18 +106,17 @@ class LocNotifier extends StateNotifier<LocState> {
       final meta = (res['meta'] as Map?)?.cast<String, Object?>() ?? const {};
       final idCount = (meta['id_count'] as num?)?.toInt();
       final languageCount = (meta['languages'] as List?)?.length;
-      final message = 'Extracted ${idCount ?? '?'} ids across '
-          '${languageCount ?? '?'} languages';
+      // Return the counts and let the UI format them with AppLocalizations,
+      // rather than embedding an English sentence here.
       state = state.copyWith(
         phase: LocPhase.done,
         present: true,
-        message: message,
+        clearMessage: true,
         idCount: idCount,
         languageCount: languageCount,
       );
       return LocExtractOutcome(
         success: true,
-        message: message,
         idCount: idCount,
         languageCount: languageCount,
       );

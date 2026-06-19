@@ -1,6 +1,5 @@
 {
   "@@locale": "zh_Hans",
-
   "extractLocalizedText": "提取本地化文本",
   "lightMode": "浅色模式",
   "darkMode": "深色模式",
@@ -8,7 +7,6 @@
   "exportMod": "导出 Mod",
   "exportModWithCount": "导出 Mod（{count}）",
   "selectAnItemToEdit": "选择一个物品以编辑其字段。",
-
   "gameDataActiveTooltip": "游戏数据：{name}",
   "gameDataBundledTooltip": "游戏数据：内置",
   "loadGameDataDump": "加载游戏数据转储…",
@@ -16,12 +14,10 @@
   "useBundledData": "使用内置数据",
   "alreadyBundled": "已内置",
   "gameDataFileGroupLabel": "游戏数据",
-
   "minimize": "最小化",
   "restore": "还原",
   "maximize": "最大化",
   "close": "关闭",
-
   "categoryMeleeWeapons": "近战武器",
   "categoryRangedWeapons": "远程武器",
   "categoryAmmunition": "弹药",
@@ -36,17 +32,14 @@
   "categoryMissionItems": "任务物品",
   "categoryKeys": "钥匙",
   "categoryOther": "其他",
-
   "categoryWithCount": "{label}（{count}）",
   "searchItems": "搜索物品",
   "noItemsMatch": "没有匹配的物品",
   "failedToLoadCatalog": "加载目录失败：{error}",
-
   "pendingOverridesWithCount": "待应用的修改（{count}）",
   "clearAll": "全部清除",
   "noPendingOverrides": "没有待应用的修改。\n编辑物品字段以添加修改。",
   "removeOverride": "移除修改",
-
   "modName": "Mod 名称",
   "loadDelayLabel": "加载延迟（毫秒，0 = 立即）",
   "noFolderSelected": "未选择文件夹",
@@ -56,7 +49,6 @@
   "export": "导出",
   "exportHere": "导出到此处",
   "mustBeNonNegativeInteger": "必须为非负整数",
-
   "extractingLocalizedText": "正在提取本地化游戏文本…",
   "localizedTextExtractionCancelled": "已取消本地化文本提取。",
   "localizedTextExtracted": "已提取本地化文本。",
@@ -66,7 +58,6 @@
   "extractLocalizedTextBody": "尚未提取本地化游戏文本。现在从你的游戏安装目录中提取吗？（可选）",
   "notNow": "暂不",
   "extract": "提取",
-
   "validationRequired": "必填",
   "validationMustBeWholeNumber": "必须为整数",
   "validationMustBeNumber": "必须为数字",
@@ -75,9 +66,9 @@
   "validationMustBeAtMost": "必须 ≤ {max}",
   "validationMustBeBool": "必须为 true 或 false",
   "validationMustBeOneOf": "必须为以下之一：{options}",
-
   "modNameRequired": "必填",
   "modNameControlCharacters": "不得包含控制字符",
   "modNamePathSeparators": "不得包含路径分隔符",
-  "modNameNotAFolderName": "不是有效的文件夹名称"
+  "modNameNotAFolderName": "不是有效的文件夹名称",
+  "localizedTextExtractedCount": "已提取 {idCount} 个 ID，涵盖 {languageCount} 种语言"
 }

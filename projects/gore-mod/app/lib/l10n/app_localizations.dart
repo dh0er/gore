@@ -535,6 +535,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Not a valid folder name'**
   String get modNameNotAFolderName;
+
+  /// No description provided for @localizedTextExtractedCount.
+  ///
+  /// In en, this message translates to:
+  /// **'Extracted {idCount} ids across {languageCount} languages'**
+  String localizedTextExtractedCount(int idCount, int languageCount);
 }
 
 class _AppLocalizationsDelegate

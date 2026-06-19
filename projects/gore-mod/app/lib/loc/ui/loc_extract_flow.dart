@@ -22,13 +22,16 @@ Future<void> runLocExtractFlow(BuildContext context, WidgetRef ref) async {
   var outcome = await notifier.extract();
 
   if (outcome.needsManualFile) {
-    messenger.hideCurrentSnackBar();
+    // The first extract() already awaited; bail if the page is gone before
+    // touching the (captured) messenger.
     if (!context.mounted) return;
+    messenger.hideCurrentSnackBar();
     final group = XTypeGroup(
       label: l10n.localizationCacheFileGroupLabel,
       extensions: const ['lcache'],
     );
     final file = await openFile(acceptedTypeGroups: [group]);
+    if (!context.mounted) return;
     if (file == null) {
       // User cancelled the picker — abort gracefully, no error.
       messenger.showSnackBar(
@@ -51,10 +54,14 @@ Future<void> runLocExtractFlow(BuildContext context, WidgetRef ref) async {
   // written but the meta write then failed), so the new names should still show.
   ref.invalidate(locCatalogProvider);
   if (outcome.success) {
+    final ids = outcome.idCount;
+    final langs = outcome.languageCount;
     messenger.showSnackBar(
       SnackBar(
         content: Text(
-          outcome.message ?? l10n.localizedTextExtracted,
+          ids != null && langs != null
+              ? l10n.localizedTextExtractedCount(ids, langs)
+              : l10n.localizedTextExtracted,
         ),
       ),
     );
