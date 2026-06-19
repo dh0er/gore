@@ -1,4 +1,5 @@
 import 'package:goresave/features/editor/domain/editor_models.dart';
+import 'package:goresave/l10n/app_localizations.dart';
 
 /// Item categories for Gothic 1 Remake inventory items, derived from the
 /// Angelscript class-name prefix (e.g. `ItMi_Orenugget` -> misc).
@@ -24,6 +25,42 @@ enum ItemCategory {
   const ItemCategory(this.label);
 
   final String label;
+}
+
+/// Returns the localized display label for [category]. The English
+/// [ItemCategory.label] is kept as a stable identifier / fallback; this is what
+/// should be shown to the user.
+String localizedItemCategoryLabel(AppLocalizations l10n, ItemCategory category) {
+  switch (category) {
+    case ItemCategory.meleeWeapon:
+      return l10n.itemCategoryMeleeWeapon;
+    case ItemCategory.rangedWeapon:
+      return l10n.itemCategoryRangedWeapon;
+    case ItemCategory.ammunition:
+      return l10n.itemCategoryAmmunition;
+    case ItemCategory.rune:
+      return l10n.itemCategoryRune;
+    case ItemCategory.scroll:
+      return l10n.itemCategoryScroll;
+    case ItemCategory.food:
+      return l10n.itemCategoryFood;
+    case ItemCategory.misc:
+      return l10n.itemCategoryMisc;
+    case ItemCategory.amulet:
+      return l10n.itemCategoryAmulet;
+    case ItemCategory.ring:
+      return l10n.itemCategoryRing;
+    case ItemCategory.trophy:
+      return l10n.itemCategoryTrophy;
+    case ItemCategory.writing:
+      return l10n.itemCategoryWriting;
+    case ItemCategory.mission:
+      return l10n.itemCategoryMission;
+    case ItemCategory.key:
+      return l10n.itemCategoryKey;
+    case ItemCategory.other:
+      return l10n.itemCategoryOther;
+  }
 }
 
 ItemCategory itemCategoryFromId(String id) {

@@ -318,6 +318,48 @@ class AppLocalizationsPl extends AppLocalizations {
   }
 
   @override
+  String get itemCategoryMeleeWeapon => 'Broń biała';
+
+  @override
+  String get itemCategoryRangedWeapon => 'Broń dystansowa';
+
+  @override
+  String get itemCategoryAmmunition => 'Amunicja';
+
+  @override
+  String get itemCategoryRune => 'Runy';
+
+  @override
+  String get itemCategoryScroll => 'Zwoje zaklęć';
+
+  @override
+  String get itemCategoryFood => 'Jedzenie i mikstury';
+
+  @override
+  String get itemCategoryMisc => 'Różne';
+
+  @override
+  String get itemCategoryAmulet => 'Amulety';
+
+  @override
+  String get itemCategoryRing => 'Pierścienie';
+
+  @override
+  String get itemCategoryTrophy => 'Trofea ze zwierząt';
+
+  @override
+  String get itemCategoryWriting => 'Pisma';
+
+  @override
+  String get itemCategoryMission => 'Przedmioty zadań';
+
+  @override
+  String get itemCategoryKey => 'Klucze';
+
+  @override
+  String get itemCategoryOther => 'Inne';
+
+  @override
   String get count => 'Liczba';
 
   @override

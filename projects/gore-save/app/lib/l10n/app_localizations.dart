@@ -662,6 +662,90 @@ abstract class AppLocalizations {
   /// **'{label} ({count})'**
   String categoryWithCount(String label, int count);
 
+  /// No description provided for @itemCategoryMeleeWeapon.
+  ///
+  /// In en, this message translates to:
+  /// **'Melee weapons'**
+  String get itemCategoryMeleeWeapon;
+
+  /// No description provided for @itemCategoryRangedWeapon.
+  ///
+  /// In en, this message translates to:
+  /// **'Ranged weapons'**
+  String get itemCategoryRangedWeapon;
+
+  /// No description provided for @itemCategoryAmmunition.
+  ///
+  /// In en, this message translates to:
+  /// **'Ammunition'**
+  String get itemCategoryAmmunition;
+
+  /// No description provided for @itemCategoryRune.
+  ///
+  /// In en, this message translates to:
+  /// **'Runes'**
+  String get itemCategoryRune;
+
+  /// No description provided for @itemCategoryScroll.
+  ///
+  /// In en, this message translates to:
+  /// **'Spell scrolls'**
+  String get itemCategoryScroll;
+
+  /// No description provided for @itemCategoryFood.
+  ///
+  /// In en, this message translates to:
+  /// **'Food & potions'**
+  String get itemCategoryFood;
+
+  /// No description provided for @itemCategoryMisc.
+  ///
+  /// In en, this message translates to:
+  /// **'Miscellaneous'**
+  String get itemCategoryMisc;
+
+  /// No description provided for @itemCategoryAmulet.
+  ///
+  /// In en, this message translates to:
+  /// **'Amulets'**
+  String get itemCategoryAmulet;
+
+  /// No description provided for @itemCategoryRing.
+  ///
+  /// In en, this message translates to:
+  /// **'Rings'**
+  String get itemCategoryRing;
+
+  /// No description provided for @itemCategoryTrophy.
+  ///
+  /// In en, this message translates to:
+  /// **'Animal trophies'**
+  String get itemCategoryTrophy;
+
+  /// No description provided for @itemCategoryWriting.
+  ///
+  /// In en, this message translates to:
+  /// **'Writings'**
+  String get itemCategoryWriting;
+
+  /// No description provided for @itemCategoryMission.
+  ///
+  /// In en, this message translates to:
+  /// **'Mission items'**
+  String get itemCategoryMission;
+
+  /// No description provided for @itemCategoryKey.
+  ///
+  /// In en, this message translates to:
+  /// **'Keys'**
+  String get itemCategoryKey;
+
+  /// No description provided for @itemCategoryOther.
+  ///
+  /// In en, this message translates to:
+  /// **'Other'**
+  String get itemCategoryOther;
+
   /// No description provided for @count.
   ///
   /// In en, this message translates to:

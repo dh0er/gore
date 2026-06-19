@@ -1899,7 +1899,10 @@ class _PrivateInventorySummaryCardState
                                           group.category,
                                         ),
                                         label: l10n.categoryWithCount(
-                                          group.category.label,
+                                          localizedItemCategoryLabel(
+                                            l10n,
+                                            group.category,
+                                          ),
                                           group.items.length,
                                         ),
                                         selected: !searching &&

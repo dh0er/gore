@@ -103,7 +103,10 @@ pub fn import(lcache: PathBuf, edits: PathBuf, out: Option<PathBuf>) -> Result<(
     }
 
     let out_path = out.unwrap_or(lcache);
-    fs::write(&out_path, lc.encode().context("encoding lcache")?)
+    // Write via temp + rename so an interrupted/failed write never truncates the
+    // only game .lcache in place (import overwrites it directly without --out).
+    let bytes = lc.encode().context("encoding lcache")?;
+    loc_store::write_atomic(&out_path, &bytes)
         .with_context(|| format!("writing '{}'", out_path.display()))?;
     println!("Applied {applied} edit(s) -> {}", out_path.display());
     Ok(())

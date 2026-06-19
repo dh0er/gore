@@ -317,6 +317,48 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
+  String get itemCategoryMeleeWeapon => 'Melee weapons';
+
+  @override
+  String get itemCategoryRangedWeapon => 'Ranged weapons';
+
+  @override
+  String get itemCategoryAmmunition => 'Ammunition';
+
+  @override
+  String get itemCategoryRune => 'Runes';
+
+  @override
+  String get itemCategoryScroll => 'Spell scrolls';
+
+  @override
+  String get itemCategoryFood => 'Food & potions';
+
+  @override
+  String get itemCategoryMisc => 'Miscellaneous';
+
+  @override
+  String get itemCategoryAmulet => 'Amulets';
+
+  @override
+  String get itemCategoryRing => 'Rings';
+
+  @override
+  String get itemCategoryTrophy => 'Animal trophies';
+
+  @override
+  String get itemCategoryWriting => 'Writings';
+
+  @override
+  String get itemCategoryMission => 'Mission items';
+
+  @override
+  String get itemCategoryKey => 'Keys';
+
+  @override
+  String get itemCategoryOther => 'Other';
+
+  @override
   String get count => 'Count';
 
   @override

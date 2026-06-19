@@ -158,7 +158,10 @@ class _AddInventoryItemDialogState
             if (searching) {
               shown = available.where((e) {
                 return e.id.toLowerCase().contains(query) ||
-                    e.path.toLowerCase().contains(query);
+                    e.path.toLowerCase().contains(query) ||
+                    _displayName(locCatalog, lang, e.id)
+                        .toLowerCase()
+                        .contains(query);
               }).toList();
             } else {
               shown = groups
@@ -190,7 +193,10 @@ class _AddInventoryItemDialogState
                       }
                     } else if (_selected != null &&
                         !(_selected!.id.toLowerCase().contains(q) ||
-                            _selected!.path.toLowerCase().contains(q))) {
+                            _selected!.path.toLowerCase().contains(q) ||
+                            _displayName(locCatalog, lang, _selected!.id)
+                                .toLowerCase()
+                                .contains(q))) {
                       // A search that no longer matches the selection drops it.
                       _selected = null;
                     }
@@ -250,7 +256,9 @@ class _AddInventoryItemDialogState
                                         SidebarTile(
                                           icon: iconForItemCategory(g.category),
                                           label: l10n.categoryWithCount(
-                                              g.category.label, g.entries.length),
+                                              localizedItemCategoryLabel(
+                                                  l10n, g.category),
+                                              g.entries.length),
                                           selected:
                                               !searching && g.category == selectedCat,
                                           onTap: () => setState(() {

@@ -89,9 +89,11 @@ class _AddNpcDialogState extends ConsumerState<_AddNpcDialog> {
     final searching = query.isNotEmpty;
     final List<NpcCatalogEntry> shown;
     if (searching) {
-      shown = available
-          .where((e) => e.id.toLowerCase().contains(query))
-          .toList();
+      shown = available.where((e) {
+        final name = localizedGameName(catalog, lang, e.id) ?? e.id;
+        return e.id.toLowerCase().contains(query) ||
+            name.toLowerCase().contains(query);
+      }).toList();
     } else if (selectedCategory == _kAllCategory) {
       shown = available;
     } else {

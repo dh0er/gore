@@ -319,6 +319,48 @@ class AppLocalizationsDe extends AppLocalizations {
   }
 
   @override
+  String get itemCategoryMeleeWeapon => 'Nahkampfwaffen';
+
+  @override
+  String get itemCategoryRangedWeapon => 'Fernkampfwaffen';
+
+  @override
+  String get itemCategoryAmmunition => 'Munition';
+
+  @override
+  String get itemCategoryRune => 'Runen';
+
+  @override
+  String get itemCategoryScroll => 'Zauberschriftrollen';
+
+  @override
+  String get itemCategoryFood => 'Essen & Tränke';
+
+  @override
+  String get itemCategoryMisc => 'Verschiedenes';
+
+  @override
+  String get itemCategoryAmulet => 'Amulette';
+
+  @override
+  String get itemCategoryRing => 'Ringe';
+
+  @override
+  String get itemCategoryTrophy => 'Tiertrophäen';
+
+  @override
+  String get itemCategoryWriting => 'Schriften';
+
+  @override
+  String get itemCategoryMission => 'Questgegenstände';
+
+  @override
+  String get itemCategoryKey => 'Schlüssel';
+
+  @override
+  String get itemCategoryOther => 'Sonstiges';
+
+  @override
   String get count => 'Anzahl';
 
   @override

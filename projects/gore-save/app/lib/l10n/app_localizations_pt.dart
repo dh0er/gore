@@ -318,6 +318,48 @@ class AppLocalizationsPt extends AppLocalizations {
   }
 
   @override
+  String get itemCategoryMeleeWeapon => 'Armas corpo a corpo';
+
+  @override
+  String get itemCategoryRangedWeapon => 'Armas à distância';
+
+  @override
+  String get itemCategoryAmmunition => 'Munição';
+
+  @override
+  String get itemCategoryRune => 'Runas';
+
+  @override
+  String get itemCategoryScroll => 'Pergaminhos de magia';
+
+  @override
+  String get itemCategoryFood => 'Comida e poções';
+
+  @override
+  String get itemCategoryMisc => 'Diversos';
+
+  @override
+  String get itemCategoryAmulet => 'Amuletos';
+
+  @override
+  String get itemCategoryRing => 'Anéis';
+
+  @override
+  String get itemCategoryTrophy => 'Troféus de animais';
+
+  @override
+  String get itemCategoryWriting => 'Escritos';
+
+  @override
+  String get itemCategoryMission => 'Itens de missão';
+
+  @override
+  String get itemCategoryKey => 'Chaves';
+
+  @override
+  String get itemCategoryOther => 'Outros';
+
+  @override
   String get count => 'Quantidade';
 
   @override
@@ -1225,6 +1267,48 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
   String categoryWithCount(String label, int count) {
     return '$label ($count)';
   }
+
+  @override
+  String get itemCategoryMeleeWeapon => 'Armas corpo a corpo';
+
+  @override
+  String get itemCategoryRangedWeapon => 'Armas à distância';
+
+  @override
+  String get itemCategoryAmmunition => 'Munição';
+
+  @override
+  String get itemCategoryRune => 'Runas';
+
+  @override
+  String get itemCategoryScroll => 'Pergaminhos de magia';
+
+  @override
+  String get itemCategoryFood => 'Comida e poções';
+
+  @override
+  String get itemCategoryMisc => 'Diversos';
+
+  @override
+  String get itemCategoryAmulet => 'Amuletos';
+
+  @override
+  String get itemCategoryRing => 'Anéis';
+
+  @override
+  String get itemCategoryTrophy => 'Troféus de animais';
+
+  @override
+  String get itemCategoryWriting => 'Escritos';
+
+  @override
+  String get itemCategoryMission => 'Itens de missão';
+
+  @override
+  String get itemCategoryKey => 'Chaves';
+
+  @override
+  String get itemCategoryOther => 'Outros';
 
   @override
   String get count => 'Quantidade';

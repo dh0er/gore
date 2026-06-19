@@ -315,6 +315,48 @@ class AppLocalizationsJa extends AppLocalizations {
   }
 
   @override
+  String get itemCategoryMeleeWeapon => '近接武器';
+
+  @override
+  String get itemCategoryRangedWeapon => '遠隔武器';
+
+  @override
+  String get itemCategoryAmmunition => '弾薬';
+
+  @override
+  String get itemCategoryRune => 'ルーン';
+
+  @override
+  String get itemCategoryScroll => '呪文の巻物';
+
+  @override
+  String get itemCategoryFood => '食料・ポーション';
+
+  @override
+  String get itemCategoryMisc => 'その他雑貨';
+
+  @override
+  String get itemCategoryAmulet => 'アミュレット';
+
+  @override
+  String get itemCategoryRing => '指輪';
+
+  @override
+  String get itemCategoryTrophy => '動物の戦利品';
+
+  @override
+  String get itemCategoryWriting => '書物';
+
+  @override
+  String get itemCategoryMission => 'クエストアイテム';
+
+  @override
+  String get itemCategoryKey => '鍵';
+
+  @override
+  String get itemCategoryOther => 'その他';
+
+  @override
   String get count => '数量';
 
   @override

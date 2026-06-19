@@ -318,6 +318,48 @@ class AppLocalizationsRu extends AppLocalizations {
   }
 
   @override
+  String get itemCategoryMeleeWeapon => 'Оружие ближнего боя';
+
+  @override
+  String get itemCategoryRangedWeapon => 'Дальнобойное оружие';
+
+  @override
+  String get itemCategoryAmmunition => 'Боеприпасы';
+
+  @override
+  String get itemCategoryRune => 'Руны';
+
+  @override
+  String get itemCategoryScroll => 'Свитки заклинаний';
+
+  @override
+  String get itemCategoryFood => 'Еда и зелья';
+
+  @override
+  String get itemCategoryMisc => 'Разное';
+
+  @override
+  String get itemCategoryAmulet => 'Амулеты';
+
+  @override
+  String get itemCategoryRing => 'Кольца';
+
+  @override
+  String get itemCategoryTrophy => 'Трофеи животных';
+
+  @override
+  String get itemCategoryWriting => 'Записи';
+
+  @override
+  String get itemCategoryMission => 'Квестовые предметы';
+
+  @override
+  String get itemCategoryKey => 'Ключи';
+
+  @override
+  String get itemCategoryOther => 'Прочее';
+
+  @override
   String get count => 'Количество';
 
   @override

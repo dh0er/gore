@@ -161,6 +161,22 @@
       "count": { "type": "int" }
     }
   },
+
+  "itemCategoryMeleeWeapon": "Melee weapons",
+  "itemCategoryRangedWeapon": "Ranged weapons",
+  "itemCategoryAmmunition": "Ammunition",
+  "itemCategoryRune": "Runes",
+  "itemCategoryScroll": "Spell scrolls",
+  "itemCategoryFood": "Food & potions",
+  "itemCategoryMisc": "Miscellaneous",
+  "itemCategoryAmulet": "Amulets",
+  "itemCategoryRing": "Rings",
+  "itemCategoryTrophy": "Animal trophies",
+  "itemCategoryWriting": "Writings",
+  "itemCategoryMission": "Mission items",
+  "itemCategoryKey": "Keys",
+  "itemCategoryOther": "Other",
+
   "count": "Count",
   "min1": "Min 1",
   "countTimes": "×{count}",

@@ -310,6 +310,48 @@ class AppLocalizationsZh extends AppLocalizations {
   }
 
   @override
+  String get itemCategoryMeleeWeapon => '近战武器';
+
+  @override
+  String get itemCategoryRangedWeapon => '远程武器';
+
+  @override
+  String get itemCategoryAmmunition => '弹药';
+
+  @override
+  String get itemCategoryRune => '符文';
+
+  @override
+  String get itemCategoryScroll => '法术卷轴';
+
+  @override
+  String get itemCategoryFood => '食物与药水';
+
+  @override
+  String get itemCategoryMisc => '杂项';
+
+  @override
+  String get itemCategoryAmulet => '护身符';
+
+  @override
+  String get itemCategoryRing => '戒指';
+
+  @override
+  String get itemCategoryTrophy => '动物战利品';
+
+  @override
+  String get itemCategoryWriting => '文书';
+
+  @override
+  String get itemCategoryMission => '任务物品';
+
+  @override
+  String get itemCategoryKey => '钥匙';
+
+  @override
+  String get itemCategoryOther => '其他';
+
+  @override
   String get count => '数量';
 
   @override
@@ -1185,6 +1227,48 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   String categoryWithCount(String label, int count) {
     return '$label（$count）';
   }
+
+  @override
+  String get itemCategoryMeleeWeapon => '近战武器';
+
+  @override
+  String get itemCategoryRangedWeapon => '远程武器';
+
+  @override
+  String get itemCategoryAmmunition => '弹药';
+
+  @override
+  String get itemCategoryRune => '符文';
+
+  @override
+  String get itemCategoryScroll => '法术卷轴';
+
+  @override
+  String get itemCategoryFood => '食物与药水';
+
+  @override
+  String get itemCategoryMisc => '杂项';
+
+  @override
+  String get itemCategoryAmulet => '护身符';
+
+  @override
+  String get itemCategoryRing => '戒指';
+
+  @override
+  String get itemCategoryTrophy => '动物战利品';
+
+  @override
+  String get itemCategoryWriting => '文书';
+
+  @override
+  String get itemCategoryMission => '任务物品';
+
+  @override
+  String get itemCategoryKey => '钥匙';
+
+  @override
+  String get itemCategoryOther => '其他';
 
   @override
   String get count => '数量';
