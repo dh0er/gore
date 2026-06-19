@@ -35,10 +35,12 @@ class EditorPage extends ConsumerStatefulWidget {
   ConsumerState<EditorPage> createState() => _EditorPageState();
 }
 
-class _EditorPageState extends ConsumerState<EditorPage> {
+class _EditorPageState extends ConsumerState<EditorPage>
+    with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     // First-run, optional localized-text extraction prompt. Runs after the
     // first frame so the Scaffold (SnackBar host) and Navigator (dialog host)
     // exist. Guarded by a persisted flag so it only auto-prompts once; the
@@ -46,6 +48,22 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       unawaited(_maybePromptLocalizationExtract());
     });
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Another tool (or `gore-cli loc extract`) may have written the shared
+    // loc_catalog.json while this app was backgrounded; reload it on resume so
+    // item/NPC names pick up a catalog that appeared after first load.
+    if (state == AppLifecycleState.resumed) {
+      ref.read(locCatalogReloadProvider.notifier).state++;
+    }
   }
 
   Future<void> _maybePromptLocalizationExtract() async {

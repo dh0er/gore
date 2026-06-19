@@ -25,7 +25,9 @@ class UiSettings {
         _ => ThemeMode.light,
       },
       appLocale: switch (json['appLocale']) {
-        final String code when code.isNotEmpty => code,
+        // Trim so a stored " de " still matches kGameLangs (else the picker
+        // would silently fall back to English).
+        final String code when code.trim().isNotEmpty => code.trim(),
         _ => 'en',
       },
       uiScale: switch (json['uiScale']) {
