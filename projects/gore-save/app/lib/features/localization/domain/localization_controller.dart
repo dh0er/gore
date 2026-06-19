@@ -74,14 +74,15 @@ class LocalizationController extends StateNotifier<LocalizationState> {
 
   final GoresaveCoreService _core;
 
-  /// Refresh status from the core. Returns the latest `present` value (false on
-  /// any error, so callers can decide whether to offer extraction).
-  Future<bool> status() async {
+  /// Refresh status from the core. Returns the latest `present` value, or null
+  /// when the status query itself failed (e.g. the native core is unavailable) —
+  /// callers must not treat null as "not extracted".
+  Future<bool?> status() async {
     try {
       final response = await _core.execute('loc_status');
       if (response['ok'] != true) {
         state = state.copyWith(present: false, message: _errorMessage(response));
-        return false;
+        return null;
       }
       final data = (response['data'] as Map?)?.cast<String, Object?>();
       final present = data?['present'] == true;
@@ -93,7 +94,7 @@ class LocalizationController extends StateNotifier<LocalizationState> {
         present: false,
         message: 'Localization status failed: $error',
       );
-      return false;
+      return null;
     }
   }
 

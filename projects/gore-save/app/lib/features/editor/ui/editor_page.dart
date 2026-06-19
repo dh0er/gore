@@ -73,7 +73,9 @@ class _EditorPageState extends ConsumerState<EditorPage>
     final present = await ref
         .read(localizationControllerProvider.notifier)
         .status();
-    if (present || !mounted) return;
+    // Only prompt when the catalog is definitively absent: a null status means
+    // the query failed (e.g. core unavailable), where extraction can't work.
+    if (present != false || !mounted) return;
 
     final store = ref.read(uiSettingsStoreProvider);
     if (store.read().locExtractPrompted) return;

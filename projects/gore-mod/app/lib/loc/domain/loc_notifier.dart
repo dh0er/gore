@@ -71,9 +71,14 @@ class LocNotifier extends StateNotifier<LocState> {
 
   final GoreCoreFfiService _core;
 
-  /// Refresh whether a catalog is already present. Returns true when present.
-  Future<bool> status() async {
+  /// Refresh whether a catalog is already present. Returns true/false on a
+  /// successful query, or null when the status call itself failed (e.g. the
+  /// native core is unavailable) — callers must not treat null as "absent".
+  Future<bool?> status() async {
     final res = await _core.execute('loc_status');
+    if (res['ok'] != true) {
+      return null;
+    }
     final present = res['present'] == true;
     final meta = (res['present'] == true ? res['meta'] : null) as Map?;
     state = state.copyWith(

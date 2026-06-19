@@ -58,7 +58,10 @@ class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver
   Future<void> _maybeFirstRunPrompt() async {
     if (ref.read(locExtractPromptedProvider)) return;
     final present = await ref.read(locProvider.notifier).status();
-    if (!mounted || present) return;
+    // Only prompt when the catalog is definitively absent: a null status means
+    // the query failed (e.g. core unavailable), where extraction can't work, so
+    // don't nag with the dialog.
+    if (!mounted || present != false) return;
     final shouldExtract = await showLocFirstRunDialog(context);
     if (!mounted || !shouldExtract) return;
     // Record only once the user actually chose to extract, so the prompt isn't
