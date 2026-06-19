@@ -94,9 +94,11 @@ class LocalizationController extends StateNotifier<LocalizationState> {
       final data = (response['data'] as Map?)?.cast<String, Object?>();
       final present = data?['present'] == true;
       final meta = (data?['meta'] as Map?)?.cast<String, Object?>();
-      // Only keep metadata while a catalog is present, so id/language counts
-      // never reflect an old extraction after the catalog is gone.
-      state = state.copyWith(present: present, meta: present ? meta : null, clearMeta: !present);
+      // Clear cached metadata whenever the status carries none — not only when
+      // the catalog is absent: a present catalog can legitimately have no
+      // loc_meta.json (e.g. after a meta write failure), and copyWith(meta:null)
+      // would otherwise keep stale id/language counts from a different catalog.
+      state = state.copyWith(present: present, meta: meta, clearMeta: meta == null);
       return present;
     } catch (error) {
       // Leave `present` untouched (a catalog may still exist on disk).
