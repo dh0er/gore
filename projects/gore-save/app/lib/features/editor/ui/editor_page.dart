@@ -1760,8 +1760,10 @@ class _PrivateInventorySummaryCardState
         return false;
       }
       if (query.isEmpty) return true;
+      final name = localizedGameName(locCatalog, lang, item.id);
       return item.id.toLowerCase().contains(query) ||
-          item.path.toLowerCase().contains(query);
+          item.path.toLowerCase().contains(query) ||
+          (name != null && name.toLowerCase().contains(query));
     }).toList();
     final groups = groupInventoryItems(items);
 
