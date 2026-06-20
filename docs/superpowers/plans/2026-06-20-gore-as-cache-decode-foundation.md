@@ -10,6 +10,11 @@
 
 **Scope note:** This is the *foundation* slice of the Tier-1 work in `docs/superpowers/specs/2026-06-20-gore-as-angelscript-decode-design.md`. It covers M1's verifiable outer-header decode + investigation harness and starts M0's version pinning. Deeper work (full container/record parse, bytecode disassembly, round-trip, offline compiler, UE4SS injector) is intentionally deferred to follow-up plans listed at the end — those require format facts this plan's harness will surface, so writing "exact code" for them now would be guesswork.
 
+**Documentation rule:** log findings continuously to `work/reversing/gore-as/JOURNAL.md`
+(append-only, CONFIRMED/HYPOTHESIS/DEAD-END tags). It is local scratch (gitignored);
+confirmed facts also graduate to the tracked `projects/gore-as/FORMAT.md`. Tasks 6–7 below
+append their observations to the journal as well as `FORMAT.md`.
+
 **Verified facts this plan builds on (from the real 122 MB file):**
 - Bytes `0x00..0x10`: 16-byte hash header = `d54f0ffb10c1054b99f11446a43ed5dc`.
 - `u32 @ 0x10` (LE) = `0x9e377abe` (magic).

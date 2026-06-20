@@ -128,6 +128,15 @@ provides) — not its internal registration order or pointer layout.
   compiled scripts; missing entries fail compilation. `Binds.Cache` may be required to fill
   gaps the headers miss.
 
+## Documentation (standing rule)
+
+All reversing findings are logged continuously to `work/reversing/gore-as/` —
+`JOURNAL.md` (chronological, append-only, CONFIRMED/HYPOTHESIS/DEAD-END tags) plus
+`findings/<topic>.md` per investigation thread. This folder is **local scratch
+(gitignored)**; distilled *confirmed* facts graduate to the tracked
+`projects/gore-as/FORMAT.md`. Parallel agents each own one `findings/<topic>.md`
+(no write conflicts) and append a one-line summary to `JOURNAL.md`.
+
 ## Placement
 
 New project `projects/gore-as`, sibling to `gore-{cli,core,dump,mod,save}`.
