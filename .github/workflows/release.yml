@@ -62,8 +62,14 @@ jobs:
           channel: stable
           cache: true
 
+      # Inno Setup is no longer on the windows-latest (2025) image, so install
+      # it; choco drops iscc at C:\Program Files (x86)\Inno Setup 6, which is
+      # build.py's ISCC fallback path.
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+
       # build.py builds the native DLL, the Flutter release, packages the zip,
-      # and compiles the Inno installer (iscc is preinstalled on the runner).
+      # and compiles the Inno installer.
       - name: Build installer
         run: python build.py gore-save installer
 
@@ -148,6 +154,11 @@ jobs:
           flutter-version: 3.44.0
           channel: stable
           cache: true
+
+      # Inno Setup is no longer on the windows-latest (2025) image; install it
+      # for build.py's ISCC fallback path.
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
 
       - name: Build installer
         run: python build.py gore-mod installer
