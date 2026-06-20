@@ -385,6 +385,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "gore_as"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "assert_cmd",
+ "clap",
+ "predicates 2.1.5",
+ "pretty_assertions",
+ "thiserror",
+]
+
+[[package]]
 name = "gore_cli"
 version = "0.1.0"
 dependencies = [
