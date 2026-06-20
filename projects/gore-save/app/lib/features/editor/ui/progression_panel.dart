@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:goresave/l10n/app_localizations.dart';
 import 'package:goresave/loc/game_lang.dart';
 import 'package:goresave/loc/loc_catalog_provider.dart';
+import 'package:goresave/loc/progression_loc.dart';
 
 import '../domain/editor_models.dart';
 import '../domain/editor_notifier.dart';
@@ -45,6 +46,22 @@ String _localizedProgressionName(
   String fallback,
 ) {
   return localizedGameName(catalog, lang, id) ?? fallback;
+}
+
+/// Client-side match for a character row: true when [query] (already trimmed
+/// and lower-cased) is empty, or the raw [id] OR its localized display name
+/// contains it. Lets the NPC/character search hit localized names, not just
+/// the raw save id (which is all the core can filter on).
+bool _characterMatches(
+  Map<String, Map<String, String>> catalog,
+  GameLang lang,
+  String id,
+  String query,
+) {
+  if (query.isEmpty) return true;
+  if (id.toLowerCase().contains(query)) return true;
+  final name = localizedGameName(catalog, lang, id);
+  return name != null && name.toLowerCase().contains(query);
 }
 
 /// Maps an English short state label to its localized form, defaulting to the
@@ -277,6 +294,35 @@ class _SidebarTile extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
+// Group picker tile (quests left pane)
+// ---------------------------------------------------------------------------
+
+class _GroupTile extends StatelessWidget {
+  const _GroupTile({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return ListTile(
+      dense: true,
+      selected: selected,
+      title: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
+      selectedTileColor: scheme.primaryContainer,
+      selectedColor: scheme.primary,
+      onTap: onTap,
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Shared pagination bar widget
 // ---------------------------------------------------------------------------
 
@@ -404,19 +450,28 @@ class _QuestsDetailState extends ConsumerState<_QuestsDetail> {
   static const _defaultPageSize = 50;
 
   final TextEditingController _search = TextEditingController();
-  ProgressionQuestPage _page = const ProgressionQuestPage();
+  // Full quest list (fetched once with a large limit, no server filters):
+  // search, faceting and pagination are done client-side so the query can
+  // match the localized quest name, not just the raw class_path the core sees.
+  List<ProgressionQuest> _allQuests = const [];
+  String? _fetchError;
   final Map<String, QuestStateChange> _pending = {};
   bool _loading = false;
   int _reloadEpoch = 0;
   int _pageSize = _defaultPageSize;
-  String _activeQuery = '';
+  // Client-side search/pagination state (query trimmed + lower-cased).
+  String _query = '';
+  int _offset = 0;
   String? _stateFilter;
   String? _groupFilter;
+  // Large enough to pull every quest in one round; the set is fixed game
+  // content (~700) and stays under the core's per-page cap.
+  static const _fetchAllLimit = 100000;
 
   @override
   void initState() {
     super.initState();
-    _reload(offset: 0);
+    _loadAllQuests();
   }
 
   @override
@@ -425,10 +480,11 @@ class _QuestsDetailState extends ConsumerState<_QuestsDetail> {
     if (widget.reloadKey != oldWidget.reloadKey) {
       _pending.clear();
       _search.clear();
-      _activeQuery = '';
+      _query = '';
+      _offset = 0;
       _stateFilter = null;
       _groupFilter = null;
-      _reload(offset: 0);
+      _loadAllQuests();
     }
   }
 
@@ -438,29 +494,28 @@ class _QuestsDetailState extends ConsumerState<_QuestsDetail> {
     super.dispose();
   }
 
-  Future<void> _reload({required int offset, bool newQuery = false}) async {
-    if (newQuery) _activeQuery = _search.text.trim();
+  /// Fetches the full quest list. Filtering, faceted counts and pagination
+  /// then happen client-side in [build].
+  Future<void> _loadAllQuests() async {
     final epoch = ++_reloadEpoch;
     setState(() => _loading = true);
     final page = await widget.notifier.loadProgressionQuests(
-      query: _activeQuery,
-      offset: offset,
-      limit: _pageSize,
-      state: _stateFilter,
-      group: _groupFilter,
+      offset: 0,
+      limit: _fetchAllLimit,
     );
     if (!mounted || epoch != _reloadEpoch) return;
     setState(() {
       _loading = false;
-      _page = page;
+      _allQuests = page.quests;
+      _fetchError = page.error;
     });
   }
 
-  void _goToPage(int newOffset) => _reload(offset: newOffset);
-
-  void _setPageSize(int size) {
-    setState(() => _pageSize = size);
-    _reload(offset: 0);
+  void _applySearch() {
+    setState(() {
+      _query = _search.text.trim().toLowerCase();
+      _offset = 0;
+    });
   }
 
   void _pushPending() {
@@ -490,6 +545,73 @@ class _QuestsDetailState extends ConsumerState<_QuestsDetail> {
     _pushPending();
   }
 
+  /// Short state label used for faceting, mirroring the core: a null state
+  /// folds to 'unknown'.
+  String _questLabel(ProgressionQuest e) =>
+      e.currentState == null ? 'unknown' : shortStateLabel(e.currentState!);
+
+  /// Builds the filtered + faceted + paginated quest view from [_allQuests].
+  /// Faceting mirrors the core: stateCounts ignore the state filter and
+  /// groupCounts ignore the group filter, while the query (id OR localized
+  /// name) and the other filter apply to both.
+  ProgressionQuestPage _computeView(
+    Map<String, Map<String, String>> catalog,
+    GameLang lang,
+  ) {
+    final q = _query;
+    bool matchesQuery(ProgressionQuest e) {
+      if (q.isEmpty) return true;
+      if (e.questClass.toLowerCase().contains(q)) return true;
+      final name = localizedQuestName(catalog, lang, e.id);
+      return name != null && name.toLowerCase().contains(q);
+    }
+
+    bool matchesState(ProgressionQuest e) {
+      final sf = _stateFilter;
+      if (sf == null) return true;
+      final lf = sf.toLowerCase();
+      return _questLabel(e).toLowerCase() == lf ||
+          (e.currentState?.toLowerCase() ?? '') == lf;
+    }
+
+    bool matchesGroup(ProgressionQuest e) {
+      final gf = _groupFilter;
+      return gf == null || e.group.toLowerCase() == gf.toLowerCase();
+    }
+
+    final stateCounts = <String, int>{};
+    final groupCounts = <String, int>{};
+    for (final e in _allQuests) {
+      if (!matchesQuery(e)) continue;
+      if (matchesGroup(e)) {
+        final l = _questLabel(e);
+        stateCounts[l] = (stateCounts[l] ?? 0) + 1;
+      }
+      if (matchesState(e)) {
+        groupCounts[e.group] = (groupCounts[e.group] ?? 0) + 1;
+      }
+    }
+
+    final filtered =
+        _allQuests
+            .where(
+              (e) => matchesQuery(e) && matchesState(e) && matchesGroup(e),
+            )
+            .toList()
+          ..sort((a, b) => a.questClass.compareTo(b.questClass));
+    final total = filtered.length;
+    final offset = _offset < total ? _offset : 0;
+    final pageQuests = filtered.skip(offset).take(_pageSize).toList();
+    return ProgressionQuestPage(
+      quests: pageQuests,
+      stateCounts: stateCounts,
+      groupCounts: groupCounts,
+      total: total,
+      offset: offset,
+      limit: _pageSize,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
@@ -497,145 +619,209 @@ class _QuestsDetailState extends ConsumerState<_QuestsDetail> {
     final locCatalog =
         ref.watch(locCatalogProvider).asData?.value ?? const {};
     final scheme = widget.theme.colorScheme;
+    final page = _computeView(locCatalog, lang);
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
-        child: Column(
+        // Two-pane row: group picker left, quest content right.
+        child: Row(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // Header row
-            Row(
-              children: [
-                Icon(Icons.flag_outlined, color: scheme.primary),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    l10n.sectionQuests,
-                    style: widget.theme.textTheme.titleMedium,
-                  ),
-                ),
-                if (widget.editable && _pending.isNotEmpty)
-                  Tooltip(
-                    message: l10n.resetQuestChanges,
-                    child: IconButton(
-                      icon: const Icon(Icons.undo_outlined),
-                      onPressed: () {
-                        setState(_pending.clear);
-                        widget.notifier.clearPendingEdit('progression.quests');
-                      },
-                    ),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            // Search field with in-flight spinner
-            TextField(
-              controller: _search,
-              decoration: InputDecoration(
-                labelText: l10n.searchQuests,
-                prefixIcon: const Icon(Icons.search),
-                suffixIcon: _loading
-                    ? const Padding(
-                        padding: EdgeInsets.all(12),
-                        child: SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        ),
-                      )
-                    : IconButton(
-                        icon: const Icon(Icons.arrow_forward),
-                        onPressed: () => _reload(offset: 0, newQuery: true),
-                      ),
-              ),
-              onSubmitted: (_) => _reload(offset: 0, newQuery: true),
-            ),
-            if (_page.error != null) ...[
-              const SizedBox(height: 8),
-              Text(_page.error!, style: TextStyle(color: scheme.error)),
-            ],
-            const SizedBox(height: 8),
-            // Filter row: status chips + group dropdown
-            _QuestFilterRow(
-              page: _page,
-              stateFilter: _stateFilter,
-              groupFilter: _groupFilter,
-              busy: _loading,
-              onStateChanged: (label) {
-                setState(() {
-                  _stateFilter = (_stateFilter == label) ? null : label;
-                });
-                _reload(offset: 0);
-              },
-              onGroupChanged: (group) {
-                setState(() => _groupFilter = group);
-                _reload(offset: 0);
-              },
-            ),
-            const SizedBox(height: 4),
-            _PaginationBar(
-              offset: _page.offset,
-              count: _page.quests.length,
-              total: _page.total,
-              pageSize: _pageSize,
-              busy: _loading,
-              onPage: _goToPage,
-              onPageSize: _setPageSize,
-            ),
-            const SizedBox(height: 4),
-            // Quest list — the only scrollable, fills remaining height
+            // Left pane: scrollable group picker.
+            SizedBox(width: 190, child: _buildGroupPicker(l10n, page)),
+            const SizedBox(width: 12),
+            const VerticalDivider(width: 1),
+            const SizedBox(width: 12),
+            // Right pane: existing header + search + status chips + list.
             Expanded(
-              child: _loading && _page.quests.isEmpty
-                  ? const Center(child: CircularProgressIndicator())
-                  : ListView.separated(
-                      itemCount: _page.quests.length,
-                      separatorBuilder: (_, _) => const Divider(height: 1),
-                      itemBuilder: (context, index) {
-                        final quest = _page.quests[index];
-                        final pendingState = _pending[quest.questClass]?.state;
-                        final effectiveState =
-                            pendingState ?? quest.currentState;
-                        final inKnownStates =
-                            effectiveState != null &&
-                            questStates.contains(effectiveState);
-                        return ListTile(
-                          dense: true,
-                          leading: const Icon(Icons.flag_outlined),
-                          title: SelectableText(
-                            _localizedProgressionName(
-                              locCatalog,
-                              lang,
-                              quest.id,
-                              quest.name.isEmpty ? quest.id : quest.name,
-                            ),
-                            maxLines: 1,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // Header row
+                  Row(
+                    children: [
+                      Icon(Icons.flag_outlined, color: scheme.primary),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          l10n.sectionQuests,
+                          style: widget.theme.textTheme.titleMedium,
+                        ),
+                      ),
+                      if (widget.editable && _pending.isNotEmpty)
+                        Tooltip(
+                          message: l10n.resetQuestChanges,
+                          child: IconButton(
+                            icon: const Icon(Icons.undo_outlined),
+                            onPressed: () {
+                              setState(_pending.clear);
+                              widget.notifier.clearPendingEdit(
+                                'progression.quests',
+                              );
+                            },
                           ),
-                          subtitle: SelectableText(quest.group, maxLines: 1),
-                          trailing:
-                              widget.editable && quest.writable && inKnownStates
-                              ? DropdownButton<String>(
-                                  value: effectiveState,
-                                  underline: const SizedBox.shrink(),
-                                  items: questStates
-                                      .map(
-                                        (s) => DropdownMenuItem(
-                                          value: s,
-                                          child: Text(_localizedState(l10n, s)),
-                                        ),
-                                      )
-                                      .toList(),
-                                  onChanged: (s) => _setQuestState(quest, s),
-                                )
-                              : Text(
-                                  _localizedState(l10n, quest.currentState),
-                                ),
-                        );
-                      },
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  // Search field — client-side, filters live as you type.
+                  TextField(
+                    controller: _search,
+                    decoration: InputDecoration(
+                      labelText: l10n.searchQuests,
+                      prefixIcon: const Icon(Icons.search),
+                      suffixIcon: IconButton(
+                        icon: const Icon(Icons.arrow_forward),
+                        onPressed: _applySearch,
+                      ),
                     ),
+                    onChanged: (_) => _applySearch(),
+                    onSubmitted: (_) => _applySearch(),
+                  ),
+                  if (_fetchError != null) ...[
+                    const SizedBox(height: 8),
+                    Text(_fetchError!, style: TextStyle(color: scheme.error)),
+                  ],
+                  const SizedBox(height: 8),
+                  // Filter row: status chips only (group selection lives in the
+                  // left pane now).
+                  _QuestFilterRow(
+                    page: page,
+                    stateFilter: _stateFilter,
+                    busy: _loading,
+                    onStateChanged: (label) {
+                      setState(() {
+                        _stateFilter = (_stateFilter == label) ? null : label;
+                        _offset = 0;
+                      });
+                    },
+                  ),
+                  const SizedBox(height: 4),
+                  _PaginationBar(
+                    offset: page.offset,
+                    count: page.quests.length,
+                    total: page.total,
+                    pageSize: _pageSize,
+                    busy: _loading,
+                    onPage: (o) => setState(() => _offset = o),
+                    onPageSize: (s) => setState(() {
+                      _pageSize = s;
+                      _offset = 0;
+                    }),
+                  ),
+                  const SizedBox(height: 4),
+                  // Quest list — the only scrollable, fills remaining height
+                  Expanded(
+                    child: _loading && page.quests.isEmpty
+                        ? const Center(child: CircularProgressIndicator())
+                        : ListView.separated(
+                            itemCount: page.quests.length,
+                            separatorBuilder: (_, _) =>
+                                const Divider(height: 1),
+                            itemBuilder: (context, index) {
+                              final quest = page.quests[index];
+                              final pendingState =
+                                  _pending[quest.questClass]?.state;
+                              final effectiveState =
+                                  pendingState ?? quest.currentState;
+                              final inKnownStates =
+                                  effectiveState != null &&
+                                  questStates.contains(effectiveState);
+                              return ListTile(
+                                dense: true,
+                                leading: const Icon(Icons.flag_outlined),
+                                title: SelectableText(
+                                  localizedQuestName(
+                                        locCatalog,
+                                        lang,
+                                        quest.id,
+                                      ) ??
+                                      (quest.name.isEmpty
+                                          ? quest.id
+                                          : quest.name),
+                                  maxLines: 1,
+                                ),
+                                subtitle: SelectableText(
+                                  '${quest.group} / ${quest.id}',
+                                  maxLines: 1,
+                                ),
+                                trailing:
+                                    widget.editable &&
+                                        quest.writable &&
+                                        inKnownStates
+                                    ? DropdownButton<String>(
+                                        value: effectiveState,
+                                        underline: const SizedBox.shrink(),
+                                        items: questStates
+                                            .map(
+                                              (s) => DropdownMenuItem(
+                                                value: s,
+                                                child: Text(
+                                                  _localizedState(l10n, s),
+                                                ),
+                                              ),
+                                            )
+                                            .toList(),
+                                        onChanged: (s) =>
+                                            _setQuestState(quest, s),
+                                      )
+                                    : Text(
+                                        _localizedState(
+                                          l10n,
+                                          quest.currentState,
+                                        ),
+                                      ),
+                              );
+                            },
+                          ),
+                  ),
+                ],
+              ),
             ),
           ],
         ),
       ),
+    );
+  }
+
+  /// Left-pane group picker: "All groups" entry plus one tile per group from
+  /// [page.groupCounts], sorted alphabetically. The selected group is kept
+  /// visible (count 0) even if it drops out of the latest counts. Tapping sets
+  /// [_groupFilter] and re-filters client-side.
+  Widget _buildGroupPicker(AppLocalizations l10n, ProgressionQuestPage page) {
+    final sortedGroups = page.groupCounts.keys.toList()..sort();
+    // Keep the selected group present even when its count is now 0.
+    final selected = _groupFilter;
+    if (selected != null && !page.groupCounts.containsKey(selected)) {
+      sortedGroups.add(selected);
+    }
+    return ListView(
+      padding: EdgeInsets.zero,
+      children: [
+        _GroupTile(
+          label: l10n.allGroups,
+          selected: selected == null,
+          onTap: () {
+            if (selected == null) return;
+            setState(() {
+              _groupFilter = null;
+              _offset = 0;
+            });
+          },
+        ),
+        for (final g in sortedGroups)
+          _GroupTile(
+            label: l10n.groupWithCount(g, page.groupCounts[g] ?? 0),
+            selected: selected == g,
+            onTap: () {
+              if (selected == g) return;
+              setState(() {
+                _groupFilter = g;
+                _offset = 0;
+              });
+            },
+          ),
+      ],
     );
   }
 }
@@ -666,20 +852,28 @@ class _KnowledgeDetailState extends ConsumerState<_KnowledgeDetail> {
   static const _defaultPageSize = 50;
 
   final TextEditingController _characterSearch = TextEditingController();
+  // Holds the FULL character list (fetched with a large limit, no server
+  // query): search and pagination are done client-side so the query can also
+  // match localized display names, which only exist on the Dart side.
   KnowledgeCharactersPage _characters = const KnowledgeCharactersPage();
   String? _selectedCharacter;
   KnowledgeEntriesPage _entries = const KnowledgeEntriesPage();
   final Map<String, KnowledgeEntryEdit> _pending = {};
   final TextEditingController _addController = TextEditingController();
   bool _loadingCharacters = false;
-  bool _searchingCharacters = false;
   bool _loadingEntries = false;
   // Per-loader epochs so a stale characters load never races an entries load.
   int _charsEpoch = 0;
   int _entriesEpoch = 0;
   int _charPageSize = _defaultPageSize;
   int _entryPageSize = _defaultPageSize;
-  String _activeCharQuery = '';
+  // Client-side search/pagination state for the NPC list (trimmed+lower-cased
+  // query, current page offset into the filtered list).
+  String _charQuery = '';
+  int _charOffset = 0;
+  // Large enough to pull every knowledge character in one round; the set is
+  // bounded by the NPCs that appear in the save (hundreds at most).
+  static const _fetchAllLimit = 100000;
   // Used during the cross-page duplicate check in _addEntry.
   bool _checkingDuplicate = false;
   // Error text shown beneath the add field (duplicate-check failure, etc.).
@@ -692,7 +886,7 @@ class _KnowledgeDetailState extends ConsumerState<_KnowledgeDetail> {
   @override
   void initState() {
     super.initState();
-    _loadCharacters(offset: 0);
+    _loadCharacters();
     _loadCatalogs();
   }
 
@@ -723,7 +917,7 @@ class _KnowledgeDetailState extends ConsumerState<_KnowledgeDetail> {
     if (picked == null || !mounted) return;
     final ok = await widget.notifier.applyAddKnowledgeCharacter(picked);
     if (!mounted || !ok) return; // on failure the notifier set state.error.
-    await _loadCharacters(offset: 0);
+    await _loadCharacters();
     if (!mounted) return;
     await _selectCharacter(picked);
   }
@@ -752,13 +946,14 @@ class _KnowledgeDetailState extends ConsumerState<_KnowledgeDetail> {
       _charsEpoch++;
       _entriesEpoch++;
       _characterSearch.clear();
-      _activeCharQuery = '';
+      _charQuery = '';
+      _charOffset = 0;
       // A different save file means a different character set: drop the
       // selection. A same-file refresh (post-save reload) preserves it.
       if (widget.reloadKey.path != oldWidget.reloadKey.path) {
         _selectedCharacter = null;
       }
-      _loadCharacters(offset: 0);
+      _loadCharacters();
       if (_selectedCharacter != null) {
         _selectCharacter(_selectedCharacter!);
       } else {
@@ -774,26 +969,26 @@ class _KnowledgeDetailState extends ConsumerState<_KnowledgeDetail> {
     super.dispose();
   }
 
-  Future<void> _loadCharacters({
-    required int offset,
-    bool newQuery = false,
-  }) async {
-    if (newQuery) _activeCharQuery = _characterSearch.text.trim();
+  /// Fetches the full knowledge-character list. Searching and pagination then
+  /// happen client-side in [build] so the query can match localized names too.
+  Future<void> _loadCharacters() async {
     final epoch = ++_charsEpoch;
-    setState(() {
-      _loadingCharacters = true;
-      if (newQuery) _searchingCharacters = true;
-    });
+    setState(() => _loadingCharacters = true);
     final page = await widget.notifier.loadKnowledgeCharacters(
-      query: _activeCharQuery,
-      offset: offset,
-      limit: _charPageSize,
+      offset: 0,
+      limit: _fetchAllLimit,
     );
     if (!mounted || epoch != _charsEpoch) return;
     setState(() {
       _loadingCharacters = false;
-      _searchingCharacters = false;
       _characters = page;
+    });
+  }
+
+  void _applyCharSearch() {
+    setState(() {
+      _charQuery = _characterSearch.text.trim().toLowerCase();
+      _charOffset = 0;
     });
   }
 
@@ -996,6 +1191,18 @@ class _KnowledgeDetailState extends ConsumerState<_KnowledgeDetail> {
       }
     }
 
+    // Client-side search (id OR localized name) + pagination over the full
+    // fetched character list.
+    final filteredChars = _characters.characters
+        .where((c) => _characterMatches(locCatalog, lang, c.name, _charQuery))
+        .toList();
+    final charTotal = filteredChars.length;
+    final charOffset = _charOffset < charTotal ? _charOffset : 0;
+    final pageChars = filteredChars
+        .skip(charOffset)
+        .take(_charPageSize)
+        .toList();
+
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -1057,30 +1264,14 @@ class _KnowledgeDetailState extends ConsumerState<_KnowledgeDetail> {
                             labelText: l10n.searchNpcs,
                             isDense: true,
                             prefixIcon: const Icon(Icons.search, size: 18),
-                            suffixIcon: _searchingCharacters
-                                ? const Padding(
-                                    padding: EdgeInsets.all(10),
-                                    child: SizedBox(
-                                      width: 16,
-                                      height: 16,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 2,
-                                      ),
-                                    ),
-                                  )
-                                : IconButton(
-                                    icon: const Icon(
-                                      Icons.arrow_forward,
-                                      size: 18,
-                                    ),
-                                    onPressed: () => _loadCharacters(
-                                      offset: 0,
-                                      newQuery: true,
-                                    ),
-                                  ),
+                            suffixIcon: IconButton(
+                              icon: const Icon(Icons.arrow_forward, size: 18),
+                              onPressed: _applyCharSearch,
+                            ),
                           ),
-                          onSubmitted: (_) =>
-                              _loadCharacters(offset: 0, newQuery: true),
+                          // Client-side filter: apply live as the user types.
+                          onChanged: (_) => _applyCharSearch(),
+                          onSubmitted: (_) => _applyCharSearch(),
                         ),
                         if (_characters.error != null) ...[
                           const SizedBox(height: 4),
@@ -1091,16 +1282,16 @@ class _KnowledgeDetailState extends ConsumerState<_KnowledgeDetail> {
                         ],
                         const SizedBox(height: 4),
                         _PaginationBar(
-                          offset: _characters.offset,
-                          count: _characters.characters.length,
-                          total: _characters.total,
+                          offset: charOffset,
+                          count: pageChars.length,
+                          total: charTotal,
                           pageSize: _charPageSize,
                           busy: _loadingCharacters,
-                          onPage: (o) => _loadCharacters(offset: o),
-                          onPageSize: (s) {
-                            setState(() => _charPageSize = s);
-                            _loadCharacters(offset: 0);
-                          },
+                          onPage: (o) => setState(() => _charOffset = o),
+                          onPageSize: (s) => setState(() {
+                            _charPageSize = s;
+                            _charOffset = 0;
+                          }),
                         ),
                         const SizedBox(height: 4),
                         Expanded(
@@ -1109,26 +1300,42 @@ class _KnowledgeDetailState extends ConsumerState<_KnowledgeDetail> {
                                   _characters.characters.isEmpty
                               ? const Center(child: CircularProgressIndicator())
                               : ListView.separated(
-                                  itemCount: _characters.characters.length,
+                                  itemCount: pageChars.length,
                                   separatorBuilder: (_, _) =>
                                       const Divider(height: 1),
                                   itemBuilder: (context, index) {
-                                    final c = _characters.characters[index];
+                                    final c = pageChars[index];
                                     final isSelected = c.name == character;
+                                    final displayName =
+                                        _localizedProgressionName(
+                                          locCatalog,
+                                          lang,
+                                          c.name,
+                                          c.name,
+                                        );
                                     return ListTile(
                                       dense: true,
                                       selected: isSelected,
                                       title: Text(
                                         l10n.characterWithCount(
-                                          _localizedProgressionName(
-                                            locCatalog,
-                                            lang,
-                                            c.name,
-                                            c.name,
-                                          ),
+                                          displayName,
                                           c.entryCount,
                                         ),
                                       ),
+                                      // Show the raw save id beneath the name
+                                      // when it differs from the localized
+                                      // display name.
+                                      subtitle: displayName == c.name
+                                          ? null
+                                          : Text(
+                                              c.name,
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: TextStyle(
+                                                color: scheme.onSurfaceVariant,
+                                                fontSize: 11,
+                                              ),
+                                            ),
                                       onTap: () => _selectCharacter(c.name),
                                     );
                                   },
@@ -1262,24 +1469,46 @@ class _KnowledgeDetailState extends ConsumerState<_KnowledgeDetail> {
                               ),
                             ),
                             for (final entry in addedEntries)
-                              ListTile(
-                                dense: true,
-                                tileColor: scheme.tertiaryContainer.withValues(
-                                  alpha: 0.4,
-                                ),
-                                title: Text(
-                                  entry,
-                                  style: TextStyle(
-                                    color: scheme.onTertiaryContainer,
-                                  ),
-                                ),
-                                trailing: widget.editable
-                                    ? IconButton(
-                                        icon: const Icon(Icons.undo, size: 18),
-                                        tooltip: l10n.undoAdd,
-                                        onPressed: () => _undoAdd(entry),
-                                      )
-                                    : null,
+                              Builder(
+                                builder: (context) {
+                                  final text = localizedKnowledgeEntry(
+                                    locCatalog,
+                                    lang,
+                                    entry,
+                                  );
+                                  return ListTile(
+                                    dense: true,
+                                    tileColor: scheme.tertiaryContainer
+                                        .withValues(alpha: 0.4),
+                                    title: Text(
+                                      text ?? entry,
+                                      style: TextStyle(
+                                        color: scheme.onTertiaryContainer,
+                                      ),
+                                    ),
+                                    subtitle: text == null
+                                        ? null
+                                        : Text(
+                                            entry,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: TextStyle(
+                                              color: scheme.onSurfaceVariant,
+                                              fontSize: 11,
+                                            ),
+                                          ),
+                                    trailing: widget.editable
+                                        ? IconButton(
+                                            icon: const Icon(
+                                              Icons.undo,
+                                              size: 18,
+                                            ),
+                                            tooltip: l10n.undoAdd,
+                                            onPressed: () => _undoAdd(entry),
+                                          )
+                                        : null,
+                                  );
+                                },
                               ),
                             const Divider(height: 8),
                           ],
@@ -1299,10 +1528,15 @@ class _KnowledgeDetailState extends ConsumerState<_KnowledgeDetail> {
                                       final isRemoved = removedEntries.contains(
                                         entry.toLowerCase(),
                                       );
+                                      final text = localizedKnowledgeEntry(
+                                        locCatalog,
+                                        lang,
+                                        entry,
+                                      );
                                       return ListTile(
                                         dense: true,
                                         title: Text(
-                                          entry,
+                                          text ?? entry,
                                           style: isRemoved
                                               ? const TextStyle(
                                                   decoration: TextDecoration
@@ -1310,6 +1544,24 @@ class _KnowledgeDetailState extends ConsumerState<_KnowledgeDetail> {
                                                 )
                                               : null,
                                         ),
+                                        // Raw entry id beneath the resolved
+                                        // dialog line, when one was found.
+                                        subtitle: text == null
+                                            ? null
+                                            : Text(
+                                                entry,
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: TextStyle(
+                                                  color:
+                                                      scheme.onSurfaceVariant,
+                                                  fontSize: 11,
+                                                  decoration: isRemoved
+                                                      ? TextDecoration
+                                                            .lineThrough
+                                                      : null,
+                                                ),
+                                              ),
                                         trailing: widget.editable
                                             ? IconButton(
                                                 icon: Icon(
@@ -1380,6 +1632,9 @@ class _EventsDetailState extends ConsumerState<_EventsDetail> {
   static const _defaultPageSize = 50;
 
   final TextEditingController _characterSearch = TextEditingController();
+  // Memory-event characters use ids that have no loc entries (spawn-point /
+  // internal names), so their search stays server-side: the set can exceed
+  // the core's per-page cap, and there is no localized name to match anyway.
   MemoryCharactersPage _characters = const MemoryCharactersPage();
   String? _selectedCharacter;
   MemoryEventsPage _events = const MemoryEventsPage();
@@ -1803,25 +2058,21 @@ class _EventsDetailState extends ConsumerState<_EventsDetail> {
 }
 
 // ---------------------------------------------------------------------------
-// Quest filter row: status chips + group dropdown
+// Quest filter row: status chips
 // ---------------------------------------------------------------------------
 
 class _QuestFilterRow extends StatelessWidget {
   const _QuestFilterRow({
     required this.page,
     required this.stateFilter,
-    required this.groupFilter,
     required this.busy,
     required this.onStateChanged,
-    required this.onGroupChanged,
   });
 
   final ProgressionQuestPage page;
   final String? stateFilter;
-  final String? groupFilter;
   final bool busy;
   final void Function(String label) onStateChanged;
-  final void Function(String? group) onGroupChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -1846,40 +2097,11 @@ class _QuestFilterRow extends StatelessWidget {
           ),
     ];
 
-    // Group dropdown entries sorted by name.
-    // Always include the currently selected group even if its count is now 0
-    // (prevents DropdownButton crash on value not in items).
-    final sortedGroups = page.groupCounts.keys.toList()..sort();
-    final groupItems = <DropdownMenuItem<String?>>[
-      DropdownMenuItem<String?>(value: null, child: Text(l10n.allGroups)),
-      for (final g in sortedGroups)
-        DropdownMenuItem<String?>(
-          value: g,
-          child: Text(l10n.groupWithCount(g, page.groupCounts[g] ?? 0)),
-        ),
-      // Ensure selected group is present even when its count is 0.
-      if (groupFilter != null && !page.groupCounts.containsKey(groupFilter))
-        DropdownMenuItem<String?>(
-          value: groupFilter,
-          child: Text(l10n.groupWithCount(groupFilter!, 0)),
-        ),
-    ];
-
     return Wrap(
       spacing: 6,
       runSpacing: 4,
       crossAxisAlignment: WrapCrossAlignment.center,
-      children: [
-        ...chips,
-        DropdownButton<String?>(
-          value: groupFilter,
-          isDense: true,
-          underline: const SizedBox.shrink(),
-          hint: Text(l10n.allGroups),
-          onChanged: busy ? null : onGroupChanged,
-          items: groupItems,
-        ),
-      ],
+      children: [...chips],
     );
   }
 }

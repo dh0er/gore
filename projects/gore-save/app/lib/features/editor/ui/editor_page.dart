@@ -136,7 +136,9 @@ class _EditorPageState extends ConsumerState<EditorPage>
               // must truncate instead of overflowing the title bar row.
               Flexible(
                 child: Text(
-                  l10n.appTitle,
+                  // Title bar text is language-independent — always the
+                  // product name (see goresave_app.dart).
+                  'Gothic Remake Savegame Editor',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
