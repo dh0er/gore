@@ -1,25 +1,37 @@
 name: Release
 
+# Monorepo releases are per-project, triggered by prefixed tags:
+#   gore-save-vX.Y.Z   -> goresave (Flutter app, WinSparkle updater)
+#   gore-mod-vX.Y.Z    -> gore-mod (Flutter app, WinSparkle updater)
+#   gore-cli-vX.Y.Z    -> gore-cli (Rust binary)
+# Each job gates on its tag prefix, so one tag builds exactly one product.
+#
+# IMPORTANT: only gore-save publishes with make_latest=true. Its app polls
+# releases/latest/download/appcast-windows.xml, so the repo's "latest"
+# pointer must always be the newest goresave release. gore-mod and gore-cli
+# publish with make_latest=false; gore-mod's updater instead reads a fixed
+# `gore-mod-appcast` release whose asset CI overwrites each release.
+
 on:
   push:
-    tags: ["v*"]
+    tags:
+      - "gore-save-v*"
+      - "gore-mod-v*"
+      - "gore-cli-v*"
   workflow_dispatch:
+    inputs:
+      project:
+        description: "Smoke-build a project without publishing"
+        type: choice
+        options: [gore-save, gore-mod, gore-cli]
 
 permissions:
   contents: write
 
 jobs:
-  windows:
+  gore-save:
+    if: startsWith(github.ref_name, 'gore-save-v') || (github.event_name == 'workflow_dispatch' && inputs.project == 'gore-save')
     runs-on: windows-latest
-    defaults:
-      run:
-        # gore-save lives under projects/ in the monorepo. All `run:` steps
-        # execute from here, so build.py, scripts/, installer/, dist/ and
-        # CHANGELOG.md resolve relatively. NOTE: `uses:` action inputs
-        # (upload/release `path:`/`files:`) are relative to the repo root, not
-        # this working-directory, so those carry an explicit projects/gore-save/
-        # prefix below.
-        working-directory: projects/gore-save
     steps:
       - uses: actions/checkout@v4
 
@@ -27,7 +39,7 @@ jobs:
         id: version
         shell: pwsh
         run: |
-          $pubspec = Get-Content app/pubspec.yaml -Raw
+          $pubspec = Get-Content projects/gore-save/app/pubspec.yaml -Raw
           if ($pubspec -notmatch '(?m)^version:\s*([0-9]+\.[0-9]+\.[0-9]+)\s*$') {
             Write-Error 'pubspec.yaml version must be plain X.Y.Z (no build number)'
             exit 1
@@ -35,75 +47,59 @@ jobs:
           $version = $Matches[1]
           if ('${{ github.ref_type }}' -eq 'tag') {
             $tag = $env:GITHUB_REF_NAME
-            if ($tag -ne "v$version") {
+            if ($tag -ne "gore-save-v$version") {
               Write-Error "tag $tag does not match pubspec version $version"
               exit 1
             }
           }
           "version=$version" >> $env:GITHUB_OUTPUT
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-
-      - name: Install Flutter
-        uses: subosito/flutter-action@v2
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: subosito/flutter-action@v2
         with:
           flutter-version: 3.44.0
           channel: stable
           cache: true
 
-      # GIT_SHA comes from the GITHUB_SHA env via build.py.
-      - name: Build distribution
-        run: python build.py dist
+      # Inno Setup is no longer on the windows-latest (2025) image, so install
+      # it; choco drops iscc at C:\Program Files (x86)\Inno Setup 6, which is
+      # build.py's ISCC fallback path.
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
 
-      # Release notes come from CHANGELOG.md only; a missing or empty
-      # section for the released version fails a tag build. Non-tag runs
-      # (workflow_dispatch smoke builds) fall back to a placeholder so the
-      # appcast step still has notes input.
+      # build.py builds the native DLL, the Flutter release, packages the zip,
+      # and compiles the Inno installer.
+      - name: Build installer
+        run: python build.py gore-save installer
+
       - name: Extract release notes from CHANGELOG.md
         shell: pwsh
         run: |
           $version = '${{ steps.version.outputs.version }}'
           $isTag = '${{ github.ref_type }}' -eq 'tag'
-          $changelog = Get-Content CHANGELOG.md -Raw
+          $changelog = Get-Content projects/gore-save/CHANGELOG.md -Raw
           $pattern = "(?ms)^## \[$([regex]::Escape($version))\][^`r`n]*`r?`n(.*?)(?=^## \[|\z)"
           $notes = ''
           if ($changelog -match $pattern) { $notes = $Matches[1].Trim() }
           if (-not $notes) {
-            if ($isTag) {
-              Write-Error "CHANGELOG.md has no non-empty section for $version"
-              exit 1
-            }
+            if ($isTag) { Write-Error "CHANGELOG.md has no non-empty section for $version"; exit 1 }
             $notes = "Development build $version"
           }
-          New-Item -ItemType Directory -Force dist | Out-Null
-          [IO.File]::WriteAllText((Join-Path $PWD 'dist\RELEASE_NOTES.md'), $notes)
+          New-Item -ItemType Directory -Force projects/gore-save/dist | Out-Null
+          [IO.File]::WriteAllText((Join-Path $PWD 'projects/gore-save/dist/RELEASE_NOTES.md'), $notes)
 
-      # Inno Setup 6 is preinstalled on windows-latest but not on PATH.
-      - name: Build installer (Inno Setup)
-        shell: pwsh
-        run: |
-          & "C:\Program Files (x86)\Inno Setup 6\iscc.exe" /Qp `
-            "/DAppVersion=${{ steps.version.outputs.version }}" `
-            "/DSourceDir=$PWD\app\build\windows\x64\runner\Release" `
-            "/DOutputDir=$PWD\dist" `
-            installer\setup.iss
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      # Signs the installer and writes the appcast the app polls via
-      # releases/latest/download/appcast-windows.xml.
       - name: Generate signed appcast
         env:
           WINSPARKLE_DSA_PRIV_KEY_B64: ${{ secrets.WINSPARKLE_DSA_PRIV_KEY_B64 }}
         run: >-
           python scripts/appcast.py
+          --title goresave
           --version ${{ steps.version.outputs.version }}
-          --installer dist/GoresaveSetup-${{ steps.version.outputs.version }}.exe
-          --notes dist/RELEASE_NOTES.md
-          --output dist/appcast-windows.xml
+          --installer projects/gore-save/dist/GoresaveSetup-${{ steps.version.outputs.version }}.exe
+          --notes projects/gore-save/dist/RELEASE_NOTES.md
+          --release-tag gore-save-v${{ steps.version.outputs.version }}
+          --output projects/gore-save/dist/appcast-windows.xml
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
@@ -114,14 +110,185 @@ jobs:
             projects/gore-save/dist/*.exe
             projects/gore-save/dist/appcast-windows.xml
 
-      # The installer + appcast must be attached so that
-      # releases/latest/download/ serves the update feed.
+      # make_latest=true: the app's releases/latest/ feed must resolve here.
       - name: Publish GitHub release
-        if: startsWith(github.ref, 'refs/tags/')
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
+          make_latest: "true"
           files: |
             projects/gore-save/dist/*.zip
             projects/gore-save/dist/*.exe
             projects/gore-save/dist/appcast-windows.xml
           body_path: projects/gore-save/dist/RELEASE_NOTES.md
+
+  gore-mod:
+    if: startsWith(github.ref_name, 'gore-mod-v') || (github.event_name == 'workflow_dispatch' && inputs.project == 'gore-mod')
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve and verify version
+        id: version
+        shell: pwsh
+        run: |
+          $pubspec = Get-Content projects/gore-mod/app/pubspec.yaml -Raw
+          if ($pubspec -notmatch '(?m)^version:\s*([0-9]+\.[0-9]+\.[0-9]+)\s*$') {
+            Write-Error 'pubspec.yaml version must be plain X.Y.Z (no build number)'
+            exit 1
+          }
+          $version = $Matches[1]
+          if ('${{ github.ref_type }}' -eq 'tag') {
+            $tag = $env:GITHUB_REF_NAME
+            if ($tag -ne "gore-mod-v$version") {
+              Write-Error "tag $tag does not match pubspec version $version"
+              exit 1
+            }
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.44.0
+          channel: stable
+          cache: true
+
+      # Inno Setup is no longer on the windows-latest (2025) image; install it
+      # for build.py's ISCC fallback path.
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: Build installer
+        run: python build.py gore-mod installer
+
+      - name: Extract release notes from CHANGELOG.md
+        shell: pwsh
+        run: |
+          $version = '${{ steps.version.outputs.version }}'
+          $isTag = '${{ github.ref_type }}' -eq 'tag'
+          $changelog = Get-Content projects/gore-mod/CHANGELOG.md -Raw
+          $pattern = "(?ms)^## \[$([regex]::Escape($version))\][^`r`n]*`r?`n(.*?)(?=^## \[|\z)"
+          $notes = ''
+          if ($changelog -match $pattern) { $notes = $Matches[1].Trim() }
+          if (-not $notes) {
+            if ($isTag) { Write-Error "CHANGELOG.md has no non-empty section for $version"; exit 1 }
+            $notes = "Development build $version"
+          }
+          New-Item -ItemType Directory -Force projects/gore-mod/dist | Out-Null
+          [IO.File]::WriteAllText((Join-Path $PWD 'projects/gore-mod/dist/RELEASE_NOTES.md'), $notes)
+
+      - name: Generate signed appcast
+        env:
+          WINSPARKLE_DSA_PRIV_KEY_B64: ${{ secrets.WINSPARKLE_DSA_PRIV_KEY_B64 }}
+        run: >-
+          python scripts/appcast.py
+          --title gore-mod
+          --version ${{ steps.version.outputs.version }}
+          --installer projects/gore-mod/dist/GoreModSetup-${{ steps.version.outputs.version }}.exe
+          --notes projects/gore-mod/dist/RELEASE_NOTES.md
+          --release-tag gore-mod-v${{ steps.version.outputs.version }}
+          --output projects/gore-mod/dist/appcast-windows.xml
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gore-mod-windows-x64
+          path: |
+            projects/gore-mod/dist/*.zip
+            projects/gore-mod/dist/*.exe
+            projects/gore-mod/dist/appcast-windows.xml
+
+      # Versioned release holds the installer the appcast enclosure points at.
+      # make_latest=false so it never steals goresave's releases/latest feed.
+      - name: Publish GitHub release
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          make_latest: "false"
+          files: |
+            projects/gore-mod/dist/*.zip
+            projects/gore-mod/dist/GoreModSetup-${{ steps.version.outputs.version }}.exe
+          body_path: projects/gore-mod/dist/RELEASE_NOTES.md
+
+      # gore-mod's updater polls this fixed-tag release. The asset name is the
+      # same every release, so use `gh release upload --clobber` to replace it
+      # in place — a plain upload errors on the second release and the feed
+      # would stay stuck on the first appcast.
+      - name: Update gore-mod appcast feed
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view gore-mod-appcast 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create gore-mod-appcast `
+              --title "gore-mod update feed" `
+              --notes "Stable WinSparkle feed for gore-mod. Assets overwritten each release." `
+              --latest=false
+          }
+          gh release upload gore-mod-appcast `
+            projects/gore-mod/dist/appcast-windows.xml --clobber
+
+  gore-cli:
+    if: startsWith(github.ref_name, 'gore-cli-v') || (github.event_name == 'workflow_dispatch' && inputs.project == 'gore-cli')
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve and verify version
+        id: version
+        shell: pwsh
+        run: |
+          $manifest = Get-Content projects/gore-cli/crates/gore_cli/Cargo.toml -Raw
+          if ($manifest -notmatch '(?m)^version\s*=\s*"([0-9]+\.[0-9]+\.[0-9]+)"') {
+            Write-Error 'Cargo.toml version must be X.Y.Z'
+            exit 1
+          }
+          $version = $Matches[1]
+          if ('${{ github.ref_type }}' -eq 'tag') {
+            $tag = $env:GITHUB_REF_NAME
+            if ($tag -ne "gore-cli-v$version") {
+              Write-Error "tag $tag does not match Cargo.toml version $version"
+              exit 1
+            }
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build distribution
+        run: python build.py gore-cli dist
+
+      - name: Extract release notes from CHANGELOG.md
+        shell: pwsh
+        run: |
+          $version = '${{ steps.version.outputs.version }}'
+          $isTag = '${{ github.ref_type }}' -eq 'tag'
+          $changelog = Get-Content projects/gore-cli/CHANGELOG.md -Raw
+          $pattern = "(?ms)^## \[$([regex]::Escape($version))\][^`r`n]*`r?`n(.*?)(?=^## \[|\z)"
+          $notes = ''
+          if ($changelog -match $pattern) { $notes = $Matches[1].Trim() }
+          if (-not $notes) {
+            if ($isTag) { Write-Error "CHANGELOG.md has no non-empty section for $version"; exit 1 }
+            $notes = "Development build $version"
+          }
+          New-Item -ItemType Directory -Force projects/gore-cli/dist | Out-Null
+          [IO.File]::WriteAllText((Join-Path $PWD 'projects/gore-cli/dist/RELEASE_NOTES.md'), $notes)
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gore-cli-windows-x64
+          path: projects/gore-cli/dist/*.zip
+
+      - name: Publish GitHub release
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          make_latest: "false"
+          files: projects/gore-cli/dist/*.zip
+          body_path: projects/gore-cli/dist/RELEASE_NOTES.md

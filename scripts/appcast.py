@@ -1,19 +1,24 @@
-"""Generate and DSA-sign the WinSparkle appcast for a goresave release.
+"""Generate and DSA-sign a WinSparkle appcast for a gore-tools release.
 
-The appcast is uploaded as a GitHub release asset; the app polls
-releases/latest/download/appcast-windows.xml. The enclosure URL points at
-the versioned installer asset of the same release.
+Shared by every WinSparkle-updated app in the monorepo (gore-save, gore-mod).
+The appcast is uploaded as a GitHub release asset; the app polls a stable
+feed URL (gore-save uses releases/latest/download/, gore-mod uses its own
+fixed-tag release). The enclosure URL points at the versioned installer asset
+of the matching per-project release tag (e.g. gore-save-v1.2.3).
 
 Usage:
-    python scripts/appcast.py --version 0.1.1 \
+    python scripts/appcast.py --title goresave --version 0.1.1 \
         --installer dist/GoresaveSetup-0.1.1.exe \
         --notes dist/RELEASE_NOTES.md \
+        --release-tag gore-save-v0.1.1 \
         --output dist/appcast-windows.xml
 
 Environment:
     WINSPARKLE_DSA_PRIV_KEY_B64   base64-encoded DSA private key PEM.
                                   Required: WinSparkle rejects unsigned
                                   updates once a public key is embedded.
+                                  gore-save and gore-mod share one keypair,
+                                  so the same secret signs both feeds.
 """
 
 from __future__ import annotations
@@ -74,15 +79,15 @@ def to_cdata(text: str) -> str:
     return "<![CDATA[" + text.replace("]]>", "]]]]><![CDATA[>") + "]]>"
 
 
-def build_appcast(*, version: str, installer: Path, notes_html: str,
-                  signature: str) -> str:
+def build_appcast(*, title: str, version: str, installer: Path,
+                  notes_html: str, signature: str, release_tag: str) -> str:
     rss = ET.Element("rss", {
         "version": "2.0",
         "xmlns:sparkle": "http://www.andymatuschak.org/xml-namespaces/sparkle",
         "xmlns:dc": "http://purl.org/dc/elements/1.1/",
     })
     channel = ET.SubElement(rss, "channel")
-    ET.SubElement(channel, "title").text = "goresave"
+    ET.SubElement(channel, "title").text = title
 
     item = ET.SubElement(channel, "item")
     ET.SubElement(item, "title").text = f"Version {version}"
@@ -97,7 +102,7 @@ def build_appcast(*, version: str, installer: Path, notes_html: str,
         ET.SubElement(item, "description").text = placeholder
 
     ET.SubElement(item, "enclosure", {
-        "url": f"{REPO_DOWNLOAD_BASE}/v{version}/{installer.name}",
+        "url": f"{REPO_DOWNLOAD_BASE}/{release_tag}/{installer.name}",
         "length": str(installer.stat().st_size),
         "type": "application/octet-stream",
         "sparkle:dsaSignature": signature,
@@ -116,10 +121,15 @@ def build_appcast(*, version: str, installer: Path, notes_html: str,
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--title", default="goresave",
+                        help="channel title (the product name)")
     parser.add_argument("--version", required=True)
     parser.add_argument("--installer", required=True, type=Path)
     parser.add_argument("--notes", type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--release-tag", required=True,
+                        help="git tag the installer asset lives under, "
+                        "e.g. gore-save-v1.2.3")
     args = parser.parse_args()
 
     if not args.installer.exists():
@@ -127,10 +137,12 @@ def main() -> int:
 
     signature = sign_dsa(args.installer)
     xml = build_appcast(
+        title=args.title,
         version=args.version,
         installer=args.installer,
         notes_html=notes_to_html(args.notes),
         signature=signature,
+        release_tag=args.release_tag,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(xml, encoding="utf-8")

@@ -57,6 +57,15 @@ IDI_APP_ICON            ICON                    "resources\\app_icon.ico"
 
 /////////////////////////////////////////////////////////////////////////////
 //
+// WinSparkle DSA public key (resource name/type fixed by WinSparkle).
+// Shares goresave's keypair, so the same CI secret signs both feeds.
+//
+
+DSAPub                  DSAPEM                  "../../dsa_pub.pem"
+
+
+/////////////////////////////////////////////////////////////////////////////
+//
 // Version
 //
 

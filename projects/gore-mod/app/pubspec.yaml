@@ -20,6 +20,28 @@ dependencies:
   path: ^1.9.0
   state_notifier: ^1.0.0
   window_manager: ^0.5.1
+  auto_updater:
+    git:
+      url: https://github.com/dh0er/auto_updater.git
+      path: packages/auto_updater
+      ref: swiftpm-support
+
+dependency_overrides:
+  auto_updater_windows:
+    git:
+      url: https://github.com/dh0er/auto_updater.git
+      ref: swiftpm-support
+      path: packages/auto_updater_windows
+  auto_updater_macos:
+    git:
+      url: https://github.com/dh0er/auto_updater.git
+      ref: swiftpm-support
+      path: packages/auto_updater_macos
+  auto_updater_platform_interface:
+    git:
+      url: https://github.com/dh0er/auto_updater.git
+      ref: swiftpm-support
+      path: packages/auto_updater_platform_interface
 
 dev_dependencies:
   flutter_test:
