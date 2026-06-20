@@ -419,6 +419,17 @@ def release_project(project: str, version: str, steps: dict, dry: bool) -> None:
     if steps["installer"]:
         installer_project(project, dry=dry)
     if steps["tag"]:
+        # The tag must match the manifest version, or CI's version-verify step
+        # rejects the build and leaves a stray remote tag. --bump already wrote
+        # it; without --bump, confirm the manifest is already at this version
+        # so a mistyped version argument fails before anything is tagged.
+        if not steps["bump"]:
+            actual = read_version(project)
+            if actual != version:
+                raise SystemExit(
+                    f"manifest version {actual} != requested {version}; "
+                    "re-run with --bump to set it, or fix the version argument"
+                )
         manifest = cfg["pubspec"] if cfg["kind"] == "flutter" else cfg["manifest"]
         rel_paths = [f"{cfg['dir']}/{manifest}"]
         if cfg.get("changelog"):
