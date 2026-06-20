@@ -190,10 +190,14 @@ def write_version(project: str, version: str, dry: bool) -> None:
         return
     path.write_text(new, encoding="utf-8")
     # A Rust version bump must be mirrored into the workspace Cargo.lock, or a
-    # tag built with `cargo --locked` resolves the old version. `--workspace`
-    # updates only the bumped member's lock entry, leaving registry deps pinned.
+    # tag built with `cargo --locked` resolves the old version. Update only the
+    # bumped crate to exactly this version (`-p <crate> --precise`), so no
+    # unrelated dependency resolutions sneak into the release commit.
     if cfg["kind"] in ("rust-bin", "rust-lib"):
-        run(f"sync Cargo.lock {project}", [CARGO, "update", "--workspace"])
+        run(
+            f"sync Cargo.lock {project}",
+            [CARGO, "update", "-p", cfg["crate"], "--precise", version],
+        )
 
 
 def changelog_notes(project: str, version: str) -> str:
