@@ -305,8 +305,15 @@ def run_project(project: str, release: bool) -> None:
     if not exe.exists():
         raise SystemExit(f"build did not produce {exe}")
     # Run from the exe's own directory so a Flutter app finds its bundled DLLs.
-    # Propagate the program's own exit code rather than framing a nonzero exit
-    # as a build failure (a CLI may exit nonzero, e.g. usage with no args).
+    if PROJECTS[project]["kind"] == "flutter":
+        # A GUI app would otherwise block the build script until the window is
+        # closed. Launch it detached and return immediately.
+        print(f"\nlaunching {exe} (background)")
+        subprocess.Popen([str(exe)], cwd=exe.parent, env=env())
+        return
+    # CLI: wait and propagate the program's own exit code rather than framing a
+    # nonzero exit as a build failure (a CLI may exit nonzero, e.g. usage with
+    # no args).
     print(f"\nlaunching {exe}")
     completed = subprocess.run([str(exe)], cwd=exe.parent, env=env())
     raise SystemExit(completed.returncode)
