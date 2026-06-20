@@ -11,7 +11,7 @@ import 'gore_mod_app.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await windowManager.ensureInitialized();
-  windowManager.waitUntilReadyToShow(
+  await windowManager.waitUntilReadyToShow(
     const WindowOptions(
       // Sized so the three fixed panes (catalog + editor + overrides) plus the
       // editor's label column always fit without horizontal overflow.

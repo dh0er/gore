@@ -186,8 +186,14 @@ def write_version(project: str, version: str, dry: bool) -> None:
     if n == 0:
         raise SystemExit(f"no version line found to bump in {path}")
     print(f"bump {project} -> {version} ({path})")
-    if not dry:
-        path.write_text(new, encoding="utf-8")
+    if dry:
+        return
+    path.write_text(new, encoding="utf-8")
+    # A Rust version bump must be mirrored into the workspace Cargo.lock, or a
+    # tag built with `cargo --locked` resolves the old version. `--workspace`
+    # updates only the bumped member's lock entry, leaving registry deps pinned.
+    if cfg["kind"] in ("rust-bin", "rust-lib"):
+        run(f"sync Cargo.lock {project}", [CARGO, "update", "--workspace"])
 
 
 def changelog_notes(project: str, version: str) -> str:
@@ -434,6 +440,9 @@ def release_project(project: str, version: str, steps: dict, dry: bool) -> None:
         rel_paths = [f"{cfg['dir']}/{manifest}"]
         if cfg.get("changelog"):
             rel_paths.append(f"{cfg['dir']}/{cfg['changelog']}")
+        # The bump also rewrites the root workspace lockfile (see write_version).
+        if cfg["kind"] in ("rust-bin", "rust-lib"):
+            rel_paths.append("Cargo.lock")
         # Commit only this project's files via pathspec, so unrelated staged
         # work never rides along on the release tag. Skip the commit entirely
         # when those files are already at the target version (nothing to
