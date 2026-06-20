@@ -1,9 +1,7 @@
 import 'package:collection/collection.dart';
-import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
-import 'package:path/path.dart' as p;
 import 'app/domain/ui_settings.dart';
 import 'app/ui/window_chrome.dart';
 import 'catalog/domain/catalog_provider.dart';
@@ -18,6 +16,7 @@ import 'loc/domain/loc_catalog_provider.dart';
 import 'loc/domain/loc_notifier.dart';
 import 'loc/game_lang.dart';
 import 'loc/ui/loc_extract_flow.dart';
+import 'settings/ui/settings_tab.dart';
 
 final _selectedItemProvider = StateProvider<CatalogItem?>((ref) => null);
 
@@ -114,35 +113,6 @@ class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver
         centerTitle: false,
         scrolledUnderElevation: 0,
         actions: [
-          _DumpMenu(
-            dumpPath: ref.watch(dumpPathProvider),
-            onLoad: () async {
-              final group = XTypeGroup(
-                label: l10n.gameDataFileGroupLabel,
-                extensions: const ['json'],
-              );
-              final file = await openFile(acceptedTypeGroups: [group]);
-              if (file != null) {
-                ref.read(dumpPathProvider.notifier).set(file.path);
-              }
-            },
-            onReset: () => ref.read(dumpPathProvider.notifier).clear(),
-          ),
-          IconButton(
-            icon: const Icon(Icons.translate),
-            tooltip: l10n.extractLocalizedText,
-            onPressed: ref.watch(locProvider).isRunning
-                ? null
-                : () => runLocExtractFlow(context, ref),
-          ),
-          _LanguageMenu(
-            // Normalize through gameLangByCode so the checkmark matches the
-            // language MaterialApp actually shows for an unknown/obsolete code.
-            current: gameLangByCode(ref.watch(localeProvider)).code,
-            onSelected: (code) =>
-                ref.read(localeProvider.notifier).setLocale(code),
-            tooltip: l10n.language,
-          ),
           IconButton(
             icon: Icon(isDark ? Icons.light_mode : Icons.dark_mode),
             tooltip: isDark ? l10n.lightMode : l10n.darkMode,
@@ -173,157 +143,112 @@ class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver
           const SizedBox(width: 8),
         ],
       ),
-      body: Row(
-        children: [
-          // Left: catalog browser
-          SizedBox(
-            width: 560,
-            child: CatalogBrowser(
-              selected: selected,
-              onItemSelected: (item) =>
-                  ref.read(_selectedItemProvider.notifier).state = item,
-            ),
-          ),
-          const VerticalDivider(width: 1),
-          // Centre: field editor. Cap the editing column width and centre it so
-          // the inputs don't stretch across the whole window on wide displays.
-          Expanded(
-            child: selected == null
-                ? Center(
-                    child: Text(
-                      l10n.selectAnItemToEdit,
-                      style: TextStyle(color: scheme.onSurfaceVariant),
-                    ),
-                  )
-                : Align(
-                    alignment: Alignment.topCenter,
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 720),
-                      child: FieldEditor(
-                        item: selected,
-                        displayName: displayNameForItem(
-                          selected,
-                          ref.watch(locCatalogProvider).value ?? const {},
-                          gameLangByCode(ref.watch(localeProvider)),
+      body: DefaultTabController(
+        length: 3,
+        child: Column(
+          children: [
+            Container(
+              color: scheme.surfaceContainerLowest,
+              child: Row(
+                children: [
+                  Expanded(
+                    child: TabBar(
+                      isScrollable: true,
+                      tabs: [
+                        Tab(
+                          icon: const Icon(Icons.inventory_2_outlined),
+                          text: l10n.tabItems,
                         ),
-                        pendingOverrides: {
-                          for (final e in overridesState.entries
-                              .where((e) => e.classId == selected.id))
-                            e.field: e,
-                        },
-                        onOverrideChanged: (entry) => ref
-                            .read(overridesProvider.notifier)
-                            .setOverride(entry),
-                      ),
+                        Tab(
+                          icon: const Icon(Icons.edit_note_outlined),
+                          text: l10n.tabOverrides,
+                        ),
+                        Tab(
+                          icon: const Icon(Icons.settings_outlined),
+                          text: l10n.tabSettings,
+                        ),
+                      ],
                     ),
                   ),
-          ),
-          const VerticalDivider(width: 1),
-          // Right: overrides panel
-          SizedBox(
-            width: 460,
-            child: const OverridesPanel(),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// AppBar control for loading a fresh game-data dump (from the gore-dump mod)
-/// that overrides the bundled model — the post-release refresh path. Shows
-/// whether a dump is active and offers a reset to the bundled data.
-class _DumpMenu extends StatelessWidget {
-  const _DumpMenu({
-    required this.dumpPath,
-    required this.onLoad,
-    required this.onReset,
-  });
-
-  final String? dumpPath;
-  final Future<void> Function() onLoad;
-  final void Function() onReset;
-
-  @override
-  Widget build(BuildContext context) {
-    final active = dumpPath != null;
-    final scheme = Theme.of(context).colorScheme;
-    final l10n = AppLocalizations.of(context);
-    return PopupMenuButton<String>(
-      tooltip: active
-          ? l10n.gameDataActiveTooltip(p.basename(dumpPath!))
-          : l10n.gameDataBundledTooltip,
-      icon: Icon(
-        active ? Icons.dataset : Icons.dataset_outlined,
-        color: active ? scheme.primary : null,
-      ),
-      onSelected: (value) {
-        if (value == 'load') {
-          onLoad();
-        } else if (value == 'reset') {
-          onReset();
-        }
-      },
-      itemBuilder: (context) => [
-        PopupMenuItem(
-          value: 'load',
-          child: ListTile(
-            leading: const Icon(Icons.upload_file),
-            title: Text(l10n.loadGameDataDump),
-            subtitle: Text(l10n.loadGameDataDumpSubtitle),
-            contentPadding: EdgeInsets.zero,
-          ),
-        ),
-        PopupMenuItem(
-          value: 'reset',
-          enabled: active,
-          child: ListTile(
-            leading: const Icon(Icons.restore),
-            title: Text(l10n.useBundledData),
-            subtitle:
-                Text(active ? p.basename(dumpPath!) : l10n.alreadyBundled),
-            contentPadding: EdgeInsets.zero,
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-/// AppBar control for picking the app / game language. Lists [kGameLangs] by
-/// endonym; selecting one updates [localeProvider] (which persists and drives
-/// both the UI locale and which extracted game-text names are shown).
-class _LanguageMenu extends StatelessWidget {
-  const _LanguageMenu({
-    required this.current,
-    required this.onSelected,
-    required this.tooltip,
-  });
-
-  final String current;
-  final void Function(String code) onSelected;
-  final String tooltip;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return PopupMenuButton<String>(
-      tooltip: tooltip,
-      icon: const Icon(Icons.language),
-      onSelected: onSelected,
-      itemBuilder: (context) => [
-        for (final lang in kGameLangs)
-          PopupMenuItem(
-            value: lang.code,
-            child: Row(
-              children: [
-                Expanded(child: Text(lang.endonym)),
-                if (lang.code == current)
-                  Icon(Icons.check, size: 18, color: scheme.primary),
-              ],
+                ],
+              ),
             ),
-          ),
-      ],
+            Expanded(
+              child: TabBarView(
+                children: [
+                  // Items: catalog browser + field editor.
+                  Row(
+                    children: [
+                      // Left: catalog browser
+                      SizedBox(
+                        width: 560,
+                        child: CatalogBrowser(
+                          selected: selected,
+                          onItemSelected: (item) => ref
+                              .read(_selectedItemProvider.notifier)
+                              .state = item,
+                        ),
+                      ),
+                      const VerticalDivider(width: 1),
+                      // Centre: field editor. Cap the editing column width and
+                      // centre it so the inputs don't stretch across the whole
+                      // window on wide displays.
+                      Expanded(
+                        child: selected == null
+                            ? Center(
+                                child: Text(
+                                  l10n.selectAnItemToEdit,
+                                  style: TextStyle(
+                                      color: scheme.onSurfaceVariant),
+                                ),
+                              )
+                            : Align(
+                                alignment: Alignment.topCenter,
+                                child: ConstrainedBox(
+                                  constraints:
+                                      const BoxConstraints(maxWidth: 720),
+                                  child: FieldEditor(
+                                    item: selected,
+                                    displayName: displayNameForItem(
+                                      selected,
+                                      ref.watch(locCatalogProvider).value ??
+                                          const {},
+                                      gameLangByCode(
+                                          ref.watch(localeProvider)),
+                                    ),
+                                    pendingOverrides: {
+                                      for (final e in overridesState.entries
+                                          .where((e) =>
+                                              e.classId == selected.id))
+                                        e.field: e,
+                                    },
+                                    onOverrideChanged: (entry) => ref
+                                        .read(overridesProvider.notifier)
+                                        .setOverride(entry),
+                                  ),
+                                ),
+                              ),
+                      ),
+                    ],
+                  ),
+                  // Overrides: the pending-overrides panel, centred with a
+                  // readable max width.
+                  Align(
+                    alignment: Alignment.topCenter,
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 600),
+                      child: const OverridesPanel(),
+                    ),
+                  ),
+                  // Settings.
+                  const SettingsTab(),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
+
