@@ -1,4 +1,5 @@
 pub mod catalog;
+pub mod deploy_shared;
 pub mod dump;
 pub mod dump_mod;
 pub mod gen;
