@@ -101,15 +101,56 @@ struct Cmp {
 }
 
 /// Build a call expression from the pushed-arg stack. For a method, the receiver is the
-/// last-pushed entry (top of stack); the rest are args in push order.
-fn build_call(stack: &mut Vec<String>, f: &str, is_method: bool) -> String {
+/// last-pushed entry (top of stack); the rest are args in push order. Operator-overload
+/// methods (opAssign/opAdd/opEquals/...) render as the source operator. Returns None for
+/// compiler-generated behaviors ($behN construct/destruct) that have no source form.
+fn build_call(stack: &mut Vec<String>, f: &str, is_method: bool) -> Option<String> {
+    if f.starts_with('$') {
+        stack.clear();
+        return None; // generated construct/destruct behavior — no source statement
+    }
     let mut a: Vec<String> = std::mem::take(stack).into_iter().filter(|x| !x.is_empty()).collect();
     if is_method && !a.is_empty() {
         let recv = a.pop().unwrap();
-        format!("{recv}.{f}({})", a.join(", "))
+        // operator-overload methods -> source operators
+        if let Some(op) = assign_op(f) {
+            if let Some(rhs) = a.first() {
+                return Some(format!("{recv} {op} {rhs}"));
+            }
+        }
+        if let Some(op) = binop_method(f) {
+            if let Some(rhs) = a.first() {
+                return Some(format!("({recv} {op} {rhs})"));
+            }
+        }
+        Some(format!("{recv}.{f}({})", a.join(", ")))
     } else {
-        format!("{f}({})", a.join(", "))
+        Some(format!("{f}({})", a.join(", ")))
     }
+}
+
+/// Compound-assignment operator method names -> operator (statement-producing).
+fn assign_op(f: &str) -> Option<&'static str> {
+    Some(match f {
+        "opAssign" => "=",
+        "opAddAssign" => "+=",
+        "opSubAssign" => "-=",
+        "opMulAssign" => "*=",
+        "opDivAssign" => "/=",
+        _ => return None,
+    })
+}
+
+/// Binary operator method names -> operator (value-producing).
+fn binop_method(f: &str) -> Option<&'static str> {
+    Some(match f {
+        "opAdd" => "+",
+        "opSub" => "-",
+        "opMul" => "*",
+        "opDiv" => "/",
+        "opEquals" => "==",
+        _ => return None,
+    })
 }
 
 /// Emit `dst = rhs;` if a result is available (object store).
@@ -158,7 +199,8 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
             "PSF" => {
                 // &local, unless it's the destination of a following ALLOC
                 if insns.get(k + 1).map(|i| i.op.name) != Some("ALLOC") {
-                    stack.push(format!("&{}", name(w(ins, 0))));
+                    // &local at the AS source level is implicit (param decides &in/&out) — no `&`.
+                    stack.push(name(w(ins, 0)));
                 }
                 // else: this PSF is the destination local for the following ALLOC; don't push.
             }
@@ -254,16 +296,16 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
             "CALL" | "CALLINTF" | "CALLBND" => {
                 let id = ins.dwords.first().copied().unwrap_or(0) as i32;
                 let f = ctx.refs.func_by_id(id).unwrap_or("func?").to_string();
-                pending = Some(build_call(&mut stack, &f, ctx.refs.is_method_by_id(id)));
+                pending = build_call(&mut stack, &f, ctx.refs.is_method_by_id(id));
             }
             "CALLSYS" | "Thiscall1" => {
                 let ptr = ins.qwords.first().copied().unwrap_or(0) as i64;
                 let f = ctx.refs.func_by_ptr(ptr).unwrap_or("syscall?").to_string();
-                pending = Some(build_call(&mut stack, &f, ctx.refs.is_method_by_ptr(ptr)));
+                pending = build_call(&mut stack, &f, ctx.refs.is_method_by_ptr(ptr));
             }
             "CallPtr" => {
                 let f = name(w(ins, 0));
-                pending = Some(build_call(&mut stack, &f, false));
+                pending = build_call(&mut stack, &f, false);
             }
             // ---- object construction ----
             "ALLOC" => {
