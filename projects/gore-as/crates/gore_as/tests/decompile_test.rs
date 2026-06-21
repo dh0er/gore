@@ -81,6 +81,61 @@ fn structured_real_cache_no_panic() {
     eprintln!("structured 20000 funcs, {chars} chars total");
 }
 
+/// Tally opcode frequency across all real function bytecode (to prioritize op coverage).
+#[test]
+fn opcode_frequency() {
+    let Ok(path) = std::env::var("GORE_AS_REAL_CACHE") else {
+        eprintln!("skip: set GORE_AS_REAL_CACHE");
+        return;
+    };
+    let b = std::fs::read(&path).unwrap();
+    let funcs = collect_function_bytecodes(&b).unwrap();
+    let mut freq: std::collections::HashMap<&'static str, u64> = std::collections::HashMap::new();
+    for f in &funcs {
+        if let Ok(ins) = gore_as::cache::disasm::disassemble(&f.bytecode) {
+            for i in &ins {
+                *freq.entry(i.op.name).or_insert(0) += 1;
+            }
+        }
+    }
+    let mut v: Vec<_> = freq.into_iter().collect();
+    v.sort_by(|a, b| b.1.cmp(&a.1));
+    eprintln!("=== top 45 opcodes by frequency ===");
+    for (name, n) in v.iter().take(45) {
+        eprintln!("{n:>9}  {name}");
+    }
+}
+
+/// Measure body-recovery rate across ALL real functions: a body is "clean" if it has no
+/// raw `// OPCODE` annotation / disasm error (i.e. fully decompiled, no stub needed).
+#[test]
+fn body_recovery_rate() {
+    let Ok(path) = std::env::var("GORE_AS_REAL_CACHE") else {
+        eprintln!("skip: set GORE_AS_REAL_CACHE");
+        return;
+    };
+    let b = std::fs::read(&path).unwrap();
+    let refs = RefResolver::build(&b).unwrap();
+    let funcs = collect_function_bytecodes(&b).unwrap();
+    let total = funcs.len();
+    let mut clean = 0usize;
+    for f in &funcs {
+        let body = gore_as::cache::structure::body_statements(f, &refs, 1);
+        let stub = body.lines().any(|l| {
+            let t = l.trim_start();
+            t.starts_with("// ") && {
+                let w = t.trim_start_matches("// ").split_whitespace().next().unwrap_or("");
+                w.chars().next().map(|c| c.is_ascii_uppercase()).unwrap_or(false)
+                    && w.chars().all(|c| c.is_ascii_alphanumeric())
+            }
+        });
+        if !stub {
+            clean += 1;
+        }
+    }
+    eprintln!("body recovery: {clean}/{total} functions fully decompiled ({}%)", clean * 100 / total.max(1));
+}
+
 /// Decompile a couple of real modules (env-gated) and print them; must not panic.
 #[test]
 fn decompiles_real_targets() {
