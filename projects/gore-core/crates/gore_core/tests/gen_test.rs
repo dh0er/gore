@@ -52,9 +52,12 @@ fn gen_lua_mod_name_in_log() {
 #[test]
 fn gen_lua_no_delay_uses_direct_call() {
     let lua = gen_lua(&apple_config());
-    // delay_ms=0: apply() is called directly, no ExecuteWithDelay
-    assert!(!lua.contains("ExecuteWithDelay"), "delay_ms=0 must not emit ExecuteWithDelay");
-    assert!(lua.contains("apply()"), "apply() must be called");
+    // delay_ms=0: the startup invocation is a direct tryApply(), not delayed.
+    // (The retry loop itself still uses ExecuteWithDelay to re-poll for CDOs
+    // that load lazily, so ExecuteWithDelay appears regardless.)
+    assert!(lua.contains("\ntryApply()\n"), "delay_ms=0 must call tryApply() directly");
+    assert!(!lua.contains("ExecuteWithDelay(0"), "startup call must not be delayed");
+    assert!(lua.contains("apply()"), "apply() must be invoked");
 }
 
 #[test]

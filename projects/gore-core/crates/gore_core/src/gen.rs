@@ -229,30 +229,53 @@ pub fn gen_lua(cfg: &OverridesConfig) -> String {
     // (Lua treats `%` as a format directive); the plain concat below must not.
     let mod_fmt = mod_name.replace('%', "%%");
 
-    // Build apply() body
+    // Build apply()/retry body. AngelScript item CDOs load lazily and are
+    // absent when the mod first runs, so a single apply() at startup misses
+    // them ("CDO not found"). Poll until each override's CDO appears (capped),
+    // applying each exactly once via a per-row `_done` flag.
     let apply_body = format!(
-        r#"local function apply()
+        r#"local INTERVAL_MS = 1000
+local MAX_ATTEMPTS = 120
+
+local function apply()
+  local pending = 0
   for _, o in ipairs(OVERRIDES) do
-    local cdo = StaticFindObject("/Script/" .. o.module .. ".Default__" .. o.class)
-    if cdo and cdo:IsValid() then
-      local before = cdo[o.field]
-      cdo[o.field] = o.value
-      print(string.format("[{mod_fmt}] %s.%s %s -> %s\n",
-        o.class, o.field, tostring(before), tostring(cdo[o.field])))
-    else
-      print("[{mod}] CDO not found: " .. o.class .. "\n")
+    if not o._done then
+      local cdo = StaticFindObject("/Script/" .. o.module .. ".Default__" .. o.class)
+      if cdo and cdo:IsValid() then
+        local before = cdo[o.field]
+        cdo[o.field] = o.value
+        o._done = true
+        print(string.format("[{mod_fmt}] %s.%s %s -> %s\n",
+          o.class, o.field, tostring(before), tostring(cdo[o.field])))
+      else
+        pending = pending + 1
+      end
     end
+  end
+  return pending
+end
+
+local attempt = 0
+local function tryApply()
+  attempt = attempt + 1
+  local pending = apply()
+  if pending > 0 and attempt < MAX_ATTEMPTS then
+    ExecuteWithDelay(INTERVAL_MS, tryApply)
+  elseif pending > 0 then
+    print("[{mod}] gave up after " .. attempt .. " attempts; " .. pending .. " CDO(s) never appeared\n")
   end
 end"#,
         mod_fmt = mod_fmt,
         mod = mod_name
     );
 
-    // Startup invocation
+    // Startup invocation. delay_ms now gates the FIRST attempt; the retry loop
+    // keeps polling regardless, so a 0 delay is safe.
     let startup = if cfg.meta.delay_ms == 0 {
-        "apply()".to_string()
+        "tryApply()".to_string()
     } else {
-        format!("ExecuteWithDelay({}, function() apply() end)", cfg.meta.delay_ms)
+        format!("ExecuteWithDelay({}, tryApply)", cfg.meta.delay_ms)
     };
 
     format!(
@@ -316,9 +339,9 @@ mod gen_tests {
         };
         let lua = gen_lua(&cfg);
         // In the string.format template the % must be doubled (%%); the plain
-        // concat ("CDO not found") keeps the single %.
+        // concat ("gave up") keeps the single %.
         assert!(lua.contains("[100%%Balance] %s.%s"), "format template must double %: {lua}");
-        assert!(lua.contains(r#"[100%Balance] CDO not found"#), "concat keeps single %: {lua}");
+        assert!(lua.contains(r#"[100%Balance] gave up"#), "concat keeps single %: {lua}");
     }
 
     #[test]

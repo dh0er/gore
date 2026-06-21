@@ -13,6 +13,7 @@ class LocExtractOutcome {
     required this.success,
     this.needsManualFile = false,
     this.message,
+    this.code,
     this.idCount,
     this.languageCount,
   });
@@ -20,6 +21,10 @@ class LocExtractOutcome {
   final bool success;
   final bool needsManualFile;
   final String? message;
+
+  /// Error code from the native core on failure (e.g. `LCACHE_NOT_FOUND`,
+  /// `EXTRACT_FAILED`); null on success or a needs-manual-file outcome.
+  final String? code;
   final int? idCount;
   final int? languageCount;
 }
@@ -137,7 +142,7 @@ class LocNotifier extends StateNotifier<LocState> {
     }
 
     state = state.copyWith(phase: LocPhase.error, message: message);
-    return LocExtractOutcome(success: false, message: message);
+    return LocExtractOutcome(success: false, message: message, code: code);
   }
 }
 

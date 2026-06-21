@@ -1,15 +1,17 @@
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../app/domain/ui_settings.dart';
 import '../../l10n/app_localizations.dart';
 import '../domain/loc_catalog_provider.dart';
 import '../domain/loc_notifier.dart';
 
 /// Run the shared extraction flow used by both the first-run confirmation and
-/// the manual AppBar action. Tries auto-detect first; on LCACHE_NOT_FOUND it
-/// opens a file picker for the .lcache and retries with that hint. Surfaces
-/// progress and the success/failure result via SnackBars. On success the loaded
-/// localization catalog is invalidated so item names refresh.
+/// the manual Settings action. Tries auto-detect first, seeded with the
+/// configured game executable path (when set) as the resolution hint; on
+/// LCACHE_NOT_FOUND it opens a file picker for the .lcache and retries with that
+/// hint. Surfaces progress and the success/failure result via SnackBars. On
+/// success the loaded localization catalog is invalidated so item names refresh.
 Future<void> runLocExtractFlow(BuildContext context, WidgetRef ref) async {
   final messenger = ScaffoldMessenger.of(context);
   final l10n = AppLocalizations.of(context);
@@ -19,7 +21,25 @@ Future<void> runLocExtractFlow(BuildContext context, WidgetRef ref) async {
     SnackBar(content: Text(l10n.extractingLocalizedText)),
   );
 
-  var outcome = await notifier.extract();
+  // Seed auto-detect with the configured game executable path when set; null
+  // leaves the resolver's default auto-detection unchanged.
+  final exeHint = ref.read(gameExePathProvider);
+  var outcome = await notifier.extract(lcacheHint: exeHint);
+
+  // A stale/moved executable path resolves to nothing (LCACHE_NOT_FOUND), and
+  // because the hint is non-null the notifier won't ask for the manual picker —
+  // leaving the user at a dead-end error they could only escape by clearing
+  // settings. Retry pure auto-detect so a bad saved exe falls through to Steam
+  // detection / the picker just like a first run with no hint. Only the
+  // unresolved-hint case qualifies: a hinted cache that is found but fails to
+  // parse/read (EXTRACT_FAILED) must surface directly, never silently fall back
+  // to a different install's localization.
+  if (exeHint != null &&
+      !outcome.success &&
+      !outcome.needsManualFile &&
+      outcome.code == 'LCACHE_NOT_FOUND') {
+    outcome = await notifier.extract(lcacheHint: null);
+  }
 
   if (outcome.needsManualFile) {
     // The first extract() already awaited; bail if the page is gone before

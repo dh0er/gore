@@ -13,6 +13,7 @@ class UiSettings {
     this.windowSize,
     this.windowMaximized = false,
     this.dumpPath,
+    this.gameExePath,
     this.locExtractPrompted = false,
     this.appLocale = 'en',
   });
@@ -44,6 +45,10 @@ class UiSettings {
         final String path when path.isNotEmpty => path,
         _ => null,
       },
+      gameExePath: switch (json['gameExePath']) {
+        final String path when path.isNotEmpty => path,
+        _ => null,
+      },
       locExtractPrompted: json['locExtractPrompted'] == true,
     );
   }
@@ -58,6 +63,10 @@ class UiSettings {
   /// Path to a user-loaded game-data dump that overrides the bundled model;
   /// null means use the bundled assets.
   final String? dumpPath;
+
+  /// Path to the game's executable (.exe). Used as the hint when auto-detecting
+  /// localized text and the game install; null until set by the user.
+  final String? gameExePath;
 
   /// Whether the first-run localized-text extraction prompt has been shown.
   /// Persisted so the optional auto-prompt only fires once.
@@ -74,6 +83,8 @@ class UiSettings {
     bool? windowMaximized,
     String? dumpPath,
     bool clearDumpPath = false,
+    String? gameExePath,
+    bool clearGameExePath = false,
     bool? locExtractPrompted,
     String? appLocale,
   }) {
@@ -83,6 +94,7 @@ class UiSettings {
       windowSize: windowSize ?? this.windowSize,
       windowMaximized: windowMaximized ?? this.windowMaximized,
       dumpPath: clearDumpPath ? null : dumpPath ?? this.dumpPath,
+      gameExePath: clearGameExePath ? null : gameExePath ?? this.gameExePath,
       locExtractPrompted: locExtractPrompted ?? this.locExtractPrompted,
       appLocale: appLocale ?? this.appLocale,
     );
@@ -101,6 +113,7 @@ class UiSettings {
     },
     'windowMaximized': windowMaximized,
     if (dumpPath != null) 'dumpPath': dumpPath,
+    if (gameExePath != null) 'gameExePath': gameExePath,
     'locExtractPrompted': locExtractPrompted,
     'appLocale': appLocale,
   };
@@ -291,6 +304,30 @@ class DumpPathNotifier extends StateNotifier<String?> {
   void clear() {
     state = null;
     _store.write(_store.read().copyWith(clearDumpPath: true));
+  }
+}
+
+/// Path to the game's executable (.exe), or null if unset. Used as the hint for
+/// localized-text auto-detection and game-install discovery. Persisted so the
+/// choice survives restarts.
+final gameExePathProvider =
+    StateNotifierProvider<GameExePathNotifier, String?>((ref) {
+  return GameExePathNotifier(ref.watch(uiSettingsStoreProvider));
+});
+
+class GameExePathNotifier extends StateNotifier<String?> {
+  GameExePathNotifier(this._store) : super(_store.read().gameExePath);
+
+  final UiSettingsStore _store;
+
+  void set(String path) {
+    state = path;
+    _store.write(_store.read().copyWith(gameExePath: path));
+  }
+
+  void clear() {
+    state = null;
+    _store.write(_store.read().copyWith(clearGameExePath: true));
   }
 }
 

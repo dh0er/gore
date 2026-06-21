@@ -9,6 +9,34 @@ class AppLocalizationsDe extends AppLocalizations {
   AppLocalizationsDe([String locale = 'de']) : super(locale);
 
   @override
+  String get tabItems => 'Items';
+
+  @override
+  String get tabOverrides => 'Overrides';
+
+  @override
+  String get tabSettings => 'Einstellungen';
+
+  @override
+  String get gameExecutable => 'Spiel-Programmdatei';
+
+  @override
+  String get gameExecutableSubtitle =>
+      'Pfad zur .exe des Spiels. Wird zur automatischen Erkennung der lokalisierten Texte und der Spielinstallation genutzt.';
+
+  @override
+  String get gameExecutableNotSet => 'Nicht gesetzt';
+
+  @override
+  String get chooseGameExecutable => 'Auswählen…';
+
+  @override
+  String get settingsDataSourceSection => 'Spieldaten';
+
+  @override
+  String get settingsLocalizationSection => 'Lokalisierte Texte';
+
+  @override
   String get extractLocalizedText => 'Lokalisierte Texte extrahieren';
 
   @override

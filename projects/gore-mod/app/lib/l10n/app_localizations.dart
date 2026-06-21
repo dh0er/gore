@@ -116,6 +116,60 @@ abstract class AppLocalizations {
     Locale.fromSubtags(languageCode: 'zh', scriptCode: 'Hans'),
   ];
 
+  /// No description provided for @tabItems.
+  ///
+  /// In en, this message translates to:
+  /// **'Items'**
+  String get tabItems;
+
+  /// No description provided for @tabOverrides.
+  ///
+  /// In en, this message translates to:
+  /// **'Overrides'**
+  String get tabOverrides;
+
+  /// No description provided for @tabSettings.
+  ///
+  /// In en, this message translates to:
+  /// **'Settings'**
+  String get tabSettings;
+
+  /// No description provided for @gameExecutable.
+  ///
+  /// In en, this message translates to:
+  /// **'Game executable'**
+  String get gameExecutable;
+
+  /// No description provided for @gameExecutableSubtitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Path to the game\'s .exe. Used to auto-detect localized text and the game install.'**
+  String get gameExecutableSubtitle;
+
+  /// No description provided for @gameExecutableNotSet.
+  ///
+  /// In en, this message translates to:
+  /// **'Not set'**
+  String get gameExecutableNotSet;
+
+  /// No description provided for @chooseGameExecutable.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose…'**
+  String get chooseGameExecutable;
+
+  /// No description provided for @settingsDataSourceSection.
+  ///
+  /// In en, this message translates to:
+  /// **'Game data'**
+  String get settingsDataSourceSection;
+
+  /// No description provided for @settingsLocalizationSection.
+  ///
+  /// In en, this message translates to:
+  /// **'Localized text'**
+  String get settingsLocalizationSection;
+
   /// No description provided for @extractLocalizedText.
   ///
   /// In en, this message translates to:
