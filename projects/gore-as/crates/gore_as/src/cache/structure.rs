@@ -251,7 +251,7 @@ impl Structurer<'_> {
             }
             let prev = i;
             let b = &self.g.blocks[i];
-            let mut next = i + 1;
+            let mut next;
 
             if let Some((body_end, cond)) = self.top_test_while(i, stop) {
                 // top-test loop: `header: <cmp> Jcc exit; body; JMP header`

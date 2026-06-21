@@ -30,7 +30,6 @@ enum Expr {
     Bin(&'static str, Box<Expr>, Box<Expr>),
     Unary(&'static str, Box<Expr>),
     Call(String, Vec<Expr>),
-    Raw(String),
 }
 
 impl Expr {
@@ -46,7 +45,6 @@ impl Expr {
                 let a: Vec<String> = args.iter().map(|e| e.render()).collect();
                 format!("{}({})", n, a.join(", "))
             }
-            Expr::Raw(s) => s.clone(),
         }
     }
 }

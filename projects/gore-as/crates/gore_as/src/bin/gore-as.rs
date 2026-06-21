@@ -26,6 +26,24 @@ enum Cmd {
     },
     /// Print module count + TAIL_OFF (the splice insertion point) for a cache.
     Info { file: PathBuf },
+    /// Decompile functions whose name contains <needle> to structured AngelScript.
+    Decompile {
+        file: PathBuf,
+        /// Substring filter on `module.Class::func` (default: all).
+        #[arg(default_value = "")]
+        needle: String,
+        /// Max functions to print.
+        #[arg(long, default_value_t = 20)]
+        max: usize,
+    },
+    /// Disassemble functions whose name contains <needle> to an asBC listing.
+    Disasm {
+        file: PathBuf,
+        #[arg(default_value = "")]
+        needle: String,
+        #[arg(long, default_value_t = 20)]
+        max: usize,
+    },
     /// Splice a primitive-only mini-cache module into a base cache.
     Splice {
         /// Base cache (e.g. PrecompiledScript_Shipping.Cache).
@@ -64,6 +82,36 @@ fn main() -> Result<()> {
             println!("tail_off : {:#x}", tail);
             println!("eof      : {:#x}", bytes.len());
             println!("tail_len : {} bytes (global ref tables)", bytes.len() - tail);
+        }
+        Cmd::Decompile { file, needle, max } => {
+            let bytes = std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?;
+            let refs = gore_as::cache::refs::RefResolver::build(&bytes).context("resolver")?;
+            let funcs = gore_as::cache::walk_modules::collect_function_bytecodes(&bytes).context("walk")?;
+            let mut n = 0;
+            for f in funcs.iter().filter(|f| f.func.contains(&needle)) {
+                if n >= max {
+                    break;
+                }
+                println!("{}", gore_as::cache::structure::decompile(f, &refs));
+                n += 1;
+            }
+            eprintln!("({n} function(s))");
+        }
+        Cmd::Disasm { file, needle, max } => {
+            let bytes = std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?;
+            let funcs = gore_as::cache::walk_modules::collect_function_bytecodes(&bytes).context("walk")?;
+            let mut n = 0;
+            for f in funcs.iter().filter(|f| f.func.contains(&needle)) {
+                if n >= max {
+                    break;
+                }
+                match gore_as::cache::disasm::disassemble(&f.bytecode) {
+                    Ok(ins) => println!("// {}\n{}", f.func, gore_as::cache::disasm::listing(&ins)),
+                    Err(e) => println!("// {} — {e}", f.func),
+                }
+                n += 1;
+            }
+            eprintln!("({n} function(s))");
         }
         Cmd::Splice { base, mini, out } => {
             let base_b =
