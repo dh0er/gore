@@ -520,7 +520,9 @@ class _QuestsDetailState extends ConsumerState<_QuestsDetail> {
     if (!mounted || epoch != _reloadEpoch) return;
     setState(() {
       _loading = false;
-      _allQuests = all;
+      // Drop any partially-fetched pages on error so search/filter/edit never
+      // operate on a silently-incomplete list; surface the error instead.
+      _allQuests = error == null ? all : const [];
       _fetchError = error;
     });
   }
@@ -1005,15 +1007,21 @@ class _KnowledgeDetailState extends ConsumerState<_KnowledgeDetail> {
       if (page.characters.isEmpty || offset >= page.total) break;
     }
     if (!mounted || epoch != _charsEpoch) return;
+    // The loop always runs at least once, so `last` is non-null here. Read its
+    // fields before setState so the closure doesn't depend on flow promotion.
+    final error = last.error;
+    final total = last.total;
+    final limit = last.limit;
     setState(() {
       _loadingCharacters = false;
-      // Preserve the last page's metadata/error but expose the full NPC list.
+      // Drop any partially-fetched pages on error so search/filter/edit never
+      // operate on a silently-incomplete list; surface the error instead.
       _characters = KnowledgeCharactersPage(
-        characters: all,
-        total: last?.total ?? all.length,
+        characters: error == null ? all : const [],
+        total: error == null ? total : 0,
         offset: 0,
-        limit: last?.limit ?? _fetchPageLimit,
-        error: last?.error,
+        limit: limit,
+        error: error,
       );
     });
   }
