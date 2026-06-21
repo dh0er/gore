@@ -199,7 +199,14 @@ fn infer_locals(f: &Func, refs: &RefResolver) -> BTreeMap<i32, String> {
             continue; // params / this, not a local
         }
         let ty = if let Some(p) = obj.get(&dst) {
-            refs.type_by_ptr(*p).map(|s| format!("{s}@")).unwrap_or_else(|| "auto".into())
+            // reuse DataType::render (template subtypes + @ only on ref types U*/A*)
+            super::types::DataType {
+                token: 5,
+                type_info: *p,
+                is_object_handle: true,
+                ..Default::default()
+            }
+            .render(refs)
         } else if writes_float(n) {
             "float".to_string()
         } else if writes_double(n) {
