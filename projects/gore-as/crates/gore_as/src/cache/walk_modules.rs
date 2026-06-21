@@ -44,6 +44,23 @@ pub fn module_names(bytes: &[u8]) -> Result<Vec<String>, WireError> {
     Ok(names)
 }
 
+/// Collect each module's `(name, start, end)` byte range, where the range spans the WHOLE
+/// `Modules` TMap entry: from the byte before the `FString` key through the end of the
+/// module value (the cursor after `read_module`). Mirrors [`module_names`] but records
+/// positions — used by the splice to locate and replace a module's byte blob.
+pub fn module_ranges(bytes: &[u8]) -> Result<Vec<(String, usize, usize)>, WireError> {
+    let mut c = Cursor::at(bytes, CacheHeader::SIZE);
+    let count = module_count(bytes) as usize;
+    let mut ranges = Vec::with_capacity(count);
+    for _ in 0..count {
+        let start = c.pos();
+        let name = c.read_fstring()?; // key
+        read_module(&mut c)?;
+        ranges.push((name, start, c.pos()));
+    }
+    Ok(ranges)
+}
+
 /// A function's compiled bytecode + signature info, captured during a walk.
 #[derive(Debug, Clone)]
 pub struct FuncCode {

@@ -12,8 +12,8 @@
 use std::collections::HashSet;
 
 use super::header::CacheHeader;
-use super::tables::{parse_tail_tables, N_TABLES};
-use super::walk_modules::{module_count, module_names, module_region_end};
+use super::tables::{parse_tail_tables, TailTables, N_TABLES};
+use super::walk_modules::{module_count, module_names, module_ranges, module_region_end};
 use super::wire::WireError;
 use thiserror::Error;
 
@@ -27,6 +27,8 @@ pub enum SpliceError {
     MiniHasGlobalRefs(usize),
     #[error("module name {0:?} already exists in the base cache (splicing would overwrite it)")]
     NameCollision(String),
+    #[error("module name {0:?} not found in the base cache (nothing to replace)")]
+    NameNotFound(String),
     #[error("tail tables of {which} don't end at EOF (ended {got:#x}, len {len:#x}) — parse desync")]
     TailNotAtEof {
         which: &'static str,
@@ -114,15 +116,6 @@ pub fn splice_case_a(base: &[u8], mini: &[u8]) -> Result<Vec<u8>, SpliceError> {
         });
     }
 
-    // Per-table OldReference key-collision guard (keys resolve by name at load, so they only
-    // need to be unique within the base table).
-    for i in 0..N_TABLES {
-        let base_keys: HashSet<i64> = base_tt.tables[i].keys.iter().copied().collect();
-        if let Some(&k) = mini_tt.tables[i].keys.iter().find(|k| base_keys.contains(k)) {
-            return Err(SpliceError::KeyCollision { table: i, key: k });
-        }
-    }
-
     // Module name collision.
     let new_name = module_names(mini)?.into_iter().next().unwrap_or_default();
     if module_names(base)?.iter().any(|n| n == &new_name) {
@@ -138,13 +131,112 @@ pub fn splice_case_a(base: &[u8], mini: &[u8]) -> Result<Vec<u8>, SpliceError> {
     out.extend_from_slice(&base[CacheHeader::SIZE..base_tail]); // existing modules
     out.extend_from_slice(mod_bytes); // new module, before tables
 
-    // Merged tables: for each of the 7, write (base+mini count) then base entries then mini entries.
+    append_merged_tables(&mut out, base, &base_tt, mini, &mini_tt);
+    Ok(out)
+}
+
+/// Append the 7 merged tail tables (base ++ mini, deduped) to `out`.
+///
+/// Tables 1 & 3 (TypeIdReferenceToPointer / FunctionIdReferenceToPointer) are
+/// `TMap<int32,int64>` whose KEY is a DETERMINISTIC engine id (not a per-process pointer).
+/// The mini's engine-type/func ids collide with the base's by design — those refs already
+/// resolve in the base, so we DROP the mini's colliding 12-byte entries and append only
+/// genuinely-new ids. The other 5 tables are int64-pointer/name keyed (per-process, no
+/// collision) → append verbatim.
+fn append_merged_tables(
+    out: &mut Vec<u8>,
+    base: &[u8],
+    base_tt: &TailTables,
+    mini: &[u8],
+    mini_tt: &TailTables,
+) {
+    const ID_TABLES: [usize; 2] = [1, 3];
     for i in 0..N_TABLES {
         let b = &base_tt.tables[i];
         let m = &mini_tt.tables[i];
-        out.extend_from_slice(&(b.count + m.count).to_le_bytes());
-        out.extend_from_slice(&base[b.entries_start..b.entries_end]);
-        out.extend_from_slice(&mini[m.entries_start..m.entries_end]);
+        if ID_TABLES.contains(&i) {
+            let base_keys: HashSet<i64> = b.keys.iter().copied().collect();
+            let mut kept = Vec::new();
+            let mut kept_count = 0u32;
+            let mut off = m.entries_start;
+            for &k in &m.keys {
+                let entry = &mini[off..off + 12]; // int32 key + int64 value
+                if !base_keys.contains(&k) {
+                    kept.extend_from_slice(entry);
+                    kept_count += 1;
+                }
+                off += 12;
+            }
+            out.extend_from_slice(&(b.count + kept_count).to_le_bytes());
+            out.extend_from_slice(&base[b.entries_start..b.entries_end]);
+            out.extend_from_slice(&kept);
+        } else {
+            out.extend_from_slice(&(b.count + m.count).to_le_bytes());
+            out.extend_from_slice(&base[b.entries_start..b.entries_end]);
+            out.extend_from_slice(&mini[m.entries_start..m.entries_end]);
+        }
     }
+}
+
+/// Replace an existing module in `base` with `new_mini`'s single module, keeping the
+/// `Modules` count UNCHANGED. The new module's tail-table entries are merged into `base`'s
+/// the same way [`splice_case_a`] does (per `case-a-tables-and-exec.md` §3): drop colliding
+/// engine ids from tables 1 & 3, append the pointer-keyed tables 0/2/4/5/6 verbatim.
+///
+/// This is the decompiler edit loop: decompile a module → edit the `.as` → the game
+/// recompiles it to a mini-cache → `replace_module` swaps it in.
+///
+/// NOTE: the OLD module's now-orphaned tail-table entries are NOT removed — they are
+/// name-resolved at load and harmless (per `container-splice.md` §4); only the new
+/// entries are appended.
+pub fn replace_module(
+    base: &[u8],
+    new_mini: &[u8],
+    target_name: &str,
+) -> Result<Vec<u8>, SpliceError> {
+    let mini_n = module_count(new_mini);
+    if mini_n != 1 {
+        return Err(SpliceError::MiniNotSingle(mini_n));
+    }
+
+    // Locate the target module's whole TMap-entry byte range in the base.
+    let ranges = module_ranges(base)?;
+    let Some((_, target_start, target_end)) =
+        ranges.into_iter().find(|(name, _, _)| name == target_name)
+    else {
+        return Err(SpliceError::NameNotFound(target_name.to_string()));
+    };
+
+    let base_tail = module_region_end(base)?;
+    let base_tt = parse_tail_tables(base, base_tail)?;
+    if base_tt.end != base.len() {
+        return Err(SpliceError::TailNotAtEof {
+            which: "base",
+            got: base_tt.end,
+            len: base.len(),
+        });
+    }
+
+    let mini_tail = module_region_end(new_mini)?;
+    let mini_tt = parse_tail_tables(new_mini, mini_tail)?;
+    if mini_tt.end != new_mini.len() {
+        return Err(SpliceError::TailNotAtEof {
+            which: "mini",
+            got: mini_tt.end,
+            len: new_mini.len(),
+        });
+    }
+
+    // The new module entry = TMap (FString key + module value) at [0x18 .. mini_tail].
+    let mod_bytes = &new_mini[CacheHeader::SIZE..mini_tail];
+
+    // out = base[0..target_start] ++ MOD_BYTES ++ base[target_end..base_tail] ++ MERGED.
+    // Header (incl. Modules count @0x14) stays byte-identical: count is unchanged.
+    let mut out =
+        Vec::with_capacity(base.len() + mod_bytes.len() + (new_mini.len() - mini_tail));
+    out.extend_from_slice(&base[..target_start]); // header + modules before target
+    out.extend_from_slice(mod_bytes); // replacement module
+    out.extend_from_slice(&base[target_end..base_tail]); // modules after target
+    append_merged_tables(&mut out, base, &base_tt, new_mini, &mini_tt);
     Ok(out)
 }

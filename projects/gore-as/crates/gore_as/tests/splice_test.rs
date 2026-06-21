@@ -1,4 +1,4 @@
-use gore_as::cache::splice::{splice, splice_case_a, SpliceError};
+use gore_as::cache::splice::{replace_module, splice, splice_auto, splice_case_a, SpliceError};
 use gore_as::cache::tables::parse_tail_tables;
 use gore_as::cache::walk_modules::{module_count, module_names, module_region_end};
 
@@ -69,6 +69,54 @@ fn rejects_mini_with_global_refs() {
     // richtest as the MINI has non-empty global tables (class-bearing) -> rejected.
     let err = splice(&base, &rich).unwrap_err();
     assert!(matches!(err, SpliceError::MiniHasGlobalRefs(_)), "got {err:?}");
+}
+
+const BRANCH: &str = "PrecompiledScript.branchtest.Cache"; // single-module branchtest
+
+#[test]
+fn replace_module_swaps_module_in_place() {
+    // Build a 2-module base: richtest base + minimal appended.
+    let (Some(rich), Some(minimal), Some(branch)) =
+        (read_sample(RICH), read_sample(MINI), read_sample(BRANCH))
+    else {
+        eprintln!("skip: samples not present (gitignored scratch)");
+        return;
+    };
+    let base = splice_auto(&rich, &minimal).expect("build 2-module base");
+    assert_eq!(module_count(&base), 2, "base has 2 modules");
+    assert_eq!(
+        module_names(&base).unwrap(),
+        vec!["_gore_richtest".to_string(), "_gore_bakemarker".to_string()]
+    );
+
+    // Replace the minimal module (_gore_bakemarker) with the branchtest module.
+    let out = replace_module(&base, &branch, "_gore_bakemarker").expect("replace ok");
+
+    // Module count is UNCHANGED (still 2).
+    assert_eq!(module_count(&out), 2, "module count unchanged");
+
+    // Names: richtest + branchtest present, bakemarker gone.
+    let names = module_names(&out).unwrap();
+    assert!(names.contains(&"_gore_richtest".to_string()), "richtest kept: {names:?}");
+    assert!(names.contains(&"_gore_branchtest".to_string()), "branchtest added: {names:?}");
+    assert!(
+        !names.contains(&"_gore_bakemarker".to_string()),
+        "bakemarker replaced: {names:?}"
+    );
+
+    // Output re-walks and its merged tail tables parse to EOF.
+    let out_tail = module_region_end(&out).expect("re-walk replaced cache");
+    let tt = parse_tail_tables(&out, out_tail).expect("parse merged tables");
+    assert_eq!(tt.end, out.len(), "tail tables consume to EOF");
+}
+
+#[test]
+fn replace_module_rejects_missing_name() {
+    let (Some(rich), Some(branch)) = (read_sample(RICH), read_sample(BRANCH)) else {
+        return;
+    };
+    let err = replace_module(&rich, &branch, "_does_not_exist").unwrap_err();
+    assert!(matches!(err, SpliceError::NameNotFound(_)), "got {err:?}");
 }
 
 /// Splice the primitive mini into the REAL 122 MB cache and verify the result re-walks
