@@ -49,6 +49,8 @@ pub fn module_names(bytes: &[u8]) -> Result<Vec<String>, WireError> {
 pub struct FuncCode {
     /// `module::func` or `module.Class::method`.
     pub func: String,
+    /// True for class methods/constructors (have an implicit `this` at slot 0).
+    pub is_method: bool,
     /// Source parameter names in declaration order (locals are NOT stored in the cache).
     pub param_names: Vec<String>,
     /// Raw `TArray<int32>` bytecode (the asBC dword stream).
@@ -68,7 +70,12 @@ pub fn collect_function_bytecodes(bytes: &[u8]) -> Result<Vec<FuncCode>, WireErr
     Ok(out)
 }
 
-fn read_function_c(c: &mut Cursor, scope: &str, out: &mut Vec<FuncCode>) -> Result<(), WireError> {
+fn read_function_c(
+    c: &mut Cursor,
+    scope: &str,
+    is_method: bool,
+    out: &mut Vec<FuncCode>,
+) -> Result<(), WireError> {
     let name = c.read_sia()?;
     c.read_sia()?; // Namespace
     read_data_type(c)?; // ReturnType
@@ -98,6 +105,7 @@ fn read_function_c(c: &mut Cursor, scope: &str, out: &mut Vec<FuncCode>) -> Resu
     }
     out.push(FuncCode {
         func: format!("{scope}::{name}"),
+        is_method,
         param_names,
         bytecode,
     });
@@ -115,20 +123,20 @@ fn read_class_c(c: &mut Cursor, module: &str, out: &mut Vec<FuncCode>) -> Result
     }
     let nmethods = c.read_count("Class.Methods")?;
     for _ in 0..nmethods {
-        read_function_c(c, &scope, out)?;
+        read_function_c(c, &scope, true, out)?;
     }
     c.skip_tarray_fixed(4, "Class.MethodTable")?;
     c.skip(8)?; // DerivedFrom
     c.skip(8)?; // ShadowType
     let nctors = c.read_count("Class.Constructors")?;
     for _ in 0..nctors {
-        read_function_c(c, &scope, out)?;
+        read_function_c(c, &scope, true, out)?;
     }
     c.skip_tarray_fixed(8, "Class.FactoryRefs")?;
     c.skip_tarray_fixed(8, "Class.BehaviorRefs")?;
     let nbehav = c.read_count("Class.BehaviorFunctions")?;
     for _ in 0..nbehav {
-        read_function_c(c, &scope, out)?;
+        read_function_c(c, &scope, true, out)?;
     }
     c.skip_tarray_fixed(4, "Class.BehaviorFunctionTypes")?;
     if c.read_bool4()? {
@@ -154,7 +162,7 @@ fn read_global_c(c: &mut Cursor, module: &str, out: &mut Vec<FuncCode>) -> Resul
             c.skip(8)?; // PureConstantValue
         } else if c.read_bool4()? {
             // bHasInitFunction
-            read_function_c(c, &format!("{module}.<glob:{name}>"), out)?;
+            read_function_c(c, &format!("{module}.<glob:{name}>"), false, out)?;
         }
     }
     Ok(())
@@ -164,7 +172,7 @@ fn read_module_c(c: &mut Cursor, out: &mut Vec<FuncCode>) -> Result<(), WireErro
     let module = c.read_sia()?;
     let nfns = c.read_count("Module.Functions")?;
     for _ in 0..nfns {
-        read_function_c(c, &module, out)?;
+        read_function_c(c, &module, false, out)?;
     }
     let nclasses = c.read_count("Module.Classes")?;
     for _ in 0..nclasses {

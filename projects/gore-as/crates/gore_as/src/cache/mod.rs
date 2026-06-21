@@ -8,6 +8,7 @@ pub mod isa;
 pub mod refs;
 pub mod scan;
 pub mod splice;
+pub mod structure;
 pub mod tables;
 pub mod walk_modules;
 pub mod wire;
