@@ -12,6 +12,7 @@
 use std::collections::HashMap;
 
 use super::header::CacheHeader;
+use super::types::DataType;
 use super::walk_modules::module_region_end;
 use super::wire::{Cursor, WireError};
 
@@ -30,6 +31,8 @@ pub struct RefResolver {
     global_is_string: std::collections::HashSet<i64>,
     /// FunctionReferences with bIsMethod=true (receiver split for calls).
     func_is_method: std::collections::HashSet<i64>,
+    /// Template type SubTypes per type ptr (e.g. TSubclassOf -> [UObject]).
+    type_subtypes: HashMap<i64, Vec<DataType>>,
 }
 
 impl RefResolver {
@@ -45,7 +48,14 @@ impl RefResolver {
             let name = c.read_sia()?;
             c.read_sia()?; // Module
             c.read_sia()?; // Namespace
-            c.skip_tarray_fixed(DATA_TYPE_SIZE, "TypeRef.SubTypes")?;
+            let nsub = c.read_count("TypeRef.SubTypes")?;
+            if nsub > 0 {
+                let mut subs = Vec::with_capacity(nsub);
+                for _ in 0..nsub {
+                    subs.push(DataType::read(&mut c)?);
+                }
+                r.type_subtypes.insert(key, subs);
+            }
             r.type_by_ptr.insert(key, name);
         }
         // T2 TypeIdReferenceToPointer: int32 id -> int64 ptr
@@ -118,6 +128,10 @@ impl RefResolver {
     }
     pub fn type_by_ptr(&self, ptr: i64) -> Option<&str> {
         self.type_by_ptr.get(&ptr).map(|s| s.as_str())
+    }
+    /// Template SubTypes for a type ptr (e.g. TSubclassOf -> [UObject]).
+    pub fn type_subtypes(&self, ptr: i64) -> Option<&[DataType]> {
+        self.type_subtypes.get(&ptr).map(|v| v.as_slice())
     }
     pub fn func_by_ptr(&self, ptr: i64) -> Option<&str> {
         self.func_by_ptr.get(&ptr).map(|s| s.as_str())

@@ -19,6 +19,9 @@ use super::refs::RefResolver;
 use super::walk_modules::FuncCode;
 
 const AS_PTR_SIZE: i32 = 2;
+/// Placeholder for a value the decompiler couldn't resolve (e.g. PshRPtr with no live
+/// register). Statements that would emit it are dropped rather than producing bad source.
+const UNRESOLVED: &str = "\u{1}unresolved";
 
 /// Structured statement body for a function (no signature wrapper), indented at `depth`.
 /// Returns an error annotation string on disasm failure (never panics).
@@ -109,13 +112,17 @@ fn build_call(stack: &mut Vec<String>, f: &str, is_method: bool) -> Option<Strin
         stack.clear();
         return None; // generated construct/destruct behavior — no source statement
     }
-    let mut a: Vec<String> = std::mem::take(stack).into_iter().filter(|x| !x.is_empty()).collect();
+    let mut a: Vec<String> = std::mem::take(stack)
+        .into_iter()
+        .filter(|x| !x.is_empty() && x != UNRESOLVED)
+        .collect();
     if is_method && !a.is_empty() {
         let recv = a.pop().unwrap();
         // operator-overload methods -> source operators
         if let Some(op) = assign_op(f) {
-            if let Some(rhs) = a.first() {
-                return Some(format!("{recv} {op} {rhs}"));
+            match a.first() {
+                Some(rhs) => return Some(format!("{recv} {op} {rhs}")),
+                None => return None, // unresolved RHS -> skip rather than emit `x = <bad>`
             }
         }
         if let Some(op) = binop_method(f) {
@@ -204,7 +211,7 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 }
                 // else: this PSF is the destination local for the following ALLOC; don't push.
             }
-            "PshRPtr" => stack.push(value_reg.take().or_else(|| ref_reg.clone()).unwrap_or_else(|| "ref".into())),
+            "PshRPtr" => stack.push(value_reg.take().or_else(|| ref_reg.clone()).unwrap_or_else(|| UNRESOLVED.into())),
             "PGA" | "PshGPtr" | "PshG4" => {
                 let ptr = ins.qwords.first().copied().unwrap_or(0) as i64;
                 if ctx.refs.global_is_string(ptr) {
@@ -348,6 +355,7 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
         }
     }
     flush!();
+    out.retain(|s| !s.contains(UNRESOLVED)); // drop statements with an unresolved value
     (out, cmp)
 }
 

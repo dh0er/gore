@@ -46,9 +46,18 @@ impl DataType {
             if self.is_auto {
                 "auto".to_string()
             } else {
-                refs.type_by_ptr(self.type_info)
+                let base = refs
+                    .type_by_ptr(self.type_info)
                     .map(|s| s.to_string())
-                    .unwrap_or_else(|| "auto".to_string())
+                    .unwrap_or_else(|| "auto".to_string());
+                // template types (TSubclassOf, TArray, ...) need their <SubTypes>
+                match refs.type_subtypes(self.type_info) {
+                    Some(subs) if !subs.is_empty() => {
+                        let inner: Vec<String> = subs.iter().map(|s| s.base_name(refs)).collect();
+                        format!("{base}<{}>", inner.join(", "))
+                    }
+                    _ => base,
+                }
             }
         } else {
             token_keyword(self.token).to_string()
