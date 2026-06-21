@@ -36,6 +36,11 @@ enum Cmd {
         #[arg(long, default_value_t = 20)]
         max: usize,
     },
+    /// Emit ALL modules as recompilable .as into <outdir>, mirroring ScriptRelativeFilename.
+    EmitAll {
+        file: PathBuf,
+        outdir: PathBuf,
+    },
     /// Emit recompilable .as for modules whose name contains <needle>.
     Emit {
         file: PathBuf,
@@ -112,6 +117,26 @@ fn main() -> Result<()> {
                 n += 1;
             }
             eprintln!("({n} function(s))");
+        }
+        Cmd::EmitAll { file, outdir } => {
+            let bytes = std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?;
+            let refs = gore_as::cache::refs::RefResolver::build(&bytes).context("resolver")?;
+            let mods = gore_as::cache::model::parse_modules(&bytes).context("parse modules")?;
+            let (mut written, mut stubbed) = (0usize, 0usize);
+            for m in &mods {
+                let src = gore_as::cache::emit::emit_module(m, &refs);
+                if src.contains("not fully recovered") {
+                    stubbed += 1;
+                }
+                let rel = if m.file.is_empty() { format!("{}.as", m.name) } else { m.file.clone() };
+                let path = outdir.join(rel.replace('\\', "/"));
+                if let Some(p) = path.parent() {
+                    std::fs::create_dir_all(p).ok();
+                }
+                std::fs::write(&path, src).with_context(|| format!("writing {}", path.display()))?;
+                written += 1;
+            }
+            eprintln!("emitted {written} modules to {} ({stubbed} contain a stubbed function)", outdir.display());
         }
         Cmd::Emit { file, needle, max } => {
             let bytes = std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?;

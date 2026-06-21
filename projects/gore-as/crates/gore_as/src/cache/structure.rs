@@ -135,7 +135,6 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
     let mut ref_reg: Option<String> = None; // Idiom-B member address
     let mut pending: Option<String> = None; // unconsumed call/ctor result
     let mut ret_val: Option<String> = None;
-    let mut alloc_dest: Option<i32> = None;
     let name = |off: i32| ctx.slot_name(off);
     let w = |ins: &Instr, i: usize| s16(ins.words.get(i).copied().unwrap_or(0));
 
@@ -158,11 +157,10 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
             "PshV4" | "PshV8" | "PshVPtr" => stack.push(name(w(ins, 0))),
             "PSF" => {
                 // &local, unless it's the destination of a following ALLOC
-                if insns.get(k + 1).map(|i| i.op.name) == Some("ALLOC") {
-                    alloc_dest = Some(w(ins, 0));
-                } else {
+                if insns.get(k + 1).map(|i| i.op.name) != Some("ALLOC") {
                     stack.push(format!("&{}", name(w(ins, 0))));
                 }
+                // else: this PSF is the destination local for the following ALLOC; don't push.
             }
             "PshRPtr" => stack.push(value_reg.take().or_else(|| ref_reg.clone()).unwrap_or_else(|| "ref".into())),
             "PGA" | "PshGPtr" | "PshG4" => {
@@ -273,7 +271,6 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 let ty = ctx.refs.type_by_ptr(tptr).unwrap_or("Object").to_string();
                 let args: Vec<String> = std::mem::take(&mut stack).into_iter().filter(|a| !a.is_empty()).collect();
                 pending = Some(format!("{ty}({})", args.join(", ")));
-                alloc_dest = None;
             }
             // ---- result capture ----
             "STOREOBJ" => {
