@@ -100,16 +100,31 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
     let mut cmp: Option<Cmp> = None;
     let mut ref_reg: Option<String> = None;
     let mut ret_val: Option<String> = None;
+    let mut args: Vec<String> = Vec::new();
+    let mut pending: Option<String> = None; // unconsumed call result
     let name = |off: i32| ctx.slot_name(off);
     let w = |ins: &Instr, i: usize| s16(ins.words.get(i).copied().unwrap_or(0));
+
+    macro_rules! flush {
+        () => {
+            if let Some(p) = pending.take() {
+                out.push(format!("{p};"));
+            }
+        };
+    }
 
     for ins in &ctx.instrs[lo..hi] {
         let n = ins.op.name;
         match n {
-            "SetV4" | "SetV8" | "SetV1" => {
-                let c = ins.dwords.first().copied().unwrap_or(0) as i32;
-                out.push(format!("{} = {};", name(w(ins, 0)), c));
+            // ---- arg pushes (collect for the next call) ----
+            "PshC4" => args.push((ins.dwords.first().copied().unwrap_or(0) as i32).to_string()),
+            "PshC8" => args.push((ins.qwords.first().copied().unwrap_or(0) as i64).to_string()),
+            "PshV4" | "PshV8" | "PshVPtr" | "PSF" => args.push(name(w(ins, 0))),
+            "PGA" | "PshGPtr" | "PshG4" => {
+                let ptr = ins.qwords.first().copied().unwrap_or(0) as i64;
+                args.push(ctx.refs.global_by_ptr(ptr).unwrap_or("global?").to_string());
             }
+            // ---- member reference ----
             "LoadThisR" => {
                 let off = ins.words.first().copied().unwrap_or(0) as i32;
                 let tid = ins.dwords.first().copied().unwrap_or(0) as i32;
@@ -124,39 +139,43 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 ref_reg = Some(format!("{obj}.{field}"));
             }
             _ if n.starts_with("RDR") => {
+                flush!();
                 if let Some(r) = &ref_reg {
                     out.push(format!("{} = {};", name(w(ins, 0)), r));
                 }
             }
             _ if n.starts_with("WRTV") => {
+                flush!();
                 if let Some(r) = &ref_reg {
                     out.push(format!("{} = {};", r, name(w(ins, 0))));
                 }
             }
-            // binary: dst, s1, s2
-            _ if bin_op(n).is_some() && ins.words.len() >= 3 => {
-                out.push(format!(
-                    "{} = {} {} {};",
-                    name(w(ins, 0)),
-                    name(w(ins, 1)),
-                    bin_op(n).unwrap(),
-                    name(w(ins, 2))
-                ));
-            }
-            // inline-const binary: dst, src, const
-            _ if iconst_op(n).is_some() => {
+            "SetV4" | "SetV8" | "SetV1" => {
+                flush!();
                 let c = ins.dwords.first().copied().unwrap_or(0) as i32;
-                out.push(format!(
-                    "{} = {} {} {};",
-                    name(w(ins, 0)),
-                    name(w(ins, 1)),
-                    iconst_op(n).unwrap(),
-                    c
-                ));
+                out.push(format!("{} = {};", name(w(ins, 0)), c));
             }
-            "IncVi" | "IncVf" => out.push(format!("{0} = {0} + 1;", name(w(ins, 0)))),
-            "DecVi" | "DecVf" => out.push(format!("{0} = {0} - 1;", name(w(ins, 0)))),
-            "NEGi" | "NEGf" | "NEGd" => out.push(format!("{0} = -{0};", name(w(ins, 0)))),
+            _ if bin_op(n).is_some() && ins.words.len() >= 3 => {
+                flush!();
+                out.push(format!("{} = {} {} {};", name(w(ins, 0)), name(w(ins, 1)), bin_op(n).unwrap(), name(w(ins, 2))));
+            }
+            _ if iconst_op(n).is_some() => {
+                flush!();
+                let c = ins.dwords.first().copied().unwrap_or(0) as i32;
+                out.push(format!("{} = {} {} {};", name(w(ins, 0)), name(w(ins, 1)), iconst_op(n).unwrap(), c));
+            }
+            "IncVi" | "IncVf" => {
+                flush!();
+                out.push(format!("{0} = {0} + 1;", name(w(ins, 0))));
+            }
+            "DecVi" | "DecVf" => {
+                flush!();
+                out.push(format!("{0} = {0} - 1;", name(w(ins, 0))));
+            }
+            "NEGi" | "NEGf" | "NEGd" => {
+                flush!();
+                out.push(format!("{0} = -{0};", name(w(ins, 0))));
+            }
             "CMPi" | "CMPu" | "CMPf" | "CMPd" | "CMPi64" | "CMPu64" => {
                 cmp = Some(Cmp { a: name(w(ins, 0)), b: name(w(ins, 1)) });
             }
@@ -164,30 +183,45 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 let c = ins.dwords.first().copied().unwrap_or(0) as i32;
                 cmp = Some(Cmp { a: name(w(ins, 0)), b: c.to_string() });
             }
-            "CpyVtoR4" | "CpyVtoR8" => ret_val = Some(name(w(ins, 0))),
+            "CmpPtrNull" => cmp = Some(Cmp { a: name(w(ins, 0)), b: "null".into() }),
+            // ---- calls: build "func(args)" as pending (consumed by a following store) ----
             "CALL" | "CALLINTF" | "CALLBND" => {
                 let id = ins.dwords.first().copied().unwrap_or(0) as i32;
-                let fname = ctx.refs.func_by_id(id).unwrap_or("func?");
-                out.push(format!("{}(...);", fname));
+                let f = ctx.refs.func_by_id(id).unwrap_or("func?");
+                pending = Some(format!("{}({})", f, std::mem::take(&mut args).join(", ")));
             }
             "CALLSYS" | "Thiscall1" | "CallPtr" => {
                 let ptr = ins.qwords.first().copied().unwrap_or(0) as i64;
-                let fname = ctx.refs.func_by_ptr(ptr).unwrap_or("syscall?");
-                out.push(format!("{}(...);", fname));
+                let f = ctx.refs.func_by_ptr(ptr).unwrap_or("syscall?");
+                pending = Some(format!("{}({})", f, std::mem::take(&mut args).join(", ")));
             }
-            // housekeeping / flow — ignore (jumps handled by the structurer)
-            "SUSPEND" | "JitEntry" | "PopPtr" | "SwapPtr" | "ClrHi" | "JMP" | "JZ" | "JNZ"
-            | "JS" | "JNS" | "JP" | "JNP" | "JLowZ" | "JLowNZ" | "JMPP" => {}
-            "RET" => {
-                if let Some(v) = &ret_val {
-                    out.push(format!("return {};", v));
-                } else {
-                    out.push("return;".into());
+            // ---- stores: consume a pending call result, else copy a slot ----
+            "STOREOBJ" | "CpyRtoV4" | "CpyRtoV8" => {
+                let dst = name(w(ins, 0));
+                if let Some(p) = pending.take() {
+                    out.push(format!("{dst} = {p};"));
                 }
             }
-            _ => out.push(format!("// {} {}", n, operand_str(ins))),
+            "CpyVtoR4" | "CpyVtoR8" => {
+                ret_val = pending.take().or_else(|| Some(name(w(ins, 0))));
+            }
+            // housekeeping / flow — ignored (structurer handles jumps)
+            "SUSPEND" | "JitEntry" | "PopPtr" | "SwapPtr" | "ClrHi" | "ClrVPtr" | "FREE"
+            | "JMP" | "JZ" | "JNZ" | "JS" | "JNS" | "JP" | "JNP" | "JLowZ" | "JLowNZ" | "JMPP" => {}
+            "RET" => {
+                flush!();
+                match &ret_val {
+                    Some(v) => out.push(format!("return {v};")),
+                    None => out.push("return;".into()),
+                }
+            }
+            _ => {
+                flush!();
+                out.push(format!("// {} {}", n, operand_str(ins)));
+            }
         }
     }
+    flush!();
     (out, cmp)
 }
 
