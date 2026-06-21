@@ -1,7 +1,7 @@
 # gore-lua — shared UE4SS modding SDK
 
-Common helpers for Gothic 1 Remake UE4SS mods. Source of truth for the live API is the
-in-game `gorehelp` command; this README mirrors it.
+Common helpers for Gothic 1 Remake UE4SS mods. This README is the API reference;
+`gore.help.list([filter])` returns the same registry programmatically.
 
 ## Use it
 Deploy with `gore-cli deploy-shared`, then in a mod:
@@ -17,7 +17,7 @@ New mods scaffolded with `gore-cli scaffold <name>` get this loader wired in aut
 - `gore.gas` — `setAttr(setPath,name,v)`, `getAttr(setPath,name[,d])`, `heal()`, `buff(tbl)`
 - `gore.cheat` — `god(on)`, `enableCheats()`
 - `gore.cmd` — `command(name,fn)`, `keybind(key,fn)`, `onGameThread(fn)`
-- `gore.help` — `register(ns,name,sig,doc)`, `list(filter)`; plus the `gorehelp [filter]` console command
+- `gore.help` — `register(ns,name,sig,doc)`, `list(filter)` (programmatic API registry)
 - `gore.selftest()` — probe every namespace, log OK/FAIL
 
 Every helper pcall-guards its reflection and returns `nil`/`false` on failure — it never

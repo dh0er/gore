@@ -27,4 +27,4 @@ gore.cmd.command("goresay", function(params)
     gore.ui.text(msg)
 end)
 
-print("[gorelib-example] ready. Console: goretest | goresay <msg> | gorehelp\n")
+print("[gorelib-example] ready. Console: goretest | goresay <msg>\n")

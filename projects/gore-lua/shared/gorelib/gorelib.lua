@@ -1,7 +1,7 @@
 -- gorelib.lua — shared UE4SS modding SDK for Gothic 1 Remake.  Load with:
 --   local ok, gore = pcall(require, "gorelib")
 -- Every helper pcall-guards its reflection and returns nil/false on failure (never throws).
--- In-game: `gorehelp [filter]` lists the API.  `gore.selftest()` probes every namespace.
+-- `gore.selftest()` probes every namespace.  See the README for the full API.
 
 local gore = { _VERSION = "0.1.0" }
 
@@ -229,14 +229,6 @@ function gore.selftest()
 end
 R("", "selftest", "selftest()", "probe every namespace safely; logs OK/FAIL")
 
--- ===== register the in-game gorehelp command on load =======================
-gore.cmd.command("gorehelp", function(params)
-    local filter = params and params[1]
-    gore.ui.log("gore SDK " .. gore._VERSION .. (filter and (" [" .. filter .. "]") or "") .. ":")
-    for _, e in ipairs(gore.help.list(filter)) do
-        local ns = (e.ns ~= "" and ("gore." .. e.ns .. ".") or "gore.")
-        gore.ui.log(string.format("  %s%-26s -- %s", ns, e.sig, e.doc))
-    end
-end)
+-- (no in-game help command — call gore.help.list() programmatically, or see the README)
 
 return gore
