@@ -1,7 +1,7 @@
 //! The 7 GLOBAL tail tables that follow the module list (case-a merge support).
 //!
 //! Layout per `work/reversing/gore-as/findings/case-a-tables-and-exec.md`:
-//! ```
+//! ```text
 //! 0 TypeReferences              TMap<int64, FAngelscriptTypeReference>
 //! 1 TypeIdReferenceToPointer    TMap<int32, int64>
 //! 2 FunctionReferences          TMap<int64, FAngelscriptFunctionReference>
