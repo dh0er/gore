@@ -315,7 +315,13 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 if ctx.refs.global_is_string(ptr) {
                     stack.push(Arg::obj(format!("\"{}\"", esc(ctx.refs.global_by_ptr(ptr).unwrap_or("")))));
                 } else {
-                    stack.push(Arg::obj(ctx.refs.global_by_ptr(ptr).unwrap_or("global?").to_string()));
+                    // qualify with the global's namespace if any (e.g. `FColor::Red`)
+                    let nm = ctx.refs.global_by_ptr(ptr).unwrap_or("global?");
+                    let q = match ctx.refs.global_ns(ptr) {
+                        Some(ns) => format!("{ns}::{nm}"),
+                        None => nm.to_string(),
+                    };
+                    stack.push(Arg::obj(q));
                 }
             }
             "PshNull" => stack.push(Arg::obj("nullptr".into())),

@@ -37,6 +37,8 @@ pub struct RefResolver {
     type_subtypes: HashMap<i64, Vec<DataType>>,
     /// Set of all type names (to recognise constructor calls).
     type_names: std::collections::HashSet<String>,
+    /// Namespace per global ref ptr (e.g. an `FColor::Red` constant's `FColor`).
+    global_ns: HashMap<i64, String>,
     /// FunctionReferences parameter DataTypes (for arg-type-driven casts at call sites).
     func_params: HashMap<i64, Vec<DataType>>,
     /// FunctionReferences return DataType.
@@ -109,10 +111,13 @@ impl RefResolver {
             let key = c.read_i64()?;
             let name = c.read_sia()?;
             c.read_sia()?; // Module
-            c.read_sia()?; // Namespace
+            let ns = c.read_sia()?; // Namespace
             let is_string = c.read_bool4()?;
             if is_string {
                 r.global_is_string.insert(key);
+            }
+            if !ns.is_empty() {
+                r.global_ns.insert(key, ns);
             }
             r.global_by_ptr.insert(key, name);
         }
@@ -176,6 +181,10 @@ impl RefResolver {
     }
     pub fn global_by_ptr(&self, ptr: i64) -> Option<&str> {
         self.global_by_ptr.get(&ptr).map(|s| s.as_str())
+    }
+    /// Namespace for a global ref ptr (empty/absent -> None).
+    pub fn global_ns(&self, ptr: i64) -> Option<&str> {
+        self.global_ns.get(&ptr).map(|s| s.as_str())
     }
     /// True if the global at `ptr` is actually a string literal (Name = the text).
     pub fn global_is_string(&self, ptr: i64) -> bool {
