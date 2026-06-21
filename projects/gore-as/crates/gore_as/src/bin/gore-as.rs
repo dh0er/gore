@@ -36,6 +36,14 @@ enum Cmd {
         #[arg(long, default_value_t = 20)]
         max: usize,
     },
+    /// Emit recompilable .as for modules whose name contains <needle>.
+    Emit {
+        file: PathBuf,
+        #[arg(default_value = "")]
+        needle: String,
+        #[arg(long, default_value_t = 5)]
+        max: usize,
+    },
     /// Disassemble functions whose name contains <needle> to an asBC listing.
     Disasm {
         file: PathBuf,
@@ -104,6 +112,20 @@ fn main() -> Result<()> {
                 n += 1;
             }
             eprintln!("({n} function(s))");
+        }
+        Cmd::Emit { file, needle, max } => {
+            let bytes = std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?;
+            let refs = gore_as::cache::refs::RefResolver::build(&bytes).context("resolver")?;
+            let mods = gore_as::cache::model::parse_modules(&bytes).context("parse modules")?;
+            let mut n = 0;
+            for m in mods.iter().filter(|m| m.name.contains(&needle)) {
+                if n >= max {
+                    break;
+                }
+                println!("{}", gore_as::cache::emit::emit_module(m, &refs));
+                n += 1;
+            }
+            eprintln!("({n} module(s))");
         }
         Cmd::Disasm { file, needle, max } => {
             let bytes = std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?;

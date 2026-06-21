@@ -20,30 +20,37 @@ use super::walk_modules::FuncCode;
 
 const AS_PTR_SIZE: i32 = 2;
 
-/// Decompile a function to structured AngelScript-ish source.
-pub fn decompile(f: &FuncCode, refs: &RefResolver) -> String {
+/// Structured statement body for a function (no signature wrapper), indented at `depth`.
+/// Returns an error annotation string on disasm failure (never panics).
+pub fn body_statements(f: &FuncCode, refs: &RefResolver, depth: usize) -> String {
     let instrs = match disassemble(&f.bytecode) {
         Ok(i) => i,
-        Err(e) => return format!("// {} — disasm error: {e}\n", f.func),
+        Err(e) => return format!("{}// disasm error: {e}\n", "    ".repeat(depth)),
     };
     let g = cfg::build(&instrs);
     let ctx = Ctx { f, refs, instrs: &instrs };
-
-    // index blocks by start offset, in order
-    let order: Vec<usize> = g.blocks.iter().map(|b| b.start_dw).collect();
-    let idx_of: HashMap<usize, usize> = order.iter().enumerate().map(|(i, &o)| (o, i)).collect();
-
+    let idx_of: HashMap<usize, usize> =
+        g.blocks.iter().enumerate().map(|(i, b)| (b.start_dw, i)).collect();
     let mut body = String::new();
     let mut st = Structurer { ctx: &ctx, g: &g, idx_of: &idx_of };
-    st.emit_range(0, g.blocks.len(), 1, &mut body);
+    st.emit_range(0, g.blocks.len(), depth, &mut body);
+    body
+}
 
+/// Decompile a function to a self-contained `function(...) { ... }` (readable, not recompilable).
+pub fn decompile(f: &FuncCode, refs: &RefResolver) -> String {
     let params: Vec<String> = f
         .param_names
         .iter()
         .enumerate()
         .map(|(i, n)| if n.is_empty() { format!("arg{i}") } else { n.clone() })
         .collect();
-    format!("// {}\nfunction({})\n{{\n{}}}\n", f.func, params.join(", "), body)
+    format!(
+        "// {}\nfunction({})\n{{\n{}}}\n",
+        f.func,
+        params.join(", "),
+        body_statements(f, refs, 1)
+    )
 }
 
 struct Ctx<'a> {
