@@ -26,6 +26,10 @@ pub struct RefResolver {
     prop_by_key: HashMap<i64, String>,
     typeid_to_ptr: HashMap<i32, i64>,
     funcid_to_ptr: HashMap<i32, i64>,
+    /// GlobalReferences with bIsString=true: the Name is the literal string text.
+    global_is_string: std::collections::HashSet<i64>,
+    /// FunctionReferences with bIsMethod=true (receiver split for calls).
+    func_is_method: std::collections::HashSet<i64>,
 }
 
 impl RefResolver {
@@ -56,10 +60,15 @@ impl RefResolver {
             let name = c.read_sia()?;
             c.read_sia()?; // Module
             c.read_sia()?; // Namespace
-            c.skip(4 * 3)?; // bIsConst/bIsImportedDecl/bIsMethod
+            c.skip(4)?; // bIsConst
+            c.skip(4)?; // bIsImportedDecl
+            let is_method = c.read_bool4()?;
             c.skip(8)?; // ObjectType ptr
             c.skip_tarray_fixed(DATA_TYPE_SIZE, "FuncRef.Params")?;
             c.skip(DATA_TYPE_SIZE)?; // ReturnType
+            if is_method {
+                r.func_is_method.insert(key);
+            }
             r.func_by_ptr.insert(key, name);
         }
         // T4 FunctionIdReferenceToPointer: int32 id -> int64 ptr
@@ -74,7 +83,10 @@ impl RefResolver {
             let name = c.read_sia()?;
             c.read_sia()?; // Module
             c.read_sia()?; // Namespace
-            c.skip(4)?; // bIsString
+            let is_string = c.read_bool4()?;
+            if is_string {
+                r.global_is_string.insert(key);
+            }
             r.global_by_ptr.insert(key, name);
         }
         // T6 StaticNames: TArray<SIA>
@@ -112,6 +124,21 @@ impl RefResolver {
     }
     pub fn global_by_ptr(&self, ptr: i64) -> Option<&str> {
         self.global_by_ptr.get(&ptr).map(|s| s.as_str())
+    }
+    /// True if the global at `ptr` is actually a string literal (Name = the text).
+    pub fn global_is_string(&self, ptr: i64) -> bool {
+        self.global_is_string.contains(&ptr)
+    }
+    /// True if the function (by ptr) is a method (receiver split for calls).
+    pub fn is_method_by_ptr(&self, ptr: i64) -> bool {
+        self.func_is_method.contains(&ptr)
+    }
+    /// True if the function (by id) is a method.
+    pub fn is_method_by_id(&self, id: i32) -> bool {
+        self.funcid_to_ptr
+            .get(&id)
+            .map(|p| self.func_is_method.contains(p))
+            .unwrap_or(false)
     }
     /// Member name from a containing type-id + byte offset.
     pub fn member(&self, type_id: i32, offset: i32) -> Option<&str> {

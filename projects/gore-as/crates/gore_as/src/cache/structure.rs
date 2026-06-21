@@ -100,9 +100,28 @@ struct Cmp {
     b: String,
 }
 
-/// Join collected args, dropping empties (this-arg/marshalling artifacts).
-fn take_args(args: &mut Vec<String>) -> String {
-    std::mem::take(args).into_iter().filter(|a| !a.is_empty()).collect::<Vec<_>>().join(", ")
+/// Build a call expression from the pushed-arg stack. For a method, the receiver is the
+/// last-pushed entry (top of stack); the rest are args in push order.
+fn build_call(stack: &mut Vec<String>, f: &str, is_method: bool) -> String {
+    let mut a: Vec<String> = std::mem::take(stack).into_iter().filter(|x| !x.is_empty()).collect();
+    if is_method && !a.is_empty() {
+        let recv = a.pop().unwrap();
+        format!("{recv}.{f}({})", a.join(", "))
+    } else {
+        format!("{f}({})", a.join(", "))
+    }
+}
+
+/// Emit `dst = rhs;` if a result is available (object store).
+fn flush_store(out: &mut Vec<String>, dst: String, rhs: Option<String>) {
+    if let Some(r) = rhs {
+        out.push(format!("{dst} = {r};"));
+    }
+}
+
+/// Escape a string literal for AS source.
+fn esc(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n").replace('\r', "\\r")
 }
 
 /// Decompile one block's instruction range into statements; also return the
@@ -110,10 +129,13 @@ fn take_args(args: &mut Vec<String>) -> String {
 fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
     let mut out = Vec::new();
     let mut cmp: Option<Cmp> = None;
-    let mut ref_reg: Option<String> = None;
+    let mut stack: Vec<String> = Vec::new(); // pushed pointer/value expressions
+    let mut value_reg: Option<String> = None;
+    let mut obj_reg: Option<String> = None;
+    let mut ref_reg: Option<String> = None; // Idiom-B member address
+    let mut pending: Option<String> = None; // unconsumed call/ctor result
     let mut ret_val: Option<String> = None;
-    let mut args: Vec<String> = Vec::new();
-    let mut pending: Option<String> = None; // unconsumed call result
+    let mut alloc_dest: Option<i32> = None;
     let name = |off: i32| ctx.slot_name(off);
     let w = |ins: &Instr, i: usize| s16(ins.words.get(i).copied().unwrap_or(0));
 
@@ -125,25 +147,53 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
         };
     }
 
-    for ins in &ctx.instrs[lo..hi] {
+    let insns = &ctx.instrs[lo..hi];
+    for k in 0..insns.len() {
+        let ins = &insns[k];
         let n = ins.op.name;
         match n {
-            // ---- arg pushes (collect for the next call) ----
-            "PshC4" => args.push((ins.dwords.first().copied().unwrap_or(0) as i32).to_string()),
-            "PshC8" => args.push((ins.qwords.first().copied().unwrap_or(0) as i64).to_string()),
-            "PshV4" | "PshV8" | "PshVPtr" | "PSF" => args.push(name(w(ins, 0))),
+            // ---- pushes ----
+            "PshC4" => stack.push((ins.dwords.first().copied().unwrap_or(0) as i32).to_string()),
+            "PshC8" => stack.push((ins.qwords.first().copied().unwrap_or(0) as i64).to_string()),
+            "PshV4" | "PshV8" | "PshVPtr" => stack.push(name(w(ins, 0))),
+            "PSF" => {
+                // &local, unless it's the destination of a following ALLOC
+                if insns.get(k + 1).map(|i| i.op.name) == Some("ALLOC") {
+                    alloc_dest = Some(w(ins, 0));
+                } else {
+                    stack.push(format!("&{}", name(w(ins, 0))));
+                }
+            }
+            "PshRPtr" => stack.push(value_reg.take().or_else(|| ref_reg.clone()).unwrap_or_else(|| "ref".into())),
             "PGA" | "PshGPtr" | "PshG4" => {
                 let ptr = ins.qwords.first().copied().unwrap_or(0) as i64;
-                args.push(ctx.refs.global_by_ptr(ptr).unwrap_or("global?").to_string());
+                if ctx.refs.global_is_string(ptr) {
+                    stack.push(format!("\"{}\"", esc(ctx.refs.global_by_ptr(ptr).unwrap_or(""))));
+                } else {
+                    stack.push(ctx.refs.global_by_ptr(ptr).unwrap_or("global?").to_string());
+                }
             }
-            // ---- member reference ----
+            "PshNull" => stack.push("null".into()),
+            "VAR" => stack.push(name(w(ins, 0))),
+            "FuncPtr" => stack.push("funcptr".into()),
+            // ---- member access (Idiom A: rewrite top of stack in place) ----
+            "ADDSi" => {
+                let off = ins.words.first().copied().unwrap_or(0) as i32;
+                let tid = ins.dwords.first().copied().unwrap_or(0) as i32;
+                let field = ctx.refs.member(tid, off).map(|s| s.to_string()).unwrap_or_else(|| format!("field_0x{off:x}"));
+                if let Some(top) = stack.last_mut() {
+                    *top = format!("{top}.{field}");
+                }
+            }
+            "RDSPtr" => {} // deref in place: no change to the rendered name
+            // ---- member access (Idiom B: register) ----
             "LoadThisR" => {
                 let off = ins.words.first().copied().unwrap_or(0) as i32;
                 let tid = ins.dwords.first().copied().unwrap_or(0) as i32;
                 let field = ctx.refs.member(tid, off).map(|s| s.to_string()).unwrap_or_else(|| format!("field_0x{off:x}"));
                 ref_reg = Some(format!("this.{field}"));
             }
-            "LoadRObjR" => {
+            "LoadRObjR" | "LoadVObjR" => {
                 let obj = name(w(ins, 0));
                 let off = ins.words.get(1).copied().unwrap_or(0) as i32;
                 let tid = ins.dwords.first().copied().unwrap_or(0) as i32;
@@ -162,10 +212,15 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                     out.push(format!("{} = {};", r, name(w(ins, 0))));
                 }
             }
+            // ---- constants / arithmetic into slots ----
             "SetV4" | "SetV8" | "SetV1" => {
                 flush!();
                 let c = ins.dwords.first().copied().unwrap_or(0) as i32;
                 out.push(format!("{} = {};", name(w(ins, 0)), c));
+            }
+            "CpyVtoV4" | "CpyVtoV8" => {
+                flush!();
+                out.push(format!("{} = {};", name(w(ins, 0)), name(w(ins, 1))));
             }
             _ if bin_op(n).is_some() && ins.words.len() >= 3 => {
                 flush!();
@@ -184,10 +239,11 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 flush!();
                 out.push(format!("{0} = {0} - 1;", name(w(ins, 0))));
             }
-            "NEGi" | "NEGf" | "NEGd" => {
+            "NEGi" | "NEGf" | "NEGd" | "NOT" => {
                 flush!();
                 out.push(format!("{0} = -{0};", name(w(ins, 0))));
             }
+            // ---- comparisons ----
             "CMPi" | "CMPu" | "CMPf" | "CMPd" | "CMPi64" | "CMPu64" => {
                 cmp = Some(Cmp { a: name(w(ins, 0)), b: name(w(ins, 1)) });
             }
@@ -196,37 +252,56 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 cmp = Some(Cmp { a: name(w(ins, 0)), b: c.to_string() });
             }
             "CmpPtrNull" => cmp = Some(Cmp { a: name(w(ins, 0)), b: "null".into() }),
-            // ---- calls: build "func(args)" as pending (consumed by a following store) ----
+            // ---- calls ----
             "CALL" | "CALLINTF" | "CALLBND" => {
                 let id = ins.dwords.first().copied().unwrap_or(0) as i32;
-                let f = ctx.refs.func_by_id(id).unwrap_or("func?");
-                pending = Some(format!("{}({})", f, take_args(&mut args)));
+                let f = ctx.refs.func_by_id(id).unwrap_or("func?").to_string();
+                pending = Some(build_call(&mut stack, &f, ctx.refs.is_method_by_id(id)));
             }
-            "CALLSYS" | "Thiscall1" | "CallPtr" => {
+            "CALLSYS" | "Thiscall1" => {
                 let ptr = ins.qwords.first().copied().unwrap_or(0) as i64;
-                let f = ctx.refs.func_by_ptr(ptr).unwrap_or("syscall?");
-                pending = Some(format!("{}({})", f, take_args(&mut args)));
+                let f = ctx.refs.func_by_ptr(ptr).unwrap_or("syscall?").to_string();
+                pending = Some(build_call(&mut stack, &f, ctx.refs.is_method_by_ptr(ptr)));
             }
-            // ---- stores: consume a pending call result, else copy a slot ----
-            "STOREOBJ" | "CpyRtoV4" | "CpyRtoV8" => {
-                let dst = name(w(ins, 0));
+            "CallPtr" => {
+                let f = name(w(ins, 0));
+                pending = Some(build_call(&mut stack, &f, false));
+            }
+            // ---- object construction ----
+            "ALLOC" => {
+                let tptr = ins.qwords.first().copied().unwrap_or(0) as i64;
+                let ty = ctx.refs.type_by_ptr(tptr).unwrap_or("Object").to_string();
+                let args: Vec<String> = std::mem::take(&mut stack).into_iter().filter(|a| !a.is_empty()).collect();
+                pending = Some(format!("{ty}({})", args.join(", ")));
+                alloc_dest = None;
+            }
+            // ---- result capture ----
+            "STOREOBJ" => {
+                flush_store(&mut out, name(w(ins, 0)), pending.take().or_else(|| obj_reg.take()));
+            }
+            "CpyRtoV4" | "CpyRtoV8" => {
                 if let Some(p) = pending.take() {
-                    out.push(format!("{dst} = {p};"));
+                    out.push(format!("{} = {};", name(w(ins, 0)), p));
                 }
             }
-            "CpyVtoR4" | "CpyVtoR8" => {
+            "LOADOBJ" => obj_reg = Some(name(w(ins, 0))),
+            "CpyVtoR4" | "CpyVtoR8" | "CpyVtoR1" => {
                 ret_val = pending.take().or_else(|| Some(name(w(ins, 0))));
             }
-            // housekeeping / flow — ignored (structurer handles jumps)
-            "SUSPEND" | "JitEntry" | "PopPtr" | "SwapPtr" | "ClrHi" | "ClrVPtr" | "FREE"
-            | "JMP" | "JZ" | "JNZ" | "JS" | "JNS" | "JP" | "JNP" | "JLowZ" | "JLowNZ" | "JMPP" => {}
             "RET" => {
                 flush!();
-                match &ret_val {
-                    Some(v) => out.push(format!("return {v};")),
-                    None => out.push("return;".into()),
+                if let Some(v) = ret_val.take().or_else(|| obj_reg.take()).or_else(|| pending.take()) {
+                    out.push(format!("return {v};"));
+                } else {
+                    out.push("return;".into());
                 }
             }
+            // ---- pure VM housekeeping / flow: ignore ----
+            "SUSPEND" | "JitEntry" | "PopPtr" | "PopRPtr" | "SwapPtr" | "ClrHi" | "ClrVPtr"
+            | "FREE" | "FinConstruct" | "CHKREF" | "ChkRefS" | "ChkNullV" | "ChkNullS"
+            | "Destruct" | "SaveReturnValue" | "ResolveObjectPtr" | "FreeNullV8" | "GETOBJ"
+            | "GETOBJREF" | "GETREF" | "RefCpyV" | "REFCPY"
+            | "JMP" | "JZ" | "JNZ" | "JS" | "JNS" | "JP" | "JNP" | "JLowZ" | "JLowNZ" | "JMPP" => {}
             _ => {
                 flush!();
                 out.push(format!("// {} {}", n, operand_str(ins)));
