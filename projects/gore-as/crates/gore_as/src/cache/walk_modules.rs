@@ -44,11 +44,13 @@ pub fn module_names(bytes: &[u8]) -> Result<Vec<String>, WireError> {
     Ok(names)
 }
 
-/// A function's compiled bytecode, captured during a walk.
+/// A function's compiled bytecode + signature info, captured during a walk.
 #[derive(Debug, Clone)]
 pub struct FuncCode {
     /// `module::func` or `module.Class::method`.
     pub func: String,
+    /// Source parameter names in declaration order (locals are NOT stored in the cache).
+    pub param_names: Vec<String>,
     /// Raw `TArray<int32>` bytecode (the asBC dword stream).
     pub bytecode: Vec<i32>,
 }
@@ -71,7 +73,7 @@ fn read_function_c(c: &mut Cursor, scope: &str, out: &mut Vec<FuncCode>) -> Resu
     c.read_sia()?; // Namespace
     read_data_type(c)?; // ReturnType
     c.skip_tarray_fixed(DATA_TYPE_SIZE, "ParameterTypes")?;
-    c.skip_tarray_sia("ParameterNames")?;
+    let param_names = c.read_tarray_sia("ParameterNames")?;
     c.skip_tarray_fixed(4, "ParameterFlags")?;
     c.skip_tarray_sia("ParameterDefaultArgs")?;
     c.skip(4)?; // FunctionTraits
@@ -96,6 +98,7 @@ fn read_function_c(c: &mut Cursor, scope: &str, out: &mut Vec<FuncCode>) -> Resu
     }
     out.push(FuncCode {
         func: format!("{scope}::{name}"),
+        param_names,
         bytecode,
     });
     Ok(())

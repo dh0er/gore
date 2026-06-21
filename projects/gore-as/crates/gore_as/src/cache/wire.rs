@@ -179,4 +179,14 @@ impl<'a> Cursor<'a> {
         }
         Ok(v)
     }
+
+    /// Read a `TArray<FStringInArchive>` into a Vec (used to capture parameter names).
+    pub fn read_tarray_sia(&mut self, field: &'static str) -> Result<Vec<String>, WireError> {
+        let n = self.read_count(field)?;
+        let mut v = Vec::with_capacity(n);
+        for _ in 0..n {
+            v.push(self.read_sia()?);
+        }
+        Ok(v)
+    }
 }
