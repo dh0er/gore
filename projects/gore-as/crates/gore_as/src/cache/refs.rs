@@ -33,6 +33,10 @@ pub struct RefResolver {
     func_is_method: std::collections::HashSet<i64>,
     /// Template type SubTypes per type ptr (e.g. TSubclassOf -> [UObject]).
     type_subtypes: HashMap<i64, Vec<DataType>>,
+    /// FunctionReferences parameter DataTypes (for arg-type-driven casts at call sites).
+    func_params: HashMap<i64, Vec<DataType>>,
+    /// FunctionReferences return DataType.
+    func_ret: HashMap<i64, DataType>,
 }
 
 impl RefResolver {
@@ -74,11 +78,19 @@ impl RefResolver {
             c.skip(4)?; // bIsImportedDecl
             let is_method = c.read_bool4()?;
             c.skip(8)?; // ObjectType ptr
-            c.skip_tarray_fixed(DATA_TYPE_SIZE, "FuncRef.Params")?;
-            c.skip(DATA_TYPE_SIZE)?; // ReturnType
+            let nparams = c.read_count("FuncRef.Params")?;
+            let mut params = Vec::with_capacity(nparams);
+            for _ in 0..nparams {
+                params.push(DataType::read(&mut c)?);
+            }
+            let ret = DataType::read(&mut c)?; // ReturnType
             if is_method {
                 r.func_is_method.insert(key);
             }
+            if !params.is_empty() {
+                r.func_params.insert(key, params);
+            }
+            r.func_ret.insert(key, ret);
             r.func_by_ptr.insert(key, name);
         }
         // T4 FunctionIdReferenceToPointer: int32 id -> int64 ptr
@@ -135,6 +147,22 @@ impl RefResolver {
     }
     pub fn func_by_ptr(&self, ptr: i64) -> Option<&str> {
         self.func_by_ptr.get(&ptr).map(|s| s.as_str())
+    }
+    /// Parameter DataTypes for a function by ptr (excludes the receiver).
+    pub fn func_params_by_ptr(&self, ptr: i64) -> Option<&[DataType]> {
+        self.func_params.get(&ptr).map(|v| v.as_slice())
+    }
+    /// Parameter DataTypes for a function by id.
+    pub fn func_params_by_id(&self, id: i32) -> Option<&[DataType]> {
+        self.funcid_to_ptr.get(&id).and_then(|p| self.func_params.get(p)).map(|v| v.as_slice())
+    }
+    /// Return DataType for a function by ptr.
+    pub fn func_ret_by_ptr(&self, ptr: i64) -> Option<&DataType> {
+        self.func_ret.get(&ptr)
+    }
+    /// Return DataType for a function by id.
+    pub fn func_ret_by_id(&self, id: i32) -> Option<&DataType> {
+        self.funcid_to_ptr.get(&id).and_then(|p| self.func_ret.get(p))
     }
     pub fn global_by_ptr(&self, ptr: i64) -> Option<&str> {
         self.global_by_ptr.get(&ptr).map(|s| s.as_str())

@@ -16,7 +16,24 @@ use std::fmt::Write as _;
 use super::cfg::{self, Cfg};
 use super::disasm::{disassemble, Instr};
 use super::refs::RefResolver;
+use super::types::DataType;
 use super::walk_modules::FuncCode;
+
+/// A pushed call argument: its rendered text plus whether it originated from an integer
+/// value (a constant or `int` slot), so it can be cast to the callee's expected `bool`/enum.
+#[derive(Clone)]
+struct Arg {
+    s: String,
+    is_int: bool,
+}
+impl Arg {
+    fn int(s: String) -> Arg {
+        Arg { s, is_int: true }
+    }
+    fn obj(s: String) -> Arg {
+        Arg { s, is_int: false }
+    }
+}
 
 const AS_PTR_SIZE: i32 = 2;
 /// Placeholder for a value the decompiler couldn't resolve (e.g. PshRPtr with no live
@@ -114,37 +131,70 @@ struct Cmp {
 /// last-pushed entry (top of stack); the rest are args in push order. Operator-overload
 /// methods (opAssign/opAdd/opEquals/...) render as the source operator. Returns None for
 /// compiler-generated behaviors ($behN construct/destruct) that have no source form.
-fn build_call(stack: &mut Vec<String>, f: &str, is_method: bool, super_ctor: Option<&str>) -> Option<String> {
+fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option<&str>, params: Option<&[DataType]>, refs: &RefResolver) -> Option<String> {
     if f.starts_with('$') {
         stack.clear();
         return None; // generated construct/destruct behavior — no source statement
     }
-    let mut a: Vec<String> = std::mem::take(stack)
+    let mut a: Vec<Arg> = std::mem::take(stack)
         .into_iter()
-        .filter(|x| !x.is_empty() && x != UNRESOLVED)
+        .filter(|x| !x.s.is_empty() && x.s != UNRESOLVED)
         .collect();
     if is_method && !a.is_empty() {
         let recv = a.pop().unwrap();
         // call to the super class's constructor on `this` -> `super(args)`
-        if super_ctor == Some(f) && recv == "this" {
-            return Some(format!("super({})", a.join(", ")));
+        if super_ctor == Some(f) && recv.s == "this" {
+            return Some(format!("super({})", render_args(&a, params, refs)));
         }
         // operator-overload methods -> source operators
         if let Some(op) = assign_op(f) {
             match a.first() {
-                Some(rhs) => return Some(format!("{recv} {op} {rhs}")),
+                Some(rhs) => return Some(format!("{} {op} {}", recv.s, rhs.s)),
                 None => return None, // unresolved RHS -> skip rather than emit `x = <bad>`
             }
         }
         if let Some(op) = binop_method(f) {
             if let Some(rhs) = a.first() {
-                return Some(format!("({recv} {op} {rhs})"));
+                return Some(format!("({} {op} {})", recv.s, rhs.s));
             }
         }
-        Some(format!("{recv}.{f}({})", a.join(", ")))
+        Some(format!("{}.{f}({})", recv.s, render_args(&a, params, refs)))
     } else {
-        Some(format!("{f}({})", a.join(", ")))
+        Some(format!("{f}({})", render_args(&a, params, refs)))
     }
+}
+
+/// Render args joined by ", ", casting each int arg to the callee's expected param type.
+fn render_args(a: &[Arg], params: Option<&[DataType]>, refs: &RefResolver) -> String {
+    a.iter()
+        .enumerate()
+        .map(|(i, arg)| match params.and_then(|p| p.get(i)) {
+            Some(pt) => cast_arg(arg, pt, refs),
+            None => arg.s.clone(),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Cast an int-origin argument to the callee's `bool`/enum param (AngelScript has no
+/// implicit int->bool or int->enum conversion). Non-int args pass through unchanged.
+fn cast_arg(arg: &Arg, pt: &DataType, refs: &RefResolver) -> String {
+    if !arg.is_int {
+        return arg.s.clone();
+    }
+    if pt.token == 0x41 {
+        // bool param
+        return format!("({} != 0)", arg.s);
+    }
+    if pt.token == 5 {
+        // object/enum identifier type: UE enums are `E<Upper>...`; cast int -> enum
+        let base = pt.base_name(refs);
+        let b = base.as_bytes();
+        if b.len() >= 2 && b[0] == b'E' && b[1].is_ascii_uppercase() {
+            return format!("{base}({})", arg.s);
+        }
+    }
+    arg.s.clone()
 }
 
 /// Compound-assignment operator method names -> operator (statement-producing).
@@ -188,7 +238,7 @@ fn esc(s: &str) -> String {
 fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
     let mut out = Vec::new();
     let mut cmp: Option<Cmp> = None;
-    let mut stack: Vec<String> = Vec::new(); // pushed pointer/value expressions
+    let mut stack: Vec<Arg> = Vec::new(); // pushed pointer/value expressions
     let mut value_reg: Option<String> = None;
     let mut obj_reg: Option<String> = None;
     let mut ref_reg: Option<String> = None; // Idiom-B member address
@@ -211,36 +261,38 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
         let n = ins.op.name;
         match n {
             // ---- pushes ----
-            "PshC4" => stack.push((ins.dwords.first().copied().unwrap_or(0) as i32).to_string()),
-            "PshC8" => stack.push((ins.qwords.first().copied().unwrap_or(0) as i64).to_string()),
-            "PshV4" | "PshV8" | "PshVPtr" => stack.push(name(w(ins, 0))),
+            "PshC4" => stack.push(Arg::int((ins.dwords.first().copied().unwrap_or(0) as i32).to_string())),
+            "PshC8" => stack.push(Arg::int((ins.qwords.first().copied().unwrap_or(0) as i64).to_string())),
+            "PshV4" | "PshV8" => stack.push(Arg::int(name(w(ins, 0)))),
+            "PshVPtr" => stack.push(Arg::obj(name(w(ins, 0)))),
             "PSF" => {
                 // &local, unless it's the destination of a following ALLOC
                 if insns.get(k + 1).map(|i| i.op.name) != Some("ALLOC") {
                     // &local at the AS source level is implicit (param decides &in/&out) — no `&`.
-                    stack.push(name(w(ins, 0)));
+                    stack.push(Arg::obj(name(w(ins, 0))));
                 }
                 // else: this PSF is the destination local for the following ALLOC; don't push.
             }
-            "PshRPtr" => stack.push(value_reg.take().or_else(|| ref_reg.clone()).unwrap_or_else(|| UNRESOLVED.into())),
+            "PshRPtr" => stack.push(Arg::obj(value_reg.take().or_else(|| ref_reg.clone()).unwrap_or_else(|| UNRESOLVED.into()))),
             "PGA" | "PshGPtr" | "PshG4" => {
                 let ptr = ins.qwords.first().copied().unwrap_or(0) as i64;
                 if ctx.refs.global_is_string(ptr) {
-                    stack.push(format!("\"{}\"", esc(ctx.refs.global_by_ptr(ptr).unwrap_or(""))));
+                    stack.push(Arg::obj(format!("\"{}\"", esc(ctx.refs.global_by_ptr(ptr).unwrap_or("")))));
                 } else {
-                    stack.push(ctx.refs.global_by_ptr(ptr).unwrap_or("global?").to_string());
+                    stack.push(Arg::obj(ctx.refs.global_by_ptr(ptr).unwrap_or("global?").to_string()));
                 }
             }
-            "PshNull" => stack.push("nullptr".into()),
-            "VAR" => stack.push(name(w(ins, 0))),
-            "FuncPtr" => stack.push("funcptr".into()),
+            "PshNull" => stack.push(Arg::obj("nullptr".into())),
+            "VAR" => stack.push(Arg::int(name(w(ins, 0)))),
+            "FuncPtr" => stack.push(Arg::obj("funcptr".into())),
             // ---- member access (Idiom A: rewrite top of stack in place) ----
             "ADDSi" => {
                 let off = ins.words.first().copied().unwrap_or(0) as i32;
                 let tid = ins.dwords.first().copied().unwrap_or(0) as i32;
                 let field = ctx.refs.member(tid, off).map(|s| s.to_string()).unwrap_or_else(|| format!("field_0x{off:x}"));
                 if let Some(top) = stack.last_mut() {
-                    *top = format!("{top}.{field}");
+                    top.s = format!("{}.{field}", top.s);
+                    top.is_int = false; // now a member access, not a bare int slot
                 }
             }
             "RDSPtr" => {} // deref in place: no change to the rendered name
@@ -314,22 +366,22 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
             "CALL" | "CALLINTF" | "CALLBND" => {
                 let id = ins.dwords.first().copied().unwrap_or(0) as i32;
                 let f = ctx.refs.func_by_id(id).unwrap_or("func?").to_string();
-                pending = build_call(&mut stack, &f, ctx.refs.is_method_by_id(id), ctx.super_ctor);
+                pending = build_call(&mut stack, &f, ctx.refs.is_method_by_id(id), ctx.super_ctor, ctx.refs.func_params_by_id(id), ctx.refs);
             }
             "CALLSYS" | "Thiscall1" => {
                 let ptr = ins.qwords.first().copied().unwrap_or(0) as i64;
                 let f = ctx.refs.func_by_ptr(ptr).unwrap_or("syscall?").to_string();
-                pending = build_call(&mut stack, &f, ctx.refs.is_method_by_ptr(ptr), ctx.super_ctor);
+                pending = build_call(&mut stack, &f, ctx.refs.is_method_by_ptr(ptr), ctx.super_ctor, ctx.refs.func_params_by_ptr(ptr), ctx.refs);
             }
             "CallPtr" => {
                 let f = name(w(ins, 0));
-                pending = build_call(&mut stack, &f, false, ctx.super_ctor);
+                pending = build_call(&mut stack, &f, false, ctx.super_ctor, None, ctx.refs);
             }
             // ---- object construction ----
             "ALLOC" => {
                 let tptr = ins.qwords.first().copied().unwrap_or(0) as i64;
                 let ty = ctx.refs.type_by_ptr(tptr).unwrap_or("Object").to_string();
-                let args: Vec<String> = std::mem::take(&mut stack).into_iter().filter(|a| !a.is_empty()).collect();
+                let args: Vec<String> = std::mem::take(&mut stack).into_iter().filter(|a| !a.s.is_empty()).map(|a| a.s).collect();
                 pending = Some(format!("{ty}({})", args.join(", ")));
             }
             // ---- result capture ----
