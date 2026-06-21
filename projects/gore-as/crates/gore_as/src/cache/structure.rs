@@ -39,6 +39,10 @@ const AS_PTR_SIZE: i32 = 2;
 /// Placeholder for a value the decompiler couldn't resolve (e.g. PshRPtr with no live
 /// register). Statements that would emit it are dropped rather than producing bad source.
 const UNRESOLVED: &str = "\u{1}unresolved";
+/// Sentinel marking a call whose recovered arg count disagrees with the callee signature;
+/// its presence in a body forces the stub fallback. Distinct from UNRESOLVED so it is NOT
+/// stripped by the unresolved-statement retain (it must survive to reach the emitter).
+const ARGMISMATCH: &str = "\u{2}argmismatch";
 
 /// Structured statement body for a function (no signature wrapper), indented at `depth`.
 /// Returns an error annotation string on disasm failure (never panics).
@@ -168,13 +172,27 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
                 return Some(format!("({} {op} {})", recv.s, rhs.s));
             }
         }
+        if arg_count_mismatch(a.len(), params) {
+            return Some(ARGMISMATCH.into());
+        }
         Some(format!("{}.{f}({})", recv.s, render_args(&a, params, refs)))
     } else {
         if refs.is_type_name(f) {
             return None; // free-standing in-place constructor — implicit in AS source
         }
+        if arg_count_mismatch(a.len(), params) {
+            return Some(ARGMISMATCH.into());
+        }
         Some(format!("{f}({})", render_args(&a, params, refs)))
     }
+}
+
+/// AngelScript always pushes every argument (defaults included) in the call bytecode, so
+/// a correct decompile recovers exactly as many args as the callee has params. A count
+/// mismatch means the arg recovery is wrong — signal the whole body as unreliable so the
+/// emitter falls back to a clean stub instead of an un-compilable call.
+fn arg_count_mismatch(n: usize, params: Option<&[DataType]>) -> bool {
+    params.is_some_and(|p| p.len() != n)
 }
 
 /// Render args joined by ", ", casting each int arg to the callee's expected param type.
@@ -205,6 +223,9 @@ fn cast_arg(arg: &Arg, pt: &DataType, refs: &RefResolver) -> String {
         if let Some(c) = cast_to_typename(&arg.s, &base) {
             return c;
         }
+        // an int arg to a non-enum object/struct param can't convert at all — the arg
+        // recovery is wrong; mark the body for the stub fallback.
+        return ARGMISMATCH.into();
     }
     arg.s.clone()
 }

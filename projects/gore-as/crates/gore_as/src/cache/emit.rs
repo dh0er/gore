@@ -194,6 +194,10 @@ fn render_params(f: &Func, refs: &RefResolver) -> String {
 /// and may reference a `local_N` that wasn't inferred. Any of these is a syntax/semantic
 /// error that aborts the module's parse, so such a function falls back to a clean stub.
 fn body_is_recoverable(body: &str, locals: &BTreeMap<i32, String>) -> bool {
+    // a call whose recovered arg count disagreed with its signature (ARGMISMATCH = \u{2})
+    if body.contains('\u{2}') {
+        return false;
+    }
     for l in body.lines() {
         let t = l.trim_start();
         // any decompiler annotation comment (disasm error or uncovered opcode, any case)
