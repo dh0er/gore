@@ -9,6 +9,7 @@
 //! signature-matched STUB so the module still compiles.
 
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt::Write as _;
 
@@ -96,8 +97,11 @@ fn emit_class(s: &mut String, c: &Class, refs: &RefResolver) {
         s.push('\n');
     }
     let super_name = c.super_class.as_deref().filter(|s| !s.is_empty());
+    // field name -> base type name, so the decompiler can cast `this.field = <int>` assignments.
+    let field_types: HashMap<String, String> =
+        c.fields.iter().map(|f| (f.name.clone(), f.ty.base_name(refs))).collect();
     for ctor in &c.ctors {
-        emit_function_ctor(s, ctor, refs, true, true, 1, super_name);
+        emit_function_ctor(s, ctor, refs, true, true, 1, super_name, Some(&field_types));
     }
     for m in &c.methods {
         // `__InitDefaults` (and other `__`-prefixed generator methods) set the CDO defaults
@@ -107,16 +111,16 @@ fn emit_class(s: &mut String, c: &Class, refs: &RefResolver) {
         if m.name.starts_with("__") {
             continue;
         }
-        emit_function(s, m, refs, true, false, 1);
+        emit_function_ctor(s, m, refs, true, false, 1, None, Some(&field_types));
     }
     let _ = writeln!(s, "}}\n");
 }
 
 fn emit_function(s: &mut String, f: &Func, refs: &RefResolver, is_method: bool, is_ctor: bool, depth: usize) {
-    emit_function_ctor(s, f, refs, is_method, is_ctor, depth, None);
+    emit_function_ctor(s, f, refs, is_method, is_ctor, depth, None, None);
 }
 
-fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: bool, is_ctor: bool, depth: usize, super_ctor: Option<&str>) {
+fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: bool, is_ctor: bool, depth: usize, super_ctor: Option<&str>, fields: Option<&HashMap<String, String>>) {
     let ind = "    ".repeat(depth);
     let ret = f.ret.render(refs);
     let params = render_params(f, refs);
@@ -136,7 +140,7 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
         param_names: f.params.iter().map(|p| p.name.clone()).collect(),
         bytecode: f.bytecode.clone(),
     };
-    let body = body_statements_ctor(&fc, refs, depth + 1, super_ctor);
+    let body = body_statements_ctor(&fc, refs, depth + 1, super_ctor, Some(&f.ret), fields);
     let locals = infer_locals(f, refs);
 
     if body_is_recoverable(&body, &locals) {

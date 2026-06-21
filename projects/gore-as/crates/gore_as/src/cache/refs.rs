@@ -25,6 +25,8 @@ pub struct RefResolver {
     func_by_ptr: HashMap<i64, String>,
     global_by_ptr: HashMap<i64, String>,
     prop_by_key: HashMap<i64, String>,
+    /// PropertyReferences OldTypeId per member key (for field-assignment casts).
+    prop_type_id: HashMap<i64, i32>,
     typeid_to_ptr: HashMap<i32, i64>,
     funcid_to_ptr: HashMap<i32, i64>,
     /// GlobalReferences with bIsString=true: the Name is the literal string text.
@@ -33,6 +35,8 @@ pub struct RefResolver {
     func_is_method: std::collections::HashSet<i64>,
     /// Template type SubTypes per type ptr (e.g. TSubclassOf -> [UObject]).
     type_subtypes: HashMap<i64, Vec<DataType>>,
+    /// Set of all type names (to recognise constructor calls).
+    type_names: std::collections::HashSet<String>,
     /// FunctionReferences parameter DataTypes (for arg-type-driven casts at call sites).
     func_params: HashMap<i64, Vec<DataType>>,
     /// FunctionReferences return DataType.
@@ -60,6 +64,7 @@ impl RefResolver {
                 }
                 r.type_subtypes.insert(key, subs);
             }
+            r.type_names.insert(name.clone());
             r.type_by_ptr.insert(key, name);
         }
         // T2 TypeIdReferenceToPointer: int32 id -> int64 ptr
@@ -119,8 +124,9 @@ impl RefResolver {
         for _ in 0..c.read_count("PropertyReferences")? {
             let key = c.read_i64()?;
             let name = c.read_sia()?;
-            c.skip(4)?; // OldTypeId
+            let old_type_id = c.read_i32()?; // OldTypeId
             r.prop_by_key.insert(key, name);
+            r.prop_type_id.insert(key, old_type_id);
         }
         let _ = CacheHeader::SIZE; // (header parsed elsewhere)
         Ok(r)
@@ -140,6 +146,10 @@ impl RefResolver {
     }
     pub fn type_by_ptr(&self, ptr: i64) -> Option<&str> {
         self.type_by_ptr.get(&ptr).map(|s| s.as_str())
+    }
+    /// True if `name` is a known type (so a call to it is a constructor, not a method).
+    pub fn is_type_name(&self, name: &str) -> bool {
+        self.type_names.contains(name)
     }
     /// Template SubTypes for a type ptr (e.g. TSubclassOf -> [UObject]).
     pub fn type_subtypes(&self, ptr: i64) -> Option<&[DataType]> {
@@ -186,5 +196,11 @@ impl RefResolver {
     pub fn member(&self, type_id: i32, offset: i32) -> Option<&str> {
         let key = ((type_id as i64) << 1) | ((offset as i64) << 33) | 1;
         self.prop_by_key.get(&key).map(|s| s.as_str())
+    }
+    /// Member's type NAME (e.g. `bool`, `ECrimeDurationType`) from type-id + byte offset,
+    /// resolved via its PropertyReferences OldTypeId. Used to cast field-assignment RHS.
+    pub fn member_type(&self, type_id: i32, offset: i32) -> Option<&str> {
+        let key = ((type_id as i64) << 1) | ((offset as i64) << 33) | 1;
+        self.prop_type_id.get(&key).and_then(|id| self.type_by_id(*id))
     }
 }

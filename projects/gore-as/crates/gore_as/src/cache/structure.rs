@@ -43,18 +43,21 @@ const UNRESOLVED: &str = "\u{1}unresolved";
 /// Structured statement body for a function (no signature wrapper), indented at `depth`.
 /// Returns an error annotation string on disasm failure (never panics).
 pub fn body_statements(f: &FuncCode, refs: &RefResolver, depth: usize) -> String {
-    body_statements_ctor(f, refs, depth, None)
+    body_statements_ctor(f, refs, depth, None, None, None)
 }
 
-/// Like [`body_statements`], but `super_ctor` names the super class so a call to its
-/// constructor on `this` renders as `super(...)` instead of `this.<SuperName>(...)`.
-pub fn body_statements_ctor(f: &FuncCode, refs: &RefResolver, depth: usize, super_ctor: Option<&str>) -> String {
+/// Like [`body_statements`], but with class context for type-aware casts:
+/// - `super_ctor`: super class name, so a call to its ctor on `this` -> `super(...)`.
+/// - `ret_ty`: the function's return type, so `return <int>` casts to `bool`/enum.
+/// - `fields`: the owning class's field name -> base type name, so a `this.field = <int>`
+///   assignment casts the RHS to a `bool`/enum field.
+pub fn body_statements_ctor(f: &FuncCode, refs: &RefResolver, depth: usize, super_ctor: Option<&str>, ret_ty: Option<&DataType>, fields: Option<&HashMap<String, String>>) -> String {
     let instrs = match disassemble(&f.bytecode) {
         Ok(i) => i,
         Err(e) => return format!("{}// disasm error: {e}\n", "    ".repeat(depth)),
     };
     let g = cfg::build(&instrs);
-    let ctx = Ctx { f, refs, instrs: &instrs, super_ctor };
+    let ctx = Ctx { f, refs, instrs: &instrs, super_ctor, ret_ty, fields };
     let idx_of: HashMap<usize, usize> =
         g.blocks.iter().enumerate().map(|(i, b)| (b.start_dw, i)).collect();
     let mut body = String::new();
@@ -84,6 +87,8 @@ struct Ctx<'a> {
     refs: &'a RefResolver,
     instrs: &'a [Instr],
     super_ctor: Option<&'a str>,
+    ret_ty: Option<&'a DataType>,
+    fields: Option<&'a HashMap<String, String>>,
 }
 
 impl Ctx<'_> {
@@ -146,6 +151,11 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
         if super_ctor == Some(f) && recv.s == "this" {
             return Some(format!("super({})", render_args(&a, params, refs)));
         }
+        // a call whose name is a type = an in-place constructor (e.g. a member struct's
+        // default ctor the VM runs) — implicit in AS source, emit nothing.
+        if refs.is_type_name(f) {
+            return None;
+        }
         // operator-overload methods -> source operators
         if let Some(op) = assign_op(f) {
             match a.first() {
@@ -160,6 +170,9 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
         }
         Some(format!("{}.{f}({})", recv.s, render_args(&a, params, refs)))
     } else {
+        if refs.is_type_name(f) {
+            return None; // free-standing in-place constructor — implicit in AS source
+        }
         Some(format!("{f}({})", render_args(&a, params, refs)))
     }
 }
@@ -189,12 +202,34 @@ fn cast_arg(arg: &Arg, pt: &DataType, refs: &RefResolver) -> String {
     if pt.token == 5 {
         // object/enum identifier type: UE enums are `E<Upper>...`; cast int -> enum
         let base = pt.base_name(refs);
-        let b = base.as_bytes();
-        if b.len() >= 2 && b[0] == b'E' && b[1].is_ascii_uppercase() {
-            return format!("{base}({})", arg.s);
+        if let Some(c) = cast_to_typename(&arg.s, &base) {
+            return c;
         }
     }
     arg.s.clone()
+}
+
+/// Cast an int RHS to a named target type: `bool` -> `(x != 0)`, UE enum
+/// (`E<Upper>...`) -> `EEnum(x)`. Returns None when no cast applies.
+fn cast_to_typename(rhs: &str, tyname: &str) -> Option<String> {
+    if tyname == "bool" {
+        return Some(format!("({rhs} != 0)"));
+    }
+    let b = tyname.as_bytes();
+    if b.len() >= 2 && b[0] == b'E' && b[1].is_ascii_uppercase() {
+        return Some(format!("{tyname}({rhs})"));
+    }
+    None
+}
+
+/// True if a rendered operand is an integer slot/constant (safe to cast to bool/enum).
+/// Excludes already-typed operands (params, fields, calls) so we never double-cast.
+fn looks_int(s: &str) -> bool {
+    let s = s.strip_prefix('-').unwrap_or(s);
+    if let Some(r) = s.strip_prefix("local_") {
+        return !r.is_empty() && r.bytes().all(|b| b.is_ascii_digit());
+    }
+    !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit())
 }
 
 /// Compound-assignment operator method names -> operator (statement-producing).
@@ -242,6 +277,7 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
     let mut value_reg: Option<String> = None;
     let mut obj_reg: Option<String> = None;
     let mut ref_reg: Option<String> = None; // Idiom-B member address
+    let mut ref_reg_ty: Option<String> = None; // field type name behind ref_reg (for casts)
     let mut pending: Option<String> = None; // unconsumed call/ctor result
     let mut ret_val: Option<String> = None;
     let name = |off: i32| ctx.slot_name(off);
@@ -301,6 +337,7 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 let off = ins.words.first().copied().unwrap_or(0) as i32;
                 let tid = ins.dwords.first().copied().unwrap_or(0) as i32;
                 let field = ctx.refs.member(tid, off).map(|s| s.to_string()).unwrap_or_else(|| format!("field_0x{off:x}"));
+                ref_reg_ty = ctx.fields.and_then(|m| m.get(&field)).cloned();
                 ref_reg = Some(format!("this.{field}"));
             }
             "LoadRObjR" | "LoadVObjR" => {
@@ -308,6 +345,7 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 let off = ins.words.get(1).copied().unwrap_or(0) as i32;
                 let tid = ins.dwords.first().copied().unwrap_or(0) as i32;
                 let field = ctx.refs.member(tid, off).map(|s| s.to_string()).unwrap_or_else(|| format!("field_0x{off:x}"));
+                ref_reg_ty = None; // field of another object; current-class field map doesn't apply
                 ref_reg = Some(format!("{obj}.{field}"));
             }
             _ if n.starts_with("RDR") => {
@@ -319,7 +357,13 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
             _ if n.starts_with("WRTV") => {
                 flush!();
                 if let Some(r) = &ref_reg {
-                    out.push(format!("{} = {};", r, name(w(ins, 0))));
+                    let rhs = name(w(ins, 0));
+                    let rhs = ref_reg_ty
+                        .as_deref()
+                        .filter(|_| looks_int(&rhs))
+                        .and_then(|t| cast_to_typename(&rhs, t))
+                        .unwrap_or(rhs);
+                    out.push(format!("{r} = {rhs};"));
                 }
             }
             // ---- constants / arithmetic into slots ----
@@ -400,6 +444,14 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
             "RET" => {
                 flush!();
                 if let Some(v) = ret_val.take().or_else(|| obj_reg.take()).or_else(|| pending.take()) {
+                    // cast an int return value to the function's bool/enum return type
+                    let v = match ctx.ret_ty {
+                        Some(rt) if looks_int(&v) => {
+                            let tn = if rt.token == 0x41 { "bool".to_string() } else { rt.base_name(ctx.refs) };
+                            cast_to_typename(&v, &tn).unwrap_or(v)
+                        }
+                        _ => v,
+                    };
                     out.push(format!("return {v};"));
                 } else {
                     out.push("return;".into());
