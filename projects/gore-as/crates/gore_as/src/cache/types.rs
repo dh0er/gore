@@ -62,13 +62,10 @@ impl DataType {
         } else {
             token_keyword(self.token).to_string()
         };
-        // `@` (handle) is only valid on reference types (UObject `U*` / AActor `A*` /
-        // script classes). Value types — F-structs, T-templates (TArray/TSubclassOf/
-        // TSoftObjectPtr), enums, primitives — must NOT carry `@` (else a syntax error
-        // that aborts the whole module's parse).
-        if self.is_object_handle && (base.starts_with('U') || base.starts_with('A')) {
-            base.push('@');
-        }
+        // UE-AS does NOT use AngelScript's `@` handle syntax: every UObject/AActor type
+        // is already a reference, declared bare (`UStaticMeshComponent x;`, not `...@ x;`).
+        // Emitting `@` on a member field / local / param is a syntax error
+        // (`<unrecognized token>`) that aborts the whole module's parse. So never emit `@`.
         // AngelScript splits const into two flags; emit at most ONE leading `const`.
         if self.is_read_only || self.is_object_const {
             base = format!("const {base}");

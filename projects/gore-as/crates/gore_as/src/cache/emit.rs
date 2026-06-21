@@ -125,17 +125,19 @@ fn emit_function(s: &mut String, f: &Func, refs: &RefResolver, is_method: bool, 
         bytecode: f.bytecode.clone(),
     };
     let body = body_statements(&fc, refs, depth + 1);
+    let locals = infer_locals(f, refs);
 
-    if body_is_recoverable(&body) {
+    if body_is_recoverable(&body, &locals) {
         // hoist local declarations
-        for (slot, ty) in infer_locals(f, refs) {
+        for (slot, ty) in &locals {
             let _ = writeln!(s, "{ind}    {ty} local_{slot};");
         }
         s.push_str(&body);
     } else {
         // stub fallback so the module still compiles
         let _ = writeln!(s, "{ind}    // body not fully recovered — stub", );
-        if ret != "void" {
+        // constructors must NOT return a value; everything else returns a default.
+        if !is_ctor && ret != "void" {
             let _ = writeln!(s, "{ind}    {ret} __r; return __r;");
         }
     }
@@ -165,21 +167,51 @@ fn render_params(f: &Func, refs: &RefResolver) -> String {
         .join(", ")
 }
 
-/// A body is "recoverable" if it has no raw opcode annotations or disasm errors.
-fn body_is_recoverable(body: &str) -> bool {
-    !body.lines().any(|l| {
+/// A body is "recoverable" only if it has NO recovery gaps: the decompiler emits a
+/// `// <mnemonic> ...` comment for every op it can't lower, an unresolved-operand
+/// placeholder `?` (e.g. `if (? != ?)`) when a comparison/operand couldn't be recovered,
+/// and may reference a `local_N` that wasn't inferred. Any of these is a syntax/semantic
+/// error that aborts the module's parse, so such a function falls back to a clean stub.
+fn body_is_recoverable(body: &str, locals: &BTreeMap<i32, String>) -> bool {
+    for l in body.lines() {
         let t = l.trim_start();
-        t.starts_with("// ") && (t.contains("disasm error") || is_opcode_comment(t))
-    })
+        // any decompiler annotation comment (disasm error or uncovered opcode, any case)
+        if t.starts_with("// ") {
+            return false;
+        }
+        // unresolved-operand placeholder
+        if t.contains("(? ") || t.contains(" ?)") || t.contains(" ? ") {
+            return false;
+        }
+    }
+    // a referenced local that wasn't hoisted would be an "undeclared identifier" error
+    used_locals(body).iter().all(|n| locals.contains_key(n))
 }
 
-fn is_opcode_comment(t: &str) -> bool {
-    // structure.rs annotates uncovered ops as "// <Mnemonic> ..."
-    t.strip_prefix("// ")
-        .and_then(|r| r.split_whitespace().next())
-        .map(|w| w.chars().next().map(|c| c.is_ascii_uppercase()).unwrap_or(false)
-            && w.chars().all(|c| c.is_ascii_alphanumeric()))
-        .unwrap_or(false)
+/// Slot indices of every `local_N` identifier referenced in a body.
+fn used_locals(body: &str) -> HashSet<i32> {
+    let mut out = HashSet::new();
+    let b = body.as_bytes();
+    let needle = b"local_";
+    let mut i = 0;
+    while i + needle.len() < b.len() {
+        if &b[i..i + needle.len()] == needle {
+            let mut j = i + needle.len();
+            let start = j;
+            while j < b.len() && b[j].is_ascii_digit() {
+                j += 1;
+            }
+            if j > start {
+                if let Ok(n) = body[start..j].parse::<i32>() {
+                    out.insert(n);
+                }
+            }
+            i = j;
+        } else {
+            i += 1;
+        }
+    }
+    out
 }
 
 /// Infer (slot, type) for primitive + object locals to hoist as declarations.
