@@ -44,6 +44,14 @@ enum Cmd {
         #[arg(long, default_value_t = 20)]
         max: usize,
     },
+    /// Replace an existing module (by name) in a base cache with a mini-cache's module.
+    Replace {
+        base: PathBuf,
+        mini: PathBuf,
+        target: String,
+        #[arg(short, long)]
+        out: PathBuf,
+    },
     /// Splice a primitive-only mini-cache module into a base cache.
     Splice {
         /// Base cache (e.g. PrecompiledScript_Shipping.Cache).
@@ -112,6 +120,17 @@ fn main() -> Result<()> {
                 n += 1;
             }
             eprintln!("({n} function(s))");
+        }
+        Cmd::Replace { base, mini, target, out } => {
+            let base_b = std::fs::read(&base).with_context(|| format!("reading {}", base.display()))?;
+            let mini_b = std::fs::read(&mini).with_context(|| format!("reading {}", mini.display()))?;
+            let n = module_count(&base_b);
+            let res = gore_as::cache::splice::replace_module(&base_b, &mini_b, &target).context("replace")?;
+            std::fs::write(&out, &res).with_context(|| format!("writing {}", out.display()))?;
+            println!(
+                "replaced {:?}: {} modules (unchanged) ; {} -> {} bytes ; wrote {}",
+                target, n, base_b.len(), res.len(), out.display()
+            );
         }
         Cmd::Splice { base, mini, out } => {
             let base_b =
