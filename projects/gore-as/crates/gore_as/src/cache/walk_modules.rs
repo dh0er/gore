@@ -44,6 +44,151 @@ pub fn module_names(bytes: &[u8]) -> Result<Vec<String>, WireError> {
     Ok(names)
 }
 
+/// A function's compiled bytecode, captured during a walk.
+#[derive(Debug, Clone)]
+pub struct FuncCode {
+    /// `module::func` or `module.Class::method`.
+    pub func: String,
+    /// Raw `TArray<int32>` bytecode (the asBC dword stream).
+    pub bytecode: Vec<i32>,
+}
+
+/// Walk all modules and collect every function's bytecode (free functions, class
+/// methods/constructors/behaviors, and global-var init functions).
+pub fn collect_function_bytecodes(bytes: &[u8]) -> Result<Vec<FuncCode>, WireError> {
+    let mut c = Cursor::at(bytes, CacheHeader::SIZE);
+    let count = module_count(bytes) as usize;
+    let mut out = Vec::new();
+    for _ in 0..count {
+        c.read_fstring()?; // key
+        read_module_c(&mut c, &mut out)?;
+    }
+    Ok(out)
+}
+
+fn read_function_c(c: &mut Cursor, scope: &str, out: &mut Vec<FuncCode>) -> Result<(), WireError> {
+    let name = c.read_sia()?;
+    c.read_sia()?; // Namespace
+    read_data_type(c)?; // ReturnType
+    c.skip_tarray_fixed(DATA_TYPE_SIZE, "ParameterTypes")?;
+    c.skip_tarray_sia("ParameterNames")?;
+    c.skip_tarray_fixed(4, "ParameterFlags")?;
+    c.skip_tarray_sia("ParameterDefaultArgs")?;
+    c.skip(4)?; // FunctionTraits
+    let bytecode = c.read_tarray_i32("ByteCode")?;
+    c.skip_tarray_fixed(4, "ByteCodeReferences")?;
+    c.skip(4)?; // VariableSpace
+    c.skip_tarray_fixed(8, "ObjVariableTypes")?;
+    c.skip_tarray_fixed(4, "ObjVariablePos")?;
+    c.skip(4)?; // ObjVariablesOnHeap
+    c.skip_tarray_fixed(4, "VariableInfoProgramPos")?;
+    c.skip_tarray_fixed(4, "VariableInfoOffset")?;
+    c.skip_tarray_fixed(4, "VariableInfoOption")?;
+    c.skip(4)?; // StackNeeded
+    c.skip(4)?; // Id
+    c.skip(4)?; // DeclaredAt
+    c.skip_tarray_fixed(4, "LineNumbers")?;
+    if c.read_bool4()? {
+        c.read_sia()?; // UnrealFunctionName
+        c.skip_tarray_sia("UF.MetaSpec")?;
+        c.skip_tarray_sia("UF.MetaValues")?;
+        c.skip(18 * 4)?;
+    }
+    out.push(FuncCode {
+        func: format!("{scope}::{name}"),
+        bytecode,
+    });
+    Ok(())
+}
+
+fn read_class_c(c: &mut Cursor, module: &str, out: &mut Vec<FuncCode>) -> Result<(), WireError> {
+    let class_name = c.read_sia()?;
+    c.read_sia()?; // Namespace
+    c.skip(4)?; // Flags
+    let scope = format!("{module}.{class_name}");
+    let nprops = c.read_count("Class.Properties")?;
+    for _ in 0..nprops {
+        read_property(c)?;
+    }
+    let nmethods = c.read_count("Class.Methods")?;
+    for _ in 0..nmethods {
+        read_function_c(c, &scope, out)?;
+    }
+    c.skip_tarray_fixed(4, "Class.MethodTable")?;
+    c.skip(8)?; // DerivedFrom
+    c.skip(8)?; // ShadowType
+    let nctors = c.read_count("Class.Constructors")?;
+    for _ in 0..nctors {
+        read_function_c(c, &scope, out)?;
+    }
+    c.skip_tarray_fixed(8, "Class.FactoryRefs")?;
+    c.skip_tarray_fixed(8, "Class.BehaviorRefs")?;
+    let nbehav = c.read_count("Class.BehaviorFunctions")?;
+    for _ in 0..nbehav {
+        read_function_c(c, &scope, out)?;
+    }
+    c.skip_tarray_fixed(4, "Class.BehaviorFunctionTypes")?;
+    if c.read_bool4()? {
+        c.read_sia()?; // SuperClass
+        c.read_sia()?; // CodeSuperClass
+        c.skip(8 * 4)?;
+        c.read_sia()?; // StaticClassGVName
+        c.skip(4)?; // bPlaceable
+        c.skip_tarray_sia("Class.MetaSpec")?;
+        c.skip_tarray_sia("Class.MetaValues")?;
+        c.read_sia()?; // ComposeOntoClassName
+    }
+    Ok(())
+}
+
+fn read_global_c(c: &mut Cursor, module: &str, out: &mut Vec<FuncCode>) -> Result<(), WireError> {
+    let name = c.read_sia()?;
+    c.read_sia()?; // Namespace
+    read_data_type(c)?; // Type
+    if !c.read_bool4()? {
+        // !bIsDefaultInit
+        if c.read_bool4()? {
+            c.skip(8)?; // PureConstantValue
+        } else if c.read_bool4()? {
+            // bHasInitFunction
+            read_function_c(c, &format!("{module}.<glob:{name}>"), out)?;
+        }
+    }
+    Ok(())
+}
+
+fn read_module_c(c: &mut Cursor, out: &mut Vec<FuncCode>) -> Result<(), WireError> {
+    let module = c.read_sia()?;
+    let nfns = c.read_count("Module.Functions")?;
+    for _ in 0..nfns {
+        read_function_c(c, &module, out)?;
+    }
+    let nclasses = c.read_count("Module.Classes")?;
+    for _ in 0..nclasses {
+        read_class_c(c, &module, out)?;
+    }
+    let nenums = c.read_count("Module.Enums")?;
+    for _ in 0..nenums {
+        read_enum(c)?;
+    }
+    let nglobals = c.read_count("Module.GlobalVariables")?;
+    for _ in 0..nglobals {
+        read_global_c(c, &module, out)?;
+    }
+    let nimports = c.read_count("Module.FunctionImports")?;
+    for _ in 0..nimports {
+        read_function_import(c)?;
+    }
+    c.skip(8)?; // CodeHash
+    c.skip_tarray_sia("Module.ImportedModules")?;
+    c.read_sia()?; // StaticsClassName
+    c.skip_tarray_sia("Module.DeclaredEvents")?;
+    c.skip_tarray_sia("Module.DeclaredDelegates")?;
+    c.read_sia()?; // ScriptRelativeFilename
+    c.skip_tarray_sia("Module.PostInitFunctions")?;
+    Ok(())
+}
+
 fn read_data_type(c: &mut Cursor) -> Result<(), WireError> {
     c.skip(DATA_TYPE_SIZE)
 }

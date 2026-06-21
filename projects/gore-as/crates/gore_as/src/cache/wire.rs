@@ -169,4 +169,14 @@ impl<'a> Cursor<'a> {
         }
         Ok(())
     }
+
+    /// Read a `TArray<int32>` into a Vec (used to capture function bytecode).
+    pub fn read_tarray_i32(&mut self, field: &'static str) -> Result<Vec<i32>, WireError> {
+        let n = self.read_count(field)?;
+        let mut v = Vec::with_capacity(n);
+        for _ in 0..n {
+            v.push(self.read_i32()?);
+        }
+        Ok(v)
+    }
 }
