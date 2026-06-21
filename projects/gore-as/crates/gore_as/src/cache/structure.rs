@@ -93,6 +93,11 @@ struct Cmp {
     b: String,
 }
 
+/// Join collected args, dropping empties (this-arg/marshalling artifacts).
+fn take_args(args: &mut Vec<String>) -> String {
+    std::mem::take(args).into_iter().filter(|a| !a.is_empty()).collect::<Vec<_>>().join(", ")
+}
+
 /// Decompile one block's instruction range into statements; also return the
 /// pending comparison (operands of the last CMP*) for condition recovery.
 fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
@@ -188,12 +193,12 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
             "CALL" | "CALLINTF" | "CALLBND" => {
                 let id = ins.dwords.first().copied().unwrap_or(0) as i32;
                 let f = ctx.refs.func_by_id(id).unwrap_or("func?");
-                pending = Some(format!("{}({})", f, std::mem::take(&mut args).join(", ")));
+                pending = Some(format!("{}({})", f, take_args(&mut args)));
             }
             "CALLSYS" | "Thiscall1" | "CallPtr" => {
                 let ptr = ins.qwords.first().copied().unwrap_or(0) as i64;
                 let f = ctx.refs.func_by_ptr(ptr).unwrap_or("syscall?");
-                pending = Some(format!("{}({})", f, std::mem::take(&mut args).join(", ")));
+                pending = Some(format!("{}({})", f, take_args(&mut args)));
             }
             // ---- stores: consume a pending call result, else copy a slot ----
             "STOREOBJ" | "CpyRtoV4" | "CpyRtoV8" => {
