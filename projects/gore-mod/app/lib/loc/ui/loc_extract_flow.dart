@@ -26,12 +26,18 @@ Future<void> runLocExtractFlow(BuildContext context, WidgetRef ref) async {
   final exeHint = ref.read(gameExePathProvider);
   var outcome = await notifier.extract(lcacheHint: exeHint);
 
-  // A stale/moved executable path resolves to nothing, and because the hint is
-  // non-null the notifier won't ask for the manual picker — leaving the user at
-  // a dead-end error they could only escape by clearing settings. Retry pure
-  // auto-detect so a bad saved exe falls through to Steam detection / the picker
-  // just like a first run with no hint.
-  if (exeHint != null && !outcome.success && !outcome.needsManualFile) {
+  // A stale/moved executable path resolves to nothing (LCACHE_NOT_FOUND), and
+  // because the hint is non-null the notifier won't ask for the manual picker —
+  // leaving the user at a dead-end error they could only escape by clearing
+  // settings. Retry pure auto-detect so a bad saved exe falls through to Steam
+  // detection / the picker just like a first run with no hint. Only the
+  // unresolved-hint case qualifies: a hinted cache that is found but fails to
+  // parse/read (EXTRACT_FAILED) must surface directly, never silently fall back
+  // to a different install's localization.
+  if (exeHint != null &&
+      !outcome.success &&
+      !outcome.needsManualFile &&
+      outcome.code == 'LCACHE_NOT_FOUND') {
     outcome = await notifier.extract(lcacheHint: null);
   }
 
