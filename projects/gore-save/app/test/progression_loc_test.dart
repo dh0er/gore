@@ -8,6 +8,7 @@ void main() {
     'info_diego_warumgeholfen_15_00': {'english': 'Why did you help me?'},
     'info_diego_exit_gamestart_15_00': {'english': 'I will be going.'},
     'info_stt_311_fisk_exit': {'english': 'See you, Fisk.'},
+    'info_npcexit': {'english': 'The NPC leaves.'},
     'quest-banditscamp_banditstrust-name': {'english': 'The Bandits Trust'},
     'quest-banditscamp_banditstrust_banditstrust_obj_back-name': {
       'english': 'Go back',
@@ -37,6 +38,13 @@ void main() {
       expect(
         localizedKnowledgeEntry(catalog, lang, 'ChoiceStt311FiskExit'),
         'See you, Fisk.',
+      );
+    });
+
+    test('acronym run preserved: ChoiceNPCExit → info_npcexit', () {
+      expect(
+        localizedKnowledgeEntry(catalog, lang, 'ChoiceNPCExit'),
+        'The NPC leaves.',
       );
     });
 

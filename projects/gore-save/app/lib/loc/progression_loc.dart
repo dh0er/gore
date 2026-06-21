@@ -51,32 +51,40 @@ bool _hasLongNumber(String s) {
 }
 
 /// CamelCase / mixed → snake_case, also splitting letter<->digit boundaries
-/// (`Stt311` → `stt_311`) so ids match the catalog's spelling.
+/// (`Stt311` → `stt_311`) so ids match the catalog's spelling. An underscore is
+/// inserted before an uppercase letter only when the previous char was a
+/// lowercase letter or digit, so acronym runs survive (`ChoiceNPCExit` →
+/// `choice_npcexit`, not `choice_n_p_c_exit`). Mirrors the `to_snake` helper in
+/// goresave_core's loc/quest coverage examples.
 String _toSnake(String s) {
   final out = StringBuffer();
   String? last() => out.isEmpty ? null : out.toString().substring(out.length - 1);
+  var prevLowerOrDigit = false;
   for (final ch in s.split('')) {
     if (ch == '_' || ch == '-') {
       if (last() != '_') out.write('_');
+      prevLowerOrDigit = false;
       continue;
     }
     final isUpper = ch.compareTo('A') >= 0 && ch.compareTo('Z') <= 0;
     final isLower = ch.compareTo('a') >= 0 && ch.compareTo('z') <= 0;
     final isDigit = ch.compareTo('0') >= 0 && ch.compareTo('9') <= 0;
     if (isUpper) {
-      final l = last();
-      if (l != null && l != '_') out.write('_');
+      if (prevLowerOrDigit && last() != '_') out.write('_');
       out.write(ch.toLowerCase());
+      prevLowerOrDigit = false;
     } else if (isDigit) {
       final l = last();
       if (l != null && l.compareTo('a') >= 0 && l.compareTo('z') <= 0) out.write('_');
       out.write(ch);
+      prevLowerOrDigit = true;
     } else {
       final l = last();
       if (isLower && l != null && l.compareTo('0') >= 0 && l.compareTo('9') <= 0) {
         out.write('_');
       }
       out.write(ch);
+      prevLowerOrDigit = isLower;
     }
   }
   return out.toString().replaceAll(RegExp(r'^_+|_+$'), '');

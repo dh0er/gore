@@ -23,7 +23,17 @@ Future<void> runLocExtractFlow(BuildContext context, WidgetRef ref) async {
 
   // Seed auto-detect with the configured game executable path when set; null
   // leaves the resolver's default auto-detection unchanged.
-  var outcome = await notifier.extract(lcacheHint: ref.read(gameExePathProvider));
+  final exeHint = ref.read(gameExePathProvider);
+  var outcome = await notifier.extract(lcacheHint: exeHint);
+
+  // A stale/moved executable path resolves to nothing, and because the hint is
+  // non-null the notifier won't ask for the manual picker — leaving the user at
+  // a dead-end error they could only escape by clearing settings. Retry pure
+  // auto-detect so a bad saved exe falls through to Steam detection / the picker
+  // just like a first run with no hint.
+  if (exeHint != null && !outcome.success && !outcome.needsManualFile) {
+    outcome = await notifier.extract(lcacheHint: null);
+  }
 
   if (outcome.needsManualFile) {
     // The first extract() already awaited; bail if the page is gone before
