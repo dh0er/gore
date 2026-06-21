@@ -15,7 +15,7 @@ use std::fmt::Write as _;
 use super::disasm::disassemble;
 use super::model::{Class, Func, Module};
 use super::refs::RefResolver;
-use super::structure::body_statements;
+use super::structure::body_statements_ctor;
 use super::types::token_keyword;
 use super::walk_modules::FuncCode;
 
@@ -95,16 +95,28 @@ fn emit_class(s: &mut String, c: &Class, refs: &RefResolver) {
     if !c.fields.is_empty() {
         s.push('\n');
     }
+    let super_name = c.super_class.as_deref().filter(|s| !s.is_empty());
     for ctor in &c.ctors {
-        emit_function(s, ctor, refs, true, true, 1);
+        emit_function_ctor(s, ctor, refs, true, true, 1, super_name);
     }
     for m in &c.methods {
+        // `__InitDefaults` (and other `__`-prefixed generator methods) set the CDO defaults
+        // via raw `__StaticType_*` symbols and untyped literals we can't reconstruct offline;
+        // they are auto-generated boilerplate, not hand-written script — skip them so the
+        // class compiles. (Runtime UPROPERTY defaults are lost; real script logic is intact.)
+        if m.name.starts_with("__") {
+            continue;
+        }
         emit_function(s, m, refs, true, false, 1);
     }
     let _ = writeln!(s, "}}\n");
 }
 
 fn emit_function(s: &mut String, f: &Func, refs: &RefResolver, is_method: bool, is_ctor: bool, depth: usize) {
+    emit_function_ctor(s, f, refs, is_method, is_ctor, depth, None);
+}
+
+fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: bool, is_ctor: bool, depth: usize, super_ctor: Option<&str>) {
     let ind = "    ".repeat(depth);
     let ret = f.ret.render(refs);
     let params = render_params(f, refs);
@@ -124,13 +136,18 @@ fn emit_function(s: &mut String, f: &Func, refs: &RefResolver, is_method: bool, 
         param_names: f.params.iter().map(|p| p.name.clone()).collect(),
         bytecode: f.bytecode.clone(),
     };
-    let body = body_statements(&fc, refs, depth + 1);
+    let body = body_statements_ctor(&fc, refs, depth + 1, super_ctor);
     let locals = infer_locals(f, refs);
 
     if body_is_recoverable(&body, &locals) {
-        // hoist local declarations
+        // hoist local declarations; primitives must be initialized (AngelScript errors on
+        // "may not be initialized"), objects/structs/handles default-construct themselves.
         for (slot, ty) in &locals {
-            let _ = writeln!(s, "{ind}    {ty} local_{slot};");
+            if is_primitive(ty) {
+                let _ = writeln!(s, "{ind}    {ty} local_{slot} = {};", default_for(ty));
+            } else {
+                let _ = writeln!(s, "{ind}    {ty} local_{slot};");
+            }
         }
         s.push_str(&body);
     } else {
@@ -270,6 +287,13 @@ fn writes_double(n: &str) -> bool {
 }
 fn writes_int64(n: &str) -> bool {
     matches!(n, "SetV8" | "ADDi64" | "SUBi64" | "MULi64" | "DIVi64")
+}
+
+/// True for AngelScript primitive scalar types (need an explicit initializer).
+fn is_primitive(ty: &str) -> bool {
+    matches!(ty,
+        "bool" | "int" | "int8" | "int16" | "int64" | "uint" | "uint8" | "uint16" | "uint64"
+        | "float" | "float32" | "double")
 }
 
 /// A default initializer literal for a base type.

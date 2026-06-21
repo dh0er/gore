@@ -26,12 +26,18 @@ const UNRESOLVED: &str = "\u{1}unresolved";
 /// Structured statement body for a function (no signature wrapper), indented at `depth`.
 /// Returns an error annotation string on disasm failure (never panics).
 pub fn body_statements(f: &FuncCode, refs: &RefResolver, depth: usize) -> String {
+    body_statements_ctor(f, refs, depth, None)
+}
+
+/// Like [`body_statements`], but `super_ctor` names the super class so a call to its
+/// constructor on `this` renders as `super(...)` instead of `this.<SuperName>(...)`.
+pub fn body_statements_ctor(f: &FuncCode, refs: &RefResolver, depth: usize, super_ctor: Option<&str>) -> String {
     let instrs = match disassemble(&f.bytecode) {
         Ok(i) => i,
         Err(e) => return format!("{}// disasm error: {e}\n", "    ".repeat(depth)),
     };
     let g = cfg::build(&instrs);
-    let ctx = Ctx { f, refs, instrs: &instrs };
+    let ctx = Ctx { f, refs, instrs: &instrs, super_ctor };
     let idx_of: HashMap<usize, usize> =
         g.blocks.iter().enumerate().map(|(i, b)| (b.start_dw, i)).collect();
     let mut body = String::new();
@@ -60,6 +66,7 @@ struct Ctx<'a> {
     f: &'a FuncCode,
     refs: &'a RefResolver,
     instrs: &'a [Instr],
+    super_ctor: Option<&'a str>,
 }
 
 impl Ctx<'_> {
@@ -107,7 +114,7 @@ struct Cmp {
 /// last-pushed entry (top of stack); the rest are args in push order. Operator-overload
 /// methods (opAssign/opAdd/opEquals/...) render as the source operator. Returns None for
 /// compiler-generated behaviors ($behN construct/destruct) that have no source form.
-fn build_call(stack: &mut Vec<String>, f: &str, is_method: bool) -> Option<String> {
+fn build_call(stack: &mut Vec<String>, f: &str, is_method: bool, super_ctor: Option<&str>) -> Option<String> {
     if f.starts_with('$') {
         stack.clear();
         return None; // generated construct/destruct behavior — no source statement
@@ -118,6 +125,10 @@ fn build_call(stack: &mut Vec<String>, f: &str, is_method: bool) -> Option<Strin
         .collect();
     if is_method && !a.is_empty() {
         let recv = a.pop().unwrap();
+        // call to the super class's constructor on `this` -> `super(args)`
+        if super_ctor == Some(f) && recv == "this" {
+            return Some(format!("super({})", a.join(", ")));
+        }
         // operator-overload methods -> source operators
         if let Some(op) = assign_op(f) {
             match a.first() {
@@ -220,7 +231,7 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                     stack.push(ctx.refs.global_by_ptr(ptr).unwrap_or("global?").to_string());
                 }
             }
-            "PshNull" => stack.push("null".into()),
+            "PshNull" => stack.push("nullptr".into()),
             "VAR" => stack.push(name(w(ins, 0))),
             "FuncPtr" => stack.push("funcptr".into()),
             // ---- member access (Idiom A: rewrite top of stack in place) ----
@@ -298,21 +309,21 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 let c = ins.dwords.first().copied().unwrap_or(0) as i32;
                 cmp = Some(Cmp { a: name(w(ins, 0)), b: c.to_string() });
             }
-            "CmpPtrNull" => cmp = Some(Cmp { a: name(w(ins, 0)), b: "null".into() }),
+            "CmpPtrNull" => cmp = Some(Cmp { a: name(w(ins, 0)), b: "nullptr".into() }),
             // ---- calls ----
             "CALL" | "CALLINTF" | "CALLBND" => {
                 let id = ins.dwords.first().copied().unwrap_or(0) as i32;
                 let f = ctx.refs.func_by_id(id).unwrap_or("func?").to_string();
-                pending = build_call(&mut stack, &f, ctx.refs.is_method_by_id(id));
+                pending = build_call(&mut stack, &f, ctx.refs.is_method_by_id(id), ctx.super_ctor);
             }
             "CALLSYS" | "Thiscall1" => {
                 let ptr = ins.qwords.first().copied().unwrap_or(0) as i64;
                 let f = ctx.refs.func_by_ptr(ptr).unwrap_or("syscall?").to_string();
-                pending = build_call(&mut stack, &f, ctx.refs.is_method_by_ptr(ptr));
+                pending = build_call(&mut stack, &f, ctx.refs.is_method_by_ptr(ptr), ctx.super_ctor);
             }
             "CallPtr" => {
                 let f = name(w(ins, 0));
-                pending = build_call(&mut stack, &f, false);
+                pending = build_call(&mut stack, &f, false, ctx.super_ctor);
             }
             // ---- object construction ----
             "ALLOC" => {
