@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use gore_as::cache::header::CacheHeader;
 use gore_as::cache::scan::scan_strings;
-use gore_as::cache::splice::splice;
+use gore_as::cache::splice::splice_auto;
 use gore_as::cache::walk_modules::{module_count, module_region_end};
 
 #[derive(Parser)]
@@ -71,7 +71,7 @@ fn main() -> Result<()> {
             let mini_b =
                 std::fs::read(&mini).with_context(|| format!("reading {}", mini.display()))?;
             let before = module_count(&base_b);
-            let spliced = splice(&base_b, &mini_b).context("splicing")?;
+            let spliced = splice_auto(&base_b, &mini_b).context("splicing")?;
             std::fs::write(&out, &spliced).with_context(|| format!("writing {}", out.display()))?;
             println!(
                 "spliced: {} modules -> {} ; {} -> {} bytes ; wrote {}",

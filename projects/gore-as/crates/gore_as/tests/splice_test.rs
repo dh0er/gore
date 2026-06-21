@@ -1,4 +1,5 @@
-use gore_as::cache::splice::{splice, SpliceError};
+use gore_as::cache::splice::{splice, splice_case_a, SpliceError};
+use gore_as::cache::tables::parse_tail_tables;
 use gore_as::cache::walk_modules::{module_count, module_names, module_region_end};
 
 const SAMPLES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../work/reversing/gore-as/samples");
@@ -30,6 +31,29 @@ fn splices_primitive_module_into_base() {
     let mod_len = mini_tail - 0x18;
     assert_eq!(out_tail, base_tail + mod_len, "tail moved by inserted module length");
     assert_eq!(&out[out_tail..], &base[base_tail..], "global tail tables preserved verbatim");
+}
+
+#[test]
+fn case_a_merges_tables() {
+    // base = minimal (empty tables), mini = richtest (class-bearing, non-empty tables).
+    let (Some(base), Some(mini)) = (read_sample(MINI), read_sample(RICH)) else {
+        eprintln!("skip: samples not present");
+        return;
+    };
+    let out = splice_case_a(&base, &mini).expect("case-a splice");
+    assert_eq!(module_count(&out), 2, "module count bumped");
+    assert_eq!(
+        module_names(&out).unwrap(),
+        vec!["_gore_bakemarker".to_string(), "_gore_richtest".to_string()]
+    );
+
+    // Output re-walks and its merged tail tables parse to EOF.
+    let out_tail = module_region_end(&out).unwrap();
+    let tt = parse_tail_tables(&out, out_tail).expect("parse merged tables");
+    assert_eq!(tt.end, out.len(), "merged tables consume to EOF");
+    // base tables were empty, so merged counts == mini's counts.
+    let counts: Vec<u32> = tt.tables.iter().map(|t| t.count).collect();
+    assert_eq!(counts, vec![5, 5, 4, 4, 1, 0, 2]);
 }
 
 #[test]
