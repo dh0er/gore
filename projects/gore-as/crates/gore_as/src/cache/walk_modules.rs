@@ -32,6 +32,18 @@ pub fn module_count(bytes: &[u8]) -> u32 {
     u32::from_le_bytes(bytes[0x14..0x18].try_into().unwrap())
 }
 
+/// Collect every module's name (the `Modules` TMap key) in order.
+pub fn module_names(bytes: &[u8]) -> Result<Vec<String>, WireError> {
+    let mut c = Cursor::at(bytes, CacheHeader::SIZE);
+    let count = module_count(bytes) as usize;
+    let mut names = Vec::with_capacity(count);
+    for _ in 0..count {
+        names.push(c.read_fstring()?); // key
+        read_module(&mut c)?;
+    }
+    Ok(names)
+}
+
 fn read_data_type(c: &mut Cursor) -> Result<(), WireError> {
     c.skip(DATA_TYPE_SIZE)
 }

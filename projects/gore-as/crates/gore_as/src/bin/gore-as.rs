@@ -4,6 +4,8 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use gore_as::cache::header::CacheHeader;
 use gore_as::cache::scan::scan_strings;
+use gore_as::cache::splice::splice;
+use gore_as::cache::walk_modules::{module_count, module_region_end};
 
 #[derive(Parser)]
 #[command(name = "gore-as", about = "AngelScript precompiled-cache tooling")]
@@ -21,6 +23,18 @@ enum Cmd {
         file: PathBuf,
         #[arg(long, default_value_t = 100)]
         max: usize,
+    },
+    /// Print module count + TAIL_OFF (the splice insertion point) for a cache.
+    Info { file: PathBuf },
+    /// Splice a primitive-only mini-cache module into a base cache.
+    Splice {
+        /// Base cache (e.g. PrecompiledScript_Shipping.Cache).
+        base: PathBuf,
+        /// Mini-cache from -as-generate-precompiled-data (one primitive-only module).
+        mini: PathBuf,
+        /// Output path for the spliced cache.
+        #[arg(short, long)]
+        out: PathBuf,
     },
 }
 
@@ -41,6 +55,32 @@ fn main() -> Result<()> {
             for s in scan_strings(&bytes, CacheHeader::SIZE, max) {
                 println!("0x{:08x}  len={:<4} {}", s.offset, s.len, s.text);
             }
+        }
+        Cmd::Info { file } => {
+            let bytes =
+                std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?;
+            let tail = module_region_end(&bytes).context("walking modules")?;
+            println!("modules  : {}", module_count(&bytes));
+            println!("tail_off : {:#x}", tail);
+            println!("eof      : {:#x}", bytes.len());
+            println!("tail_len : {} bytes (global ref tables)", bytes.len() - tail);
+        }
+        Cmd::Splice { base, mini, out } => {
+            let base_b =
+                std::fs::read(&base).with_context(|| format!("reading {}", base.display()))?;
+            let mini_b =
+                std::fs::read(&mini).with_context(|| format!("reading {}", mini.display()))?;
+            let before = module_count(&base_b);
+            let spliced = splice(&base_b, &mini_b).context("splicing")?;
+            std::fs::write(&out, &spliced).with_context(|| format!("writing {}", out.display()))?;
+            println!(
+                "spliced: {} modules -> {} ; {} -> {} bytes ; wrote {}",
+                before,
+                module_count(&spliced),
+                base_b.len(),
+                spliced.len(),
+                out.display()
+            );
         }
     }
     Ok(())
