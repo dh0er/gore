@@ -464,9 +464,9 @@ class _QuestsDetailState extends ConsumerState<_QuestsDetail> {
   int _offset = 0;
   String? _stateFilter;
   String? _groupFilter;
-  // Large enough to pull every quest in one round; the set is fixed game
-  // content (~700) and stays under the core's per-page cap.
-  static const _fetchAllLimit = 100000;
+  // The core clamps a query's `limit` to 1000, so the full quest list must be
+  // pulled page-by-page rather than in one oversized request.
+  static const _fetchPageLimit = 1000;
 
   @override
   void initState() {
@@ -499,15 +499,29 @@ class _QuestsDetailState extends ConsumerState<_QuestsDetail> {
   Future<void> _loadAllQuests() async {
     final epoch = ++_reloadEpoch;
     setState(() => _loading = true);
-    final page = await widget.notifier.loadProgressionQuests(
-      offset: 0,
-      limit: _fetchAllLimit,
-    );
+    final all = <ProgressionQuest>[];
+    String? error;
+    var offset = 0;
+    while (true) {
+      final page = await widget.notifier.loadProgressionQuests(
+        offset: offset,
+        limit: _fetchPageLimit,
+      );
+      if (!mounted || epoch != _reloadEpoch) return;
+      if (page.error != null) {
+        error = page.error;
+        break;
+      }
+      all.addAll(page.quests);
+      offset += page.quests.length;
+      // Stop on an empty page (defensive) or once the whole set is collected.
+      if (page.quests.isEmpty || offset >= page.total) break;
+    }
     if (!mounted || epoch != _reloadEpoch) return;
     setState(() {
       _loading = false;
-      _allQuests = page.quests;
-      _fetchError = page.error;
+      _allQuests = all;
+      _fetchError = error;
     });
   }
 
@@ -871,9 +885,9 @@ class _KnowledgeDetailState extends ConsumerState<_KnowledgeDetail> {
   // query, current page offset into the filtered list).
   String _charQuery = '';
   int _charOffset = 0;
-  // Large enough to pull every knowledge character in one round; the set is
-  // bounded by the NPCs that appear in the save (hundreds at most).
-  static const _fetchAllLimit = 100000;
+  // The core clamps a query's `limit` to 1000, so the full NPC list must be
+  // pulled page-by-page rather than in one oversized request.
+  static const _fetchPageLimit = 1000;
   // Used during the cross-page duplicate check in _addEntry.
   bool _checkingDuplicate = false;
   // Error text shown beneath the add field (duplicate-check failure, etc.).
@@ -974,14 +988,33 @@ class _KnowledgeDetailState extends ConsumerState<_KnowledgeDetail> {
   Future<void> _loadCharacters() async {
     final epoch = ++_charsEpoch;
     setState(() => _loadingCharacters = true);
-    final page = await widget.notifier.loadKnowledgeCharacters(
-      offset: 0,
-      limit: _fetchAllLimit,
-    );
+    final all = <KnowledgeCharacter>[];
+    KnowledgeCharactersPage? last;
+    var offset = 0;
+    while (true) {
+      final page = await widget.notifier.loadKnowledgeCharacters(
+        offset: offset,
+        limit: _fetchPageLimit,
+      );
+      if (!mounted || epoch != _charsEpoch) return;
+      last = page;
+      if (page.error != null) break;
+      all.addAll(page.characters);
+      offset += page.characters.length;
+      // Stop on an empty page (defensive) or once the whole set is collected.
+      if (page.characters.isEmpty || offset >= page.total) break;
+    }
     if (!mounted || epoch != _charsEpoch) return;
     setState(() {
       _loadingCharacters = false;
-      _characters = page;
+      // Preserve the last page's metadata/error but expose the full NPC list.
+      _characters = KnowledgeCharactersPage(
+        characters: all,
+        total: last?.total ?? all.length,
+        offset: 0,
+        limit: last?.limit ?? _fetchPageLimit,
+        error: last?.error,
+      );
     });
   }
 

@@ -13,30 +13,49 @@ const GAME_FOLDER: &str = "Gothic 1 Remake";
 const CACHE_SUBDIR: &[&str] = &["G1R", "Story", "Cache"];
 
 /// Resolve a user-provided hint to an `.lcache` path. The hint may be the
-/// `.lcache` file, the `Story/Cache` directory, or any ancestor up to the game
-/// root / a Steam library / `steamapps/common`.
+/// `.lcache` file, the `Story/Cache` directory, any ancestor up to the game
+/// root / a Steam library / `steamapps/common`, or the game executable (whose
+/// ancestor directories are searched for the cache).
 pub fn lcache_from_hint(hint: &Path) -> Option<PathBuf> {
-    if hint.is_file() && is_lcache(hint) {
-        return Some(hint.to_path_buf());
-    }
-    if hint.is_dir() {
-        // Direct: hint is a Cache dir (or any dir) holding the file.
-        if let Some(f) = lcache_in_dir(hint) {
-            return Some(f);
+    if hint.is_file() {
+        if is_lcache(hint) {
+            return Some(hint.to_path_buf());
         }
-        // hint is the game root -> root/G1R/Story/Cache
-        if let Some(f) = lcache_in_dir(&join(hint, CACHE_SUBDIR)) {
-            return Some(f);
-        }
-        // hint is a library root or steamapps/common -> scan for the game folder
-        for candidate in [
-            hint.join(GAME_FOLDER),
-            hint.join("steamapps").join("common").join(GAME_FOLDER),
-            hint.join("common").join(GAME_FOLDER),
-        ] {
-            if let Some(f) = lcache_in_dir(&join(&candidate, CACHE_SUBDIR)) {
+        // A non-lcache file, e.g. the game executable: walk its ancestor
+        // directories (Win64 -> Binaries -> ... -> game root -> library) and
+        // resolve from each, so a saved `.exe` path still finds the cache.
+        for dir in hint.ancestors().skip(1) {
+            if let Some(f) = lcache_from_dir(dir) {
                 return Some(f);
             }
+        }
+        return None;
+    }
+    if hint.is_dir() {
+        return lcache_from_dir(hint);
+    }
+    None
+}
+
+/// Resolve an `.lcache` from a directory hint: the `Story/Cache` directory
+/// itself, the game root, or a Steam library / `steamapps/common` root.
+fn lcache_from_dir(hint: &Path) -> Option<PathBuf> {
+    // Direct: hint is a Cache dir (or any dir) holding the file.
+    if let Some(f) = lcache_in_dir(hint) {
+        return Some(f);
+    }
+    // hint is the game root -> root/G1R/Story/Cache
+    if let Some(f) = lcache_in_dir(&join(hint, CACHE_SUBDIR)) {
+        return Some(f);
+    }
+    // hint is a library root or steamapps/common -> scan for the game folder
+    for candidate in [
+        hint.join(GAME_FOLDER),
+        hint.join("steamapps").join("common").join(GAME_FOLDER),
+        hint.join("common").join(GAME_FOLDER),
+    ] {
+        if let Some(f) = lcache_in_dir(&join(&candidate, CACHE_SUBDIR)) {
+            return Some(f);
         }
     }
     None
@@ -193,5 +212,32 @@ mod tests {
         // A non-existent path can't be a file; resolution returns None rather
         // than panicking.
         assert_eq!(lcache_from_hint(Path::new("/no/such/file.lcache")), None);
+    }
+
+    #[test]
+    fn hint_resolves_from_game_executable_ancestor() {
+        // Build a temporary game tree and point the hint at the .exe deep inside
+        // it; resolution should walk ancestors up to the game root and find the
+        // cache under G1R/Story/Cache.
+        let base = std::env::temp_dir().join(format!(
+            "gore_discover_test_{}_exe",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        let root = base.join(GAME_FOLDER);
+        let cache_dir = join(&root, CACHE_SUBDIR);
+        std::fs::create_dir_all(&cache_dir).unwrap();
+        let lcache = cache_dir.join("AlkimiaLocalization_00000000.lcache");
+        std::fs::write(&lcache, b"x").unwrap();
+        let exe_dir = root.join("G1R").join("Binaries").join("Win64");
+        std::fs::create_dir_all(&exe_dir).unwrap();
+        let exe = exe_dir.join("G1R.exe");
+        std::fs::write(&exe, b"x").unwrap();
+
+        assert_eq!(lcache_from_hint(&exe).as_deref(), Some(lcache.as_path()));
+        // The game root directory itself still resolves the same cache.
+        assert_eq!(lcache_from_hint(&root).as_deref(), Some(lcache.as_path()));
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 }
