@@ -409,7 +409,24 @@ fn infer_locals(f: &Func, refs: &RefResolver) -> BTreeMap<i32, String> {
         } else {
             continue;
         };
-        locals.entry(dst).or_insert(ty);
+        // A slot first written by an ambiguous constant (SetV4/SetV8 -> int/int64) may later
+        // be written by a typed float/double op; let the wider/typed write refine the guess
+        // instead of locking in the first. Object types (from `obj`) are never downgraded.
+        let rank = |s: &str| match s {
+            "int" => 1,
+            "int64" => 2,
+            "float" | "double" => 3,
+            _ => 0, // object/other
+        };
+        match locals.get(&dst) {
+            None => {
+                locals.insert(dst, ty);
+            }
+            Some(prev) if rank(prev) > 0 && rank(&ty) > rank(prev) => {
+                locals.insert(dst, ty);
+            }
+            _ => {}
+        }
     }
     let _ = token_keyword; // keep import used if obj path elided
     locals

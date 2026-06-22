@@ -881,7 +881,20 @@ fn branch_cond(cmp: &Option<Cmp>, jump: &str) -> String {
         Some(c) => (c.a.clone(), c.b.clone()),
         None => ("?".into(), "?".into()),
     };
-    let op = cmp.as_ref().and_then(|c| c.op).unwrap_or(match jump {
+    // A T* op (TZ/TNZ/TS/...) already turned the CMP register into a bool carrying the
+    // relation (`c.op`); the following jump then selects the TAKEN sense exactly as for the
+    // bool-expr case above (JZ -> taken when the relation is false). Apply that sense instead
+    // of emitting the raw relation, which the structurer would then negate into an inverted
+    // if/while.
+    if let Some(op) = cmp.as_ref().and_then(|c| c.op) {
+        let cond = format!("{a} {op} {b}");
+        return match jump {
+            "JNZ" | "JLowNZ" | "JNS" | "JP" => cond,
+            _ => negate(&cond),
+        };
+    }
+    // No T*: the conditional jump itself encodes the relation.
+    let op = match jump {
         "JS" => "<",
         "JNS" => ">=",
         "JP" => ">",
@@ -889,7 +902,7 @@ fn branch_cond(cmp: &Option<Cmp>, jump: &str) -> String {
         "JZ" | "JLowZ" => "==",
         "JNZ" | "JLowNZ" => "!=",
         _ => "?",
-    });
+    };
     format!("{a} {op} {b}")
 }
 
