@@ -28,16 +28,22 @@ struct Arg {
     /// Recovered base type name of the value (e.g. `FGameplayTag`, `AGothicCharacter`), when
     /// known — lets call sites detect an arg whose type can't match the callee parameter.
     ty: Option<String>,
+    /// Raw bits if this is an integer CONSTANT (`PshC4`/`PshC8`) — so a constant feeding a
+    /// float/double parameter can be reinterpreted as its real IEEE-754 value.
+    cbits: Option<ConstBits>,
 }
 impl Arg {
     fn int(s: String) -> Arg {
-        Arg { s, is_int: true, ty: None }
+        Arg { s, is_int: true, ty: None, cbits: None }
+    }
+    fn iconst(s: String, cbits: ConstBits) -> Arg {
+        Arg { s, is_int: true, ty: None, cbits: Some(cbits) }
     }
     fn obj(s: String) -> Arg {
-        Arg { s, is_int: false, ty: None }
+        Arg { s, is_int: false, ty: None, cbits: None }
     }
     fn typed(s: String, ty: Option<String>) -> Arg {
-        Arg { s, is_int: false, ty }
+        Arg { s, is_int: false, ty, cbits: None }
     }
 }
 
@@ -53,7 +59,7 @@ const ARGMISMATCH: &str = "\u{2}argmismatch";
 /// Structured statement body for a function (no signature wrapper), indented at `depth`.
 /// Returns an error annotation string on disasm failure (never panics).
 pub fn body_statements(f: &FuncCode, refs: &RefResolver, depth: usize) -> String {
-    body_statements_ctor(f, refs, depth, None, None, None, None)
+    body_statements_ctor(f, refs, depth, None, None, None, None, None)
 }
 
 /// Like [`body_statements`], but with class context for type-aware casts:
@@ -61,13 +67,14 @@ pub fn body_statements(f: &FuncCode, refs: &RefResolver, depth: usize) -> String
 /// - `ret_ty`: the function's return type, so `return <int>` casts to `bool`/enum.
 /// - `fields`: the owning class's field name -> base type name, so a `this.field = <int>`
 ///   assignment casts the RHS to a `bool`/enum field.
-pub fn body_statements_ctor(f: &FuncCode, refs: &RefResolver, depth: usize, super_ctor: Option<&str>, ret_ty: Option<&DataType>, fields: Option<&HashMap<String, String>>, param_types: Option<&[String]>) -> String {
+#[allow(clippy::too_many_arguments)]
+pub fn body_statements_ctor(f: &FuncCode, refs: &RefResolver, depth: usize, super_ctor: Option<&str>, ret_ty: Option<&DataType>, fields: Option<&HashMap<String, String>>, param_types: Option<&[String]>, class_name: Option<&str>) -> String {
     let instrs = match disassemble(&f.bytecode) {
         Ok(i) => i,
         Err(e) => return format!("{}// disasm error: {e}\n", "    ".repeat(depth)),
     };
     let g = cfg::build(&instrs);
-    let ctx = Ctx { f, refs, instrs: &instrs, super_ctor, ret_ty, fields, param_types };
+    let ctx = Ctx { f, refs, instrs: &instrs, super_ctor, ret_ty, fields, param_types, class_name };
     let idx_of: HashMap<usize, usize> =
         g.blocks.iter().enumerate().map(|(i, b)| (b.start_dw, i)).collect();
     let mut body = String::new();
@@ -100,6 +107,7 @@ struct Ctx<'a> {
     ret_ty: Option<&'a DataType>,
     fields: Option<&'a HashMap<String, String>>,
     param_types: Option<&'a [String]>,
+    class_name: Option<&'a str>,
 }
 
 impl Ctx<'_> {
@@ -158,14 +166,18 @@ enum ConstBits {
     W8(u64),
 }
 
-/// Render the constant last written to `slot` as a float (`f` suffix) or double literal,
-/// decoding its bits. None if the slot has no tracked constant.
-fn float_lit(m: &HashMap<i32, ConstBits>, slot: i32, double: bool) -> Option<String> {
-    let v: f64 = match m.get(&slot)? {
-        ConstBits::W4(b) => f32::from_bits(*b) as f64,
-        ConstBits::W8(b) => f64::from_bits(*b),
+/// Format raw constant bits as a float (`f` suffix) or double AngelScript literal.
+fn fmt_float(b: ConstBits, double: bool) -> String {
+    let v: f64 = match b {
+        ConstBits::W4(x) => f32::from_bits(x) as f64,
+        ConstBits::W8(x) => f64::from_bits(x),
     };
-    Some(if double { format!("{v:?}") } else { format!("{:?}f", v as f32) })
+    if double { format!("{v:?}") } else { format!("{:?}f", v as f32) }
+}
+
+/// Render the constant last written to `slot` as a float/double literal. None if untracked.
+fn float_lit(m: &HashMap<i32, ConstBits>, slot: i32, double: bool) -> Option<String> {
+    Some(fmt_float(*m.get(&slot)?, double))
 }
 
 /// A recovered comparison (from CMP* operands), pending a conditional jump.
@@ -266,14 +278,28 @@ fn cast_arg(arg: &Arg, pt: &DataType, refs: &RefResolver) -> String {
         // a value-type (F-struct / E-enum, which have NO inheritance) arg whose recovered
         // type differs from the parameter type can't possibly match -> the arg recovery is
         // wrong; stub. (Object U*/A* params are skipped: upcasts are legal.)
-        if let Some(at) = &arg.ty {
-            let pn = pt.base_name(refs);
-            let is_value = |s: &str| s.starts_with('F') || s.starts_with('E');
-            if pt.token == 5 && is_value(&pn) && is_value(at) && *at != pn {
-                return ARGMISMATCH.into();
+        if pt.token == 5 {
+            if let Some(at) = &arg.ty {
+                // compare the type "head" (before any `<...>`) so covariant template
+                // instantiations (e.g. TSubclassOf<Derived> vs <Base>) aren't flagged, but
+                // unrelated value types (F-struct / E-enum / T-template) are.
+                let head = |s: &str| s.split('<').next().unwrap_or(s).to_string();
+                let is_value = |s: &str| matches!(s.bytes().next(), Some(b'F') | Some(b'E') | Some(b'T'));
+                let (ph, ah) = (head(&pt.base_name(refs)), head(at));
+                if is_value(&ph) && is_value(&ah) && ph != ah {
+                    return ARGMISMATCH.into();
+                }
             }
         }
         return arg.s.clone();
+    }
+    // an integer constant feeding a float/double param carries IEEE-754 bits, not an int.
+    if let Some(cb) = arg.cbits {
+        match pt.token {
+            0x50 => return fmt_float(cb, false),        // float32 -> `Nf` literal
+            0x51 | 0x5E => return fmt_float(cb, true),  // float (64-bit here) / double -> plain
+            _ => {}
+        }
     }
     if pt.token == 0x41 {
         // bool param
@@ -396,8 +422,14 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
         let n = ins.op.name;
         match n {
             // ---- pushes ----
-            "PshC4" => stack.push(Arg::int((ins.dwords.first().copied().unwrap_or(0) as i32).to_string())),
-            "PshC8" => stack.push(Arg::int((ins.qwords.first().copied().unwrap_or(0) as i64).to_string())),
+            "PshC4" => {
+                let b = ins.dwords.first().copied().unwrap_or(0);
+                stack.push(Arg::iconst((b as i32).to_string(), ConstBits::W4(b)));
+            }
+            "PshC8" => {
+                let b = ins.qwords.first().copied().unwrap_or(0);
+                stack.push(Arg::iconst((b as i64).to_string(), ConstBits::W8(b)));
+            }
             "PshV4" | "PshV8" => stack.push(Arg::int(name(w(ins, 0)))),
             "PshVPtr" => stack.push(Arg::typed(name(w(ins, 0)), ctx.slot_type(w(ins, 0)))),
             "PSF" => {
@@ -482,8 +514,8 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                     // a constant slot stored into a float/double field carries IEEE-754 bits,
                     // not an int — decode it; else apply the bool/enum/incompatible cast.
                     let rhs = match ref_reg_ty.as_deref() {
-                        Some("float") | Some("float32") => float_lit(&set_consts, w(ins, 0), false).unwrap_or(rhs),
-                        Some("double") => float_lit(&set_consts, w(ins, 0), true).unwrap_or(rhs),
+                        Some("float32") => float_lit(&set_consts, w(ins, 0), false).unwrap_or(rhs),
+                        Some("float") | Some("double") => float_lit(&set_consts, w(ins, 0), true).unwrap_or(rhs),
                         Some(t) if looks_int(&rhs) => field_assign_rhs(&rhs, t),
                         _ => rhs,
                     };
@@ -541,12 +573,22 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
             "CALL" | "CALLINTF" | "CALLBND" => {
                 let id = ins.dwords.first().copied().unwrap_or(0) as i32;
                 let f = ctx.refs.func_by_id(id).unwrap_or("func?").to_string();
-                pending = build_call(&mut stack, &f, ctx.refs.is_method_by_id(id), ctx.super_ctor, ctx.refs.func_params_by_id(id), ctx.refs);
+                pending = if f == "StaticClass" {
+                    stack.clear();
+                    Some(format!("{}::StaticClass()", ctx.class_name.unwrap_or("UObject")))
+                } else {
+                    build_call(&mut stack, &f, ctx.refs.is_method_by_id(id), ctx.super_ctor, ctx.refs.func_params_by_id(id), ctx.refs)
+                };
             }
             "CALLSYS" | "Thiscall1" => {
                 let ptr = ins.qwords.first().copied().unwrap_or(0) as i64;
                 let f = ctx.refs.func_by_ptr(ptr).unwrap_or("syscall?").to_string();
-                pending = build_call(&mut stack, &f, ctx.refs.is_method_by_ptr(ptr), ctx.super_ctor, ctx.refs.func_params_by_ptr(ptr), ctx.refs);
+                pending = if f == "StaticClass" {
+                    stack.clear();
+                    Some(format!("{}::StaticClass()", ctx.class_name.unwrap_or("UObject")))
+                } else {
+                    build_call(&mut stack, &f, ctx.refs.is_method_by_ptr(ptr), ctx.super_ctor, ctx.refs.func_params_by_ptr(ptr), ctx.refs)
+                };
             }
             "CallPtr" => {
                 let f = name(w(ins, 0));

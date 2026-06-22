@@ -110,7 +110,7 @@ fn emit_class(s: &mut String, c: &Class, refs: &RefResolver) {
     let field_types: HashMap<String, String> =
         c.fields.iter().map(|f| (f.name.clone(), f.ty.base_name(refs))).collect();
     for ctor in &c.ctors {
-        emit_function_ctor(s, ctor, refs, true, true, 1, super_name, Some(&field_types));
+        emit_function_ctor(s, ctor, refs, true, true, 1, super_name, Some(&field_types), Some(&c.name));
     }
     for m in &c.methods {
         // `__InitDefaults` (and other `__`-prefixed generator methods) set the CDO defaults
@@ -120,16 +120,17 @@ fn emit_class(s: &mut String, c: &Class, refs: &RefResolver) {
         if m.name.starts_with("__") {
             continue;
         }
-        emit_function_ctor(s, m, refs, true, false, 1, None, Some(&field_types));
+        emit_function_ctor(s, m, refs, true, false, 1, None, Some(&field_types), Some(&c.name));
     }
     let _ = writeln!(s, "}}\n");
 }
 
 fn emit_function(s: &mut String, f: &Func, refs: &RefResolver, is_method: bool, is_ctor: bool, depth: usize) {
-    emit_function_ctor(s, f, refs, is_method, is_ctor, depth, None, None);
+    emit_function_ctor(s, f, refs, is_method, is_ctor, depth, None, None, None);
 }
 
-fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: bool, is_ctor: bool, depth: usize, super_ctor: Option<&str>, fields: Option<&HashMap<String, String>>) {
+#[allow(clippy::too_many_arguments)]
+fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: bool, is_ctor: bool, depth: usize, super_ctor: Option<&str>, fields: Option<&HashMap<String, String>>, class_name: Option<&str>) {
     let ind = "    ".repeat(depth);
     let ret = f.ret.render(refs);
     let params = render_params(f, refs);
@@ -150,7 +151,7 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
         bytecode: f.bytecode.clone(),
     };
     let param_types: Vec<String> = f.params.iter().map(|p| p.ty.base_name(refs)).collect();
-    let body = body_statements_ctor(&fc, refs, depth + 1, super_ctor, Some(&f.ret), fields, Some(&param_types));
+    let body = body_statements_ctor(&fc, refs, depth + 1, super_ctor, Some(&f.ret), fields, Some(&param_types), class_name);
     let locals = infer_locals(f, refs);
 
     if body_is_recoverable(&body, &locals, f.params.len(), ret == "void") {
