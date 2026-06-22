@@ -12,6 +12,22 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt::Write as _;
+use std::sync::OnceLock;
+
+/// Optional list (one `Class::method` or free `function` per line) of functions to force
+/// into the stub fallback — for the handful the decompiler can't recover correctly that the
+/// in-game compile feedback flagged (engine-object arg mismatches, float-overload ambiguity).
+/// Path comes from `GORE_AS_STUBLIST`; absent => empty (no forced stubs).
+fn force_stub_set() -> &'static HashSet<String> {
+    static L: OnceLock<HashSet<String>> = OnceLock::new();
+    L.get_or_init(|| {
+        std::env::var("GORE_AS_STUBLIST")
+            .ok()
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .map(|s| s.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect())
+            .unwrap_or_default()
+    })
+}
 
 use super::disasm::disassemble;
 use super::model::{Class, Func, Module};
@@ -47,9 +63,14 @@ pub fn emit_module(m: &Module, refs: &RefResolver) -> String {
         }
         let base = g.ty.base_name(refs);
         if !is_primitive(&base) && !is_enum(&base) {
-            // FName/F-struct/object globals can't be `const X = 0;` — default-construct them
-            // (their real value is a generator default we can't reconstruct offline anyway).
-            let _ = writeln!(s, "{base} {};", g.name);
+            // AngelScript globals MUST be const, but an FName/F-struct can't take `= 0`.
+            // FName constants are almost always named after their value -> `n"Name"`; other
+            // structs get a default-constructed const (their real value isn't recoverable).
+            if base == "FName" {
+                let _ = writeln!(s, "const FName {0} = n\"{0}\";", g.name);
+            } else {
+                let _ = writeln!(s, "const {base} {} = {base}();", g.name);
+            }
             continue;
         }
         match g.value {
@@ -159,7 +180,14 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
     let body = body_statements_ctor(&fc, refs, depth + 1, super_ctor, Some(&f.ret), fields, Some(&param_types), class_name, Some(&local_types));
     let locals = infer_locals(f, refs);
 
-    if body_is_recoverable(&body, &locals, f.params.len(), ret == "void") {
+    // force-stub functions the in-game compile flagged as unrecoverable (by Class::method).
+    let qid = match class_name {
+        Some(c) => format!("{c}::{}", f.name),
+        None => f.name.clone(),
+    };
+    let forced = force_stub_set().contains(&qid) || force_stub_set().contains(&f.name);
+
+    if !forced && body_is_recoverable(&body, &locals, f.params.len(), ret == "void") {
         // hoist local declarations; primitives must be initialized (AngelScript errors on
         // "may not be initialized"), objects/structs/handles default-construct themselves.
         for (slot, ty) in &locals {
