@@ -1,4 +1,4 @@
-use gore_core::catalog::{category_for_id, ItemCategory};
+use gore_catalog::{category_for_id, ItemCategory};
 
 #[test]
 fn category_food() {

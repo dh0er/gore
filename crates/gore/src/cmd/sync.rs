@@ -12,7 +12,7 @@
 //! so `sync` validates it, restricts it to the item catalog, and re-emits it.
 
 use anyhow::{bail, Context, Result};
-use gore_core::catalog::parse_catalog;
+use gore_catalog::parse_catalog;
 use std::{fs, path::PathBuf};
 
 use crate::cmd::gui_model::{GuiClass, GuiField, GuiModel};

@@ -1,0 +1,16 @@
+[package]
+name = "gore-catalog"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Item/knowledge catalog model + prefix→category mapping for gore-tools."
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+pretty_assertions = "1"

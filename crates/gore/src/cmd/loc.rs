@@ -8,8 +8,8 @@
 //!   original bytes, so a no-edit round-trip is byte-identical.
 
 use anyhow::{Context, Result};
-use gore_core::loc::Lcache;
-use gore_core::{loc_store, paths};
+use gore_loc::loc::Lcache;
+use gore_loc::{loc_store, paths};
 use std::io::Write as _;
 use std::{collections::BTreeMap, fs, path::PathBuf};
 

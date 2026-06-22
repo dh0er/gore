@@ -496,17 +496,17 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
             Ok(write_difficulty_internal(&req, &targets, backup)?)
         }
         // Localized game text: extracted offline from the encrypted .lcache into
-        // the shared `gore-tools` dir (see gore_core::loc_store). User-local only.
+        // the shared `gore-tools` dir (see gore_loc::loc_store). User-local only.
         "loc_status" => {
-            let present = gore_core::loc_store::catalog_present();
+            let present = gore_loc::loc_store::catalog_present();
             // Only report metadata while the catalog file is present, so stale
             // sidecar meta can't describe a catalog that no longer exists.
-            let meta = if present { gore_core::loc_store::status() } else { None };
+            let meta = if present { gore_loc::loc_store::status() } else { None };
             Ok(json!({
                 "present": present,
                 "meta": meta,
-                "catalogPath": gore_core::paths::loc_catalog_path().display().to_string(),
-                "dir": gore_core::paths::shared_data_dir().display().to_string(),
+                "catalogPath": gore_loc::paths::loc_catalog_path().display().to_string(),
+                "dir": gore_loc::paths::shared_data_dir().display().to_string(),
             }))
         }
         "loc_find" => {
@@ -514,7 +514,7 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
                 .get("lcache")
                 .and_then(Value::as_str)
                 .map(PathBuf::from);
-            let found = gore_core::loc_store::resolve_lcache(hint.as_deref());
+            let found = gore_loc::loc_store::resolve_lcache(hint.as_deref());
             Ok(json!({
                 "found": found.is_some(),
                 "path": found.map(|p| p.display().to_string()),
@@ -525,9 +525,9 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
                 .get("lcache")
                 .and_then(Value::as_str)
                 .map(PathBuf::from);
-            match gore_core::loc_store::extract(hint.as_deref()) {
+            match gore_loc::loc_store::extract(hint.as_deref()) {
                 Ok(meta) => Ok(json!({ "meta": meta })),
-                Err(gore_core::loc_store::LocStoreError::NotFound) => Err(CoreError::InvalidRequest(
+                Err(gore_loc::loc_store::LocStoreError::NotFound) => Err(CoreError::InvalidRequest(
                     "could not find AlkimiaLocalization .lcache (auto-detect failed); pick it manually"
                         .to_string(),
                 )),

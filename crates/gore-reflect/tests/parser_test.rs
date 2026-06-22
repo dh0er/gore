@@ -1,5 +1,5 @@
-use gore_core::model::{Class, PropType, Property, ReflectionModel};
-use gore_core::parser::parse_hpp_file;
+use gore_reflect::model::{Class, PropType, Property, ReflectionModel};
+use gore_reflect::parser::parse_hpp_file;
 use std::path::PathBuf;
 
 fn fixture_path(name: &str) -> PathBuf {

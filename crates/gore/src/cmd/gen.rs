@@ -1,9 +1,9 @@
 use anyhow::{bail, Context, Result};
-use gore_core::{
+use gore_modgen::{
     gen::{gen_lua, OverridesConfig},
-    model::ReflectionModel,
     validate::validate_config,
 };
+use gore_reflect::model::ReflectionModel;
 use std::{fs, path::PathBuf};
 
 use crate::cmd::validate_mod_name;

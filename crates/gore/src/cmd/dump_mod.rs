@@ -14,7 +14,8 @@
 //! AlkimiaLocalization `.lcache`, which `gore-cli loc` reads directly offline.
 
 use anyhow::{Context, Result};
-use gore_core::{catalog::parse_catalog, gen::lua_escape};
+use gore_catalog::parse_catalog;
+use gore_modgen::gen::lua_escape;
 use std::{fs, path::PathBuf};
 
 use crate::cmd::gui_model::GuiModel;

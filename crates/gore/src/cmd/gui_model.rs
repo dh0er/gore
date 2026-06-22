@@ -19,7 +19,8 @@
 //! ```
 
 use anyhow::{Context, Result};
-use gore_core::{catalog::parse_catalog, model::{PropType, ReflectionModel}};
+use gore_catalog::parse_catalog;
+use gore_reflect::model::{PropType, ReflectionModel};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, fs, path::PathBuf};
 
@@ -89,7 +90,7 @@ fn prop_type_to_gui(pt: &PropType) -> Option<&'static str> {
 fn collect_inherited_properties<'a>(
     model: &'a ReflectionModel,
     class_name: &str,
-) -> Vec<&'a gore_core::model::Property> {
+) -> Vec<&'a gore_reflect::model::Property> {
     // Walk to root, then reverse to get base-first order
     let mut chain: Vec<&str> = Vec::new();
     let mut current = class_name;
@@ -205,7 +206,7 @@ pub fn run(model_path: PathBuf, catalog_path: PathBuf, out: PathBuf) -> Result<(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gore_core::model::{Class, Enum, Property};
+    use gore_reflect::model::{Class, Enum, Property};
 
     fn make_model() -> ReflectionModel {
         ReflectionModel {

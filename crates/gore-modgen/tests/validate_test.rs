@@ -1,8 +1,6 @@
-use gore_core::{
-    gen::{MetaConfig, OverrideValue, OverridesConfig, SingleOverride},
-    model::{Class, PropType, Property, ReflectionModel},
-    validate::{validate_config, ValidationError},
-};
+use gore_modgen::gen::{MetaConfig, OverrideValue, OverridesConfig, SingleOverride};
+use gore_modgen::validate::{validate_config, ValidationError};
+use gore_reflect::model::{Class, PropType, Property, ReflectionModel};
 
 fn make_model() -> ReflectionModel {
     let mut m = ReflectionModel::default();

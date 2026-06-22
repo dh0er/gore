@@ -1,7 +1,5 @@
-use crate::{
-    gen::{OverrideValue, OverridesConfig},
-    model::{PropType, ReflectionModel},
-};
+use crate::gen::{OverrideValue, OverridesConfig};
+use gore_reflect::model::{PropType, ReflectionModel};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ValidationError {
@@ -121,10 +119,8 @@ fn check_type_match(
 #[cfg(test)]
 mod validate_tests {
     use super::*;
-    use crate::{
-        gen::{MetaConfig, OverrideValue, OverridesConfig, SingleOverride},
-        model::{Class, PropType, Property, ReflectionModel},
-    };
+    use crate::gen::{MetaConfig, OverrideValue, OverridesConfig, SingleOverride};
+    use gore_reflect::model::{Class, PropType, Property, ReflectionModel};
 
     fn make_model_with_u_prefix() -> ReflectionModel {
         ReflectionModel {

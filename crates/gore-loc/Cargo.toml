@@ -1,20 +1,17 @@
 [package]
-name = "gore_core"
+name = "gore-loc"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Shared reflection/catalog model + mod-generation engine for gore-tools."
+description = "Localization cache decrypt + discovery/paths/store for gore-tools."
 
 [lib]
-# rlib for gore-cli (path dep); cdylib for gore-mod's dart:ffi bridge.
-crate-type = ["rlib", "cdylib"]
+crate-type = ["rlib"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-toml = "0.8"
 thiserror = "2"
-zip = { version = "2", default-features = false, features = ["deflate"] }
 aes = "0.8"
 
 [target.'cfg(windows)'.dependencies]

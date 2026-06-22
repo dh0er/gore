@@ -17,10 +17,10 @@ use serde_json::{json, Value};
 
 use std::path::PathBuf;
 
-use crate::gen::{gen_lua, OverridesConfig};
-use crate::model::ReflectionModel;
-use crate::validate::validate_config;
-use crate::{loc_store, paths};
+use gore_modgen::gen::{gen_lua, OverridesConfig};
+use gore_reflect::model::ReflectionModel;
+use gore_modgen::validate::validate_config;
+use gore_loc::{loc_store, paths};
 
 /// # Safety
 /// `request_json` must be null or a valid, NUL-terminated C string pointer that
@@ -119,7 +119,7 @@ fn loc_extract(payload: Value) -> Value {
     let hint = payload.get("lcache").and_then(Value::as_str).map(PathBuf::from);
     match loc_store::extract(hint.as_deref()) {
         Ok(meta) => json!({ "ok": true, "meta": meta }),
-        Err(crate::loc_store::LocStoreError::NotFound) => err(
+        Err(gore_loc::loc_store::LocStoreError::NotFound) => err(
             "LCACHE_NOT_FOUND",
             "could not find AlkimiaLocalization .lcache (auto-detect failed); pick it manually",
         ),

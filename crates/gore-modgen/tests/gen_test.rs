@@ -1,4 +1,4 @@
-use gore_core::gen::{gen_lua, MetaConfig, OverrideValue, OverridesConfig, SingleOverride};
+use gore_modgen::gen::{gen_lua, MetaConfig, OverrideValue, OverridesConfig, SingleOverride};
 
 fn apple_config() -> OverridesConfig {
     OverridesConfig {

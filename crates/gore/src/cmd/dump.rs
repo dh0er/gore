@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use gore_core::{
+use gore_reflect::{
     model::ReflectionModel,
     parser::parse_hpp_file,
 };

@@ -9,7 +9,7 @@
 
 use anyhow::{Context, Result};
 use clap::ValueEnum;
-use gore_core::catalog::pipeline;
+use gore_catalog::pipeline;
 use std::{fs, path::PathBuf};
 
 #[derive(Debug, Clone, ValueEnum)]

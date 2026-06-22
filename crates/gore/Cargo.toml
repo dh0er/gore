@@ -9,7 +9,10 @@ name = "gore"
 path = "src/main.rs"
 
 [dependencies]
-gore_core = { path = "../gore_core" }
+gore-reflect = { path = "../gore-reflect" }
+gore-catalog = { path = "../gore-catalog" }
+gore-loc = { path = "../gore-loc" }
+gore-modgen = { path = "../gore-modgen" }
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

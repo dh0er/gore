@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use gore_core::model::{PropType, ReflectionModel};
+use gore_reflect::model::{PropType, ReflectionModel};
 use std::{fs, path::PathBuf};
 
 pub fn run(model_path: PathBuf, out_dir: PathBuf, filter: Option<String>) -> Result<()> {
