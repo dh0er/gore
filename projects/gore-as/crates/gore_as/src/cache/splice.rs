@@ -207,6 +207,18 @@ pub fn replace_module(
         return Err(SpliceError::NameNotFound(target_name.to_string()));
     };
 
+    // Renaming onto an already-occupied key would write two entries under one module
+    // name while leaving the count unchanged — an ambiguous TMap. Reject a replacement
+    // whose name collides with a DIFFERENT base module (matching `target_name` is fine:
+    // that's an in-place replace). Mirrors the `splice_case_a` collision guard.
+    let new_name = module_names(new_mini)?.into_iter().next().unwrap_or_default();
+    if module_names(base)?
+        .iter()
+        .any(|n| n != target_name && n == &new_name)
+    {
+        return Err(SpliceError::NameCollision(new_name));
+    }
+
     let base_tail = module_region_end(base)?;
     let base_tt = parse_tail_tables(base, base_tail)?;
     if base_tt.end != base.len() {
