@@ -63,16 +63,22 @@ pub fn decompile_function(f: &FuncCode, refs: &RefResolver) -> String {
     let mut body = String::new();
 
     let slot_name = |off: i32| -> Expr {
-        if off == 0 {
-            Expr::This
-        } else if off < 0 {
-            let idx = (-off - AS_PTR_SIZE) as usize;
-            match f.param_names.get(idx) {
-                Some(n) if !n.is_empty() => Expr::Var(n.clone()),
-                _ => Expr::Var(format!("arg{idx}")),
+        if off > 0 {
+            return Expr::Var(format!("local_{off}"));
+        }
+        // Methods carry an implicit `this` at slot 0 with params at -AS_PTR_SIZE, -AS_PTR_SIZE-1, …
+        // Free functions have no `this`: params start at slot 0 (0, -1, -2, …). See structure.rs.
+        let idx = if f.is_method {
+            if off == 0 {
+                return Expr::This;
             }
+            (-off - AS_PTR_SIZE) as usize
         } else {
-            Expr::Var(format!("local_{off}"))
+            (-off) as usize
+        };
+        match f.param_names.get(idx) {
+            Some(n) if !n.is_empty() => Expr::Var(n.clone()),
+            _ => Expr::Var(format!("arg{idx}")),
         }
     };
     let get = |slots: &HashMap<i32, Expr>, off: i32| -> Expr {

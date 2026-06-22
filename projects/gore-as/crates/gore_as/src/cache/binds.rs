@@ -58,7 +58,8 @@ impl NativeApi {
         }
         let by_class = parse_records(&data);
         let by_name = scan_by_name(&data);
-        if by_name.is_empty() {
+        // A partially readable cache may populate only one table; keep it if either has data.
+        if by_name.is_empty() && by_class.is_empty() {
             return None;
         }
         Some(NativeApi { by_class, by_name })
