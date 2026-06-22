@@ -215,16 +215,15 @@ pub fn replace_module(
         None => {
             // Fall back to the inner `ModuleName`, but ONLY if it's unambiguous: if several
             // entries share that inner name (different TMap keys), we can't tell which to
-            // replace, so refuse rather than corrupt the wrong byte range.
-            let inner: Vec<usize> = super::model::parse_modules(base)
-                .map(|mods| {
-                    mods.iter()
-                        .enumerate()
-                        .filter(|(i, m)| *i < ranges.len() && m.name == target_name)
-                        .map(|(i, _)| i)
-                        .collect()
-                })
-                .unwrap_or_default();
+            // replace, so refuse rather than corrupt the wrong byte range. Propagate a
+            // base-parse failure instead of masking it as NameNotFound.
+            let mods = super::model::parse_modules(base)?;
+            let inner: Vec<usize> = mods
+                .iter()
+                .enumerate()
+                .filter(|(i, m)| *i < ranges.len() && m.name == target_name)
+                .map(|(i, _)| i)
+                .collect();
             match inner.as_slice() {
                 [i] => *i,
                 _ => return Err(SpliceError::NameNotFound(target_name.to_string())),
