@@ -100,11 +100,11 @@ fn class_hierarchy(mods: &[gore_as::cache::model::Module]) -> std::collections::
     let mut h = std::collections::HashMap::new();
     for m in mods {
         for c in &m.classes {
-            if let Some(s) = &c.super_class {
-                if !s.is_empty() {
-                    h.insert(c.name.clone(), s.clone());
-                }
-            }
+            // Record EVERY script class so `is_script_class` recognizes it; a root class with
+            // no super maps to "" (is_subclass stops there). Omitting no-super classes made
+            // them look like engine types, skipping script-class casts/subclass checks.
+            let super_name = c.super_class.clone().filter(|s| !s.is_empty()).unwrap_or_default();
+            h.insert(c.name.clone(), super_name);
         }
     }
     h

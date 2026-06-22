@@ -210,17 +210,26 @@ pub fn replace_module(
     // can differ. Match the key first, then fall back to the inner name so a modder using the
     // emitted module name as `target` doesn't get a spurious NameNotFound.
     let ranges = module_ranges(base)?;
-    let Some(idx) = ranges
-        .iter()
-        .position(|(name, _, _)| name == target_name)
-        .or_else(|| {
-            super::model::parse_modules(base)
-                .ok()
-                .and_then(|mods| mods.iter().position(|m| m.name == target_name))
-                .filter(|&i| i < ranges.len())
-        })
-    else {
-        return Err(SpliceError::NameNotFound(target_name.to_string()));
+    let idx = match ranges.iter().position(|(name, _, _)| name == target_name) {
+        Some(i) => i,
+        None => {
+            // Fall back to the inner `ModuleName`, but ONLY if it's unambiguous: if several
+            // entries share that inner name (different TMap keys), we can't tell which to
+            // replace, so refuse rather than corrupt the wrong byte range.
+            let inner: Vec<usize> = super::model::parse_modules(base)
+                .map(|mods| {
+                    mods.iter()
+                        .enumerate()
+                        .filter(|(i, m)| *i < ranges.len() && m.name == target_name)
+                        .map(|(i, _)| i)
+                        .collect()
+                })
+                .unwrap_or_default();
+            match inner.as_slice() {
+                [i] => *i,
+                _ => return Err(SpliceError::NameNotFound(target_name.to_string())),
+            }
+        }
     };
     let (_, target_start, target_end) = ranges[idx].clone();
 
