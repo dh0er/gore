@@ -185,6 +185,61 @@ fn name_before_paren(decl: &str) -> Option<&str> {
     Some(ident)
 }
 
+/// Offset just past the whole record at `o` (header + its `fc` fields). Walking the fields
+/// (rather than only skipping the type/path header) means the scanner resumes AFTER the
+/// record instead of inside its field region, where a field's bytes can coincidentally match
+/// the record-start signature and create a spurious boundary that truncates the next record's
+/// field walk. Returns `None` if the header/field-count looks implausible.
+fn record_end(data: &[u8], o: usize) -> Option<usize> {
+    let n = data.len();
+    let tl = read_u32(data, o)? as usize;
+    let mut p = o + 4 + tl; // past type name
+    let pl = read_u32(data, p)? as usize;
+    p += 4 + pl; // past script path
+    let fc = read_u32(data, p)? as usize;
+    if fc > 200_000 {
+        return None;
+    }
+    p += 4; // past fieldCount
+    let mut fi = 0usize;
+    while fi < fc {
+        if !looks_field_decl(data, p, n) {
+            break;
+        }
+        let dl = read_u32(data, p)? as usize;
+        let mut q = p + 4 + dl; // past decl string
+        let nl = read_u32(data, q)? as usize;
+        if !is_cstr(data, q + 4, nl) {
+            break;
+        }
+        q += 4 + nl; // past bare name
+        // Re-sync over the variable-width metadata slot to the next field decl. For the last
+        // field this lands on the next record's type name (also a u32-len + cstr), i.e. the
+        // record end.
+        let limit = (q + 512).min(n);
+        let mut nxt = q;
+        let mut found = None;
+        while nxt < limit {
+            if looks_field_decl(data, nxt, n) {
+                found = Some(nxt);
+                break;
+            }
+            nxt += 1;
+        }
+        match found {
+            Some(f) => {
+                p = f;
+                fi += 1;
+            }
+            None => {
+                p = q;
+                break;
+            }
+        }
+    }
+    Some(p)
+}
+
 /// Locate record starts by the strong `(typeLen, typeName, pathLen, "/Script/…")` signature.
 fn find_record_starts(data: &[u8]) -> Vec<usize> {
     let n = data.len();
@@ -194,9 +249,13 @@ fn find_record_starts(data: &[u8]) -> Vec<usize> {
         if let Some(tl) = read_u32(data, o) {
             let tl = tl as usize;
             if tl > 1 && tl <= 256 && is_cstr(data, o + 4, tl) && is_script_path(data, o + 4 + tl) {
-                let pl = read_u32(data, o + 4 + tl).unwrap() as usize;
                 starts.push(o);
-                o = o + 4 + tl + 4 + pl;
+                // Advance past the WHOLE record so an in-record byte run can't be mistaken
+                // for the next record start; fall back to the header skip if the walk fails.
+                match record_end(data, o) {
+                    Some(e) if e > o => o = e,
+                    _ => o = o + 4 + tl + 4 + read_u32(data, o + 4 + tl).unwrap_or(0) as usize,
+                }
                 continue;
             }
         }
