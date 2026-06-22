@@ -1,5 +1,5 @@
 //! Locks ooz decode compatibility against a real-Oodle-produced Kraken block.
-use goresave_oodle::kraken_decompress;
+use gore_oodle::kraken_decompress;
 use sha1::{Digest, Sha1};
 
 const REAL_OODLE_BLOCK_B64: &str = include_str!("calibration_block.b64");

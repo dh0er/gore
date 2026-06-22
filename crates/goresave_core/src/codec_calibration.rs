@@ -19,7 +19,7 @@ pub fn decode_self_test() -> bool {
     let Ok(comp) = BASE64.decode(SAMPLE_B64.trim()) else {
         return false;
     };
-    let Ok(out) = goresave_oodle::kraken_decompress(&comp, SAMPLE_SIZE) else {
+    let Ok(out) = gore_oodle::kraken_decompress(&comp, SAMPLE_SIZE) else {
         return false;
     };
     out.len() == SAMPLE_SIZE && hex::encode(Sha1::digest(&out)) == SAMPLE_SHA1
@@ -27,10 +27,10 @@ pub fn decode_self_test() -> bool {
 
 pub fn compress_roundtrip_self_test() -> bool {
     let input = compress_input();
-    let Ok(comp) = goresave_oodle::kraken_compress(&input, 5) else {
+    let Ok(comp) = gore_oodle::kraken_compress(&input, 5) else {
         return false;
     };
-    let Ok(back) = goresave_oodle::kraken_decompress(&comp, input.len()) else {
+    let Ok(back) = gore_oodle::kraken_decompress(&comp, input.len()) else {
         return false;
     };
     back == input

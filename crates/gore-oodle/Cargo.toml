@@ -1,5 +1,5 @@
 [package]
-name = "goresave_oodle"
+name = "gore-oodle"
 version.workspace = true
 edition.workspace = true
 

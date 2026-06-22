@@ -80,12 +80,12 @@ impl CodecBackend for OozKrakenBackend {
     }
 
     fn decompress(&self, input: &[u8], expected_size: usize) -> Result<Vec<u8>, CoreError> {
-        goresave_oodle::kraken_decompress(input, expected_size)
+        gore_oodle::kraken_decompress(input, expected_size)
             .map_err(|e| CoreError::Codec(e.to_string()))
     }
 
     fn compress(&self, input: &[u8], level: u8) -> Result<Vec<u8>, CoreError> {
-        goresave_oodle::kraken_compress(input, level).map_err(|e| CoreError::Codec(e.to_string()))
+        gore_oodle::kraken_compress(input, level).map_err(|e| CoreError::Codec(e.to_string()))
     }
 }
 

@@ -385,6 +385,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "gore-oodle"
+version = "0.0.0"
+dependencies = [
+ "base64",
+ "cc",
+ "hex",
+ "sha1",
+]
+
+[[package]]
 name = "gore_as"
 version = "0.0.0"
 dependencies = [
@@ -432,24 +442,14 @@ name = "goresave_core"
 version = "0.0.0"
 dependencies = [
  "base64",
+ "gore-oodle",
  "gore_core",
- "goresave_oodle",
  "hex",
  "serde",
  "serde_json",
  "sha1",
  "tempfile",
  "thiserror",
-]
-
-[[package]]
-name = "goresave_oodle"
-version = "0.0.0"
-dependencies = [
- "base64",
- "cc",
- "hex",
- "sha1",
 ]
 
 [[package]]
