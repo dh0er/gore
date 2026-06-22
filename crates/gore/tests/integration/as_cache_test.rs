@@ -7,9 +7,9 @@ fn fixture_path() -> String {
 
 #[test]
 fn decode_header_prints_values() {
-    Command::cargo_bin("gore-as")
+    Command::cargo_bin("gore")
         .unwrap()
-        .args(["decode-header", &fixture_path()])
+        .args(["as", "decode-header", &fixture_path()])
         .assert()
         .success()
         .stdout(contains("magic      : 0x9e377abe"))

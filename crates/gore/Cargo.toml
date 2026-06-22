@@ -13,6 +13,7 @@ gore-reflect = { path = "../gore-reflect" }
 gore-catalog = { path = "../gore-catalog" }
 gore-loc = { path = "../gore-loc" }
 gore-modgen = { path = "../gore-modgen" }
+gore-as = { path = "../gore-as" }
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -55,3 +56,7 @@ path = "tests/integration/package_test.rs"
 [[test]]
 name = "deploy_shared_test"
 path = "tests/integration/deploy_shared_test.rs"
+
+[[test]]
+name = "as_cache_test"
+path = "tests/integration/as_cache_test.rs"

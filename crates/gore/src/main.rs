@@ -114,6 +114,11 @@ enum Commands {
         #[arg(long)]
         game: std::path::PathBuf,
     },
+    /// AngelScript precompiled-cache tooling (decode/emit/splice/decompile).
+    As {
+        #[command(subcommand)]
+        cmd: cmd::as_cache::AsCmd,
+    },
     /// Zip a mod folder into distributable UE4SS layout
     Package {
         /// Path to the mod directory
@@ -182,6 +187,7 @@ fn main() {
         Commands::Scaffold { mod_name, out } => cmd::scaffold::run(mod_name, out),
         Commands::Gen { overrides, out, model } => cmd::gen::run(overrides, out, model),
         Commands::DeployShared { src, game } => cmd::deploy_shared::run(src, game),
+        Commands::As { cmd } => cmd::as_cache::run(cmd),
         Commands::Package { mod_dir, out } => cmd::package::run(mod_dir, out),
     };
     if let Err(e) = result {

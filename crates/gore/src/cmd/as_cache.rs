@@ -1,21 +1,14 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
+use clap::Subcommand;
 use gore_as::cache::header::CacheHeader;
 use gore_as::cache::scan::scan_strings;
 use gore_as::cache::splice::splice_auto;
 use gore_as::cache::walk_modules::{module_count, module_region_end};
 
-#[derive(Parser)]
-#[command(name = "gore-as", about = "AngelScript precompiled-cache tooling")]
-struct Cli {
-    #[command(subcommand)]
-    cmd: Cmd,
-}
-
 #[derive(Subcommand)]
-enum Cmd {
+pub enum AsCmd {
     /// Parse and print the outer cache header.
     DecodeHeader { file: PathBuf },
     /// Scan length-prefixed type-name strings (decode investigation aid).
@@ -110,10 +103,9 @@ fn class_hierarchy(mods: &[gore_as::cache::model::Module]) -> std::collections::
     h
 }
 
-fn main() -> Result<()> {
-    let cli = Cli::parse();
-    match cli.cmd {
-        Cmd::DecodeHeader { file } => {
+pub fn run(cmd: AsCmd) -> Result<()> {
+    match cmd {
+        AsCmd::DecodeHeader { file } => {
             let bytes =
                 std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?;
             let h = CacheHeader::parse(&bytes).context("parsing header")?;
@@ -121,14 +113,14 @@ fn main() -> Result<()> {
             println!("magic      : {:#010x}", h.magic);
             println!("type_count : {}", h.type_count);
         }
-        Cmd::Walk { file, max } => {
+        AsCmd::Walk { file, max } => {
             let bytes =
                 std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?;
             for s in scan_strings(&bytes, CacheHeader::SIZE, max) {
                 println!("0x{:08x}  len={:<4} {}", s.offset, s.len, s.text);
             }
         }
-        Cmd::Info { file } => {
+        AsCmd::Info { file } => {
             let bytes =
                 std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?;
             let tail = module_region_end(&bytes).context("walking modules")?;
@@ -137,7 +129,7 @@ fn main() -> Result<()> {
             println!("eof      : {:#x}", bytes.len());
             println!("tail_len : {} bytes (global ref tables)", bytes.len() - tail);
         }
-        Cmd::Decompile { file, needle, max } => {
+        AsCmd::Decompile { file, needle, max } => {
             let bytes = std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?;
             let mut refs = gore_as::cache::refs::RefResolver::build(&bytes).context("resolver")?;
             // Mirror `emit`/`emit-all`: load the class hierarchy and native arity table so
@@ -158,7 +150,7 @@ fn main() -> Result<()> {
             }
             eprintln!("({n} function(s))");
         }
-        Cmd::EmitAll { file, outdir } => {
+        AsCmd::EmitAll { file, outdir } => {
             let bytes = std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?;
             let mut refs = gore_as::cache::refs::RefResolver::build(&bytes).context("resolver")?;
             let mods = gore_as::cache::model::parse_modules(&bytes).context("parse modules")?;
@@ -214,7 +206,7 @@ fn main() -> Result<()> {
             }
             eprintln!("emitted {written} modules to {} ({stubbed} contain a stubbed function)", outdir.display());
         }
-        Cmd::Emit { file, needle, max } => {
+        AsCmd::Emit { file, needle, max } => {
             let bytes = std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?;
             let mut refs = gore_as::cache::refs::RefResolver::build(&bytes).context("resolver")?;
             let mods = gore_as::cache::model::parse_modules(&bytes).context("parse modules")?;
@@ -232,7 +224,7 @@ fn main() -> Result<()> {
             }
             eprintln!("({n} module(s))");
         }
-        Cmd::Disasm { file, needle, max } => {
+        AsCmd::Disasm { file, needle, max } => {
             let bytes = std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?;
             let funcs = gore_as::cache::walk_modules::collect_function_bytecodes(&bytes).context("walk")?;
             let mut n = 0;
@@ -248,7 +240,7 @@ fn main() -> Result<()> {
             }
             eprintln!("({n} function(s))");
         }
-        Cmd::Replace { base, mini, target, out } => {
+        AsCmd::Replace { base, mini, target, out } => {
             let base_b = std::fs::read(&base).with_context(|| format!("reading {}", base.display()))?;
             let mini_b = std::fs::read(&mini).with_context(|| format!("reading {}", mini.display()))?;
             let n = module_count(&base_b);
@@ -259,7 +251,7 @@ fn main() -> Result<()> {
                 target, n, base_b.len(), res.len(), out.display()
             );
         }
-        Cmd::Splice { base, mini, out } => {
+        AsCmd::Splice { base, mini, out } => {
             let base_b =
                 std::fs::read(&base).with_context(|| format!("reading {}", base.display()))?;
             let mini_b =
