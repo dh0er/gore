@@ -473,10 +473,12 @@ fn default_for(ty: &str) -> String {
 /// Render a global's stored u64 constant per its rendered type.
 fn render_const(ty: &str, v: u64) -> String {
     match ty {
-        // AngelScript `float`/`float32` are 32-bit: the IEEE-754 pattern sits in the low dword
-        // of the 64-bit constant slot. `double` is the full 64-bit value.
-        "float" | "float32" => format!("{}f", f32::from_bits(v as u32)),
+        // This build is `floatIsFloat64` (types.rs): token 0x51 `float` is a 64-bit value (the
+        // full u64), like `double`; only token 0x50 `float32` is 32-bit (IEEE pattern in the
+        // low dword). Matches structure.rs's call-argument constant handling.
+        "float" => format!("{}f", f64::from_bits(v)),
         "double" => format!("{}", f64::from_bits(v)),
+        "float32" => format!("{}f", f32::from_bits(v as u32)),
         "bool" => if v != 0 { "true".into() } else { "false".into() },
         _ => (v as i64).to_string(),
     }
