@@ -809,16 +809,21 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 ret_val = Some(v);
             }
             "RET" => {
-                flush!();
                 let non_void = ctx.ret_ty.map(|t| t.token != 0x52).unwrap_or(false);
                 // a value only belongs in a non-void return; for void, `ret_val` may hold a
                 // condition value (CpyVtoR1) that must NOT become `return x;`.
-                let v = if non_void {
+                // Capture the return value BEFORE flush!: a directly-returned call/ctor result
+                // lives in `pending` (e.g. `CALL`/`ALLOC` then `RET`), and flush! would emit it
+                // as a standalone statement, leaving the return a default (RVODEF).
+                let mut v = if non_void {
                     ret_val.take().or_else(|| obj_reg.take()).or_else(|| pending.take())
-                        .or_else(|| scan_back_retval(ctx, lo + k))
                 } else {
                     None
                 };
+                flush!();
+                if non_void && v.is_none() {
+                    v = scan_back_retval(ctx, lo + k);
+                }
                 match v {
                     Some(v) => {
                         let v = match ctx.ret_ty {
