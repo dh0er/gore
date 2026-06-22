@@ -395,6 +395,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "gore-save"
+version = "0.0.0"
+dependencies = [
+ "base64",
+ "gore-oodle",
+ "gore_core",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha1",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "gore_as"
 version = "0.0.0"
 dependencies = [
@@ -435,21 +450,6 @@ dependencies = [
  "toml",
  "winreg",
  "zip",
-]
-
-[[package]]
-name = "goresave_core"
-version = "0.0.0"
-dependencies = [
- "base64",
- "gore-oodle",
- "gore_core",
- "hex",
- "serde",
- "serde_json",
- "sha1",
- "tempfile",
- "thiserror",
 ]
 
 [[package]]

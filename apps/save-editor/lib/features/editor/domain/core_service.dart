@@ -95,7 +95,7 @@ class MissingGoresaveCoreService implements GoresaveCoreService {
   bool get isAvailable => false;
 
   @override
-  String get description => 'goresave_core.dll not loaded';
+  String get description => 'gore_save.dll not loaded';
 
   @override
   Future<Map<String, Object?>> execute(
@@ -107,7 +107,7 @@ class MissingGoresaveCoreService implements GoresaveCoreService {
       'error': {
         'code': 'CORE_UNAVAILABLE',
         'message':
-            'The native goresave core is not available. Build crates/goresave_core first.',
+            'The native gore_save.dll is not available. Build crates/gore-save first.',
       },
     };
   }
@@ -122,21 +122,21 @@ List<String> _candidateLibraryPaths() {
   final cwd = Directory.current.path;
   return [
     // Trusted shipped location first; always a path with separators so the
-    // Windows DLL search order is bypassed. A bare "goresave_core.dll" is
+    // Windows DLL search order is bypassed. A bare "gore_save.dll" is
     // intentionally omitted because it would let a same-named DLL on the
     // process search path bind instead of the core we ship.
-    p.join(executableDir, 'goresave_core.dll'),
+    p.join(executableDir, 'gore_save.dll'),
     p.normalize(
-      p.join(cwd, '..', 'target', 'debug', 'goresave_core.dll'),
+      p.join(cwd, '..', 'target', 'debug', 'gore_save.dll'),
     ),
     p.normalize(
-      p.join(cwd, '..', 'target', 'release', 'goresave_core.dll'),
+      p.join(cwd, '..', 'target', 'release', 'gore_save.dll'),
     ),
     p.normalize(
-      p.join(cwd, '..', '..', 'target', 'debug', 'goresave_core.dll'),
+      p.join(cwd, '..', '..', 'target', 'debug', 'gore_save.dll'),
     ),
     p.normalize(
-      p.join(cwd, '..', '..', 'target', 'release', 'goresave_core.dll'),
+      p.join(cwd, '..', '..', 'target', 'release', 'gore_save.dll'),
     ),
   ];
 }

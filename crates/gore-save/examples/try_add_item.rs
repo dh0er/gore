@@ -3,7 +3,7 @@
 //!
 //! Usage: try_add_item <save.sav> <item_path> <count> [add|remove]
 
-use goresave_core::execute_json;
+use gore_save::execute_json;
 use serde_json::{Value, json};
 
 fn main() {

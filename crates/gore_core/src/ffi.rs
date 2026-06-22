@@ -1,4 +1,4 @@
-//! C ABI for gore-mod's `dart:ffi` bridge. Mirrors goresave_core's
+//! C ABI for gore-mod's `dart:ffi` bridge. Mirrors gore-save's
 //! `goresave_execute`/`goresave_free`: a single JSON-in/JSON-out entry point.
 //!
 //! Request:  `{"command": "<name>", "payload": { ... }}`

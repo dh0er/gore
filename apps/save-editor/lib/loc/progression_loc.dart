@@ -3,7 +3,7 @@ import 'game_lang.dart';
 /// Localized-text resolvers for progression ids (quest names, dialog-knowledge
 /// entries) whose save id does NOT equal the loc-catalog key. The transforms
 /// here were validated against a real save: see the `quest_coverage` /
-/// `loc_coverage` examples in goresave_core.
+/// `loc_coverage` examples in gore-save.
 ///
 /// [catalog] is the loaded loc_catalog (`id -> {set -> text}`), keys lowercased.
 /// All functions return null when nothing resolves so callers fall back to the
@@ -55,7 +55,7 @@ bool _hasLongNumber(String s) {
 /// inserted before an uppercase letter only when the previous char was a
 /// lowercase letter or digit, so acronym runs survive (`ChoiceNPCExit` →
 /// `choice_npcexit`, not `choice_n_p_c_exit`). Mirrors the `to_snake` helper in
-/// goresave_core's loc/quest coverage examples.
+/// gore-save's loc/quest coverage examples.
 String _toSnake(String s) {
   final out = StringBuffer();
   String? last() => out.isEmpty ? null : out.toString().substring(out.length - 1);

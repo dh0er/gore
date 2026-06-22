@@ -2,7 +2,7 @@
 //!
 //! Usage: try_typed_edit <save.sav> <path-json> <value>
 
-use goresave_core::execute_json;
+use gore_save::execute_json;
 use serde_json::{Value, json};
 
 fn main() {

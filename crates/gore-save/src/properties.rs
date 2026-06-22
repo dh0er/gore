@@ -2185,7 +2185,7 @@ mod tests {
     }
 
     /// Strict full parse of real payload dumps. Run manually:
-    /// `GORESAVE_PAYLOAD_BIN=work/decompressed/G1R-001.host.bin cargo test -p goresave_core real_payload -- --ignored --nocapture`
+    /// `GORESAVE_PAYLOAD_BIN=work/decompressed/G1R-001.host.bin cargo test -p gore-save real_payload -- --ignored --nocapture`
     /// Accepts a single file or a `;`-separated list.
     #[test]
     #[ignore = "needs a local payload dump (GORESAVE_PAYLOAD_BIN)"]

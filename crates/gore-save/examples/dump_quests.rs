@@ -2,7 +2,7 @@
 //!
 //! Usage: dump_quests <save.sav>
 
-use goresave_core::execute_json;
+use gore_save::execute_json;
 use serde_json::{Value, json};
 
 fn main() {

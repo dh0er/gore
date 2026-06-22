@@ -3,7 +3,7 @@
 //! Holds the UE reflection model (parsed from UE4SS SDK dumps), the item/npc/
 //! knowledge catalog model + prefix→category mapping, the config→Lua mod
 //! generation engine, and field-level validation. It deliberately does NOT
-//! contain save-payload parsing — that stays in `goresave_core`.
+//! contain save-payload parsing — that stays in `gore-save`.
 
 pub mod catalog;
 pub mod discover;
