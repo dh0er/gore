@@ -1,55 +1,105 @@
-# gore-tools
+# gore
 
-A monorepo for Gothic 1 Remake modding and editing tooling. Each tool is a
-project under `projects/`, prefixed `gore-`. Shared code lives in its own
-`gore-*` project.
+**gore** (Go-thic Re-make) is a modding and save-editing toolsuite for the
+Gothic Remake. It is version-agnostic across Gothic 1 Remake (G1R) and
+Gothic 2 Remake (G2R) — they share the same engine and AngelScript stack — so
+the same tools work on either game.
 
-## Projects
+The suite spans three axes of tooling:
 
-| Project | Kind | What it does |
-|---------|------|--------------|
-| [`gore-save`](projects/gore-save) | Flutter app + Rust core | Savegame editor — edit player, inventory, progression, difficulty in GSAV saves. Backup-first. (Formerly the standalone `goresave` repo.) |
-| `gore-core` | Rust lib + pipelines | Shared reflection/catalog model + the catalog generation pipelines (item/npc/knowledge) that both modding front-ends build on. |
-| `gore-cli` *(planned)* | Rust CLI | Programmer-facing: generate Lua type stubs, catalogs, mod scaffolding; compile declarative override configs into UE4SS Lua mods; package mods. |
-| `gore-mod` *(planned)* | Flutter app | Designer/no-code GUI: browse the catalog, edit values, export a ready-to-use UE4SS Lua mod — never touching Lua. |
+1. **Save editing** — [`save-editor`](apps/save-editor) edits GSAV save files
+   (player, inventory, progression, difficulty), backup-first.
+2. **Mod authoring** — the [`gore`](crates/gore) CLI and
+   [`mod-studio`](apps/mod-studio) GUI author UE4SS Lua CDO-override mods,
+   built on a shared [`lua`](lua) SDK that ships into the game.
+3. **AngelScript reverse engineering** — [`gore-as`](crates/gore-as) decodes,
+   emits, and splices the game's precompiled AngelScript cache (surfaced via
+   `gore as`).
+
+The `gore` CLI is the single binary that does everything; the Flutter apps are
+GUIs that reuse the same Rust crates through a `dart:ffi` bridge.
+
+## Projects / layout
+
+```
+gore/
+├─ Cargo.toml              flat workspace (members = ["crates/*"])
+├─ build.py                orchestrator: python build.py <project> build|dist|installer|test|release
+├─ crates/
+│  ├─ gore/                THE unified CLI binary (gore.exe)
+│  ├─ gore-reflect/        UE reflection model + UE4SS SDK dump parser
+│  ├─ gore-catalog/        item/npc/knowledge catalog model + pipelines
+│  ├─ gore-loc/            AlkimiaLocalization .lcache crypto + game-dir discovery + shared paths
+│  ├─ gore-modgen/         overrides.toml → UE4SS Lua mod generation + validation
+│  ├─ gore-ffi/            cdylib dart:ffi bridge for mod-studio (gore_ffi.dll)
+│  ├─ gore-save/           GSAV savegame parse/edit core + its cdylib (gore_save.dll)
+│  ├─ gore-oodle/          Oodle/Kraken codec
+│  └─ gore-as/             AngelScript precompiled-cache decoder/emitter/splicer (surfaced via `gore as`)
+├─ apps/
+│  ├─ save-editor/         Flutter (Windows) savegame editor — WinSparkle auto-update
+│  └─ mod-studio/          Flutter (Windows) no-code mod authoring GUI
+├─ lua/                    shared UE4SS Lua SDK (gorelib) deployed into the game
+├─ dump-mod/               generated UE4SS dump mod
+└─ docs/
+```
+
+| Component | Kind | What it does |
+|-----------|------|--------------|
+| [`gore`](crates/gore) | Rust CLI (`gore.exe`) | The unified binary. Subcommands: `dump`, `stubs`, `catalog`, `gui-model`, `sync`, `dump-mod`, `loc`, `scaffold`, `gen`, `deploy-shared`, `package`, and `as` (AngelScript cache: `decode-header`/`walk`/`info`/`decompile`/`emit`/`emit-all`/`disasm`/`replace`/`splice`). |
+| [`gore-reflect`](crates/gore-reflect) | Rust lib | UE reflection model + UE4SS SDK dump parser. |
+| [`gore-catalog`](crates/gore-catalog) | Rust lib | Item/NPC/knowledge catalog model + generation pipelines. |
+| [`gore-loc`](crates/gore-loc) | Rust lib | AlkimiaLocalization `.lcache` crypto, game-dir discovery, shared paths. |
+| [`gore-modgen`](crates/gore-modgen) | Rust lib | `overrides.toml` → UE4SS Lua mod generation + validation. |
+| [`gore-ffi`](crates/gore-ffi) | Rust cdylib | `dart:ffi` bridge for mod-studio (`gore_ffi.dll`). |
+| [`gore-save`](crates/gore-save) | Rust lib + cdylib | GSAV savegame parse/edit core (`gore_save.dll`). |
+| [`gore-oodle`](crates/gore-oodle) | Rust lib | Oodle/Kraken codec. |
+| [`gore-as`](crates/gore-as) | Rust lib | AngelScript precompiled-cache decoder/emitter/splicer. |
+| [`save-editor`](apps/save-editor) | Flutter app | GSAV savegame editor GUI (auto-updating). |
+| [`mod-studio`](apps/mod-studio) | Flutter app | No-code UE4SS Lua mod authoring GUI. |
+| [`lua`](lua) | Lua SDK | Shared `gorelib` UE4SS SDK deployed into the game. |
 
 ## The mod artifact
 
-The modding tools (`gore-cli`, `gore-mod`) all produce the same thing: a
-**UE4SS Lua mod folder** the player drops into
-`<game>/Binaries/Win64/ue4ss/Mods/`. The Lua applies **CDO overrides** (and
-optionally hooks) at game load — e.g. set an item's value via
+The two modding front-ends — the [`gore`](crates/gore) CLI and
+[`mod-studio`](apps/mod-studio) — emit the **same thing**: a UE4SS Lua mod
+folder the player drops into `<game>/Binaries/Win64/ue4ss/Mods/`. The Lua
+applies **CDO overrides** (and optionally hooks) at game load — e.g. set an
+item's value via
 `StaticFindObject("/Script/Angelscript.Default__<Class>")` then
-`cdo.m_Value = ...`. The tools are authoring front-ends; they do not modify
-game files directly — the produced mod does, at runtime.
+`cdo.m_Value = ...`. The front-ends are authoring tools; they do **not** patch
+game files — the produced mod does its work at runtime, against a shared
+[`lua`](lua) SDK that the CLI deploys into the game.
 
-`gore-save` is a different axis: it edits **save files**, not game behavior.
-
-## Layout
-
-```
-gore-tools/
-├─ Cargo.toml            root workspace (members = projects/*/crates/*)
-├─ docs/                 monorepo-wide docs (design specs, plans, images)
-├─ projects/
-│  ├─ gore-save/         save editor (app/ + crates/ + installer/ + tools/)
-│  ├─ gore-core/         shared lib (crates/gore_core) + catalog pipelines
-│  ├─ gore-cli/          (planned)
-│  └─ gore-mod/          (planned)
-└─ .github/workflows/    CI + release (gore-save)
-```
+[`save-editor`](apps/save-editor) is a different axis entirely: it edits **save
+files**, not game behavior.
 
 ## Build
 
-The Rust workspace spans all projects:
+The Rust workspace spans every crate:
 
-```powershell
+```sh
 cargo build
 cargo test
 ```
 
-Per-project build/run instructions live in each project's README
-(e.g. [`projects/gore-save/README.md`](projects/gore-save/README.md)).
+Products (apps and shippable artifacts) are driven by the top-level
+orchestrator:
+
+```sh
+python build.py <project> build      # debug build
+python build.py <project> dist       # release bundle
+python build.py <project> installer  # Windows installer
+python build.py <project> test       # run the project's test suite
+```
+
+Per-project build/run details live in each component's own README (e.g.
+[`apps/save-editor/README.md`](apps/save-editor/README.md)).
+
+### Versioning
+
+Per-product independent semver — `save-editor` (`gore-save-v*`), `mod-studio`
+(`gore-mod-v*`), and the CLI (`gore-cli-v*`). Internal libraries share one
+workspace version.
 
 ## License
 
