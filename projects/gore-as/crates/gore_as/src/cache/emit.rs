@@ -221,7 +221,10 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
         // "no default constructor" for engine object types); everything else uses a default
         // local `{ret} __r;` (works for primitives, enums and default-constructible structs).
         if body.contains(RVODEF) {
-            if ret.ends_with('@') {
+            // Object/AActor handles have no default constructor, so `{ret} __r;` fails to
+            // compile — return `null` directly. `render` strips `@`, so detect handles via
+            // the DataType flag, not the rendered string.
+            if f.ret.is_object_handle {
                 s.push_str(&body.replace(RVODEF, "null"));
             } else {
                 let _ = writeln!(s, "{ind}    {ret} __r;");
@@ -233,9 +236,14 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
     } else {
         // stub fallback so the module still compiles (reason recorded for aggregation)
         let _ = writeln!(s, "{ind}    // body not fully recovered — stub [{}]", reason.unwrap());
-        // constructors must NOT return a value; everything else returns a default.
+        // constructors must NOT return a value; everything else returns a default. An object
+        // handle return defaults to `null` (no default-constructor for engine object types).
         if !is_ctor && ret != "void" {
-            let _ = writeln!(s, "{ind}    {ret} __r; return __r;");
+            if f.ret.is_object_handle {
+                let _ = writeln!(s, "{ind}    return null;");
+            } else {
+                let _ = writeln!(s, "{ind}    {ret} __r; return __r;");
+            }
         }
     }
     let _ = writeln!(s, "{ind}}}");

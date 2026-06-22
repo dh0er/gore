@@ -42,7 +42,7 @@ if not ok or not gore then
         if ok2 then gore = res end
     end
 end
--- use gore.* helpers below; see `gorehelp` in-game or projects/gore-lua/README.md
+-- use gore.* helpers below; call gore.help.list() or see projects/gore-lua/README.md
 
 local function apply()
   -- TODO: add your CDO overrides here

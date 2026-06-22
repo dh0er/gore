@@ -139,12 +139,14 @@ pub fn splice_case_a(base: &[u8], mini: &[u8]) -> Result<Vec<u8>, SpliceError> {
 ///
 /// Every keyed table is `TMap<key, V>` whose KEY (an int32 engine id for tables 1 & 3, an
 /// int64 `OldReference` original-pointer-id for tables 0/2/4/6) is DETERMINISTIC for a given
-/// build (see `container-splice.md` §4). A recompiled mini re-exports references already
-/// present in the base — types, functions, globals, properties it touches — so concatenating
-/// verbatim would emit duplicate TMap keys the loader may reject or mis-resolve. For each
-/// keyed table we therefore DROP the mini entries whose key already exists in the base and
-/// append only genuinely-new ones. Table 5 (StaticNames) is an unkeyed `TArray<FString>`
-/// where duplicates are harmless → append verbatim.
+/// build (see `container-splice.md` §4). A recompiled mini re-exports references the edited
+/// module touches — types, functions, globals, properties — some of which already exist in
+/// the base. Concatenating verbatim would emit duplicate TMap keys; keeping the BASE row on a
+/// collision would discard the mini's freshly compiled metadata for refs the new bytecode
+/// actually expects. So on a key collision the MINI wins: drop the base's colliding row and
+/// take the mini's, which both removes the duplicate key and keeps the up-to-date payload.
+/// Table 5 (StaticNames) is an unkeyed `TArray<FString>` where duplicates are harmless →
+/// append verbatim.
 fn append_merged_tables(
     out: &mut Vec<u8>,
     base: &[u8],
@@ -162,29 +164,30 @@ fn append_merged_tables(
             out.extend_from_slice(&mini[m.entries_start..m.entries_end]);
             continue;
         }
-        // Drop mini entries whose deterministic key already resolves in the base.
-        let base_keys: HashSet<i64> = b.keys.iter().copied().collect();
+        // Keep base rows the mini does NOT redefine, then append every mini row (mini wins on
+        // collision, replacing stale base metadata while avoiding a duplicate key).
+        let mini_keys: HashSet<i64> = m.keys.iter().copied().collect();
         let mut kept = Vec::new();
         let mut kept_count = 0u32;
-        for (j, &k) in m.keys.iter().enumerate() {
-            if base_keys.contains(&k) {
+        for (j, &k) in b.keys.iter().enumerate() {
+            if mini_keys.contains(&k) {
                 continue;
             }
-            let start = m.entry_starts[j];
-            let end = m.entry_starts.get(j + 1).copied().unwrap_or(m.entries_end);
-            kept.extend_from_slice(&mini[start..end]);
+            let start = b.entry_starts[j];
+            let end = b.entry_starts.get(j + 1).copied().unwrap_or(b.entries_end);
+            kept.extend_from_slice(&base[start..end]);
             kept_count += 1;
         }
-        out.extend_from_slice(&(b.count + kept_count).to_le_bytes());
-        out.extend_from_slice(&base[b.entries_start..b.entries_end]);
+        out.extend_from_slice(&(kept_count + m.count).to_le_bytes());
         out.extend_from_slice(&kept);
+        out.extend_from_slice(&mini[m.entries_start..m.entries_end]);
     }
 }
 
 /// Replace an existing module in `base` with `new_mini`'s single module, keeping the
 /// `Modules` count UNCHANGED. The new module's tail-table entries are merged into `base`'s
-/// the same way [`splice_case_a`] does (per `case-a-tables-and-exec.md` §3): drop colliding
-/// engine ids from tables 1 & 3, append the pointer-keyed tables 0/2/4/5/6 verbatim.
+/// the same way [`splice_case_a`] does (per `case-a-tables-and-exec.md` §3): see
+/// [`append_merged_tables`] — on a key collision the mini's row wins; StaticNames appends.
 ///
 /// This is the decompiler edit loop: decompile a module → edit the `.as` → the game
 /// recompiles it to a mini-cache → `replace_module` swaps it in.
@@ -202,11 +205,21 @@ pub fn replace_module(
         return Err(SpliceError::MiniNotSingle(mini_n));
     }
 
-    // Locate the target module's whole TMap-entry byte range in the base.
+    // Locate the target module's whole TMap-entry byte range in the base. `module_ranges`
+    // keys by the `Modules` TMap key; `emit` labels output by the inner `ModuleName`, which
+    // can differ. Match the key first, then fall back to the inner name so a modder using the
+    // emitted module name as `target` doesn't get a spurious NameNotFound.
     let ranges = module_ranges(base)?;
-    let Some((_, target_start, target_end)) =
-        ranges.into_iter().find(|(name, _, _)| name == target_name)
-    else {
+    let idx = ranges
+        .iter()
+        .position(|(name, _, _)| name == target_name)
+        .or_else(|| {
+            super::model::parse_modules(base)
+                .ok()
+                .and_then(|mods| mods.iter().position(|m| m.name == target_name))
+                .filter(|&i| i < ranges.len())
+        });
+    let Some((_, target_start, target_end)) = idx.map(|i| ranges[i].clone()) else {
         return Err(SpliceError::NameNotFound(target_name.to_string()));
     };
 

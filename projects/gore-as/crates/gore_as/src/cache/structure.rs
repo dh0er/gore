@@ -396,8 +396,9 @@ fn cast_arg(arg: &Arg, pt: &DataType, refs: &RefResolver) -> String {
             return c;
         }
         // an int arg to a non-enum object/struct param can't convert at all — the arg
-        // recovery is wrong; mark the body for the stub fallback.
-        return arg.s.clone();
+        // recovery is wrong; mark the body for the stub fallback (emitting the raw int
+        // would compile-fail, e.g. passing `0` to an FName/UObject parameter).
+        return amm("argint");
     }
     arg.s.clone()
 }
