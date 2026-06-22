@@ -127,16 +127,16 @@ List<String> _candidateLibraryPaths() {
     // process search path bind instead of the core we ship.
     p.join(executableDir, 'goresave_core.dll'),
     p.normalize(
+      p.join(cwd, '..', 'target', 'debug', 'goresave_core.dll'),
+    ),
+    p.normalize(
+      p.join(cwd, '..', 'target', 'release', 'goresave_core.dll'),
+    ),
+    p.normalize(
       p.join(cwd, '..', '..', 'target', 'debug', 'goresave_core.dll'),
     ),
     p.normalize(
       p.join(cwd, '..', '..', 'target', 'release', 'goresave_core.dll'),
-    ),
-    p.normalize(
-      p.join(cwd, '..', '..', '..', 'target', 'debug', 'goresave_core.dll'),
-    ),
-    p.normalize(
-      p.join(cwd, '..', '..', '..', 'target', 'release', 'goresave_core.dll'),
     ),
   ];
 }
