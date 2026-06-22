@@ -46,6 +46,12 @@ pub struct RefResolver {
     func_params: HashMap<i64, Vec<DataType>>,
     /// FunctionReferences return DataType.
     func_ret: HashMap<i64, DataType>,
+    /// FunctionReferences owning class name (from the ObjectType ptr) — disambiguates native
+    /// method overloads when looking up arity in the Binds.Cache native API.
+    func_owner: HashMap<i64, String>,
+    /// Native AngelScript API arities parsed from Binds.Cache (fallback arity for native calls
+    /// whose param count isn't carried in the script FunctionReferences).
+    native: Option<super::binds::NativeApi>,
 }
 
 impl RefResolver {
@@ -87,7 +93,7 @@ impl RefResolver {
             c.skip(4)?; // bIsConst
             c.skip(4)?; // bIsImportedDecl
             let is_method = c.read_bool4()?;
-            c.skip(8)?; // ObjectType ptr
+            let objtype = c.read_i64()?; // ObjectType ptr (owning class)
             let nparams = c.read_count("FuncRef.Params")?;
             let mut params = Vec::with_capacity(nparams);
             for _ in 0..nparams {
@@ -101,6 +107,9 @@ impl RefResolver {
             // can stub a zero-param method that was decompiled with phantom args.
             r.func_params.insert(key, params);
             r.func_ret.insert(key, ret);
+            if let Some(cls) = r.type_by_ptr.get(&objtype) {
+                r.func_owner.insert(key, cls.clone());
+            }
             r.func_by_ptr.insert(key, name);
         }
         // T4 FunctionIdReferenceToPointer: int32 id -> int64 ptr
@@ -206,6 +215,29 @@ impl RefResolver {
     /// Return DataType for a function by id.
     pub fn func_ret_by_id(&self, id: i32) -> Option<&DataType> {
         self.funcid_to_ptr.get(&id).and_then(|p| self.func_ret.get(p))
+    }
+
+    /// Attach the Binds.Cache native API (for arity fallback on native method calls).
+    pub fn set_native_api(&mut self, api: super::binds::NativeApi) {
+        self.native = Some(api);
+    }
+    /// Best-known native arity for a call by function ptr: prefer the exact (owning class,
+    /// name) match, else the unambiguous by-name arity. None if no native data / ambiguous.
+    pub fn native_arity_by_ptr(&self, ptr: i64, name: &str) -> Option<usize> {
+        let n = self.native.as_ref()?;
+        if let Some(cls) = self.func_owner.get(&ptr) {
+            if let Some(a) = n.arity(cls, name) {
+                return Some(a);
+            }
+        }
+        n.arity_by_name(name)
+    }
+    /// Best-known native arity for a call by function id.
+    pub fn native_arity_by_id(&self, id: i32, name: &str) -> Option<usize> {
+        match self.funcid_to_ptr.get(&id) {
+            Some(&ptr) => self.native_arity_by_ptr(ptr, name),
+            None => self.native.as_ref()?.arity_by_name(name),
+        }
     }
     pub fn global_by_ptr(&self, ptr: i64) -> Option<&str> {
         self.global_by_ptr.get(&ptr).map(|s| s.as_str())

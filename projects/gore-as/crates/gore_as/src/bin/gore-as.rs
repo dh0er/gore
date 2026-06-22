@@ -78,6 +78,24 @@ enum Cmd {
 }
 
 /// Build the script-class hierarchy (class name -> super class name) from parsed modules.
+/// Locate and load the native API arities from Binds.Cache: `GORE_AS_BINDS` env if set, else a
+/// `Binds.Cache` sitting next to the input cache file. Absent/unparsable => None (no fallback).
+fn load_native_api(cache_file: &std::path::Path) -> Option<gore_as::cache::binds::NativeApi> {
+    let path = match std::env::var_os("GORE_AS_BINDS") {
+        Some(p) => PathBuf::from(p),
+        None => cache_file.parent()?.join("Binds.Cache"),
+    };
+    if !path.exists() {
+        return None;
+    }
+    let api = gore_as::cache::binds::NativeApi::load(&path);
+    match &api {
+        Some(_) => eprintln!("loaded native arities from {}", path.display()),
+        None => eprintln!("warning: failed to parse {}", path.display()),
+    }
+    api
+}
+
 fn class_hierarchy(mods: &[gore_as::cache::model::Module]) -> std::collections::HashMap<String, String> {
     let mut h = std::collections::HashMap::new();
     for m in mods {
@@ -138,6 +156,9 @@ fn main() -> Result<()> {
             let mut refs = gore_as::cache::refs::RefResolver::build(&bytes).context("resolver")?;
             let mods = gore_as::cache::model::parse_modules(&bytes).context("parse modules")?;
             refs.set_class_hierarchy(class_hierarchy(&mods));
+            if let Some(api) = load_native_api(&file) {
+                refs.set_native_api(api);
+            }
             let (mut written, mut stubbed) = (0usize, 0usize);
             for m in &mods {
                 let src = gore_as::cache::emit::emit_module(m, &refs);
@@ -159,6 +180,9 @@ fn main() -> Result<()> {
             let mut refs = gore_as::cache::refs::RefResolver::build(&bytes).context("resolver")?;
             let mods = gore_as::cache::model::parse_modules(&bytes).context("parse modules")?;
             refs.set_class_hierarchy(class_hierarchy(&mods));
+            if let Some(api) = load_native_api(&file) {
+                refs.set_native_api(api);
+            }
             let mut n = 0;
             for m in mods.iter().filter(|m| m.name.contains(&needle)) {
                 if n >= max {

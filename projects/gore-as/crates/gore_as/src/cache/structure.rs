@@ -245,22 +245,29 @@ struct Cmp {
 /// last-pushed entry (top of stack); the rest are args in push order. Operator-overload
 /// methods (opAssign/opAdd/opEquals/...) render as the source operator. Returns None for
 /// compiler-generated behaviors ($behN construct/destruct) that have no source form.
-fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option<&str>, params: Option<&[DataType]>, refs: &RefResolver) -> Option<String> {
-    if f.starts_with('$') {
+fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option<&str>, params: Option<&[DataType]>, native_arity: Option<usize>, refs: &RefResolver) -> Option<String> {
+    if f.starts_with('$') || f.starts_with('~') || f == "__STATIC_NAME" {
+        // generated construct/destruct behavior ($beh, ~Dtor — implicit in AS source) and the
+        // synthesized static-name accessor (__STATIC_NAME) have no valid source form; emitting
+        // them produces stray `~`/identifier tokens that abort the whole module's parse.
         stack.clear();
-        return None; // generated construct/destruct behavior — no source statement
+        return None;
     }
     let mut a: Vec<Arg> = std::mem::take(stack)
         .into_iter()
         .filter(|x| !x.s.is_empty() && x.s != UNRESOLVED)
         .collect();
+    // Effective arity for receiver detection + phantom trimming: the in-game compile validates
+    // against the shipped Binds.Cache, so its native arity is authoritative — prefer it over the
+    // script FunctionReferences param count (which can disagree). Falls back to the script count.
+    let arity = native_arity.or_else(|| params.map(|p| p.len()));
     // Receiver detection by COUNT, not the unreliable bIsMethod flag: AngelScript pushes
     // receiver + N args (N+1 entries) for a method, N for a free call, and the cache's param
     // count N is reliable. The recovered stack often carries phantom extras (values the
     // decompiler couldn't attribute to an earlier consumer) at the BOTTOM, so when the count
     // overshoots a known arity we pop the receiver (top) and keep only the last N args,
     // dropping the leading noise — this is what `recv.Get0Param()` getters need.
-    let has_recv = match params.map(|p| p.len()) {
+    let has_recv = match arity {
         Some(w) if a.len() == w => false,         // exact free arity
         Some(w) if a.len() == w + 1 => true,       // exact method arity (receiver + w)
         // overshoot/undershoot/no signature: trust the bIsMethod hint.
@@ -269,7 +276,7 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
     if has_recv {
         let recv = a.pop().unwrap();
         // trim phantom extras: keep only the last `w` pushed values as the call args.
-        if let Some(w) = params.map(|p| p.len()) {
+        if let Some(w) = arity {
             if a.len() > w {
                 a.drain(..a.len() - w);
             }
@@ -317,7 +324,7 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
             return None;
         }
         // trim leading phantom extras for a known free arity too.
-        if let Some(w) = params.map(|p| p.len()) {
+        if let Some(w) = arity {
             if a.len() > w {
                 a.drain(..a.len() - w);
             }
@@ -683,7 +690,8 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                     Some(format!("{}::StaticClass()", ctx.class_name.unwrap_or("UObject")))
                 } else {
                     pending_ty = ctx.refs.func_ret_by_id(id).map(|d| d.base_name(ctx.refs));
-                    build_call(&mut stack, &f, ctx.refs.is_method_by_id(id), ctx.super_ctor, ctx.refs.func_params_by_id(id), ctx.refs)
+                    let na = ctx.refs.native_arity_by_id(id, &f);
+                    build_call(&mut stack, &f, ctx.refs.is_method_by_id(id), ctx.super_ctor, ctx.refs.func_params_by_id(id), na, ctx.refs)
                 };
             }
             "CALLSYS" | "Thiscall1" => {
@@ -695,13 +703,14 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                     Some(format!("{}::StaticClass()", ctx.class_name.unwrap_or("UObject")))
                 } else {
                     pending_ty = ctx.refs.func_ret_by_ptr(ptr).map(|d| d.base_name(ctx.refs));
-                    build_call(&mut stack, &f, ctx.refs.is_method_by_ptr(ptr), ctx.super_ctor, ctx.refs.func_params_by_ptr(ptr), ctx.refs)
+                    let na = ctx.refs.native_arity_by_ptr(ptr, &f);
+                    build_call(&mut stack, &f, ctx.refs.is_method_by_ptr(ptr), ctx.super_ctor, ctx.refs.func_params_by_ptr(ptr), na, ctx.refs)
                 };
             }
             "CallPtr" => {
                 let f = name(w(ins, 0));
                 pending_ty = None;
-                pending = build_call(&mut stack, &f, false, ctx.super_ctor, None, ctx.refs);
+                pending = build_call(&mut stack, &f, false, ctx.super_ctor, None, None, ctx.refs);
             }
             // ---- object construction ----
             "ALLOC" => {

@@ -1,5 +1,6 @@
 //! Parsing of `PrecompiledScript_Shipping.Cache`.
 
+pub mod binds;
 pub mod cfg;
 pub mod decompile;
 pub mod disasm;
