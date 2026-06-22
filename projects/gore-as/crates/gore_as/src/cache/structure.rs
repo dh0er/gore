@@ -268,8 +268,10 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
     // overshoots a known arity we pop the receiver (top) and keep only the last N args,
     // dropping the leading noise — this is what `recv.Get0Param()` getters need.
     let has_recv = match arity {
-        Some(w) if a.len() == w => false,         // exact free arity
-        Some(w) if a.len() == w + 1 => true,       // exact method arity (receiver + w)
+        Some(w) if a.len() == w => false,                   // exact free arity
+        // receiver + w only when this is actually a method; for a free call w+1 is a phantom
+        // extra (trimmed below), not a receiver — else a real arg gets mislabeled as `recv`.
+        Some(w) if a.len() == w + 1 => is_method,
         // overshoot/undershoot/no signature: trust the bIsMethod hint.
         Some(_) | None => is_method && !a.is_empty(),
     };
