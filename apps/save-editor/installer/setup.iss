@@ -37,7 +37,7 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayIcon={app}\goresave.exe
 WizardStyle=modern
-SetupIconFile=..\app\windows\runner\resources\app_icon.ico
+SetupIconFile=..\windows\runner\resources\app_icon.ico
 LicenseFile=..\..\..\LICENSE
 
 ; Remove obsolete files from earlier versions before copying the new bundle.

@@ -38,7 +38,7 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayIcon={app}\gore_mod.exe
 WizardStyle=modern
-SetupIconFile=..\app\windows\runner\resources\app_icon.ico
+SetupIconFile=..\windows\runner\resources\app_icon.ico
 LicenseFile=..\..\..\LICENSE
 
 [UninstallDelete]
