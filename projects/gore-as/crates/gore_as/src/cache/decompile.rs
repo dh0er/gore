@@ -131,6 +131,12 @@ pub fn decompile_function(f: &FuncCode, refs: &RefResolver) -> String {
                 }
             }
             // --- constants ---
+            // SetV8 is `wW_QW_ARG`: its 64-bit immediate lives in qwords, not dwords.
+            "SetV8" => {
+                let dst = s16(ins.words.first().copied().unwrap_or(0));
+                let c = ins.qwords.first().copied().unwrap_or(0) as i64;
+                slots.insert(dst, Expr::Const(c));
+            }
             n if n.starts_with("SetV") => {
                 let dst = s16(ins.words.first().copied().unwrap_or(0));
                 let c = ins.dwords.first().copied().unwrap_or(0) as i32 as i64;
