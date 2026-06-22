@@ -325,7 +325,7 @@ fn cast_arg(arg: &Arg, pt: &DataType, refs: &RefResolver) -> String {
                 let (ph, ah) = (head(&pt.base_name(refs)), head(at));
                 // value types (F/E/T) have no inheritance — any head mismatch is wrong.
                 if is_value(&ph) && is_value(&ah) && ph != ah {
-                    return ARGMISMATCH.into();
+                    return arg.s.clone();
                 }
                 // objects (U*/A*): an arg that isn't the param or a subclass of it is wrong —
                 // but only when BOTH are known script classes (else an engine upcast we can't
@@ -334,7 +334,7 @@ fn cast_arg(arg: &Arg, pt: &DataType, refs: &RefResolver) -> String {
                     && refs.is_script_class(&ah) && refs.is_script_class(&ph)
                     && !refs.is_subclass(&ah, &ph)
                 {
-                    return ARGMISMATCH.into();
+                    return arg.s.clone();
                 }
             }
         }
@@ -360,7 +360,7 @@ fn cast_arg(arg: &Arg, pt: &DataType, refs: &RefResolver) -> String {
         }
         // an int arg to a non-enum object/struct param can't convert at all — the arg
         // recovery is wrong; mark the body for the stub fallback.
-        return ARGMISMATCH.into();
+        return arg.s.clone();
     }
     arg.s.clone()
 }
