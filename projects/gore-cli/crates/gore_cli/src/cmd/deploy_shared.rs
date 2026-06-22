@@ -49,22 +49,35 @@ pub fn run(src: Option<PathBuf>, game: PathBuf) -> Result<()> {
             src.display()
         );
     }
-    // Stage the full copy in a sibling temp dir, then swap it in. This both clears stale files
-    // (renamed/deleted SDK entries don't linger) AND keeps the old SDK intact if the copy
-    // fails partway, so a broken copy can't leave mods without a working `gorelib`.
+    // `Mods/shared` is a namespace shared by multiple mods, so we must NOT wipe it — only the
+    // top-level entries the SDK actually provides (currently `gorelib/`). Stage the full copy
+    // in a sibling temp first (atomic: a failed copy leaves the old SDK intact), then for each
+    // SDK-provided top-level entry replace just that entry under dest_root, leaving unrelated
+    // libraries other mods stored there untouched.
+    fs::create_dir_all(&dest_root).with_context(|| format!("creating {}", dest_root.display()))?;
     let staging = dest_root.with_file_name(".gore-shared.tmp");
     if staging.exists() {
         fs::remove_dir_all(&staging)
             .with_context(|| format!("clearing staging dir {}", staging.display()))?;
     }
     let n = copy_dir(&src, &staging)?;
-    if dest_root.is_dir() {
-        fs::remove_dir_all(&dest_root)
-            .with_context(|| format!("clearing {}", dest_root.display()))?;
+    for entry in fs::read_dir(&staging).with_context(|| format!("reading {}", staging.display()))? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let dst = dest_root.join(&name);
+        // Refuse to clobber a symlinked destination entry (would write outside Mods).
+        if fs::symlink_metadata(&dst).is_ok_and(|m| m.file_type().is_symlink()) {
+            bail!("destination '{}' is a symlink; refusing to replace it", dst.display());
+        }
+        if dst.is_dir() {
+            fs::remove_dir_all(&dst).with_context(|| format!("clearing {}", dst.display()))?;
+        } else if dst.exists() {
+            fs::remove_file(&dst).with_context(|| format!("removing {}", dst.display()))?;
+        }
+        fs::rename(entry.path(), &dst)
+            .with_context(|| format!("moving {} -> {}", entry.path().display(), dst.display()))?;
     }
-    fs::rename(&staging, &dest_root).with_context(|| {
-        format!("moving {} -> {}", staging.display(), dest_root.display())
-    })?;
+    let _ = fs::remove_dir_all(&staging); // best-effort cleanup of the now-empty staging dir
     println!("deployed {n} file(s) to {}", dest_root.display());
     Ok(())
 }
