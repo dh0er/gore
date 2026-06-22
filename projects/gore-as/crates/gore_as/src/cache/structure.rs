@@ -358,8 +358,9 @@ fn downcast(rhs: String, src_ty: Option<String>, dst_ty: Option<&String>, _refs:
 
 /// Render the RHS of `field = <int>` for a field whose type name is `tyname`:
 /// numeric fields take the int as-is; bool/enum get the cast; anything else (FName,
-/// F-structs, U*/A* objects) can't hold an int — emit the stub sentinel so the function
-/// falls back (these are almost always generator-inlined CDO defaults we can't reconstruct).
+/// F-structs, U*/A* objects) can't hold an int — return UNRESOLVED so just THIS assignment
+/// is dropped (a generator-inlined CDO default we can't reconstruct) and the rest of the
+/// function still recovers, rather than stubbing the whole body.
 fn field_assign_rhs(rhs: &str, tyname: &str) -> String {
     if let Some(c) = cast_to_typename(rhs, tyname) {
         return c; // bool / enum
@@ -367,7 +368,7 @@ fn field_assign_rhs(rhs: &str, tyname: &str) -> String {
     match tyname {
         "int" | "uint" | "int8" | "int16" | "int64" | "uint8" | "uint16" | "uint64"
         | "float" | "float32" | "double" | "?" => rhs.to_string(),
-        _ => ARGMISMATCH.to_string(),
+        _ => UNRESOLVED.to_string(),
     }
 }
 
@@ -514,7 +515,9 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 let off = ins.words.first().copied().unwrap_or(0) as i32;
                 let tid = ins.dwords.first().copied().unwrap_or(0) as i32;
                 let field = ctx.refs.member(tid, off).map(|s| s.to_string()).unwrap_or_else(|| format!("field_0x{off:x}"));
-                let fty = ctx.refs.member_type(tid, off).map(|s| s.to_string());
+                // field VALUE type from the class map (member_type gives the owner class).
+                let fty = ctx.fields.and_then(|m| m.get(&field)).cloned()
+                    .or_else(|| ctx.refs.member_type(tid, off).map(|s| s.to_string()));
                 if let Some(top) = stack.last_mut() {
                     top.s = format!("{}.{field}", top.s);
                     top.is_int = false; // now a member access, not a bare int slot
@@ -527,10 +530,11 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 let off = ins.words.first().copied().unwrap_or(0) as i32;
                 let tid = ins.dwords.first().copied().unwrap_or(0) as i32;
                 let field = ctx.refs.member(tid, off).map(|s| s.to_string()).unwrap_or_else(|| format!("field_0x{off:x}"));
-                // resolve the field's type from the cache (covers inherited fields, which the
-                // current-class field map misses); fall back to the class-local map.
-                ref_reg_ty = ctx.refs.member_type(tid, off).map(|s| s.to_string())
-                    .or_else(|| ctx.fields.and_then(|m| m.get(&field)).cloned());
+                // The class field-type map holds the real field VALUE type; member_type()
+                // resolves PropertyReferences OldTypeId which is the OWNER class, not the
+                // field type — so prefer the map and only fall back to member_type.
+                ref_reg_ty = ctx.fields.and_then(|m| m.get(&field)).cloned()
+                    .or_else(|| ctx.refs.member_type(tid, off).map(|s| s.to_string()));
                 ref_reg = Some(format!("this.{field}"));
             }
             "LoadRObjR" | "LoadVObjR" => {
