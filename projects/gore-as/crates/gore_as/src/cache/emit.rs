@@ -178,7 +178,13 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
         (*slot, ty)
     }).collect();
     let body = body_statements_ctor(&fc, refs, depth + 1, super_ctor, Some(&f.ret), fields, Some(&param_types), class_name, Some(&local_types));
-    let locals = infer_locals(f, refs);
+    // hoist every referenced local; infer_locals types what it can, the rest default to `int`
+    // (a wrong type just becomes a compile error the in-game loop force-stubs, rather than the
+    // whole function stubbing on an undeclared identifier).
+    let mut locals = infer_locals(f, refs);
+    for n in used_locals(&body) {
+        locals.entry(n).or_insert_with(|| "int".to_string());
+    }
 
     // force-stub functions the in-game compile flagged as unrecoverable (by Class::method).
     let qid = match class_name {
