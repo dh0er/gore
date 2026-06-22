@@ -44,7 +44,7 @@ The local development setup used for this repository is Flutter 3.44.0, Dart
 
 ## Build And Test
 
-All commands run from this directory (`projects/gore-save/`). `cargo` resolves
+Dev commands run from this directory (`apps/save-editor/`). `cargo` resolves
 the workspace at the monorepo root automatically.
 
 Run the gore-save test suite:
@@ -53,28 +53,22 @@ Run the gore-save test suite:
 python test.py
 ```
 
-Build the Rust native artifacts:
+Run the Flutter app (build the native core first so the loader's upward search
+finds `gore_save.dll` under the workspace `target/`):
 
 ```powershell
 cargo build
-```
-
-Run the Flutter app:
-
-```powershell
-cd app
 flutter run -d windows
 ```
 
-Build a Windows release bundle:
+Build a Windows release bundle (native DLL + Flutter release + packaged zip)
+via the monorepo build script, from the repository root:
 
 ```powershell
-cargo build --release
-cd app
-flutter build windows --release
-cd ..
-python tools\build_native.py --release --bundle-windows
+python build.py gore-save dist
 ```
+
+Add `installer` instead of `dist` to also compile the Inno Setup installer.
 
 ## Safety
 
