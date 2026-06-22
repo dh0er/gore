@@ -7,7 +7,11 @@ if not ok or not gore then
     local base = [[\ue4ss\Mods\shared\gorelib\gorelib.lua]]
     for _, root in ipairs({ "ue4ss/Mods/shared/gorelib/gorelib.lua", "." .. base }) do
         local f = loadfile(root)
-        if f then gore = f(); break end
+        if f then
+            -- run the chunk under pcall: a load-time error in the SDK must not abort the mod
+            local ok2, res = pcall(f)
+            if ok2 then gore = res; break end
+        end
     end
 end
 

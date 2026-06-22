@@ -49,6 +49,12 @@ pub fn run(src: Option<PathBuf>, game: PathBuf) -> Result<()> {
             src.display()
         );
     }
+    // Clean the destination first so renamed/deleted SDK files don't linger from a previous
+    // deploy. dest_root is a real (non-symlink, verified above) directory we own.
+    if dest_root.is_dir() {
+        fs::remove_dir_all(&dest_root)
+            .with_context(|| format!("clearing {}", dest_root.display()))?;
+    }
     let n = copy_dir(&src, &dest_root)?;
     println!("deployed {n} file(s) to {}", dest_root.display());
     Ok(())
