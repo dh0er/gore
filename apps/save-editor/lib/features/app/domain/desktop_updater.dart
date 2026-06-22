@@ -7,7 +7,7 @@ import 'package:path/path.dart' as p;
 /// Stable URL: releases/latest/download/ redirects to the newest GitHub
 /// release's assets, where CI uploads the signed appcast.
 const _appcastUrl =
-    'https://github.com/dh0er/goresave/releases/latest/download/appcast-windows.xml';
+    'https://github.com/dh0er/gore/releases/latest/download/appcast-windows.xml';
 
 const _checkIntervalSeconds = 3600;
 

@@ -49,7 +49,7 @@ Existing flow (checkout, Rust, Flutter, `python build.py dist`) is extended:
 
 ### Update source — no token, no API
 
-Base URL: `https://github.com/dh0er/goresave/releases/latest/download/`
+Base URL: `https://github.com/dh0er/gore/releases/latest/download/`
 
 GitHub redirects this stable URL to the newest release's assets.
 `releases.win.json` references packages by file name relative to that base, so
