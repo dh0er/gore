@@ -43,7 +43,7 @@ if not gore then
         gore = ok2 and res or nil
     end
 end
--- use gore.* helpers below; call gore.help.list() or see projects/gore-lua/README.md
+-- use gore.* helpers below; call gore.help.list() or see lua/README.md
 
 local function apply()
   -- TODO: add your CDO overrides here

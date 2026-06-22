@@ -96,17 +96,17 @@ fn resolve_default_src() -> Result<PathBuf> {
         }
     }
     // Dev tree: the `target/` holding the binary can be at the workspace root
-    // (`target/debug/`) OR crate-local (`projects/gore-cli/crates/gore_cli/target/debug/`), so
+    // (`target/debug/`) OR crate-local (`crates/gore_cli/target/debug/`), so
     // the repo root is an unknown number of levels up. Walk ancestors for the SDK.
     for anc in exe_dir.ancestors() {
-        let c = anc.join("projects").join("gore-lua").join("shared");
+        let c = anc.join("lua").join("shared");
         if c.is_dir() {
             return Ok(c);
         }
     }
     bail!(
         "could not locate the bundled gore-lua shared/ SDK relative to '{}'; \
-         pass --src <path-to-gore-lua/shared>",
+         pass --src <path-to-lua/shared>",
         exe_dir.display()
     )
 }
