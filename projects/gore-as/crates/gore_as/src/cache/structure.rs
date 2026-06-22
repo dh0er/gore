@@ -165,6 +165,23 @@ fn s16(w: u16) -> i32 {
     w as i16 as i32
 }
 
+/// Recover a non-void function's return value when the RET's own block produced none: scan
+/// backwards for the nearest `CpyVtoR*`/`LOADOBJ` that filled the return register in a
+/// dominating block, stopping at a previous RET so we never cross into an unrelated value.
+fn scan_back_retval(ctx: &Ctx, before: usize) -> Option<String> {
+    for i in (0..before).rev() {
+        let ins = &ctx.instrs[i];
+        match ins.op.name {
+            "CpyVtoR4" | "CpyVtoR8" | "CpyVtoR1" | "LOADOBJ" => {
+                return Some(ctx.slot_name(ins.words.first().copied().map(s16).unwrap_or(0)));
+            }
+            "RET" => return None,
+            _ => {}
+        }
+    }
+    None
+}
+
 /// A primitive numeric-conversion opcode (`dst = (cast) src`); the cast is implicit in
 /// type-erased AngelScript source, so we render the plain copy `dst = src`.
 fn is_numeric_cast(n: &str) -> bool {
@@ -672,7 +689,9 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
             }
             "RET" => {
                 flush!();
-                if let Some(v) = ret_val.take().or_else(|| obj_reg.take()).or_else(|| pending.take()) {
+                if let Some(v) = ret_val.take().or_else(|| obj_reg.take()).or_else(|| pending.take())
+                    .or_else(|| scan_back_retval(ctx, lo + k))
+                {
                     // cast an int return value to the function's bool/enum return type
                     let v = match ctx.ret_ty {
                         Some(rt) if looks_int(&v) => {
