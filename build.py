@@ -117,6 +117,9 @@ PROJECTS: dict[str, dict] = {
         "changelog": "CHANGELOG.md",
         "dist_zip": "gore-cli-{version}-windows-x64",
         "releasable": True,
+        # extra dirs staged beside the exe in the release zip: (src relative to ROOT, dest name).
+        # `gore-cli deploy-shared` resolves the SDK from `shared/` next to the binary.
+        "bundle_dirs": [("projects/gore-lua/shared", "shared")],
     },
     "gore-core": {
         "kind": "rust-lib",
@@ -359,6 +362,12 @@ def dist_project(project: str, dry: bool) -> Path | None:
     shutil.copy2(exe, staging / exe.name)
     if (ROOT / "LICENSE").exists():
         shutil.copy2(ROOT / "LICENSE", staging / "LICENSE")
+    # stage any bundled data dirs beside the exe (e.g. gore-cli's gore-lua shared/ SDK)
+    for src_rel, dest_name in cfg.get("bundle_dirs", []):
+        src_dir = ROOT / src_rel
+        if not src_dir.is_dir():
+            raise SystemExit(f"missing bundle dir: {src_dir}")
+        shutil.copytree(src_dir, staging / dest_name)
     if base.with_suffix(".zip").exists():
         base.with_suffix(".zip").unlink()
     archive = shutil.make_archive(str(base), "zip", root_dir=staging)
