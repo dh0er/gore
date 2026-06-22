@@ -4,7 +4,11 @@
 use anyhow::{bail, Context, Result};
 use std::{fs, path::Path, path::PathBuf};
 
-pub fn run(src: PathBuf, game: PathBuf) -> Result<()> {
+pub fn run(src: Option<PathBuf>, game: PathBuf) -> Result<()> {
+    let src = match src {
+        Some(s) => s,
+        None => resolve_default_src()?,
+    };
     if !src.is_dir() {
         bail!("source '{}' is not a directory", src.display());
     }
@@ -34,6 +38,30 @@ pub fn run(src: PathBuf, game: PathBuf) -> Result<()> {
     let n = copy_dir(&src, &dest_root)?;
     println!("deployed {n} file(s) to {}", dest_root.display());
     Ok(())
+}
+
+/// Locate the bundled `shared/` SDK relative to the gore-cli executable, so
+/// `deploy-shared` works regardless of the caller's working directory. Tries packaged
+/// layouts (next to the binary) first, then the dev tree (repo root above target/).
+fn resolve_default_src() -> Result<PathBuf> {
+    let exe = std::env::current_exe().context("locating gore-cli executable")?;
+    let exe_dir = exe.parent().unwrap_or(Path::new("."));
+    let candidates = [
+        exe_dir.join("shared"),                  // packaged: shared/ beside the binary
+        exe_dir.join("gore-lua").join("shared"), // packaged: gore-lua/shared/ beside binary
+        // dev: target/{debug,release}/gore-cli -> repo root/projects/gore-lua/shared
+        exe_dir.join("..").join("..").join("projects").join("gore-lua").join("shared"),
+    ];
+    for c in candidates {
+        if c.is_dir() {
+            return Ok(c);
+        }
+    }
+    bail!(
+        "could not locate the bundled gore-lua shared/ SDK relative to '{}'; \
+         pass --src <path-to-gore-lua/shared>",
+        exe_dir.display()
+    )
 }
 
 fn copy_dir(src: &Path, dest: &Path) -> Result<usize> {

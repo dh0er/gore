@@ -106,9 +106,10 @@ enum Commands {
     },
     /// Deploy the gore-lua shared SDK into the game's ue4ss/Mods/shared.
     DeployShared {
-        /// Source shared/ dir (default: projects/gore-lua/shared).
-        #[arg(long, default_value = "projects/gore-lua/shared")]
-        src: std::path::PathBuf,
+        /// Source shared/ dir. Defaults to a copy located relative to the gore-cli
+        /// executable (cwd-independent); pass this when running from an unusual layout.
+        #[arg(long)]
+        src: Option<std::path::PathBuf>,
         /// Game dir containing ue4ss/Mods.
         #[arg(long)]
         game: std::path::PathBuf,
