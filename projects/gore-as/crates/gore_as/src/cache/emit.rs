@@ -151,7 +151,12 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
         bytecode: f.bytecode.clone(),
     };
     let param_types: Vec<String> = f.params.iter().map(|p| p.ty.base_name(refs)).collect();
-    let body = body_statements_ctor(&fc, refs, depth + 1, super_ctor, Some(&f.ret), fields, Some(&param_types), class_name);
+    // object-local slot -> type name, so the decompiler can insert downcasts on stores.
+    let local_types: HashMap<i32, String> = f.obj_locals.iter().map(|(slot, tinfo)| {
+        let ty = super::types::DataType { token: 5, type_info: *tinfo, is_object_handle: true, ..Default::default() }.base_name(refs);
+        (*slot, ty)
+    }).collect();
+    let body = body_statements_ctor(&fc, refs, depth + 1, super_ctor, Some(&f.ret), fields, Some(&param_types), class_name, Some(&local_types));
     let locals = infer_locals(f, refs);
 
     if body_is_recoverable(&body, &locals, f.params.len(), ret == "void") {

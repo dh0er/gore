@@ -59,7 +59,7 @@ const ARGMISMATCH: &str = "\u{2}argmismatch";
 /// Structured statement body for a function (no signature wrapper), indented at `depth`.
 /// Returns an error annotation string on disasm failure (never panics).
 pub fn body_statements(f: &FuncCode, refs: &RefResolver, depth: usize) -> String {
-    body_statements_ctor(f, refs, depth, None, None, None, None, None)
+    body_statements_ctor(f, refs, depth, None, None, None, None, None, None)
 }
 
 /// Like [`body_statements`], but with class context for type-aware casts:
@@ -68,13 +68,13 @@ pub fn body_statements(f: &FuncCode, refs: &RefResolver, depth: usize) -> String
 /// - `fields`: the owning class's field name -> base type name, so a `this.field = <int>`
 ///   assignment casts the RHS to a `bool`/enum field.
 #[allow(clippy::too_many_arguments)]
-pub fn body_statements_ctor(f: &FuncCode, refs: &RefResolver, depth: usize, super_ctor: Option<&str>, ret_ty: Option<&DataType>, fields: Option<&HashMap<String, String>>, param_types: Option<&[String]>, class_name: Option<&str>) -> String {
+pub fn body_statements_ctor(f: &FuncCode, refs: &RefResolver, depth: usize, super_ctor: Option<&str>, ret_ty: Option<&DataType>, fields: Option<&HashMap<String, String>>, param_types: Option<&[String]>, class_name: Option<&str>, local_types: Option<&HashMap<i32, String>>) -> String {
     let instrs = match disassemble(&f.bytecode) {
         Ok(i) => i,
         Err(e) => return format!("{}// disasm error: {e}\n", "    ".repeat(depth)),
     };
     let g = cfg::build(&instrs);
-    let ctx = Ctx { f, refs, instrs: &instrs, super_ctor, ret_ty, fields, param_types, class_name };
+    let ctx = Ctx { f, refs, instrs: &instrs, super_ctor, ret_ty, fields, param_types, class_name, local_types };
     let idx_of: HashMap<usize, usize> =
         g.blocks.iter().enumerate().map(|(i, b)| (b.start_dw, i)).collect();
     let mut body = String::new();
@@ -108,6 +108,7 @@ struct Ctx<'a> {
     fields: Option<&'a HashMap<String, String>>,
     param_types: Option<&'a [String]>,
     class_name: Option<&'a str>,
+    local_types: Option<&'a HashMap<i32, String>>,
 }
 
 impl Ctx<'_> {
@@ -318,6 +319,18 @@ fn cast_arg(arg: &Arg, pt: &DataType, refs: &RefResolver) -> String {
     arg.s.clone()
 }
 
+/// Wrap a call result in `Cast<DstType>(...)` when it's stored into an object local of a
+/// different (derived) type — the cache erases the covariant return type of template getters
+/// like `GetTypedOuter<T>`/`SpawnedStorage<T>` to the base, so AS rejects the implicit
+/// downcast. Only applies between UObject/AActor types (`U*`/`A*`).
+fn downcast(rhs: String, src_ty: Option<String>, dst_ty: Option<&String>, _refs: &RefResolver) -> String {
+    let is_obj = |s: &str| s.starts_with('U') || s.starts_with('A');
+    match (src_ty, dst_ty) {
+        (Some(s), Some(d)) if is_obj(&s) && is_obj(d) && s != *d => format!("Cast<{d}>({rhs})"),
+        _ => rhs,
+    }
+}
+
 /// Render the RHS of `field = <int>` for a field whose type name is `tyname`:
 /// numeric fields take the int as-is; bool/enum get the cast; anything else (FName,
 /// F-structs, U*/A* objects) can't hold an int — emit the stub sentinel so the function
@@ -404,12 +417,14 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
     let mut ref_reg_ty: Option<String> = None; // field type name behind ref_reg (for casts)
     let mut set_consts: HashMap<i32, ConstBits> = HashMap::new(); // last SetV* constant per slot
     let mut pending: Option<String> = None; // unconsumed call/ctor result
+    let mut pending_ty: Option<String> = None; // recovered type of `pending` (call return type)
     let mut ret_val: Option<String> = None;
     let name = |off: i32| ctx.slot_name(off);
     let w = |ins: &Instr, i: usize| s16(ins.words.get(i).copied().unwrap_or(0));
 
     macro_rules! flush {
         () => {
+            pending_ty = None;
             if let Some(p) = pending.take() {
                 out.push(format!("{p};"));
             }
@@ -575,8 +590,10 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 let f = ctx.refs.func_by_id(id).unwrap_or("func?").to_string();
                 pending = if f == "StaticClass" {
                     stack.clear();
+                    pending_ty = None;
                     Some(format!("{}::StaticClass()", ctx.class_name.unwrap_or("UObject")))
                 } else {
+                    pending_ty = ctx.refs.func_ret_by_id(id).map(|d| d.base_name(ctx.refs));
                     build_call(&mut stack, &f, ctx.refs.is_method_by_id(id), ctx.super_ctor, ctx.refs.func_params_by_id(id), ctx.refs)
                 };
             }
@@ -585,13 +602,16 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 let f = ctx.refs.func_by_ptr(ptr).unwrap_or("syscall?").to_string();
                 pending = if f == "StaticClass" {
                     stack.clear();
+                    pending_ty = None;
                     Some(format!("{}::StaticClass()", ctx.class_name.unwrap_or("UObject")))
                 } else {
+                    pending_ty = ctx.refs.func_ret_by_ptr(ptr).map(|d| d.base_name(ctx.refs));
                     build_call(&mut stack, &f, ctx.refs.is_method_by_ptr(ptr), ctx.super_ctor, ctx.refs.func_params_by_ptr(ptr), ctx.refs)
                 };
             }
             "CallPtr" => {
                 let f = name(w(ins, 0));
+                pending_ty = None;
                 pending = build_call(&mut stack, &f, false, ctx.super_ctor, None, ctx.refs);
             }
             // ---- object construction ----
@@ -599,16 +619,23 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 let tptr = ins.qwords.first().copied().unwrap_or(0) as i64;
                 let ty = ctx.refs.type_by_ptr(tptr).unwrap_or("Object").to_string();
                 let args: Vec<String> = std::mem::take(&mut stack).into_iter().filter(|a| !a.s.is_empty()).map(|a| a.s).collect();
+                pending_ty = Some(ty.clone());
                 pending = Some(format!("{ty}({})", args.join(", ")));
             }
             // ---- result capture ----
             "STOREOBJ" => {
-                flush_store(&mut out, name(w(ins, 0)), pending.take().or_else(|| obj_reg.take()));
+                let slot = w(ins, 0);
+                let rhs = match pending.take() {
+                    Some(p) => Some(downcast(p, pending_ty.take(), ctx.local_types.and_then(|m| m.get(&slot)), ctx.refs)),
+                    None => obj_reg.take(),
+                };
+                flush_store(&mut out, name(slot), rhs);
             }
             "CpyRtoV4" | "CpyRtoV8" => {
                 if let Some(p) = pending.take() {
                     out.push(format!("{} = {};", name(w(ins, 0)), p));
                 }
+                pending_ty = None;
             }
             "LOADOBJ" => obj_reg = Some(name(w(ins, 0))),
             "CpyVtoR4" | "CpyVtoR8" | "CpyVtoR1" => {
