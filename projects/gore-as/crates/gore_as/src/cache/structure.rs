@@ -127,13 +127,15 @@ impl Ctx<'_> {
         self.param_or_arg((-off) as usize)
     }
 
-    /// Recovered base type name for a parameter slot (None for `this`, locals, or unknowns).
+    /// Recovered base type name for a slot: object-local type for `off > 0`, parameter type
+    /// for params; None for `this` / unknowns.
     fn slot_type(&self, off: i32) -> Option<String> {
+        if off > 0 {
+            return self.local_types.and_then(|m| m.get(&off)).cloned();
+        }
         let idx = if self.f.is_method {
-            if off >= 0 { return None; }
             (-off - AS_PTR_SIZE) as usize
         } else {
-            if off > 0 { return None; }
             (-off) as usize
         };
         self.param_types
@@ -282,12 +284,22 @@ fn cast_arg(arg: &Arg, pt: &DataType, refs: &RefResolver) -> String {
         if pt.token == 5 {
             if let Some(at) = &arg.ty {
                 // compare the type "head" (before any `<...>`) so covariant template
-                // instantiations (e.g. TSubclassOf<Derived> vs <Base>) aren't flagged, but
-                // unrelated value types (F-struct / E-enum / T-template) are.
+                // instantiations (e.g. TSubclassOf<Derived> vs <Base>) aren't flagged.
                 let head = |s: &str| s.split('<').next().unwrap_or(s).to_string();
                 let is_value = |s: &str| matches!(s.bytes().next(), Some(b'F') | Some(b'E') | Some(b'T'));
+                let is_obj = |s: &str| matches!(s.bytes().next(), Some(b'U') | Some(b'A'));
                 let (ph, ah) = (head(&pt.base_name(refs)), head(at));
+                // value types (F/E/T) have no inheritance — any head mismatch is wrong.
                 if is_value(&ph) && is_value(&ah) && ph != ah {
+                    return ARGMISMATCH.into();
+                }
+                // objects (U*/A*): an arg that isn't the param or a subclass of it is wrong —
+                // but only when BOTH are known script classes (else an engine upcast we can't
+                // verify; stay conservative and allow it).
+                if is_obj(&ph) && is_obj(&ah) && ah != ph
+                    && refs.is_script_class(&ah) && refs.is_script_class(&ph)
+                    && !refs.is_subclass(&ah, &ph)
+                {
                     return ARGMISMATCH.into();
                 }
             }

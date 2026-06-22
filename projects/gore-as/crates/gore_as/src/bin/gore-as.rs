@@ -77,6 +77,21 @@ enum Cmd {
     },
 }
 
+/// Build the script-class hierarchy (class name -> super class name) from parsed modules.
+fn class_hierarchy(mods: &[gore_as::cache::model::Module]) -> std::collections::HashMap<String, String> {
+    let mut h = std::collections::HashMap::new();
+    for m in mods {
+        for c in &m.classes {
+            if let Some(s) = &c.super_class {
+                if !s.is_empty() {
+                    h.insert(c.name.clone(), s.clone());
+                }
+            }
+        }
+    }
+    h
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
@@ -120,8 +135,9 @@ fn main() -> Result<()> {
         }
         Cmd::EmitAll { file, outdir } => {
             let bytes = std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?;
-            let refs = gore_as::cache::refs::RefResolver::build(&bytes).context("resolver")?;
+            let mut refs = gore_as::cache::refs::RefResolver::build(&bytes).context("resolver")?;
             let mods = gore_as::cache::model::parse_modules(&bytes).context("parse modules")?;
+            refs.set_class_hierarchy(class_hierarchy(&mods));
             let (mut written, mut stubbed) = (0usize, 0usize);
             for m in &mods {
                 let src = gore_as::cache::emit::emit_module(m, &refs);
@@ -140,8 +156,9 @@ fn main() -> Result<()> {
         }
         Cmd::Emit { file, needle, max } => {
             let bytes = std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?;
-            let refs = gore_as::cache::refs::RefResolver::build(&bytes).context("resolver")?;
+            let mut refs = gore_as::cache::refs::RefResolver::build(&bytes).context("resolver")?;
             let mods = gore_as::cache::model::parse_modules(&bytes).context("parse modules")?;
+            refs.set_class_hierarchy(class_hierarchy(&mods));
             let mut n = 0;
             for m in mods.iter().filter(|m| m.name.contains(&needle)) {
                 if n >= max {

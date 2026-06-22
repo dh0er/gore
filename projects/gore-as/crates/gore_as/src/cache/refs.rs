@@ -39,6 +39,9 @@ pub struct RefResolver {
     type_names: std::collections::HashSet<String>,
     /// Namespace per global ref ptr (e.g. an `FColor::Red` constant's `FColor`).
     global_ns: HashMap<i64, String>,
+    /// Script class -> its super class name (injected from the parsed modules after build).
+    /// Lets call sites distinguish a legal upcast from an unrelated-object arg.
+    class_super: HashMap<String, String>,
     /// FunctionReferences parameter DataTypes (for arg-type-driven casts at call sites).
     func_params: HashMap<i64, Vec<DataType>>,
     /// FunctionReferences return DataType.
@@ -155,6 +158,31 @@ impl RefResolver {
     /// True if `name` is a known type (so a call to it is a constructor, not a method).
     pub fn is_type_name(&self, name: &str) -> bool {
         self.type_names.contains(name)
+    }
+
+    /// Inject the script-class hierarchy (class name -> super name) from parsed modules.
+    pub fn set_class_hierarchy(&mut self, supers: HashMap<String, String>) {
+        self.class_super = supers;
+    }
+    /// True if `name` is a class DEFINED in a script module (vs an engine/native type).
+    pub fn is_script_class(&self, name: &str) -> bool {
+        self.class_super.contains_key(name)
+    }
+    /// True if `sub` is `sup` or transitively derives from it (within the script hierarchy).
+    pub fn is_subclass(&self, sub: &str, sup: &str) -> bool {
+        if sub == sup {
+            return true;
+        }
+        let mut cur = sub;
+        for _ in 0..64 {
+            // bound the walk against cycles
+            match self.class_super.get(cur) {
+                Some(s) if s == sup => return true,
+                Some(s) => cur = s,
+                None => return false,
+            }
+        }
+        false
     }
     /// Template SubTypes for a type ptr (e.g. TSubclassOf -> [UObject]).
     pub fn type_subtypes(&self, ptr: i64) -> Option<&[DataType]> {
