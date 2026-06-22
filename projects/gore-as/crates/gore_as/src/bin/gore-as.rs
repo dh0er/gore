@@ -139,7 +139,14 @@ fn main() -> Result<()> {
         }
         Cmd::Decompile { file, needle, max } => {
             let bytes = std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?;
-            let refs = gore_as::cache::refs::RefResolver::build(&bytes).context("resolver")?;
+            let mut refs = gore_as::cache::refs::RefResolver::build(&bytes).context("resolver")?;
+            // Mirror `emit`/`emit-all`: load the class hierarchy and native arity table so
+            // decompile output matches emitted source (subclass casts, native-call trimming).
+            let mods = gore_as::cache::model::parse_modules(&bytes).context("parse modules")?;
+            refs.set_class_hierarchy(class_hierarchy(&mods));
+            if let Some(api) = load_native_api(&file) {
+                refs.set_native_api(api);
+            }
             let funcs = gore_as::cache::walk_modules::collect_function_bytecodes(&bytes).context("walk")?;
             let mut n = 0;
             for f in funcs.iter().filter(|f| f.func.contains(&needle)) {
@@ -178,7 +185,8 @@ fn main() -> Result<()> {
                 }
                 let path = outdir.join(&rel);
                 if let Some(p) = path.parent() {
-                    std::fs::create_dir_all(p).ok();
+                    std::fs::create_dir_all(p)
+                        .with_context(|| format!("creating {}", p.display()))?;
                 }
                 std::fs::write(&path, src).with_context(|| format!("writing {}", path.display()))?;
                 written += 1;
