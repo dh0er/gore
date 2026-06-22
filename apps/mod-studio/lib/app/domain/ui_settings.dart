@@ -135,7 +135,7 @@ class NoopUiSettingsStore implements UiSettingsStore {
 }
 
 /// Resolves the shared `gore-tools` umbrella data directory, matching the Rust
-/// side (`gore_core::paths::shared_data_dir`) exactly:
+/// side (`gore_loc::paths::shared_data_dir`) exactly:
 /// - Windows: `%LOCALAPPDATA%` (fallback `%APPDATA%`) then `\gore-tools`
 /// - macOS:   `$HOME/Library/Application Support/gore-tools`
 /// - Linux:   `$XDG_DATA_HOME/gore-tools` else `$HOME/.local/share/gore-tools`

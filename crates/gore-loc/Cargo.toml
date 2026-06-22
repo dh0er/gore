@@ -16,6 +16,3 @@ aes = "0.8"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"
-
-[dev-dependencies]
-pretty_assertions = "1"

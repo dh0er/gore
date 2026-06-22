@@ -420,7 +420,6 @@ dependencies = [
 name = "gore-catalog"
 version = "0.0.0"
 dependencies = [
- "pretty_assertions",
  "serde",
  "serde_json",
 ]
@@ -441,7 +440,6 @@ name = "gore-loc"
 version = "0.0.0"
 dependencies = [
  "aes",
- "pretty_assertions",
  "serde",
  "serde_json",
  "thiserror",
@@ -453,7 +451,6 @@ name = "gore-modgen"
 version = "0.0.0"
 dependencies = [
  "gore-reflect",
- "pretty_assertions",
  "serde",
  "serde_json",
  "thiserror",
@@ -474,7 +471,6 @@ dependencies = [
 name = "gore-reflect"
 version = "0.0.0"
 dependencies = [
- "pretty_assertions",
  "serde",
  "serde_json",
  "thiserror",

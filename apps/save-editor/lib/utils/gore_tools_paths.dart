@@ -9,7 +9,7 @@ import 'package:path/path.dart' as p;
 /// serves every tool. This app's persisted JSON lives in the `gore-save`
 /// subfolder; the loc catalog stays directly in `gore-tools`.
 ///
-/// The base-dir resolution mirrors the Rust side (`gore_core::paths`) exactly:
+/// The base-dir resolution mirrors the Rust side (`gore_loc::paths`) exactly:
 /// - Windows: `%LOCALAPPDATA%` (falls back to `%APPDATA%`) then `\gore-tools`
 /// - macOS:   `$HOME/Library/Application Support/gore-tools`
 /// - Linux:   `$XDG_DATA_HOME/gore-tools` (if set) else `$HOME/.local/share/gore-tools`

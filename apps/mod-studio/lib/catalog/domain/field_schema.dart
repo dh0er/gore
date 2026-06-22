@@ -4,7 +4,7 @@ enum FieldType { int_, float_, bool_, string_, enum_ }
 /// Schema for one editable CDO field on a UItemDefinition subclass.
 /// Sourced from the parsed model.json; the GUI uses this to choose the
 /// correct input widget and run client-side validation before calling
-/// gore_core::validate_override.
+/// gore_modgen::validate_config.
 class FieldSchema {
   const FieldSchema({
     required this.name,

@@ -12,7 +12,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Parse UE4SS SDK dump into gore-core reflection model JSON
+    /// Parse UE4SS SDK dump into gore-reflect reflection model JSON
     Dump {
         /// Path to the CXXHeaderDump/ directory
         sdk_dir: PathBuf,
