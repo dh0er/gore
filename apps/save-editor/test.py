@@ -69,7 +69,7 @@ def main() -> int:
     parser.add_argument(
         "suite",
         nargs="?",
-        choices=["all", "rust", "tools", "flutter", "analyze", "build-native"],
+        choices=["all", "rust", "flutter", "analyze", "build-native"],
         default="all",
     )
     args = parser.parse_args()
@@ -77,23 +77,12 @@ def main() -> int:
     suites = (
         [args.suite]
         if args.suite != "all"
-        else ["rust", "tools", "analyze", "flutter"]
+        else ["rust", "analyze", "flutter"]
     )
     codes: list[int] = []
 
     if "rust" in suites:
         codes.append(run("Rust tests", [str(CARGO), "test"]))
-
-    if "tools" in suites:
-        codes.append(
-            run(
-                "Python tool tests",
-                [sys.executable, "-m", "unittest", "discover", "-s", "tools"],
-            )
-        )
-        # The catalog generators + their tests now live in gore-cli (Rust); they
-        # are covered by `cargo test` (the "rust" suite), so there are no Python
-        # pipeline tests to discover here.
 
     if "build-native" in suites:
         codes.append(run("Rust native build", [str(CARGO), "build"]))
