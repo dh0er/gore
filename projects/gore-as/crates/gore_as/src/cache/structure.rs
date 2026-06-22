@@ -659,9 +659,14 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 flush!();
                 out.push(format!("{0} = {0} - 1;", name(w(ins, 0))));
             }
-            "NEGi" | "NEGf" | "NEGd" | "NOT" => {
+            "NEGi" | "NEGf" | "NEGd" => {
                 flush!();
                 out.push(format!("{0} = -{0};", name(w(ins, 0))));
+            }
+            // asBC NOT (opcode 6) is the boolean logical invert, not numeric negation.
+            "NOT" => {
+                flush!();
+                out.push(format!("{0} = !{0};", name(w(ins, 0))));
             }
             // ---- comparisons ----
             "CMPi" | "CMPu" | "CMPf" | "CMPd" | "CMPi64" | "CMPu64" => {

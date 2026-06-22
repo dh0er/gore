@@ -69,6 +69,13 @@ pub struct Module {
 }
 
 pub fn parse_modules(bytes: &[u8]) -> Result<Vec<Module>, WireError> {
+    if bytes.len() < CacheHeader::SIZE {
+        return Err(WireError::Eof {
+            pos: 0,
+            need: CacheHeader::SIZE,
+            have: bytes.len(),
+        });
+    }
     let mut c = Cursor::at(bytes, CacheHeader::SIZE);
     let count = u32::from_le_bytes(bytes[0x14..0x18].try_into().unwrap()) as usize;
     let mut out = Vec::with_capacity(count);

@@ -67,8 +67,13 @@ pub fn build(instrs: &[Instr]) -> Cfg {
     for (i, ins) in instrs.iter().enumerate() {
         let n = ins.op.name;
         if is_uncond_jump(n) || is_cond_jump(n) {
+            // Only honour a jump target that lands on a decoded instruction boundary;
+            // a malformed operand pointing mid-instruction would later panic the
+            // `off_to_idx[&start]` lookup. Skip it (the block just loses that edge).
             if let Some(t) = jump_target(ins) {
-                leaders.insert(t);
+                if off_to_idx.contains_key(&t) {
+                    leaders.insert(t);
+                }
             }
             // instruction after the jump is a leader (fallthrough / dead)
             if let Some(next) = instrs.get(i + 1) {
@@ -100,11 +105,11 @@ pub fn build(instrs: &[Instr]) -> Cfg {
         if is_return(n) || n == "JMPP" {
             // RET: none; JMPP: table targets unknown here
         } else if is_uncond_jump(n) {
-            if let Some(t) = jump_target(last) {
+            if let Some(t) = jump_target(last).filter(|t| off_to_idx.contains_key(t)) {
                 succs.push(t);
             }
         } else if is_cond_jump(n) {
-            if let Some(t) = jump_target(last) {
+            if let Some(t) = jump_target(last).filter(|t| off_to_idx.contains_key(t)) {
                 succs.push(t);
             }
             if let Some(&fall) = leader_vec.get(li + 1) {

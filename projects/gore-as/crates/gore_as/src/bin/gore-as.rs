@@ -166,7 +166,17 @@ fn main() -> Result<()> {
                     stubbed += 1;
                 }
                 let rel = if m.file.is_empty() { format!("{}.as", m.name) } else { m.file.clone() };
-                let path = outdir.join(rel.replace('\\', "/"));
+                let rel = rel.replace('\\', "/");
+                // A cache entry's relative filename is untrusted: reject `..`, absolute, or
+                // drive-prefixed components so output can never escape `outdir`.
+                if std::path::Path::new(&rel).components().any(|c| {
+                    use std::path::Component::*;
+                    matches!(c, ParentDir | RootDir | Prefix(_))
+                }) {
+                    eprintln!("skipping {}: unsafe output path {rel:?}", m.name);
+                    continue;
+                }
+                let path = outdir.join(&rel);
                 if let Some(p) = path.parent() {
                     std::fs::create_dir_all(p).ok();
                 }
