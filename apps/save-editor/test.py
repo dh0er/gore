@@ -11,7 +11,8 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).parent
-APP = ROOT / "app"
+# Flat layout: the Flutter app lives directly at apps/save-editor (no app/ subdir).
+APP = ROOT
 
 
 def _resolve_tool(env_var: str, names: list[str], fallback: Path) -> Path:
