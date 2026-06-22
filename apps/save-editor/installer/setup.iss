@@ -45,7 +45,7 @@ LicenseFile=..\..\..\LICENSE
 ; dropped from a release, so stale binaries must be deleted explicitly.
 [InstallDelete]
 ; The out-of-process G1R codec host was replaced by an in-process codec
-; (linked into goresave_core.dll); remove the now-unused helper on upgrade.
+; (linked into gore_save.dll); remove the now-unused helper on upgrade.
 Type: files; Name: "{app}\goresave_g1r_codec_host.exe"
 ; ...and its derived-profile cache. The host defaulted to %LOCALAPPDATA%; also
 ; clear the %APPDATA% location defensively in case an older build wrote there.
