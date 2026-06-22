@@ -1152,7 +1152,9 @@ fn bin_op(name: &str) -> Option<&'static str> {
         "BOR" | "BOR64" => "|",
         "BXOR" | "BXOR64" => "^",
         "BSLL" | "BSLL64" => "<<",
-        "BSRA" | "BSRA64" => ">>",
+        // arithmetic (BSRA) and logical (BSRL) right shift both render `>>`; AngelScript
+        // re-derives the variant from the operand's signedness (matches the linear decompiler).
+        "BSRA" | "BSRA64" | "BSRL" | "BSRL64" => ">>",
         _ => return None,
     })
 }
