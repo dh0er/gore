@@ -244,8 +244,9 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
     let has_recv = match params.map(|p| p.len()) {
         Some(w) if a.len() == w + 1 => true,
         Some(w) if a.len() == w => false,
-        Some(w) => return Some(amm(&format!("argcount_g{}_w{}", a.len(), w))),
-        None => is_method && !a.is_empty(), // no signature: fall back to the flag
+        // count mismatch: render best-effort (some are cache param-count metadata gaps that
+        // still compile); the in-game compile loop force-stubs the ones that don't.
+        Some(_) | None => is_method && !a.is_empty(),
     };
     if has_recv {
         let recv = a.pop().unwrap();
