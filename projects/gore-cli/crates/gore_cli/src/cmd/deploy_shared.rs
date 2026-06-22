@@ -79,6 +79,17 @@ fn resolve_default_src() -> Result<PathBuf> {
 }
 
 fn copy_dir(src: &Path, dest: &Path) -> Result<usize> {
+    // A pre-existing symlinked destination (anywhere in the tree, e.g. Mods/shared/gorelib ->
+    // /tmp/elsewhere) would be FOLLOWED by create_dir_all / copy, writing outside Mods. Refuse
+    // it; this runs at every recursion level, so nested links are caught too.
+    if let Ok(meta) = fs::symlink_metadata(dest) {
+        if meta.file_type().is_symlink() {
+            bail!(
+                "destination '{}' is a symlink; refusing to deploy through it",
+                dest.display()
+            );
+        }
+    }
     fs::create_dir_all(dest).with_context(|| format!("creating {}", dest.display()))?;
     let mut count = 0;
     for entry in fs::read_dir(src).with_context(|| format!("reading {}", src.display()))? {
@@ -94,6 +105,13 @@ fn copy_dir(src: &Path, dest: &Path) -> Result<usize> {
         if ft.is_dir() {
             count += copy_dir(&from, &to)?;
         } else {
+            // Refuse to write through an existing symlinked file destination.
+            if fs::symlink_metadata(&to).is_ok_and(|m| m.file_type().is_symlink()) {
+                bail!(
+                    "destination '{}' is a symlink; refusing to deploy through it",
+                    to.display()
+                );
+            }
             fs::copy(&from, &to).with_context(|| format!("copying {}", from.display()))?;
             count += 1;
         }

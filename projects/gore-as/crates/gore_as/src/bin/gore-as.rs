@@ -183,6 +183,22 @@ fn main() -> Result<()> {
                     eprintln!("skipping {}: unsafe output path {rel:?}", m.name);
                     continue;
                 }
+                // The lexical check above stops `..`/absolute paths, but a pre-existing
+                // symlinked component under outdir would still be FOLLOWED by create_dir_all /
+                // write, escaping outdir. Reject any existing symlink along outdir -> path.
+                let mut cur = outdir.clone();
+                let mut symlinked = None;
+                for comp in std::path::Path::new(&rel).components() {
+                    cur.push(comp);
+                    if std::fs::symlink_metadata(&cur).is_ok_and(|md| md.file_type().is_symlink()) {
+                        symlinked = Some(cur.clone());
+                        break;
+                    }
+                }
+                if let Some(link) = symlinked {
+                    eprintln!("skipping {}: symlinked path component {}", m.name, link.display());
+                    continue;
+                }
                 let path = outdir.join(&rel);
                 if let Some(p) = path.parent() {
                     std::fs::create_dir_all(p)
