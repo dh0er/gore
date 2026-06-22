@@ -402,6 +402,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "gore-as"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "assert_cmd",
+ "clap",
+ "predicates 2.1.5",
+ "pretty_assertions",
+ "thiserror",
+]
+
+[[package]]
 name = "gore-oodle"
 version = "0.0.0"
 dependencies = [
@@ -423,18 +435,6 @@ dependencies = [
  "serde_json",
  "sha1",
  "tempfile",
- "thiserror",
-]
-
-[[package]]
-name = "gore_as"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "assert_cmd",
- "clap",
- "predicates 2.1.5",
- "pretty_assertions",
  "thiserror",
 ]
 

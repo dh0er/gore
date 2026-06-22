@@ -1,5 +1,5 @@
 [package]
-name = "gore_as"
+name = "gore-as"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
