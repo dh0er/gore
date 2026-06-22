@@ -81,7 +81,8 @@ pub fn body_statements_ctor(f: &FuncCode, refs: &RefResolver, depth: usize, supe
         Err(e) => return format!("{}// disasm error: {e}\n", "    ".repeat(depth)),
     };
     let g = cfg::build(&instrs);
-    let ctx = Ctx { f, refs, instrs: &instrs, super_ctor, ret_ty, fields, param_types, class_name, local_types };
+    let float_slots = float_operand_slots(&instrs);
+    let ctx = Ctx { f, refs, instrs: &instrs, super_ctor, ret_ty, fields, param_types, class_name, local_types, float_slots };
     let idx_of: HashMap<usize, usize> =
         g.blocks.iter().enumerate().map(|(i, b)| (b.start_dw, i)).collect();
     let mut body = String::new();
@@ -117,6 +118,29 @@ struct Ctx<'a> {
     param_types: Option<&'a [String]>,
     class_name: Option<&'a str>,
     local_types: Option<&'a HashMap<i32, String>>,
+    /// Slots that appear as an operand of a float/double arithmetic or compare op, so a
+    /// `SetV4`/`SetV8` constant written to one is rendered as a float literal, not raw int bits.
+    float_slots: std::collections::HashSet<i32>,
+}
+
+/// Collect slots used as an operand of a float/double arithmetic or compare op. Every word
+/// operand of those ops is a float/double value, so a constant feeding such a slot is float.
+fn float_operand_slots(instrs: &[Instr]) -> std::collections::HashSet<i32> {
+    let is_float_op = |n: &str| {
+        matches!(n,
+            "ADDf" | "SUBf" | "MULf" | "DIVf" | "MODf" | "NEGf" | "IncVf" | "DecVf"
+            | "ADDIf" | "SUBIf" | "MULIf" | "CMPf" | "CMPIf"
+            | "ADDd" | "SUBd" | "MULd" | "DIVd" | "MODd" | "NEGd" | "CMPd")
+    };
+    let mut slots = std::collections::HashSet::new();
+    for ins in instrs {
+        if is_float_op(ins.op.name) {
+            for &wd in &ins.words {
+                slots.insert(wd as i16 as i32);
+            }
+        }
+    }
+    slots
 }
 
 impl Ctx<'_> {
@@ -635,13 +659,24 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 flush!();
                 let bits = ins.qwords.first().copied().unwrap_or(0); // 64-bit const is in qwords
                 set_consts.insert(w(ins, 0), ConstBits::W8(bits));
-                out.push(format!("{} = {};", name(w(ins, 0)), bits as i64));
+                // A constant feeding a float/double-used slot is an IEEE-754 value, not an int.
+                let rhs = if ctx.float_slots.contains(&w(ins, 0)) {
+                    fmt_float(ConstBits::W8(bits), true)
+                } else {
+                    (bits as i64).to_string()
+                };
+                out.push(format!("{} = {};", name(w(ins, 0)), rhs));
             }
             "SetV4" | "SetV1" => {
                 flush!();
                 let bits = ins.dwords.first().copied().unwrap_or(0);
                 set_consts.insert(w(ins, 0), ConstBits::W4(bits));
-                out.push(format!("{} = {};", name(w(ins, 0)), bits as i32));
+                let rhs = if ctx.float_slots.contains(&w(ins, 0)) {
+                    fmt_float(ConstBits::W4(bits), false)
+                } else {
+                    (bits as i32).to_string()
+                };
+                out.push(format!("{} = {};", name(w(ins, 0)), rhs));
             }
             "CpyVtoV4" | "CpyVtoV8" => {
                 flush!();
@@ -677,9 +712,19 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
             "CMPi" | "CMPu" | "CMPf" | "CMPd" | "CMPi64" | "CMPu64" => {
                 cmp = Some(Cmp { a: name(w(ins, 0)), b: name(w(ins, 1)), ..Default::default() });
             }
-            "CMPIi" | "CMPIf" | "CMPIu" => {
+            "CMPIi" | "CMPIu" => {
                 let c = ins.dwords.first().copied().unwrap_or(0) as i32;
                 cmp = Some(Cmp { a: name(w(ins, 0)), b: c.to_string(), ..Default::default() });
+            }
+            // CMPIf's dword immediate is an IEEE-754 float payload, not an int — render it as
+            // a float literal so e.g. `x < 1.0f` doesn't become `x < 1065353216`.
+            "CMPIf" => {
+                let bits = ins.dwords.first().copied().unwrap_or(0);
+                cmp = Some(Cmp {
+                    a: name(w(ins, 0)),
+                    b: fmt_float(ConstBits::W4(bits), false),
+                    ..Default::default()
+                });
             }
             "CmpPtrNull" => cmp = Some(Cmp { a: name(w(ins, 0)), b: "nullptr".into(), ..Default::default() }),
             // a test op turns the CMP register into a bool; it carries the real relational
