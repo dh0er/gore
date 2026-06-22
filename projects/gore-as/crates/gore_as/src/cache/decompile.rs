@@ -169,11 +169,19 @@ pub fn decompile_function(f: &FuncCode, refs: &RefResolver) -> String {
                 let args = std::mem::take(&mut arg_stack);
                 value_reg = Some(Expr::Call(fname, args));
             }
-            "CALLSYS" | "Thiscall1" | "CallPtr" => {
+            "CALLSYS" | "Thiscall1" => {
                 let ptr = ins.qwords.first().copied().unwrap_or(0) as i64;
                 let fname = refs.func_by_ptr(ptr).unwrap_or("syscall?").to_string();
                 let args = std::mem::take(&mut arg_stack);
                 value_reg = Some(Expr::Call(fname, args));
+            }
+            // Indirect function-pointer call: `CallPtr` is rW_ARG, so its callee is the slot
+            // value in `words` (not a qword pointer) — render that expression as the callee.
+            "CallPtr" => {
+                let slot = s16(ins.words.first().copied().unwrap_or(0));
+                let callee = get(&slots, slot).render();
+                let args = std::mem::take(&mut arg_stack);
+                value_reg = Some(Expr::Call(callee, args));
             }
             // --- returns ---
             "RET" => {
