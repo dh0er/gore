@@ -73,14 +73,16 @@ pub fn emit_module(m: &Module, refs: &RefResolver) -> String {
             }
             continue;
         }
-        match g.value {
-            Some(v) => {
-                let _ = writeln!(s, "const {base} {} = {};", g.name, render_const(&base, v));
-            }
-            None => {
-                // a primitive/enum const whose runtime init we didn't recover — stub value
-                let _ = writeln!(s, "const {base} {} = {};", g.name, default_for(&base));
-            }
+        // a primitive/enum const; None = runtime init we didn't recover, use a stub value.
+        let inner = match g.value {
+            Some(v) => render_const(&base, v),
+            None => default_for(&base),
+        };
+        // AngelScript rejects implicit int->enum, so an enum const must be cast: `EType(1)`.
+        if is_enum(&base) {
+            let _ = writeln!(s, "const {base} {} = {base}({inner});", g.name);
+        } else {
+            let _ = writeln!(s, "const {base} {} = {inner};", g.name);
         }
     }
     if !m.globals.is_empty() {
