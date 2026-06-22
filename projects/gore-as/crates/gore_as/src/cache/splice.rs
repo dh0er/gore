@@ -29,6 +29,8 @@ pub enum SpliceError {
     NameCollision(String),
     #[error("module name {0:?} not found in the base cache (nothing to replace)")]
     NameNotFound(String),
+    #[error("module name {0:?} is ambiguous: it matches one module's TMap key and a different module's inner name — pass the exact TMap key")]
+    AmbiguousTarget(String),
     #[error("tail tables of {which} don't end at EOF (ended {got:#x}, len {len:#x}) — parse desync")]
     TailNotAtEof {
         which: &'static str,
@@ -211,7 +213,19 @@ pub fn replace_module(
     // emitted module name as `target` doesn't get a spurious NameNotFound.
     let ranges = module_ranges(base)?;
     let idx = match ranges.iter().position(|(name, _, _)| name == target_name) {
-        Some(i) => i,
+        Some(i) => {
+            // The TMap key matched. Guard against the pathological case where `target` ALSO
+            // equals a DIFFERENT module's inner name: silently replacing the key match could
+            // be the wrong module, so refuse and require the exact key.
+            let collides = super::model::parse_modules(base)?
+                .iter()
+                .enumerate()
+                .any(|(j, m)| j != i && j < ranges.len() && m.name == target_name);
+            if collides {
+                return Err(SpliceError::AmbiguousTarget(target_name.to_string()));
+            }
+            i
+        }
         None => {
             // Fall back to the inner `ModuleName`, but ONLY if it's unambiguous: if several
             // entries share that inner name (different TMap keys), we can't tell which to
