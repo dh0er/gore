@@ -499,7 +499,18 @@ fn render_const(ty: &str, v: u64) -> String {
         "float" | "double" => format!("{}", f64::from_bits(v)),
         "float32" => format!("{}f", f32::from_bits(v as u32)),
         "bool" => if v != 0 { "true".into() } else { "false".into() },
-        _ => (v as i64).to_string(),
+        // Render integers per their actual width AND signedness: an unsigned type must not be
+        // emitted negative (e.g. uint64 0xffff…ffff as -1), and signed types sign-extend from
+        // their own width (the value lives in the low bits of the stored u64).
+        "uint64" => v.to_string(),
+        "uint" => (v as u32).to_string(),
+        "uint16" => (v as u16).to_string(),
+        "uint8" => (v as u8).to_string(),
+        "int64" => (v as i64).to_string(),
+        "int16" => (v as i16).to_string(),
+        "int8" => (v as i8).to_string(),
+        // "int" and any other int-like fallback: 32-bit signed.
+        _ => (v as i32).to_string(),
     }
 }
 
