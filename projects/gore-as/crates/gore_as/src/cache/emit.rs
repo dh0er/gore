@@ -185,9 +185,13 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
         Some(c) => format!("{c}::{}", f.name),
         None => f.name.clone(),
     };
-    let forced = force_stub_set().contains(&qid) || force_stub_set().contains(&f.name);
+    let reason = if force_stub_set().contains(&qid) || force_stub_set().contains(&f.name) {
+        Some("forced".to_string())
+    } else {
+        stub_reason(&body, &locals, f.params.len(), ret == "void")
+    };
 
-    if !forced && body_is_recoverable(&body, &locals, f.params.len(), ret == "void") {
+    if reason.is_none() {
         // hoist local declarations; primitives must be initialized (AngelScript errors on
         // "may not be initialized"), objects/structs/handles default-construct themselves.
         for (slot, ty) in &locals {
@@ -199,8 +203,8 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
         }
         s.push_str(&body);
     } else {
-        // stub fallback so the module still compiles
-        let _ = writeln!(s, "{ind}    // body not fully recovered — stub", );
+        // stub fallback so the module still compiles (reason recorded for aggregation)
+        let _ = writeln!(s, "{ind}    // body not fully recovered — stub [{}]", reason.unwrap());
         // constructors must NOT return a value; everything else returns a default.
         if !is_ctor && ret != "void" {
             let _ = writeln!(s, "{ind}    {ret} __r; return __r;");
@@ -237,35 +241,33 @@ fn render_params(f: &Func, refs: &RefResolver) -> String {
 /// placeholder `?` (e.g. `if (? != ?)`) when a comparison/operand couldn't be recovered,
 /// and may reference a `local_N` that wasn't inferred. Any of these is a syntax/semantic
 /// error that aborts the module's parse, so such a function falls back to a clean stub.
-fn body_is_recoverable(body: &str, locals: &BTreeMap<i32, String>, param_count: usize, ret_is_void: bool) -> bool {
-    // a call whose recovered arg count disagreed with its signature (ARGMISMATCH = \u{2})
-    if body.contains('\u{2}') {
-        return false;
+/// Returns `None` if the body is recoverable, else `Some(reason)` for the first gap found —
+/// the reason string is emitted in the stub comment so the stub causes can be aggregated.
+fn stub_reason(body: &str, locals: &BTreeMap<i32, String>, param_count: usize, ret_is_void: bool) -> Option<String> {
+    // an ARGMISMATCH sentinel (\u{2}<code>) — extract its cause code for aggregation.
+    if let Some(i) = body.find('\u{2}') {
+        let code: String = body[i + 1..].chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '_').collect();
+        return Some(format!("argmismatch:{}", if code.is_empty() { "?" } else { &code }));
     }
     for l in body.lines() {
         let t = l.trim_start();
-        // any decompiler annotation comment (disasm error or uncovered opcode, any case)
-        if t.starts_with("// ") {
-            return false;
+        if let Some(rest) = t.strip_prefix("// ") {
+            return Some(if rest.starts_with("disasm error") { "disasm-error" } else { "opcode-uncovered" }.into());
         }
-        // unresolved-operand placeholder
         if t.contains("(? ") || t.contains(" ?)") || t.contains(" ? ") {
-            return false;
+            return Some("unresolved-operand".into());
         }
     }
-    // a referenced local that wasn't hoisted would be an "undeclared identifier" error
     if !used_locals(body).iter().all(|n| locals.contains_key(n)) {
-        return false;
+        return Some("undeclared-local".into());
     }
-    // an `argN` reference past the declared parameter list (mis-decoded slot) is undeclared
     if used_idents(body, "arg").iter().any(|&n| n as usize >= param_count) {
-        return false;
+        return Some("arg-out-of-range".into());
     }
-    // a non-void function whose body never returns a value -> "Must return a value"
     if !ret_is_void && !body.contains("return ") {
-        return false;
+        return Some("no-return".into());
     }
-    true
+    None
 }
 
 /// Indices of every `<prefix>N` identifier in a body, at an identifier boundary

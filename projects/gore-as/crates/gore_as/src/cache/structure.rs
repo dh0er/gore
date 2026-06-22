@@ -55,6 +55,10 @@ const UNRESOLVED: &str = "\u{1}unresolved";
 /// its presence in a body forces the stub fallback. Distinct from UNRESOLVED so it is NOT
 /// stripped by the unresolved-statement retain (it must survive to reach the emitter).
 const ARGMISMATCH: &str = "\u{2}argmismatch";
+/// An ARGMISMATCH sentinel tagged with a short cause code (for stub-reason aggregation).
+fn amm(code: &str) -> String {
+    format!("\u{2}{code}")
+}
 
 /// Structured statement body for a function (no signature wrapper), indented at `depth`.
 /// Returns an error annotation string on disasm failure (never panics).
@@ -161,6 +165,16 @@ fn s16(w: u16) -> i32 {
     w as i16 as i32
 }
 
+/// A primitive numeric-conversion opcode (`dst = (cast) src`); the cast is implicit in
+/// type-erased AngelScript source, so we render the plain copy `dst = src`.
+fn is_numeric_cast(n: &str) -> bool {
+    matches!(n,
+        "iTOf" | "fTOi" | "uTOf" | "fTOu" | "iTOd" | "dTOi" | "uTOd" | "dTOu"
+        | "fTOd" | "dTOf" | "iTOb" | "iTOw" | "sbTOi" | "swTOi" | "ubTOi" | "uwTOi"
+        | "i64TOi" | "iTOi64" | "uTOi64" | "i64TOf" | "fTOi64" | "i64TOd" | "dTOi64"
+        | "u64TOf" | "fTOu64" | "u64TOd" | "dTOu64")
+}
+
 /// The raw bits of a `SetV*` constant written to a slot — so a later store into a float/
 /// double field can reinterpret them as the real IEEE-754 value instead of an int literal.
 #[derive(Clone, Copy)]
@@ -203,25 +217,32 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
         .into_iter()
         .filter(|x| !x.s.is_empty() && x.s != UNRESOLVED)
         .collect();
-    if is_method && !a.is_empty() {
+    // Receiver detection by COUNT, not the unreliable bIsMethod flag: AngelScript pushes
+    // receiver + N args (N+1 entries) for a method, N for a free call, and the cache's param
+    // count N is reliable. So a.len()==N+1 -> method (pop receiver), ==N -> free, else a genuine
+    // recovery mismatch -> stub. (Eliminates most phantom-arg / dropped-receiver stubs.)
+    let has_recv = match params.map(|p| p.len()) {
+        Some(w) if a.len() == w + 1 => true,
+        Some(w) if a.len() == w => false,
+        Some(w) => return Some(amm(&format!("argcount_g{}_w{}", a.len(), w))),
+        None => is_method && !a.is_empty(), // no signature: fall back to the flag
+    };
+    if has_recv {
         let recv = a.pop().unwrap();
-        // call to the super class's constructor on `this` -> `super(args)`
+        // super-class constructor on `this` -> `super(args)` (before is_type_name, since the
+        // super name is itself a type name).
         if super_ctor == Some(f) && recv.s == "this" {
             return Some(format!("super({})", render_args(&a, params, refs)));
         }
-        // a call whose name is a type = an in-place constructor (e.g. a member struct's
-        // default ctor the VM runs) — implicit in AS source, emit nothing.
+        // a call whose name is a type = an in-place constructor (member struct default ctor) —
+        // implicit in AS source, emit nothing.
         if refs.is_type_name(f) {
             return None;
         }
-        // operator-overload methods -> source operators. Cast the RHS to the operator's
-        // operand type (params[0]) so e.g. `this.NameField = <int>` on an FName becomes a
-        // stub (int can't convert) instead of an un-compilable assignment.
+        // operator-overload methods -> source operators (cast the RHS to the operand type).
         if let Some(op) = assign_op(f) {
-            // `this = Other` is a generated struct copy-ctor / assign (whole-object) — its
-            // const-ref param can't bind to the non-const opAssign; stub it.
             if op == "=" && recv.s == "this" {
-                return Some(ARGMISMATCH.into());
+                return Some(amm("copyctor")); // generated struct copy-ctor/assign — stub
             }
             match a.first() {
                 Some(rhs) => {
@@ -239,27 +260,19 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
                 return Some(format!("({} {op} {})", recv.s, r));
             }
         }
-        if arg_count_mismatch(a.len(), params) {
-            return Some(ARGMISMATCH.into());
-        }
         Some(format!("{}.{f}({})", recv.s, render_args(&a, params, refs)))
     } else {
         if refs.is_type_name(f) {
             return None; // free-standing in-place constructor — implicit in AS source
         }
-        if arg_count_mismatch(a.len(), params) {
-            return Some(ARGMISMATCH.into());
+        // an operator-overload method with no stack receiver (its target was in the reference
+        // register, e.g. a member opAssign) can't render as a free call — skip it rather than
+        // emit `opAssign(...)`, which never resolves.
+        if assign_op(f).is_some() || binop_method(f).is_some() {
+            return None;
         }
         Some(format!("{f}({})", render_args(&a, params, refs)))
     }
-}
-
-/// AngelScript always pushes every argument (defaults included) in the call bytecode, so
-/// a correct decompile recovers exactly as many args as the callee has params. A count
-/// mismatch means the arg recovery is wrong — signal the whole body as unreliable so the
-/// emitter falls back to a clean stub instead of an un-compilable call.
-fn arg_count_mismatch(n: usize, params: Option<&[DataType]>) -> bool {
-    params.is_some_and(|p| p.len() != n)
 }
 
 /// Render args joined by ", ", casting each int arg to the callee's expected param type.
@@ -676,11 +689,45 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                     }
                 }
             }
+            // Idiom-A member store: an ADDSi chain builds `this.a.b` on the stack top, then
+            // PopRPtr moves that address into the reference register for the following WRTV.
+            // (Ignoring it left the member expression on the stack -> phantom call args.)
+            "PopRPtr" => {
+                if let Some(top) = stack.pop() {
+                    ref_reg = Some(top.s);
+                    ref_reg_ty = top.ty;
+                }
+            }
+            // Handle-copy (asBC stack_inc -2): pop the source pointer to BALANCE the operand
+            // stack (the dominant phantom-arg cause). We deliberately do NOT emit `slot = src`:
+            // the source is often a const/derived handle whose direct assignment to the dest
+            // local fails to compile, and the value is re-read where it's actually used.
+            "RefCpyV" | "REFCPY" => { stack.pop(); }
+            // The TYPEID push is the implicit type operand of the following opCast/cast syscall
+            // (NOT counted in the cache param list) — drop it so the cast block stays balanced.
+            "TYPEID" => {}
+            // primitive numeric conversions (iTOf/fTOi/dTOf/sbTOi/...): `dst = src` (the cast is
+            // implicit in type-erased AS source).
+            n2 if is_numeric_cast(n2) => {
+                flush!();
+                out.push(format!("{} = {};", name(w(ins, 0)), name(w(ins, 1))));
+            }
+            "SetV2" => {
+                flush!();
+                let bits = ins.dwords.first().copied().unwrap_or(0);
+                set_consts.insert(w(ins, 0), ConstBits::W4(bits));
+                out.push(format!("{} = {};", name(w(ins, 0)), bits as i32));
+            }
+            "CmpPtr" => cmp = Some(Cmp { a: name(w(ins, 0)), b: name(w(ins, 1)) }),
+            "OBJTYPE" => stack.push(Arg::obj("objtype".into())), // +2: RTTI objtype ptr
+            "STR" => stack.push(Arg::obj("\"\"".into())),         // +3: string-constant push
+            "PshListElmnt" => stack.push(Arg::int(name(w(ins, 0)))), // +2: list element
+            "COPY" | "Cast" => { stack.pop(); }                  // -2: pop the source ptr
             // ---- pure VM housekeeping / flow: ignore ----
-            "SUSPEND" | "JitEntry" | "PopPtr" | "PopRPtr" | "SwapPtr" | "ClrHi" | "ClrVPtr"
+            "SUSPEND" | "JitEntry" | "PopPtr" | "SwapPtr" | "ClrHi" | "ClrVPtr"
             | "FREE" | "FinConstruct" | "CHKREF" | "ChkRefS" | "ChkNullV" | "ChkNullS"
             | "Destruct" | "SaveReturnValue" | "ResolveObjectPtr" | "FreeNullV8" | "GETOBJ"
-            | "GETOBJREF" | "GETREF" | "RefCpyV" | "REFCPY"
+            | "GETOBJREF" | "GETREF" | "CopyScript" | "ThrowException"
             | "JMP" | "JZ" | "JNZ" | "JS" | "JNS" | "JP" | "JNP" | "JLowZ" | "JLowNZ" | "JMPP" => {}
             _ => {
                 flush!();
