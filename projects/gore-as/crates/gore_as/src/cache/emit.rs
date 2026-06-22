@@ -32,7 +32,7 @@ fn force_stub_set() -> &'static HashSet<String> {
 use super::disasm::disassemble;
 use super::model::{Class, Func, Module};
 use super::refs::RefResolver;
-use super::structure::body_statements_ctor;
+use super::structure::{body_statements_ctor, RVODEF};
 use super::types::token_keyword;
 use super::walk_modules::FuncCode;
 
@@ -185,6 +185,12 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
     for n in used_locals(&body) {
         locals.entry(n).or_insert_with(|| "int".to_string());
     }
+    // arg slots the bytecode reads beyond the declared parameter list (the signature parse
+    // undercounts some value-type / defaulted params). Declare them as `int` locals so the
+    // body compiles instead of stubbing wholesale; a wrong type the in-game loop force-stubs.
+    let mut oor_args: Vec<i32> =
+        used_idents(&body, "arg").into_iter().filter(|&n| n as usize >= f.params.len()).collect();
+    oor_args.sort_unstable();
 
     // force-stub functions the in-game compile flagged as unrecoverable (by Class::method).
     let qid = match class_name {
@@ -207,7 +213,23 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
                 let _ = writeln!(s, "{ind}    {ty} local_{slot};");
             }
         }
-        s.push_str(&body);
+        for n in &oor_args {
+            let _ = writeln!(s, "{ind}    int arg{n} = 0;");
+        }
+        // RVODEF marks a return whose value couldn't be recovered: substitute a type-correct
+        // default. A handle return defaults to `null` (no local needed — and it sidesteps
+        // "no default constructor" for engine object types); everything else uses a default
+        // local `{ret} __r;` (works for primitives, enums and default-constructible structs).
+        if body.contains(RVODEF) {
+            if ret.ends_with('@') {
+                s.push_str(&body.replace(RVODEF, "null"));
+            } else {
+                let _ = writeln!(s, "{ind}    {ret} __r;");
+                s.push_str(&body.replace(RVODEF, "__r"));
+            }
+        } else {
+            s.push_str(&body);
+        }
     } else {
         // stub fallback so the module still compiles (reason recorded for aggregation)
         let _ = writeln!(s, "{ind}    // body not fully recovered — stub [{}]", reason.unwrap());
@@ -267,9 +289,7 @@ fn stub_reason(body: &str, locals: &BTreeMap<i32, String>, param_count: usize, r
     if !used_locals(body).iter().all(|n| locals.contains_key(n)) {
         return Some("undeclared-local".into());
     }
-    if used_idents(body, "arg").iter().any(|&n| n as usize >= param_count) {
-        return Some("arg-out-of-range".into());
-    }
+    let _ = param_count; // out-of-range arg slots are hoisted as locals, not stubbed
     if !ret_is_void && !body.contains("return ") {
         return Some("no-return".into());
     }

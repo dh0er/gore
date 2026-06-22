@@ -51,14 +51,17 @@ const AS_PTR_SIZE: i32 = 2;
 /// Placeholder for a value the decompiler couldn't resolve (e.g. PshRPtr with no live
 /// register). Statements that would emit it are dropped rather than producing bad source.
 const UNRESOLVED: &str = "\u{1}unresolved";
-/// Sentinel marking a call whose recovered arg count disagrees with the callee signature;
-/// its presence in a body forces the stub fallback. Distinct from UNRESOLVED so it is NOT
-/// stripped by the unresolved-statement retain (it must survive to reach the emitter).
-const ARGMISMATCH: &str = "\u{2}argmismatch";
-/// An ARGMISMATCH sentinel tagged with a short cause code (for stub-reason aggregation).
+/// An ARGMISMATCH sentinel (`\u{2}<code>`) tagged with a short cause code: marks a statement
+/// the decompiler couldn't recover, forcing the stub fallback. Distinct from UNRESOLVED so it
+/// is NOT stripped by the unresolved-statement retain (it must survive to reach the emitter);
+/// the code is extracted for stub-reason aggregation.
 fn amm(code: &str) -> String {
     format!("\u{2}{code}")
 }
+/// Sentinel for a non-void RET whose return value couldn't be recovered. Unlike an ARGMISMATCH
+/// this does NOT stub the whole function: the emitter replaces it with a default-valued
+/// return so the recovered body survives (far more faithful than a bare stub).
+pub(crate) const RVODEF: &str = "\u{3}rvodef";
 
 /// Structured statement body for a function (no signature wrapper), indented at `depth`.
 /// Returns an error annotation string on disasm failure (never panics).
@@ -95,11 +98,12 @@ pub fn decompile(f: &FuncCode, refs: &RefResolver) -> String {
         .enumerate()
         .map(|(i, n)| if n.is_empty() { format!("arg{i}") } else { n.clone() })
         .collect();
+    let body = body_statements(f, refs, 1).replace(RVODEF, "/* unrecovered */ {}");
     format!(
         "// {}\nfunction({})\n{{\n{}}}\n",
         f.func,
         params.join(", "),
-        body_statements(f, refs, 1)
+        body
     )
 }
 
@@ -192,6 +196,18 @@ fn is_numeric_cast(n: &str) -> bool {
         | "u64TOf" | "fTOu64" | "u64TOd" | "dTOu64")
 }
 
+/// For a float/double -> integer narrowing cast, the AngelScript target type to make the
+/// conversion explicit (`int(x)`); `None` for widenings/same-width casts that stay implicit.
+fn narrowing_cast_target(n: &str) -> Option<&'static str> {
+    Some(match n {
+        "fTOi" | "dTOi" => "int",
+        "fTOu" | "dTOu" => "uint",
+        "fTOi64" | "dTOi64" => "int64",
+        "fTOu64" | "dTOu64" => "uint64",
+        _ => return None,
+    })
+}
+
 /// The raw bits of a `SetV*` constant written to a slot — so a later store into a float/
 /// double field can reinterpret them as the real IEEE-754 value instead of an int literal.
 #[derive(Clone, Copy)]
@@ -240,17 +256,24 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
         .collect();
     // Receiver detection by COUNT, not the unreliable bIsMethod flag: AngelScript pushes
     // receiver + N args (N+1 entries) for a method, N for a free call, and the cache's param
-    // count N is reliable. So a.len()==N+1 -> method (pop receiver), ==N -> free, else a genuine
-    // recovery mismatch -> stub. (Eliminates most phantom-arg / dropped-receiver stubs.)
+    // count N is reliable. The recovered stack often carries phantom extras (values the
+    // decompiler couldn't attribute to an earlier consumer) at the BOTTOM, so when the count
+    // overshoots a known arity we pop the receiver (top) and keep only the last N args,
+    // dropping the leading noise — this is what `recv.Get0Param()` getters need.
     let has_recv = match params.map(|p| p.len()) {
-        Some(w) if a.len() == w + 1 => true,
-        Some(w) if a.len() == w => false,
-        // count mismatch: render best-effort (some are cache param-count metadata gaps that
-        // still compile); the in-game compile loop force-stubs the ones that don't.
+        Some(w) if a.len() == w => false,         // exact free arity
+        Some(w) if a.len() == w + 1 => true,       // exact method arity (receiver + w)
+        // overshoot/undershoot/no signature: trust the bIsMethod hint.
         Some(_) | None => is_method && !a.is_empty(),
     };
     if has_recv {
         let recv = a.pop().unwrap();
+        // trim phantom extras: keep only the last `w` pushed values as the call args.
+        if let Some(w) = params.map(|p| p.len()) {
+            if a.len() > w {
+                a.drain(..a.len() - w);
+            }
+        }
         // super-class constructor on `this` -> `super(args)` (before is_type_name, since the
         // super name is itself a type name).
         if super_ctor == Some(f) && recv.s == "this" {
@@ -292,6 +315,12 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
         // emit `opAssign(...)`, which never resolves.
         if assign_op(f).is_some() || binop_method(f).is_some() {
             return None;
+        }
+        // trim leading phantom extras for a known free arity too.
+        if let Some(w) = params.map(|p| p.len()) {
+            if a.len() > w {
+                a.drain(..a.len() - w);
+            }
         }
         Some(format!("{f}({})", render_args(&a, params, refs)))
     }
@@ -731,8 +760,9 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                         };
                         out.push(format!("return {v};"));
                     }
-                    // non-void with no recovered value -> "Must return a value": stub fallback.
-                    None if non_void => out.push(format!("return {ARGMISMATCH};")),
+                    // non-void with no recovered value: keep the recovered body, return a
+                    // default (the emitter fills RVODEF with a type-correct default value).
+                    None if non_void => out.push(format!("return {RVODEF};")),
                     None => out.push("return;".into()),
                 }
             }
@@ -753,11 +783,16 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
             // The TYPEID push is the implicit type operand of the following opCast/cast syscall
             // (NOT counted in the cache param list) — drop it so the cast block stays balanced.
             "TYPEID" => {}
-            // primitive numeric conversions (iTOf/fTOi/dTOf/sbTOi/...): `dst = src` (the cast is
-            // implicit in type-erased AS source).
+            // primitive numeric conversions (iTOf/fTOi/dTOf/sbTOi/...): `dst = src`. A
+            // float/double -> integer narrowing must be made EXPLICIT (`dst = int(src)`) or the
+            // compiler rejects it as an implicit precision loss; widenings stay implicit.
             n2 if is_numeric_cast(n2) => {
                 flush!();
-                out.push(format!("{} = {};", name(w(ins, 0)), name(w(ins, 1))));
+                let (dst, src) = (name(w(ins, 0)), name(w(ins, 1)));
+                match narrowing_cast_target(n2) {
+                    Some(t) => out.push(format!("{dst} = {t}({src});")),
+                    None => out.push(format!("{dst} = {src};")),
+                }
             }
             "SetV2" => {
                 flush!();
