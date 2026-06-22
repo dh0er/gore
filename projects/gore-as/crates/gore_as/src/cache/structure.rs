@@ -435,10 +435,19 @@ fn cast_arg(arg: &Arg, pt: &DataType, refs: &RefResolver) -> String {
 /// different (derived) type — the cache erases the covariant return type of template getters
 /// like `GetTypedOuter<T>`/`SpawnedStorage<T>` to the base, so AS rejects the implicit
 /// downcast. Only applies between UObject/AActor types (`U*`/`A*`).
-fn downcast(rhs: String, src_ty: Option<String>, dst_ty: Option<&String>, _refs: &RefResolver) -> String {
+fn downcast(rhs: String, src_ty: Option<String>, dst_ty: Option<&String>, refs: &RefResolver) -> String {
     let is_obj = |s: &str| s.starts_with('U') || s.starts_with('A');
     match (src_ty, dst_ty) {
-        (Some(s), Some(d)) if is_obj(&s) && is_obj(d) && s != *d => format!("Cast<{d}>({rhs})"),
+        (Some(s), Some(d)) if is_obj(&s) && is_obj(d) && s != *d => {
+            // An upcast (src derives from dst) is implicit in AngelScript — wrapping it in
+            // `Cast<Base>(derived)` can fail in-game compile. Only emit Cast for an actual
+            // downcast / unrelated covariant-erased type.
+            if refs.is_subclass(&s, d) {
+                rhs
+            } else {
+                format!("Cast<{d}>({rhs})")
+            }
+        }
         _ => rhs,
     }
 }
@@ -898,8 +907,12 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
             "SUSPEND" | "JitEntry" | "PopPtr" | "SwapPtr" | "ClrHi" | "ClrVPtr"
             | "FREE" | "FinConstruct" | "CHKREF" | "ChkRefS" | "ChkNullV" | "ChkNullS"
             | "DestructScript" | "SaveReturnValue" | "ResolveObjectPtr" | "FreeNullV8" | "GETOBJ"
-            | "GETOBJREF" | "GETREF" | "CopyScript"
+            | "GETOBJREF" | "GETREF"
             | "JMP" => {}
+            // CopyScript performs a script-value copy (an assignment), not housekeeping — it's
+            // unmodeled, so fall through to the marker + stub rather than dropping the copy.
+            // (FinConstruct/DestructScript stay ignored: implicit AS construct/destruct that
+            // appear in nearly every function — emitting/stubbing them would be wrong.)
             _ => {
                 flush!();
                 out.push(format!("// {} {}", n, operand_str(ins)));
