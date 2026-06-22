@@ -2,7 +2,8 @@
 -- and `goresay <msg>` (on-screen text). Proves deploy + load + API end-to-end.
 
 local ok, gore = pcall(require, "gorelib")
-if not ok or not gore then
+if not ok then gore = nil end -- a failed pcall leaves the error string in `gore`; clear it
+if not gore then
     -- robust fallback: load directly from the shared folder (require can be finicky)
     local base = [[\ue4ss\Mods\shared\gorelib\gorelib.lua]]
     for _, root in ipairs({ "ue4ss/Mods/shared/gorelib/gorelib.lua", "." .. base }) do

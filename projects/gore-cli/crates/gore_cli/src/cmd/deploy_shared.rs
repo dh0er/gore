@@ -75,13 +75,17 @@ pub fn run(src: Option<PathBuf>, game: PathBuf) -> Result<()> {
 fn resolve_default_src() -> Result<PathBuf> {
     let exe = std::env::current_exe().context("locating gore-cli executable")?;
     let exe_dir = exe.parent().unwrap_or(Path::new("."));
-    let candidates = [
-        exe_dir.join("shared"),                  // packaged: shared/ beside the binary
-        exe_dir.join("gore-lua").join("shared"), // packaged: gore-lua/shared/ beside binary
-        // dev: target/{debug,release}/gore-cli -> repo root/projects/gore-lua/shared
-        exe_dir.join("..").join("..").join("projects").join("gore-lua").join("shared"),
-    ];
-    for c in candidates {
+    // Packaged layouts: shared/ beside the binary.
+    for c in [exe_dir.join("shared"), exe_dir.join("gore-lua").join("shared")] {
+        if c.is_dir() {
+            return Ok(c);
+        }
+    }
+    // Dev tree: the `target/` holding the binary can be at the workspace root
+    // (`target/debug/`) OR crate-local (`projects/gore-cli/crates/gore_cli/target/debug/`), so
+    // the repo root is an unknown number of levels up. Walk ancestors for the SDK.
+    for anc in exe_dir.ancestors() {
+        let c = anc.join("projects").join("gore-lua").join("shared");
         if c.is_dir() {
             return Ok(c);
         }

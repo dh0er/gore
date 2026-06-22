@@ -34,12 +34,13 @@ pub fn run(mod_name: String, mods_dir: PathBuf) -> Result<()> {
 
 -- gore-lua SDK loader (require + robust loadfile fallback)
 local ok, gore = pcall(require, "gorelib")
-if not ok or not gore then
+if not ok then gore = nil end -- a failed pcall leaves the error string in `gore`; clear it
+if not gore then
     local f = loadfile("ue4ss/Mods/shared/gorelib/gorelib.lua")
     if f then
         -- run the chunk under pcall: a load-time error in the SDK must not abort the mod
         local ok2, res = pcall(f)
-        if ok2 then gore = res end
+        gore = ok2 and res or nil
     end
 end
 -- use gore.* helpers below; call gore.help.list() or see projects/gore-lua/README.md
