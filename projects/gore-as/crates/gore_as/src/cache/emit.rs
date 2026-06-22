@@ -483,10 +483,10 @@ fn default_for(ty: &str) -> String {
 fn render_const(ty: &str, v: u64) -> String {
     match ty {
         // This build is `floatIsFloat64` (types.rs): token 0x51 `float` is a 64-bit value (the
-        // full u64), like `double`; only token 0x50 `float32` is 32-bit (IEEE pattern in the
-        // low dword). Matches structure.rs's call-argument constant handling.
-        "float" => format!("{}f", f64::from_bits(v)),
-        "double" => format!("{}", f64::from_bits(v)),
+        // full u64), like `double` — render it WITHOUT the `f` suffix (which would round to
+        // 32-bit / pick the wrong literal). Only token 0x50 `float32` is 32-bit and takes `f`.
+        // Matches structure.rs's `fmt_float` (no suffix for 64-bit).
+        "float" | "double" => format!("{}", f64::from_bits(v)),
         "float32" => format!("{}f", f32::from_bits(v as u32)),
         "bool" => if v != 0 { "true".into() } else { "false".into() },
         _ => (v as i64).to_string(),
