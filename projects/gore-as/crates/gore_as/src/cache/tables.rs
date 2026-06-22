@@ -26,6 +26,10 @@ pub struct TableSpan {
     pub entries_end: usize,
     /// Entry keys (int64 for tables 0/2/4/6; the int32 key widened for tables 1/3; empty for table 5).
     pub keys: Vec<i64>,
+    /// Byte offset where each entry begins (parallel to `keys`). Entry `i` spans
+    /// `entry_starts[i] .. entry_starts[i+1]` (or `entries_end` for the last) — lets a merge
+    /// drop a single variable-width colliding entry. Empty for table 5 (StaticNames).
+    pub entry_starts: Vec<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -77,7 +81,9 @@ fn read_i64_map(
     let count = c.read_count(field)? as u32;
     let entries_start = c.pos();
     let mut keys = Vec::with_capacity(count as usize);
+    let mut entry_starts = Vec::with_capacity(count as usize);
     for _ in 0..count {
+        entry_starts.push(c.pos());
         keys.push(c.read_i64()?);
         read_value(c)?;
     }
@@ -86,6 +92,7 @@ fn read_i64_map(
         entries_start,
         entries_end: c.pos(),
         keys,
+        entry_starts,
     })
 }
 
@@ -94,7 +101,9 @@ fn read_id_ptr_map(c: &mut Cursor, field: &'static str) -> Result<TableSpan, Wir
     let count = c.read_count(field)? as u32;
     let entries_start = c.pos();
     let mut keys = Vec::with_capacity(count as usize);
+    let mut entry_starts = Vec::with_capacity(count as usize);
     for _ in 0..count {
+        entry_starts.push(c.pos());
         keys.push(c.read_i32()? as i64);
         c.skip(8)?; // value (int64 ptr)
     }
@@ -103,6 +112,7 @@ fn read_id_ptr_map(c: &mut Cursor, field: &'static str) -> Result<TableSpan, Wir
         entries_start,
         entries_end: c.pos(),
         keys,
+        entry_starts,
     })
 }
 
@@ -118,6 +128,7 @@ fn read_static_names(c: &mut Cursor) -> Result<TableSpan, WireError> {
         entries_start,
         entries_end: c.pos(),
         keys: Vec::new(),
+        entry_starts: Vec::new(),
     })
 }
 

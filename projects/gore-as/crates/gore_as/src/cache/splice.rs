@@ -137,12 +137,14 @@ pub fn splice_case_a(base: &[u8], mini: &[u8]) -> Result<Vec<u8>, SpliceError> {
 
 /// Append the 7 merged tail tables (base ++ mini, deduped) to `out`.
 ///
-/// Tables 1 & 3 (TypeIdReferenceToPointer / FunctionIdReferenceToPointer) are
-/// `TMap<int32,int64>` whose KEY is a DETERMINISTIC engine id (not a per-process pointer).
-/// The mini's engine-type/func ids collide with the base's by design — those refs already
-/// resolve in the base, so we DROP the mini's colliding 12-byte entries and append only
-/// genuinely-new ids. The other 5 tables are int64-pointer/name keyed (per-process, no
-/// collision) → append verbatim.
+/// Every keyed table is `TMap<key, V>` whose KEY (an int32 engine id for tables 1 & 3, an
+/// int64 `OldReference` original-pointer-id for tables 0/2/4/6) is DETERMINISTIC for a given
+/// build (see `container-splice.md` §4). A recompiled mini re-exports references already
+/// present in the base — types, functions, globals, properties it touches — so concatenating
+/// verbatim would emit duplicate TMap keys the loader may reject or mis-resolve. For each
+/// keyed table we therefore DROP the mini entries whose key already exists in the base and
+/// append only genuinely-new ones. Table 5 (StaticNames) is an unkeyed `TArray<FString>`
+/// where duplicates are harmless → append verbatim.
 fn append_merged_tables(
     out: &mut Vec<u8>,
     base: &[u8],
@@ -150,31 +152,32 @@ fn append_merged_tables(
     mini: &[u8],
     mini_tt: &TailTables,
 ) {
-    const ID_TABLES: [usize; 2] = [1, 3];
+    const STATIC_NAMES: usize = 5;
     for i in 0..N_TABLES {
         let b = &base_tt.tables[i];
         let m = &mini_tt.tables[i];
-        if ID_TABLES.contains(&i) {
-            let base_keys: HashSet<i64> = b.keys.iter().copied().collect();
-            let mut kept = Vec::new();
-            let mut kept_count = 0u32;
-            let mut off = m.entries_start;
-            for &k in &m.keys {
-                let entry = &mini[off..off + 12]; // int32 key + int64 value
-                if !base_keys.contains(&k) {
-                    kept.extend_from_slice(entry);
-                    kept_count += 1;
-                }
-                off += 12;
-            }
-            out.extend_from_slice(&(b.count + kept_count).to_le_bytes());
-            out.extend_from_slice(&base[b.entries_start..b.entries_end]);
-            out.extend_from_slice(&kept);
-        } else {
+        if i == STATIC_NAMES {
             out.extend_from_slice(&(b.count + m.count).to_le_bytes());
             out.extend_from_slice(&base[b.entries_start..b.entries_end]);
             out.extend_from_slice(&mini[m.entries_start..m.entries_end]);
+            continue;
         }
+        // Drop mini entries whose deterministic key already resolves in the base.
+        let base_keys: HashSet<i64> = b.keys.iter().copied().collect();
+        let mut kept = Vec::new();
+        let mut kept_count = 0u32;
+        for (j, &k) in m.keys.iter().enumerate() {
+            if base_keys.contains(&k) {
+                continue;
+            }
+            let start = m.entry_starts[j];
+            let end = m.entry_starts.get(j + 1).copied().unwrap_or(m.entries_end);
+            kept.extend_from_slice(&mini[start..end]);
+            kept_count += 1;
+        }
+        out.extend_from_slice(&(b.count + kept_count).to_le_bytes());
+        out.extend_from_slice(&base[b.entries_start..b.entries_end]);
+        out.extend_from_slice(&kept);
     }
 }
 
