@@ -166,6 +166,11 @@ fn main() -> Result<()> {
             if let Some(api) = load_native_api(&file) {
                 refs.set_native_api(api);
             }
+            // Resolve the output root up front so a symlinked `outdir` is followed to its real
+            // target ONCE here — the per-entry component check below then guards the untrusted
+            // cache paths against that real root. (create_dir_all so canonicalize succeeds.)
+            std::fs::create_dir_all(&outdir).with_context(|| format!("creating {}", outdir.display()))?;
+            let outdir = outdir.canonicalize().with_context(|| format!("resolving {}", outdir.display()))?;
             let (mut written, mut stubbed) = (0usize, 0usize);
             for m in &mods {
                 let src = gore_as::cache::emit::emit_module(m, &refs);
