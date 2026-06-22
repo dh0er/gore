@@ -49,13 +49,22 @@ pub fn run(src: Option<PathBuf>, game: PathBuf) -> Result<()> {
             src.display()
         );
     }
-    // Clean the destination first so renamed/deleted SDK files don't linger from a previous
-    // deploy. dest_root is a real (non-symlink, verified above) directory we own.
+    // Stage the full copy in a sibling temp dir, then swap it in. This both clears stale files
+    // (renamed/deleted SDK entries don't linger) AND keeps the old SDK intact if the copy
+    // fails partway, so a broken copy can't leave mods without a working `gorelib`.
+    let staging = dest_root.with_file_name(".gore-shared.tmp");
+    if staging.exists() {
+        fs::remove_dir_all(&staging)
+            .with_context(|| format!("clearing staging dir {}", staging.display()))?;
+    }
+    let n = copy_dir(&src, &staging)?;
     if dest_root.is_dir() {
         fs::remove_dir_all(&dest_root)
             .with_context(|| format!("clearing {}", dest_root.display()))?;
     }
-    let n = copy_dir(&src, &dest_root)?;
+    fs::rename(&staging, &dest_root).with_context(|| {
+        format!("moving {} -> {}", staging.display(), dest_root.display())
+    })?;
     println!("deployed {n} file(s) to {}", dest_root.display());
     Ok(())
 }
