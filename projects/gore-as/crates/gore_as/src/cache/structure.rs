@@ -214,11 +214,14 @@ fn float_lit(m: &HashMap<i32, ConstBits>, slot: i32, double: bool) -> Option<Str
     Some(fmt_float(*m.get(&slot)?, double))
 }
 
-/// A recovered comparison (from CMP* operands), pending a conditional jump.
-#[derive(Clone)]
+/// A recovered branch condition: either a binary comparison (`a <op> b`) or a single boolean
+/// `expr` (a bool slot / call result tested by JLowZ).
+#[derive(Clone, Default)]
 struct Cmp {
     a: String,
     b: String,
+    op: Option<&'static str>, // relational op from a T* test (overrides the jump-derived one)
+    expr: Option<String>,     // a complete boolean condition (when set, a/b are ignored)
 }
 
 /// Build a call expression from the pushed-arg stack. For a method, the receiver is the
@@ -453,6 +456,7 @@ fn esc(s: &str) -> String {
 fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
     let mut out = Vec::new();
     let mut cmp: Option<Cmp> = None;
+    let mut cond: Option<String> = None; // a bool value (CpyVtoR1 / call) tested by a later jump
     let mut stack: Vec<Arg> = Vec::new(); // pushed pointer/value expressions
     let mut value_reg: Option<String> = None;
     let mut obj_reg: Option<String> = None;
@@ -623,13 +627,21 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
             }
             // ---- comparisons ----
             "CMPi" | "CMPu" | "CMPf" | "CMPd" | "CMPi64" | "CMPu64" => {
-                cmp = Some(Cmp { a: name(w(ins, 0)), b: name(w(ins, 1)) });
+                cmp = Some(Cmp { a: name(w(ins, 0)), b: name(w(ins, 1)), ..Default::default() });
             }
             "CMPIi" | "CMPIf" | "CMPIu" => {
                 let c = ins.dwords.first().copied().unwrap_or(0) as i32;
-                cmp = Some(Cmp { a: name(w(ins, 0)), b: c.to_string() });
+                cmp = Some(Cmp { a: name(w(ins, 0)), b: c.to_string(), ..Default::default() });
             }
-            "CmpPtrNull" => cmp = Some(Cmp { a: name(w(ins, 0)), b: "nullptr".into() }),
+            "CmpPtrNull" => cmp = Some(Cmp { a: name(w(ins, 0)), b: "nullptr".into(), ..Default::default() }),
+            // a test op turns the CMP register into a bool; it carries the real relational
+            // operator (the jump only carries the true/false sense).
+            "TZ" => { if let Some(c) = &mut cmp { c.op = Some("=="); } }
+            "TNZ" => { if let Some(c) = &mut cmp { c.op = Some("!="); } }
+            "TS" => { if let Some(c) = &mut cmp { c.op = Some("<"); } }
+            "TNS" => { if let Some(c) = &mut cmp { c.op = Some(">="); } }
+            "TP" => { if let Some(c) = &mut cmp { c.op = Some(">"); } }
+            "TNP" => { if let Some(c) = &mut cmp { c.op = Some("<="); } }
             // ---- calls ----
             "CALL" | "CALLINTF" | "CALLBND" => {
                 let id = ins.dwords.first().copied().unwrap_or(0) as i32;
@@ -684,32 +696,40 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 pending_ty = None;
             }
             "LOADOBJ" => obj_reg = Some(name(w(ins, 0))),
-            "CpyVtoR4" | "CpyVtoR8" | "CpyVtoR1" => {
+            "CpyVtoR4" | "CpyVtoR8" => {
                 ret_val = pending.take().or_else(|| Some(name(w(ins, 0))));
+            }
+            "CpyVtoR1" => {
+                // a bool moved into the test register: feeds either RET or a conditional jump.
+                let v = pending.take().unwrap_or_else(|| name(w(ins, 0)));
+                cond = Some(v.clone());
+                ret_val = Some(v);
             }
             "RET" => {
                 flush!();
-                if let Some(v) = ret_val.take().or_else(|| obj_reg.take()).or_else(|| pending.take())
-                    .or_else(|| scan_back_retval(ctx, lo + k))
-                {
-                    // cast an int return value to the function's bool/enum return type
-                    let v = match ctx.ret_ty {
-                        Some(rt) if looks_int(&v) => {
-                            let tn = if rt.token == 0x41 { "bool".to_string() } else { rt.base_name(ctx.refs) };
-                            cast_to_typename(&v, &tn).unwrap_or(v)
-                        }
-                        _ => v,
-                    };
-                    out.push(format!("return {v};"));
+                let non_void = ctx.ret_ty.map(|t| t.token != 0x52).unwrap_or(false);
+                // a value only belongs in a non-void return; for void, `ret_val` may hold a
+                // condition value (CpyVtoR1) that must NOT become `return x;`.
+                let v = if non_void {
+                    ret_val.take().or_else(|| obj_reg.take()).or_else(|| pending.take())
+                        .or_else(|| scan_back_retval(ctx, lo + k))
                 } else {
-                    // bare `return;` in a non-void function = the return value wasn't
-                    // recovered ("Must return a value"). Mark unreliable -> stub fallback.
-                    let non_void = ctx.ret_ty.map(|t| t.token != 0x52).unwrap_or(false);
-                    if non_void {
-                        out.push(format!("return {ARGMISMATCH};"));
-                    } else {
-                        out.push("return;".into());
+                    None
+                };
+                match v {
+                    Some(v) => {
+                        let v = match ctx.ret_ty {
+                            Some(rt) if looks_int(&v) => {
+                                let tn = if rt.token == 0x41 { "bool".to_string() } else { rt.base_name(ctx.refs) };
+                                cast_to_typename(&v, &tn).unwrap_or(v)
+                            }
+                            _ => v,
+                        };
+                        out.push(format!("return {v};"));
                     }
+                    // non-void with no recovered value -> "Must return a value": stub fallback.
+                    None if non_void => out.push(format!("return {ARGMISMATCH};")),
+                    None => out.push("return;".into()),
                 }
             }
             // Idiom-A member store: an ADDSi chain builds `this.a.b` on the stack top, then
@@ -741,7 +761,7 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 set_consts.insert(w(ins, 0), ConstBits::W4(bits));
                 out.push(format!("{} = {};", name(w(ins, 0)), bits as i32));
             }
-            "CmpPtr" => cmp = Some(Cmp { a: name(w(ins, 0)), b: name(w(ins, 1)) }),
+            "CmpPtr" => cmp = Some(Cmp { a: name(w(ins, 0)), b: name(w(ins, 1)), ..Default::default() }),
             "OBJTYPE" => stack.push(Arg::obj("objtype".into())), // +2: RTTI objtype ptr
             "STR" => stack.push(Arg::obj("\"\"".into())),         // +3: string-constant push
             "PshListElmnt" => stack.push(Arg::int(name(w(ins, 0)))), // +2: list element
@@ -760,16 +780,35 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
     }
     flush!();
     out.retain(|s| !s.contains(UNRESOLVED)); // drop statements with an unresolved value
+    // no binary comparison but a bool value was tested -> use it as the branch condition so
+    // the jump renders `if (cond != 0)` instead of `if (? != ?)`.
+    if cmp.is_none() {
+        if let Some(c) = cond.take() {
+            if !c.is_empty() && c != UNRESOLVED {
+                cmp = Some(Cmp { expr: Some(c), ..Default::default() });
+            }
+        }
+    }
     (out, cmp)
 }
 
 /// Condition rendered for the branch being TAKEN, given the CMP operands + jump op.
 fn branch_cond(cmp: &Option<Cmp>, jump: &str) -> String {
+    // single boolean condition (a bool slot / call result tested by JLowZ/JLowNZ): the bool is
+    // held in an int slot, so test against 0 (int-safe; negate() swaps `!= 0` <-> `== 0`).
+    if let Some(c) = cmp {
+        if let Some(e) = &c.expr {
+            return match jump {
+                "JNZ" | "JLowNZ" | "JNS" | "JP" => format!("{e} != 0"),
+                _ => format!("{e} == 0"),
+            };
+        }
+    }
     let (a, b) = match cmp {
         Some(c) => (c.a.clone(), c.b.clone()),
         None => ("?".into(), "?".into()),
     };
-    let op = match jump {
+    let op = cmp.as_ref().and_then(|c| c.op).unwrap_or(match jump {
         "JS" => "<",
         "JNS" => ">=",
         "JP" => ">",
@@ -777,7 +816,7 @@ fn branch_cond(cmp: &Option<Cmp>, jump: &str) -> String {
         "JZ" | "JLowZ" => "==",
         "JNZ" | "JLowNZ" => "!=",
         _ => "?",
-    };
+    });
     format!("{a} {op} {b}")
 }
 
