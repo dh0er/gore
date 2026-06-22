@@ -210,7 +210,7 @@ pub fn replace_module(
     // can differ. Match the key first, then fall back to the inner name so a modder using the
     // emitted module name as `target` doesn't get a spurious NameNotFound.
     let ranges = module_ranges(base)?;
-    let idx = ranges
+    let Some(idx) = ranges
         .iter()
         .position(|(name, _, _)| name == target_name)
         .or_else(|| {
@@ -218,19 +218,23 @@ pub fn replace_module(
                 .ok()
                 .and_then(|mods| mods.iter().position(|m| m.name == target_name))
                 .filter(|&i| i < ranges.len())
-        });
-    let Some((_, target_start, target_end)) = idx.map(|i| ranges[i].clone()) else {
+        })
+    else {
         return Err(SpliceError::NameNotFound(target_name.to_string()));
     };
+    let (_, target_start, target_end) = ranges[idx].clone();
 
-    // Renaming onto an already-occupied key would write two entries under one module
-    // name while leaving the count unchanged — an ambiguous TMap. Reject a replacement
-    // whose name collides with a DIFFERENT base module (matching `target_name` is fine:
-    // that's an in-place replace). Mirrors the `splice_case_a` collision guard.
+    // Renaming onto an already-occupied key would write two entries under one module name
+    // while leaving the count unchanged — an ambiguous TMap. Reject a replacement whose name
+    // collides with a DIFFERENT base module. Exclude the module being replaced BY INDEX (its
+    // own key matching is an in-place replace) — `target_name` may be the inner ModuleName,
+    // not the TMap key, so comparing against it would miss the self-match. Mirrors the
+    // `splice_case_a` collision guard.
     let new_name = module_names(new_mini)?.into_iter().next().unwrap_or_default();
     if module_names(base)?
         .iter()
-        .any(|n| n != target_name && n == &new_name)
+        .enumerate()
+        .any(|(i, n)| i != idx && n == &new_name)
     {
         return Err(SpliceError::NameCollision(new_name));
     }

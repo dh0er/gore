@@ -28,7 +28,21 @@ pub fn run(src: Option<PathBuf>, game: PathBuf) -> Result<()> {
         .canonicalize()
         .with_context(|| format!("resolving {}", mods.display()))?
         .join("shared");
-    if dest_root.starts_with(&src) {
+    // A symlinked destination would be written THROUGH by copy_dir, escaping Mods or looping
+    // back into the source; refuse it outright.
+    if let Ok(meta) = fs::symlink_metadata(&dest_root) {
+        if meta.file_type().is_symlink() {
+            bail!(
+                "destination '{}' is a symlink; refusing to deploy through it",
+                dest_root.display()
+            );
+        }
+    }
+    // Resolve an existing destination to its real path (a lexical path can't be compared
+    // reliably against the canonicalized source), then reject a destination inside the
+    // source: copying a dir into its own subtree recurses until the path/disk blows up.
+    let dest_real = dest_root.canonicalize().unwrap_or_else(|_| dest_root.clone());
+    if dest_real.starts_with(&src) {
         bail!(
             "destination '{}' is inside source '{}' — would copy into itself",
             dest_root.display(),
