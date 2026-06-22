@@ -97,31 +97,30 @@ struct Ctx<'a> {
 
 impl Ctx<'_> {
     fn slot_name(&self, off: i32) -> String {
+        if off > 0 {
+            return format!("local_{off}");
+        }
         if self.f.is_method {
             if off == 0 {
                 return "this".into();
             }
-            if off < 0 {
-                let idx = (-off - AS_PTR_SIZE) as usize;
-                if let Some(n) = self.f.param_names.get(idx) {
-                    if !n.is_empty() {
-                        return n.clone();
-                    }
-                }
-            }
-        } else if off <= 0 {
-            let idx = (-off) as usize;
-            if let Some(n) = self.f.param_names.get(idx) {
-                if !n.is_empty() {
-                    return n.clone();
-                }
+            let idx = (-off - AS_PTR_SIZE) as usize;
+            return self.param_or_arg(idx);
+        }
+        // free function: params at off 0, -1, -2, ...
+        self.param_or_arg((-off) as usize)
+    }
+
+    /// Name for parameter slot `idx`: the stored name, else `arg{idx}` — which MUST match
+    /// how `emit::render_params` declares unnamed params (also `arg{idx}`), so a body
+    /// reference resolves to a declared parameter.
+    fn param_or_arg(&self, idx: usize) -> String {
+        if let Some(n) = self.f.param_names.get(idx) {
+            if !n.is_empty() {
+                return n.clone();
             }
         }
-        if off > 0 {
-            format!("local_{off}")
-        } else {
-            format!("arg_{}", -off)
-        }
+        format!("arg{idx}")
     }
 }
 
@@ -481,7 +480,14 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                     };
                     out.push(format!("return {v};"));
                 } else {
-                    out.push("return;".into());
+                    // bare `return;` in a non-void function = the return value wasn't
+                    // recovered ("Must return a value"). Mark unreliable -> stub fallback.
+                    let non_void = ctx.ret_ty.map(|t| t.token != 0x52).unwrap_or(false);
+                    if non_void {
+                        out.push(format!("return {ARGMISMATCH};"));
+                    } else {
+                        out.push("return;".into());
+                    }
                 }
             }
             // ---- pure VM housekeeping / flow: ignore ----

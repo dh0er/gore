@@ -143,7 +143,7 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
     let body = body_statements_ctor(&fc, refs, depth + 1, super_ctor, Some(&f.ret), fields);
     let locals = infer_locals(f, refs);
 
-    if body_is_recoverable(&body, &locals) {
+    if body_is_recoverable(&body, &locals, f.params.len(), ret == "void") {
         // hoist local declarations; primitives must be initialized (AngelScript errors on
         // "may not be initialized"), objects/structs/handles default-construct themselves.
         for (slot, ty) in &locals {
@@ -193,7 +193,7 @@ fn render_params(f: &Func, refs: &RefResolver) -> String {
 /// placeholder `?` (e.g. `if (? != ?)`) when a comparison/operand couldn't be recovered,
 /// and may reference a `local_N` that wasn't inferred. Any of these is a syntax/semantic
 /// error that aborts the module's parse, so such a function falls back to a clean stub.
-fn body_is_recoverable(body: &str, locals: &BTreeMap<i32, String>) -> bool {
+fn body_is_recoverable(body: &str, locals: &BTreeMap<i32, String>, param_count: usize, ret_is_void: bool) -> bool {
     // a call whose recovered arg count disagreed with its signature (ARGMISMATCH = \u{2})
     if body.contains('\u{2}') {
         return false;
@@ -210,7 +210,43 @@ fn body_is_recoverable(body: &str, locals: &BTreeMap<i32, String>) -> bool {
         }
     }
     // a referenced local that wasn't hoisted would be an "undeclared identifier" error
-    used_locals(body).iter().all(|n| locals.contains_key(n))
+    if !used_locals(body).iter().all(|n| locals.contains_key(n)) {
+        return false;
+    }
+    // an `argN` reference past the declared parameter list (mis-decoded slot) is undeclared
+    if used_idents(body, "arg").iter().any(|&n| n as usize >= param_count) {
+        return false;
+    }
+    // a non-void function whose body never returns a value -> "Must return a value"
+    if !ret_is_void && !body.contains("return ") {
+        return false;
+    }
+    true
+}
+
+/// Indices of every `<prefix>N` identifier in a body, at an identifier boundary
+/// (so `arg` does not match inside `Target`/`FArg`, and the trailing char isn't alnum).
+fn used_idents(body: &str, prefix: &str) -> HashSet<i32> {
+    let mut out = HashSet::new();
+    let b = body.as_bytes();
+    let pl = prefix.len();
+    let is_ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    let mut i = 0;
+    while i + pl < b.len() {
+        if &b[i..i + pl] == prefix.as_bytes()
+            && (i == 0 || !is_ident(b[i - 1]))
+        {
+            let mut j = i + pl;
+            let start = j;
+            while j < b.len() && b[j].is_ascii_digit() { j += 1; }
+            if j > start && (j >= b.len() || !is_ident(b[j])) {
+                if let Ok(n) = body[start..j].parse::<i32>() { out.insert(n); }
+                i = j; continue;
+            }
+        }
+        i += 1;
+    }
+    out
 }
 
 /// Slot indices of every `local_N` identifier referenced in a body.
