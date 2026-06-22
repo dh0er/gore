@@ -90,6 +90,22 @@ pub fn emit_module(m: &Module, refs: &RefResolver) -> String {
     }
 
     let class_names: HashSet<&str> = m.classes.iter().map(|c| c.name.as_str()).collect();
+    // class name -> its member (method/ctor) names, so a module-level function is only treated
+    // as an already-emitted class member when it actually names one — not merely because its
+    // namespace happens to match a class.
+    let class_members: HashMap<&str, HashSet<&str>> = m
+        .classes
+        .iter()
+        .map(|c| {
+            let members: HashSet<&str> = c
+                .methods
+                .iter()
+                .chain(c.ctors.iter())
+                .map(|f| f.name.as_str())
+                .collect();
+            (c.name.as_str(), members)
+        })
+        .collect();
 
     for c in &m.classes {
         emit_class(&mut s, c, refs);
@@ -97,7 +113,7 @@ pub fn emit_module(m: &Module, refs: &RefResolver) -> String {
 
     // free functions = module.functions that aren't generator-synthesized accessors
     for f in &m.functions {
-        if is_generated(f, &class_names) {
+        if is_generated(f, &class_names, &class_members) {
             continue;
         }
         emit_function(&mut s, f, refs, false, false, 0);
@@ -449,8 +465,18 @@ fn render_const(ty: &str, v: u64) -> String {
 }
 
 /// Is this module-level function a generator-synthesized accessor (skip it)?
-fn is_generated(f: &Func, class_names: &HashSet<&str>) -> bool {
-    f.name == "StaticClass"
-        || class_names.contains(f.name.as_str())
-        || class_names.contains(f.namespace.as_str())
+fn is_generated(
+    f: &Func,
+    class_names: &HashSet<&str>,
+    class_members: &HashMap<&str, HashSet<&str>>,
+) -> bool {
+    if f.name == "StaticClass" || class_names.contains(f.name.as_str()) {
+        return true;
+    }
+    // A function whose namespace is a class is the already-emitted method ONLY if the class
+    // actually declares a member with this name; a genuine free function that merely shares the
+    // namespace is kept (previously it was silently dropped).
+    class_members
+        .get(f.namespace.as_str())
+        .is_some_and(|members| members.contains(f.name.as_str()))
 }
