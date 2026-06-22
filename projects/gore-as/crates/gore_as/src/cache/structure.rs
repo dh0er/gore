@@ -886,11 +886,15 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 }
             }
             // ---- pure VM housekeeping / flow: ignore ----
+            // NOTE: `ThrowException` (throw) and `JMPP` (jump-table/switch) are NOT housekeeping
+            // — they're unmodeled control transfers, and `cfg.rs` leaves JMPP successors unknown.
+            // They fall through to the `// opcode` marker below so `stub_reason` stubs the body
+            // rather than emitting recompilable source with the throw/switch silently dropped.
             "SUSPEND" | "JitEntry" | "PopPtr" | "SwapPtr" | "ClrHi" | "ClrVPtr"
             | "FREE" | "FinConstruct" | "CHKREF" | "ChkRefS" | "ChkNullV" | "ChkNullS"
             | "DestructScript" | "SaveReturnValue" | "ResolveObjectPtr" | "FreeNullV8" | "GETOBJ"
-            | "GETOBJREF" | "GETREF" | "CopyScript" | "ThrowException"
-            | "JMP" | "JMPP" => {}
+            | "GETOBJREF" | "GETREF" | "CopyScript"
+            | "JMP" => {}
             _ => {
                 flush!();
                 out.push(format!("// {} {}", n, operand_str(ins)));
