@@ -688,7 +688,13 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
             }
             _ if iconst_op(n).is_some() => {
                 flush!();
-                let c = ins.dwords.first().copied().unwrap_or(0) as i32;
+                let bits = ins.dwords.first().copied().unwrap_or(0);
+                // ADDIf/SUBIf/MULIf carry an IEEE-754 float immediate, not an int (like CMPIf).
+                let c = if n.ends_with('f') {
+                    fmt_float(ConstBits::W4(bits), false)
+                } else {
+                    (bits as i32).to_string()
+                };
                 out.push(format!("{} = {} {} {};", name(w(ins, 0)), name(w(ins, 1)), iconst_op(n).unwrap(), c));
             }
             "IncVi" | "IncVf" => {
@@ -1140,8 +1146,8 @@ fn bin_op(name: &str) -> Option<&'static str> {
         "ADDi" | "ADDi64" | "ADDf" | "ADDd" => "+",
         "SUBi" | "SUBi64" | "SUBf" | "SUBd" => "-",
         "MULi" | "MULi64" | "MULf" | "MULd" => "*",
-        "DIVi" | "DIVi64" | "DIVf" | "DIVd" => "/",
-        "MODi" | "MODi64" | "MODf" | "MODd" => "%",
+        "DIVi" | "DIVi64" | "DIVf" | "DIVd" | "DIVu" | "DIVu64" => "/",
+        "MODi" | "MODi64" | "MODf" | "MODd" | "MODu" | "MODu64" => "%",
         "BAND" | "BAND64" => "&",
         "BOR" | "BOR64" => "|",
         "BXOR" | "BXOR64" => "^",
