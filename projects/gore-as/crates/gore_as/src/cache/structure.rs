@@ -159,16 +159,24 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
         if refs.is_type_name(f) {
             return None;
         }
-        // operator-overload methods -> source operators
+        // operator-overload methods -> source operators. Cast the RHS to the operator's
+        // operand type (params[0]) so e.g. `this.NameField = <int>` on an FName becomes a
+        // stub (int can't convert) instead of an un-compilable assignment.
         if let Some(op) = assign_op(f) {
             match a.first() {
-                Some(rhs) => return Some(format!("{} {op} {}", recv.s, rhs.s)),
+                Some(rhs) => {
+                    let r = params.and_then(|p| p.first()).map(|pt| cast_arg(rhs, pt, refs))
+                        .unwrap_or_else(|| rhs.s.clone());
+                    return Some(format!("{} {op} {}", recv.s, r));
+                }
                 None => return None, // unresolved RHS -> skip rather than emit `x = <bad>`
             }
         }
         if let Some(op) = binop_method(f) {
             if let Some(rhs) = a.first() {
-                return Some(format!("({} {op} {})", recv.s, rhs.s));
+                let r = params.and_then(|p| p.first()).map(|pt| cast_arg(rhs, pt, refs))
+                    .unwrap_or_else(|| rhs.s.clone());
+                return Some(format!("({} {op} {})", recv.s, r));
             }
         }
         if arg_count_mismatch(a.len(), params) {
@@ -227,6 +235,21 @@ fn cast_arg(arg: &Arg, pt: &DataType, refs: &RefResolver) -> String {
         return ARGMISMATCH.into();
     }
     arg.s.clone()
+}
+
+/// Render the RHS of `field = <int>` for a field whose type name is `tyname`:
+/// numeric fields take the int as-is; bool/enum get the cast; anything else (FName,
+/// F-structs, U*/A* objects) can't hold an int — emit the stub sentinel so the function
+/// falls back (these are almost always generator-inlined CDO defaults we can't reconstruct).
+fn field_assign_rhs(rhs: &str, tyname: &str) -> String {
+    if let Some(c) = cast_to_typename(rhs, tyname) {
+        return c; // bool / enum
+    }
+    match tyname {
+        "int" | "uint" | "int8" | "int16" | "int64" | "uint8" | "uint16" | "uint64"
+        | "float" | "float32" | "double" | "?" => rhs.to_string(),
+        _ => ARGMISMATCH.to_string(),
+    }
 }
 
 /// Cast an int RHS to a named target type: `bool` -> `(x != 0)`, UE enum
@@ -335,11 +358,14 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 if ctx.refs.global_is_string(ptr) {
                     stack.push(Arg::obj(format!("\"{}\"", esc(ctx.refs.global_by_ptr(ptr).unwrap_or("")))));
                 } else {
-                    // qualify with the global's namespace if any (e.g. `FColor::Red`)
                     let nm = ctx.refs.global_by_ptr(ptr).unwrap_or("global?");
-                    let q = match ctx.refs.global_ns(ptr) {
-                        Some(ns) => format!("{ns}::{nm}"),
-                        None => nm.to_string(),
+                    let q = if let Some(cls) = nm.strip_prefix("__StaticType_") {
+                        // generator class-pointer global -> the real UClass accessor
+                        format!("{cls}::StaticClass()")
+                    } else if let Some(ns) = ctx.refs.global_ns(ptr) {
+                        format!("{ns}::{nm}") // qualify with namespace (e.g. `FColor::Red`)
+                    } else {
+                        nm.to_string()
                     };
                     stack.push(Arg::obj(q));
                 }
@@ -384,11 +410,10 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 flush!();
                 if let Some(r) = &ref_reg {
                     let rhs = name(w(ins, 0));
-                    let rhs = ref_reg_ty
-                        .as_deref()
-                        .filter(|_| looks_int(&rhs))
-                        .and_then(|t| cast_to_typename(&rhs, t))
-                        .unwrap_or(rhs);
+                    let rhs = match ref_reg_ty.as_deref() {
+                        Some(t) if looks_int(&rhs) => field_assign_rhs(&rhs, t),
+                        _ => rhs,
+                    };
                     out.push(format!("{r} = {rhs};"));
                 }
             }

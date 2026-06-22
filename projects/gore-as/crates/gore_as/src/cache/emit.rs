@@ -87,7 +87,10 @@ fn emit_class(s: &mut String, c: &Class, refs: &RefResolver) {
     }
     let _ = writeln!(s, "{{");
     for f in &c.fields {
+        // Drop a leading `const`: UE-AS UPROPERTY members aren't const-assignable, yet the
+        // generated constructor assigns them — keeping `const` causes "Cannot assign" errors.
         let ty = f.ty.render(refs);
+        let ty = ty.strip_prefix("const ").unwrap_or(&ty);
         if f.is_uproperty {
             let _ = writeln!(s, "    UPROPERTY()");
         }
