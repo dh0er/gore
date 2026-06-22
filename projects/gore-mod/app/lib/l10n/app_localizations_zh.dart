@@ -9,6 +9,34 @@ class AppLocalizationsZh extends AppLocalizations {
   AppLocalizationsZh([String locale = 'zh']) : super(locale);
 
   @override
+  String get tabItems => 'Items';
+
+  @override
+  String get tabOverrides => 'Overrides';
+
+  @override
+  String get tabSettings => 'Settings';
+
+  @override
+  String get gameExecutable => 'Game executable';
+
+  @override
+  String get gameExecutableSubtitle =>
+      'Path to the game\'s .exe. Used to auto-detect localized text and the game install.';
+
+  @override
+  String get gameExecutableNotSet => 'Not set';
+
+  @override
+  String get chooseGameExecutable => 'Choose…';
+
+  @override
+  String get settingsDataSourceSection => 'Game data';
+
+  @override
+  String get settingsLocalizationSection => 'Localized text';
+
+  @override
   String get extractLocalizedText => '提取本地化文本';
 
   @override

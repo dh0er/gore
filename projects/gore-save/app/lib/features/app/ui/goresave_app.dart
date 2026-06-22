@@ -17,7 +17,9 @@ class GoresaveApp extends ConsumerWidget {
     final themeMode = ref.watch(themeModeProvider);
     final lang = gameLangByCode(ref.watch(localeProvider));
     return MaterialApp.router(
-      onGenerateTitle: (context) => AppLocalizations.of(context).appTitle,
+      // Window/OS title is language-independent on purpose — always the
+      // product name, never the localized UI string.
+      title: 'Gothic Remake Savegame Editor',
       debugShowCheckedModeBanner: false,
       theme: buildGoresaveTheme(),
       darkTheme: buildGoresaveDarkTheme(),
