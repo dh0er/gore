@@ -35,7 +35,7 @@ fn catalog_item_produces_json() {
     ensure_dump_fixture();
     let tmp = TempDir::new().unwrap();
     let out = tmp.path().join("item_catalog.json");
-    Command::cargo_bin("gore-cli")
+    Command::cargo_bin("gore")
         .unwrap()
         .args([
             "catalog",
@@ -62,7 +62,7 @@ fn catalog_npc_produces_json() {
     ensure_dump_fixture();
     let tmp = TempDir::new().unwrap();
     let out = tmp.path().join("npc_catalog.json");
-    Command::cargo_bin("gore-cli")
+    Command::cargo_bin("gore")
         .unwrap()
         .args([
             "catalog",
@@ -85,7 +85,7 @@ fn catalog_knowledge_produces_json() {
     ensure_dump_fixture();
     let tmp = TempDir::new().unwrap();
     let out = tmp.path().join("knowledge_catalog.json");
-    Command::cargo_bin("gore-cli")
+    Command::cargo_bin("gore")
         .unwrap()
         .args([
             "catalog",
@@ -111,7 +111,7 @@ fn catalog_item_entry_has_correct_fields() {
     ensure_dump_fixture();
     let tmp = TempDir::new().unwrap();
     let out = tmp.path().join("catalog.json");
-    Command::cargo_bin("gore-cli")
+    Command::cargo_bin("gore")
         .unwrap()
         .args([
             "catalog",
@@ -143,7 +143,7 @@ fn gui_model_produces_valid_json() {
 
     // 1. Build model.json from SDK fixtures
     let model_out = tmp.path().join("model.json");
-    Command::cargo_bin("gore-cli")
+    Command::cargo_bin("gore")
         .unwrap()
         .args(["dump", sdk_dir().to_str().unwrap(), "-o", model_out.to_str().unwrap()])
         .assert()
@@ -151,7 +151,7 @@ fn gui_model_produces_valid_json() {
 
     // 2. Build item catalog from dump fixture
     let catalog_out = tmp.path().join("item_catalog.json");
-    Command::cargo_bin("gore-cli")
+    Command::cargo_bin("gore")
         .unwrap()
         .args([
             "catalog", "--kind", "item",
@@ -163,7 +163,7 @@ fn gui_model_produces_valid_json() {
 
     // 3. Build GUI model
     let gui_out = tmp.path().join("gui_model.json");
-    Command::cargo_bin("gore-cli")
+    Command::cargo_bin("gore")
         .unwrap()
         .args([
             "gui-model",

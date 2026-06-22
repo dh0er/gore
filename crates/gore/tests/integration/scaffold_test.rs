@@ -5,7 +5,7 @@ use tempfile::TempDir;
 fn scaffold_creates_mod_structure() {
     let tmp = TempDir::new().unwrap();
 
-    Command::cargo_bin("gore-cli")
+    Command::cargo_bin("gore")
         .unwrap()
         .args(["scaffold", "MyBalanceMod", "-o", tmp.path().to_str().unwrap()])
         .assert()
@@ -30,7 +30,7 @@ fn scaffold_creates_mod_structure() {
 #[test]
 fn scaffold_main_lua_wires_gorelib_loader() {
     let dir = TempDir::new().unwrap();
-    Command::cargo_bin("gore-cli")
+    Command::cargo_bin("gore")
         .unwrap()
         .args(["scaffold", "MyMod", "-o", dir.path().to_str().unwrap()])
         .assert()
@@ -46,7 +46,7 @@ fn scaffold_main_lua_wires_gorelib_loader() {
 #[test]
 fn scaffold_enabled_txt_is_empty() {
     let tmp = TempDir::new().unwrap();
-    Command::cargo_bin("gore-cli")
+    Command::cargo_bin("gore")
         .unwrap()
         .args(["scaffold", "EmptyMod", "-o", tmp.path().to_str().unwrap()])
         .assert()

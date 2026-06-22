@@ -385,6 +385,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "gore"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "assert_cmd",
+ "clap",
+ "gore_core",
+ "predicates 2.1.5",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "toml",
+ "zip",
+]
+
+[[package]]
 name = "gore-oodle"
 version = "0.0.0"
 dependencies = [
@@ -419,23 +436,6 @@ dependencies = [
  "predicates 2.1.5",
  "pretty_assertions",
  "thiserror",
-]
-
-[[package]]
-name = "gore_cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "assert_cmd",
- "clap",
- "gore_core",
- "predicates 2.1.5",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror",
- "toml",
- "zip",
 ]
 
 [[package]]

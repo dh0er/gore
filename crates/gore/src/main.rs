@@ -4,7 +4,7 @@ use std::path::PathBuf;
 mod cmd;
 
 #[derive(Parser)]
-#[command(name = "gore-cli", about = "Gothic 1 Remake mod tooling CLI", version)]
+#[command(name = "gore", about = "Gothic Remake mod tooling CLI", version)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,

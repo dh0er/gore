@@ -17,7 +17,7 @@ fn package_creates_zip() {
     let mod_dir = make_test_mod(&tmp);
     let out_zip = tmp.path().join("TestMod.zip");
 
-    Command::cargo_bin("gore-cli")
+    Command::cargo_bin("gore")
         .unwrap()
         .args(["package", mod_dir.to_str().unwrap(), "-o", out_zip.to_str().unwrap()])
         .assert()
@@ -32,7 +32,7 @@ fn package_zip_contains_required_files() {
     let mod_dir = make_test_mod(&tmp);
     let out_zip = tmp.path().join("out.zip");
 
-    Command::cargo_bin("gore-cli")
+    Command::cargo_bin("gore")
         .unwrap()
         .args(["package", mod_dir.to_str().unwrap(), "-o", out_zip.to_str().unwrap()])
         .assert()
@@ -59,7 +59,7 @@ fn package_fails_if_enabled_txt_missing() {
     let mod_dir = tmp.path().join("BadMod");
     std::fs::create_dir_all(mod_dir.join("Scripts")).unwrap();
     // No enabled.txt, no main.lua — validation must reject
-    Command::cargo_bin("gore-cli")
+    Command::cargo_bin("gore")
         .unwrap()
         .args(["package", mod_dir.to_str().unwrap(), "-o", tmp.path().join("bad.zip").to_str().unwrap()])
         .assert()
@@ -74,7 +74,7 @@ fn package_fails_if_main_lua_missing() {
     std::fs::create_dir_all(mod_dir.join("Scripts")).unwrap();
     std::fs::write(mod_dir.join("enabled.txt"), "").unwrap();
     // Scripts/main.lua is missing
-    Command::cargo_bin("gore-cli")
+    Command::cargo_bin("gore")
         .unwrap()
         .args(["package", mod_dir.to_str().unwrap(), "-o", tmp.path().join("nolua.zip").to_str().unwrap()])
         .assert()

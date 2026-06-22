@@ -13,7 +13,7 @@ fn dump_produces_model_json() {
     let out = tmp.path().join("model.json");
     let sdk_dir = fixtures_dir().join("sdk");
 
-    Command::cargo_bin("gore-cli")
+    Command::cargo_bin("gore")
         .unwrap()
         .args(["dump", sdk_dir.to_str().unwrap(), "-o", out.to_str().unwrap()])
         .assert()
@@ -35,7 +35,7 @@ fn dump_produces_model_json() {
 #[test]
 fn dump_fails_on_missing_dir() {
     let tmp = TempDir::new().unwrap();
-    Command::cargo_bin("gore-cli")
+    Command::cargo_bin("gore")
         .unwrap()
         .args(["dump", "/no/such/dir", "-o", tmp.path().join("out.json").to_str().unwrap()])
         .assert()

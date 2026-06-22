@@ -15,7 +15,7 @@ fn gen_creates_mod_dir_and_main_lua() {
     let tmp = TempDir::new().unwrap();
     let overrides = fixtures().join("overrides.toml");
 
-    Command::cargo_bin("gore-cli")
+    Command::cargo_bin("gore")
         .unwrap()
         .args(["gen", overrides.to_str().unwrap(), "-o", tmp.path().to_str().unwrap()])
         .assert()
@@ -42,7 +42,7 @@ fn gen_round_trip_lua_shape() {
     let tmp = TempDir::new().unwrap();
     let overrides = fixtures().join("overrides.toml");
 
-    Command::cargo_bin("gore-cli")
+    Command::cargo_bin("gore")
         .unwrap()
         .args(["gen", overrides.to_str().unwrap(), "-o", tmp.path().to_str().unwrap()])
         .assert()
@@ -64,13 +64,13 @@ fn gen_round_trip_lua_shape() {
 fn gen_with_valid_model_succeeds() {
     let tmp = TempDir::new().unwrap();
     let model = tmp.path().join("model.json");
-    Command::cargo_bin("gore-cli")
+    Command::cargo_bin("gore")
         .unwrap()
         .args(["dump", sdk_dir().to_str().unwrap(), "-o", model.to_str().unwrap()])
         .assert()
         .success();
 
-    Command::cargo_bin("gore-cli")
+    Command::cargo_bin("gore")
         .unwrap()
         .args([
             "gen", fixtures().join("overrides.toml").to_str().unwrap(),
@@ -85,7 +85,7 @@ fn gen_with_valid_model_succeeds() {
 fn gen_with_unknown_class_fails_validation() {
     let tmp = TempDir::new().unwrap();
     let model = tmp.path().join("model.json");
-    Command::cargo_bin("gore-cli")
+    Command::cargo_bin("gore")
         .unwrap()
         .args(["dump", sdk_dir().to_str().unwrap(), "-o", model.to_str().unwrap()])
         .assert()
@@ -97,7 +97,7 @@ fn gen_with_unknown_class_fails_validation() {
         "[meta]\nname = \"BadMod\"\ndelay_ms = 0\n\n[[override]]\nclass = \"NonExistentClass\"\nfield = \"m_Value\"\nvalue_int = 1\n"
     ).unwrap();
 
-    Command::cargo_bin("gore-cli")
+    Command::cargo_bin("gore")
         .unwrap()
         .args([
             "gen", bad_toml.to_str().unwrap(),

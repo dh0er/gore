@@ -1,11 +1,11 @@
 [package]
-name = "gore_cli"
+name = "gore"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
 
 [[bin]]
-name = "gore-cli"
+name = "gore"
 path = "src/main.rs"
 
 [dependencies]

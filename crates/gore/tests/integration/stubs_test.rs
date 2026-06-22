@@ -7,7 +7,7 @@ fn make_model_json(tmp: &TempDir) -> PathBuf {
     let sdk_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/integration/fixtures/sdk");
     let model_path = tmp.path().join("model.json");
-    Command::cargo_bin("gore-cli")
+    Command::cargo_bin("gore")
         .unwrap()
         .args(["dump", sdk_dir.to_str().unwrap(), "-o", model_path.to_str().unwrap()])
         .assert()
@@ -21,7 +21,7 @@ fn stubs_creates_lua_files() {
     let model = make_model_json(&tmp);
     let out_dir = tmp.path().join("stubs");
 
-    Command::cargo_bin("gore-cli")
+    Command::cargo_bin("gore")
         .unwrap()
         .args(["stubs", model.to_str().unwrap(), "-o", out_dir.to_str().unwrap()])
         .assert()
@@ -42,7 +42,7 @@ fn stubs_lua_file_contains_emmylua_annotations() {
     let model = make_model_json(&tmp);
     let out_dir = tmp.path().join("stubs");
 
-    Command::cargo_bin("gore-cli")
+    Command::cargo_bin("gore")
         .unwrap()
         .args(["stubs", model.to_str().unwrap(), "-o", out_dir.to_str().unwrap()])
         .assert()
@@ -63,7 +63,7 @@ fn stubs_filter_limits_output() {
     let model = make_model_json(&tmp);
     let out_dir = tmp.path().join("stubs_filtered");
 
-    Command::cargo_bin("gore-cli")
+    Command::cargo_bin("gore")
         .unwrap()
         .args([
             "stubs", model.to_str().unwrap(),

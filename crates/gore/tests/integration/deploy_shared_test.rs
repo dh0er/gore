@@ -13,7 +13,7 @@ fn deploy_shared_copies_tree_into_mods_shared() {
     let mods = game.path().join("ue4ss/Mods");
     fs::create_dir_all(&mods).unwrap();
 
-    Command::cargo_bin("gore-cli")
+    Command::cargo_bin("gore")
         .unwrap()
         .args([
             "deploy-shared",
