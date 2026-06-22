@@ -48,3 +48,7 @@ path = "tests/integration/gen_test.rs"
 [[test]]
 name = "package_test"
 path = "tests/integration/package_test.rs"
+
+[[test]]
+name = "deploy_shared_test"
+path = "tests/integration/deploy_shared_test.rs"

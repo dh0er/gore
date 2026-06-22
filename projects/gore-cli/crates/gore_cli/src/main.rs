@@ -104,6 +104,16 @@ enum Commands {
         #[arg(long)]
         model: Option<PathBuf>,
     },
+    /// Deploy the gore-lua shared SDK into the game's ue4ss/Mods/shared.
+    DeployShared {
+        /// Source shared/ dir. Defaults to a copy located relative to the gore-cli
+        /// executable (cwd-independent); pass this when running from an unusual layout.
+        #[arg(long)]
+        src: Option<std::path::PathBuf>,
+        /// Game dir containing ue4ss/Mods.
+        #[arg(long)]
+        game: std::path::PathBuf,
+    },
     /// Zip a mod folder into distributable UE4SS layout
     Package {
         /// Path to the mod directory
@@ -171,6 +181,7 @@ fn main() {
         },
         Commands::Scaffold { mod_name, out } => cmd::scaffold::run(mod_name, out),
         Commands::Gen { overrides, out, model } => cmd::gen::run(overrides, out, model),
+        Commands::DeployShared { src, game } => cmd::deploy_shared::run(src, game),
         Commands::Package { mod_dir, out } => cmd::package::run(mod_dir, out),
     };
     if let Err(e) = result {

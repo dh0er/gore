@@ -32,6 +32,19 @@ pub fn run(mod_name: String, mods_dir: PathBuf) -> Result<()> {
 -- Use `gore-cli stubs` to generate LuaLS type stubs for autocomplete.
 -- Require stubs: (add to your .luarc.json: {{ "workspace.library": ["path/to/stubs"] }})
 
+-- gore-lua SDK loader (require + robust loadfile fallback)
+local ok, gore = pcall(require, "gorelib")
+if not ok then gore = nil end -- a failed pcall leaves the error string in `gore`; clear it
+if not gore then
+    local f = loadfile("ue4ss/Mods/shared/gorelib/gorelib.lua")
+    if f then
+        -- run the chunk under pcall: a load-time error in the SDK must not abort the mod
+        local ok2, res = pcall(f)
+        gore = ok2 and res or nil
+    end
+end
+-- use gore.* helpers below; call gore.help.list() or see projects/gore-lua/README.md
+
 local function apply()
   -- TODO: add your CDO overrides here
 end
