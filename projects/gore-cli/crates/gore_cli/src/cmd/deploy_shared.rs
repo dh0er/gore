@@ -39,10 +39,11 @@ pub fn run(src: Option<PathBuf>, game: PathBuf) -> Result<()> {
         }
     }
     // Resolve an existing destination to its real path (a lexical path can't be compared
-    // reliably against the canonicalized source), then reject a destination inside the
-    // source: copying a dir into its own subtree recurses until the path/disk blows up.
+    // reliably against the canonicalized source), then reject a destination strictly INSIDE
+    // the source: the sibling staging dir would land under src and copy_dir would recurse into
+    // it. dest == src is fine — staging is a sibling of src, so the in-place refresh is safe.
     let dest_real = dest_root.canonicalize().unwrap_or_else(|_| dest_root.clone());
-    if dest_real.starts_with(&src) {
+    if dest_real != src && dest_real.starts_with(&src) {
         bail!(
             "destination '{}' is inside source '{}' — would copy into itself",
             dest_root.display(),
