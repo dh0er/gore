@@ -121,6 +121,14 @@ PROJECTS: dict[str, dict] = {
         # `gore-cli deploy-shared` resolves the SDK from `shared/` next to the binary.
         "bundle_dirs": [("projects/gore-lua/shared", "shared")],
     },
+    "gore-as": {
+        "kind": "rust-bin",
+        "dir": "projects/gore-as",
+        "manifest": "crates/gore_as/Cargo.toml",
+        "crate": "gore_as",
+        "bin": "gore-as",  # AngelScript decompiler/recompiler (dev/reversing tool)
+        "releasable": False,
+    },
     "gore-core": {
         "kind": "rust-lib",
         "dir": "projects/gore-core",

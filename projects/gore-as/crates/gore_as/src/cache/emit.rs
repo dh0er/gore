@@ -306,7 +306,17 @@ fn stub_reason(body: &str, locals: &BTreeMap<i32, String>, param_count: usize, r
     for l in body.lines() {
         let t = l.trim_start();
         if let Some(rest) = t.strip_prefix("// ") {
-            return Some(if rest.starts_with("disasm error") { "disasm-error" } else { "opcode-uncovered" }.into());
+            // A structurer bailout (control-flow guard hit) leaves the body truncated, so it
+            // MUST still stub — but it's not missing bytecode, so report a distinct cause
+            // rather than mislabeling it `opcode-uncovered`.
+            let reason = if rest.starts_with("disasm error") {
+                "disasm-error"
+            } else if rest.starts_with("<structurer bailout>") {
+                "structurer-bailout"
+            } else {
+                "opcode-uncovered"
+            };
+            return Some(reason.into());
         }
         if t.contains("(? ") || t.contains(" ?)") || t.contains(" ? ") {
             return Some("unresolved-operand".into());
