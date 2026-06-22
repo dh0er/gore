@@ -558,6 +558,22 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
     for k in 0..insns.len() {
         let ins = &insns[k];
         let n = ins.op.name;
+        // Invalidate a cached SetV* constant when this op overwrites that slot with a
+        // NON-constant value (copy, call-result deref, arithmetic, conversion). Otherwise a
+        // later float/double field store reads the stale literal instead of the live value.
+        let overwrites_slot = !matches!(n, "SetV4" | "SetV8" | "SetV1")
+            && (bin_op(n).is_some()
+                || iconst_op(n).is_some()
+                || n.contains("TO") // numeric conversions (iTOf, fTOi, …) write their dst slot
+                || n.starts_with("CpyVtoV")
+                || n.starts_with("CpyRtoV")
+                || n.starts_with("RDR")
+                || matches!(n, "IncVi" | "IncVf" | "DecVi" | "DecVf" | "NEGi" | "NEGf" | "NEGd" | "NOT"));
+        if overwrites_slot {
+            if let Some(&wd) = ins.words.first() {
+                set_consts.remove(&(wd as i16 as i32));
+            }
+        }
         match n {
             // ---- pushes ----
             "PshC4" => {
