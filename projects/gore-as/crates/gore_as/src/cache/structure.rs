@@ -222,6 +222,7 @@ struct Cmp {
     b: String,
     op: Option<&'static str>, // relational op from a T* test (overrides the jump-derived one)
     expr: Option<String>,     // a complete boolean condition (when set, a/b are ignored)
+    expr_bool: bool,          // `expr` is already bool-typed (render bare, don't wrap `!= 0`)
 }
 
 /// Build a call expression from the pushed-arg stack. For a method, the receiver is the
@@ -457,7 +458,7 @@ fn esc(s: &str) -> String {
 fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
     let mut out = Vec::new();
     let mut cmp: Option<Cmp> = None;
-    let mut cond: Option<String> = None; // a bool value (CpyVtoR1 / call) tested by a later jump
+    let mut cond: Option<(String, bool)> = None; // (bool value tested by a jump, is-bool-typed)
     let mut stack: Vec<Arg> = Vec::new(); // pushed pointer/value expressions
     let mut value_reg: Option<String> = None;
     let mut obj_reg: Option<String> = None;
@@ -702,8 +703,10 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
             }
             "CpyVtoR1" => {
                 // a bool moved into the test register: feeds either RET or a conditional jump.
+                // A call result is already bool-typed; a slot holds the bool as an int.
+                let is_bool = pending.is_some() && pending_ty.as_deref() == Some("bool");
                 let v = pending.take().unwrap_or_else(|| name(w(ins, 0)));
-                cond = Some(v.clone());
+                cond = Some((v.clone(), is_bool));
                 ret_val = Some(v);
             }
             "RET" => {
@@ -767,12 +770,22 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
             "STR" => stack.push(Arg::obj("\"\"".into())),         // +3: string-constant push
             "PshListElmnt" => stack.push(Arg::int(name(w(ins, 0)))), // +2: list element
             "COPY" | "Cast" => { stack.pop(); }                  // -2: pop the source ptr
+            // conditional jump: if no comparison was recovered, the tested value is the live
+            // call result / bool register — use it as the branch condition (consume so it's
+            // not flushed as a stray statement).
+            "JZ" | "JNZ" | "JS" | "JNS" | "JP" | "JNP" | "JLowZ" | "JLowNZ" => {
+                if cond.is_none() && cmp.is_none() {
+                    if let Some(p) = pending.take() {
+                        cond = Some((p, pending_ty.as_deref() == Some("bool")));
+                    }
+                }
+            }
             // ---- pure VM housekeeping / flow: ignore ----
             "SUSPEND" | "JitEntry" | "PopPtr" | "SwapPtr" | "ClrHi" | "ClrVPtr"
             | "FREE" | "FinConstruct" | "CHKREF" | "ChkRefS" | "ChkNullV" | "ChkNullS"
             | "Destruct" | "SaveReturnValue" | "ResolveObjectPtr" | "FreeNullV8" | "GETOBJ"
             | "GETOBJREF" | "GETREF" | "CopyScript" | "ThrowException"
-            | "JMP" | "JZ" | "JNZ" | "JS" | "JNS" | "JP" | "JNP" | "JLowZ" | "JLowNZ" | "JMPP" => {}
+            | "JMP" | "JMPP" => {}
             _ => {
                 flush!();
                 out.push(format!("// {} {}", n, operand_str(ins)));
@@ -784,9 +797,9 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
     // no binary comparison but a bool value was tested -> use it as the branch condition so
     // the jump renders `if (cond != 0)` instead of `if (? != ?)`.
     if cmp.is_none() {
-        if let Some(c) = cond.take() {
+        if let Some((c, is_bool)) = cond.take() {
             if !c.is_empty() && c != UNRESOLVED {
-                cmp = Some(Cmp { expr: Some(c), ..Default::default() });
+                cmp = Some(Cmp { expr: Some(c), expr_bool: is_bool, ..Default::default() });
             }
         }
     }
@@ -799,6 +812,13 @@ fn branch_cond(cmp: &Option<Cmp>, jump: &str) -> String {
     // held in an int slot, so test against 0 (int-safe; negate() swaps `!= 0` <-> `== 0`).
     if let Some(c) = cmp {
         if let Some(e) = &c.expr {
+            if c.expr_bool {
+                // already bool-typed (a call result) -> render bare / negated.
+                return match jump {
+                    "JNZ" | "JLowNZ" | "JNS" | "JP" => e.clone(),
+                    _ => format!("!({e})"),
+                };
+            }
             return match jump {
                 "JNZ" | "JLowNZ" | "JNS" | "JP" => format!("{e} != 0"),
                 _ => format!("{e} == 0"),
