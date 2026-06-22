@@ -90,13 +90,17 @@ end
 function gore.player.loc(actor)
     local x, y, z = 0, 0, 0
     if gore.obj.valid(actor) then
-        pcall(function() local l = actor.RootComponent.RelativeLocation; x, y, z = l.X, l.Y, l.Z end)
+        -- World location, not the root component's parent-relative transform: an attached
+        -- actor's RelativeLocation is not its world position.
+        pcall(function() local l = actor:K2_GetActorLocation(); x, y, z = l.X, l.Y, l.Z end)
     end
     return x, y, z
 end
 function gore.player.setLoc(actor, x, y, z)
     if not gore.obj.valid(actor) then return false end
-    return (pcall(function() actor.RootComponent.RelativeLocation = { X = x, Y = y, Z = z } end))
+    -- Teleport in world space (bSweep=false, bTeleport=true) so attached/parented actors
+    -- land at the given world coordinates instead of parent-relative ones.
+    return (pcall(function() actor:K2_SetActorLocation({ X = x, Y = y, Z = z }, false, {}, true) end))
 end
 function gore.player.rot()
     local pitch, yaw = 0, 0

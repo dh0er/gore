@@ -16,9 +16,16 @@ const DATA_TYPE_SIZE: usize = 36;
 /// Parse the cache header + all `Modules`, returning `TAIL_OFF` (offset of the first
 /// global tail table = end of the last module).
 pub fn module_region_end(bytes: &[u8]) -> Result<usize, WireError> {
+    if bytes.len() < CacheHeader::SIZE {
+        return Err(WireError::Eof {
+            pos: 0,
+            need: CacheHeader::SIZE,
+            have: bytes.len(),
+        });
+    }
     let mut c = Cursor::at(bytes, CacheHeader::SIZE); // skip FGuid+magic+count (0x18)
     // Re-read the count from its known offset (0x14) rather than trusting header parse.
-    let count = u32::from_le_bytes(bytes[0x14..0x18].try_into().unwrap()) as usize;
+    let count = module_count(bytes) as usize;
     for _ in 0..count {
         // Modules is TMap<FString key, FAngelscriptPrecompiledModule value>.
         c.read_fstring()?; // key (UE FString)
@@ -27,9 +34,13 @@ pub fn module_region_end(bytes: &[u8]) -> Result<usize, WireError> {
     Ok(c.pos())
 }
 
-/// Number of modules declared in the header (@0x14).
+/// Number of modules declared in the header (@0x14). Returns 0 for inputs too short to
+/// hold a header, so callers report a normal parse error instead of panicking.
 pub fn module_count(bytes: &[u8]) -> u32 {
-    u32::from_le_bytes(bytes[0x14..0x18].try_into().unwrap())
+    match bytes.get(0x14..0x18) {
+        Some(b) => u32::from_le_bytes([b[0], b[1], b[2], b[3]]),
+        None => 0,
+    }
 }
 
 /// Collect every module's name (the `Modules` TMap key) in order.
