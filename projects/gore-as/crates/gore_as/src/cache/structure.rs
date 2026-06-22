@@ -25,13 +25,19 @@ use super::walk_modules::FuncCode;
 struct Arg {
     s: String,
     is_int: bool,
+    /// Recovered base type name of the value (e.g. `FGameplayTag`, `AGothicCharacter`), when
+    /// known — lets call sites detect an arg whose type can't match the callee parameter.
+    ty: Option<String>,
 }
 impl Arg {
     fn int(s: String) -> Arg {
-        Arg { s, is_int: true }
+        Arg { s, is_int: true, ty: None }
     }
     fn obj(s: String) -> Arg {
-        Arg { s, is_int: false }
+        Arg { s, is_int: false, ty: None }
+    }
+    fn typed(s: String, ty: Option<String>) -> Arg {
+        Arg { s, is_int: false, ty }
     }
 }
 
@@ -47,7 +53,7 @@ const ARGMISMATCH: &str = "\u{2}argmismatch";
 /// Structured statement body for a function (no signature wrapper), indented at `depth`.
 /// Returns an error annotation string on disasm failure (never panics).
 pub fn body_statements(f: &FuncCode, refs: &RefResolver, depth: usize) -> String {
-    body_statements_ctor(f, refs, depth, None, None, None)
+    body_statements_ctor(f, refs, depth, None, None, None, None)
 }
 
 /// Like [`body_statements`], but with class context for type-aware casts:
@@ -55,13 +61,13 @@ pub fn body_statements(f: &FuncCode, refs: &RefResolver, depth: usize) -> String
 /// - `ret_ty`: the function's return type, so `return <int>` casts to `bool`/enum.
 /// - `fields`: the owning class's field name -> base type name, so a `this.field = <int>`
 ///   assignment casts the RHS to a `bool`/enum field.
-pub fn body_statements_ctor(f: &FuncCode, refs: &RefResolver, depth: usize, super_ctor: Option<&str>, ret_ty: Option<&DataType>, fields: Option<&HashMap<String, String>>) -> String {
+pub fn body_statements_ctor(f: &FuncCode, refs: &RefResolver, depth: usize, super_ctor: Option<&str>, ret_ty: Option<&DataType>, fields: Option<&HashMap<String, String>>, param_types: Option<&[String]>) -> String {
     let instrs = match disassemble(&f.bytecode) {
         Ok(i) => i,
         Err(e) => return format!("{}// disasm error: {e}\n", "    ".repeat(depth)),
     };
     let g = cfg::build(&instrs);
-    let ctx = Ctx { f, refs, instrs: &instrs, super_ctor, ret_ty, fields };
+    let ctx = Ctx { f, refs, instrs: &instrs, super_ctor, ret_ty, fields, param_types };
     let idx_of: HashMap<usize, usize> =
         g.blocks.iter().enumerate().map(|(i, b)| (b.start_dw, i)).collect();
     let mut body = String::new();
@@ -93,6 +99,7 @@ struct Ctx<'a> {
     super_ctor: Option<&'a str>,
     ret_ty: Option<&'a DataType>,
     fields: Option<&'a HashMap<String, String>>,
+    param_types: Option<&'a [String]>,
 }
 
 impl Ctx<'_> {
@@ -111,6 +118,21 @@ impl Ctx<'_> {
         self.param_or_arg((-off) as usize)
     }
 
+    /// Recovered base type name for a parameter slot (None for `this`, locals, or unknowns).
+    fn slot_type(&self, off: i32) -> Option<String> {
+        let idx = if self.f.is_method {
+            if off >= 0 { return None; }
+            (-off - AS_PTR_SIZE) as usize
+        } else {
+            if off > 0 { return None; }
+            (-off) as usize
+        };
+        self.param_types
+            .and_then(|p| p.get(idx))
+            .filter(|t| !t.is_empty())
+            .cloned()
+    }
+
     /// Name for parameter slot `idx`: the stored name, else `arg{idx}` — which MUST match
     /// how `emit::render_params` declares unnamed params (also `arg{idx}`), so a body
     /// reference resolves to a declared parameter.
@@ -126,6 +148,24 @@ impl Ctx<'_> {
 
 fn s16(w: u16) -> i32 {
     w as i16 as i32
+}
+
+/// The raw bits of a `SetV*` constant written to a slot — so a later store into a float/
+/// double field can reinterpret them as the real IEEE-754 value instead of an int literal.
+#[derive(Clone, Copy)]
+enum ConstBits {
+    W4(u32),
+    W8(u64),
+}
+
+/// Render the constant last written to `slot` as a float (`f` suffix) or double literal,
+/// decoding its bits. None if the slot has no tracked constant.
+fn float_lit(m: &HashMap<i32, ConstBits>, slot: i32, double: bool) -> Option<String> {
+    let v: f64 = match m.get(&slot)? {
+        ConstBits::W4(b) => f32::from_bits(*b) as f64,
+        ConstBits::W8(b) => f64::from_bits(*b),
+    };
+    Some(if double { format!("{v:?}") } else { format!("{:?}f", v as f32) })
 }
 
 /// A recovered comparison (from CMP* operands), pending a conditional jump.
@@ -163,6 +203,11 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
         // operand type (params[0]) so e.g. `this.NameField = <int>` on an FName becomes a
         // stub (int can't convert) instead of an un-compilable assignment.
         if let Some(op) = assign_op(f) {
+            // `this = Other` is a generated struct copy-ctor / assign (whole-object) — its
+            // const-ref param can't bind to the non-const opAssign; stub it.
+            if op == "=" && recv.s == "this" {
+                return Some(ARGMISMATCH.into());
+            }
             match a.first() {
                 Some(rhs) => {
                     let r = params.and_then(|p| p.first()).map(|pt| cast_arg(rhs, pt, refs))
@@ -218,6 +263,16 @@ fn render_args(a: &[Arg], params: Option<&[DataType]>, refs: &RefResolver) -> St
 /// implicit int->bool or int->enum conversion). Non-int args pass through unchanged.
 fn cast_arg(arg: &Arg, pt: &DataType, refs: &RefResolver) -> String {
     if !arg.is_int {
+        // a value-type (F-struct / E-enum, which have NO inheritance) arg whose recovered
+        // type differs from the parameter type can't possibly match -> the arg recovery is
+        // wrong; stub. (Object U*/A* params are skipped: upcasts are legal.)
+        if let Some(at) = &arg.ty {
+            let pn = pt.base_name(refs);
+            let is_value = |s: &str| s.starts_with('F') || s.starts_with('E');
+            if pt.token == 5 && is_value(&pn) && is_value(at) && *at != pn {
+                return ARGMISMATCH.into();
+            }
+        }
         return arg.s.clone();
     }
     if pt.token == 0x41 {
@@ -321,6 +376,7 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
     let mut obj_reg: Option<String> = None;
     let mut ref_reg: Option<String> = None; // Idiom-B member address
     let mut ref_reg_ty: Option<String> = None; // field type name behind ref_reg (for casts)
+    let mut set_consts: HashMap<i32, ConstBits> = HashMap::new(); // last SetV* constant per slot
     let mut pending: Option<String> = None; // unconsumed call/ctor result
     let mut ret_val: Option<String> = None;
     let name = |off: i32| ctx.slot_name(off);
@@ -343,31 +399,39 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
             "PshC4" => stack.push(Arg::int((ins.dwords.first().copied().unwrap_or(0) as i32).to_string())),
             "PshC8" => stack.push(Arg::int((ins.qwords.first().copied().unwrap_or(0) as i64).to_string())),
             "PshV4" | "PshV8" => stack.push(Arg::int(name(w(ins, 0)))),
-            "PshVPtr" => stack.push(Arg::obj(name(w(ins, 0)))),
+            "PshVPtr" => stack.push(Arg::typed(name(w(ins, 0)), ctx.slot_type(w(ins, 0)))),
             "PSF" => {
                 // &local, unless it's the destination of a following ALLOC
                 if insns.get(k + 1).map(|i| i.op.name) != Some("ALLOC") {
                     // &local at the AS source level is implicit (param decides &in/&out) — no `&`.
-                    stack.push(Arg::obj(name(w(ins, 0))));
+                    stack.push(Arg::typed(name(w(ins, 0)), ctx.slot_type(w(ins, 0))));
                 }
                 // else: this PSF is the destination local for the following ALLOC; don't push.
             }
-            "PshRPtr" => stack.push(Arg::obj(value_reg.take().or_else(|| ref_reg.clone()).unwrap_or_else(|| UNRESOLVED.into()))),
+            "PshRPtr" => {
+                let (s, ty) = match value_reg.take() {
+                    Some(v) => (v, None),
+                    None => (ref_reg.clone().unwrap_or_else(|| UNRESOLVED.into()), ref_reg_ty.clone()),
+                };
+                stack.push(Arg::typed(s, ty));
+            }
             "PGA" | "PshGPtr" | "PshG4" => {
                 let ptr = ins.qwords.first().copied().unwrap_or(0) as i64;
                 if ctx.refs.global_is_string(ptr) {
                     stack.push(Arg::obj(format!("\"{}\"", esc(ctx.refs.global_by_ptr(ptr).unwrap_or("")))));
                 } else {
                     let nm = ctx.refs.global_by_ptr(ptr).unwrap_or("global?");
-                    let q = if let Some(cls) = nm.strip_prefix("__StaticType_") {
+                    if let Some(cls) = nm.strip_prefix("__StaticType_") {
                         // generator class-pointer global -> the real UClass accessor
-                        format!("{cls}::StaticClass()")
+                        stack.push(Arg::obj(format!("{cls}::StaticClass()")));
+                    } else if nm.starts_with("__") {
+                        // other implicit generator global (e.g. __WorldContext) — not a
+                        // source-level identifier and not a real arg; drop it.
                     } else if let Some(ns) = ctx.refs.global_ns(ptr) {
-                        format!("{ns}::{nm}") // qualify with namespace (e.g. `FColor::Red`)
+                        stack.push(Arg::obj(format!("{ns}::{nm}"))); // e.g. `FColor::Red`
                     } else {
-                        nm.to_string()
-                    };
-                    stack.push(Arg::obj(q));
+                        stack.push(Arg::obj(nm.to_string()));
+                    }
                 }
             }
             "PshNull" => stack.push(Arg::obj("nullptr".into())),
@@ -378,9 +442,11 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 let off = ins.words.first().copied().unwrap_or(0) as i32;
                 let tid = ins.dwords.first().copied().unwrap_or(0) as i32;
                 let field = ctx.refs.member(tid, off).map(|s| s.to_string()).unwrap_or_else(|| format!("field_0x{off:x}"));
+                let fty = ctx.refs.member_type(tid, off).map(|s| s.to_string());
                 if let Some(top) = stack.last_mut() {
                     top.s = format!("{}.{field}", top.s);
                     top.is_int = false; // now a member access, not a bare int slot
+                    top.ty = fty;
                 }
             }
             "RDSPtr" => {} // deref in place: no change to the rendered name
@@ -389,7 +455,10 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 let off = ins.words.first().copied().unwrap_or(0) as i32;
                 let tid = ins.dwords.first().copied().unwrap_or(0) as i32;
                 let field = ctx.refs.member(tid, off).map(|s| s.to_string()).unwrap_or_else(|| format!("field_0x{off:x}"));
-                ref_reg_ty = ctx.fields.and_then(|m| m.get(&field)).cloned();
+                // resolve the field's type from the cache (covers inherited fields, which the
+                // current-class field map misses); fall back to the class-local map.
+                ref_reg_ty = ctx.refs.member_type(tid, off).map(|s| s.to_string())
+                    .or_else(|| ctx.fields.and_then(|m| m.get(&field)).cloned());
                 ref_reg = Some(format!("this.{field}"));
             }
             "LoadRObjR" | "LoadVObjR" => {
@@ -397,7 +466,7 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 let off = ins.words.get(1).copied().unwrap_or(0) as i32;
                 let tid = ins.dwords.first().copied().unwrap_or(0) as i32;
                 let field = ctx.refs.member(tid, off).map(|s| s.to_string()).unwrap_or_else(|| format!("field_0x{off:x}"));
-                ref_reg_ty = None; // field of another object; current-class field map doesn't apply
+                ref_reg_ty = ctx.refs.member_type(tid, off).map(|s| s.to_string()); // foreign object field
                 ref_reg = Some(format!("{obj}.{field}"));
             }
             _ if n.starts_with("RDR") => {
@@ -410,7 +479,11 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 flush!();
                 if let Some(r) = &ref_reg {
                     let rhs = name(w(ins, 0));
+                    // a constant slot stored into a float/double field carries IEEE-754 bits,
+                    // not an int — decode it; else apply the bool/enum/incompatible cast.
                     let rhs = match ref_reg_ty.as_deref() {
+                        Some("float") | Some("float32") => float_lit(&set_consts, w(ins, 0), false).unwrap_or(rhs),
+                        Some("double") => float_lit(&set_consts, w(ins, 0), true).unwrap_or(rhs),
                         Some(t) if looks_int(&rhs) => field_assign_rhs(&rhs, t),
                         _ => rhs,
                     };
@@ -418,10 +491,17 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 }
             }
             // ---- constants / arithmetic into slots ----
-            "SetV4" | "SetV8" | "SetV1" => {
+            "SetV8" => {
                 flush!();
-                let c = ins.dwords.first().copied().unwrap_or(0) as i32;
-                out.push(format!("{} = {};", name(w(ins, 0)), c));
+                let bits = ins.qwords.first().copied().unwrap_or(0); // 64-bit const is in qwords
+                set_consts.insert(w(ins, 0), ConstBits::W8(bits));
+                out.push(format!("{} = {};", name(w(ins, 0)), bits as i64));
+            }
+            "SetV4" | "SetV1" => {
+                flush!();
+                let bits = ins.dwords.first().copied().unwrap_or(0);
+                set_consts.insert(w(ins, 0), ConstBits::W4(bits));
+                out.push(format!("{} = {};", name(w(ins, 0)), bits as i32));
             }
             "CpyVtoV4" | "CpyVtoV8" => {
                 flush!();

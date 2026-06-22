@@ -94,9 +94,9 @@ impl RefResolver {
             if is_method {
                 r.func_is_method.insert(key);
             }
-            if !params.is_empty() {
-                r.func_params.insert(key, params);
-            }
+            // Always record params — even an empty list — so the call-site arg-count check
+            // can stub a zero-param method that was decompiled with phantom args.
+            r.func_params.insert(key, params);
             r.func_ret.insert(key, ret);
             r.func_by_ptr.insert(key, name);
         }

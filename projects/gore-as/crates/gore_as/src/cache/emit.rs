@@ -46,12 +46,18 @@ pub fn emit_module(m: &Module, refs: &RefResolver) -> String {
             continue; // generator-synthesized (e.g. __StaticType_X)
         }
         let base = g.ty.base_name(refs);
+        if !is_primitive(&base) && !is_enum(&base) {
+            // FName/F-struct/object globals can't be `const X = 0;` — default-construct them
+            // (their real value is a generator default we can't reconstruct offline anyway).
+            let _ = writeln!(s, "{base} {};", g.name);
+            continue;
+        }
         match g.value {
             Some(v) => {
                 let _ = writeln!(s, "const {base} {} = {};", g.name, render_const(&base, v));
             }
             None => {
-                // a non-const global with a runtime init we didn't recover — emit a const stub
+                // a primitive/enum const whose runtime init we didn't recover — stub value
                 let _ = writeln!(s, "const {base} {} = {};", g.name, default_for(&base));
             }
         }
@@ -143,7 +149,8 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
         param_names: f.params.iter().map(|p| p.name.clone()).collect(),
         bytecode: f.bytecode.clone(),
     };
-    let body = body_statements_ctor(&fc, refs, depth + 1, super_ctor, Some(&f.ret), fields);
+    let param_types: Vec<String> = f.params.iter().map(|p| p.ty.base_name(refs)).collect();
+    let body = body_statements_ctor(&fc, refs, depth + 1, super_ctor, Some(&f.ret), fields, Some(&param_types));
     let locals = infer_locals(f, refs);
 
     if body_is_recoverable(&body, &locals, f.params.len(), ret == "void") {
@@ -334,6 +341,12 @@ fn writes_double(n: &str) -> bool {
 }
 fn writes_int64(n: &str) -> bool {
     matches!(n, "SetV8" | "ADDi64" | "SUBi64" | "MULi64" | "DIVi64")
+}
+
+/// Heuristic: a UE enum type name (`E` + uppercase), which is int-castable like a primitive.
+fn is_enum(ty: &str) -> bool {
+    let b = ty.as_bytes();
+    b.len() >= 2 && b[0] == b'E' && b[1].is_ascii_uppercase()
 }
 
 /// True for AngelScript primitive scalar types (need an explicit initializer).
