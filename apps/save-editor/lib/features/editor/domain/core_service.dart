@@ -118,25 +118,24 @@ List<String> _candidateLibraryPaths() {
     return const [];
   }
 
-  final executableDir = p.dirname(Platform.resolvedExecutable);
-  final cwd = Directory.current.path;
-  return [
+  final candidates = <String>[
     // Trusted shipped location first; always a path with separators so the
     // Windows DLL search order is bypassed. A bare "gore_save.dll" is
     // intentionally omitted because it would let a same-named DLL on the
     // process search path bind instead of the core we ship.
-    p.join(executableDir, 'gore_save.dll'),
-    p.normalize(
-      p.join(cwd, '..', 'target', 'debug', 'gore_save.dll'),
-    ),
-    p.normalize(
-      p.join(cwd, '..', 'target', 'release', 'gore_save.dll'),
-    ),
-    p.normalize(
-      p.join(cwd, '..', '..', 'target', 'debug', 'gore_save.dll'),
-    ),
-    p.normalize(
-      p.join(cwd, '..', '..', 'target', 'release', 'gore_save.dll'),
-    ),
+    p.join(p.dirname(Platform.resolvedExecutable), 'gore_save.dll'),
   ];
+  // Dev: the cargo workspace target/ is at the monorepo root. The runtime cwd
+  // depth varies (app dir vs a subfolder like integration_test), so walk up
+  // looking for it rather than hard-coding a level count.
+  var dir = Directory.current.path;
+  for (var i = 0; i < 6; i++) {
+    for (final profile in const ['debug', 'release']) {
+      candidates.add(p.join(dir, 'target', profile, 'gore_save.dll'));
+    }
+    final parent = p.dirname(dir);
+    if (parent == dir) break;
+    dir = parent;
+  }
+  return candidates;
 }
