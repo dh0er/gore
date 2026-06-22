@@ -435,17 +435,26 @@ fn infer_locals(f: &Func, refs: &RefResolver) -> BTreeMap<i32, String> {
 fn writes_int(n: &str) -> bool {
     matches!(n, "SetV4" | "SetV1" | "ADDi" | "SUBi" | "MULi" | "DIVi" | "MODi" | "IncVi" | "DecVi"
         | "NEGi" | "BAND" | "BOR" | "BXOR" | "BSLL" | "BSRA" | "ADDIi" | "SUBIi" | "MULIi"
-        | "CpyVtoR4" | "RDR4" | "i2f" | "f2i" | "CpyRtoV4")
+        | "CpyVtoR4" | "RDR4" | "CpyRtoV4"
+        // conversions whose RESULT is a 32-bit int/uint (*TO i/u/b/w)
+        | "fTOi" | "fTOu" | "sbTOi" | "swTOi" | "ubTOi" | "uwTOi" | "dTOi" | "dTOu"
+        | "iTOb" | "iTOw" | "i64TOi")
 }
 fn writes_float(n: &str) -> bool {
     matches!(n, "ADDf" | "SUBf" | "MULf" | "DIVf" | "MODf" | "NEGf" | "IncVf" | "DecVf"
-        | "ADDIf" | "SUBIf" | "MULIf")
+        | "ADDIf" | "SUBIf" | "MULIf"
+        // conversions whose RESULT is float (*TO f)
+        | "iTOf" | "uTOf" | "dTOf" | "i64TOf" | "u64TOf")
 }
 fn writes_double(n: &str) -> bool {
-    matches!(n, "ADDd" | "SUBd" | "MULd" | "DIVd" | "MODd" | "NEGd")
+    matches!(n, "ADDd" | "SUBd" | "MULd" | "DIVd" | "MODd" | "NEGd"
+        // conversions whose RESULT is double (*TO d)
+        | "iTOd" | "uTOd" | "fTOd" | "i64TOd" | "u64TOd")
 }
 fn writes_int64(n: &str) -> bool {
-    matches!(n, "SetV8" | "ADDi64" | "SUBi64" | "MULi64" | "DIVi64")
+    matches!(n, "SetV8" | "ADDi64" | "SUBi64" | "MULi64" | "DIVi64"
+        // conversions whose RESULT is a 64-bit int/uint (*TO i64/u64)
+        | "uTOi64" | "iTOi64" | "fTOi64" | "dTOi64" | "fTOu64" | "dTOu64")
 }
 
 /// Heuristic: a UE enum type name (`E` + uppercase), which is int-castable like a primitive.

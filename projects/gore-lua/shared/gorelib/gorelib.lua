@@ -197,7 +197,13 @@ R("cheat", "enableCheats", "enableCheats()", "call PlayerController:EnableCheats
 -- ===== cmd: console commands / keybinds / game thread ======================
 gore.cmd = {}
 function gore.cmd.onGameThread(fn)
-    if type(ExecuteInGameThread) == "function" then ExecuteInGameThread(fn) else pcall(fn) end
+    -- Contain errors so a bad keybind/callback can't propagate through UE4SS (helpers never
+    -- throw); the scheduled closure must be guarded too, not just the inline fallback.
+    local function guarded()
+        local ok, err = pcall(fn)
+        if not ok then gore.ui.log("onGameThread error: " .. tostring(err)) end
+    end
+    if type(ExecuteInGameThread) == "function" then ExecuteInGameThread(guarded) else guarded() end
 end
 function gore.cmd.command(name, fn)
     return (pcall(RegisterConsoleCommandHandler, name, function(_, params, ar)
