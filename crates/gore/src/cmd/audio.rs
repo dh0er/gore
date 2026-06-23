@@ -11,6 +11,7 @@
 
 use anyhow::{bail, Context, Result};
 use std::collections::BTreeMap;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 fn key_bytes(key: Option<String>) -> Vec<u8> {
@@ -114,23 +115,102 @@ pub fn replace(map: PathBuf, bank: PathBuf, out: Option<PathBuf>, key: Option<St
         .map_err(|e| anyhow::anyhow!("{e}"))
         .context("injecting replacements")?;
 
+    write_result(&bank, &new_bank, out, count)
+}
+
+/// Write a rebuilt bank to `out`, or overwrite `bank` in place after backing it up.
+fn write_result(bank: &Path, new_bank: &[u8], out: Option<PathBuf>, count: usize) -> Result<()> {
     match out {
         Some(o) => {
-            write_atomic(&o, &new_bank)?;
+            write_atomic(&o, new_bank)?;
             println!("wrote {} ({count} sample(s) replaced)", o.display());
         }
         None => {
-            let bak = backup_path(&bank);
+            let bak = backup_path(bank);
             if !bak.exists() {
-                std::fs::copy(&bank, &bak)
+                std::fs::copy(bank, &bak)
                     .with_context(|| format!("backing up to '{}'", bak.display()))?;
                 println!("backed up -> {}", bak.display());
             }
-            write_atomic(&bank, &new_bank)?;
+            write_atomic(bank, new_bank)?;
             println!("replaced {count} sample(s) in place -> {}", bank.display());
         }
     }
     Ok(())
+}
+
+/// Build a shareable audio patch zip: a manifest + the replacement WAVs (no game audio).
+pub fn export_patch(map: PathBuf, out: PathBuf) -> Result<()> {
+    let map_json = std::fs::read_to_string(&map)
+        .with_context(|| format!("reading map '{}'", map.display()))?;
+    let entries: BTreeMap<String, String> = serde_json::from_str(&map_json)
+        .context("parsing map (expected {\"SampleName\": \"path/to/new.wav\"})")?;
+    if entries.is_empty() {
+        bail!("map is empty");
+    }
+    let base = map.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
+
+    let file = std::fs::File::create(&out).with_context(|| format!("creating '{}'", out.display()))?;
+    let mut zip = zip::ZipWriter::new(file);
+    let opts: zip::write::FileOptions<()> =
+        zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+
+    let mut manifest = BTreeMap::new();
+    for (name, wav_rel) in &entries {
+        let wav = std::fs::read(resolve(&base, wav_rel))
+            .with_context(|| format!("reading wav for '{name}'"))?;
+        let entry = format!("audio/{}.wav", sanitize(name));
+        zip.start_file(&entry, opts).context("zip start_file")?;
+        zip.write_all(&wav).context("zip write")?;
+        manifest.insert(name.clone(), entry);
+    }
+    zip.start_file("manifest.json", opts).context("zip manifest")?;
+    zip.write_all(&serde_json::to_vec_pretty(&manifest)?)?;
+    zip.finish().context("finishing zip")?;
+    println!("wrote patch {} ({} sample(s))", out.display(), entries.len());
+    Ok(())
+}
+
+/// Apply a patch zip (from `export-patch`) to a bank.
+pub fn apply_patch(patch: PathBuf, bank: PathBuf, out: Option<PathBuf>, key: Option<String>) -> Result<()> {
+    let key = key_bytes(key);
+    let bytes = std::fs::read(&bank).with_context(|| format!("reading '{}'", bank.display()))?;
+
+    let file = std::fs::File::open(&patch).with_context(|| format!("opening '{}'", patch.display()))?;
+    let mut zip = zip::ZipArchive::new(file).context("reading patch zip")?;
+
+    let manifest: BTreeMap<String, String> = {
+        let mut f = zip.by_name("manifest.json").context("patch missing manifest.json")?;
+        let mut s = String::new();
+        f.read_to_string(&mut s)?;
+        serde_json::from_str(&s).context("parsing manifest.json")?
+    };
+    if manifest.is_empty() {
+        bail!("patch manifest is empty");
+    }
+
+    let mut replacements = Vec::with_capacity(manifest.len());
+    for (name, entry) in &manifest {
+        let wav = {
+            let mut f = zip
+                .by_name(entry)
+                .with_context(|| format!("patch missing entry '{entry}' for '{name}'"))?;
+            let mut buf = Vec::new();
+            f.read_to_end(&mut buf)?;
+            buf
+        };
+        let (rate, channels, pcm) = gore_fmod::read_wav_pcm16(&wav)
+            .map_err(|e| anyhow::anyhow!("{name}: {e}"))?;
+        replacements.push((
+            name.clone(),
+            gore_fmod::Pcm16Sample { name: name.clone(), freq: rate, channels, pcm },
+        ));
+    }
+    let count = replacements.len();
+    let new_bank = gore_fmod::replace_samples(&bytes, &key, replacements)
+        .map_err(|e| anyhow::anyhow!("{e}"))
+        .context("applying patch")?;
+    write_result(&bank, &new_bank, out, count)
 }
 
 pub fn restore(bank: PathBuf) -> Result<()> {

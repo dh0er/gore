@@ -181,6 +181,30 @@ enum AudioAction {
         #[arg(long)]
         bank: PathBuf,
     },
+    /// Build a shareable audio patch zip (manifest + replacement WAVs, no game audio)
+    ExportPatch {
+        /// Path to map JSON: { "SampleName": "path/to/new.wav", ... }
+        #[arg(long)]
+        map: PathBuf,
+        /// Output patch .zip
+        #[arg(short = 'o', long)]
+        out: PathBuf,
+    },
+    /// Apply a patch zip (from export-patch) to a bank
+    ApplyPatch {
+        /// Path to the patch .zip
+        #[arg(long)]
+        patch: PathBuf,
+        /// Path to the .bank to modify
+        #[arg(long)]
+        bank: PathBuf,
+        /// Output .bank (default: overwrite --bank in place, backing up to *.gore-bak)
+        #[arg(short = 'o', long)]
+        out: Option<PathBuf>,
+        /// Override the bank encryption key
+        #[arg(long)]
+        key: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -248,6 +272,8 @@ fn main() {
             AudioAction::Extract { bank, out, sample, key } => cmd::audio::extract(bank, out, sample, key),
             AudioAction::Replace { map, bank, out, key } => cmd::audio::replace(map, bank, out, key),
             AudioAction::Restore { bank } => cmd::audio::restore(bank),
+            AudioAction::ExportPatch { map, out } => cmd::audio::export_patch(map, out),
+            AudioAction::ApplyPatch { patch, bank, out, key } => cmd::audio::apply_patch(patch, bank, out, key),
         },
     };
     if let Err(e) = result {
