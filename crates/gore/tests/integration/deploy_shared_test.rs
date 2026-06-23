@@ -5,7 +5,7 @@ use tempfile::tempdir;
 #[test]
 fn deploy_shared_copies_tree_into_mods_shared() {
     let src = tempdir().unwrap();
-    // a fake projects/gore-lua/shared/ tree
+    // a fake lua/shared/ tree
     fs::create_dir_all(src.path().join("gorelib")).unwrap();
     fs::write(src.path().join("gorelib/gorelib.lua"), "return {}\n").unwrap();
 
