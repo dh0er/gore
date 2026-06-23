@@ -212,6 +212,19 @@ class _FieldEditorState extends State<FieldEditor> {
             ],
           ),
         ),
+        // Localized item name (one field per language), above the stat fields.
+        // Collapsed by default.
+        Card(
+          margin: const EdgeInsets.only(bottom: 12),
+          child: ExpansionTile(
+            leading: const Icon(Icons.translate_outlined, size: 20),
+            title: const Text('Name (all languages)'),
+            childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+            children: [
+              LangFieldsEditor(locId: locIdForCatalogId(widget.item.id)),
+            ],
+          ),
+        ),
         for (final field in widget.item.fields)
           Padding(
             padding: const EdgeInsets.only(bottom: 12),
@@ -226,19 +239,6 @@ class _FieldEditorState extends State<FieldEditor> {
               onChanged:  (raw) => _onChanged(field, raw),
             ),
           ),
-        // Localized item name (one field per language), below the stat fields so
-        // the editable values stay front-and-centre. Collapsed by default.
-        Card(
-          margin: const EdgeInsets.only(top: 4),
-          child: ExpansionTile(
-            leading: const Icon(Icons.translate_outlined, size: 20),
-            title: const Text('Name (all languages)'),
-            childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-            children: [
-              LangFieldsEditor(locId: locIdForCatalogId(widget.item.id)),
-            ],
-          ),
-        ),
       ],
     );
   }
