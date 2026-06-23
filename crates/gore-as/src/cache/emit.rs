@@ -235,15 +235,15 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
             let _ = writeln!(s, "{ind}    int arg{n} = 0;");
         }
         // RVODEF marks a return whose value couldn't be recovered: substitute a type-correct
-        // default. A handle return defaults to `null` (no local needed — and it sidesteps
+        // default. A handle return defaults to `nullptr` (no local needed — and it sidesteps
         // "no default constructor" for engine object types); everything else uses a default
         // local `{ret} __r;` (works for primitives, enums and default-constructible structs).
         if body.contains(RVODEF) {
             // Object/AActor handles have no default constructor, so `{ret} __r;` fails to
-            // compile — return `null` directly. `render` strips `@`, so detect handles via
-            // the DataType flag, not the rendered string.
+            // compile — return `nullptr` directly (this build's null-handle literal, matching
+            // PshNull/CmpPtrNull). `render` strips `@`, so detect handles via the DataType flag.
             if f.ret.is_object_handle {
-                s.push_str(&body.replace(RVODEF, "null"));
+                s.push_str(&body.replace(RVODEF, "nullptr"));
             } else {
                 let _ = writeln!(s, "{ind}    {ret} __r;");
                 s.push_str(&body.replace(RVODEF, "__r"));
@@ -255,10 +255,11 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
         // stub fallback so the module still compiles (reason recorded for aggregation)
         let _ = writeln!(s, "{ind}    // body not fully recovered — stub [{}]", reason.unwrap());
         // constructors must NOT return a value; everything else returns a default. An object
-        // handle return defaults to `null` (no default-constructor for engine object types).
+        // handle return defaults to `nullptr` (no default-constructor for engine object types;
+        // `nullptr` is this build's null-handle literal — `null` parses as undeclared).
         if !is_ctor && ret != "void" {
             if f.ret.is_object_handle {
-                let _ = writeln!(s, "{ind}    return null;");
+                let _ = writeln!(s, "{ind}    return nullptr;");
             } else {
                 let _ = writeln!(s, "{ind}    {ret} __r; return __r;");
             }

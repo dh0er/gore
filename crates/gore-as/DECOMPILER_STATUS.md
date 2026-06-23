@@ -12,14 +12,18 @@ Measured on the full shipped cache (`PrecompiledScript_Shipping.Cache`, 7264 mod
 
 | Metric | Value |
 |--------|-------|
-| Functions with a fully recovered body | ~161,810 (**99.37%**) |
-| Functions emitted as a stub | ~1,021 (**0.63%**) |
-| Modules containing ≥1 stub | 172 / 7265 |
+| Functions with a fully recovered body | ~160,578 (**98.62%**) |
+| Functions emitted as a stub | ~2,253 (**1.38%**) |
+| — of which proactive (category A, no loop) | ~1,046 |
+| — of which force-stubbed compile failures (category B) | ~1,207 |
+| Modules containing ≥1 stub | 620 / 7265 |
 | In-game compile (all modules) | **100%** — the emitted tree compiles |
 
 The 100% compile rate is *not* the same as 100% recovery: it is achieved by stubbing the
 functions the decompiler cannot render correctly (see *force-stub loop* below). Every stub is
-a real gap.
+a real gap. The category-B count is inflated by the force-stub mechanism keying on
+`Class::method` *names*, so stubbing one failing overload also stubs its (possibly fine)
+same-named siblings — the true unrecoverable count is somewhat lower.
 
 ## What a stub is
 
@@ -36,27 +40,30 @@ bool DoesEntryApplyToCurrentSituation_Implementation()
 
 A stub preserves the signature (name, parameter types, return type, `UFUNCTION()`/`UPROPERTY()`
 markers, `const`) but **loses the original logic**. The raw bytecode for a stubbed function is
-still inspectable via `gore-as disasm <needle>`.
+still inspectable via `gore as disasm <needle>`.
 
 ## Two categories of gap
 
-### A. The decompiler genuinely cannot render the body (~46 functions, "raw" stubs)
+### A. The decompiler genuinely cannot render the body (~1,046 functions, "raw" stubs)
 
-These stub *regardless* of the compiler — the structured emitter itself has no valid output.
-Reason codes appear in the stub comment; regenerate the breakdown with:
+These stub *regardless* of the compiler — the structured emitter detects it cannot produce a
+correct body and bails out proactively. Reason codes appear in the stub comment; regenerate
+the breakdown with:
 
 ```
-GORE_AS_BINDS=.../Binds.Cache gore-as emit-all <cache> <out>   # no GORE_AS_STUBLIST
+GORE_AS_BINDS=.../Binds.Cache gore as emit-all <cache> <out>   # no GORE_AS_STUBLIST
 grep -rhoE 'stub \[[^]]*\]' <out> | sort | uniq -c | sort -rn
 ```
 
 | Reason | Count | Why |
 |--------|-------|-----|
-| `opcode-uncovered` | ~32 | The function uses an asBC opcode the stack machine in `cache/structure.rs` does not yet model. Modelling it requires reversing that opcode's stack effect. |
+| `argmismatch:argint` | ~492 | A call argument the decompiler recovered as a plain integer where the callee wants a different scalar/enum/handle — the operand's real type isn't pinned by any side table. |
+| `argmismatch:argtype` | ~376 | A call argument whose recovered struct/object type can't match the callee parameter — same root cause (no slot-type inference). |
+| `opcode-uncovered` | ~164 | The function uses an asBC opcode the stack machine in `cache/structure.rs` does not yet model (and the conservative fixes now bail here rather than silently dropping it). |
 | `argmismatch:copyctor` | ~12 | A compiler-generated struct copy-constructor / `opAssign` on `this` — has no hand-written source form to recover. |
 | `unresolved-operand` | ~2 | A comparison/operand left a `?` placeholder: the value tested was produced by an op whose result the decompiler couldn't track. |
 
-### B. The body decompiles but does not COMPILE (~975 functions, force-stubbed)
+### B. The body decompiles but does not COMPILE (~1,207 functions, force-stubbed)
 
 The structured emitter produces a body, but the in-game AngelScript compiler rejects it, so the
 **force-stub loop** routes it to a clean stub (emit → headless compile → collect the failing
