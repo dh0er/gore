@@ -374,7 +374,7 @@ class _ProfileHeader extends StatelessWidget {
   /// `hasUnsavedEdits` signal the profile-switch guard uses (pending registry
   /// edits OR a pending difficulty edit).
   Future<void> _confirmRefresh(BuildContext context) async {
-    if (notifier.state.hasUnsavedEdits) {
+    if (notifier.hasUnsavedEdits) {
       final pendingCount = notifier.pendingEditCount;
       final confirmed = await showDialog<bool>(
         context: context,
@@ -1712,7 +1712,7 @@ class _PrivateInventorySummaryCardState
     // the add against the wrong save. Key on the selected save path, not the
     // inventory object identity: re-inspecting the SAME save allocates a fresh
     // summary instance with identical contents, and that result must still apply.
-    final dialogSavePath = widget.notifier.state.selectedPath;
+    final dialogSavePath = widget.notifier.selectedPath;
     final result = await showDialog<InventoryItemAdd>(
       context: context,
       builder: (_) => AddInventoryItemDialog(
@@ -1720,7 +1720,7 @@ class _PrivateInventorySummaryCardState
       ),
     );
     if (result == null) return;
-    if (!mounted || widget.notifier.state.selectedPath != dialogSavePath) return;
+    if (!mounted || widget.notifier.selectedPath != dialogSavePath) return;
     setState(() {
       _pendingAdd = result;
       // Keep the one-structural-edit-per-save invariant unconditionally.

@@ -390,6 +390,14 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// dialog) read a just-failed write's error without reaching into `state`.
   String? get lastError => state.error;
 
+  /// Whether there are unsaved edits. Lets UI guards check the live value
+  /// without reaching into the protected `state`.
+  bool get hasUnsavedEdits => state.hasUnsavedEdits;
+
+  /// The currently selected save path. Lets async UI callbacks read the live
+  /// value without reaching into the protected `state`.
+  String? get selectedPath => state.selectedPath;
+
   /// Dismiss the current error banner.
   void dismissError() {
     if (state.error != null) state = state.copyWith(clearError: true);
