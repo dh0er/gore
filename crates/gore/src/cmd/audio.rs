@@ -60,10 +60,10 @@ pub fn extract(bank: PathBuf, out: PathBuf, sample: Option<String>, key: Option<
 
     let (mut ok, mut skipped) = (0usize, 0usize);
     for i in indices {
-        match gore_fmod::extract_ogg(&block, &fsb, i) {
-            Ok(ogg) => {
-                let path = out.join(format!("{}.ogg", sanitize(&fsb.samples[i].name)));
-                std::fs::write(&path, &ogg)
+        match gore_fmod::extract_wav(&block, &fsb, i) {
+            Ok(wav) => {
+                let path = out.join(format!("{}.wav", sanitize(&fsb.samples[i].name)));
+                std::fs::write(&path, &wav)
                     .with_context(|| format!("writing '{}'", path.display()))?;
                 ok += 1;
             }

@@ -214,7 +214,7 @@ fn audio_extract(payload: Value) -> Value {
     let Some(index) = fsb.samples.iter().position(|s| s.name == sample) else {
         return err("NOT_FOUND", format!("sample not found: {sample}"));
     };
-    let ogg = match gore_fmod::extract_ogg(&block, &fsb, index) {
+    let wav = match gore_fmod::extract_wav(&block, &fsb, index) {
         Ok(o) => o,
         Err(e) => return err("EXTRACT", e),
     };
@@ -223,11 +223,11 @@ fn audio_extract(payload: Value) -> Value {
         return err("IO", format!("temp dir: {e}"));
     }
     let safe: String = sample.chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' }).collect();
-    let path = dir.join(format!("{safe}.ogg"));
-    if let Err(e) = std::fs::write(&path, &ogg) {
-        return err("IO", format!("writing ogg: {e}"));
+    let path = dir.join(format!("{safe}.wav"));
+    if let Err(e) = std::fs::write(&path, &wav) {
+        return err("IO", format!("writing wav: {e}"));
     }
-    json!({"ok": true, "ogg_path": path.display().to_string()})
+    json!({"ok": true, "ogg_path": path.display().to_string(), "wav_path": path.display().to_string()})
 }
 
 /// `{out_dir, spec:BuildSpec}` → build the unified bundle into `out_dir`.

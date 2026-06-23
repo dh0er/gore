@@ -350,6 +350,50 @@ pub fn bank_fsb0(bank: &[u8], key: &[u8]) -> Result<Fsb5, String> {
     decrypt_fsb0(bank, key).map(|(_, f)| f)
 }
 
+/// Decode one Vorbis sample (by index in FSB5 #0) to a gapless 16-bit PCM WAV.
+/// Preferred over [`extract_ogg`] for preview/editing: the rebuilt Ogg's intermediate
+/// granule positions are approximate (some players insert silence at page boundaries),
+/// whereas decoded PCM is exact and plays cleanly everywhere.
+pub fn extract_wav(block: &[u8], fsb: &Fsb5, index: usize) -> Result<Vec<u8>, String> {
+    let ogg = extract_ogg(block, fsb, index)?;
+    let mut reader = lewton::inside_ogg::OggStreamReader::new(std::io::Cursor::new(ogg))
+        .map_err(|e| format!("vorbis open: {e:?}"))?;
+    let channels = reader.ident_hdr.audio_channels as u32;
+    let rate = reader.ident_hdr.audio_sample_rate;
+    let mut pcm: Vec<i16> = Vec::new();
+    loop {
+        match reader.read_dec_packet_itl() {
+            Ok(Some(s)) => pcm.extend_from_slice(&s),
+            Ok(None) => break,
+            Err(e) => return Err(format!("vorbis decode: {e:?}")),
+        }
+    }
+    Ok(wav_pcm16(rate, channels, &pcm))
+}
+
+/// Wrap interleaved 16-bit PCM in a canonical WAV container.
+pub fn wav_pcm16(rate: u32, channels: u32, pcm: &[i16]) -> Vec<u8> {
+    let data_len = pcm.len() * 2;
+    let mut w = Vec::with_capacity(44 + data_len);
+    w.extend_from_slice(b"RIFF");
+    w.extend_from_slice(&((36 + data_len) as u32).to_le_bytes());
+    w.extend_from_slice(b"WAVE");
+    w.extend_from_slice(b"fmt ");
+    w.extend_from_slice(&16u32.to_le_bytes());
+    w.extend_from_slice(&1u16.to_le_bytes()); // PCM
+    w.extend_from_slice(&(channels as u16).to_le_bytes());
+    w.extend_from_slice(&rate.to_le_bytes());
+    w.extend_from_slice(&(rate * channels * 2).to_le_bytes());
+    w.extend_from_slice(&((channels * 2) as u16).to_le_bytes());
+    w.extend_from_slice(&16u16.to_le_bytes());
+    w.extend_from_slice(b"data");
+    w.extend_from_slice(&(data_len as u32).to_le_bytes());
+    for &s in pcm {
+        w.extend_from_slice(&s.to_le_bytes());
+    }
+    w
+}
+
 /// Extract one Vorbis sample (by index in FSB5 #0) to a playable Ogg Vorbis byte buffer.
 pub fn extract_ogg(block: &[u8], fsb: &Fsb5, index: usize) -> Result<Vec<u8>, String> {
     if fsb.codec != Codec::Vorbis {
