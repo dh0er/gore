@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """gore-tools monorepo build orchestrator.
 
-One entry point for every project under projects/. Wraps the per-project
-build logic (Flutter apps, Rust crates) and adds debug builds, tests, and a
-flag-driven release pipeline.
+One entry point for every releasable product in the flat layout (Flutter apps
+under apps/, the gore CLI under crates/gore). Wraps the per-project build logic
+(Flutter apps, Rust crates) and adds debug builds, tests, and a flag-driven
+release pipeline.
 
 Usage:
     python build.py <project|all> build      [--debug|--release] [--run]
@@ -25,13 +26,13 @@ Release steps (additive; pass at least one, or --all):
     --dry-run     print every action, change nothing
 
 Tags are per-project prefixed: gore-save-vX.Y.Z, gore-mod-vX.Y.Z,
-gore-cli-vX.Y.Z. The Release workflow matches the prefix and builds only
-that project.
+gore-cli-vX.Y.Z (the gore CLI keeps the gore-cli- tag prefix). The Release
+workflow matches the prefix and builds only that project.
 
 Examples:
     python build.py all test
     python build.py gore-save dist
-    python build.py gore-cli release 0.2.0 --all
+    python build.py gore release 0.2.0 --all
     python build.py gore-mod release 0.1.0 --bump --build --installer  # local only
 """
 
@@ -77,68 +78,57 @@ ISCC = _resolve_tool(
 # --------------------------------------------------------------------------- #
 # Project registry                                                            #
 # --------------------------------------------------------------------------- #
-# Each project declares its kind plus the paths the recipes need. Internal
-# libraries (gore-core) and generated mods (gore-dump) carry releasable=False
-# so `all` skips them for release/dist and `release <project>` rejects them.
+# Each project declares its kind plus the paths the recipes need. Only the
+# three shippable products live here; internal libraries (gore-reflect,
+# gore-save, gore-ffi, gore-as, ...) are plain workspace crates with no release
+# entry. A project may carry releasable=False so `all` skips it for
+# release/dist and `release <project>` rejects it.
 PROJECTS: dict[str, dict] = {
-    "gore-save": {
+    "gore-save": {  # save editor (Flutter, WinSparkle)
         "kind": "flutter",
-        "dir": "projects/gore-save",
-        "pubspec": "app/pubspec.yaml",
+        "dir": "apps/save-editor",
+        "pubspec": "pubspec.yaml",
         "tag_prefix": "gore-save",
         "changelog": "CHANGELOG.md",
         "installer": "installer/setup.iss",
-        "installer_name": "GoresaveSetup",  # -> GoresaveSetup-X.Y.Z.exe
-        "exe": "goresave.exe",  # CMake BINARY_NAME
-        "core_dll": "goresave_core",  # cargo crate + dll basename
+        "installer_name": "GoresaveSetup",  # keep: shipped update feed expects this filename
+        "exe": "goresave.exe",  # keep: CMake BINARY_NAME (Inno AppId-tied upgrade)
+        "core_crate": "gore-save",  # cargo -p selector (cargo wants the hyphenated package id)
+        "core_dll": "gore_save",  # was goresave_core; dll now gore_save.dll (cargo underscores it)
         "dist_zip": "goresave-{version}-windows-x64",
         "releasable": True,
     },
-    "gore-mod": {
+    "gore-mod": {  # mod studio (Flutter, WinSparkle)
         "kind": "flutter",
-        "dir": "projects/gore-mod",
-        "pubspec": "app/pubspec.yaml",
+        "dir": "apps/mod-studio",
+        "pubspec": "pubspec.yaml",
         "tag_prefix": "gore-mod",
         "changelog": "CHANGELOG.md",
         "installer": "installer/setup.iss",
         "installer_name": "GoreModSetup",
         "exe": "gore_mod.exe",  # CMake BINARY_NAME
-        "core_dll": "gore_core",
+        "core_crate": "gore-ffi",  # cargo -p selector (cargo wants the hyphenated package id)
+        "core_dll": "gore_ffi",  # was gore_core; dll now gore_ffi.dll (cargo underscores it)
         "dist_zip": "gore-mod-{version}-windows-x64",
         "releasable": True,
     },
-    "gore-cli": {
+    "gore": {  # the unified CLI (was gore-cli)
         "kind": "rust-bin",
-        "dir": "projects/gore-cli",
-        "manifest": "crates/gore_cli/Cargo.toml",
-        "crate": "gore_cli",
-        "bin": "gore-cli",  # produced exe basename
-        "tag_prefix": "gore-cli",
+        "dir": "crates/gore",
+        "manifest": "Cargo.toml",
+        "crate": "gore",
+        "bin": "gore",  # produces gore.exe
+        "tag_prefix": "gore-cli",  # KEEP this tag prefix (release.yml trigger + habit)
         "changelog": "CHANGELOG.md",
-        "dist_zip": "gore-cli-{version}-windows-x64",
+        "dist_zip": "gore-{version}-windows-x64",
         "releasable": True,
         # extra dirs staged beside the exe in the release zip: (src relative to ROOT, dest name).
-        # `gore-cli deploy-shared` resolves the SDK from `shared/` next to the binary.
-        "bundle_dirs": [("projects/gore-lua/shared", "shared")],
-    },
-    "gore-as": {
-        "kind": "rust-bin",
-        "dir": "projects/gore-as",
-        "manifest": "crates/gore_as/Cargo.toml",
-        "crate": "gore_as",
-        "bin": "gore-as",  # AngelScript decompiler/recompiler (dev/reversing tool)
-        "releasable": False,
-    },
-    "gore-core": {
-        "kind": "rust-lib",
-        "dir": "projects/gore-core",
-        "manifest": "crates/gore_core/Cargo.toml",
-        "crate": "gore_core",
-        "releasable": False,
+        # `gore deploy-shared` resolves the SDK from `shared/` next to the binary.
+        "bundle_dirs": [("lua/shared", "shared")],
     },
 }
 
-RELEASE_ORDER = ["gore-cli", "gore-save", "gore-mod"]  # for `all`
+RELEASE_ORDER = ["gore", "gore-save", "gore-mod"]  # for `all`
 
 
 def env() -> dict[str, str]:
@@ -252,7 +242,12 @@ def resolve_git_sha() -> str:
 # --------------------------------------------------------------------------- #
 def flutter_build_dir(project: str, release: bool = True) -> Path:
     mode = "Release" if release else "Debug"
-    return pdir(project) / "app" / "build" / "windows" / "x64" / "runner" / mode
+    return pdir(project) / "build" / "windows" / "x64" / "runner" / mode
+
+
+def dist_dir(project: str) -> Path:
+    """Top-level dist output dir for a project (dist/<project>/)."""
+    return ROOT / "dist" / project
 
 
 def flutter_release_dir(project: str) -> Path:
@@ -273,7 +268,9 @@ def build_project(project: str, release: bool, dry: bool) -> None:
         run(f"cargo build {project} ({mode})", cmd, dry=dry)
         return
     # flutter app: build native cdylib first, then the app, then bundle the dll.
-    crate = cfg["core_dll"]
+    # The cargo package id (hyphenated) and the produced dll basename
+    # (underscored) differ, so they are tracked as separate fields.
+    crate = cfg["core_crate"]
     cargo_cmd = [CARGO, "build", "-p", crate]
     if release:
         cargo_cmd.append("--release")
@@ -282,14 +279,14 @@ def build_project(project: str, release: bool, dry: bool) -> None:
     flutter_cmd = [FLUTTER, "build", "windows", f"--{mode}"]
     if project == "gore-save":
         flutter_cmd.append(f"--dart-define=GIT_SHA={resolve_git_sha()}")
-    run(f"flutter build {project} ({mode})", flutter_cmd, cwd=pdir(project) / "app", dry=dry)
+    run(f"flutter build {project} ({mode})", flutter_cmd, cwd=pdir(project), dry=dry)
 
     if dry:
         return
     rel = flutter_build_dir(project, release)
     if not rel.exists():
         raise SystemExit(f"missing flutter output: {rel}")
-    dll = f"{crate}.dll"
+    dll = f"{cfg['core_dll']}.dll"
     src = target_dir(release) / dll
     if not src.exists():
         raise SystemExit(f"missing native artifact: {src}")
@@ -337,9 +334,9 @@ def dist_project(project: str, dry: bool) -> Path | None:
         raise SystemExit(f"{project} is not releasable")
     build_project(project, release=True, dry=dry)
     version = read_version(project)
-    dist = pdir(project) / "dist"
+    dist = dist_dir(project)
     if not dry:
-        dist.mkdir(exist_ok=True)
+        dist.mkdir(parents=True, exist_ok=True)
     base = dist / cfg["dist_zip"].format(version=version)
 
     if cfg["kind"] == "flutter":
@@ -370,7 +367,7 @@ def dist_project(project: str, dry: bool) -> Path | None:
     shutil.copy2(exe, staging / exe.name)
     if (ROOT / "LICENSE").exists():
         shutil.copy2(ROOT / "LICENSE", staging / "LICENSE")
-    # stage any bundled data dirs beside the exe (e.g. gore-cli's gore-lua shared/ SDK)
+    # stage any bundled data dirs beside the exe (e.g. gore's lua/shared SDK)
     for src_rel, dest_name in cfg.get("bundle_dirs", []):
         src_dir = ROOT / src_rel
         if not src_dir.is_dir():
@@ -391,7 +388,7 @@ def installer_project(project: str, dry: bool) -> Path | None:
     dist_project(project, dry=dry)
     version = read_version(project)
     rel = flutter_release_dir(project)
-    dist = pdir(project) / "dist"
+    dist = dist_dir(project)
     iss = pdir(project) / cfg["installer"]
     run(
         f"installer {project}",
@@ -418,8 +415,8 @@ def test_project(project: str, dry: bool) -> None:
     # A Flutter app is backed by a native Rust cdylib (core_dll crate); its
     # unit tests live there, so cover them too — analyze/test alone would skip
     # all the native logic the app depends on.
-    run(f"cargo test {cfg['core_dll']}", [CARGO, "test", "-p", cfg["core_dll"]], dry=dry)
-    app = pdir(project) / "app"
+    run(f"cargo test {cfg['core_crate']}", [CARGO, "test", "-p", cfg["core_crate"]], dry=dry)
+    app = pdir(project)
     run(f"flutter pub get {project}", [FLUTTER, "pub", "get"], cwd=app, dry=dry)
     run(f"flutter analyze {project}", [FLUTTER, "analyze"], cwd=app, dry=dry)
     run(f"flutter test {project}", [FLUTTER, "test"], cwd=app, dry=dry)

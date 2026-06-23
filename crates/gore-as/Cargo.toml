@@ -1,0 +1,13 @@
+[package]
+name = "gore-as"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "AngelScript precompiled-cache decoder + tooling for Gothic 1 Remake (gore-tools)."
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+thiserror = "2"
+anyhow = "1"

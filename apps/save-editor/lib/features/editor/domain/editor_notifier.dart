@@ -1,0 +1,1301 @@
+import 'dart:io';
+
+import 'package:file_selector/file_selector.dart';
+import 'package:goresave/features/editor/domain/core_service.dart';
+import 'package:goresave/features/editor/domain/editor_models.dart';
+import 'package:goresave/features/editor/domain/editor_settings_store.dart';
+import 'package:goresave/features/editor/domain/hero_attributes.dart';
+import 'package:goresave/features/editor/domain/pending_edits.dart';
+import 'package:goresave/features/editor/domain/progression_models.dart';
+import 'package:goresave/utils/default_paths.dart';
+import 'package:path/path.dart' as p;
+import 'package:state_notifier/state_notifier.dart';
+
+const _unchanged = Object();
+
+/// Sorts saves by in-game playtime (highest first). Slots with null playtime
+/// sink to the bottom. Equal or both-null playtime falls back to file
+/// last-modified descending so the order is stable on files that lack
+/// persistent metadata — saves whose file can't be stat'd sink to the very
+/// bottom rather than throwing, so a transient FS error never breaks the scan.
+void _sortByPlaytimeDesc(List<SaveSlot> saves) {
+  final mtime = <String, DateTime>{};
+  for (final save in saves) {
+    try {
+      mtime[save.path] = File(save.path).lastModifiedSync();
+    } catch (_) {
+      // Leave unset; treated as oldest in the mtime tie-break below.
+    }
+  }
+  saves.sort((a, b) {
+    final pa = a.timePlayedSeconds;
+    final pb = b.timePlayedSeconds;
+    // Primary key: playtime descending; nulls sink to the bottom.
+    if (pa != null && pb != null) {
+      final cmp = pb.compareTo(pa);
+      if (cmp != 0) return cmp;
+    } else if (pa == null && pb != null) {
+      return 1;
+    } else if (pa != null && pb == null) {
+      return -1;
+    }
+    // Secondary key: last-modified descending (tie-break / no-metadata path).
+    final ma = mtime[a.path];
+    final mb = mtime[b.path];
+    if (ma == null && mb == null) return 0;
+    if (ma == null) return 1;
+    if (mb == null) return -1;
+    return mb.compareTo(ma);
+  });
+}
+
+class EditorState {
+  const EditorState({
+    required this.saveDir,
+    this.isLoading = false,
+    this.saves = const [],
+    this.profiles = const [],
+    this.activeProfileId,
+    this.selectedProfileId,
+    this.backups = const [],
+    this.companionBackups = const [],
+    this.selectedPath,
+    this.inspection,
+    this.codecStatus,
+    this.error,
+    this.codecError,
+    this.lastWriteMessage,
+    this.pendingEdits = const {},
+  });
+
+  final String saveDir;
+  final bool isLoading;
+  final List<SaveSlot> saves;
+  final List<ProfileSummary> profiles;
+  final int? activeProfileId;
+
+  /// Explicitly selected profile id. Null means no explicit selection — use
+  /// [effectiveProfileId] for the resolved value.
+  final int? selectedProfileId;
+
+  final List<BackupEntry> backups;
+  final List<BackupEntry> companionBackups;
+  final String? selectedPath;
+  final SaveInspection? inspection;
+  final CodecStatus? codecStatus;
+
+  /// Pending (unsaved) savegame edits, keyed by editor surface
+  /// (e.g. 'publicName', 'heroStats', 'transform', 'attr:Health',
+  /// 'inventory', 'typed:&lt;joined path&gt;'). Cleared on save, refresh to a
+  /// different save, or selection change.
+  final Map<String, PendingSaveEdit> pendingEdits;
+
+  /// True when there are any unsaved edits. The profile-switch guard blocks on
+  /// this. Difficulty is edited separately (a profile-level dialog that writes
+  /// immediately) and is never part of the pending set.
+  bool get hasUnsavedEdits => pendingEdits.isNotEmpty;
+
+  final String? error;
+
+  /// Compression-dependent private writes are safe when the in-process codec
+  /// reports it can compress. The always-on codec reports this directly, so
+  /// there is no longer a manual per-session verification step.
+  bool get codecCompressReady => codecStatus?.canCompress ?? false;
+
+  /// Error from the most recent codec check. Kept separate from [error] so a
+  /// save-directory refresh does not wipe a standing codec configuration error.
+  final String? codecError;
+  final String? lastWriteMessage;
+
+  /// Total number of edit objects across all pending keys, driving the global
+  /// "Unsaved (N)" badge and the Save/Reset buttons.
+  int get pendingEditCount =>
+      pendingEdits.values.fold(0, (n, e) => n + e.edits.length);
+
+  SaveSlot? get selectedSave {
+    for (final save in saves) {
+      if (save.path == selectedPath) return save;
+    }
+    return null;
+  }
+
+  /// The profile id to use for filtering: the explicitly selected profile, or
+  /// fall back to the scan's active profile id.
+  /// One resolution shared by the header and the save-list filter, so they
+  /// can never disagree: explicit switcher choice first, then the selected
+  /// save's own profile, then the scan's active profile id.
+  int? get effectiveProfileId =>
+      selectedProfileId ?? selectedSave?.persistentProfileId ?? activeProfileId;
+
+  /// Saves to show in the sidebar. When there are fewer than 2 profiles, or
+  /// no effective profile id, all saves are shown. Otherwise only saves whose
+  /// [SaveSlot.persistentProfileId] matches [effectiveProfileId] are shown
+  /// (saves with a null persistentProfileId stay visible in every profile —
+  /// they cannot be attributed). The currently selected save is always kept
+  /// visible so it is never silently removed from the list mid-session.
+  List<SaveSlot> get visibleSaves {
+    final eid = effectiveProfileId;
+    if (eid == null || profiles.length < 2) return saves;
+    return saves
+        .where(
+          (s) =>
+              s.persistentProfileId == eid ||
+              s.persistentProfileId == null ||
+              s.path == selectedPath,
+        )
+        .toList();
+  }
+
+  ProfileSummary? get activeProfile {
+    // Same resolution as the save-list filter (effectiveProfileId), so the
+    // header always describes the profile whose saves are listed.
+    final targetProfileId = effectiveProfileId;
+    for (final profile in profiles) {
+      if (profile.profileId == targetProfileId) return profile;
+    }
+    // No profile matches: report none rather than guessing `profiles.first`,
+    // which would show another profile's name and counts.
+    return null;
+  }
+
+
+  EditorState copyWith({
+    String? saveDir,
+    bool? isLoading,
+    List<SaveSlot>? saves,
+    List<ProfileSummary>? profiles,
+    Object? activeProfileId = _unchanged,
+    Object? selectedProfileId = _unchanged,
+    List<BackupEntry>? backups,
+    List<BackupEntry>? companionBackups,
+    Object? selectedPath = _unchanged,
+    SaveInspection? inspection,
+    CodecStatus? codecStatus,
+    String? error,
+    String? codecError,
+    String? lastWriteMessage,
+    Map<String, PendingSaveEdit>? pendingEdits,
+    bool clearInspection = false,
+    bool clearBackups = false,
+    bool clearError = false,
+    bool clearCodecError = false,
+    bool clearCodecStatus = false,
+    bool clearWriteMessage = false,
+    bool clearPendingEdits = false,
+  }) {
+    return EditorState(
+      saveDir: saveDir ?? this.saveDir,
+      isLoading: isLoading ?? this.isLoading,
+      saves: saves ?? this.saves,
+      profiles: profiles ?? this.profiles,
+      activeProfileId: identical(activeProfileId, _unchanged)
+          ? this.activeProfileId
+          : activeProfileId as int?,
+      selectedProfileId: identical(selectedProfileId, _unchanged)
+          ? this.selectedProfileId
+          : selectedProfileId as int?,
+      backups: clearBackups ? const [] : backups ?? this.backups,
+      companionBackups: clearBackups
+          ? const []
+          : companionBackups ?? this.companionBackups,
+      selectedPath: identical(selectedPath, _unchanged)
+          ? this.selectedPath
+          : selectedPath as String?,
+      inspection: clearInspection ? null : inspection ?? this.inspection,
+      codecStatus: clearCodecStatus ? null : codecStatus ?? this.codecStatus,
+      error: clearError ? null : error ?? this.error,
+      codecError: clearCodecError ? null : codecError ?? this.codecError,
+      lastWriteMessage: clearWriteMessage
+          ? null
+          : lastWriteMessage ?? this.lastWriteMessage,
+      pendingEdits: clearPendingEdits
+          ? const {}
+          : pendingEdits ?? this.pendingEdits,
+    );
+  }
+}
+
+class EditorNotifier extends StateNotifier<EditorState> {
+  EditorNotifier(
+    this._core, {
+    String? saveDir,
+    EditorSettingsStore? settingsStore,
+  }) : _settingsStore = settingsStore ?? const NoopEditorSettingsStore(),
+       super(
+         _initialState(
+           saveDir: saveDir,
+           settingsStore: settingsStore ?? const NoopEditorSettingsStore(),
+         ),
+       ) {
+    refresh();
+    checkCodec();
+  }
+
+  final GoresaveCoreService _core;
+  final EditorSettingsStore _settingsStore;
+
+  /// Monotonic token identifying the latest in-flight load. Only the op holding
+  /// the current token may write loading/result state; superseded ops bail
+  /// without touching it, so the most recent op always clears `isLoading`.
+  int _loadSeq = 0;
+
+  /// Number of in-flight loads (inspect / backup refresh). The overlay shows
+  /// while this is > 0; it is cleared only when the last load finishes, so an
+  /// older load completing after a newer one can neither clear the spinner
+  /// early nor turn it back on.
+  int _activeLoads = 0;
+
+  void _loadStarted() {
+    _activeLoads++;
+  }
+
+  void _loadFinished() {
+    if (_activeLoads > 0) _activeLoads--;
+    if (_activeLoads == 0) {
+      state = state.copyWith(isLoading: false);
+    }
+  }
+
+  /// Run a mutating action (write/validate/restore) as a tracked load: show the
+  /// overlay, clear prior errors, and always clear loading afterwards — even if
+  /// the core call throws — so the spinner can't get stuck. Counting also lets
+  /// checkCodec see that a load is in flight and not race it with an inspect.
+  Future<void> _withLoading(Future<void> Function() body) async {
+    _loadStarted();
+    state = state.copyWith(isLoading: true, clearError: true);
+    try {
+      await body();
+    } catch (error) {
+      // A thrown core call (e.g. bad JSON / null native response) must surface
+      // as an error rather than propagate and leave the UI wedged.
+      state = state.copyWith(error: 'Unexpected error: $error');
+    } finally {
+      _loadFinished();
+    }
+  }
+
+  /// Run a single write request (`write_save` by default) as a tracked load,
+  /// then rescan on success. Returns true only when the core accepted the
+  /// write; a rejected write sets `state.error` and returns false so callers
+  /// can skip success-only follow-ups. The post-success `refresh()` rescans
+  /// saves AND profiles. Used by [restoreBackup] and [applyMemoryEventEdit];
+  /// the global [saveAllPending] orchestrates its writes inline so it can do a
+  /// slot write_save and a write_difficulty with a single trailing refresh.
+  Future<bool> _runWrite({
+    required Map<String, Object?> payload,
+    required String Function(Map<String, Object?> data) message,
+    String command = 'write_save',
+  }) async {
+    var ok = false;
+    await _withLoading(() async {
+      final response = await _execute(command, payload: payload);
+      if (response['ok'] != true) {
+        state = state.copyWith(error: _errorMessage(response));
+        return;
+      }
+      final data = (response['data'] as Map).cast<String, Object?>();
+      state = state.copyWith(lastWriteMessage: message(data));
+      await refresh();
+      ok = true;
+    });
+    return ok;
+  }
+
+  /// Write difficulty into the active profile's `PersistentDataList.sav`.
+  ///
+  /// This is the ONLY difficulty write the app performs: the profile copy is
+  /// the authoritative, profile-wide value — editing a save's own copy has no
+  /// in-game effect, so the per-save write path was removed. The change applies
+  /// to every save in the profile. [difficulty] is the same map shape the core's
+  /// `write_difficulty` expects (`preset`, optional `combat`/`resources`/
+  /// `progression`, `flowHelper`, `permadeath`). No codec host is needed —
+  /// `PersistentDataList.sav` is a plain GVAS file with no compressed stream.
+  /// Returns true on success; on failure sets `state.error` and returns false.
+  Future<bool> writeProfileDifficulty({
+    required int profileId,
+    required Map<String, Object?> difficulty,
+  }) {
+    // Re-entry guard: bail if a load is already in flight (a rescan or another
+    // write), so this write + refresh cannot interleave editor-state updates
+    // with that work — mirrors saveAllPending / applyMemoryEventEdit. Set an
+    // explicit error so the dialog explains why rather than showing a generic
+    // failure.
+    if (state.isLoading) {
+      state = state.copyWith(
+        error: 'Another operation is in progress. Try again in a moment.',
+      );
+      return Future.value(false);
+    }
+    // Refuse while slot edits are pending: this write runs _runWrite -> refresh,
+    // and the same-save _inspect clears the pending registry — silently
+    // discarding those drafts even though no write_save ran for them. Make the
+    // user save or reset them first.
+    if (state.hasUnsavedEdits) {
+      state = state.copyWith(
+        error:
+            'You have unsaved save edits. Save or reset them before changing '
+            'the profile difficulty.',
+      );
+      return Future.value(false);
+    }
+    final dir = state.saveDir;
+    if (dir.isEmpty) {
+      state = state.copyWith(error: 'No save folder selected.');
+      return Future.value(false);
+    }
+    // `dir` carries the on-disk style of the save folder (Windows-style for
+    // these saves even on a POSIX host). Pick a path Context matching that style
+    // so join() stays correct on any host (a POSIX host's p.join would otherwise
+    // mangle a Windows save path).
+    final isWindowsStyle =
+        dir.contains('\\') || RegExp(r'^[A-Za-z]:').hasMatch(dir);
+    final ctx = isWindowsStyle ? p.Context(style: p.Style.windows) : p.posix;
+    final payload = <String, Object?>{
+      'difficulty': difficulty,
+      'targets': {
+        'profile': {
+          'path': ctx.join(dir, 'PersistentDataList.sav'),
+          'profileId': profileId,
+        },
+      },
+      'backup': true,
+    };
+    return _runWrite(
+      command: 'write_difficulty',
+      payload: payload,
+      message: (data) {
+        final written = (data['targetsWritten'] as num?)?.toInt() ?? 0;
+        return written == 0
+            ? 'No difficulty changes to write'
+            : 'Difficulty written to the profile (backup created)';
+      },
+    );
+  }
+
+
+  /// Serializes all core calls. The native layer runs each command in its own
+  /// isolate with no serialization, so overlapping write_save/restore_backup
+  /// requests on the same file could interleave temp files and renames. Chaining
+  /// through this queue guarantees one core command finishes before the next
+  /// starts.
+  Future<void> _coreQueue = Future<void>.value();
+
+  bool get coreAvailable => _core.isAvailable;
+  String get coreDescription => _core.description;
+
+  /// Convenience forwarder — prefer [EditorState.pendingEditCount].
+  int get pendingEditCount => state.pendingEditCount;
+
+  /// The current error message, if any. Lets a modal (e.g. the difficulty
+  /// dialog) read a just-failed write's error without reaching into `state`.
+  String? get lastError => state.error;
+
+  /// Whether there are unsaved edits. Lets UI guards check the live value
+  /// without reaching into the protected `state`.
+  bool get hasUnsavedEdits => state.hasUnsavedEdits;
+
+  /// The currently selected save path. Lets async UI callbacks read the live
+  /// value without reaching into the protected `state`.
+  String? get selectedPath => state.selectedPath;
+
+  /// Dismiss the current error banner.
+  void dismissError() {
+    if (state.error != null) state = state.copyWith(clearError: true);
+  }
+
+  /// Dismiss the current success/status banner.
+  void dismissWriteMessage() {
+    if (state.lastWriteMessage != null) {
+      state = state.copyWith(clearWriteMessage: true);
+    }
+  }
+
+  /// Switch the active profile filter. Pass null to clear the explicit
+  /// selection (show all profiles).
+  ///
+  /// Blocked with an error when there are unsaved edits — switching profiles
+  /// changes which saves are visible and would potentially move selection away
+  /// from the save the edits target.
+  ///
+  /// If the currently selected save is not in the new visible set, the first
+  /// visible save is selected (triggering [_inspect]); if there are none,
+  /// the selection is cleared.
+  Future<void> selectProfile(int? profileId) async {
+    if (state.hasUnsavedEdits) {
+      state = state.copyWith(
+        error:
+            'Save or reset your unsaved changes first — switching profiles '
+            'would move away from the current save.',
+      );
+      return;
+    }
+
+    // Check whether the current selection belongs to the target profile before
+    // updating state. We avoid relying on visibleSaves here so that the "keep
+    // selected save visible" exemption cannot silently keep the old save in view
+    // and prevent the selection from moving.
+    final currentSave = state.selectedSave;
+    final selectionMatchesNewProfile =
+        profileId == null ||
+        state.profiles.length < 2 ||
+        currentSave == null ||
+        currentSave.persistentProfileId == null ||
+        currentSave.persistentProfileId == profileId;
+
+    state = state.copyWith(selectedProfileId: profileId);
+
+    if (selectionMatchesNewProfile) {
+      // Current selection is compatible with the new profile — stay put.
+      return;
+    }
+
+    // Current save does not belong to the new profile — move to the first
+    // save that does. Prefer saves attributed to the target profile; an
+    // unattributed (null persistentProfileId) save is only a fallback so it
+    // cannot shadow the profile's own saves in global sort order. The
+    // selectedPath exemption is intentionally absent (we have already
+    // established the current save is the wrong profile).
+    final attributed = state.saves.where(
+      (s) => s.persistentProfileId == profileId,
+    );
+    final unattributed = state.saves.where(
+      (s) => s.persistentProfileId == null,
+    );
+    final candidate = attributed.isNotEmpty
+        ? attributed.first
+        : (unattributed.isNotEmpty ? unattributed.first : null);
+
+    if (candidate != null) {
+      await _inspect(candidate.path);
+    } else {
+      state = state.copyWith(
+        selectedPath: null,
+        clearInspection: true,
+        clearBackups: true,
+        clearPendingEdits: true,
+      );
+    }
+  }
+
+  Future<Map<String, Object?>> _execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) {
+    final pending = _coreQueue.then(
+      (_) => _core.execute(command, payload: payload),
+    );
+    // Keep the queue alive regardless of this command's success/failure.
+    _coreQueue = pending.then((_) {}, onError: (_) {});
+    return pending;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Pending-edit registry
+  // ---------------------------------------------------------------------------
+
+  /// Upsert a pending edit for a given editor surface key.
+  void setPendingEdit(String key, PendingSaveEdit edit) {
+    final updated = Map<String, PendingSaveEdit>.from(state.pendingEdits);
+    updated[key] = edit;
+    state = state.copyWith(pendingEdits: updated);
+  }
+
+  /// Remove the pending edit for a given editor surface key.
+  void clearPendingEdit(String key) {
+    if (!state.pendingEdits.containsKey(key)) return;
+    final updated = Map<String, PendingSaveEdit>.from(state.pendingEdits);
+    updated.remove(key);
+    state = state.copyWith(pendingEdits: updated);
+  }
+
+  /// Clear all pending edits.
+  void clearAllPendingEdits() {
+    if (state.pendingEdits.isEmpty) return;
+    state = state.copyWith(clearPendingEdits: true);
+  }
+
+  /// Save all pending slot edits in one `write_save`, then refresh ONCE.
+  /// No-op when nothing is pending. Re-entry-safe: bails immediately if a load
+  /// is already in flight. Returns true on success (or when nothing to save),
+  /// false on failure.
+  ///
+  /// Difficulty is NOT part of this path — it is a profile-level edit written
+  /// directly by [writeProfileDifficulty] from the profile-header dialog.
+  Future<bool> saveAllPending() async {
+    if (state.pendingEdits.isEmpty) return true;
+    if (state.isLoading) return false;
+    final savePath = state.selectedPath;
+    if (savePath == null) return false;
+
+    // Snapshot the keys in stable (sorted) order for determinism. We clear
+    // exactly these keys on success rather than using clearAllPendingEdits()
+    // so that an edit typed during the in-flight write (which lives only in
+    // widget-local text until onChanged fires again) isn't silently discarded
+    // by a subsequent refresh-clears-all; the refresh's central clear will
+    // wipe those mid-write registry entries anyway, but the snapshot-key
+    // path is the explicit safety net for any failed-then-refreshed scenarios.
+    final snapshotKeys = state.pendingEdits.keys.toList()..sort();
+    final allEdits = <Map<String, Object?>>[];
+    var syncPersistent = false;
+    for (final key in snapshotKeys) {
+      final entry = state.pendingEdits[key]!;
+      allEdits.addAll(entry.edits);
+      if (entry.syncPersistentDataList) syncPersistent = true;
+    }
+
+    // The same typed property can be edited from two surfaces at once (the
+    // Player tab's hero stats and the All data browser). Batching both would
+    // silently let sorted-key order pick the winner — refuse instead and let
+    // the user resolve the conflict.
+    final seenTypedPaths = <String>{};
+    for (final edit in allEdits) {
+      if (edit['path'] != 'private.typed.setValue') continue;
+      final value = edit['value'];
+      if (value is! Map) continue;
+      final path = (value['path'] as List?)?.join(' › ') ?? '';
+      if (!seenTypedPaths.add(path)) {
+        state = state.copyWith(
+          error:
+              'Conflicting unsaved edits target the same property '
+              '($path) from two tabs. Reset or revert one of them, '
+              'then save again.',
+        );
+        return false;
+      }
+    }
+
+    // A structural inventory edit (addItem/removeItem) splices the MainContainer
+    // slot array and shifts every byte after the splice point. The core applies
+    // a batch in one write round, so ANY other edit in the same write is unsafe:
+    // a typed edit re-resolves a now-shifted array index, and an in-place
+    // setItemCount patches byte offsets that the splice invalidates. Require a
+    // structural inventory edit to be the only edit in the write.
+    final hasStructuralInventory = allEdits.any(
+      (edit) =>
+          edit['path'] == 'private.inventory.addItem' ||
+          edit['path'] == 'private.inventory.removeItem',
+    );
+    if (hasStructuralInventory && allEdits.length > 1) {
+      state = state.copyWith(
+        error:
+            'An inventory add or remove shifts item indices, so it must be '
+            'saved on its own. Save or reset your other unsaved changes first, '
+            'then save the inventory change.',
+      );
+      return false;
+    }
+
+    final n = allEdits.length;
+    // `slotCommitted` tracks that write_save put the bytes on disk, captured
+    // BEFORE refresh() so we still converge (clear the snapshot keys) even if a
+    // later refresh fails — leaving committed edits pending would make the
+    // editor think on-disk changes are unsaved and a retry double-apply them.
+    var slotCommitted = false;
+    var ok = false;
+    await _withLoading(() async {
+      final response = await _execute(
+        'write_save',
+        payload: {
+          'path': savePath,
+          'backup': true,
+          if (syncPersistent) 'syncPersistentDataList': true,
+          'edits': allEdits,
+        },
+      );
+      if (response['ok'] != true) {
+        // write_save failed: nothing committed. Keep ALL pending edits.
+        state = state.copyWith(error: _errorMessage(response));
+        return;
+      }
+      slotCommitted = true;
+      final data = (response['data'] as Map).cast<String, Object?>();
+      state = state.copyWith(
+        lastWriteMessage: _backupMessage(
+          '$n change${n == 1 ? '' : 's'} saved with backup',
+          data,
+        ),
+      );
+      await refresh();
+      ok = true;
+    });
+
+    // The snapshot edits are on disk now — clear them explicitly so a failed
+    // re-inspect still converges (refresh()'s _inspect clears on success).
+    if (slotCommitted) {
+      for (final key in snapshotKeys) {
+        clearPendingEdit(key);
+      }
+    }
+    return ok;
+  }
+
+  Future<void> chooseSaveDir() async {
+    final selected = await getDirectoryPath(
+      confirmButtonText: 'Use folder',
+      initialDirectory: state.saveDir,
+    );
+    if (selected == null) return;
+    await setSaveDir(selected);
+  }
+
+  Future<void> setSaveDir(String value) async {
+    state = state.copyWith(
+      saveDir: value,
+      // Drop the previous folder's slots/selection up front so a failed scan
+      // can't leave the sidebar showing the old folder under the new path.
+      saves: const [],
+      profiles: const [],
+      selectedPath: null,
+      activeProfileId: null,
+      selectedProfileId: null,
+      clearInspection: true,
+      clearBackups: true,
+    );
+    _persistSettings();
+    await refresh();
+  }
+
+  Future<void> refresh() async {
+    final seq = ++_loadSeq;
+    _loadStarted();
+    state = state.copyWith(isLoading: true, clearError: true);
+    try {
+      final response = await _execute(
+        'scan_save_dir',
+        payload: {'path': state.saveDir},
+      );
+      if (seq != _loadSeq) return;
+      if (response['ok'] != true) {
+        state = state.copyWith(error: _errorMessage(response));
+        return;
+      }
+      final data = (response['data'] as Map?)?.cast<String, Object?>();
+      final rawSaves = (data?['saves'] as List?) ?? const [];
+      final saves = rawSaves
+          .whereType<Map>()
+          .map((m) => SaveSlot.fromJson(m.cast<String, Object?>()))
+          .toList();
+      _sortByPlaytimeDesc(saves);
+      final rawProfiles = (data?['profiles'] as List?) ?? const [];
+      final profiles = rawProfiles
+          .whereType<Map>()
+          .map((m) => ProfileSummary.fromJson(m.cast<String, Object?>()))
+          .toList();
+      final activeProfileId = (data?['activeProfileId'] as num?)?.toInt();
+      // Keep the explicit profile selection if that profile still exists in
+      // the new scan result, otherwise reset it to null.
+      final profileIds = profiles.map((p) => p.profileId).toSet();
+      final keptSelectedProfileId =
+          (state.selectedProfileId != null &&
+              profileIds.contains(state.selectedProfileId))
+          ? state.selectedProfileId
+          : null;
+
+      // When the explicit selection was reset, fall back to any visible save;
+      // otherwise restrict to the still-valid profile's visible saves.
+      final newState = state.copyWith(
+        saves: saves,
+        profiles: profiles,
+        activeProfileId: activeProfileId,
+        selectedProfileId: keptSelectedProfileId,
+      );
+      // Compute visible saves with the updated state fields to find a
+      // sensible first selection path when the folder or profile changed.
+      final visibleAfterRefresh = newState.visibleSaves;
+      final selectedPath =
+          visibleAfterRefresh.any((s) => s.path == state.selectedPath)
+          ? state.selectedPath
+          : (visibleAfterRefresh.isNotEmpty
+                ? visibleAfterRefresh.first.path
+                : null);
+      // Pending edits are cleared by _inspect once the fresh inspection
+      // actually lands (so a failed re-inspect keeps them retryable); only
+      // when nothing remains selected is there no inspect to do it.
+      state = newState.copyWith(
+        selectedPath: selectedPath,
+        clearInspection: selectedPath == null,
+        clearBackups: selectedPath == null,
+        clearPendingEdits: selectedPath == null,
+      );
+      if (selectedPath != null) {
+        await _inspect(selectedPath);
+      }
+    } catch (error) {
+      // A thrown core call (e.g. invalid/null native JSON) must surface as an
+      // in-app error, not just an async console error.
+      if (seq == _loadSeq) {
+        state = state.copyWith(error: 'Failed to scan saves: $error');
+      }
+    } finally {
+      _loadFinished();
+    }
+  }
+
+  Future<void> inspect(String path) async {
+    await _inspect(path, clearWriteMessage: true);
+  }
+
+  Future<void> _inspect(String path, {bool clearWriteMessage = false}) async {
+    final seq = ++_loadSeq;
+    // Switching slots: drop the previous slot's inspection/backups so the panes
+    // don't keep showing stale data while the new load runs.
+    final switchingSlot = state.selectedPath != path;
+    _loadStarted();
+    state = state.copyWith(
+      selectedPath: path,
+      isLoading: true,
+      clearError: true,
+      clearWriteMessage: clearWriteMessage,
+      clearInspection: switchingSlot,
+      clearBackups: switchingSlot,
+      // Slot switch: stale edits must never be written into a different
+      // file, so drop them immediately. Same-save re-inspects clear pending
+      // only once the fresh inspection lands (below) — if the inspect fails,
+      // fields still show the drafts and the registry must keep matching
+      // them so the user can retry the save.
+      clearPendingEdits: switchingSlot,
+    );
+    try {
+      final payload = <String, Object?>{
+        'path': path,
+        'includePrivate': true,
+      };
+      final response = await _execute('inspect_save', payload: payload);
+      // Only the latest load applies results. Core calls are serialized, so a
+      // superseded load always finishes before the newer one; bailing here
+      // prevents it from applying stale data over the fresher load.
+      if (seq != _loadSeq) return;
+      if (response['ok'] != true) {
+        state = state.copyWith(
+          error: _errorMessage(response),
+          clearInspection: true,
+          clearBackups: true,
+        );
+        return;
+      }
+      final data = (response['data'] as Map).cast<String, Object?>();
+      // Apply the parsed inspection immediately so a later list_backups failure
+      // does not drop the save metadata/private views that already loaded.
+      // The fresh inspection re-seeds every editor, so pending edits are
+      // discarded in the same state change — never earlier (see above).
+      state = state.copyWith(
+        inspection: SaveInspection.fromJson(data),
+        // The fresh inspection re-seeds every editor, so discard all pending
+        // edits — including any pending difficulty edit, which clearPendingEdits
+        // also clears. The card re-seeds its controls from the new inspection's
+        // stored difficulty.
+        clearPendingEdits: true,
+      );
+      final backupSnapshot = await _loadBackups(path, seq);
+      if (backupSnapshot == null) return;
+      state = state.copyWith(
+        backups: backupSnapshot.backups,
+        companionBackups: backupSnapshot.companionBackups,
+      );
+    } catch (error) {
+      if (seq == _loadSeq) {
+        state = state.copyWith(
+          error: 'Failed to inspect save: $error',
+          clearInspection: true,
+          clearBackups: true,
+        );
+      }
+    } finally {
+      _loadFinished();
+    }
+  }
+
+  Future<void> refreshBackups() async {
+    final path = state.selectedPath;
+    if (path == null) return;
+    final seq = ++_loadSeq;
+    _loadStarted();
+    state = state.copyWith(isLoading: true, clearError: true);
+    try {
+      final backupSnapshot = await _loadBackups(path, seq);
+      if (backupSnapshot == null) return;
+      state = state.copyWith(
+        backups: backupSnapshot.backups,
+        companionBackups: backupSnapshot.companionBackups,
+      );
+    } catch (error) {
+      if (seq == _loadSeq) {
+        state = state.copyWith(error: 'Failed to load backups: $error');
+      }
+    } finally {
+      _loadFinished();
+    }
+  }
+
+  /// Restore the profile's `PersistentDataList.sav` from one of its companion
+  /// backups (e.g. one created by a profile difficulty write). Targets the
+  /// PersistentDataList.sav that sits alongside the selected save (the same
+  /// directory the slot lives in), not the selected slot itself.
+  Future<void> restoreCompanionBackup(String backupPath) async {
+    // Restoring the PDL runs refresh(), which clears the pending slot-edit
+    // registry. Those drafts are unrelated to the profile file, so block the
+    // restore while they are unsaved (mirrors the profile difficulty write)
+    // rather than silently discarding them.
+    if (state.hasUnsavedEdits) {
+      state = state.copyWith(
+        error:
+            'You have unsaved save edits. Save or reset them before restoring '
+            'a profile backup.',
+      );
+      return;
+    }
+    final selected = state.selectedPath;
+    if (selected == null) return;
+    // The save paths carry the on-disk style of the save folder (Windows-style
+    // even on a POSIX host), so pick a matching path Context — p.dirname on a
+    // POSIX host would otherwise collapse a `C:\...` path to '.'.
+    final isWindowsStyle =
+        selected.contains('\\') || RegExp(r'^[A-Za-z]:').hasMatch(selected);
+    final ctx = isWindowsStyle ? p.Context(style: p.Style.windows) : p.posix;
+    await restoreBackup(
+      backupPath,
+      targetPath: ctx.join(ctx.dirname(selected), 'PersistentDataList.sav'),
+    );
+  }
+
+  /// Restore a backup. [targetPath] overrides the file to restore (used for
+  /// companion `PersistentDataList.sav` backups); it defaults to the selected
+  /// slot.
+  Future<void> restoreBackup(String backupPath, {String? targetPath}) async {
+    final path = targetPath ?? state.selectedPath;
+    if (path == null) return;
+    await _withLoading(() async {
+      final response = await _execute(
+        'restore_backup',
+        payload: {'path': path, 'backupPath': backupPath},
+      );
+      if (response['ok'] != true) {
+        state = state.copyWith(error: _errorMessage(response));
+        return;
+      }
+      final data = (response['data'] as Map?)?.cast<String, Object?>();
+      final companionPresent = data?['persistentCompanionPresent'] == true;
+      final companionRestored = data?['persistentRestoredFrom'] != null;
+      // The companion-unchanged warning is only meaningful for SLOT restores.
+      // When the restore target IS PersistentDataList.sav (a companion-backup
+      // restore), the core reports persistentCompanionPresent (the target file
+      // exists) and no separate companion — but this restore just replaced it,
+      // so the warning would be misleading. Suppress it for PDL targets.
+      final targetIsPdl = path.endsWith('PersistentDataList.sav');
+      final restoreMessage = companionPresent && !companionRestored && !targetIsPdl
+          ? 'Restored backup: $backupPath (PersistentDataList.sav left unchanged '
+                '— no matching companion backup; slot metadata may differ)'
+          : 'Restored backup: $backupPath';
+      state = state.copyWith(lastWriteMessage: restoreMessage);
+      // Rescan so the sidebar/profile summary reflect the rolled-back public
+      // name and PersistentDataList metadata, not just the detail pane.
+      // refresh() also centrally clears all pending edits (avoids mutating
+      // the provider from widget lifecycle hooks).
+      await refresh();
+      // The restore itself succeeded on disk; if the follow-up rescan/inspection
+      // failed, make clear the restore worked so the error is not misread as a
+      // failed restore.
+      if (state.error != null) {
+        state = state.copyWith(
+          error:
+              'Restored backup: $backupPath, but reloading the save failed: ${state.error}',
+        );
+      }
+    });
+  }
+
+  Future<void> checkCodec() async {
+    try {
+      final response = await _execute('check_codec');
+      if (response['ok'] != true) {
+        // Use the dedicated codec error channel so a concurrent/later refresh
+        // does not wipe this message, and drop the now-stale codec status so
+        // the UI doesn't keep showing an earlier "ready" state.
+        state = state.copyWith(
+          codecError: _errorMessage(response),
+          clearCodecStatus: true,
+        );
+        return;
+      }
+      final data = (response['data'] as Map).cast<String, Object?>();
+      final status = CodecStatus.fromJson(data);
+      state = state.copyWith(codecStatus: status, clearCodecError: true);
+      // Re-decode the selected save now the codec is available — but only if no
+      // load is already running. An in-flight inspect is already the latest load
+      // and will populate; spawning another here would just race it.
+      if (status.available && state.selectedPath != null && _activeLoads == 0) {
+        await inspect(state.selectedPath!);
+      }
+    } catch (error) {
+      // checkCodec is fire-and-forget from the constructor; a thrown core call
+      // must surface in UI state, not as an unhandled async error.
+      state = state.copyWith(
+        codecError: 'Codec check failed: $error',
+        clearCodecStatus: true,
+      );
+    }
+  }
+
+  /// Round-trip a real private chunk from the selected save through the
+  /// in-process codec (decompress → compress → decompress) and report the
+  /// result. Surfaces a quick confidence check for the always-on codec.
+  Future<void> validateCodecRoundtrip() async {
+    final path = state.selectedPath;
+    if (path == null) return;
+    await _withLoading(() async {
+      final response = await _execute(
+        'validate_codec_roundtrip',
+        payload: {'path': path},
+      );
+      if (response['ok'] != true) {
+        state = state.copyWith(error: _errorMessage(response));
+        return;
+      }
+      final data = (response['data'] as Map).cast<String, Object?>();
+      state = state.copyWith(
+        lastWriteMessage:
+            'Codec roundtrip passed: chunk ${data['chunkIndex']} recompressed to ${data['recompressedSize']} bytes',
+      );
+    });
+  }
+
+  /// Search every typed property in the decoded private payload. The core
+  /// caches the decoded payload, so the first search pays the decode cost and
+  /// later searches are instant. Returns a result carrying an error string
+  /// instead of throwing, so the browser UI can render it inline.
+  Future<TypedSearchResult> searchTypedProperties(
+    String query, {
+    int offset = 0,
+    int limit = 50,
+  }) async {
+    final path = state.selectedPath;
+    if (path == null) {
+      return const TypedSearchResult(error: 'No save selected.');
+    }
+    try {
+      final response = await _execute(
+        'search_typed_properties',
+        payload: {
+          'path': path,
+          'query': query,
+          'offset': offset,
+          'limit': limit,
+        },
+      );
+      if (response['ok'] != true) {
+        return TypedSearchResult(error: _errorMessage(response));
+      }
+      return TypedSearchResult.fromJson(
+        (response['data'] as Map).cast<String, Object?>(),
+      );
+    } catch (error) {
+      return TypedSearchResult(error: 'Property search failed: $error');
+    }
+  }
+
+  /// Search query that returns exactly the hero attribute leaves: both terms
+  /// must appear in the display path, which only holds for entries under
+  /// AttributesByGlobalId/{Hero}.
+  static const heroAttributesQuery = 'AttributesByGlobalId {Hero}';
+
+  /// Load every hero gameplay attribute from the typed property tree. The
+  /// core caps each search page at 1000 hits, so page through the full match
+  /// set instead of trusting one request. The decode cache is already seeded
+  /// by inspect, so this does not pay a second full private-payload decode.
+  Future<HeroAttributesResult> loadHeroAttributes() async {
+    // Pin the save under load: searchTypedProperties always reads the
+    // current selection, so a save switch mid-pagination would silently
+    // merge pages from two different files into one stat list.
+    final loadPath = state.selectedPath;
+    final hits = <TypedPropertyHit>[];
+    var offset = 0;
+    while (true) {
+      final result = await searchTypedProperties(
+        heroAttributesQuery,
+        offset: offset,
+        limit: 1000,
+      );
+      if (state.selectedPath != loadPath) {
+        return const HeroAttributesResult(
+          error: 'Save selection changed while loading hero attributes.',
+        );
+      }
+      if (result.error != null) {
+        return HeroAttributesResult(error: result.error);
+      }
+      hits.addAll(result.results);
+      offset += result.results.length;
+      if (offset >= result.total || result.results.isEmpty) break;
+    }
+    return HeroAttributesResult(attributes: parseHeroAttributes(hits));
+  }
+
+  /// Run one progression section query. Returns the raw data map, or null
+  /// with [onError] called, so each typed loader below can build its own page
+  /// object with an inline error.
+  Future<Map<String, Object?>?> _queryProgression(
+    Map<String, Object?> params, {
+    required void Function(String message) onError,
+  }) async {
+    final path = state.selectedPath;
+    if (path == null) {
+      onError('No save selected.');
+      return null;
+    }
+    try {
+      final response = await _execute(
+        'query_progression',
+        payload: {'path': path, ...params},
+      );
+      if (response['ok'] != true) {
+        onError(_errorMessage(response));
+        return null;
+      }
+      return (response['data'] as Map).cast<String, Object?>();
+    } catch (error) {
+      onError('Progression query failed: $error');
+      return null;
+    }
+  }
+
+  Future<ProgressionQuestPage> loadProgressionQuests({
+    String query = '',
+    int offset = 0,
+    int limit = 100,
+    String? state,
+    String? group,
+  }) async {
+    String? error;
+    final data = await _queryProgression({
+      'section': 'quests',
+      'query': query,
+      'offset': offset,
+      'limit': limit,
+      if (state != null && state.isNotEmpty) 'state': state,
+      if (group != null && group.isNotEmpty) 'group': group,
+    }, onError: (message) => error = message);
+    if (data == null) return ProgressionQuestPage(error: error);
+    return ProgressionQuestPage.fromJson(data);
+  }
+
+  Future<KnowledgeCharactersPage> loadKnowledgeCharacters({
+    String query = '',
+    int offset = 0,
+    int limit = 100,
+  }) async {
+    String? error;
+    final data = await _queryProgression({
+      'section': 'knowledge',
+      'query': query,
+      'offset': offset,
+      'limit': limit,
+    }, onError: (message) => error = message);
+    if (data == null) return KnowledgeCharactersPage(error: error);
+    return KnowledgeCharactersPage.fromJson(data);
+  }
+
+  Future<KnowledgeEntriesPage> loadKnowledgeEntries(
+    String character, {
+    String query = '',
+    int offset = 0,
+    int limit = 200,
+  }) async {
+    String? error;
+    final data = await _queryProgression({
+      'section': 'knowledge',
+      'character': character,
+      'query': query,
+      'offset': offset,
+      'limit': limit,
+    }, onError: (message) => error = message);
+    if (data == null) return KnowledgeEntriesPage(error: error);
+    return KnowledgeEntriesPage.fromJson(data);
+  }
+
+  Future<MemoryCharactersPage> loadMemoryCharacters({
+    String query = '',
+    int offset = 0,
+    int limit = 100,
+  }) async {
+    String? error;
+    final data = await _queryProgression({
+      'section': 'events',
+      'query': query,
+      'offset': offset,
+      'limit': limit,
+    }, onError: (message) => error = message);
+    if (data == null) return MemoryCharactersPage(error: error);
+    return MemoryCharactersPage.fromJson(data);
+  }
+
+  Future<MemoryEventsPage> loadMemoryEvents(
+    String character, {
+    String query = '',
+    int offset = 0,
+    int limit = 100,
+  }) async {
+    String? error;
+    final data = await _queryProgression({
+      'section': 'events',
+      'character': character,
+      'query': query,
+      'offset': offset,
+      'limit': limit,
+    }, onError: (message) => error = message);
+    if (data == null) return MemoryEventsPage(error: error);
+    return MemoryEventsPage.fromJson(data);
+  }
+
+  /// Apply one structural progression edit (event remove/duplicate)
+  /// immediately, with backup. Index-addressed array edits must go one per
+  /// write round — indices shift after every structural change — so this is
+  /// intentionally not part of the pending-edit registry.
+  Future<bool> applyMemoryEventEdit(MemoryEventEdit edit) async {
+    final savePath = state.selectedPath;
+    if (savePath == null) {
+      state = state.copyWith(error: 'No save selected.');
+      return false;
+    }
+    if (state.isLoading) {
+      state = state.copyWith(
+        error: 'Another operation is in progress — try again when it finishes.',
+      );
+      return false;
+    }
+    // Guard on hasUnsavedEdits (pendingEdits OR a pending difficulty), matching
+    // selectProfile/refresh: removing or duplicating a memory event writes the
+    // file immediately and its success path re-seeds the editors, which would
+    // silently discard a pending difficulty edit just as it would pending edits.
+    if (state.hasUnsavedEdits) {
+      state = state.copyWith(
+        error:
+            'Save or reset your unsaved changes first — removing or '
+            'duplicating a memory event writes the file immediately and '
+            'would discard them.',
+      );
+      return false;
+    }
+    return _runWrite(
+      payload: {
+        'path': savePath,
+        'backup': true,
+        'edits': [edit.toEditJson()],
+      },
+      message: (data) => _backupMessage(
+        edit.isRemove ? 'Memory event removed' : 'Memory event duplicated',
+        data,
+      ),
+    );
+  }
+
+  /// Insert a brand-new character into CharacterKnowledgeByUniqueName and write
+  /// the file immediately (with backup), then re-inspect so the new NPC's empty
+  /// Knowledge set is queryable for follow-on entry edits. Map insertions are
+  /// structural and applied one-at-a-time, so this is intentionally NOT a
+  /// pending edit. Returns true on success; on failure sets state.error and
+  /// returns false.
+  ///
+  /// Mirrors [applyMemoryEventEdit]: same no-save / isLoading / hasUnsavedEdits
+  /// guards (an immediate write + refresh re-seeds the editors and would discard
+  /// any unsaved pending edits), and the same _runWrite-then-refresh flow.
+  Future<bool> applyAddKnowledgeCharacter(String uniqueName) async {
+    final savePath = state.selectedPath;
+    if (savePath == null) {
+      state = state.copyWith(error: 'No save selected.');
+      return false;
+    }
+    if (state.isLoading) {
+      state = state.copyWith(
+        error: 'Another operation is in progress — try again when it finishes.',
+      );
+      return false;
+    }
+    if (state.hasUnsavedEdits) {
+      state = state.copyWith(
+        error:
+            'Save or reset your unsaved changes first — adding a character '
+            'writes the file immediately and would discard them.',
+      );
+      return false;
+    }
+    return _runWrite(
+      payload: {
+        'path': savePath,
+        'backup': true,
+        'edits': [
+          {
+            'path': 'private.knowledge.addCharacter',
+            'value': {'value': uniqueName.trim()},
+          },
+        ],
+      },
+      message: (data) => _backupMessage('Character added', data),
+    );
+  }
+
+  String _errorMessage(Map<String, Object?> response) {
+    final error = (response['error'] as Map?)?.cast<String, Object?>();
+    return error?['message'] as String? ?? 'Unknown core error';
+  }
+
+  String _backupMessage(String prefix, Map<String, Object?> data) {
+    final backupPath = data['backupPath'] ?? 'none';
+    final persistentBackupPath = data['persistentBackupPath'] as String?;
+    if (persistentBackupPath == null || persistentBackupPath.isEmpty) {
+      return '$prefix: $backupPath';
+    }
+    return '$prefix: $backupPath; PersistentDataList backup: $persistentBackupPath';
+  }
+
+  Future<_BackupSnapshot?> _loadBackups(String path, int seq) async {
+    final response = await _execute('list_backups', payload: {'path': path});
+    // Only the latest load applies; a superseded load must not replace the
+    // fresher list with its outdated result.
+    if (seq != _loadSeq) return null;
+    if (response['ok'] != true) {
+      // Leave isLoading to the caller's load-counter bookkeeping.
+      state = state.copyWith(error: _errorMessage(response));
+      return null;
+    }
+    final data = (response['data'] as Map?)?.cast<String, Object?>();
+    final rawBackups = (data?['backups'] as List?) ?? const [];
+    final rawCompanionBackups =
+        (data?['companionBackups'] as List?) ?? const [];
+    final backups = rawBackups
+        .whereType<Map>()
+        .map((value) => BackupEntry.fromJson(value.cast<Object?, Object?>()))
+        .toList();
+    final companionBackups = rawCompanionBackups
+        .whereType<Map>()
+        .map((value) => BackupEntry.fromJson(value.cast<Object?, Object?>()))
+        .toList();
+    return _BackupSnapshot(
+      backups: backups,
+      companionBackups: companionBackups,
+    );
+  }
+
+  void _persistSettings() {
+    _settingsStore.write(EditorSettings(saveDir: state.saveDir));
+  }
+
+  static EditorState _initialState({
+    required String? saveDir,
+    required EditorSettingsStore settingsStore,
+  }) {
+    final stored = settingsStore.read();
+    return EditorState(
+      saveDir: saveDir ?? stored.saveDir ?? defaultSaveRoot(),
+    );
+  }
+}
+
+class _BackupSnapshot {
+  const _BackupSnapshot({
+    required this.backups,
+    required this.companionBackups,
+  });
+
+  final List<BackupEntry> backups;
+  final List<BackupEntry> companionBackups;
+}

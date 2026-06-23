@@ -39,7 +39,7 @@ jobs:
         id: version
         shell: pwsh
         run: |
-          $pubspec = Get-Content projects/gore-save/app/pubspec.yaml -Raw
+          $pubspec = Get-Content apps/save-editor/pubspec.yaml -Raw
           if ($pubspec -notmatch '(?m)^version:\s*([0-9]+\.[0-9]+\.[0-9]+)\s*$') {
             Write-Error 'pubspec.yaml version must be plain X.Y.Z (no build number)'
             exit 1
@@ -78,7 +78,7 @@ jobs:
         run: |
           $version = '${{ steps.version.outputs.version }}'
           $isTag = '${{ github.ref_type }}' -eq 'tag'
-          $changelog = Get-Content projects/gore-save/CHANGELOG.md -Raw
+          $changelog = Get-Content apps/save-editor/CHANGELOG.md -Raw
           $pattern = "(?ms)^## \[$([regex]::Escape($version))\][^`r`n]*`r?`n(.*?)(?=^## \[|\z)"
           $notes = ''
           if ($changelog -match $pattern) { $notes = $Matches[1].Trim() }
@@ -86,8 +86,8 @@ jobs:
             if ($isTag) { Write-Error "CHANGELOG.md has no non-empty section for $version"; exit 1 }
             $notes = "Development build $version"
           }
-          New-Item -ItemType Directory -Force projects/gore-save/dist | Out-Null
-          [IO.File]::WriteAllText((Join-Path $PWD 'projects/gore-save/dist/RELEASE_NOTES.md'), $notes)
+          New-Item -ItemType Directory -Force dist/gore-save | Out-Null
+          [IO.File]::WriteAllText((Join-Path $PWD 'dist/gore-save/RELEASE_NOTES.md'), $notes)
 
       - name: Generate signed appcast
         env:
@@ -96,19 +96,19 @@ jobs:
           python scripts/appcast.py
           --title goresave
           --version ${{ steps.version.outputs.version }}
-          --installer projects/gore-save/dist/GoresaveSetup-${{ steps.version.outputs.version }}.exe
-          --notes projects/gore-save/dist/RELEASE_NOTES.md
+          --installer dist/gore-save/GoresaveSetup-${{ steps.version.outputs.version }}.exe
+          --notes dist/gore-save/RELEASE_NOTES.md
           --release-tag gore-save-v${{ steps.version.outputs.version }}
-          --output projects/gore-save/dist/appcast-windows.xml
+          --output dist/gore-save/appcast-windows.xml
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: goresave-windows-x64
           path: |
-            projects/gore-save/dist/*.zip
-            projects/gore-save/dist/*.exe
-            projects/gore-save/dist/appcast-windows.xml
+            dist/gore-save/*.zip
+            dist/gore-save/*.exe
+            dist/gore-save/appcast-windows.xml
 
       # make_latest=true: the app's releases/latest/ feed must resolve here.
       - name: Publish GitHub release
@@ -117,10 +117,10 @@ jobs:
         with:
           make_latest: "true"
           files: |
-            projects/gore-save/dist/*.zip
-            projects/gore-save/dist/*.exe
-            projects/gore-save/dist/appcast-windows.xml
-          body_path: projects/gore-save/dist/RELEASE_NOTES.md
+            dist/gore-save/*.zip
+            dist/gore-save/*.exe
+            dist/gore-save/appcast-windows.xml
+          body_path: dist/gore-save/RELEASE_NOTES.md
 
   gore-mod:
     if: startsWith(github.ref_name, 'gore-mod-v') || (github.event_name == 'workflow_dispatch' && inputs.project == 'gore-mod')
@@ -132,7 +132,7 @@ jobs:
         id: version
         shell: pwsh
         run: |
-          $pubspec = Get-Content projects/gore-mod/app/pubspec.yaml -Raw
+          $pubspec = Get-Content apps/mod-studio/pubspec.yaml -Raw
           if ($pubspec -notmatch '(?m)^version:\s*([0-9]+\.[0-9]+\.[0-9]+)\s*$') {
             Write-Error 'pubspec.yaml version must be plain X.Y.Z (no build number)'
             exit 1
@@ -168,7 +168,7 @@ jobs:
         run: |
           $version = '${{ steps.version.outputs.version }}'
           $isTag = '${{ github.ref_type }}' -eq 'tag'
-          $changelog = Get-Content projects/gore-mod/CHANGELOG.md -Raw
+          $changelog = Get-Content apps/mod-studio/CHANGELOG.md -Raw
           $pattern = "(?ms)^## \[$([regex]::Escape($version))\][^`r`n]*`r?`n(.*?)(?=^## \[|\z)"
           $notes = ''
           if ($changelog -match $pattern) { $notes = $Matches[1].Trim() }
@@ -176,8 +176,8 @@ jobs:
             if ($isTag) { Write-Error "CHANGELOG.md has no non-empty section for $version"; exit 1 }
             $notes = "Development build $version"
           }
-          New-Item -ItemType Directory -Force projects/gore-mod/dist | Out-Null
-          [IO.File]::WriteAllText((Join-Path $PWD 'projects/gore-mod/dist/RELEASE_NOTES.md'), $notes)
+          New-Item -ItemType Directory -Force dist/gore-mod | Out-Null
+          [IO.File]::WriteAllText((Join-Path $PWD 'dist/gore-mod/RELEASE_NOTES.md'), $notes)
 
       - name: Generate signed appcast
         env:
@@ -186,19 +186,19 @@ jobs:
           python scripts/appcast.py
           --title gore-mod
           --version ${{ steps.version.outputs.version }}
-          --installer projects/gore-mod/dist/GoreModSetup-${{ steps.version.outputs.version }}.exe
-          --notes projects/gore-mod/dist/RELEASE_NOTES.md
+          --installer dist/gore-mod/GoreModSetup-${{ steps.version.outputs.version }}.exe
+          --notes dist/gore-mod/RELEASE_NOTES.md
           --release-tag gore-mod-v${{ steps.version.outputs.version }}
-          --output projects/gore-mod/dist/appcast-windows.xml
+          --output dist/gore-mod/appcast-windows.xml
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: gore-mod-windows-x64
           path: |
-            projects/gore-mod/dist/*.zip
-            projects/gore-mod/dist/*.exe
-            projects/gore-mod/dist/appcast-windows.xml
+            dist/gore-mod/*.zip
+            dist/gore-mod/*.exe
+            dist/gore-mod/appcast-windows.xml
 
       # Versioned release holds the installer the appcast enclosure points at.
       # make_latest=false so it never steals goresave's releases/latest feed.
@@ -208,9 +208,9 @@ jobs:
         with:
           make_latest: "false"
           files: |
-            projects/gore-mod/dist/*.zip
-            projects/gore-mod/dist/GoreModSetup-${{ steps.version.outputs.version }}.exe
-          body_path: projects/gore-mod/dist/RELEASE_NOTES.md
+            dist/gore-mod/*.zip
+            dist/gore-mod/GoreModSetup-${{ steps.version.outputs.version }}.exe
+          body_path: dist/gore-mod/RELEASE_NOTES.md
 
       # gore-mod's updater polls this fixed-tag release. The asset name is the
       # same every release, so use `gh release upload --clobber` to replace it
@@ -230,7 +230,7 @@ jobs:
               --latest=false
           }
           gh release upload gore-mod-appcast `
-            projects/gore-mod/dist/appcast-windows.xml --clobber
+            dist/gore-mod/appcast-windows.xml --clobber
 
   gore-cli:
     if: startsWith(github.ref_name, 'gore-cli-v') || (github.event_name == 'workflow_dispatch' && inputs.project == 'gore-cli')
@@ -242,7 +242,7 @@ jobs:
         id: version
         shell: pwsh
         run: |
-          $manifest = Get-Content projects/gore-cli/crates/gore_cli/Cargo.toml -Raw
+          $manifest = Get-Content crates/gore/Cargo.toml -Raw
           if ($manifest -notmatch '(?m)^version\s*=\s*"([0-9]+\.[0-9]+\.[0-9]+)"') {
             Write-Error 'Cargo.toml version must be X.Y.Z'
             exit 1
@@ -261,14 +261,14 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Build distribution
-        run: python build.py gore-cli dist
+        run: python build.py gore dist
 
       - name: Extract release notes from CHANGELOG.md
         shell: pwsh
         run: |
           $version = '${{ steps.version.outputs.version }}'
           $isTag = '${{ github.ref_type }}' -eq 'tag'
-          $changelog = Get-Content projects/gore-cli/CHANGELOG.md -Raw
+          $changelog = Get-Content crates/gore/CHANGELOG.md -Raw
           $pattern = "(?ms)^## \[$([regex]::Escape($version))\][^`r`n]*`r?`n(.*?)(?=^## \[|\z)"
           $notes = ''
           if ($changelog -match $pattern) { $notes = $Matches[1].Trim() }
@@ -276,19 +276,19 @@ jobs:
             if ($isTag) { Write-Error "CHANGELOG.md has no non-empty section for $version"; exit 1 }
             $notes = "Development build $version"
           }
-          New-Item -ItemType Directory -Force projects/gore-cli/dist | Out-Null
-          [IO.File]::WriteAllText((Join-Path $PWD 'projects/gore-cli/dist/RELEASE_NOTES.md'), $notes)
+          New-Item -ItemType Directory -Force dist/gore | Out-Null
+          [IO.File]::WriteAllText((Join-Path $PWD 'dist/gore/RELEASE_NOTES.md'), $notes)
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: gore-cli-windows-x64
-          path: projects/gore-cli/dist/*.zip
+          path: dist/gore/*.zip
 
       - name: Publish GitHub release
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           make_latest: "false"
-          files: projects/gore-cli/dist/*.zip
-          body_path: projects/gore-cli/dist/RELEASE_NOTES.md
+          files: dist/gore/*.zip
+          body_path: dist/gore/RELEASE_NOTES.md
