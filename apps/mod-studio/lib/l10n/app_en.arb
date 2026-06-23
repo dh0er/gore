@@ -1,7 +1,7 @@
 {
   "@@locale": "en",
   "tabItems": "Items",
-  "tabOverrides": "Overrides",
+  "tabOverrides": "Changes",
   "tabSettings": "Settings",
   "gameExecutable": "Game executable",
   "gameExecutableSubtitle": "Path to the game's .exe. Used to auto-detect localized text and the game install.",

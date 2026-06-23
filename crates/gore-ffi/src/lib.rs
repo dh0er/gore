@@ -84,6 +84,7 @@ fn dispatch(input: &str) -> Value {
         "loc_status" => loc_status(),
         "loc_find" => loc_find(payload),
         "loc_extract" => loc_extract(payload),
+        "find_game" => find_game(),
         "audio_list" => audio_list(payload),
         "audio_extract" => audio_extract(payload),
         "mod_build" => mod_build(payload),
@@ -130,6 +131,18 @@ fn loc_extract(payload: Value) -> Value {
         ),
         Err(e) => err("EXTRACT_FAILED", e.to_string()),
     }
+}
+
+/// `{ok, found, game_root?, exe?}` — auto-detect the game install via Steam.
+fn find_game() -> Value {
+    let root = gore_loc::discover::find_game_root();
+    let exe = gore_loc::discover::find_game_exe();
+    json!({
+        "ok": true,
+        "found": root.is_some(),
+        "game_root": root.map(|p| p.display().to_string()),
+        "exe": exe.map(|p| p.display().to_string()),
+    })
 }
 
 fn generate_mod(payload: Value) -> Value {

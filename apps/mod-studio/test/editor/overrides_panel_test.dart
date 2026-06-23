@@ -70,9 +70,9 @@ void main() {
     expect(find.text('No pending overrides.\nEdit item fields to add some.'), findsOneWidget);
   });
 
-  testWidgets('count in header matches override count', (tester) async {
+  testWidgets('count in header matches change count', (tester) async {
     await tester.pumpWidget(buildPanel(initial: [apple500, sword]));
     await tester.pumpAndSettle();
-    expect(find.text('Pending overrides (2)'), findsOneWidget);
+    expect(find.text('Changes (2)'), findsOneWidget);
   });
 }

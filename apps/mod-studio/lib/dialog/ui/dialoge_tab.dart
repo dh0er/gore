@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
 
+import '../../app/domain/ui_settings.dart';
 import '../../loc/domain/loc_catalog_provider.dart';
 import '../../loc/domain/loc_edits_notifier.dart';
+import '../../loc/game_lang.dart';
 import '../../loc/ui/lang_fields.dart';
 import '../domain/dialog_catalog_provider.dart';
 
@@ -74,14 +76,43 @@ class _DialogBrowser extends ConsumerStatefulWidget {
   ConsumerState<_DialogBrowser> createState() => _DialogBrowserState();
 }
 
+/// Stable key for a speaker group: `'${isBark}:${speaker}'`.
+String _groupKey(bool isBark, String speaker) => '$isBark:$speaker';
+
 class _DialogBrowserState extends ConsumerState<_DialogBrowser> {
   final TextEditingController _searchController = TextEditingController();
   String _query = '';
+
+  /// Keys of groups the user has expanded. Empty = everything collapsed.
+  final Set<String> _expanded = <String>{};
 
   @override
   void dispose() {
     _searchController.dispose();
     super.dispose();
+  }
+
+  void _toggleGroup(DialogGroupRow row) {
+    final key = _groupKey(row.isBark, row.speaker);
+    setState(() {
+      if (!_expanded.remove(key)) _expanded.add(key);
+    });
+  }
+
+  /// Collapse-aware view (used when no search query is active): always emit
+  /// group headers, but emit a group's line rows only when it is expanded.
+  List<DialogRow> _collapsedRows(List<DialogRow> rows) {
+    final out = <DialogRow>[];
+    var currentExpanded = false;
+    for (final row in rows) {
+      if (row is DialogGroupRow) {
+        currentExpanded = _expanded.contains(_groupKey(row.isBark, row.speaker));
+        out.add(row);
+      } else if (row is DialogLineRow && currentExpanded) {
+        out.add(row);
+      }
+    }
+    return out;
   }
 
   /// Whether [id]'s catalog entry matches [query] by id substring or by any of
@@ -133,8 +164,13 @@ class _DialogBrowserState extends ConsumerState<_DialogBrowser> {
     final catalog = ref.watch(locCatalogProvider).value ?? const {};
     final allRows = ref.watch(dialogRowsProvider);
     final query = _query.trim().toLowerCase();
-    final rows = _filteredRows(allRows, query, catalog);
+    // With a search query active, show matching lines (groups effectively
+    // expanded). With no query, apply the default-collapsed group logic.
+    final rows = query.isEmpty
+        ? _collapsedRows(allRows)
+        : _filteredRows(allRows, query, catalog);
 
+    final lang = gameLangByCode(ref.watch(localeProvider));
     final selectedId = ref.watch(_selectedDialogIdProvider);
     final editedIds = ref.watch(locEditsProvider).edits;
 
@@ -160,10 +196,20 @@ class _DialogBrowserState extends ConsumerState<_DialogBrowser> {
                   itemBuilder: (context, index) {
                     final row = rows[index];
                     if (row is DialogGroupRow) {
-                      return _GroupHeader(row: row);
+                      // When searching, matching groups are shown expanded.
+                      final expanded = query.isNotEmpty ||
+                          _expanded
+                              .contains(_groupKey(row.isBark, row.speaker));
+                      return _GroupHeader(
+                        row: row,
+                        expanded: expanded,
+                        onTap: () => _toggleGroup(row),
+                      );
                     }
                     final line = row as DialogLineRow;
-                    final preview = _previewFor(line.id, catalog);
+                    final preview =
+                        resolveGameText(catalog, line.id, lang) ??
+                            _previewFor(line.id, catalog);
                     return ListTile(
                       dense: true,
                       selected: line.id == selectedId,
@@ -201,37 +247,52 @@ String? _previewFor(String id, Map<String, Map<String, String>> catalog) {
 }
 
 class _GroupHeader extends StatelessWidget {
-  const _GroupHeader({required this.row});
+  const _GroupHeader({
+    required this.row,
+    required this.expanded,
+    required this.onTap,
+  });
   final DialogGroupRow row;
+  final bool expanded;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Container(
-      color: theme.colorScheme.surfaceContainerHigh,
-      padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-      child: Row(
-        children: [
-          Icon(
-            row.isBark ? Icons.campaign_outlined : Icons.forum_outlined,
-            size: 16,
-            color: theme.colorScheme.onSurfaceVariant,
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              row.speaker.isEmpty ? '(unknown)' : row.speaker,
-              style: theme.textTheme.titleSmall,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
+    return InkWell(
+      onTap: onTap,
+      child: Container(
+        color: theme.colorScheme.surfaceContainerHigh,
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+        child: Row(
+          children: [
+            Icon(
+              expanded ? Icons.expand_more : Icons.chevron_right,
+              size: 18,
+              color: theme.colorScheme.onSurfaceVariant,
             ),
-          ),
-          Text(
-            row.isBark ? 'bark · ${row.lineCount}' : '${row.lineCount}',
-            style: theme.textTheme.labelSmall
-                ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-          ),
-        ],
+            const SizedBox(width: 4),
+            Icon(
+              row.isBark ? Icons.campaign_outlined : Icons.forum_outlined,
+              size: 16,
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                row.speaker.isEmpty ? '(unknown)' : row.speaker,
+                style: theme.textTheme.titleSmall,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            Text(
+              row.isBark ? 'bark · ${row.lineCount}' : '${row.lineCount}',
+              style: theme.textTheme.labelSmall
+                  ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+            ),
+          ],
+        ),
       ),
     );
   }

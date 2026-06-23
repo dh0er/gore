@@ -45,6 +45,13 @@ class ModFfi {
 
   Future<void> modUndeploy(String gameRoot) =>
       _call('mod_undeploy', {'game_root': gameRoot});
+
+  /// Auto-detect the game install via Steam; returns the exe path hint, or null.
+  Future<String?> findGameExe() async {
+    final r = await _call('find_game', const {});
+    if (r['found'] != true) return null;
+    return r['exe'] as String?;
+  }
 }
 
 class ModFfiException implements Exception {

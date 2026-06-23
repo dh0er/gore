@@ -7,6 +7,8 @@ import 'app/ui/window_chrome.dart';
 import 'catalog/domain/catalog_provider.dart';
 import 'catalog/domain/item_entry.dart';
 import 'catalog/ui/catalog_browser.dart';
+import 'core/mod_ffi.dart';
+import 'core/providers.dart';
 import 'audio/domain/audio_replacements_notifier.dart';
 import 'audio/ui/audio_tab.dart';
 import 'dialog/ui/dialoge_tab.dart';
@@ -41,6 +43,21 @@ class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver
     // been extracted yet and the user hasn't been prompted before, offer to
     // extract it.
     WidgetsBinding.instance.addPostFrameCallback((_) => _maybeFirstRunPrompt());
+    WidgetsBinding.instance.addPostFrameCallback((_) => _maybeAutoDetectGamePath());
+  }
+
+  /// On first run, if no game path is set, auto-detect the Steam install and save it.
+  Future<void> _maybeAutoDetectGamePath() async {
+    if (ref.read(gameExePathProvider) != null) return;
+    try {
+      final exe = await ModFfi(ref.read(coreServiceProvider)).findGameExe();
+      if (!mounted || exe == null) return;
+      if (ref.read(gameExePathProvider) == null) {
+        ref.read(gameExePathProvider.notifier).set(exe);
+      }
+    } catch (_) {
+      // best-effort; user can still set it manually in Settings
+    }
   }
 
   @override
@@ -209,13 +226,13 @@ class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver
                           icon: Icon(Icons.forum_outlined),
                           text: 'Dialoge',
                         ),
-                        Tab(
-                          icon: const Icon(Icons.edit_note_outlined),
-                          text: l10n.tabOverrides,
-                        ),
                         const Tab(
                           icon: Icon(Icons.audiotrack_outlined),
                           text: 'Audio',
+                        ),
+                        Tab(
+                          icon: const Icon(Icons.edit_note_outlined),
+                          text: l10n.tabOverrides,
                         ),
                         Tab(
                           icon: const Icon(Icons.settings_outlined),
@@ -287,8 +304,9 @@ class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver
                   ),
                   // Dialoge: localized dialog/bark line editor.
                   const DialogeTab(),
-                  // Overrides: the pending-overrides panel, centred with a
-                  // readable max width.
+                  // Audio: FMOD bank sample browser + replacement.
+                  const AudioTab(),
+                  // Changes: all staged item/loc/audio changes, centred.
                   Align(
                     alignment: Alignment.topCenter,
                     child: ConstrainedBox(
@@ -296,8 +314,6 @@ class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver
                       child: const OverridesPanel(),
                     ),
                   ),
-                  // Audio: FMOD bank sample browser + replacement.
-                  const AudioTab(),
                   // Settings.
                   const SettingsTab(),
                 ],
