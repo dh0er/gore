@@ -2,7 +2,7 @@ use gore_as::cache::cfg;
 use gore_as::cache::disasm::disassemble;
 use gore_as::cache::walk_modules::collect_function_bytecodes;
 
-const SAMPLES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../work/reversing/gore-as/samples");
+const SAMPLES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../work/reversing/gore-as/samples");
 
 fn read_sample(name: &str) -> Option<Vec<u8>> {
     std::fs::read(format!("{SAMPLES}/{name}")).ok()
