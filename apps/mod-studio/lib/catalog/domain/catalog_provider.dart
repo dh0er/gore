@@ -20,28 +20,37 @@ final catalogProvider = FutureProvider<List<CatalogItem>>((ref) async {
       .toList();
 
   // model.json shape:
-  // { "classes": { "ItFo_Apple": { "fields": [ { "name": ..., "type": ... } ] } } }
-  // Prefer a loaded game-data dump (live values), but fall back to the bundled
-  // model when the dump is missing, unreadable, or empty (e.g. a gore-dump run
-  // that found no CDOs writes `{"classes":{}}`) — otherwise every item would
-  // lose its fields and become uneditable.
+  // { "classes": { "ItFo_Apple": { "fields": [ { "name", "type", "default" } ] } } }
+  //
+  // The bundled assets/model.json is the COMPLETE base (schema + real default
+  // values for every catalog id). A loaded game-data dump (dumpPathProvider) is
+  // an OPTIONAL refresh from the user's installed game version: it OVERLAYS the
+  // bundle per class, but only for classes it actually carries fields for — so a
+  // missing, unreadable, partial, or empty dump (a gore-dump run that found no
+  // CDOs writes `{"classes":{}}`) can never strip a class's fields.
+  final bundled = await rootBundle.loadString('assets/model.json');
+  final modelClasses = <String, Object?>{
+    ...?(jsonDecode(bundled) as Map<String, Object?>?)?['classes']
+        as Map<String, Object?>?,
+  };
+
   final dumpPath = ref.watch(dumpPathProvider);
-  Map<String, Object?> modelClasses = {};
   if (dumpPath != null) {
     try {
       final dumpStr = await File(dumpPath).readAsString();
-      modelClasses = ((jsonDecode(dumpStr) as Map<String, Object?>?)?['classes']
-              as Map<String, Object?>?) ??
-          {};
+      final dumpClasses = (jsonDecode(dumpStr) as Map<String, Object?>?)?['classes']
+          as Map<String, Object?>?;
+      if (dumpClasses != null) {
+        dumpClasses.forEach((id, cls) {
+          final fields = (cls as Map<String, Object?>?)?['fields'] as List?;
+          if (fields != null && fields.isNotEmpty) {
+            modelClasses[id] = cls; // overlay only classes the dump really has
+          }
+        });
+      }
     } catch (_) {
-      modelClasses = {};
+      // unreadable/invalid dump -> keep the bundled base
     }
-  }
-  if (modelClasses.isEmpty) {
-    final bundled = await rootBundle.loadString('assets/model.json');
-    modelClasses = ((jsonDecode(bundled) as Map<String, Object?>?)?['classes']
-            as Map<String, Object?>?) ??
-        {};
   }
 
   return [
