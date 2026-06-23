@@ -127,6 +127,45 @@ enum Commands {
         #[arg(short = 'o', long)]
         out: PathBuf,
     },
+    /// Read/replace audio in the game's encrypted FMOD sound banks (.bank)
+    Audio {
+        #[command(subcommand)]
+        action: AudioAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum AudioAction {
+    /// List a bank's samples (name, codec, sample rate, channels, duration)
+    List {
+        /// Path to a .bank file
+        #[arg(long)]
+        bank: PathBuf,
+        /// Override the bank encryption key (defaults to the Gothic 1 Remake key)
+        #[arg(long)]
+        key: Option<String>,
+    },
+    /// Replace samples with new audio (WAV) via PCM injection
+    Replace {
+        /// Path to map JSON: { "SampleName": "path/to/new.wav", ... } (WAV paths relative to it)
+        #[arg(long)]
+        map: PathBuf,
+        /// Path to the .bank to modify
+        #[arg(long)]
+        bank: PathBuf,
+        /// Output .bank (default: overwrite --bank in place, backing up to *.gore-bak)
+        #[arg(short = 'o', long)]
+        out: Option<PathBuf>,
+        /// Override the bank encryption key
+        #[arg(long)]
+        key: Option<String>,
+    },
+    /// Restore a bank from its *.gore-bak backup
+    Restore {
+        /// Path to the .bank to restore
+        #[arg(long)]
+        bank: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -189,6 +228,11 @@ fn main() {
         Commands::DeployShared { src, game } => cmd::deploy_shared::run(src, game),
         Commands::As { cmd } => cmd::as_cache::run(cmd),
         Commands::Package { mod_dir, out } => cmd::package::run(mod_dir, out),
+        Commands::Audio { action } => match action {
+            AudioAction::List { bank, key } => cmd::audio::list(bank, key),
+            AudioAction::Replace { map, bank, out, key } => cmd::audio::replace(map, bank, out, key),
+            AudioAction::Restore { bank } => cmd::audio::restore(bank),
+        },
     };
     if let Err(e) = result {
         eprintln!("error: {e:#}");

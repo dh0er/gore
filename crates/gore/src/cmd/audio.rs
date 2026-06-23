@@ -1,0 +1,118 @@
+//! `gore audio` — read and replace audio in the game's encrypted FMOD sound banks
+//! (pure Rust, no FMOD). The banks are loose at `…/G1R/Content/FMOD/Desktop/*.bank`.
+//!
+//! - `list`:    decrypt + list a bank's samples (name, codec, rate, channels, duration)
+//! - `replace`: swap samples with new audio (WAV) via PCM injection; in-place with a
+//!   `*.gore-bak` backup, or to `--out`
+//! - `restore`: restore a bank from its `*.gore-bak`
+//!
+//! Replacement re-encodes the new audio as PCM16 in an appended FSB5 sub-bank and repoints
+//! the bank's waveform references to it — arbitrary size, no whole-bank re-encode.
+
+use anyhow::{bail, Context, Result};
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+fn key_bytes(key: Option<String>) -> Vec<u8> {
+    key.map(|s| s.into_bytes())
+        .unwrap_or_else(|| gore_fmod::GOTHIC_STUDIO_KEY.to_vec())
+}
+
+/// Write `bytes` to `path` via a temp file + rename so a failed write never truncates the
+/// original game file in place.
+fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    let tmp = path.with_extension("gore-tmp");
+    std::fs::write(&tmp, bytes).with_context(|| format!("writing '{}'", tmp.display()))?;
+    std::fs::rename(&tmp, path).with_context(|| format!("renaming into '{}'", path.display()))?;
+    Ok(())
+}
+
+pub fn list(bank: PathBuf, key: Option<String>) -> Result<()> {
+    let bytes = std::fs::read(&bank).with_context(|| format!("reading '{}'", bank.display()))?;
+    let f0 = gore_fmod::bank_fsb0(&bytes, &key_bytes(key))
+        .map_err(|e| anyhow::anyhow!("{e}"))
+        .context("decoding bank")?;
+    println!("{} samples, codec {:?}", f0.samples.len(), f0.codec);
+    for (i, s) in f0.samples.iter().enumerate() {
+        let secs = if s.freq > 0 { s.num_samples as f64 / s.freq as f64 } else { 0.0 };
+        println!("#{i:<5} {:6}Hz {}ch {:6.2}s  {}", s.freq, s.channels, secs, s.name);
+    }
+    Ok(())
+}
+
+pub fn replace(map: PathBuf, bank: PathBuf, out: Option<PathBuf>, key: Option<String>) -> Result<()> {
+    let key = key_bytes(key);
+    let bytes = std::fs::read(&bank).with_context(|| format!("reading '{}'", bank.display()))?;
+
+    let map_json = std::fs::read_to_string(&map)
+        .with_context(|| format!("reading map '{}'", map.display()))?;
+    let entries: BTreeMap<String, String> = serde_json::from_str(&map_json)
+        .context("parsing map (expected {\"SampleName\": \"path/to/new.wav\"})")?;
+    if entries.is_empty() {
+        bail!("map is empty");
+    }
+
+    // resolve WAV paths relative to the map file's directory
+    let base = map.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
+    let mut replacements = Vec::with_capacity(entries.len());
+    for (name, wav_rel) in &entries {
+        let wav_path = resolve(&base, wav_rel);
+        let wav = std::fs::read(&wav_path)
+            .with_context(|| format!("reading wav '{}'", wav_path.display()))?;
+        let (rate, channels, pcm) = gore_fmod::read_wav_pcm16(&wav)
+            .map_err(|e| anyhow::anyhow!("{wav_rel}: {e}"))?;
+        replacements.push((
+            name.clone(),
+            gore_fmod::Pcm16Sample { name: name.clone(), freq: rate, channels, pcm },
+        ));
+    }
+    let count = entries.len();
+
+    let new_bank = gore_fmod::replace_samples(&bytes, &key, replacements)
+        .map_err(|e| anyhow::anyhow!("{e}"))
+        .context("injecting replacements")?;
+
+    match out {
+        Some(o) => {
+            write_atomic(&o, &new_bank)?;
+            println!("wrote {} ({count} sample(s) replaced)", o.display());
+        }
+        None => {
+            let bak = backup_path(&bank);
+            if !bak.exists() {
+                std::fs::copy(&bank, &bak)
+                    .with_context(|| format!("backing up to '{}'", bak.display()))?;
+                println!("backed up -> {}", bak.display());
+            }
+            write_atomic(&bank, &new_bank)?;
+            println!("replaced {count} sample(s) in place -> {}", bank.display());
+        }
+    }
+    Ok(())
+}
+
+pub fn restore(bank: PathBuf) -> Result<()> {
+    let bak = backup_path(&bank);
+    if !bak.exists() {
+        bail!("no backup found at '{}'", bak.display());
+    }
+    let bytes = std::fs::read(&bak).with_context(|| format!("reading '{}'", bak.display()))?;
+    write_atomic(&bank, &bytes)?;
+    println!("restored {} from {}", bank.display(), bak.display());
+    Ok(())
+}
+
+fn backup_path(bank: &Path) -> PathBuf {
+    let mut s = bank.as_os_str().to_os_string();
+    s.push(".gore-bak");
+    PathBuf::from(s)
+}
+
+fn resolve(base: &Path, rel: &str) -> PathBuf {
+    let p = Path::new(rel);
+    if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        base.join(p)
+    }
+}

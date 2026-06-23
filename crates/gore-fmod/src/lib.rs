@@ -327,6 +327,87 @@ fn read_cstr(b: &[u8]) -> String {
     String::from_utf8_lossy(&b[..end]).into_owned()
 }
 
+/// The recovered FMOD Studio bank encryption key for Gothic 1 Remake (StudioBankKey).
+pub const GOTHIC_STUDIO_KEY: &[u8] = b"NGpxstJ42kfNfz4z3CsS";
+
+/// Decrypt + parse FSB5 sub-bank #0 (the game's single audio FSB5).
+pub fn bank_fsb0(bank: &[u8], key: &[u8]) -> Result<Fsb5, String> {
+    let entries = parse_bank(bank)?;
+    let e = entries.first().ok_or("bank has no FSB5")?;
+    let mut blk = bank
+        .get(e.fsb5_offset..e.fsb5_offset + e.fsb5_size)
+        .ok_or("FSB5 out of range")?
+        .to_vec();
+    fsb5_decrypt(&mut blk, key);
+    parse_fsb5(&blk)
+}
+
+/// Read a 16-bit PCM WAV file → (sample_rate, channels, interleaved samples).
+pub fn read_wav_pcm16(b: &[u8]) -> Result<(u32, u32, Vec<i16>), String> {
+    if b.len() < 12 || &b[0..4] != b"RIFF" || &b[8..12] != b"WAVE" {
+        return Err("not a RIFF/WAVE file".into());
+    }
+    let (mut fmt, mut data): (Option<(u32, u32, u16)>, Option<&[u8]>) = (None, None);
+    let mut off = 12;
+    while off + 8 <= b.len() {
+        let id = &b[off..off + 4];
+        let sz = u32_le(b, off + 4) as usize;
+        let body = off + 8;
+        let end = (body + sz).min(b.len());
+        match id {
+            b"fmt " if end - body >= 16 => {
+                let format = u16::from_le_bytes([b[body], b[body + 1]]);
+                let channels = u16::from_le_bytes([b[body + 2], b[body + 3]]) as u32;
+                let rate = u32_le(b, body + 4);
+                let bits = u16::from_le_bytes([b[body + 14], b[body + 15]]);
+                if format != 1 {
+                    return Err(format!("WAV not PCM (format {format})"));
+                }
+                fmt = Some((rate, channels, bits));
+            }
+            b"data" => data = Some(&b[body..end]),
+            _ => {}
+        }
+        off = body + sz + (sz & 1); // chunks are word-aligned
+    }
+    let (rate, channels, bits) = fmt.ok_or("WAV missing fmt chunk")?;
+    if bits != 16 {
+        return Err(format!("WAV not 16-bit (got {bits}); convert to PCM16 first"));
+    }
+    let data = data.ok_or("WAV missing data chunk")?;
+    let samples = data
+        .chunks_exact(2)
+        .map(|c| i16::from_le_bytes([c[0], c[1]]))
+        .collect();
+    Ok((rate, channels, samples))
+}
+
+/// High-level replace: for each `(existing_sample_name, replacement)`, repoint that sample
+/// to a freshly-built PCM16 FSB5 carrying the replacements. Returns the new bank bytes.
+pub fn replace_samples(
+    bank: &[u8],
+    key: &[u8],
+    replacements: Vec<(String, Pcm16Sample)>,
+) -> Result<Vec<u8>, String> {
+    if replacements.is_empty() {
+        return Err("no replacements".into());
+    }
+    let f0 = bank_fsb0(bank, key)?;
+    let mut repoints = Vec::with_capacity(replacements.len());
+    let mut samples = Vec::with_capacity(replacements.len());
+    for (i, (name, samp)) in replacements.into_iter().enumerate() {
+        let idx = f0
+            .samples
+            .iter()
+            .position(|x| x.name == name)
+            .ok_or_else(|| format!("sample not found in bank: {name}"))?;
+        repoints.push((idx, i as u32));
+        samples.push(samp);
+    }
+    let new_fsb5 = build_fsb5_pcm16_multi(&samples)?;
+    inject_fsb5(bank, &repoints, &new_fsb5, key)
+}
+
 #[inline]
 fn i32_le(b: &[u8], o: usize) -> i32 {
     i32::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]])
@@ -340,58 +421,89 @@ fn printable(cc: &[u8]) -> bool {
     cc.iter().all(|&c| c == 0x20 || (0x21..0x7f).contains(&c))
 }
 
-// ---------- build a PCM16 FSB5 (single sample, no extra chunks) ----------
+// ---------- build a PCM16 FSB5 ----------
+/// One PCM16 sample to pack into an FSB5.
+pub struct Pcm16Sample {
+    pub name: String,
+    pub freq: u32,
+    pub channels: u32,
+    pub pcm: Vec<i16>, // interleaved
+}
+
 /// Build an UNENCRYPTED FSB5 v1 holding one PCM16 sample.
-/// `freq` must be one of the FSB5 frequency-table values; `channels` ∈ {1,2,6,8}.
-pub fn build_fsb5_pcm16(
-    name: &str,
-    freq: u32,
-    channels: u32,
-    pcm: &[i16],
-) -> Result<Vec<u8>, String> {
-    let freq_idx = FREQ
-        .iter()
-        .position(|&f| f == freq)
-        .ok_or("freq not in FSB5 table")? as u64;
-    let ch_e: u64 = match channels {
-        1 => 0,
-        2 => 1,
-        6 => 2,
-        8 => 3,
-        _ => return Err("channels must be 1/2/6/8".into()),
-    };
-    if pcm.len() % channels as usize != 0 {
-        return Err("pcm length not a multiple of channels".into());
+pub fn build_fsb5_pcm16(name: &str, freq: u32, channels: u32, pcm: &[i16]) -> Result<Vec<u8>, String> {
+    build_fsb5_pcm16_multi(&[Pcm16Sample {
+        name: name.to_string(),
+        freq,
+        channels,
+        pcm: pcm.to_vec(),
+    }])
+}
+
+/// Build an UNENCRYPTED FSB5 v1 holding multiple PCM16 samples (subsound 0..n).
+/// `freq` must be an FSB5 frequency-table value; `channels` ∈ {1,2,6,8}.
+pub fn build_fsb5_pcm16_multi(samples: &[Pcm16Sample]) -> Result<Vec<u8>, String> {
+    if samples.is_empty() {
+        return Err("no samples".into());
     }
-    let frames = (pcm.len() / channels as usize) as u64;
+    // data section: each sample's PCM 32-byte aligned (FSB5 offsets are <<5).
+    let mut data = Vec::new();
+    let mut offsets = Vec::with_capacity(samples.len());
+    for s in samples {
+        if s.pcm.len() % s.channels as usize != 0 {
+            return Err("pcm length not a multiple of channels".into());
+        }
+        while data.len() % 32 != 0 {
+            data.push(0);
+        }
+        offsets.push(data.len() as u64);
+        for &x in &s.pcm {
+            data.extend_from_slice(&x.to_le_bytes());
+        }
+    }
 
-    // sample header: single 64-bit base word, no extra chunks (has_chunks=0).
-    let mut m: u64 = 0;
-    m |= (freq_idx & 0xF) << 1;
-    m |= (ch_e & 0x3) << 5;
-    // data_offset = 0 (bits 7..33)
-    m |= (frames & 0x3FFF_FFFF) << 34;
-    let shdr = m.to_le_bytes();
+    // sample header table: one 64-bit base word per sample, no extra chunks.
+    let mut shdr = Vec::with_capacity(samples.len() * 8);
+    for (i, s) in samples.iter().enumerate() {
+        let freq_idx = FREQ
+            .iter()
+            .position(|&f| f == s.freq)
+            .ok_or("freq not in FSB5 table")? as u64;
+        let ch_e: u64 = match s.channels {
+            1 => 0,
+            2 => 1,
+            6 => 2,
+            8 => 3,
+            _ => return Err("channels must be 1/2/6/8".into()),
+        };
+        let frames = (s.pcm.len() / s.channels as usize) as u64;
+        let mut m: u64 = 0;
+        m |= (freq_idx & 0xF) << 1;
+        m |= (ch_e & 0x3) << 5;
+        m |= ((offsets[i] >> 5) & 0x07FF_FFFF) << 7;
+        m |= (frames & 0x3FFF_FFFF) << 34;
+        shdr.extend_from_slice(&m.to_le_bytes());
+    }
 
-    // name table: [u32 rel-offset = 4][name\0], padded to 16.
+    // name table: [u32 rel-offset]*n then NUL-terminated names; padded to 16.
     let mut name_tbl = Vec::new();
-    name_tbl.extend_from_slice(&4u32.to_le_bytes());
-    name_tbl.extend_from_slice(name.as_bytes());
-    name_tbl.push(0);
+    let hdr_len = 4 * samples.len();
+    let mut strings = Vec::new();
+    for s in samples {
+        let rel = (hdr_len + strings.len()) as u32;
+        name_tbl.extend_from_slice(&rel.to_le_bytes());
+        strings.extend_from_slice(s.name.as_bytes());
+        strings.push(0);
+    }
+    name_tbl.extend_from_slice(&strings);
     while name_tbl.len() % 16 != 0 {
         name_tbl.push(0);
-    }
-
-    // data: interleaved PCM16 LE
-    let mut data = Vec::with_capacity(pcm.len() * 2);
-    for &s in pcm {
-        data.extend_from_slice(&s.to_le_bytes());
     }
 
     let mut out = Vec::with_capacity(0x3C + shdr.len() + name_tbl.len() + data.len());
     out.extend_from_slice(b"FSB5");
     out.extend_from_slice(&1u32.to_le_bytes()); // version
-    out.extend_from_slice(&1u32.to_le_bytes()); // num_samples
+    out.extend_from_slice(&(samples.len() as u32).to_le_bytes()); // num_samples
     out.extend_from_slice(&(shdr.len() as u32).to_le_bytes());
     out.extend_from_slice(&(name_tbl.len() as u32).to_le_bytes());
     out.extend_from_slice(&(data.len() as u32).to_le_bytes());
@@ -520,10 +632,22 @@ pub fn inject_pcm_sample(
 
 /// Like [`inject_pcm_sample`] but repoints multiple FSB5#0 subsounds at the single new
 /// FSB5 (all → subsound 0). Useful when an event randomly picks among variants.
-/// Assumes a bank with exactly one existing FSB5 (the Gothic case).
 pub fn inject_pcm_sample_multi(
     bank: &[u8],
     targets: &[usize],
+    new_fsb5_plain: &[u8],
+    key: &[u8],
+) -> Result<Vec<u8>, String> {
+    let repoints: Vec<(usize, u32)> = targets.iter().map(|&t| (t, 0)).collect();
+    inject_fsb5(bank, &repoints, new_fsb5_plain, key)
+}
+
+/// Append `new_fsb5_plain` as a 2nd FSB5 sub-bank (SoundBankIndex 1) and repoint, for each
+/// `(target_subsound, new_subsound)`, the WAV reference of `target_subsound` in FSB5 #0 to
+/// subsound `new_subsound` of the new FSB5. Assumes a bank with exactly one existing FSB5.
+pub fn inject_fsb5(
+    bank: &[u8],
+    repoints: &[(usize, u32)],
     new_fsb5_plain: &[u8],
     key: &[u8],
 ) -> Result<Vec<u8>, String> {
@@ -538,21 +662,21 @@ pub fn inject_pcm_sample_multi(
         return Err("FSB5 size unknown (old bank version)".into());
     }
 
-    if targets.is_empty() {
-        return Err("no targets".into());
+    if repoints.is_empty() {
+        return Err("no repoints".into());
     }
     let mut wavs = Vec::new();
     let mut sndh = None;
     gather(bank, list_off + 8 + 4, metadata_end, &mut wavs, &mut sndh);
     let (_sndh_size_field, sndh_body, sndh_size) = sndh.ok_or("no SNDH")?;
-    let mut wav_bodies = Vec::with_capacity(targets.len());
-    for &t in targets {
+    let mut repoint_pos = Vec::with_capacity(repoints.len()); // (wav_body, new_subsound)
+    for &(t, new_idx) in repoints {
         let wav_body = wavs
             .iter()
             .find(|(_, sb, ss)| *sb == 0 && *ss as usize == t)
             .ok_or_else(|| format!("no WAV node for (0,{t})"))?
             .0;
-        wav_bodies.push(wav_body);
+        repoint_pos.push((wav_body, new_idx));
     }
 
     let p = sndh_body + sndh_size; // append point = end of SNDH body
@@ -567,10 +691,10 @@ pub fn inject_pcm_sample_multi(
         put_u32(&mut meta, f, v);
     }
     meta.splice(p..p, [0u8; 8]);
-    for &wav_body in &wav_bodies {
+    for &(wav_body, new_idx) in &repoint_pos {
         let wpos = if wav_body < p { wav_body } else { wav_body + 8 };
         put_u32(&mut meta, wpos + 0x12, 1); // SoundBankIndex = 1
-        put_u32(&mut meta, wpos + 0x16, 0); // SubsoundIndex = 0
+        put_u32(&mut meta, wpos + 0x16, new_idx); // SubsoundIndex
     }
 
     // bump the SNDH element count (X16) so FMOD reads the 2nd entry. (Size-based readers

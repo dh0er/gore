@@ -387,6 +387,7 @@ dependencies = [
  "clap",
  "gore-as",
  "gore-catalog",
+ "gore-fmod",
  "gore-loc",
  "gore-modgen",
  "gore-reflect",
