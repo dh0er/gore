@@ -342,16 +342,34 @@ def dist_project(project: str, dry: bool) -> Path | None:
     if cfg["kind"] == "flutter":
         rel = flutter_release_dir(project)
         license_file = ROOT / "LICENSE"
-        if not dry:
-            if license_file.exists():
-                shutil.copy2(license_file, rel / "LICENSE")
-            if base.with_suffix(".zip").exists():
-                base.with_suffix(".zip").unlink()
-            archive = shutil.make_archive(str(base), "zip", root_dir=rel)
-            print(f"\npackaged: {archive}")
-            return Path(archive)
-        print(f"[dry-run] would zip {rel} -> {base}.zip")
-        return None
+        if dry:
+            print(f"[dry-run] would zip {rel} -> {base}.zip (minus WinSparkle.dll)")
+            return None
+        # Stage a copy so the portable zip can omit files without touching the
+        # shared Release dir that the Inno installer packages from.
+        staging = dist / "_stage"
+        if staging.exists():
+            shutil.rmtree(staging)
+        shutil.copytree(rel, staging)
+        if license_file.exists():
+            shutil.copy2(license_file, staging / "LICENSE")
+        # The auto-updater DLLs are false-positive virus magnets that NexusMods
+        # quarantines. The portable build never calls the updater (it is gated
+        # to Inno-installed copies); the runner delay-loads the plugin and stubs
+        # out its registration when absent (see windows/runner/updater_delayload
+        # .cpp), so both DLLs can be dropped without a load-time crash. Installer
+        # builds still bundle them straight from `rel`.
+        for dll_name in ("auto_updater_windows_plugin.dll", "WinSparkle.dll"):
+            dll = staging / dll_name
+            if dll.exists():
+                dll.unlink()
+                print(f"dropped {dll_name} from portable zip")
+        if base.with_suffix(".zip").exists():
+            base.with_suffix(".zip").unlink()
+        archive = shutil.make_archive(str(base), "zip", root_dir=staging)
+        shutil.rmtree(staging)
+        print(f"\npackaged: {archive}")
+        return Path(archive)
 
     # rust-bin: zip the exe + LICENSE
     exe = target_dir(True) / f"{cfg['bin']}.exe"

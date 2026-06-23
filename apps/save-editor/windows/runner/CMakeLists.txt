@@ -11,6 +11,7 @@ add_executable(${BINARY_NAME} WIN32
   "main.cpp"
   "utils.cpp"
   "win32_window.cpp"
+  "updater_delayload.cpp"
   "${FLUTTER_MANAGED_DIR}/generated_plugin_registrant.cc"
   "Runner.rc"
   "runner.exe.manifest"
@@ -35,6 +36,13 @@ target_compile_definitions(${BINARY_NAME} PRIVATE "NOMINMAX")
 target_link_libraries(${BINARY_NAME} PRIVATE flutter flutter_wrapper_app)
 target_link_libraries(${BINARY_NAME} PRIVATE "dwmapi.lib")
 target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
+
+# Delay-load the auto-updater plugin so a portable build can ship without
+# auto_updater_windows_plugin.dll (a NexusMods false-positive) instead of
+# failing to start. updater_delayload.cpp stubs out registration when the DLL
+# is absent. delayimp.lib provides the delay-load runtime helper.
+target_link_libraries(${BINARY_NAME} PRIVATE "delayimp.lib")
+target_link_options(${BINARY_NAME} PRIVATE "/DELAYLOAD:auto_updater_windows_plugin.dll")
 
 # Run the Flutter tool portions of the build. This must not be removed.
 add_dependencies(${BINARY_NAME} flutter_assemble)
