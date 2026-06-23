@@ -3,6 +3,8 @@ import '../../catalog/domain/field_schema.dart';
 import '../../catalog/domain/item_entry.dart';
 import '../../l10n/app_localizations.dart';
 import '../../l10n/l10n_errors.dart';
+import '../../loc/game_lang.dart';
+import '../../loc/ui/lang_fields.dart';
 import '../domain/field_validator.dart';
 import '../domain/override_entry.dart';
 
@@ -207,6 +209,19 @@ class _FieldEditorState extends State<FieldEditor> {
                   color: theme.colorScheme.onSurfaceVariant,
                 ),
               ),
+            ],
+          ),
+        ),
+        // Localized item name (one field per language), edited via the shared
+        // loc-edits notifier — staged into the same unified mod bundle.
+        Card(
+          margin: const EdgeInsets.only(bottom: 12),
+          child: ExpansionTile(
+            leading: const Icon(Icons.translate_outlined, size: 20),
+            title: const Text('Name (all languages)'),
+            childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+            children: [
+              LangFieldsEditor(locId: locIdForCatalogId(widget.item.id)),
             ],
           ),
         ),

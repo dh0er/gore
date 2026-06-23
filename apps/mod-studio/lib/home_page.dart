@@ -7,15 +7,20 @@ import 'app/ui/window_chrome.dart';
 import 'catalog/domain/catalog_provider.dart';
 import 'catalog/domain/item_entry.dart';
 import 'catalog/ui/catalog_browser.dart';
+import 'audio/domain/audio_replacements_notifier.dart';
+import 'audio/ui/audio_tab.dart';
+import 'dialog/ui/dialoge_tab.dart';
 import 'editor/domain/overrides_notifier.dart';
 import 'editor/ui/field_editor.dart';
 import 'editor/ui/overrides_panel.dart';
-import 'export/ui/export_dialog.dart';
+import 'export/ui/build_deploy_dialog.dart';
 import 'l10n/app_localizations.dart';
 import 'loc/domain/loc_catalog_provider.dart';
+import 'loc/domain/loc_edits_notifier.dart';
 import 'loc/domain/loc_notifier.dart';
 import 'loc/game_lang.dart';
 import 'loc/ui/loc_extract_flow.dart';
+import 'project/project_controller.dart';
 import 'settings/ui/settings_tab.dart';
 
 final _selectedItemProvider = StateProvider<CatalogItem?>((ref) => null);
@@ -70,6 +75,29 @@ class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver
     await runLocExtractFlow(context, ref);
   }
 
+  void _snack(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<void> _saveProject() async {
+    try {
+      final path = await saveProjectInteractive(ref);
+      if (path != null) _snack('Saved project to $path');
+    } catch (e) {
+      _snack('Save failed: $e');
+    }
+  }
+
+  Future<void> _openProject() async {
+    try {
+      final path = await openProjectInteractive(ref);
+      if (path != null) _snack('Loaded project $path');
+    } catch (e) {
+      _snack('Open failed: $e');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     // Switching the model data source invalidates pending overrides and the
@@ -93,6 +121,9 @@ class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver
                 ?.firstWhereOrNull((i) => i.id == selectedRaw.id) ??
             selectedRaw);
     final overridesState = ref.watch(overridesProvider);
+    final dirty = overridesState.count > 0 ||
+        ref.watch(locEditsProvider).isDirty ||
+        ref.watch(audioReplacementsProvider).count > 0;
     final themeModeNotifier = ref.read(themeModeProvider.notifier);
     final scheme         = Theme.of(context).colorScheme;
     final isDark         = Theme.of(context).brightness == Brightness.dark;
@@ -122,21 +153,36 @@ class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver
               );
             },
           ),
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.folder_open_outlined),
+            tooltip: 'Project',
+            onSelected: (v) {
+              switch (v) {
+                case 'new':
+                  newProject(ref);
+                case 'open':
+                  _openProject();
+                case 'save':
+                  _saveProject();
+              }
+            },
+            itemBuilder: (_) => const [
+              PopupMenuItem(value: 'new', child: Text('New project')),
+              PopupMenuItem(value: 'open', child: Text('Open project…')),
+              PopupMenuItem(value: 'save', child: Text('Save project as…')),
+            ],
+          ),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 8),
             child: FilledButton.icon(
-              icon: const Icon(Icons.upload_outlined, size: 18),
-              label: Text(
-                overridesState.count == 0
-                    ? l10n.exportMod
-                    : l10n.exportModWithCount(overridesState.count),
-              ),
-              onPressed: overridesState.count == 0
-                  ? null
-                  : () => showDialog(
+              icon: const Icon(Icons.rocket_launch_outlined, size: 18),
+              label: const Text('Build / Deploy'),
+              onPressed: dirty
+                  ? () => showDialog(
                         context: context,
-                        builder: (_) => const ExportDialog(),
-                      ),
+                        builder: (_) => const BuildDeployDialog(),
+                      )
+                  : null,
             ),
           ),
           const WindowControls(),
@@ -144,7 +190,7 @@ class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver
         ],
       ),
       body: DefaultTabController(
-        length: 3,
+        length: 5,
         child: Column(
           children: [
             Container(
@@ -159,9 +205,17 @@ class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver
                           icon: const Icon(Icons.inventory_2_outlined),
                           text: l10n.tabItems,
                         ),
+                        const Tab(
+                          icon: Icon(Icons.forum_outlined),
+                          text: 'Dialoge',
+                        ),
                         Tab(
                           icon: const Icon(Icons.edit_note_outlined),
                           text: l10n.tabOverrides,
+                        ),
+                        const Tab(
+                          icon: Icon(Icons.audiotrack_outlined),
+                          text: 'Audio',
                         ),
                         Tab(
                           icon: const Icon(Icons.settings_outlined),
@@ -231,6 +285,8 @@ class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver
                       ),
                     ],
                   ),
+                  // Dialoge: localized dialog/bark line editor.
+                  const DialogeTab(),
                   // Overrides: the pending-overrides panel, centred with a
                   // readable max width.
                   Align(
@@ -240,6 +296,8 @@ class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver
                       child: const OverridesPanel(),
                     ),
                   ),
+                  // Audio: FMOD bank sample browser + replacement.
+                  const AudioTab(),
                   // Settings.
                   const SettingsTab(),
                 ],
