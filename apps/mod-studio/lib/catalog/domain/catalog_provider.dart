@@ -15,24 +15,34 @@ import 'field_schema.dart';
 final catalogProvider = FutureProvider<List<CatalogItem>>((ref) async {
   final catalogJson = await rootBundle.loadString('assets/item_catalog.json');
 
-  final dumpPath = ref.watch(dumpPathProvider);
-  final String modelJson;
-  if (dumpPath != null) {
-    modelJson = await File(dumpPath).readAsString();
-  } else {
-    modelJson = await rootBundle.loadString('assets/model.json');
-  }
-
   final catalogList = (jsonDecode(catalogJson) as List)
       .whereType<Map<String, Object?>>()
       .toList();
 
   // model.json shape:
   // { "classes": { "ItFo_Apple": { "fields": [ { "name": ..., "type": ... } ] } } }
-  final modelClasses = (
-    (jsonDecode(modelJson) as Map<String, Object?>?)?['classes']
-        as Map<String, Object?>?
-  ) ?? {};
+  // Prefer a loaded game-data dump (live values), but fall back to the bundled
+  // model when the dump is missing, unreadable, or empty (e.g. a gore-dump run
+  // that found no CDOs writes `{"classes":{}}`) — otherwise every item would
+  // lose its fields and become uneditable.
+  final dumpPath = ref.watch(dumpPathProvider);
+  Map<String, Object?> modelClasses = {};
+  if (dumpPath != null) {
+    try {
+      final dumpStr = await File(dumpPath).readAsString();
+      modelClasses = ((jsonDecode(dumpStr) as Map<String, Object?>?)?['classes']
+              as Map<String, Object?>?) ??
+          {};
+    } catch (_) {
+      modelClasses = {};
+    }
+  }
+  if (modelClasses.isEmpty) {
+    final bundled = await rootBundle.loadString('assets/model.json');
+    modelClasses = ((jsonDecode(bundled) as Map<String, Object?>?)?['classes']
+            as Map<String, Object?>?) ??
+        {};
+  }
 
   return [
     for (final entry in catalogList)
