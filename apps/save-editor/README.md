@@ -25,7 +25,7 @@ Tested with Steam game version CL168781. Should work with all versions.
 ## Installation & Updates
 
 Download `GoresaveSetup-<version>.exe` from the
-[latest release](https://github.com/dh0er/gore/releases/latest) and run it.
+[latest release](https://github.com/dh0er/goresave/releases/latest) and run it.
 The app checks for updates on startup and prompts you when a new version is
 available.
 
