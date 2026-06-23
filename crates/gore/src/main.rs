@@ -145,6 +145,21 @@ enum AudioAction {
         #[arg(long)]
         key: Option<String>,
     },
+    /// Extract samples to Ogg Vorbis (.ogg) for listening/editing
+    Extract {
+        /// Path to a .bank file
+        #[arg(long)]
+        bank: PathBuf,
+        /// Output directory for .ogg files
+        #[arg(short = 'o', long)]
+        out: PathBuf,
+        /// A single sample name, or "all" (default)
+        #[arg(long)]
+        sample: Option<String>,
+        /// Override the bank encryption key
+        #[arg(long)]
+        key: Option<String>,
+    },
     /// Replace samples with new audio (WAV) via PCM injection
     Replace {
         /// Path to map JSON: { "SampleName": "path/to/new.wav", ... } (WAV paths relative to it)
@@ -230,6 +245,7 @@ fn main() {
         Commands::Package { mod_dir, out } => cmd::package::run(mod_dir, out),
         Commands::Audio { action } => match action {
             AudioAction::List { bank, key } => cmd::audio::list(bank, key),
+            AudioAction::Extract { bank, out, sample, key } => cmd::audio::extract(bank, out, sample, key),
             AudioAction::Replace { map, bank, out, key } => cmd::audio::replace(map, bank, out, key),
             AudioAction::Restore { bank } => cmd::audio::restore(bank),
         },

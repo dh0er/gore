@@ -40,6 +40,48 @@ pub fn list(bank: PathBuf, key: Option<String>) -> Result<()> {
     Ok(())
 }
 
+pub fn extract(bank: PathBuf, out: PathBuf, sample: Option<String>, key: Option<String>) -> Result<()> {
+    let bytes = std::fs::read(&bank).with_context(|| format!("reading '{}'", bank.display()))?;
+    let (block, fsb) = gore_fmod::decrypt_fsb0(&bytes, &key_bytes(key))
+        .map_err(|e| anyhow::anyhow!("{e}"))
+        .context("decoding bank")?;
+    std::fs::create_dir_all(&out).with_context(|| format!("creating '{}'", out.display()))?;
+
+    // indices to extract
+    let indices: Vec<usize> = match &sample {
+        Some(name) if name != "all" => vec![fsb
+            .samples
+            .iter()
+            .position(|s| &s.name == name)
+            .with_context(|| format!("sample not found: {name}"))?],
+        _ => (0..fsb.samples.len()).collect(),
+    };
+
+    let (mut ok, mut skipped) = (0usize, 0usize);
+    for i in indices {
+        match gore_fmod::extract_ogg(&block, &fsb, i) {
+            Ok(ogg) => {
+                let path = out.join(format!("{}.ogg", sanitize(&fsb.samples[i].name)));
+                std::fs::write(&path, &ogg)
+                    .with_context(|| format!("writing '{}'", path.display()))?;
+                ok += 1;
+            }
+            Err(e) => {
+                skipped += 1;
+                eprintln!("skip #{i} {}: {e}", fsb.samples[i].name);
+            }
+        }
+    }
+    println!("extracted {ok} ogg file(s) to {} ({skipped} skipped)", out.display());
+    Ok(())
+}
+
+fn sanitize(name: &str) -> String {
+    name.chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.' { c } else { '_' })
+        .collect()
+}
+
 pub fn replace(map: PathBuf, bank: PathBuf, out: Option<PathBuf>, key: Option<String>) -> Result<()> {
     let key = key_bytes(key);
     let bytes = std::fs::read(&bank).with_context(|| format!("reading '{}'", bank.display()))?;

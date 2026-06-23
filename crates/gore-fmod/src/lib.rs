@@ -6,6 +6,8 @@
 //!
 //! Refs: vgmstream `meta/fsb5.c`, `meta/fsb5_fev.c`, `meta/fsb_encrypted_streamfile.h`.
 
+pub mod vorbis;
+
 // ---------- little/big-endian readers ----------
 #[inline]
 pub fn u32_le(b: &[u8], o: usize) -> u32 {
@@ -330,8 +332,8 @@ fn read_cstr(b: &[u8]) -> String {
 /// The recovered FMOD Studio bank encryption key for Gothic 1 Remake (StudioBankKey).
 pub const GOTHIC_STUDIO_KEY: &[u8] = b"NGpxstJ42kfNfz4z3CsS";
 
-/// Decrypt + parse FSB5 sub-bank #0 (the game's single audio FSB5).
-pub fn bank_fsb0(bank: &[u8], key: &[u8]) -> Result<Fsb5, String> {
+/// Decrypt FSB5 sub-bank #0 and return (decrypted block bytes, parsed view).
+pub fn decrypt_fsb0(bank: &[u8], key: &[u8]) -> Result<(Vec<u8>, Fsb5), String> {
     let entries = parse_bank(bank)?;
     let e = entries.first().ok_or("bank has no FSB5")?;
     let mut blk = bank
@@ -339,7 +341,26 @@ pub fn bank_fsb0(bank: &[u8], key: &[u8]) -> Result<Fsb5, String> {
         .ok_or("FSB5 out of range")?
         .to_vec();
     fsb5_decrypt(&mut blk, key);
-    parse_fsb5(&blk)
+    let fsb = parse_fsb5(&blk)?;
+    Ok((blk, fsb))
+}
+
+/// Decrypt + parse FSB5 sub-bank #0 (the game's single audio FSB5).
+pub fn bank_fsb0(bank: &[u8], key: &[u8]) -> Result<Fsb5, String> {
+    decrypt_fsb0(bank, key).map(|(_, f)| f)
+}
+
+/// Extract one Vorbis sample (by index in FSB5 #0) to a playable Ogg Vorbis byte buffer.
+pub fn extract_ogg(block: &[u8], fsb: &Fsb5, index: usize) -> Result<Vec<u8>, String> {
+    if fsb.codec != Codec::Vorbis {
+        return Err(format!("extract_ogg only supports Vorbis (codec {:?})", fsb.codec));
+    }
+    let s = fsb.samples.get(index).ok_or("sample index out of range")?;
+    let crc = s.vorbis_crc32.ok_or("sample has no Vorbis setup CRC32")?;
+    let start = (fsb.data_section + s.data_offset) as usize;
+    let end = (start + s.size as usize).min(block.len());
+    let audio = block.get(start..end).ok_or("sample data out of range")?;
+    vorbis::fsb_vorbis_to_ogg(s.channels, s.freq, crc, s.num_samples as u64, audio)
 }
 
 /// Read a 16-bit PCM WAV file → (sample_rate, channels, interleaved samples).
