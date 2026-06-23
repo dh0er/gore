@@ -132,6 +132,39 @@ enum Commands {
         #[command(subcommand)]
         action: AudioAction,
     },
+    /// Build / deploy / undeploy a unified mod bundle (overrides + loc + audio)
+    Mod {
+        #[command(subcommand)]
+        action: ModAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum ModAction {
+    /// Build a bundle dir from a BuildSpec JSON
+    Build {
+        /// Path to the build spec JSON
+        #[arg(long)]
+        spec: PathBuf,
+        /// Output directory (the bundle is written to <out>/<mod-name>)
+        #[arg(short = 'o', long)]
+        out: PathBuf,
+    },
+    /// Deploy a built bundle to the game install
+    Deploy {
+        /// Path to the bundle directory
+        #[arg(long)]
+        bundle: PathBuf,
+        /// Game root (the folder containing G1R/)
+        #[arg(long)]
+        game: PathBuf,
+    },
+    /// Undeploy the active mod (restore backups)
+    Undeploy {
+        /// Game root (the folder containing G1R/)
+        #[arg(long)]
+        game: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -274,6 +307,11 @@ fn main() {
             AudioAction::Restore { bank } => cmd::audio::restore(bank),
             AudioAction::ExportPatch { map, out } => cmd::audio::export_patch(map, out),
             AudioAction::ApplyPatch { patch, bank, out, key } => cmd::audio::apply_patch(patch, bank, out, key),
+        },
+        Commands::Mod { action } => match action {
+            ModAction::Build { spec, out } => cmd::modcmd::build(spec, out),
+            ModAction::Deploy { bundle, game } => cmd::modcmd::deploy(bundle, game),
+            ModAction::Undeploy { game } => cmd::modcmd::undeploy(game),
         },
     };
     if let Err(e) = result {

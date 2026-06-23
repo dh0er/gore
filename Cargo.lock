@@ -389,6 +389,7 @@ dependencies = [
  "gore-catalog",
  "gore-fmod",
  "gore-loc",
+ "gore-mod",
  "gore-modgen",
  "gore-reflect",
  "predicates 2.1.5",
@@ -420,7 +421,9 @@ dependencies = [
 name = "gore-ffi"
 version = "0.0.0"
 dependencies = [
+ "gore-fmod",
  "gore-loc",
+ "gore-mod",
  "gore-modgen",
  "gore-reflect",
  "serde",
@@ -440,6 +443,19 @@ dependencies = [
  "serde_json",
  "thiserror",
  "winreg",
+]
+
+[[package]]
+name = "gore-mod"
+version = "0.0.0"
+dependencies = [
+ "gore-fmod",
+ "gore-loc",
+ "gore-modgen",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
 ]
 
 [[package]]

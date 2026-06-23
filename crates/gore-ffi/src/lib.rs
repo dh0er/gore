@@ -84,6 +84,11 @@ fn dispatch(input: &str) -> Value {
         "loc_status" => loc_status(),
         "loc_find" => loc_find(payload),
         "loc_extract" => loc_extract(payload),
+        "audio_list" => audio_list(payload),
+        "audio_extract" => audio_extract(payload),
+        "mod_build" => mod_build(payload),
+        "mod_deploy" => mod_deploy(payload),
+        "mod_undeploy" => mod_undeploy(payload),
         other => err("UNKNOWN_COMMAND", format!("unknown command: {other}")),
     }
 }
@@ -140,6 +145,127 @@ fn generate_mod(payload: Value) -> Value {
             "Scripts/main.lua": lua,
         }
     })
+}
+
+/// `{bank}` → `{ok, codec, samples:[{index,name,freq,channels,seconds}]}`
+fn audio_list(payload: Value) -> Value {
+    let Some(bank) = payload.get("bank").and_then(Value::as_str) else {
+        return err("BAD_REQUEST", "missing 'bank'");
+    };
+    let bytes = match std::fs::read(bank) {
+        Ok(b) => b,
+        Err(e) => return err("IO", format!("reading bank: {e}")),
+    };
+    let key = payload
+        .get("key")
+        .and_then(Value::as_str)
+        .map(|s| s.as_bytes().to_vec())
+        .unwrap_or_else(|| gore_fmod::GOTHIC_STUDIO_KEY.to_vec());
+    let fsb = match gore_fmod::bank_fsb0(&bytes, &key) {
+        Ok(f) => f,
+        Err(e) => return err("DECODE", e),
+    };
+    let samples: Vec<Value> = fsb
+        .samples
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            let secs = if s.freq > 0 { s.num_samples as f64 / s.freq as f64 } else { 0.0 };
+            json!({"index": i, "name": s.name, "freq": s.freq, "channels": s.channels, "seconds": secs})
+        })
+        .collect();
+    json!({"ok": true, "codec": format!("{:?}", fsb.codec), "samples": samples})
+}
+
+/// `{bank, sample}` → `{ok, ogg_path}` — extract one Vorbis sample to a temp .ogg for preview.
+fn audio_extract(payload: Value) -> Value {
+    let (Some(bank), Some(sample)) = (
+        payload.get("bank").and_then(Value::as_str),
+        payload.get("sample").and_then(Value::as_str),
+    ) else {
+        return err("BAD_REQUEST", "missing 'bank' or 'sample'");
+    };
+    let bytes = match std::fs::read(bank) {
+        Ok(b) => b,
+        Err(e) => return err("IO", format!("reading bank: {e}")),
+    };
+    let key = payload
+        .get("key")
+        .and_then(Value::as_str)
+        .map(|s| s.as_bytes().to_vec())
+        .unwrap_or_else(|| gore_fmod::GOTHIC_STUDIO_KEY.to_vec());
+    let (block, fsb) = match gore_fmod::decrypt_fsb0(&bytes, &key) {
+        Ok(v) => v,
+        Err(e) => return err("DECODE", e),
+    };
+    let Some(index) = fsb.samples.iter().position(|s| s.name == sample) else {
+        return err("NOT_FOUND", format!("sample not found: {sample}"));
+    };
+    let ogg = match gore_fmod::extract_ogg(&block, &fsb, index) {
+        Ok(o) => o,
+        Err(e) => return err("EXTRACT", e),
+    };
+    let dir = std::env::temp_dir().join("gore-fmod-preview");
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        return err("IO", format!("temp dir: {e}"));
+    }
+    let safe: String = sample.chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' }).collect();
+    let path = dir.join(format!("{safe}.ogg"));
+    if let Err(e) = std::fs::write(&path, &ogg) {
+        return err("IO", format!("writing ogg: {e}"));
+    }
+    json!({"ok": true, "ogg_path": path.display().to_string()})
+}
+
+/// `{out_dir, spec:BuildSpec}` → build the unified bundle into `out_dir`.
+fn mod_build(payload: Value) -> Value {
+    let Some(out_dir) = payload.get("out_dir").and_then(Value::as_str) else {
+        return err("BAD_REQUEST", "missing 'out_dir'");
+    };
+    let spec_val = payload.get("spec").cloned().unwrap_or(Value::Null);
+    let spec: gore_mod::BuildSpec = match serde_json::from_value(spec_val) {
+        Ok(s) => s,
+        Err(e) => return err("BAD_SPEC", format!("invalid build spec: {e}")),
+    };
+    let bundle = match gore_mod::build_bundle(&spec) {
+        Ok(b) => b,
+        Err(e) => return err("BUILD_FAILED", e.to_string()),
+    };
+    let dir = std::path::Path::new(out_dir).join(&spec.meta.name);
+    if let Err(e) = gore_mod::write_bundle(&dir, &bundle) {
+        return err("IO", e.to_string());
+    }
+    json!({
+        "ok": true,
+        "bundle_dir": dir.display().to_string(),
+        "components": bundle.manifest.components.len(),
+        "files": bundle.files.len(),
+    })
+}
+
+/// `{bundle_dir, game_root}` → deploy.
+fn mod_deploy(payload: Value) -> Value {
+    let (Some(bundle_dir), Some(game_root)) = (
+        payload.get("bundle_dir").and_then(Value::as_str),
+        payload.get("game_root").and_then(Value::as_str),
+    ) else {
+        return err("BAD_REQUEST", "missing 'bundle_dir' or 'game_root'");
+    };
+    match gore_mod::deploy(std::path::Path::new(bundle_dir), std::path::Path::new(game_root)) {
+        Ok(rec) => json!({"ok": true, "record": serde_json::to_value(rec).unwrap_or(Value::Null)}),
+        Err(e) => err("DEPLOY_FAILED", e.to_string()),
+    }
+}
+
+/// `{game_root}` → undeploy the active mod.
+fn mod_undeploy(payload: Value) -> Value {
+    let Some(game_root) = payload.get("game_root").and_then(Value::as_str) else {
+        return err("BAD_REQUEST", "missing 'game_root'");
+    };
+    match gore_mod::undeploy(std::path::Path::new(game_root)) {
+        Ok(rec) => json!({"ok": true, "record": serde_json::to_value(rec).unwrap_or(Value::Null)}),
+        Err(e) => err("UNDEPLOY_FAILED", e.to_string()),
+    }
 }
 
 fn validate(payload: Value) -> Value {

@@ -1,0 +1,434 @@
+//! gore-mod — assemble one unified mod **bundle** (item overrides + localized-text edits +
+//! audio replacements) and deploy/undeploy it to the game.
+//!
+//! Pipeline: `BuildSpec` → [`build_bundle`] → bundle dir (`gore-mod.json` manifest + payloads)
+//! → [`deploy`]/[`undeploy`]. Each content domain is a manifest **component** with its own
+//! deploy mechanism (UE4SS Lua = runtime mod; loc + audio = loose-file patches applied against
+//! the user's own pristine game files, with `*.gore-bak` backups). The manifest is the
+//! hand-off contract for a future stand-alone mod-manager; this crate does single-mod deploy.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+use gore_modgen::gen::{gen_lua, MetaConfig, OverridesConfig, SingleOverride};
+
+pub type Files = BTreeMap<String, Vec<u8>>;
+
+// ── Errors ───────────────────────────────────────────────────────────────────
+#[derive(Debug, thiserror::Error)]
+pub enum ModError {
+    #[error("io: {0}")]
+    Io(String),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error("loc: {0}")]
+    Loc(#[from] gore_loc::loc::LcacheError),
+    #[error("fmod: {0}")]
+    Fmod(String),
+    #[error("{0}")]
+    Other(String),
+}
+type Result<T> = std::result::Result<T, ModError>;
+
+fn io<E: std::fmt::Display>(ctx: &str) -> impl FnOnce(E) -> ModError + '_ {
+    move |e| ModError::Io(format!("{ctx}: {e}"))
+}
+
+// ── Spec / manifest types ──────────────────────────────────────────────────────
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModMeta {
+    pub name: String,
+    #[serde(default)]
+    pub version: String,
+    #[serde(default)]
+    pub author: String,
+}
+
+/// One audio sample replacement: put `wav_path`'s audio in place of `sample` in `bank`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AudioReplacement {
+    pub bank: String,   // e.g. "SFX.bank"
+    pub sample: String, // FSB5 sample name in that bank
+    pub wav_path: String,
+}
+
+/// Declarative build input — the union of the editor domains.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BuildSpec {
+    pub meta: ModMeta,
+    #[serde(default)]
+    pub delay_ms: u64,
+    #[serde(default)]
+    pub overrides: Vec<SingleOverride>,
+    /// `{ locId: { setName: text } }`
+    #[serde(default)]
+    pub loc_edits: BTreeMap<String, BTreeMap<String, String>>,
+    #[serde(default)]
+    pub audio: Vec<AudioReplacement>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Component {
+    /// A UE4SS Lua mod folder at `path`, deployed to `ue4ss/Mods/<name>`.
+    Ue4ssLua { name: String, path: String },
+    /// Declarative loc edits at `path` (`{id:{set:text}}`), applied to the .lcache.
+    LocPatch { path: String },
+    /// Audio patch dir at `path` (manifest.json + wavs), applied to `banks`.
+    AudioPatch { path: String, banks: Vec<String> },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModManifest {
+    pub format: u32,
+    #[serde(rename = "mod")]
+    pub mod_meta: ModMeta,
+    pub components: Vec<Component>,
+}
+
+pub struct Bundle {
+    pub files: Files,
+    pub manifest: ModManifest,
+}
+
+// ── Build ──────────────────────────────────────────────────────────────────────
+/// Assemble the in-memory bundle (files + manifest) from a declarative spec.
+pub fn build_bundle(spec: &BuildSpec) -> Result<Bundle> {
+    let mut files = Files::new();
+    let mut components = Vec::new();
+    let name = &spec.meta.name;
+    if name.is_empty() {
+        return Err(ModError::Other("mod name must not be empty".into()));
+    }
+
+    // overrides → UE4SS Lua mod
+    if !spec.overrides.is_empty() {
+        let cfg = OverridesConfig {
+            meta: MetaConfig { name: name.clone(), delay_ms: spec.delay_ms },
+            overrides: spec.overrides.clone(),
+        };
+        let lua = gen_lua(&cfg);
+        files.insert(format!("ue4ss/{name}/enabled.txt"), Vec::new());
+        files.insert(format!("ue4ss/{name}/Scripts/main.lua"), lua.into_bytes());
+        components.push(Component::Ue4ssLua { name: name.clone(), path: format!("ue4ss/{name}") });
+    }
+
+    // loc edits → declarative patch
+    if !spec.loc_edits.is_empty() {
+        files.insert("loc/edits.json".into(), serde_json::to_vec_pretty(&spec.loc_edits)?);
+        components.push(Component::LocPatch { path: "loc/edits.json".into() });
+    }
+
+    // audio → manifest + wavs (no game audio, just the replacements)
+    if !spec.audio.is_empty() {
+        let mut map: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
+        for a in &spec.audio {
+            let wav = std::fs::read(&a.wav_path).map_err(io(&format!("reading wav {}", a.wav_path)))?;
+            let fname = format!("{}__{}.wav", sanitize(&a.bank), sanitize(&a.sample));
+            files.insert(format!("audio/{fname}"), wav);
+            map.entry(a.bank.clone()).or_default().insert(a.sample.clone(), format!("audio/{fname}"));
+        }
+        let banks: Vec<String> = map.keys().cloned().collect();
+        files.insert("audio/manifest.json".into(), serde_json::to_vec_pretty(&map)?);
+        components.push(Component::AudioPatch { path: "audio".into(), banks });
+    }
+
+    let manifest = ModManifest { format: 1, mod_meta: spec.meta.clone(), components };
+    files.insert("gore-mod.json".into(), serde_json::to_vec_pretty(&manifest)?);
+    Ok(Bundle { files, manifest })
+}
+
+/// Write a built bundle's files under `dir` (creating parent dirs).
+pub fn write_bundle(dir: &Path, bundle: &Bundle) -> Result<()> {
+    for (rel, bytes) in &bundle.files {
+        let path = dir.join(rel);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(io("create dir"))?;
+        }
+        std::fs::write(&path, bytes).map_err(io(&format!("writing {}", path.display())))?;
+    }
+    Ok(())
+}
+
+fn sanitize(s: &str) -> String {
+    s.chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+        .collect()
+}
+
+// ── Game paths ──────────────────────────────────────────────────────────────────
+/// Resolved game-install locations. `root` is the game folder that contains `G1R/`.
+pub struct GamePaths {
+    pub ue4ss_mods: PathBuf,
+    pub fmod_desktop: PathBuf,
+    pub lcache: Option<PathBuf>,
+}
+
+pub fn resolve_game_paths(root: &Path) -> GamePaths {
+    let g1r = if root.file_name().is_some_and(|n| n == "G1R") {
+        root.to_path_buf()
+    } else {
+        root.join("G1R")
+    };
+    let lcache = {
+        let cache = g1r.join("Story").join("Cache");
+        std::fs::read_dir(&cache).ok().and_then(|rd| {
+            rd.filter_map(|e| e.ok())
+                .map(|e| e.path())
+                .find(|p| {
+                    p.file_name()
+                        .and_then(|n| n.to_str())
+                        .is_some_and(|n| n.starts_with("AlkimiaLocalization") && n.ends_with(".lcache"))
+                })
+        })
+    };
+    GamePaths {
+        ue4ss_mods: g1r.join("Binaries").join("Win64").join("ue4ss").join("Mods"),
+        fmod_desktop: g1r.join("Content").join("FMOD").join("Desktop"),
+        lcache,
+    }
+}
+
+// ── Deploy / undeploy ────────────────────────────────────────────────────────────
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct DeployRecord {
+    pub mod_name: String,
+    /// deployed UE4SS mod dir (absolute), if any
+    pub ue4ss_mod_dir: Option<String>,
+    /// (live_path, backup_path) pairs to restore on undeploy
+    pub backups: Vec<(String, String)>,
+}
+
+const RECORD_NAME: &str = "gore-mod.deployed.json";
+
+fn record_path(root: &Path) -> PathBuf {
+    root.join(RECORD_NAME)
+}
+
+/// Deploy a built bundle dir into the game at `game_root`. Single active mod: any previous
+/// gore-mod deployment is undeployed first (restoring its backups). Transactional: if any
+/// component fails, all already-applied side effects are rolled back before returning.
+pub fn deploy(bundle_dir: &Path, game_root: &Path) -> Result<DeployRecord> {
+    // restore any previous deployment so loose-file edits never compound
+    let _ = undeploy(game_root);
+
+    let mut record = DeployRecord::default();
+    match deploy_inner(bundle_dir, game_root, &mut record) {
+        Ok(()) => {
+            let rec_bytes = serde_json::to_vec_pretty(&record)?;
+            std::fs::write(record_path(game_root), rec_bytes).map_err(io("writing deploy record"))?;
+            Ok(record)
+        }
+        Err(e) => {
+            restore_record(&record); // roll back partial deploy
+            Err(e)
+        }
+    }
+}
+
+fn deploy_inner(bundle_dir: &Path, game_root: &Path, record: &mut DeployRecord) -> Result<()> {
+    let manifest_bytes = std::fs::read(bundle_dir.join("gore-mod.json"))
+        .map_err(io("reading gore-mod.json"))?;
+    let manifest: ModManifest = serde_json::from_slice(&manifest_bytes)?;
+    let gp = resolve_game_paths(game_root);
+    record.mod_name = manifest.mod_meta.name.clone();
+
+    for comp in &manifest.components {
+        match comp {
+            Component::Ue4ssLua { name, path } => {
+                let dst = gp.ue4ss_mods.join(name);
+                copy_dir(&bundle_dir.join(path), &dst)?;
+                record.ue4ss_mod_dir = Some(dst.display().to_string());
+            }
+            Component::LocPatch { path } => {
+                let lcache = gp.lcache.clone().ok_or_else(|| {
+                    ModError::Other("no AlkimiaLocalization .lcache found in game".into())
+                })?;
+                let bak = backup(&lcache, record)?;
+                let pristine = std::fs::read(&bak).map_err(io("reading pristine lcache"))?;
+                let edits: BTreeMap<String, BTreeMap<String, String>> =
+                    serde_json::from_slice(&std::fs::read(bundle_dir.join(path)).map_err(io("reading edits.json"))?)?;
+                let mut lc = gore_loc::loc::Lcache::decode(&pristine)?;
+                for (id, langs) in &edits {
+                    for (set, text) in langs {
+                        lc.set_value(id, set, text)?;
+                    }
+                }
+                let out = lc.encode()?;
+                atomic_write(&lcache, &out)?;
+            }
+            Component::AudioPatch { path, banks: _ } => {
+                let map: BTreeMap<String, BTreeMap<String, String>> = serde_json::from_slice(
+                    &std::fs::read(bundle_dir.join(path).join("manifest.json")).map_err(io("reading audio manifest"))?,
+                )?;
+                for (bank, samples) in &map {
+                    let bank_path = gp.fmod_desktop.join(bank);
+                    let bak = backup(&bank_path, record)?;
+                    let pristine = std::fs::read(&bak).map_err(io("reading pristine bank"))?;
+                    let mut repl = Vec::new();
+                    for (sample, wav_rel) in samples {
+                        let wav = std::fs::read(bundle_dir.join(wav_rel)).map_err(io("reading patch wav"))?;
+                        let (rate, ch, pcm) =
+                            gore_fmod::read_wav_pcm16(&wav).map_err(ModError::Fmod)?;
+                        repl.push((
+                            sample.clone(),
+                            gore_fmod::Pcm16Sample { name: sample.clone(), freq: rate, channels: ch, pcm },
+                        ));
+                    }
+                    let new_bank = gore_fmod::replace_samples(&pristine, gore_fmod::GOTHIC_STUDIO_KEY, repl)
+                        .map_err(ModError::Fmod)?;
+                    atomic_write(&bank_path, &new_bank)?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Restore every backup in `record` (copy `*.gore-bak` → live, delete the backup) and remove
+/// the deployed UE4SS mod. Best-effort; used by both undeploy and deploy-rollback.
+fn restore_record(record: &DeployRecord) {
+    for (live, bak) in &record.backups {
+        let (live, bak) = (Path::new(live), Path::new(bak));
+        if bak.exists() {
+            if let Ok(bytes) = std::fs::read(bak) {
+                let _ = atomic_write(live, &bytes);
+            }
+            let _ = std::fs::remove_file(bak);
+        }
+    }
+    if let Some(dir) = &record.ue4ss_mod_dir {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+/// Undo the active gore-mod deployment at `game_root`: restore every backup and remove the
+/// UE4SS mod. No-op if nothing is deployed.
+pub fn undeploy(game_root: &Path) -> Result<Option<DeployRecord>> {
+    let rp = record_path(game_root);
+    let Ok(bytes) = std::fs::read(&rp) else {
+        return Ok(None);
+    };
+    let record: DeployRecord = serde_json::from_slice(&bytes)?;
+    restore_record(&record);
+    let _ = std::fs::remove_file(&rp);
+    Ok(Some(record))
+}
+
+/// Back up `live` to `live.gore-bak` if no backup exists yet (preserving the pristine file),
+/// register it in `record`, and return the backup path. The backup is the pristine source.
+fn backup(live: &Path, record: &mut DeployRecord) -> Result<PathBuf> {
+    if !live.exists() {
+        return Err(ModError::Other(format!("game file not found: {}", live.display())));
+    }
+    let mut bak = live.as_os_str().to_os_string();
+    bak.push(".gore-bak");
+    let bak = PathBuf::from(bak);
+    if !bak.exists() {
+        std::fs::copy(live, &bak).map_err(io("creating backup"))?;
+    }
+    record.backups.push((live.display().to_string(), bak.display().to_string()));
+    Ok(bak)
+}
+
+fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
+    let mut tmp = path.as_os_str().to_os_string();
+    tmp.push(".gore-tmp");
+    let tmp = PathBuf::from(tmp);
+    std::fs::write(&tmp, bytes).map_err(io("writing temp"))?;
+    std::fs::rename(&tmp, path).map_err(io("renaming temp"))?;
+    Ok(())
+}
+
+fn copy_dir(src: &Path, dst: &Path) -> Result<()> {
+    std::fs::create_dir_all(dst).map_err(io("create dir"))?;
+    for entry in std::fs::read_dir(src).map_err(io(&format!("reading {}", src.display())))? {
+        let entry = entry.map_err(io("dir entry"))?;
+        let ft = entry.file_type().map_err(io("file type"))?;
+        let to = dst.join(entry.file_name());
+        if ft.is_dir() {
+            copy_dir(&entry.path(), &to)?;
+        } else if ft.is_file() {
+            std::fs::copy(entry.path(), &to).map_err(io("copy file"))?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gore_modgen::gen::OverrideValue;
+
+    #[test]
+    fn build_bundle_overrides_loc_audio() {
+        let dir = tempfile::tempdir().unwrap();
+        let wav = dir.path().join("tone.wav");
+        // minimal 16-bit PCM WAV, 1 sample
+        let mut w = Vec::new();
+        w.extend_from_slice(b"RIFF");
+        w.extend_from_slice(&(36u32 + 2).to_le_bytes());
+        w.extend_from_slice(b"WAVE");
+        w.extend_from_slice(b"fmt ");
+        w.extend_from_slice(&16u32.to_le_bytes());
+        w.extend_from_slice(&1u16.to_le_bytes());
+        w.extend_from_slice(&1u16.to_le_bytes());
+        w.extend_from_slice(&48000u32.to_le_bytes());
+        w.extend_from_slice(&96000u32.to_le_bytes());
+        w.extend_from_slice(&2u16.to_le_bytes());
+        w.extend_from_slice(&16u16.to_le_bytes());
+        w.extend_from_slice(b"data");
+        w.extend_from_slice(&2u32.to_le_bytes());
+        w.extend_from_slice(&0i16.to_le_bytes());
+        std::fs::write(&wav, &w).unwrap();
+
+        let mut loc = BTreeMap::new();
+        let mut langs = BTreeMap::new();
+        langs.insert("german_new".to_string(), "Käse".to_string());
+        loc.insert("itfo_cheese".to_string(), langs);
+
+        let spec = BuildSpec {
+            meta: ModMeta { name: "MyMod".into(), version: "1.0".into(), author: "me".into() },
+            delay_ms: 0,
+            overrides: vec![SingleOverride {
+                class: "ItFo_Apple".into(),
+                field: "m_Value".into(),
+                module: "Angelscript".into(),
+                value: OverrideValue::Int(500),
+            }],
+            loc_edits: loc,
+            audio: vec![AudioReplacement {
+                bank: "SFX.bank".into(),
+                sample: "SFX_UI_X".into(),
+                wav_path: wav.display().to_string(),
+            }],
+        };
+
+        let bundle = build_bundle(&spec).unwrap();
+        assert!(bundle.files.contains_key("ue4ss/MyMod/Scripts/main.lua"));
+        assert!(bundle.files.contains_key("ue4ss/MyMod/enabled.txt"));
+        assert!(bundle.files.contains_key("loc/edits.json"));
+        assert!(bundle.files.contains_key("audio/manifest.json"));
+        assert!(bundle.files.contains_key("audio/SFX_bank__SFX_UI_X.wav"));
+        assert!(bundle.files.contains_key("gore-mod.json"));
+        assert_eq!(bundle.manifest.components.len(), 3);
+
+        // round-trip manifest
+        let mj = &bundle.files["gore-mod.json"];
+        let m: ModManifest = serde_json::from_slice(mj).unwrap();
+        assert_eq!(m.mod_meta.name, "MyMod");
+    }
+
+    #[test]
+    fn empty_name_rejected() {
+        let spec = BuildSpec {
+            meta: ModMeta { name: "".into(), version: String::new(), author: String::new() },
+            delay_ms: 0,
+            overrides: vec![],
+            loc_edits: BTreeMap::new(),
+            audio: vec![],
+        };
+        assert!(build_bundle(&spec).is_err());
+    }
+}
