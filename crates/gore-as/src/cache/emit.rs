@@ -113,12 +113,23 @@ pub fn emit_module(m: &Module, refs: &RefResolver) -> String {
 
     // free functions = module.functions that aren't generator-synthesized accessors
     for f in &m.functions {
-        if is_generated(f, &class_names, &class_members) {
+        if is_generated(f, &class_names, &class_members) || is_generated_spawn(f, refs) {
             continue;
         }
         emit_function(&mut s, f, refs, false, false, 0);
     }
     s
+}
+
+/// The AngelScript-UE binding auto-generates `<Actor> Spawn(const FVector&, const FRotator&,
+/// const FName&, bool, ULevel)` as a free function for every actor class. The cache also carries
+/// it as a module function, so emitting it duplicates the native binding ("a function with the
+/// same name and parameters already exists" — un-stubbable, the declaration itself collides). Skip.
+fn is_generated_spawn(f: &Func, refs: &RefResolver) -> bool {
+    f.name == "Spawn"
+        && f.params.len() == 5
+        && f.ret.is_object_handle
+        && f.params.first().map(|p| p.ty.base_name(refs)).as_deref() == Some("FVector")
 }
 
 fn emit_class(s: &mut String, c: &Class, refs: &RefResolver) {
