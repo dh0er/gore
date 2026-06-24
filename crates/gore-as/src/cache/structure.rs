@@ -885,9 +885,12 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 pending = if f == "StaticClass" {
                     stack.clear();
                     pending_ty = None;
-                    // The class is the function's OWNER (the X in X::StaticClass()), not the
+                    // The class is the StaticClass func's NAMESPACE last-segment (objtype is
+                    // NULL for StaticClass; the target class lives in the namespace), not the
                     // calling class — `local = UFoo::StaticClass()` from inside UBar must say UFoo.
-                    let cls = ctx.refs.func_owner_by_id(id).or(ctx.class_name).unwrap_or("UObject");
+                    let cls = ctx.refs.staticclass_class_by_id(id)
+                        .or_else(|| ctx.refs.func_owner_by_id(id))
+                        .or(ctx.class_name).unwrap_or("UObject");
                     Some(format!("{cls}::StaticClass()"))
                 } else {
                     pending_ty = ctx.refs.func_ret_by_id(id).map(|d| d.base_name(ctx.refs));
@@ -971,7 +974,9 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 pending = if f == "StaticClass" {
                     stack.clear();
                     pending_ty = None;
-                    let cls = ctx.refs.func_owner_by_ptr(ptr).or(ctx.class_name).unwrap_or("UObject");
+                    let cls = ctx.refs.staticclass_class_by_ptr(ptr)
+                        .or_else(|| ctx.refs.func_owner_by_ptr(ptr))
+                        .or(ctx.class_name).unwrap_or("UObject");
                     Some(format!("{cls}::StaticClass()"))
                 } else {
                     pending_ty = ctx.refs.func_ret_by_ptr(ptr).map(|d| d.base_name(ctx.refs));

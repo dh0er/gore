@@ -170,6 +170,15 @@ impl RefResolver {
             .and_then(|p| self.func_by_ptr.get(p))
             .map(|s| s.as_str())
     }
+    /// Owning class name of a function by ptr (the ObjectType the method belongs to). Used to
+    /// qualify `Class::StaticClass()` with the TARGET class, not the calling class.
+    pub fn func_owner_by_ptr(&self, ptr: i64) -> Option<&str> {
+        self.func_owner.get(&ptr).map(|s| s.as_str())
+    }
+    /// Owning class name of a function by id.
+    pub fn func_owner_by_id(&self, id: i32) -> Option<&str> {
+        self.funcid_to_ptr.get(&id).and_then(|p| self.func_owner.get(p)).map(|s| s.as_str())
+    }
     pub fn type_by_ptr(&self, ptr: i64) -> Option<&str> {
         self.type_by_ptr.get(&ptr).map(|s| s.as_str())
     }
@@ -212,6 +221,19 @@ impl RefResolver {
     /// Namespace (`Gameplay`, `Math`, ...) for a free/static native function by ptr, if any.
     pub fn func_ns_by_ptr(&self, ptr: i64) -> Option<&str> {
         self.func_ns.get(&ptr).map(|s| s.as_str())
+    }
+    /// Namespace for a free/static native function by id, if any.
+    pub fn func_ns_by_id(&self, id: i32) -> Option<&str> {
+        self.funcid_to_ptr.get(&id).and_then(|p| self.func_ns.get(p)).map(|s| s.as_str())
+    }
+    /// Target class of a `StaticClass` call: StaticClass is a namespaced free fn whose
+    /// Namespace IS the (fully-qualified) target class — the LAST `::` segment is the class
+    /// name (objtype is NULL for StaticClass, so func_owner can't carry it).
+    pub fn staticclass_class_by_id(&self, id: i32) -> Option<&str> {
+        self.func_ns_by_id(id).map(|ns| ns.rsplit("::").next().unwrap_or(ns))
+    }
+    pub fn staticclass_class_by_ptr(&self, ptr: i64) -> Option<&str> {
+        self.func_ns_by_ptr(ptr).map(|ns| ns.rsplit("::").next().unwrap_or(ns))
     }
     /// Parameter DataTypes for a function by ptr (excludes the receiver).
     pub fn func_params_by_ptr(&self, ptr: i64) -> Option<&[DataType]> {
