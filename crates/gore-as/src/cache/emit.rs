@@ -235,10 +235,16 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
     };
     let param_types: Vec<String> = f.params.iter().map(|p| p.ty.base_name(refs)).collect();
     // object-local slot -> type name, so the decompiler can insert downcasts on stores.
-    let local_types: HashMap<i32, String> = f.obj_locals.iter().map(|(slot, tinfo)| {
+    let mut local_types: HashMap<i32, String> = f.obj_locals.iter().map(|(slot, tinfo)| {
         let ty = super::types::DataType { token: 5, type_info: *tinfo, is_object_handle: true, ..Default::default() }.base_name(refs);
         (*slot, ty)
     }).collect();
+    // consumer-side override: never-written arg slots get the type their callee expects (fixes
+    // mis-typed default/optional-arg slots — FName->UAIState_DailyRoutine, TSubclassOf<X>->X).
+    let slot_overrides = infer_slot_types(f, refs);
+    for (slot, ty) in &slot_overrides {
+        local_types.insert(*slot, ty.clone());
+    }
     let body = body_statements_ctor(&fc, refs, depth + 1, super_ctor, Some(&f.ret), fields, Some(&param_types), class_name, Some(&local_types));
     // hoist every referenced local; infer_locals types what it can, the rest default to `int`
     // (a wrong type just becomes a compile error the in-game loop force-stubs, rather than the
@@ -247,6 +253,12 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
     let mut locals = infer_locals(f, refs);
     for &n in &used {
         locals.entry(n).or_insert_with(|| "int".to_string());
+    }
+    // declare never-written consumer-typed slots with their inferred type (not the cache's wrong one)
+    for (slot, ty) in &slot_overrides {
+        if used.contains(slot) {
+            locals.insert(*slot, ty.clone());
+        }
     }
     // Drop locals never referenced in the body: `obj_locals` includes profiling temporaries like
     // FScopeCycleCounter / FStatID that the body never uses, and they have no default constructor,
@@ -431,6 +443,87 @@ fn used_locals(body: &str) -> HashSet<i32> {
         }
     }
     out
+}
+
+/// Consumer-side slot typing: a slot that is NEVER written but is passed as a call argument takes
+/// the type that call's parameter expects (e.g. an optional/default-arg slot the cache mis-typed —
+/// FName where UAIState_DailyRoutine is wanted, or TSubclassOf<X> where X is wanted). Returns an
+/// override `slot -> type` ONLY for never-written slots with a single consistent consumer object
+/// type, so it can never clobber a real producer type. Pairs args from the stack TOP (robust to the
+/// cache counting the implicit `this` in a method's param list).
+fn infer_slot_types(f: &Func, refs: &RefResolver) -> HashMap<i32, String> {
+    let instrs = match disassemble(&f.bytecode) {
+        Ok(i) => i,
+        Err(_) => return HashMap::new(),
+    };
+    let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32);
+    let writes = |op: &str| {
+        op.starts_with("SetV") || op.starts_with("CpyVtoV") || op.starts_with("CpyRtoV")
+            || op.starts_with("RDR") || op.contains("TO") || op == "STOREOBJ" || op == "PopRPtr"
+            || op.starts_with("ADD") || op.starts_with("SUB") || op.starts_with("MUL")
+            || op.starts_with("DIV") || op.starts_with("MOD") || op.starts_with("NEG")
+            || op.starts_with("Inc") || op.starts_with("Dec") || op == "NOT"
+            || op.starts_with("B") || op == "ALLOC"
+    };
+    let mut written: HashSet<i32> = HashSet::new();
+    for ins in &instrs {
+        if writes(ins.op.name) {
+            if let Some(d) = w0(ins) {
+                if d > 0 {
+                    written.insert(d);
+                }
+            }
+        }
+    }
+    let mut ostack: Vec<Option<i32>> = Vec::new();
+    let mut cand: HashMap<i32, Option<String>> = HashMap::new(); // slot -> Some(type) | None(conflict)
+    let mut pair = |ostack: &mut Vec<Option<i32>>, params: Option<&[super::types::DataType]>, is_method: bool, cand: &mut HashMap<i32, Option<String>>| {
+        let Some(params) = params else { ostack.clear(); return; };
+        let total = if is_method { params.len() + 1 } else { params.len() };
+        let take = total.min(ostack.len());
+        let popped = ostack.split_off(ostack.len() - take);
+        // method: top popped entry is the receiver -> drop it; the rest are the user args
+        let args = if is_method && !popped.is_empty() { &popped[..popped.len() - 1] } else { &popped[..] };
+        // pair from the TOP: last arg <-> last param (so a leading `this` param, if the cache
+        // counts it, never shifts the user-arg pairing).
+        for (i, slot) in args.iter().rev().enumerate() {
+            if let Some(s) = slot {
+                if let Some(pt) = params.len().checked_sub(1 + i).and_then(|j| params.get(j)) {
+                    let ty = pt.base_name(refs);
+                    match cand.get(s) {
+                        None => { cand.insert(*s, Some(ty)); }
+                        Some(Some(prev)) if *prev != ty => { cand.insert(*s, None); }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    };
+    for ins in &instrs {
+        match ins.op.name {
+            "PshVPtr" | "PshV4" | "PshV8" | "PSF" => {
+                let s = w0(ins).unwrap_or(0);
+                ostack.push(if s > 0 { Some(s) } else { None });
+            }
+            "PshC4" | "PshC8" | "PshNull" | "PGA" | "PshGPtr" | "PshG4" | "PshRPtr" | "STR"
+            | "TYPEID" | "OBJTYPE" | "PshListElmnt" => ostack.push(None),
+            "CALL" | "CALLINTF" | "CALLBND" => {
+                let id = ins.dwords.first().copied().unwrap_or(0) as i32;
+                pair(&mut ostack, refs.func_params_by_id(id), refs.is_method_by_id(id), &mut cand);
+            }
+            "CALLSYS" | "Thiscall1" => {
+                let ptr = ins.qwords.first().copied().unwrap_or(0) as i64;
+                pair(&mut ostack, refs.func_params_by_ptr(ptr), refs.is_method_by_ptr(ptr), &mut cand);
+            }
+            _ => {}
+        }
+    }
+    cand.into_iter()
+        .filter_map(|(slot, ty)| match ty {
+            Some(t) if !written.contains(&slot) && !is_primitive(t.trim_end_matches('@')) && t != "void" && !t.is_empty() => Some((slot, t)),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Infer (slot, type) for primitive + object locals to hoist as declarations.
