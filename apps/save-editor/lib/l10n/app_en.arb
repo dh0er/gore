@@ -388,7 +388,19 @@
   "updatesTitle": "Updates",
   "checkForUpdatesAutomatically": "Check for updates automatically",
   "checkForUpdatesNow": "Check for updates now",
-  "updatesPortableNotice": "Updates are available only for installed builds. The portable version must be updated manually.",
+  "updatesPortableNotice": "The portable version opens the download page in your browser. Replace your existing files with the new download.",
+  "updateAvailableTitle": "Update available",
+  "updateAvailableMessage": "Version {version} is available. You have {current}.",
+  "@updateAvailableMessage": {
+    "placeholders": {
+      "version": {},
+      "current": {}
+    }
+  },
+  "updateDownload": "Download",
+  "updateLater": "Later",
+  "updateUpToDate": "You are using the latest version.",
+  "updateCheckFailed": "Could not check for updates. Please try again later.",
   "gameTextTitle": "Game text",
   "gameTextExtractedWithCounts": "Extracted: {ids} ids across {languages} languages.",
   "@gameTextExtractedWithCounts": {

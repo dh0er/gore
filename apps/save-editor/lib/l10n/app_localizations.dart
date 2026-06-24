@@ -1319,8 +1319,44 @@ abstract class AppLocalizations {
   /// No description provided for @updatesPortableNotice.
   ///
   /// In en, this message translates to:
-  /// **'Updates are available only for installed builds. The portable version must be updated manually.'**
+  /// **'The portable version opens the download page in your browser. Replace your existing files with the new download.'**
   String get updatesPortableNotice;
+
+  /// No description provided for @updateAvailableTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Update available'**
+  String get updateAvailableTitle;
+
+  /// No description provided for @updateAvailableMessage.
+  ///
+  /// In en, this message translates to:
+  /// **'Version {version} is available. You have {current}.'**
+  String updateAvailableMessage(Object version, Object current);
+
+  /// No description provided for @updateDownload.
+  ///
+  /// In en, this message translates to:
+  /// **'Download'**
+  String get updateDownload;
+
+  /// No description provided for @updateLater.
+  ///
+  /// In en, this message translates to:
+  /// **'Later'**
+  String get updateLater;
+
+  /// No description provided for @updateUpToDate.
+  ///
+  /// In en, this message translates to:
+  /// **'You are using the latest version.'**
+  String get updateUpToDate;
+
+  /// No description provided for @updateCheckFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Could not check for updates. Please try again later.'**
+  String get updateCheckFailed;
 
   /// No description provided for @gameTextTitle.
   ///

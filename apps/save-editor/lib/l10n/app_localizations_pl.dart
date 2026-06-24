@@ -687,7 +687,28 @@ class AppLocalizationsPl extends AppLocalizations {
 
   @override
   String get updatesPortableNotice =>
-      'Aktualizacje są dostępne tylko dla wersji zainstalowanych. Wersję przenośną trzeba aktualizować ręcznie.';
+      'Wersja przenośna otwiera stronę pobierania w przeglądarce. Zastąp istniejące pliki nowym pobraniem.';
+
+  @override
+  String get updateAvailableTitle => 'Dostępna aktualizacja';
+
+  @override
+  String updateAvailableMessage(Object version, Object current) {
+    return 'Wersja $version jest dostępna. Masz $current.';
+  }
+
+  @override
+  String get updateDownload => 'Pobierz';
+
+  @override
+  String get updateLater => 'Później';
+
+  @override
+  String get updateUpToDate => 'Używasz najnowszej wersji.';
+
+  @override
+  String get updateCheckFailed =>
+      'Nie udało się sprawdzić aktualizacji. Spróbuj ponownie później.';
 
   @override
   String get gameTextTitle => 'Tekst gry';

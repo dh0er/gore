@@ -682,7 +682,28 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get updatesPortableNotice =>
-      'Updates are available only for installed builds. The portable version must be updated manually.';
+      'The portable version opens the download page in your browser. Replace your existing files with the new download.';
+
+  @override
+  String get updateAvailableTitle => 'Update available';
+
+  @override
+  String updateAvailableMessage(Object version, Object current) {
+    return 'Version $version is available. You have $current.';
+  }
+
+  @override
+  String get updateDownload => 'Download';
+
+  @override
+  String get updateLater => 'Later';
+
+  @override
+  String get updateUpToDate => 'You are using the latest version.';
+
+  @override
+  String get updateCheckFailed =>
+      'Could not check for updates. Please try again later.';
 
   @override
   String get gameTextTitle => 'Game text';

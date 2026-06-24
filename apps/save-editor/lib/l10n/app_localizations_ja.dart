@@ -675,7 +675,27 @@ class AppLocalizationsJa extends AppLocalizations {
 
   @override
   String get updatesPortableNotice =>
-      'アップデートはインストール版でのみ利用できます。ポータブル版は手動で更新する必要があります。';
+      'ポータブル版はダウンロードページをブラウザで開きます。既存のファイルを新しいダウンロードで置き換えてください。';
+
+  @override
+  String get updateAvailableTitle => 'アップデートがあります';
+
+  @override
+  String updateAvailableMessage(Object version, Object current) {
+    return 'バージョン $version が利用可能です。現在は $current です。';
+  }
+
+  @override
+  String get updateDownload => 'ダウンロード';
+
+  @override
+  String get updateLater => '後で';
+
+  @override
+  String get updateUpToDate => '最新バージョンを使用しています。';
+
+  @override
+  String get updateCheckFailed => 'アップデートを確認できませんでした。後でもう一度お試しください。';
 
   @override
   String get gameTextTitle => 'ゲームテキスト';
