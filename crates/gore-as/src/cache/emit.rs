@@ -121,15 +121,29 @@ pub fn emit_module(m: &Module, refs: &RefResolver) -> String {
     s
 }
 
-/// The AngelScript-UE binding auto-generates `<Actor> Spawn(const FVector&, const FRotator&,
-/// const FName&, bool, ULevel)` as a free function for every actor class. The cache also carries
-/// it as a module function, so emitting it duplicates the native binding ("a function with the
-/// same name and parameters already exists" — un-stubbable, the declaration itself collides). Skip.
+/// The AngelScript-UE binding auto-generates factory free functions for every actor/component
+/// class. The cache also carries them as module functions, so emitting them duplicates the native
+/// binding ("a function with the same name and parameters already exists" — un-stubbable, the
+/// declaration itself collides). Skip the exact generated shapes:
+///   - actor:     `<Actor> Spawn(const FVector&, const FRotator&, const FName&, bool, ULevel)`
+///   - component: `<Comp> Get|GetOrCreate|Create(const AActor, const FName&)`
 fn is_generated_spawn(f: &Func, refs: &RefResolver) -> bool {
-    f.name == "Spawn"
-        && f.params.len() == 5
-        && f.ret.is_object_handle
-        && f.params.first().map(|p| p.ty.base_name(refs)).as_deref() == Some("FVector")
+    if !f.ret.is_object_handle {
+        return false;
+    }
+    let p0 = f.params.first().map(|p| p.ty.base_name(refs));
+    let p0 = p0.as_deref();
+    if f.name == "Spawn" && f.params.len() == 5 && p0 == Some("FVector") {
+        return true;
+    }
+    if matches!(f.name.as_str(), "Get" | "GetOrCreate" | "Create")
+        && f.params.len() == 2
+        && p0 == Some("AActor")
+        && f.params.get(1).map(|p| p.ty.base_name(refs)).as_deref() == Some("FName")
+    {
+        return true;
+    }
+    false
 }
 
 fn emit_class(s: &mut String, c: &Class, refs: &RefResolver) {
