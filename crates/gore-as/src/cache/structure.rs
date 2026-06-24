@@ -303,24 +303,18 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
     // against the shipped Binds.Cache, so its native arity is authoritative — prefer it over the
     // script FunctionReferences param count (which can disagree). Falls back to the script count.
     let arity = native_arity.or_else(|| params.map(|p| p.len()));
-    // Receiver detection by COUNT, not the unreliable bIsMethod flag: AngelScript pushes
-    // receiver + N args (N+1 entries) for a method, N for a free call, and the cache's param
-    // count N is reliable. The recovered stack often carries phantom extras (values the
-    // decompiler couldn't attribute to an earlier consumer) at the BOTTOM, so when the count
-    // overshoots a known arity we pop the receiver (top) and keep only the last N args,
-    // dropping the leading noise — this is what `recv.Get0Param()` getters need.
-    let has_recv = match arity {
-        Some(w) if a.len() == w => false,                   // exact free arity
-        // receiver + w only when this is actually a method; for a free call w+1 is a phantom
-        // extra (trimmed below), not a receiver — else a real arg gets mislabeled as `recv`.
-        Some(w) if a.len() == w + 1 => is_method,
-        // overshoot/undershoot/no signature: trust the bIsMethod hint.
-        Some(_) | None => is_method && !a.is_empty(),
-    };
+    // Receiver detection: a METHOD call always pushes its receiver on the stack, so for any
+    // `is_method` call with a non-empty stack the top entry IS the receiver — pop it. (The cache's
+    // param count is unreliable for this: for many native methods it COUNTS the implicit `this`,
+    // so `params_len==a.len` even though the receiver is present, which a pure count test would
+    // misread as a free call — e.g. `GetNPCState(local)` instead of `local.GetNPCState()`.)
+    let has_recv = is_method && !a.is_empty();
     if has_recv {
         let recv = a.pop().unwrap();
-        // trim phantom extras: keep only the last `w` pushed values as the call args.
+        // trim phantom extras: keep only the last `w` user args (the cache arity may include the
+        // now-popped `this`, so cap below the popped count, never above).
         if let Some(w) = arity {
+            let w = w.min(a.len());
             if a.len() > w {
                 a.drain(..a.len() - w);
             }
