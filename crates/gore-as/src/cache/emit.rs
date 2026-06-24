@@ -196,7 +196,10 @@ fn emit_function(s: &mut String, f: &Func, refs: &RefResolver, is_method: bool, 
 #[allow(clippy::too_many_arguments)]
 fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: bool, is_ctor: bool, depth: usize, super_ctor: Option<&str>, fields: Option<&HashMap<String, String>>, class_name: Option<&str>) {
     let ind = "    ".repeat(depth);
-    let ret = f.ret.render(refs);
+    // Strip a leading `const` from the return type: a return-by-value `const` is meaningless in
+    // AngelScript, and the cache sets the const flag inconsistently between a base method and its
+    // override -> "must have the same return type as in the base class". Stripping makes them match.
+    let ret = f.ret.render(refs).trim_start_matches("const ").to_string();
     let params = render_params(f, refs);
     if f.is_ufunction {
         let _ = writeln!(s, "{ind}UFUNCTION()");
