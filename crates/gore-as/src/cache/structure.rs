@@ -752,10 +752,13 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 flush!();
                 out.push(format!("{0} = -{0};", name(w(ins, 0))));
             }
-            // asBC NOT (opcode 6) is the boolean logical invert, not numeric negation.
+            // asBC NOT (opcode 6) is the boolean logical invert. The slot is held as `int` (and
+            // is often also written with integer values like `= 1`), and AngelScript rejects `!`
+            // on int ("Illegal operation on this datatype"); render an int-safe toggle instead.
             "NOT" => {
                 flush!();
-                out.push(format!("{0} = !{0};", name(w(ins, 0))));
+                let s = name(w(ins, 0));
+                out.push(format!("{s} = int({s} == 0);"));
             }
             // ---- comparisons ----
             "CMPi" | "CMPu" | "CMPf" | "CMPd" | "CMPi64" | "CMPu64" => {
