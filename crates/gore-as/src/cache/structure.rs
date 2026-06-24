@@ -1033,7 +1033,13 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
             }
             "CMPIi" | "CMPIu" => {
                 let c = ins.dwords.first().copied().unwrap_or(0) as i32;
-                cmp = Some(Cmp { a: name(w(ins, 0)), b: c.to_string(), ..Default::default() });
+                let s = w(ins, 0);
+                // an enum compared to an int literal needs explicit int(enum) — AngelScript has
+                // no implicit enum<->int (e.g. `if (_AlternativeState != 0)`).
+                let a = if ctx.slot_type(s).as_deref().map(is_enum_name).unwrap_or(false) {
+                    format!("int({})", name(s))
+                } else { name(s) };
+                cmp = Some(Cmp { a, b: c.to_string(), ..Default::default() });
             }
             // CMPIf's dword immediate is an IEEE-754 float payload, not an int — render it as
             // a float literal so e.g. `x < 1.0f` doesn't become `x < 1065353216`.
