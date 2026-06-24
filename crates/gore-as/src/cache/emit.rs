@@ -112,9 +112,13 @@ pub fn emit_module(m: &Module, refs: &RefResolver) -> String {
     }
 
     // free functions = module.functions that aren't generator-synthesized accessors
+    let mut seen_free: HashSet<String> = HashSet::new();
     for f in &m.functions {
         if is_generated(f, &class_names, &class_members) || is_generated_spawn(f, refs) {
             continue;
+        }
+        if !seen_free.insert(format!("{}({})", f.name, render_params(f, refs))) {
+            continue; // duplicate signature -> "function ... already exists"
         }
         emit_function(&mut s, f, refs, false, false, 0);
     }
@@ -180,6 +184,11 @@ fn emit_class(s: &mut String, c: &Class, refs: &RefResolver) {
     for ctor in &c.ctors {
         emit_function_ctor(s, ctor, refs, true, true, 1, super_name, Some(&field_types), Some(&c.name));
     }
+    // Dedup methods by name+parameters: the cache can carry two entries that render to the same
+    // signature (e.g. a const- and non-const-return overload that collapse once the meaningless
+    // return `const` is stripped), which AngelScript rejects as "a function with the same name
+    // and parameters already exists".
+    let mut seen_sigs: HashSet<String> = HashSet::new();
     for m in &c.methods {
         // `__InitDefaults` (and other `__`-prefixed generator methods) set the CDO defaults
         // via raw `__StaticType_*` symbols and untyped literals we can't reconstruct offline;
@@ -187,6 +196,9 @@ fn emit_class(s: &mut String, c: &Class, refs: &RefResolver) {
         // class compiles. (Runtime UPROPERTY defaults are lost; real script logic is intact.)
         if m.name.starts_with("__") {
             continue;
+        }
+        if !seen_sigs.insert(format!("{}({})", m.name, render_params(m, refs))) {
+            continue; // duplicate signature
         }
         emit_function_ctor(s, m, refs, true, false, 1, None, Some(&field_types), Some(&c.name));
     }
