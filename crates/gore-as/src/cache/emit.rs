@@ -247,6 +247,12 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
     for (slot, ty) in &slot_overrides {
         local_types.insert(*slot, ty.clone());
     }
+    // member-access-derived types: the field's declaring class is the strongest signal for a
+    // slot used as a member-access base; apply AFTER (overriding) the call-arg guess.
+    let member_overrides = infer_slot_types_from_members(f, refs);
+    for (slot, ty) in &member_overrides {
+        local_types.insert(*slot, ty.clone());
+    }
     let body = body_statements_ctor(&fc, refs, depth + 1, super_ctor, Some(&f.ret), fields, Some(&param_types), class_name, Some(&local_types));
     // hoist every referenced local; infer_locals types what it can, the rest default to `int`
     // (a wrong type just becomes a compile error the in-game loop force-stubs, rather than the
@@ -266,6 +272,12 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
             if ty == "?" && locals.get(slot).map(|t| t != "?").unwrap_or(false) {
                 continue;
             }
+            locals.insert(*slot, ty.clone());
+        }
+    }
+    // member-derived declaring-class types override the cache's wrong/general slot type
+    for (slot, ty) in &member_overrides {
+        if used.contains(slot) {
             locals.insert(*slot, ty.clone());
         }
     }
@@ -549,6 +561,44 @@ fn infer_slot_types(f: &Func, refs: &RefResolver) -> HashMap<i32, String> {
             _ => None,
         })
         .collect()
+}
+
+/// Member-access-driven slot typing: a `LoadRObjR`/`LoadVObjR base, off, tid` reads field
+/// `member(tid,off)` off the object in `base`; `member_type(tid,off)` is the field's DECLARING
+/// class — exactly the type `base` must have for `base.field` to compile. The cache often types
+/// the slot too generally (`UObject`) or wrong (`FGameplayTag` for a `FGameplayTagContainer`),
+/// or not at all (`int`), producing "<field> is not a member of <T>". Override the slot with the
+/// declaring class. Conservative: LOCAL slots only (base > 0), single consistent declaring type
+/// (conflict -> drop), non-empty non-primitive.
+fn infer_slot_types_from_members(f: &Func, refs: &RefResolver) -> HashMap<i32, String> {
+    let instrs = match disassemble(&f.bytecode) {
+        Ok(i) => i,
+        Err(_) => return HashMap::new(),
+    };
+    let mut cand: HashMap<i32, Option<String>> = HashMap::new();
+    for ins in &instrs {
+        if matches!(ins.op.name, "LoadRObjR" | "LoadVObjR") {
+            let base = match ins.words.first() {
+                Some(w) => *w as i16 as i32,
+                None => continue,
+            };
+            if base <= 0 {
+                continue; // this / param-as-receiver: skip (only local slots here)
+            }
+            let off = ins.words.get(1).copied().unwrap_or(0) as i32;
+            let tid = ins.dwords.first().copied().unwrap_or(0) as i32;
+            let Some(ty) = refs.member_type(tid, off) else { continue };
+            if ty.is_empty() || is_primitive(ty) {
+                continue;
+            }
+            match cand.get(&base) {
+                None => { cand.insert(base, Some(ty.to_string())); }
+                Some(Some(prev)) if prev != ty => { cand.insert(base, None); }
+                _ => {}
+            }
+        }
+    }
+    cand.into_iter().filter_map(|(s, t)| t.map(|t| (s, t))).collect()
 }
 
 /// §3.3 consumer-driven typing of out-of-range `argN` slots. Scans the body for the RHS of an
