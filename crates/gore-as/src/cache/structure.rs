@@ -91,6 +91,24 @@ pub fn body_statements_ctor(f: &FuncCode, refs: &RefResolver, depth: usize, supe
     body
 }
 
+/// If `v` is a top-level assignment expression `lhs = rhs` (the RVO return-slot write pattern),
+/// return the RHS — `return lhs = rhs;` is a parse error, the RHS is the real returned value.
+fn strip_return_assign(v: &str) -> &str {
+    let b = v.as_bytes();
+    let mut depth = 0i32;
+    let mut i = 0;
+    while i + 2 < b.len() {
+        match b[i] {
+            b'(' | b'[' => depth += 1,
+            b')' | b']' => depth -= 1,
+            b' ' if depth == 0 && b[i + 1] == b'=' && b[i + 2] == b' ' => return v[i + 3..].trim(),
+            _ => {}
+        }
+        i += 1;
+    }
+    v
+}
+
 /// Decompile a function to a self-contained `function(...) { ... }` (readable, not recompilable).
 pub fn decompile(f: &FuncCode, refs: &RefResolver) -> String {
     let params: Vec<String> = f
@@ -851,6 +869,11 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 }
                 match v {
                     Some(v) => {
+                        // RVO: a non-trivial return is built by writing the hidden return slot
+                        // then returning it -> the decompiler renders `return slot = <value>;`,
+                        // which is a syntax error (aborts the whole module's parse). The
+                        // assignment RHS is the actual returned value.
+                        let v = strip_return_assign(&v).to_string();
                         let v = match ctx.ret_ty {
                             Some(rt) if looks_int(&v) => {
                                 let tn = if rt.token == 0x41 { "bool".to_string() } else { rt.base_name(ctx.refs) };
