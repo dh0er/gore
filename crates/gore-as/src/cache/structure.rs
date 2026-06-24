@@ -31,19 +31,28 @@ struct Arg {
     /// Raw bits if this is an integer CONSTANT (`PshC4`/`PshC8`) — so a constant feeding a
     /// float/double parameter can be reinterpreted as its real IEEE-754 value.
     cbits: Option<ConstBits>,
+    /// True when this arg was pushed via `PSF` (push stack-frame address of a local) — i.e. it
+    /// is the ADDRESS of a slot, used as an out / RVO / in-place-ctor receiver. Lets the CALLSYS
+    /// handler recover `slot = T(args)` from a `$beh0` construct behaviour instead of dropping it.
+    is_psf: bool,
 }
 impl Arg {
     fn int(s: String) -> Arg {
-        Arg { s, is_int: true, ty: None, cbits: None }
+        Arg { s, is_int: true, ty: None, cbits: None, is_psf: false }
     }
     fn iconst(s: String, cbits: ConstBits) -> Arg {
-        Arg { s, is_int: true, ty: None, cbits: Some(cbits) }
+        Arg { s, is_int: true, ty: None, cbits: Some(cbits), is_psf: false }
     }
     fn obj(s: String) -> Arg {
-        Arg { s, is_int: false, ty: None, cbits: None }
+        Arg { s, is_int: false, ty: None, cbits: None, is_psf: false }
     }
     fn typed(s: String, ty: Option<String>) -> Arg {
-        Arg { s, is_int: false, ty, cbits: None }
+        Arg { s, is_int: false, ty, cbits: None, is_psf: false }
+    }
+    /// A `PSF`-pushed slot address (out / RVO / in-place-ctor receiver), carrying the slot's
+    /// recovered type so the construct can render `slot = <ty>(args)`.
+    fn psf(s: String, ty: Option<String>) -> Arg {
+        Arg { s, is_int: false, ty, cbits: None, is_psf: true }
     }
 }
 
@@ -677,7 +686,8 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 // &local, unless it's the destination of a following ALLOC
                 if insns.get(k + 1).map(|i| i.op.name) != Some("ALLOC") {
                     // &local at the AS source level is implicit (param decides &in/&out) — no `&`.
-                    stack.push(Arg::typed(name(w(ins, 0)), ctx.slot_type(w(ins, 0))));
+                    // Tag is_psf so a following `$beh0` construct can recover `slot = T(args)`.
+                    stack.push(Arg::psf(name(w(ins, 0)), ctx.slot_type(w(ins, 0))));
                 }
                 // else: this PSF is the destination local for the following ALLOC; don't push.
             }
@@ -906,6 +916,49 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                         out.push(format!("{dst} = {rhs};"));
                     }
                     continue;
+                }
+                if f == "$beh0" {
+                    // `$beh0` is the AngelScript value-type / struct in-place CONSTRUCT behaviour:
+                    // `PSF <slot> ; <args...> ; CALLSYS $beh0` constructs the value AT the PSF'd
+                    // slot (the receiver, top of stack). build_call drops every `$`-prefixed
+                    // behaviour and clears the stack, so the construct AND its write to the slot
+                    // vanished, leaving the slot uninitialised (then read downstream as garbage /
+                    // passed to a call). Recover it as `slot = T(args);` so the value FLOWS.
+                    if let Some(recv) = stack.last().cloned() {
+                        // Gate (a): receiver is a PSF'd slot with a known VALUE/struct/template
+                        // type (F*/T*/E*). Never a `$`/`?` placeholder, never an object (U*/A*):
+                        // object construction uses ALLOC, not this in-place behaviour.
+                        let is_value = recv.ty.as_deref()
+                            .and_then(|t| t.bytes().next())
+                            .map(|b| matches!(b, b'F' | b'T' | b'E'))
+                            .unwrap_or(false);
+                        if recv.is_psf && is_value {
+                            let ty = recv.ty.clone().unwrap();
+                            stack.pop(); // remove the receiver; the rest are the ctor args
+                            let params = ctx.refs.func_params_by_ptr(ptr);
+                            let args: Vec<Arg> = std::mem::take(&mut stack).into_iter()
+                                .filter(|x| !x.s.is_empty() && x.s != UNRESOLVED).collect();
+                            // Gate (b): no arg is itself a PSF slot — that is a copy/convert ctor
+                            // whose true source is an unrecovered pending call result; rendering it
+                            // as `T(&slot)` would be wrong, so drop (prior behaviour).
+                            let any_psf_arg = args.iter().any(|a| a.is_psf);
+                            // Gate (c): arg count matches the ctor's declared param count (no
+                            // spurious leftover operands on the stack).
+                            let count_ok = params.map(|p| p.len() == args.len()).unwrap_or(false);
+                            if !args.is_empty() && !any_psf_arg && count_ok {
+                                let rendered = render_args(&args, params, ctx.refs);
+                                // Gate (d): a definite arg-type mismatch -> drop (keep prior
+                                // behaviour: slot unwritten) rather than emit the `\u{2}` sentinel
+                                // that would force-stub the whole function.
+                                if !rendered.contains('\u{2}') {
+                                    flush!();
+                                    out.push(format!("{} = {ty}({rendered});", recv.s));
+                                }
+                            }
+                            continue;
+                        }
+                    }
+                    // not a recoverable in-place construct -> fall through to the generic `$` drop.
                 }
                 pending = if f == "StaticClass" {
                     stack.clear();
