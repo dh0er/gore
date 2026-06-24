@@ -859,6 +859,17 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 flush!();
                 out.push(format!("{0} = {0} - 1;", name(w(ins, 0))));
             }
+            // asBC_INCi/DECi (NO_ARG): ++/-- the int at the value/ref register — an lvalue that
+            // is a member or deref (LoadThisR/LoadRObjR set ref_reg), unlike IncVi/DecVi which
+            // carry a slot operand. Render as a compound assignment on the recovered member expr.
+            "INCi" | "INCi64" | "INCi16" | "INCi8" => {
+                flush!();
+                if let Some(r) = &ref_reg { out.push(format!("{0} = {0} + 1;", r)); }
+            }
+            "DECi" | "DECi64" | "DECi16" | "DECi8" => {
+                flush!();
+                if let Some(r) = &ref_reg { out.push(format!("{0} = {0} - 1;", r)); }
+            }
             "NEGi" | "NEGf" | "NEGd" => {
                 flush!();
                 out.push(format!("{0} = -{0};", name(w(ins, 0))));
@@ -1160,6 +1171,23 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
             "STR" => stack.push(Arg::obj("\"\"".into())),         // +3: string-constant push
             "PshListElmnt" => stack.push(Arg::int(name(w(ins, 0)))), // +2: list element
             "COPY" => { stack.pop(); }                           // -2: pop the source ptr
+            // asBC_CopyScript (QW_ARG = object-type ptr; stack -2): a script value-type / struct
+            // copy = the source-level assignment `dest = src;`. Stack top = SRC, next = DEST
+            // (target pushed first). Both operands arrive as fully-rendered member/local exprs.
+            // Dropping it left the destination (member or RVO temp) unwritten -> garbage/null.
+            "CopyScript" => {
+                let src = stack.pop();
+                let dst = stack.pop();
+                if let (Some(dst), Some(src)) = (dst, src) {
+                    if !dst.s.is_empty() && dst.s != UNRESOLVED
+                        && !src.s.is_empty() && src.s != UNRESOLVED
+                        && dst.s != src.s
+                    {
+                        flush!();
+                        out.push(format!("{} = {};", dst.s, src.s));
+                    }
+                }
+            }
             // asBC_Cast (DW_ARG=target typeid): a script-handle DOWNCAST. Pop the source handle
             // and push the cast RESULT `Cast<T>(src)` (typed) so the following store writes the
             // real object instead of dropping it. T is the instruction's own typeid operand.
