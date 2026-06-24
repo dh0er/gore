@@ -299,15 +299,11 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
         .into_iter()
         .filter(|x| !x.s.is_empty() && x.s != UNRESOLVED)
         .collect();
-    // Effective arity for receiver detection + phantom trimming: the in-game compile validates
-    // against the shipped Binds.Cache, so its native arity is authoritative — prefer it over the
-    // script FunctionReferences param count (which can disagree). Falls back to the script count.
+    // Effective arity: the in-game compile validates against the shipped Binds.Cache, so its native
+    // arity is authoritative — prefer it over the script FunctionReferences param count. Falls back.
     let arity = native_arity.or_else(|| params.map(|p| p.len()));
-    // Receiver detection: a METHOD call always pushes its receiver on the stack, so for any
-    // `is_method` call with a non-empty stack the top entry IS the receiver — pop it. (The cache's
-    // param count is unreliable for this: for many native methods it COUNTS the implicit `this`,
-    // so `params_len==a.len` even though the receiver is present, which a pure count test would
-    // misread as a free call — e.g. `GetNPCState(local)` instead of `local.GetNPCState()`.)
+    // Receiver: a METHOD call always pushes its receiver as the top entry (the cache param count is
+    // unreliable here — it often COUNTS the implicit `this`), so detect by the bIsMethod flag.
     let has_recv = is_method && !a.is_empty();
     if has_recv {
         let recv = a.pop().unwrap();
@@ -607,11 +603,18 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 // else: this PSF is the destination local for the following ALLOC; don't push.
             }
             "PshRPtr" => {
-                let (s, ty) = match value_reg.take() {
-                    Some(v) => (v, None),
-                    None => (ref_reg.clone().unwrap_or_else(|| UNRESOLVED.into()), ref_reg_ty.clone()),
-                };
-                stack.push(Arg::typed(s, ty));
+                // The value register holds a just-completed call's return value; PshRPtr pushes it
+                // back onto the operand stack as the NEXT call's argument (e.g. the receiver/arg of
+                // a chained call). Prefer that live call result over the stale member-ref register.
+                if let Some(p) = pending.take() {
+                    stack.push(Arg::typed(p, pending_ty.take()));
+                } else {
+                    let (s, ty) = match value_reg.take() {
+                        Some(v) => (v, None),
+                        None => (ref_reg.clone().unwrap_or_else(|| UNRESOLVED.into()), ref_reg_ty.clone()),
+                    };
+                    stack.push(Arg::typed(s, ty));
+                }
             }
             "PGA" | "PshGPtr" | "PshG4" => {
                 let ptr = ins.qwords.first().copied().unwrap_or(0) as i64;
