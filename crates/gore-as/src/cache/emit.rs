@@ -231,6 +231,8 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
         func: f.name.clone(),
         is_method,
         param_names: f.params.iter().map(|p| p.name.clone()).collect(),
+        param_types: f.params.iter().map(|p| p.ty.clone()).collect(),
+        ret: f.ret.clone(),
         bytecode: f.bytecode.clone(),
     };
     let param_types: Vec<String> = f.params.iter().map(|p| p.ty.base_name(refs)).collect();
@@ -277,6 +279,11 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
     let mut oor_args: Vec<i32> =
         used_idents(&body, "arg").into_iter().filter(|&n| n as usize >= f.params.len()).collect();
     oor_args.sort_unstable();
+    // §3.3 safety net: an unmapped `argN` (signature undercount / RVO-return slot) declared as
+    // `int` breaks any member/operator use on it ("Illegal operation on 'int'"). Type it from
+    // its CONSUMER instead — the RHS of `argN = <expr>` (a field/local/param whose type we know)
+    // — so the declaration is member-compatible. Falls back to `int` when nothing is recoverable.
+    let oor_arg_types = infer_oor_arg_types(&body, &oor_args, fields, &locals, &param_types);
 
     // force-stub functions the in-game compile flagged as unrecoverable (by Class::method).
     let qid = match class_name {
@@ -300,7 +307,18 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
             }
         }
         for n in &oor_args {
-            let _ = writeln!(s, "{ind}    int arg{n} = 0;");
+            match oor_arg_types.get(n) {
+                Some(ty) if is_primitive(ty) => {
+                    let _ = writeln!(s, "{ind}    {ty} arg{n} = {};", default_for(ty));
+                }
+                Some(ty) => {
+                    // object/struct/handle local: default-constructs itself (no initializer).
+                    let _ = writeln!(s, "{ind}    {ty} arg{n};");
+                }
+                None => {
+                    let _ = writeln!(s, "{ind}    int arg{n} = 0;");
+                }
+            }
         }
         // RVODEF marks a return whose value couldn't be recovered: substitute a type-correct
         // default. A handle return defaults to `nullptr` (no local needed — and it sidesteps
@@ -531,6 +549,67 @@ fn infer_slot_types(f: &Func, refs: &RefResolver) -> HashMap<i32, String> {
             _ => None,
         })
         .collect()
+}
+
+/// §3.3 consumer-driven typing of out-of-range `argN` slots. Scans the body for the RHS of an
+/// `argN = <expr>` assignment (including `return argN = <expr>;`) and resolves `<expr>`'s type
+/// from the maps we already have: `this.<field>` -> field type, `local_M` -> local type,
+/// `<param>` -> param type. A type that supports member access makes `argN.Member` legal where a
+/// bare `int` would not. Anything unresolved is left out (declared `int`, as before — no regression).
+fn infer_oor_arg_types(
+    body: &str,
+    oor_args: &[i32],
+    fields: Option<&HashMap<String, String>>,
+    locals: &BTreeMap<i32, String>,
+    param_types: &[String],
+) -> HashMap<i32, String> {
+    let mut out: HashMap<i32, String> = HashMap::new();
+    if oor_args.is_empty() {
+        return out;
+    }
+    // a primitive/enum int-ish RHS isn't worth retyping (int default already works); only adopt a
+    // type that is NOT a bare primitive (i.e. a struct/handle/array the member access needs).
+    let adopt = |out: &mut HashMap<i32, String>, n: i32, ty: String| {
+        if !ty.is_empty() && !is_primitive(&ty) {
+            out.entry(n).or_insert(ty);
+        }
+    };
+    for line in body.lines() {
+        let t = line.trim();
+        let t = t.strip_prefix("return ").unwrap_or(t);
+        // parse `argN = RHS;`
+        let Some(rest) = t.strip_prefix("arg") else { continue };
+        let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        let Ok(n) = digits.parse::<i32>() else { continue };
+        if !oor_args.contains(&n) {
+            continue;
+        }
+        let after = rest[digits.len()..].trim_start();
+        let Some(rhs) = after.strip_prefix("= ") else { continue };
+        let rhs = rhs.trim().trim_end_matches(';').trim();
+        // `this.<field>` (single member hop) -> the field's type.
+        if let Some(field) = rhs.strip_prefix("this.") {
+            if !field.contains('.') && !field.contains('(') {
+                if let Some(ty) = fields.and_then(|m| m.get(field)) {
+                    adopt(&mut out, n, ty.clone());
+                    continue;
+                }
+            }
+        }
+        // `local_M` -> that local's inferred type.
+        if let Some(m) = rhs.strip_prefix("local_") {
+            if let Ok(slot) = m.parse::<i32>() {
+                if let Some(ty) = locals.get(&slot) {
+                    adopt(&mut out, n, ty.clone());
+                    continue;
+                }
+            }
+        }
+        // a bare parameter name -> its declared type (param_types is index-aligned to params,
+        // but we only have names in the body; skip — names aren't carried here). Left for future.
+        let _ = param_types;
+    }
+    out
 }
 
 /// Infer (slot, type) for primitive + object locals to hoist as declarations.

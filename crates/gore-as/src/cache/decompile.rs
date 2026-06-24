@@ -14,12 +14,52 @@
 use std::collections::HashMap;
 use std::fmt::Write as _;
 
-use super::disasm::disassemble;
+use super::disasm::{disassemble, Instr};
+use super::model::{param_slot_map, returns_struct_by_value};
 use super::refs::RefResolver;
 use super::walk_modules::FuncCode;
 
 /// AngelScript value-pointer size in dwords on x64 (AS_PTR_SIZE).
 const AS_PTR_SIZE: i32 = 2;
+
+/// Build the AS_PTR_SIZE-aware frame-offset -> parameter-index map for a function, choosing
+/// between the no-RVO and RVO-slot variants by which one best fits the offsets the bytecode
+/// actually references (self-correcting RVO heuristic — spec §3.1 option a). Shared shape with
+/// `structure.rs::Ctx::build_param_off_map`.
+pub(crate) fn build_param_off_map(f: &FuncCode, instrs: &[Instr]) -> HashMap<i32, usize> {
+    let base = param_slot_map(&f.param_types, f.is_method, false);
+    if !returns_struct_by_value(&f.ret) {
+        return base;
+    }
+    let rvo = param_slot_map(&f.param_types, f.is_method, true);
+    // Count how many DISTINCT observed negative frame offsets each candidate map explains.
+    // A by-value struct return ALWAYS carries the RVO out-pointer per the ABI, so prefer the
+    // RVO map on ties; only fall back to the no-RVO map if it strictly explains MORE observed
+    // offsets (i.e. the return type was mis-classified as by-value).
+    let observed = observed_neg_offsets(instrs);
+    let score = |m: &HashMap<i32, usize>| observed.iter().filter(|o| m.contains_key(o)).count();
+    if score(&base) > score(&rvo) {
+        base
+    } else {
+        rvo
+    }
+}
+
+/// The set of distinct negative frame offsets (`< 0`, excluding `this`@0) that appear as the
+/// first word operand of an instruction — i.e. slots the body actually reads/writes. Used to
+/// score the RVO-vs-no-RVO param maps against reality.
+fn observed_neg_offsets(instrs: &[Instr]) -> std::collections::HashSet<i32> {
+    let mut set = std::collections::HashSet::new();
+    for ins in instrs {
+        for &w in &ins.words {
+            let off = w as i16 as i32;
+            if off < 0 {
+                set.insert(off);
+            }
+        }
+    }
+    set
+}
 
 #[derive(Clone)]
 enum Expr {
@@ -62,20 +102,26 @@ pub fn decompile_function(f: &FuncCode, refs: &RefResolver) -> String {
     let mut arg_stack: Vec<Expr> = Vec::new();
     let mut body = String::new();
 
+    // AS_PTR_SIZE-aware frame-offset -> param-index map (handles 2-dword handles/refs and the
+    // hidden by-value-return RVO slot). Self-corrects the RVO guess against observed offsets.
+    let param_off_map = build_param_off_map(f, &instrs);
     let slot_name = |off: i32| -> Expr {
         if off > 0 {
             return Expr::Var(format!("local_{off}"));
         }
-        // Methods carry an implicit `this` at slot 0 with params at -AS_PTR_SIZE, -AS_PTR_SIZE-1, …
-        // Free functions have no `this`: params start at slot 0 (0, -1, -2, …). See structure.rs.
-        let idx = if f.is_method {
-            if off == 0 {
-                return Expr::This;
-            }
-            (-off - AS_PTR_SIZE) as usize
-        } else {
-            (-off) as usize
-        };
+        if f.is_method && off == 0 {
+            return Expr::This;
+        }
+        if let Some(&idx) = param_off_map.get(&off) {
+            return match f.param_names.get(idx) {
+                Some(n) if !n.is_empty() => Expr::Var(n.clone()),
+                _ => Expr::Var(format!("arg{idx}")),
+            };
+        }
+        // Genuinely unmapped negative slot (variadic/defaulted tail the signature undercounts):
+        // fall back to a stable `arg{N}` derived from the linear position so the same offset
+        // always renders the same identifier.
+        let idx = if f.is_method { (-off - AS_PTR_SIZE) as usize } else { (-off) as usize };
         match f.param_names.get(idx) {
             Some(n) if !n.is_empty() => Expr::Var(n.clone()),
             _ => Expr::Var(format!("arg{idx}")),

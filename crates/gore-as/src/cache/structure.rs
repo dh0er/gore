@@ -91,7 +91,10 @@ pub fn body_statements_ctor(f: &FuncCode, refs: &RefResolver, depth: usize, supe
     };
     let g = cfg::build(&instrs);
     let float_slots = float_operand_slots(&instrs);
-    let ctx = Ctx { f, refs, instrs: &instrs, super_ctor, ret_ty, fields, param_types, class_name, local_types, float_slots };
+    // AS_PTR_SIZE-aware frame-offset -> param-index map (2-dword handles/refs + hidden RVO slot),
+    // self-correcting on observed offsets. Built once per function; consulted by slot_name/slot_type.
+    let param_off_map = super::decompile::build_param_off_map(f, &instrs);
+    let ctx = Ctx { f, refs, instrs: &instrs, super_ctor, ret_ty, fields, param_types, class_name, local_types, float_slots, param_off_map };
     let idx_of: HashMap<usize, usize> =
         g.blocks.iter().enumerate().map(|(i, b)| (b.start_dw, i)).collect();
     let mut body = String::new();
@@ -148,6 +151,8 @@ struct Ctx<'a> {
     /// Slots that appear as an operand of a float/double arithmetic or compare op, so a
     /// `SetV4`/`SetV8` constant written to one is rendered as a float literal, not raw int bits.
     float_slots: std::collections::HashSet<i32>,
+    /// AS_PTR_SIZE-aware frame-offset -> parameter-index map (see `model::param_slot_map`).
+    param_off_map: HashMap<i32, usize>,
 }
 
 /// Collect slots used as an operand of a float/double arithmetic or compare op. Every word
@@ -175,15 +180,10 @@ impl Ctx<'_> {
         if off > 0 {
             return format!("local_{off}");
         }
-        if self.f.is_method {
-            if off == 0 {
-                return "this".into();
-            }
-            let idx = (-off - AS_PTR_SIZE) as usize;
-            return self.param_or_arg(idx);
+        if self.f.is_method && off == 0 {
+            return "this".into();
         }
-        // free function: params at off 0, -1, -2, ...
-        self.param_or_arg((-off) as usize)
+        self.param_or_arg(self.param_idx(off))
     }
 
     /// Recovered base type name for a slot: object-local type for `off > 0`, parameter type
@@ -192,15 +192,24 @@ impl Ctx<'_> {
         if off > 0 {
             return self.local_types.and_then(|m| m.get(&off)).cloned();
         }
-        let idx = if self.f.is_method {
-            (-off - AS_PTR_SIZE) as usize
-        } else {
-            (-off) as usize
-        };
+        let idx = self.param_idx(off);
         self.param_types
             .and_then(|p| p.get(idx))
             .filter(|t| !t.is_empty())
             .cloned()
+    }
+
+    /// Resolve a negative frame offset to its parameter index via the AS_PTR_SIZE-aware map,
+    /// falling back to the old linear formula for an unmapped (variadic/defaulted-tail) slot.
+    fn param_idx(&self, off: i32) -> usize {
+        if let Some(&idx) = self.param_off_map.get(&off) {
+            return idx;
+        }
+        if self.f.is_method {
+            (-off - AS_PTR_SIZE) as usize
+        } else {
+            (-off) as usize
+        }
     }
 
     /// Name for parameter slot `idx`: the stored name, else `arg{idx}` — which MUST match

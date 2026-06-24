@@ -8,6 +8,7 @@
 //! are 4 bytes; `DataType` is a fixed 36 bytes.
 
 use super::header::CacheHeader;
+use super::types::DataType;
 use super::wire::{Cursor, WireError};
 
 /// `FAngelscriptPrecompiledDataType` = 6×bool(24) + int64 TypeInfo.Old(8) + int32 Token(4).
@@ -81,6 +82,12 @@ pub struct FuncCode {
     pub is_method: bool,
     /// Source parameter names in declaration order (locals are NOT stored in the cache).
     pub param_names: Vec<String>,
+    /// Parameter types in declaration order — needed to compute AS_PTR_SIZE-aware frame slot
+    /// widths so a param's frame offset maps to the correct index (see `model::param_slot_map`).
+    pub param_types: Vec<DataType>,
+    /// Return type — its by-value-struct shape decides whether a hidden RVO out-pointer slot
+    /// shifts every parameter's frame offset.
+    pub ret: DataType,
     /// Raw `TArray<int32>` bytecode (the asBC dword stream).
     pub bytecode: Vec<i32>,
 }
@@ -106,8 +113,12 @@ fn read_function_c(
 ) -> Result<(), WireError> {
     let name = c.read_sia()?;
     c.read_sia()?; // Namespace
-    read_data_type(c)?; // ReturnType
-    c.skip_tarray_fixed(DATA_TYPE_SIZE, "ParameterTypes")?;
+    let ret = DataType::read(c)?; // ReturnType
+    let nptypes = c.read_count("ParameterTypes")?;
+    let mut param_types = Vec::with_capacity(nptypes);
+    for _ in 0..nptypes {
+        param_types.push(DataType::read(c)?);
+    }
     let param_names = c.read_tarray_sia("ParameterNames")?;
     c.skip_tarray_fixed(4, "ParameterFlags")?;
     c.skip_tarray_sia("ParameterDefaultArgs")?;
@@ -135,6 +146,8 @@ fn read_function_c(
         func: format!("{scope}::{name}"),
         is_method,
         param_names,
+        param_types,
+        ret,
         bytecode,
     });
     Ok(())

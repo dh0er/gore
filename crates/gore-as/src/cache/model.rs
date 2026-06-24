@@ -6,9 +6,62 @@
 //! Unlike `walk_modules` (which skips types for the fast splice path), this captures
 //! everything the emitter needs.
 
+use std::collections::HashMap;
+
 use super::header::CacheHeader;
 use super::types::{DataType, DATA_TYPE_SIZE};
 use super::wire::{Cursor, WireError};
+
+/// AngelScript value-pointer size in dwords on x64 (`AS_PTR_SIZE`). Every handle/reference
+/// and every 64-bit scalar occupies this many frame slots; mirrors `isa.rs`/`decompile.rs`.
+pub const AS_PTR_SIZE: i32 = 2;
+
+/// Number of frame dword slots a parameter of this type occupies (`GetSizeOnStackDWords`):
+/// pointer-sized for every UObject/AActor handle, every `&`-reference and 64-bit scalar;
+/// 1 for ordinary 32-bit-or-smaller value primitives/enums. Struct-by-value (rare — the
+/// engine usually passes structs by reference) has no registered dword-size table here, so it
+/// defaults to `AS_PTR_SIZE`, the safe conservative width.
+pub fn slot_width_dwords(p: &DataType) -> i32 {
+    if p.is_object_handle || p.is_reference {
+        return AS_PTR_SIZE;
+    }
+    match p.token {
+        // 64-bit scalars occupy 2 dwords: int64 / uint64 / double, AND `float` (0x51) because
+        // this build is `floatIsFloat64` (see types.rs / render_const) — its `float` is 64-bit.
+        // `float32` (0x50) is the genuine 32-bit type (width 1).
+        0x47 | 0x4E | 0x5E | 0x51 => AS_PTR_SIZE,
+        5 => AS_PTR_SIZE, // struct-by-value (no size table -> conservative)
+        _ => 1,           // int/uint/float32/bool/int8..16/enum by value
+    }
+}
+
+/// True when the return type is an F-struct returned BY VALUE — which inserts a hidden RVO
+/// out-pointer slot (one `AS_PTR_SIZE`) between `this` and the first real parameter.
+/// UObject/AActor handles (`is_object_handle`) return in the value register, NOT via an RVO
+/// slot, so they are excluded.
+pub fn returns_struct_by_value(ret: &DataType) -> bool {
+    ret.token == 5 && !ret.is_object_handle && !ret.is_reference
+}
+
+/// Build the AS_PTR_SIZE-aware map from a frame offset (signed dword slot, negative below the
+/// frame pointer) to the 0-based parameter index. Each parameter consumes its real slot width,
+/// so param *i* lives at a cumulative offset, NOT at `-i`.
+///
+/// `rvo` controls whether the hidden by-value-return RVO out-pointer slot is reserved before
+/// the first param (callers self-correct on the observed offsets — see structure.rs/decompile.rs).
+pub fn param_slot_map(params: &[DataType], is_method: bool, rvo: bool) -> HashMap<i32, usize> {
+    let mut map = HashMap::new();
+    // Cursor start: free fn -> param 0 at off 0; method -> first param after `this` (-AS_PTR_SIZE).
+    let mut off: i32 = if is_method { -AS_PTR_SIZE } else { 0 };
+    if rvo {
+        off -= AS_PTR_SIZE; // skip the hidden RVO out-pointer slot
+    }
+    for (i, p) in params.iter().enumerate() {
+        map.insert(off, i);
+        off -= slot_width_dwords(p);
+    }
+    map
+}
 
 #[derive(Debug, Clone)]
 pub struct Param {
