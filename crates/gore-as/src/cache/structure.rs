@@ -93,8 +93,8 @@ pub fn body_statements_ctor(f: &FuncCode, refs: &RefResolver, depth: usize, supe
     let float_slots = float_operand_slots(&instrs);
     // AS_PTR_SIZE-aware frame-offset -> param-index map (2-dword handles/refs + hidden RVO slot),
     // self-correcting on observed offsets. Built once per function; consulted by slot_name/slot_type.
-    let param_off_map = super::decompile::build_param_off_map(f, &instrs);
-    let ctx = Ctx { f, refs, instrs: &instrs, super_ctor, ret_ty, fields, param_types, class_name, local_types, float_slots, param_off_map };
+    let (param_off_map, rvo_off) = super::decompile::build_param_off_map_rvo(f, &instrs, refs);
+    let ctx = Ctx { f, refs, instrs: &instrs, super_ctor, ret_ty, fields, param_types, class_name, local_types, float_slots, param_off_map, rvo_off };
     let idx_of: HashMap<usize, usize> =
         g.blocks.iter().enumerate().map(|(i, b)| (b.start_dw, i)).collect();
     let mut body = String::new();
@@ -153,6 +153,9 @@ struct Ctx<'a> {
     float_slots: std::collections::HashSet<i32>,
     /// AS_PTR_SIZE-aware frame-offset -> parameter-index map (see `model::param_slot_map`).
     param_off_map: HashMap<i32, usize>,
+    /// Frame offset of the hidden RVO out-pointer slot for a by-value-struct return, if any.
+    /// A `CopyScript` writing this slot is the function's `return <src>`.
+    rvo_off: Option<i32>,
 }
 
 /// Collect slots used as an operand of a float/double arithmetic or compare op. Every word
@@ -182,6 +185,12 @@ impl Ctx<'_> {
         }
         if self.f.is_method && off == 0 {
             return "this".into();
+        }
+        // The hidden RVO out-pointer slot is NOT a parameter — naming it via the param fallback
+        // mislabels it as parameter 0 (e.g. `_QuestClass`). Give it a distinct synthetic name so
+        // a stray reference is recognisable; the CopyScript-to-return rewrite normally consumes it.
+        if self.rvo_off == Some(off) {
+            return "__return".into();
         }
         self.param_or_arg(self.param_idx(off))
     }
@@ -407,8 +416,15 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
         // existing `$beh0`/`opCast` PSF out-slot arms) instead of dropping the result. Run BEFORE
         // the arity trim: the hidden out-slot inflates the arg count one past `arity`, so removing
         // it first restores the correct count (else the trim drops a real leading arg).
+        //
+        // EXCLUDE operator-overload methods (opAssign/opAdd/opEquals/...): they return their
+        // operand type (often a struct/template returned BY REFERENCE, not via an RVO out-slot)
+        // and are lowered as `recv <op> arg` below. Their PSF'd value arg can share the return
+        // type's head (e.g. `member.opAssign(states)` returning `TArray` with a PSF'd `TArray`
+        // value), which would falsely match the out-slot probe and rewrite `states = opAssign()`.
         fn head(s: &str) -> &str { s.split('<').next().unwrap_or(s) }
-        if let Some(rh) = ret_ty.map(head) {
+        let is_operator = assign_op(f).is_some() || binop_method(f).is_some();
+        if let Some(rh) = ret_ty.map(head).filter(|_| !is_operator) {
             if matches!(rh.bytes().next(), Some(b'F') | Some(b'T') | Some(b'E')) {
                 // the RVO out-slot = a PSF arg whose type head equals the return-type head
                 if let Some(pos) = a.iter().position(|x| x.is_psf
@@ -1325,19 +1341,29 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
             "PshListElmnt" => stack.push(Arg::int(name(w(ins, 0)))), // +2: list element
             "COPY" => { stack.pop(); }                           // -2: pop the source ptr
             // asBC_CopyScript (QW_ARG = object-type ptr; stack -2): a script value-type / struct
-            // copy = the source-level assignment `dest = src;`. Stack top = SRC, next = DEST
-            // (target pushed first). Both operands arrive as fully-rendered member/local exprs.
-            // Dropping it left the destination (member or RVO temp) unwritten -> garbage/null.
+            // copy = the source-level assignment `dest = src;`. Per asBC_COPY (as_context.cpp) the
+            // DESTINATION pointer is popped FIRST (it is the stack TOP), the SOURCE is the next
+            // entry below it. The compiler pushes SRC first then DEST, so DEST ends up on top —
+            // e.g. `PSF <localSrc>; PshVPtr this; ADDSi <member>; CopyScript` is `this.member =
+            // localSrc;`, and the RVO struct-return `PSF <local>; PshVPtr <retSlot>; CopyScript`
+            // is `<retSlot> = <local>;`. (Earlier this arm had src/dst swapped, which emitted
+            // every struct copy/member-init/RVO-return BACKWARDS — `local = this.member` and
+            // `local = retSlot`.) Both operands arrive as fully-rendered member/local exprs;
+            // dropping it left the destination (member or RVO temp) unwritten -> garbage/null.
             "CopyScript" => {
-                let src = stack.pop();
                 let dst = stack.pop();
+                let src = stack.pop();
                 if let (Some(dst), Some(src)) = (dst, src) {
-                    if !dst.s.is_empty() && dst.s != UNRESOLVED
-                        && !src.s.is_empty() && src.s != UNRESOLVED
-                        && dst.s != src.s
-                    {
-                        flush!();
-                        out.push(format!("{} = {};", dst.s, src.s));
+                    if !src.s.is_empty() && src.s != UNRESOLVED {
+                        // RVO struct-return: a copy whose DEST is the hidden return slot is the
+                        // function's `return <src>;` — capture it as the return value (the slot
+                        // itself has no source name) instead of emitting `__return = <src>;`.
+                        if dst.s == "__return" {
+                            ret_val = Some(src.s);
+                        } else if !dst.s.is_empty() && dst.s != UNRESOLVED && dst.s != src.s {
+                            flush!();
+                            out.push(format!("{} = {};", dst.s, src.s));
+                        }
                     }
                 }
             }

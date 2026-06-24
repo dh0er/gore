@@ -9,6 +9,7 @@
 use std::collections::HashMap;
 
 use super::header::CacheHeader;
+use super::refs::RefResolver;
 use super::types::{DataType, DATA_TYPE_SIZE};
 use super::wire::{Cursor, WireError};
 
@@ -18,10 +19,17 @@ pub const AS_PTR_SIZE: i32 = 2;
 
 /// Number of frame dword slots a parameter of this type occupies (`GetSizeOnStackDWords`):
 /// pointer-sized for every UObject/AActor handle, every `&`-reference and 64-bit scalar;
-/// 1 for ordinary 32-bit-or-smaller value primitives/enums. Struct-by-value (rare — the
-/// engine usually passes structs by reference) has no registered dword-size table here, so it
-/// defaults to `AS_PTR_SIZE`, the safe conservative width.
-pub fn slot_width_dwords(p: &DataType) -> i32 {
+/// 1 for ordinary 32-bit-or-smaller value primitives/enums. A genuine struct passed BY VALUE
+/// (rare — the engine usually passes structs by reference) has no registered dword-size table
+/// here, so it defaults to `AS_PTR_SIZE`, the safe conservative width.
+///
+/// `refs` lets a `token == 5` value type be resolved to its name so an ENUM (`E`-prefixed,
+/// UE/codebase convention; 32-bit underlying storage) is correctly sized at 1 dword rather than
+/// the conservative struct width 2. Without this, a function with an enum-by-value parameter
+/// FOLLOWING a wider param (handle/ref/struct) mis-maps every later param's frame offset (the
+/// cumulative cursor over-counts), which is what stubbed `MakeRequirement` (4 EQuestState params
+/// after a `TSubclassOf&` ref). Passing `None` keeps the conservative width-2 fallback.
+pub fn slot_width_dwords(p: &DataType, refs: Option<&RefResolver>) -> i32 {
     if p.is_object_handle || p.is_reference {
         return AS_PTR_SIZE;
     }
@@ -30,9 +38,31 @@ pub fn slot_width_dwords(p: &DataType) -> i32 {
         // this build is `floatIsFloat64` (see types.rs / render_const) — its `float` is 64-bit.
         // `float32` (0x50) is the genuine 32-bit type (width 1).
         0x47 | 0x4E | 0x5E | 0x51 => AS_PTR_SIZE,
-        5 => AS_PTR_SIZE, // struct-by-value (no size table -> conservative)
-        _ => 1,           // int/uint/float32/bool/int8..16/enum by value
+        5 => {
+            // token 5 is the catch-all "identifier" token shared by enums, value structs,
+            // templates and objects. An enum's underlying storage is a 32-bit int -> 1 dword;
+            // only a genuine value STRUCT (F*/T* by value) needs the conservative width 2. Use
+            // the resolved type name (E-prefix = enum, the established convention used by the
+            // value-type checks in structure.rs/cast_arg) to tell them apart.
+            if refs
+                .and_then(|r| r.type_by_ptr(p.type_info))
+                .map(is_enum_name)
+                .unwrap_or(false)
+            {
+                1
+            } else {
+                AS_PTR_SIZE // struct-by-value (no size table -> conservative)
+            }
+        }
+        _ => 1, // int/uint/float32/bool/int8..16/enum by value
     }
+}
+
+/// True for an enum type NAME by the codebase/UE `E`-prefix convention (e.g. `EQuestState`).
+/// Enums are 32-bit value types (1 frame dword), unlike `F`/`T` value structs (conservative 2).
+fn is_enum_name(name: &str) -> bool {
+    let mut b = name.bytes();
+    matches!(b.next(), Some(b'E')) && matches!(b.next(), Some(c) if c.is_ascii_uppercase())
 }
 
 /// True when the return type is an F-struct returned BY VALUE — which inserts a hidden RVO
@@ -49,7 +79,12 @@ pub fn returns_struct_by_value(ret: &DataType) -> bool {
 ///
 /// `rvo` controls whether the hidden by-value-return RVO out-pointer slot is reserved before
 /// the first param (callers self-correct on the observed offsets — see structure.rs/decompile.rs).
-pub fn param_slot_map(params: &[DataType], is_method: bool, rvo: bool) -> HashMap<i32, usize> {
+pub fn param_slot_map(
+    params: &[DataType],
+    is_method: bool,
+    rvo: bool,
+    refs: Option<&RefResolver>,
+) -> HashMap<i32, usize> {
     let mut map = HashMap::new();
     // Cursor start: free fn -> param 0 at off 0; method -> first param after `this` (-AS_PTR_SIZE).
     let mut off: i32 = if is_method { -AS_PTR_SIZE } else { 0 };
@@ -58,7 +93,7 @@ pub fn param_slot_map(params: &[DataType], is_method: bool, rvo: bool) -> HashMa
     }
     for (i, p) in params.iter().enumerate() {
         map.insert(off, i);
-        off -= slot_width_dwords(p);
+        off -= slot_width_dwords(p, refs);
     }
     map
 }

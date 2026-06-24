@@ -26,12 +26,31 @@ const AS_PTR_SIZE: i32 = 2;
 /// between the no-RVO and RVO-slot variants by which one best fits the offsets the bytecode
 /// actually references (self-correcting RVO heuristic — spec §3.1 option a). Shared shape with
 /// `structure.rs::Ctx::build_param_off_map`.
-pub(crate) fn build_param_off_map(f: &FuncCode, instrs: &[Instr]) -> HashMap<i32, usize> {
-    let base = param_slot_map(&f.param_types, f.is_method, false);
+pub(crate) fn build_param_off_map(
+    f: &FuncCode,
+    instrs: &[Instr],
+    refs: &RefResolver,
+) -> HashMap<i32, usize> {
+    build_param_off_map_rvo(f, instrs, refs).0
+}
+
+/// Like [`build_param_off_map`] but also returns the frame offset of the hidden RVO out-pointer
+/// slot when the RVO map is the chosen one (i.e. this function returns a struct by value and the
+/// observed offsets don't contradict it). The RVO slot sits between `this` (or the frame base for
+/// a free fn) and the first real parameter — at the cursor position the rvo `off -= AS_PTR_SIZE`
+/// reserves, which equals the no-RVO param-0 start: `-AS_PTR_SIZE` for a method, `0` for a free
+/// fn. Lets the body recognise the return slot so a `CopyScript <retSlot> = <local>` is rendered
+/// as `return <local>` and the slot is never mis-named as parameter 0.
+pub(crate) fn build_param_off_map_rvo(
+    f: &FuncCode,
+    instrs: &[Instr],
+    refs: &RefResolver,
+) -> (HashMap<i32, usize>, Option<i32>) {
+    let base = param_slot_map(&f.param_types, f.is_method, false, Some(refs));
     if !returns_struct_by_value(&f.ret) {
-        return base;
+        return (base, None);
     }
-    let rvo = param_slot_map(&f.param_types, f.is_method, true);
+    let rvo = param_slot_map(&f.param_types, f.is_method, true, Some(refs));
     // Count how many DISTINCT observed negative frame offsets each candidate map explains.
     // A by-value struct return ALWAYS carries the RVO out-pointer per the ABI, so prefer the
     // RVO map on ties; only fall back to the no-RVO map if it strictly explains MORE observed
@@ -39,9 +58,10 @@ pub(crate) fn build_param_off_map(f: &FuncCode, instrs: &[Instr]) -> HashMap<i32
     let observed = observed_neg_offsets(instrs);
     let score = |m: &HashMap<i32, usize>| observed.iter().filter(|o| m.contains_key(o)).count();
     if score(&base) > score(&rvo) {
-        base
+        (base, None)
     } else {
-        rvo
+        let rvo_off = if f.is_method { -AS_PTR_SIZE } else { 0 };
+        (rvo, Some(rvo_off))
     }
 }
 
@@ -104,7 +124,7 @@ pub fn decompile_function(f: &FuncCode, refs: &RefResolver) -> String {
 
     // AS_PTR_SIZE-aware frame-offset -> param-index map (handles 2-dword handles/refs and the
     // hidden by-value-return RVO slot). Self-corrects the RVO guess against observed offsets.
-    let param_off_map = build_param_off_map(f, &instrs);
+    let param_off_map = build_param_off_map(f, &instrs, refs);
     let slot_name = |off: i32| -> Expr {
         if off > 0 {
             return Expr::Var(format!("local_{off}"));

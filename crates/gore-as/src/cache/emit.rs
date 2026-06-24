@@ -272,6 +272,21 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
             if ty == "?" && locals.get(slot).map(|t| t != "?").unwrap_or(false) {
                 continue;
             }
+            // Never let an ARGLESS template head (e.g. a `TArray` opAssign/copy-ctor param whose
+            // own DataType carries no SubTypes) downgrade an already-specific instantiation from
+            // the authoritative obj_locals type (`TArray<EQuestState>`). Declaring a bare `TArray`
+            // is invalid (template needs args) and would stub the function; the cache's recorded
+            // object-local type is the better signal, so keep it when the override is just its
+            // template head with the `<...>` stripped.
+            if !ty.contains('<') {
+                if let Some(prev) = locals.get(slot) {
+                    if let Some(head) = prev.split('<').next() {
+                        if prev.contains('<') && head == ty {
+                            continue;
+                        }
+                    }
+                }
+            }
             locals.insert(*slot, ty.clone());
         }
     }
