@@ -257,6 +257,13 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
     // declare never-written consumer-typed slots with their inferred type (not the cache's wrong one)
     for (slot, ty) in &slot_overrides {
         if used.contains(slot) {
+            // Never let a consumer-derived `?` (the AngelScript template type, e.g. an opCast
+            // out-param slot) clobber a concrete type already inferred for the slot — declaring
+            // `? local_N;` is a syntax error that stubs the whole function. Keep the concrete
+            // type (e.g. the opCast retype) when the override is the unusable `?`.
+            if ty == "?" && locals.get(slot).map(|t| t != "?").unwrap_or(false) {
+                continue;
+            }
             locals.insert(*slot, ty.clone());
         }
     }
@@ -579,6 +586,48 @@ fn infer_locals(f: &Func, refs: &RefResolver) -> BTreeMap<i32, String> {
                 locals.insert(dst, ty);
             }
             _ => {}
+        }
+    }
+    // opCast retype: a script-handle downcast `T@ dst = Cast<T>(src)` lowers to
+    // `TYPEID <tid> ; PSF <dst> ; PshVPtr <src> ; CALLSYS opCast`, and the cache types the
+    // out-slot `dst` as the AngelScript `?` template type. Declaring `? local_N;` is a syntax
+    // error ("Expected expression value, instead found '?'") that stubs the whole function.
+    // Retype `dst` to the cast's resolved target T (from the preceding TYPEID) so it declares
+    // as e.g. `UGothicFinalDataGame local_N;` and the recovered `local_N = Cast<T>(src);`
+    // type-checks. This is the declaration-side counterpart of the structure.rs opCast recovery.
+    {
+        let mut last_tid: Option<i32> = None;
+        let mut last_psf: Option<i32> = None;
+        for ins in &instrs {
+            match ins.op.name {
+                "TYPEID" => {
+                    last_tid = ins.dwords.first().map(|d| *d as i32);
+                    last_psf = None;
+                }
+                "PSF" => {
+                    // first PSF after a TYPEID is the opCast out-slot destination
+                    if last_tid.is_some() {
+                        last_psf = ins.words.first().map(|w| *w as i16 as i32);
+                    }
+                }
+                "CALLSYS" | "Thiscall1" => {
+                    let ptr = ins.qwords.first().copied().unwrap_or(0) as i64;
+                    if refs.func_by_ptr(ptr) == Some("opCast") {
+                        if let (Some(tid), Some(dst)) = (last_tid, last_psf) {
+                            if dst > 0 {
+                                if let Some(t) = super::structure::resolve_cast_typeid(refs, tid) {
+                                    if t.starts_with('U') || t.starts_with('A') {
+                                        locals.insert(dst, t);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    last_tid = None;
+                    last_psf = None;
+                }
+                _ => {}
+            }
         }
     }
     let _ = token_keyword; // keep import used if obj path elided

@@ -228,6 +228,24 @@ fn scan_back_retval(ctx: &Ctx, before: usize) -> Option<String> {
     None
 }
 
+/// Resolve a Cast/TYPEID operand to a target typename. AngelScript bytecode typeids carry
+/// flag bits in the high word — most notably `asTYPEID_OBJHANDLE` (0x40000000) and
+/// `asTYPEID_HANDLETOCONST` (0x20000000) — that are NOT part of the key stored in the cache's
+/// TypeIdReferenceToPointer table (which keys on the object-type id incl. SCRIPTOBJECT/TEMPLATE
+/// bits but WITHOUT the handle/const flags). Strip those flags before lookup, trying the raw id
+/// first for robustness. Returns the resolved typename, or None if unresolvable.
+pub(crate) fn resolve_cast_typeid(refs: &RefResolver, tid: i32) -> Option<String> {
+    const OBJHANDLE: u32 = 0x4000_0000;
+    const HANDLETOCONST: u32 = 0x2000_0000;
+    let raw = tid as u32;
+    for cand in [raw, raw & !OBJHANDLE, raw & !(OBJHANDLE | HANDLETOCONST)] {
+        if let Some(t) = refs.type_by_id(cand as i32) {
+            return Some(t.to_string());
+        }
+    }
+    None
+}
+
 /// A primitive numeric-conversion opcode (`dst = (cast) src`); the cast is implicit in
 /// type-erased AngelScript source, so we render the plain copy `dst = src`.
 fn is_numeric_cast(n: &str) -> bool {
@@ -607,6 +625,10 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
     let mut pending: Option<String> = None; // unconsumed call/ctor result
     let mut pending_ty: Option<String> = None; // recovered type of `pending` (call return type)
     let mut ret_val: Option<String> = None;
+    // Target type of the most recent TYPEID push — the implicit type operand of the following
+    // `opCast` behaviour call (the lowered form of `Cast<T>(x)`). Resolved to a typename so the
+    // opCast can be rendered as `Cast<T>(src)` instead of a discarded `src.opCast(out)`.
+    let mut last_typeid: Option<String> = None;
     let name = |off: i32| ctx.slot_name(off);
     let w = |ins: &Instr, i: usize| s16(ins.words.get(i).copied().unwrap_or(0));
 
@@ -858,6 +880,33 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
             "CALLSYS" | "Thiscall1" => {
                 let ptr = ins.qwords.first().copied().unwrap_or(0) as i64;
                 let f = ctx.refs.func_by_ptr(ptr).unwrap_or("syscall?").to_string();
+                if f == "opCast" {
+                    // `opCast` is the AngelScript handle-downcast behaviour — the lowered form of
+                    // `T@ dst = Cast<T>(src)`. The cache renders it `src.opCast(out)` with the cast
+                    // RESULT written into the `out` arg slot, then a following RefCpyV copies that
+                    // slot into the real destination/return local. Emitting the bare `opCast` call
+                    // (and dropping the out-write) leaves the destination unwritten → the function
+                    // returns null. Recover it as an assignment `out = Cast<T>(src);` so the value
+                    // FLOWS into the store/return. T comes from the preceding TYPEID.
+                    let src = stack.pop().map(|a| a.s); // top = receiver = source handle
+                    let dst = stack.pop().map(|a| a.s); // next = the `out` destination slot
+                    let t = last_typeid.take();
+                    if let (Some(dst), Some(src)) = (dst, src) {
+                        flush!();
+                        // Emit a typed `Cast<T>(src)` only for a real object/script target type
+                        // (U*/A*); fall back to a bare passthrough `dst = src` when T is
+                        // unresolved or not an object — the value must still FLOW into the store
+                        // so the destination/return local is written (never a discarded cast).
+                        let rhs = match &t {
+                            Some(ty) if ty.starts_with('U') || ty.starts_with('A') => {
+                                format!("Cast<{ty}>({src})")
+                            }
+                            _ => src,
+                        };
+                        out.push(format!("{dst} = {rhs};"));
+                    }
+                    continue;
+                }
                 pending = if f == "StaticClass" {
                     stack.clear();
                     pending_ty = None;
@@ -955,14 +1004,41 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                     ref_reg_ty = top.ty;
                 }
             }
-            // Handle-copy (asBC stack_inc -2): pop the source pointer to BALANCE the operand
-            // stack (the dominant phantom-arg cause). We deliberately do NOT emit `slot = src`:
-            // the source is often a const/derived handle whose direct assignment to the dest
-            // local fails to compile, and the value is re-read where it's actually used.
-            "RefCpyV" | "REFCPY" => { stack.pop(); }
+            // RefCpyV (wW_ARG): copy the top-of-stack handle into the destination slot named by
+            // the word operand — `dst_slot = src`. This is the step that moves an opCast result
+            // (or any local handle) from a temp into the real destination/return local; dropping
+            // it was a primary cause of `return`ing an unwritten (null) local. Emit it as a
+            // statement (NOT a stack push) so it cannot reintroduce phantom call args.
+            //
+            // GUARD: only emit when the source is a recovered local slot (`local_N`) or a
+            // `Cast<...>` expression — a genuine temporary whose copy completes a recovered
+            // dataflow. Copying a const PARAMETER (rendered as its bare name) into a non-const
+            // local yields "Can't implicitly convert from 'const X' to 'X'", so those stay
+            // dropped (the prior conservative behaviour); the value is re-read where used.
+            "RefCpyV" => {
+                let dst = name(w(ins, 0));
+                if let Some(top) = stack.pop() {
+                    let ok = !top.s.is_empty()
+                        && top.s != dst
+                        && (top.s.starts_with("local_") || top.s.starts_with("Cast<"));
+                    if ok {
+                        flush!();
+                        out.push(format!("{dst} = {};", top.s));
+                    }
+                }
+            }
+            // REFCPY (NO_ARG): a pure stack handle-copy with no destination slot operand — just
+            // balance the operand stack (the dominant phantom-arg cause); the value is re-read
+            // where it is actually used.
+            "REFCPY" => { stack.pop(); }
             // The TYPEID push is the implicit type operand of the following opCast/cast syscall
-            // (NOT counted in the cache param list) — drop it so the cast block stays balanced.
-            "TYPEID" => {}
+            // (NOT counted in the cache param list) — it is not a real stack arg, so don't push
+            // it. Capture its resolved typename as the target T of the upcoming `opCast` so the
+            // cast renders `Cast<T>(src)` instead of a discarded `src.opCast(out)`.
+            "TYPEID" => {
+                let tid = ins.dwords.first().copied().unwrap_or(0) as i32;
+                last_typeid = resolve_cast_typeid(ctx.refs, tid);
+            }
             // primitive numeric conversions (iTOf/fTOi/dTOf/sbTOi/...): `dst = src`. A
             // float/double -> integer narrowing must be made EXPLICIT (`dst = int(src)`) or the
             // compiler rejects it as an implicit precision loss; widenings stay implicit.
@@ -984,7 +1060,24 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
             "OBJTYPE" => stack.push(Arg::obj("objtype".into())), // +2: RTTI objtype ptr
             "STR" => stack.push(Arg::obj("\"\"".into())),         // +3: string-constant push
             "PshListElmnt" => stack.push(Arg::int(name(w(ins, 0)))), // +2: list element
-            "COPY" | "Cast" => { stack.pop(); }                  // -2: pop the source ptr
+            "COPY" => { stack.pop(); }                           // -2: pop the source ptr
+            // asBC_Cast (DW_ARG=target typeid): a script-handle DOWNCAST. Pop the source handle
+            // and push the cast RESULT `Cast<T>(src)` (typed) so the following store writes the
+            // real object instead of dropping it. T is the instruction's own typeid operand.
+            // (This opcode is unused by the current cache — the fork lowers casts to the `opCast`
+            // behaviour above — but is handled for completeness/robustness.) Fall back to a bare
+            // passthrough when T is unresolved or not an object, so the value always FLOWS.
+            "Cast" => {
+                if let Some(src) = stack.pop() {
+                    let tid = ins.dwords.first().copied().unwrap_or(0) as i32;
+                    match resolve_cast_typeid(ctx.refs, tid) {
+                        Some(ty) if ty.starts_with('U') || ty.starts_with('A') => {
+                            stack.push(Arg::typed(format!("Cast<{ty}>({})", src.s), Some(ty)));
+                        }
+                        _ => stack.push(src),
+                    }
+                }
+            }
             // conditional jump: if no comparison was recovered, the tested value is the live
             // call result / bool register — use it as the branch condition (consume so it's
             // not flushed as a stray statement).
