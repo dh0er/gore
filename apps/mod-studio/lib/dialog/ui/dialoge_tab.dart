@@ -83,8 +83,13 @@ class _DialogBrowserState extends ConsumerState<_DialogBrowser> {
   final TextEditingController _searchController = TextEditingController();
   String _query = '';
 
-  /// Keys of groups the user has expanded. Empty = everything collapsed.
+  /// Groups the user expanded while NOT searching. Empty = collapsed by default.
   final Set<String> _expanded = <String>{};
+
+  /// Groups the user explicitly collapsed WHILE searching. While searching,
+  /// matching groups are open by default, so this records the exceptions —
+  /// letting groups stay collapsible even with an active query.
+  final Set<String> _collapsed = <String>{};
 
   @override
   void dispose() {
@@ -92,27 +97,18 @@ class _DialogBrowserState extends ConsumerState<_DialogBrowser> {
     super.dispose();
   }
 
+  /// Whether a group is open: default-collapsed (opt-in via [_expanded]) with no
+  /// query; default-open (opt-out via [_collapsed]) while searching.
+  bool _isOpen(String key, bool searching) =>
+      searching ? !_collapsed.contains(key) : _expanded.contains(key);
+
   void _toggleGroup(DialogGroupRow row) {
     final key = _groupKey(row.isBark, row.speaker);
+    final searching = _query.trim().isNotEmpty;
     setState(() {
-      if (!_expanded.remove(key)) _expanded.add(key);
+      final set = searching ? _collapsed : _expanded;
+      if (!set.remove(key)) set.add(key);
     });
-  }
-
-  /// Collapse-aware view (used when no search query is active): always emit
-  /// group headers, but emit a group's line rows only when it is expanded.
-  List<DialogRow> _collapsedRows(List<DialogRow> rows) {
-    final out = <DialogRow>[];
-    var currentExpanded = false;
-    for (final row in rows) {
-      if (row is DialogGroupRow) {
-        currentExpanded = _expanded.contains(_groupKey(row.isBark, row.speaker));
-        out.add(row);
-      } else if (row is DialogLineRow && currentExpanded) {
-        out.add(row);
-      }
-    }
-    return out;
   }
 
   /// Whether [id]'s catalog entry matches [query] by id substring or by any of
@@ -131,28 +127,32 @@ class _DialogBrowserState extends ConsumerState<_DialogBrowser> {
     return false;
   }
 
-  /// Build the filtered, flattened row list. Group headers are kept only when
-  /// the group has at least one matching line under the active query.
-  List<DialogRow> _filteredRows(
+  /// Flattened view: emit a group header for every group that has ≥1 qualifying
+  /// line (matching the query when searching, else any line), and that group's
+  /// (matching) line rows only when the group is open. Collapsing works in both
+  /// modes.
+  List<DialogRow> _visibleRows(
     List<DialogRow> rows,
     String query,
     Map<String, Map<String, String>> catalog,
   ) {
-    if (query.isEmpty) return rows;
+    final searching = query.isNotEmpty;
     final out = <DialogRow>[];
-    DialogGroupRow? pendingHeader;
-    var headerHasChildren = false;
+    DialogGroupRow? header;
+    var headerEmitted = false;
+    var open = false;
     for (final row in rows) {
       if (row is DialogGroupRow) {
-        pendingHeader = row;
-        headerHasChildren = false;
+        header = row;
+        headerEmitted = false;
+        open = _isOpen(_groupKey(row.isBark, row.speaker), searching);
       } else if (row is DialogLineRow) {
-        if (!_matches(row.id, query, catalog)) continue;
-        if (pendingHeader != null && !headerHasChildren) {
-          out.add(pendingHeader);
-          headerHasChildren = true;
+        if (searching && !_matches(row.id, query, catalog)) continue;
+        if (header != null && !headerEmitted) {
+          out.add(header);
+          headerEmitted = true;
         }
-        out.add(row);
+        if (open) out.add(row);
       }
     }
     return out;
@@ -164,11 +164,7 @@ class _DialogBrowserState extends ConsumerState<_DialogBrowser> {
     final catalog = ref.watch(locCatalogProvider).value ?? const {};
     final allRows = ref.watch(dialogRowsProvider);
     final query = _query.trim().toLowerCase();
-    // With a search query active, show matching lines (groups effectively
-    // expanded). With no query, apply the default-collapsed group logic.
-    final rows = query.isEmpty
-        ? _collapsedRows(allRows)
-        : _filteredRows(allRows, query, catalog);
+    final rows = _visibleRows(allRows, query, catalog);
 
     final lang = gameLangByCode(ref.watch(localeProvider));
     final selectedId = ref.watch(_selectedDialogIdProvider);
@@ -196,10 +192,10 @@ class _DialogBrowserState extends ConsumerState<_DialogBrowser> {
                   itemBuilder: (context, index) {
                     final row = rows[index];
                     if (row is DialogGroupRow) {
-                      // When searching, matching groups are shown expanded.
-                      final expanded = query.isNotEmpty ||
-                          _expanded
-                              .contains(_groupKey(row.isBark, row.speaker));
+                      final expanded = _isOpen(
+                        _groupKey(row.isBark, row.speaker),
+                        query.isNotEmpty,
+                      );
                       return _GroupHeader(
                         row: row,
                         expanded: expanded,
