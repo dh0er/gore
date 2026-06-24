@@ -49,6 +49,10 @@ pub struct RefResolver {
     /// FunctionReferences owning class name (from the ObjectType ptr) — disambiguates native
     /// method overloads when looking up arity in the Binds.Cache native API.
     func_owner: HashMap<i64, String>,
+    /// FunctionReferences namespace (e.g. `Gameplay`, `Math`, `System`) for free/static native
+    /// functions — a call must be qualified `Namespace::func(...)` or the global-scope lookup
+    /// fails with "No matching signatures". Empty for un-namespaced globals and for methods.
+    func_ns: HashMap<i64, String>,
     /// Native AngelScript API arities parsed from Binds.Cache (fallback arity for native calls
     /// whose param count isn't carried in the script FunctionReferences).
     native: Option<super::binds::NativeApi>,
@@ -89,7 +93,7 @@ impl RefResolver {
             let key = c.read_i64()?;
             let name = c.read_sia()?;
             c.read_sia()?; // Module
-            c.read_sia()?; // Namespace
+            let ns = c.read_sia()?; // Namespace
             c.skip(4)?; // bIsConst
             c.skip(4)?; // bIsImportedDecl
             let is_method = c.read_bool4()?;
@@ -109,6 +113,11 @@ impl RefResolver {
             r.func_ret.insert(key, ret);
             if let Some(cls) = r.type_by_ptr.get(&objtype) {
                 r.func_owner.insert(key, cls.clone());
+            }
+            // Only a non-method (free/static) function needs namespace qualification; a method is
+            // rendered via its receiver. Record the namespace so the call site can prefix it.
+            if !is_method && !ns.is_empty() {
+                r.func_ns.insert(key, ns);
             }
             r.func_by_ptr.insert(key, name);
         }
@@ -199,6 +208,10 @@ impl RefResolver {
     }
     pub fn func_by_ptr(&self, ptr: i64) -> Option<&str> {
         self.func_by_ptr.get(&ptr).map(|s| s.as_str())
+    }
+    /// Namespace (`Gameplay`, `Math`, ...) for a free/static native function by ptr, if any.
+    pub fn func_ns_by_ptr(&self, ptr: i64) -> Option<&str> {
+        self.func_ns.get(&ptr).map(|s| s.as_str())
     }
     /// Parameter DataTypes for a function by ptr (excludes the receiver).
     pub fn func_params_by_ptr(&self, ptr: i64) -> Option<&[DataType]> {

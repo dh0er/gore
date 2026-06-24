@@ -967,7 +967,15 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 } else {
                     pending_ty = ctx.refs.func_ret_by_ptr(ptr).map(|d| d.base_name(ctx.refs));
                     let na = ctx.refs.native_arity_by_ptr(ptr, &f);
-                    build_call(&mut stack, &f, ctx.refs.is_method_by_ptr(ptr), ctx.super_ctor, ctx.refs.func_params_by_ptr(ptr), na, ctx.refs)
+                    // A free/static native function in a namespace (Gameplay, Math, System, ...)
+                    // must be called qualified `Namespace::func(...)` or the global lookup fails
+                    // with "No matching signatures". (Methods carry no namespace -> rendered via
+                    // their receiver, unchanged. Arity lookup still uses the bare name + owner.)
+                    let qualified = match ctx.refs.func_ns_by_ptr(ptr) {
+                        Some(ns) => format!("{ns}::{f}"),
+                        None => f.clone(),
+                    };
+                    build_call(&mut stack, &qualified, ctx.refs.is_method_by_ptr(ptr), ctx.super_ctor, ctx.refs.func_params_by_ptr(ptr), na, ctx.refs)
                 };
             }
             "CallPtr" => {
