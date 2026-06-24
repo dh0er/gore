@@ -323,15 +323,66 @@ struct Cmp {
 /// last-pushed entry (top of stack); the rest are args in push order. Operator-overload
 /// methods (opAssign/opAdd/opEquals/...) render as the source operator. Returns None for
 /// compiler-generated behaviors ($behN construct/destruct) that have no source form.
-fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option<&str>, params: Option<&[DataType]>, native_arity: Option<usize>, refs: &RefResolver) -> Option<String> {
+fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option<&str>, params: Option<&[DataType]>, native_arity: Option<usize>, trusted_arity: Option<usize>, refs: &RefResolver) -> Option<String> {
     if f.starts_with('$') || f.starts_with('~') || f == "__STATIC_NAME" {
+        // EDIT C (the dominant FName form): `__STATIC_NAME` is the synthesized name-table accessor
+        // that produces an FName from a pushed name-table INDEX into the return register; a
+        // following `PshRPtr` re-pushes it as the ENCLOSING call's arg. Dropping it (return None)
+        // loses that arg → `this.GetCharacter()` (0-arg). Recover it as a renderable `FName(<idx>)`
+        // value so it FLOWS into `pending` and PshRPtr restores ARITY (`this.GetCharacter(FName(...))`).
+        // The literal is the name-table index, not the string (acceptable per spec: correct arity
+        // beats a dropped arg). Gate: exactly one int operand on top (the index).
+        if f == "__STATIC_NAME" {
+            if let Some(top) = stack.last() {
+                if top.is_int && !top.s.is_empty() {
+                    let idx = stack.pop().unwrap();
+                    return Some(format!("FName({})", idx.s));
+                }
+            }
+        }
         // generated construct/destruct behavior ($beh, ~Dtor — implicit in AS source) and the
         // synthesized static-name accessor (__STATIC_NAME) have no valid source form; emitting
         // them produces stray `~`/identifier tokens that abort the whole module's parse.
-        stack.clear();
+        //
+        // EDIT A: clearing the WHOLE stack also annihilates an ENCLOSING call's already-pushed
+        // args when this behaviour runs in the MIDDLE of that call's arg-push sequence (the RVO /
+        // by-value out-param idiom). Truncate ONLY this behaviour's own receiver + params (the
+        // PSF'd slot it constructs + its declared args) so enclosing operands survive.
+        match params {
+            Some(p) => {
+                let consume = (p.len() + 1).min(stack.len()); // ctor args + 1 receiver(PSF out-slot)
+                stack.truncate(stack.len() - consume);
+            }
+            // No param info: drop only a top PSF out-slot (the thing it just constructed); never a
+            // genuine sibling arg. If the top isn't a PSF slot, leave the stack untouched.
+            None => {
+                if stack.last().map(|a| a.is_psf).unwrap_or(false) {
+                    stack.pop();
+                }
+            }
+        }
         return None;
     }
-    let mut a: Vec<Arg> = std::mem::take(stack)
+    // EDIT B-PRIME: `mem::take` empties the ENTIRE operand stack — so a NESTED call eats the
+    // enclosing call's deeper args (proven: GetHero/GetDistanceTo). When a TRUSTED arity is known
+    // (script param count, which is authoritative; or Binds native arity), take ONLY the top
+    // `need` entries (this call's receiver + args) and LEAVE deeper entries for the enclosing call.
+    // Untrusted -> keep the original take-all (cache native param counts are unreliable).
+    let need = trusted_arity.map(|n| n + is_method as usize);
+    let mut a: Vec<Arg> = match need {
+        Some(k) if stack.len() > k => {
+            // Split off this call's own operands (top `k`); the deeper entries belong to an
+            // ENCLOSING call. BUT only PRESERVE deeper entries that are plausibly real enclosing
+            // args (typed locals/globals/PSF slots) — a stranded plain int/const literal left over
+            // from an unmodeled push is dead and, if preserved, pollutes the enclosing call's arg
+            // list and force-stubs it (regression). Drop such dead leading constants here, which is
+            // exactly what the old whole-stack `mem::take` did for them.
+            let own = stack.split_off(stack.len() - k);
+            stack.retain(|x| !x.is_int);
+            own
+        }
+        _ => std::mem::take(stack),
+    }
         .into_iter()
         .filter(|x| !x.s.is_empty() && x.s != UNRESOLVED)
         .collect();
@@ -386,6 +437,18 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
         Some(format!("{}.{f}({})", recv.s, render_args(&a, params, refs)))
     } else {
         if refs.is_type_name(f) {
+            // EDIT C: a value-type factory call (FName/E*/T* — NOT U*/A*, which use ALLOC) whose
+            // result is built into the return register and re-pushed by a following `PshRPtr` as
+            // an ENCLOSING call's arg. Dropping it (return None) loses that arg → the consuming
+            // call renders 0-arg (`this.GetCharacter()`). Instead render it as `T(args)` so it
+            // FLOWS into `pending` and PshRPtr recovers it (`this.GetCharacter(FName(...))`).
+            // Restores ARITY; the literal may be a name-table index (acceptable per spec). Gate
+            // strictly: value type AND non-empty args (a 0-arg in-place default ctor stays None).
+            let is_value = matches!(f.bytes().next(), Some(b'F') | Some(b'E') | Some(b'T'));
+            if is_value && !a.is_empty() {
+                maybe_reverse_args(&mut a, params, refs);
+                return Some(format!("{f}({})", render_args(&a, params, refs)));
+            }
             return None; // free-standing in-place constructor — implicit in AS source
         }
         // an operator-overload method with no stack receiver (its target was in the reference
@@ -935,7 +998,10 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 } else {
                     pending_ty = ctx.refs.func_ret_by_id(id).map(|d| d.base_name(ctx.refs));
                     let na = ctx.refs.native_arity_by_id(id, &f);
-                    build_call(&mut stack, &f, ctx.refs.is_method_by_id(id), ctx.super_ctor, ctx.refs.func_params_by_id(id), na, ctx.refs)
+                    // SCRIPT call by id: the cache FunctionReference param count is authoritative
+                    // (only NATIVE param lists undercount), so trust it for the EDIT B-PRIME split.
+                    let trusted = ctx.refs.func_params_by_id(id).map(|p| p.len());
+                    build_call(&mut stack, &f, ctx.refs.is_method_by_id(id), ctx.super_ctor, ctx.refs.func_params_by_id(id), na, trusted, ctx.refs)
                 };
             }
             "CALLSYS" | "Thiscall1" => {
@@ -1029,13 +1095,16 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                         Some(ns) => format!("{ns}::{f}"),
                         None => f.clone(),
                     };
-                    build_call(&mut stack, &qualified, ctx.refs.is_method_by_ptr(ptr), ctx.super_ctor, ctx.refs.func_params_by_ptr(ptr), na, ctx.refs)
+                    // NATIVE call by ptr: the cache param list undercounts, so trust ONLY the
+                    // Binds native arity (`na`) for the EDIT B-PRIME split; None falls back to
+                    // take-all (byte-identical to today when Binds is absent).
+                    build_call(&mut stack, &qualified, ctx.refs.is_method_by_ptr(ptr), ctx.super_ctor, ctx.refs.func_params_by_ptr(ptr), na, na, ctx.refs)
                 };
             }
             "CallPtr" => {
                 let f = name(w(ins, 0));
                 pending_ty = None;
-                pending = build_call(&mut stack, &f, false, ctx.super_ctor, None, None, ctx.refs);
+                pending = build_call(&mut stack, &f, false, ctx.super_ctor, None, None, None, ctx.refs);
             }
             // ---- object construction ----
             "ALLOC" => {
