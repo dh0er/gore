@@ -346,6 +346,7 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
                 return Some(format!("({} {op} {})", recv.s, r));
             }
         }
+        maybe_reverse_args(&mut a, params, refs);
         Some(format!("{}.{f}({})", recv.s, render_args(&a, params, refs)))
     } else {
         if refs.is_type_name(f) {
@@ -363,7 +364,63 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
                 a.drain(..a.len() - w);
             }
         }
+        maybe_reverse_args(&mut a, params, refs);
         Some(format!("{f}({})", render_args(&a, params, refs)))
+    }
+}
+
+/// Count DEFINITE type mismatches when pairing args[i] with params[i] (mirrors `cast_arg`'s
+/// "this arg can't possibly match" rule). A value-type (F/E/T) head-mismatch or an object
+/// arg that is a known non-subclass of a known-script param both count; everything else
+/// (unknown types, int->primitive casts, engine upcasts) is treated as a possible match so
+/// the score never penalizes a legitimately-ordered call.
+fn arg_mismatch_count(a: &[Arg], params: &[DataType], refs: &RefResolver) -> usize {
+    let head = |s: &str| s.split('<').next().unwrap_or(s).to_string();
+    let is_value = |s: &str| matches!(s.bytes().next(), Some(b'F') | Some(b'E') | Some(b'T'));
+    let is_obj = |s: &str| matches!(s.bytes().next(), Some(b'U') | Some(b'A'));
+    let mut n = 0;
+    for (i, arg) in a.iter().enumerate() {
+        let Some(pt) = params.get(i) else { continue };
+        if pt.token != 5 {
+            continue; // primitive/enum param: int casts handle it, not a definite mismatch
+        }
+        let Some(at) = &arg.ty else { continue };
+        let (ph, ah) = (head(&pt.base_name(refs)), head(at));
+        if is_value(&ph) && is_value(&ah) && ph != ah {
+            n += 1;
+        } else if is_obj(&ph) && is_obj(&ah) && ah != ph
+            && refs.is_script_class(&ah) && refs.is_script_class(&ph)
+            && !refs.is_subclass(&ah, &ph)
+        {
+            n += 1;
+        } else if is_value(&ph) && is_obj(&ah) {
+            n += 1; // an object can never satisfy a value-struct (F/E/T) parameter
+        } else if is_obj(&ph) && is_value(&ah) {
+            n += 1; // a value-struct can never satisfy an object parameter
+        }
+    }
+    n
+}
+
+/// AngelScript pushes call arguments such that, for some calls (notably mixin/member-style
+/// calls), the collected stack order is the REVERSE of the source parameter order. Detect this
+/// purely by type evidence: if reversing the args produces STRICTLY fewer definite type
+/// mismatches against the declared params, the call was reverse-pushed -> reverse it. This is
+/// self-validating (a correctly-ordered call already has 0 mismatches, so it is never touched),
+/// so it cannot regress calls that already type-check.
+fn maybe_reverse_args(a: &mut Vec<Arg>, params: Option<&[DataType]>, refs: &RefResolver) {
+    let Some(params) = params else { return };
+    if a.len() < 2 || a.len() != params.len() {
+        return;
+    }
+    let fwd = arg_mismatch_count(a, params, refs);
+    if fwd == 0 {
+        return; // already matches -> leave untouched
+    }
+    let mut rev = a.clone();
+    rev.reverse();
+    if arg_mismatch_count(&rev, params, refs) < fwd {
+        a.reverse();
     }
 }
 
