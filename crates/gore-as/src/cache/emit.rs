@@ -488,6 +488,13 @@ fn used_locals(body: &str) -> HashSet<i32> {
 /// override `slot -> type` ONLY for never-written slots with a single consistent consumer object
 /// type, so it can never clobber a real producer type. Pairs args from the stack TOP (robust to the
 /// cache counting the implicit `this` in a method's param list).
+/// True if a return type name denotes a struct/template returned BY VALUE via a hidden RVO
+/// out-slot (`F*` engine struct, `T*` template value like TSubclassOf). Enums/primitives/objects
+/// return in a register, not an out-slot, so they are excluded.
+fn ret_is_struct(ty: &str) -> bool {
+    matches!(ty.split('<').next().unwrap_or(ty).bytes().next(), Some(b'F') | Some(b'T'))
+}
+
 fn infer_slot_types(f: &Func, refs: &RefResolver) -> HashMap<i32, String> {
     let instrs = match disassemble(&f.bytecode) {
         Ok(i) => i,
@@ -514,13 +521,21 @@ fn infer_slot_types(f: &Func, refs: &RefResolver) -> HashMap<i32, String> {
     }
     let mut ostack: Vec<Option<i32>> = Vec::new();
     let mut cand: HashMap<i32, Option<String>> = HashMap::new(); // slot -> Some(type) | None(conflict)
-    let mut pair = |ostack: &mut Vec<Option<i32>>, params: Option<&[super::types::DataType]>, is_method: bool, cand: &mut HashMap<i32, Option<String>>| {
+    let mut pair = |ostack: &mut Vec<Option<i32>>, params: Option<&[super::types::DataType]>, is_method: bool, ret_struct: bool, cand: &mut HashMap<i32, Option<String>>| {
         let Some(params) = params else { ostack.clear(); return; };
-        let total = if is_method { params.len() + 1 } else { params.len() };
+        // A method returning a struct BY VALUE (F/T/E) carries a hidden RVO out-slot pushed as the
+        // last user arg (just before the receiver); count it so it is consumed, but exclude it from
+        // pairing (it is NOT params[last] — pairing it would shift every real arg one param over and
+        // mis-type the slot, e.g. the TSubclassOf out param landing on an EQuestState param).
+        let rvo = (ret_struct && is_method) as usize;
+        let total = if is_method { params.len() + 1 + rvo } else { params.len() };
         let take = total.min(ostack.len());
         let popped = ostack.split_off(ostack.len() - take);
-        // method: top popped entry is the receiver -> drop it; the rest are the user args
-        let args = if is_method && !popped.is_empty() { &popped[..popped.len() - 1] } else { &popped[..] };
+        // method: top popped entry is the receiver -> drop it (plus the RVO out-slot just below it);
+        // the rest are the user args.
+        let args = if is_method && !popped.is_empty() {
+            &popped[..popped.len().saturating_sub(1 + rvo)]
+        } else { &popped[..] };
         // pair from the TOP: last arg <-> last param (so a leading `this` param, if the cache
         // counts it, never shifts the user-arg pairing).
         for (i, slot) in args.iter().rev().enumerate() {
@@ -546,11 +561,38 @@ fn infer_slot_types(f: &Func, refs: &RefResolver) -> HashMap<i32, String> {
             | "TYPEID" | "OBJTYPE" | "PshListElmnt" => ostack.push(None),
             "CALL" | "CALLINTF" | "CALLBND" => {
                 let id = ins.dwords.first().copied().unwrap_or(0) as i32;
-                pair(&mut ostack, refs.func_params_by_id(id), refs.is_method_by_id(id), &mut cand);
+                let rs = refs.func_ret_by_id(id).map(|d| ret_is_struct(&d.base_name(refs))).unwrap_or(false);
+                pair(&mut ostack, refs.func_params_by_id(id), refs.is_method_by_id(id), rs, &mut cand);
             }
             "CALLSYS" | "Thiscall1" => {
                 let ptr = ins.qwords.first().copied().unwrap_or(0) as i64;
-                pair(&mut ostack, refs.func_params_by_ptr(ptr), refs.is_method_by_ptr(ptr), &mut cand);
+                // `$beh0` is the in-place CONSTRUCT behaviour: `<arg> ; PSF <slot> ; CALLSYS $beh0`
+                // constructs the value AT the PSF'd receiver slot (top of stack). That slot's type
+                // is the construct OWNER (e.g. TSubclassOf<UQuest>), not any callee param — pairing
+                // it as an ordinary arg mis-types it (EQuestState). Type the receiver from the owner
+                // and consume the behaviour's operands without arg-pairing.
+                if refs.func_by_ptr(ptr) == Some("$beh0") {
+                    let owner = refs.func_owner_by_ptr(ptr).map(|s| s.to_string());
+                    // receiver = top operand; ctor args = the params below it.
+                    if let Some(Some(rslot)) = ostack.last().copied() {
+                        if let Some(ty) = owner {
+                            if !ty.is_empty() {
+                                match cand.get(&rslot) {
+                                    None => { cand.insert(rslot, Some(ty)); }
+                                    Some(Some(prev)) if *prev != ty => { cand.insert(rslot, None); }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                    // pop receiver + ctor args off the operand stack so they don't leak.
+                    let nargs = refs.func_params_by_ptr(ptr).map(|p| p.len()).unwrap_or(0);
+                    let drop_n = (1 + nargs).min(ostack.len());
+                    ostack.truncate(ostack.len() - drop_n);
+                    continue;
+                }
+                let rs = refs.func_ret_by_ptr(ptr).map(|d| ret_is_struct(&d.base_name(refs))).unwrap_or(false);
+                pair(&mut ostack, refs.func_params_by_ptr(ptr), refs.is_method_by_ptr(ptr), rs, &mut cand);
             }
             _ => {}
         }

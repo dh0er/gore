@@ -323,7 +323,8 @@ struct Cmp {
 /// last-pushed entry (top of stack); the rest are args in push order. Operator-overload
 /// methods (opAssign/opAdd/opEquals/...) render as the source operator. Returns None for
 /// compiler-generated behaviors ($behN construct/destruct) that have no source form.
-fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option<&str>, params: Option<&[DataType]>, native_arity: Option<usize>, trusted_arity: Option<usize>, refs: &RefResolver) -> Option<String> {
+#[allow(clippy::too_many_arguments)]
+fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option<&str>, params: Option<&[DataType]>, native_arity: Option<usize>, trusted_arity: Option<usize>, target_owner: Option<&str>, cur_class: Option<&str>, non_virtual: bool, ret_ty: Option<&str>, refs: &RefResolver) -> Option<String> {
     if f.starts_with('$') || f.starts_with('~') || f == "__STATIC_NAME" {
         // EDIT C (the dominant FName form): `__STATIC_NAME` is the synthesized name-table accessor
         // that produces an FName from a pushed name-table INDEX into the return register; a
@@ -368,7 +369,12 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
     // (script param count, which is authoritative; or Binds native arity), take ONLY the top
     // `need` entries (this call's receiver + args) and LEAVE deeper entries for the enclosing call.
     // Untrusted -> keep the original take-all (cache native param counts are unreliable).
-    let need = trusted_arity.map(|n| n + is_method as usize);
+    // A method returning a struct BY VALUE (F*/T* head) also pushes a hidden RVO out-slot, so its
+    // frame is params + receiver + 1; account for it or the split drops a real leading arg.
+    let rvo_slot = is_method && ret_ty
+        .map(|t| matches!(t.split('<').next().unwrap_or(t).bytes().next(), Some(b'F') | Some(b'T')))
+        .unwrap_or(false);
+    let need = trusted_arity.map(|n| n + is_method as usize + rvo_slot as usize);
     let mut a: Vec<Arg> = match need {
         Some(k) if stack.len() > k => {
             // Split off this call's own operands (top `k`); the deeper entries belong to an
@@ -394,6 +400,29 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
     let has_recv = is_method && !a.is_empty();
     if has_recv {
         let recv = a.pop().unwrap();
+        // Fix b3 — RVO STRUCT-RETURN: a script method returning a struct BY VALUE
+        // (`FQuestRequirement MakeRequirement(...)`) is lowered as: push real args; push a hidden
+        // `PSF <out_slot>` RVO destination; push receiver; CALL/CALLINTF. The callee writes its
+        // return into `<out_slot>`. Recover it as `out_slot = f(real_args);` (analogous to the
+        // existing `$beh0`/`opCast` PSF out-slot arms) instead of dropping the result. Run BEFORE
+        // the arity trim: the hidden out-slot inflates the arg count one past `arity`, so removing
+        // it first restores the correct count (else the trim drops a real leading arg).
+        fn head(s: &str) -> &str { s.split('<').next().unwrap_or(s) }
+        if let Some(rh) = ret_ty.map(head) {
+            if matches!(rh.bytes().next(), Some(b'F') | Some(b'T') | Some(b'E')) {
+                // the RVO out-slot = a PSF arg whose type head equals the return-type head
+                if let Some(pos) = a.iter().position(|x| x.is_psf
+                    && x.ty.as_deref().map(head) == Some(rh)) {
+                    let out = a.remove(pos).s;
+                    if let Some(w) = arity {
+                        let w = w.min(a.len());
+                        if a.len() > w { a.drain(..a.len() - w); }
+                    }
+                    maybe_reverse_args(&mut a, params, refs);
+                    return Some(format!("{out} = {f}({})", render_args(&a, params, refs)));
+                }
+            }
+        }
         // trim phantom extras: keep only the last `w` user args (the cache arity may include the
         // now-popped `this`, so cap below the popped count, never above).
         if let Some(w) = arity {
@@ -406,6 +435,16 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
         // super name is itself a type name).
         if super_ctor == Some(f) && recv.s == "this" {
             return Some(format!("super({})", render_args(&a, params, refs)));
+        }
+        // BUG (a) — SUPER-CALL: a NON-VIRTUAL (`CALL`) dispatch on `this` to a method owned by a
+        // STRICT ANCESTOR of the current class is a `Super::method()` call, not `this.method()`
+        // (a genuine virtual self-call compiles to CALLINTF, never a CALL to the base func-id).
+        if non_virtual && recv.s == "this" {
+            if let (Some(owner), Some(cur)) = (target_owner, cur_class) {
+                if owner != cur && refs.is_subclass(cur, owner) {
+                    return Some(format!("Super::{f}({})", render_args(&a, params, refs)));
+                }
+            }
         }
         // a call whose name is a type = an in-place constructor (member struct default ctor) —
         // implicit in AS source, emit nothing.
@@ -744,6 +783,24 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
         };
     }
 
+    // Fix b2 — flush a still-pending statement-position call result before the NEXT call would
+    // overwrite/drop it (e.g. `MakeRequirement(...)` then `Add(...)`, then a dtor that returns
+    // None). UNLIKE `flush!`, this DROPS a pending that carries an ARGMISMATCH sentinel (\u{2})
+    // or is unresolved: at the call boundary such a result was previously silently overwritten by
+    // the next call's `pending = ...`. Surfacing it as an emitted statement would propagate the
+    // sentinel and force-stub the whole function (regression). So only genuinely-recovered,
+    // statement-valid results are emitted; bad ones stay dropped exactly as before.
+    macro_rules! flush_b2 {
+        () => {
+            if let Some(p) = pending.take() {
+                if !p.contains('\u{2}') && !p.contains(UNRESOLVED) {
+                    out.push(format!("{p};"));
+                }
+            }
+            pending_ty = None;
+        };
+    }
+
     let insns = &ctx.instrs[lo..hi];
     for k in 0..insns.len() {
         let ins = &insns[k];
@@ -983,10 +1040,15 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
             "TNP" => { if let Some(c) = &mut cmp { c.op = Some("<="); } }
             // ---- calls ----
             "CALL" | "CALLINTF" | "CALLBND" => {
+                // Fix b2 — FLUSH a pending statement-position call result before this call starts,
+                // so a chained statement call (e.g. MakeRequirement then Add) isn't silently
+                // overwritten. Drops sentinel/unresolved pendings (see flush_b2 doc).
+                flush_b2!();
                 let id = ins.dwords.first().copied().unwrap_or(0) as i32;
                 let f = ctx.refs.func_by_id(id).unwrap_or("func?").to_string();
                 pending = if f == "StaticClass" {
-                    stack.clear();
+                    // Fix b1 — StaticClass takes 0 operands; the stack holds the ENCLOSING call's
+                    // already-pushed args. Do NOT clear it (clearing destroys those args).
                     pending_ty = None;
                     // The class is the StaticClass func's NAMESPACE last-segment (objtype is
                     // NULL for StaticClass; the target class lives in the namespace), not the
@@ -1001,10 +1063,14 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                     // SCRIPT call by id: the cache FunctionReference param count is authoritative
                     // (only NATIVE param lists undercount), so trust it for the EDIT B-PRIME split.
                     let trusted = ctx.refs.func_params_by_id(id).map(|p| p.len());
-                    build_call(&mut stack, &f, ctx.refs.is_method_by_id(id), ctx.super_ctor, ctx.refs.func_params_by_id(id), na, trusted, ctx.refs)
+                    let owner = ctx.refs.func_owner_by_id(id);
+                    build_call(&mut stack, &f, ctx.refs.is_method_by_id(id), ctx.super_ctor, ctx.refs.func_params_by_id(id), na, trusted, owner, ctx.class_name, n == "CALL", pending_ty.as_deref(), ctx.refs)
                 };
             }
             "CALLSYS" | "Thiscall1" => {
+                // Fix b2 — flush a pending statement-position call result before this call begins
+                // (e.g. MakeRequirement's result must be emitted before `Add(...)` overwrites it).
+                flush_b2!();
                 let ptr = ins.qwords.first().copied().unwrap_or(0) as i64;
                 let f = ctx.refs.func_by_ptr(ptr).unwrap_or("syscall?").to_string();
                 if f == "opCast" {
@@ -1053,7 +1119,15 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                             let ty = recv.ty.clone().unwrap();
                             stack.pop(); // remove the receiver; the rest are the ctor args
                             let params = ctx.refs.func_params_by_ptr(ptr);
-                            let args: Vec<Arg> = std::mem::take(&mut stack).into_iter()
+                            // Consume ONLY this ctor's own args from the TOP (mirror build_call's
+                            // EDIT A/B-PRIME) — a whole-stack `mem::take` would also drain the
+                            // ENCLOSING call's operands (the 4 EQuestState args of MakeRequirement),
+                            // re-dropping them once Fix b1 keeps them on the stack.
+                            let args: Vec<Arg> = match params.map(|p| p.len()) {
+                                Some(k) if stack.len() > k => stack.split_off(stack.len() - k),
+                                _ => std::mem::take(&mut stack),
+                            }
+                                .into_iter()
                                 .filter(|x| !x.s.is_empty() && x.s != UNRESOLVED).collect();
                             // Gate (b): no arg is itself a PSF slot — that is a copy/convert ctor
                             // whose true source is an unrecovered pending call result; rendering it
@@ -1078,7 +1152,8 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                     // not a recoverable in-place construct -> fall through to the generic `$` drop.
                 }
                 pending = if f == "StaticClass" {
-                    stack.clear();
+                    // Fix b1 — do NOT clear the stack; StaticClass takes 0 operands and the entries
+                    // present belong to an ENCLOSING call.
                     pending_ty = None;
                     let cls = ctx.refs.staticclass_class_by_ptr(ptr)
                         .or_else(|| ctx.refs.func_owner_by_ptr(ptr))
@@ -1098,13 +1173,13 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                     // NATIVE call by ptr: the cache param list undercounts, so trust ONLY the
                     // Binds native arity (`na`) for the EDIT B-PRIME split; None falls back to
                     // take-all (byte-identical to today when Binds is absent).
-                    build_call(&mut stack, &qualified, ctx.refs.is_method_by_ptr(ptr), ctx.super_ctor, ctx.refs.func_params_by_ptr(ptr), na, na, ctx.refs)
+                    build_call(&mut stack, &qualified, ctx.refs.is_method_by_ptr(ptr), ctx.super_ctor, ctx.refs.func_params_by_ptr(ptr), na, na, None, ctx.class_name, false, pending_ty.as_deref(), ctx.refs)
                 };
             }
             "CallPtr" => {
                 let f = name(w(ins, 0));
                 pending_ty = None;
-                pending = build_call(&mut stack, &f, false, ctx.super_ctor, None, None, None, ctx.refs);
+                pending = build_call(&mut stack, &f, false, ctx.super_ctor, None, None, None, None, ctx.class_name, false, None, ctx.refs);
             }
             // ---- object construction ----
             "ALLOC" => {
