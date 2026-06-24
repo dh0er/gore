@@ -6,6 +6,29 @@ notes, so every release needs an entry.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.0] - 2026-06-24
+
+### Added
+
+- The editor now speaks 10 languages. The app UI is fully localized, and the
+  chosen language also drives the in-game text shown for items, quests, and
+  knowledge entries.
+- Game text is extracted from your installation on first run (or on demand),
+  so item, quest, and knowledge-entry names appear in your language instead of
+  raw IDs.
+- Inventory items are shown and searchable/filterable by their localized names.
+- Quest and knowledge-entry names are localized; NPCs and quests can be searched
+  by name, and the sidebar groups entries for easier navigation.
+
+### Fixed
+
+- Progression lists are fully paginated, so large lists load completely; the
+  localization cache is resolved from the game executable, and a failed page
+  fetch no longer leaves a partial list.
+- Numerous localization edge cases (first-run prompt, language-dropdown
+  normalization, cache/status handling, snake-case acronym preservation).
+- Live profile state is read through public forwarders for correct values.
+
 ## [0.3.0] - 2026-06-17
 
 - Codec host is now replaced with an in-process Oodle Kraken codec. This removes
