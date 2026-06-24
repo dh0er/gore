@@ -1,7 +1,30 @@
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::Subcommand;
+
+/// Rename whole-word free occurrences of `name` to `newname` in `src` — occurrences NOT preceded
+/// by `.` (so member calls `obj.name(...)` are left alone; only the decl + free calls change).
+fn rename_free_fn(src: &str, name: &str, newname: &str) -> String {
+    let (b, nb) = (src.as_bytes(), name.as_bytes());
+    let word = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    let mut out: Vec<u8> = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        let hit = b[i..].starts_with(nb)
+            && (i == 0 || (!word(b[i - 1]) && b[i - 1] != b'.' && b[i - 1] != b':'))
+            && (i + nb.len() >= b.len() || !word(b[i + nb.len()]));
+        if hit {
+            out.extend_from_slice(newname.as_bytes());
+            i += nb.len();
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).unwrap_or_else(|_| src.to_string())
+}
 use gore_as::cache::header::CacheHeader;
 use gore_as::cache::scan::scan_strings;
 use gore_as::cache::splice::splice_auto;
@@ -163,9 +186,45 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             // cache paths against that real root. (create_dir_all so canonicalize succeeds.)
             std::fs::create_dir_all(&outdir).with_context(|| format!("creating {}", outdir.display()))?;
             let outdir = outdir.canonicalize().with_context(|| format!("resolving {}", outdir.display()))?;
+            // Cross-module free-function collisions: AngelScript compiles all loose .as into ONE
+            // global scope, so two modules each defining `Foo(<same params>)` (even with different
+            // return types) collide as "a function with the same name and parameters already
+            // exists". Find such names and rename each per-module — a function's decl and its
+            // intra-module free calls live in the same emitted file, so a file-local rename
+            // de-collides without breaking resolution (cross-module calls of these don't occur).
+            let mut sig_mods: HashMap<String, HashSet<usize>> = HashMap::new();
+            for (i, m) in mods.iter().enumerate() {
+                for f in &m.functions {
+                    // generated factory accessors are skipped at emit (not free-emitted) — never
+                    // rename them, or free CALLS to the native binding would be broken.
+                    if matches!(f.name.as_str(),
+                        "Spawn" | "Get" | "GetOrCreate" | "Create" | "GetG1R" | "StaticClass") {
+                        continue;
+                    }
+                    // precise signature (render, not base_name) so only GENUINE same-signature
+                    // collisions are flagged — a coarse match falsely flags distinct overloads and
+                    // would rename (and break) functions that are validly called cross-module.
+                    let ptys: Vec<String> = f.params.iter().map(|p| p.ty.render(&refs)).collect();
+                    sig_mods.entry(format!("{}({})", f.name, ptys.join(","))).or_default().insert(i);
+                }
+            }
+            let mut colliding_in: HashMap<usize, HashSet<String>> = HashMap::new();
+            for (sig, modset) in &sig_mods {
+                if modset.len() > 1 {
+                    let name = sig.split('(').next().unwrap_or("").to_string();
+                    for &i in modset {
+                        colliding_in.entry(i).or_default().insert(name.clone());
+                    }
+                }
+            }
             let (mut written, mut stubbed) = (0usize, 0usize);
-            for m in &mods {
-                let src = gore_as::cache::emit::emit_module(m, &refs);
+            for (mi, m) in mods.iter().enumerate() {
+                let mut src = gore_as::cache::emit::emit_module(m, &refs);
+                if let Some(names) = colliding_in.get(&mi) {
+                    for name in names {
+                        src = rename_free_fn(&src, name, &format!("{name}_g{mi}"));
+                    }
+                }
                 if src.contains("not fully recovered") {
                     stubbed += 1;
                 }
