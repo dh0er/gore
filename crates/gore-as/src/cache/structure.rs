@@ -565,6 +565,23 @@ fn field_assign_rhs(rhs: &str, tyname: &str) -> String {
     }
 }
 
+/// True if `tyname` is a UE enum type (`E<Upper>...`) — same shape `cast_to_typename` keys on.
+fn is_enum_name(tyname: &str) -> bool {
+    let b = tyname.as_bytes();
+    b.len() >= 2 && b[0] == b'E' && b[1].is_ascii_uppercase()
+}
+
+/// Wrap an enum-typed RHS being stored into an INT slot as `int(expr)`. AngelScript has no
+/// implicit enum->int conversion, so an enum field-read / enum-returning call stored into an
+/// `int` local fails to compile. Only fires when the value is a known enum AND the dest is an
+/// int slot (so enum->enum and enum->enum-param copies stay bare).
+fn enum_to_int(rhs: String, src_ty: Option<&str>, dst_is_int: bool) -> String {
+    match src_ty {
+        Some(t) if dst_is_int && is_enum_name(t) => format!("int({rhs})"),
+        _ => rhs,
+    }
+}
+
 /// Cast an int RHS to a named target type: `bool` -> `(x != 0)`, UE enum
 /// (`E<Upper>...`) -> `EEnum(x)`. Returns None when no cast applies.
 fn cast_to_typename(rhs: &str, tyname: &str) -> Option<String> {
@@ -770,7 +787,10 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
             _ if n.starts_with("RDR") => {
                 flush!();
                 if let Some(r) = &ref_reg {
-                    out.push(format!("{} = {};", name(w(ins, 0)), r));
+                    let dst_slot = w(ins, 0);
+                    let dst_is_int = dst_slot > 0 && ctx.slot_type(dst_slot).is_none();
+                    let rhs = enum_to_int(r.clone(), ref_reg_ty.as_deref(), dst_is_int);
+                    out.push(format!("{} = {rhs};", name(dst_slot)));
                 }
             }
             _ if n.starts_with("WRTV") => {
@@ -1016,7 +1036,11 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
             }
             "CpyRtoV4" | "CpyRtoV8" => {
                 if let Some(p) = pending.take() {
-                    out.push(format!("{} = {};", name(w(ins, 0)), p));
+                    // an enum-returning call stored into an int slot needs an explicit int(...)
+                    let dst_slot = w(ins, 0);
+                    let dst_is_int = dst_slot > 0 && ctx.slot_type(dst_slot).is_none();
+                    let rhs = enum_to_int(p, pending_ty.as_deref(), dst_is_int);
+                    out.push(format!("{} = {rhs};", name(dst_slot)));
                 }
                 pending_ty = None;
             }
