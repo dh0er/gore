@@ -243,10 +243,15 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
     // hoist every referenced local; infer_locals types what it can, the rest default to `int`
     // (a wrong type just becomes a compile error the in-game loop force-stubs, rather than the
     // whole function stubbing on an undeclared identifier).
+    let used = used_locals(&body);
     let mut locals = infer_locals(f, refs);
-    for n in used_locals(&body) {
+    for &n in &used {
         locals.entry(n).or_insert_with(|| "int".to_string());
     }
+    // Drop locals never referenced in the body: `obj_locals` includes profiling temporaries like
+    // FScopeCycleCounter / FStatID that the body never uses, and they have no default constructor,
+    // so declaring an unused one fails ("No default constructor"). An unused declaration is dead.
+    locals.retain(|slot, _| used.contains(slot));
     // arg slots the bytecode reads beyond the declared parameter list (the signature parse
     // undercounts some value-type / defaulted params). Declare them as `int` locals so the
     // body compiles instead of stubbing wholesale; a wrong type the in-game loop force-stubs.
