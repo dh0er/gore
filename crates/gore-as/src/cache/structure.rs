@@ -435,9 +435,14 @@ fn arg_mismatch_count(a: &[Arg], params: &[DataType], refs: &RefResolver) -> usi
 /// mismatches against the declared params, the call was reverse-pushed -> reverse it. This is
 /// self-validating (a correctly-ordered call already has 0 mismatches, so it is never touched),
 /// so it cannot regress calls that already type-check.
+///
+/// Handles trailing-default omission: a call may pass FEWER args than the callee has params
+/// (the trailing ones default), e.g. `NewObject(Outer, Class)` for `NewObject(Outer, Class,
+/// Name=, bTransient=, Template=)`. The provided args still align to the FIRST params, so the
+/// reversal is scored against `params[0..a.len()]` (more args than params is never valid -> skip).
 fn maybe_reverse_args(a: &mut Vec<Arg>, params: Option<&[DataType]>, refs: &RefResolver) {
     let Some(params) = params else { return };
-    if a.len() < 2 || a.len() != params.len() {
+    if a.len() < 2 || a.len() > params.len() {
         return;
     }
     let fwd = arg_mismatch_count(a, params, refs);
@@ -880,7 +885,10 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 pending = if f == "StaticClass" {
                     stack.clear();
                     pending_ty = None;
-                    Some(format!("{}::StaticClass()", ctx.class_name.unwrap_or("UObject")))
+                    // The class is the function's OWNER (the X in X::StaticClass()), not the
+                    // calling class — `local = UFoo::StaticClass()` from inside UBar must say UFoo.
+                    let cls = ctx.refs.func_owner_by_id(id).or(ctx.class_name).unwrap_or("UObject");
+                    Some(format!("{cls}::StaticClass()"))
                 } else {
                     pending_ty = ctx.refs.func_ret_by_id(id).map(|d| d.base_name(ctx.refs));
                     let na = ctx.refs.native_arity_by_id(id, &f);
@@ -963,7 +971,8 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 pending = if f == "StaticClass" {
                     stack.clear();
                     pending_ty = None;
-                    Some(format!("{}::StaticClass()", ctx.class_name.unwrap_or("UObject")))
+                    let cls = ctx.refs.func_owner_by_ptr(ptr).or(ctx.class_name).unwrap_or("UObject");
+                    Some(format!("{cls}::StaticClass()"))
                 } else {
                     pending_ty = ctx.refs.func_ret_by_ptr(ptr).map(|d| d.base_name(ctx.refs));
                     let na = ctx.refs.native_arity_by_ptr(ptr, &f);
