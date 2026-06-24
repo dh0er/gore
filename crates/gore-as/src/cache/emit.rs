@@ -143,6 +143,10 @@ fn is_generated_spawn(f: &Func, refs: &RefResolver) -> bool {
     {
         return true;
     }
+    // subsystem/singleton accessor: `<Subsystem> Get()` / `GetG1R()` (0 params, handle return).
+    if matches!(f.name.as_str(), "Get" | "GetG1R") && f.params.is_empty() {
+        return true;
+    }
     false
 }
 
