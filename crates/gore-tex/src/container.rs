@@ -19,15 +19,17 @@
 //! export's `class_index` against it. This is an exact, table-free match.
 
 use std::io::Cursor;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use retoc::asset_conversion::{FZenPackageContext, build_legacy};
 use retoc::iostore;
+use retoc::logging::Log;
 use retoc::script_objects::FPackageObjectIndex;
 use retoc::zen::FZenPackageHeader;
-use retoc::{Config, EIoChunkType, FIoChunkId};
+use retoc::{Config, EIoChunkType, FIoChunkId, FPackageId, FSFileWriter, UEPath};
 
-use crate::error::Result;
+use crate::error::{Result, TexError};
 
 /// A texture asset discovered in a container.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -135,6 +137,100 @@ pub fn list_textures(utoc: &Path, _usmap: &Path, filter: Option<&str>) -> Result
     Ok(out)
 }
 
+/// Unpack a single asset's cooked files (.uasset/.uexp/.ubulk) from the
+/// container into `out_dir`. Returns the path to the written `.uasset`.
+///
+/// The asset is converted from its on-disk *zen* (IoStore) form back to the
+/// legacy cooked `.uasset`/`.uexp`/`.ubulk` layout via retoc's
+/// `asset_conversion::build_legacy`. That conversion resolves the package's
+/// script imports against the engine's *global* script-object table, which for
+/// G1R lives in `global.utoc` -- a sibling of the main container, **not** inside
+/// `G1R-Windows.utoc`. So we open the whole Paks *directory* (the parent of
+/// `utoc`) as a composite store: `IoStoreBackend` then exposes the global
+/// script objects through the default `load_script_objects()` while still
+/// serving the asset's chunks. (Opening the single `.utoc` file would make
+/// `build_legacy` fail to resolve script imports.)
+///
+/// `usmap` is accepted for API symmetry; the zen->legacy conversion is driven
+/// entirely by the package's own header + the global script-object table and
+/// does not need property mappings.
+pub fn unpack_asset(
+    utoc: &Path,
+    _usmap: &Path,
+    asset_path: &str,
+    out_dir: &Path,
+) -> Result<PathBuf> {
+    // Open the directory holding the .utoc so the composite store also picks up
+    // `global.utoc` (script objects) -- required for build_legacy to resolve
+    // script imports. Fall back to the file itself if it has no parent.
+    let store_path = utoc.parent().unwrap_or(utoc);
+    let store = iostore::open(store_path, Arc::new(Config::default()))?;
+
+    let container_version = store
+        .container_file_version()
+        .ok_or_else(|| anyhow::anyhow!("container has no TOC version"))?;
+    let header_version = store
+        .container_header_version()
+        .ok_or_else(|| anyhow::anyhow!("container has no header version"))?;
+
+    // Locate the package whose name == asset_path. Reuses the per-package
+    // header-parsing route from `list_textures` (panic-safe: a malformed package
+    // can panic deep in retoc; one bad package must not abort the whole search).
+    let prev_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+
+    let mut found: Option<FPackageId> = None;
+    for pkg in store.packages() {
+        let pkg_id = pkg.id();
+        let matches = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let chunk_id =
+                FIoChunkId::from_package_id(pkg_id, 0, EIoChunkType::ExportBundleData);
+            let data = match store.read(chunk_id) {
+                Ok(d) => d,
+                Err(_) => return false,
+            };
+            let header = match FZenPackageHeader::deserialize(
+                &mut Cursor::new(&data),
+                store.package_store_entry(pkg_id),
+                container_version,
+                header_version,
+                None,
+            ) {
+                Ok(h) => h,
+                Err(_) => return false,
+            };
+            header.package_name() == asset_path
+        }));
+        if let Ok(true) = matches {
+            found = Some(pkg_id);
+            break;
+        }
+    }
+
+    std::panic::set_hook(prev_hook);
+
+    let package_id = found.ok_or_else(|| TexError::AssetNotFound(asset_path.into()))?;
+
+    // Build the legacy cooked files. `build_legacy` writes paths *relative* to
+    // the FSFileWriter's root dir, so we name the output after the asset's leaf
+    // and root the writer at `out_dir`: the .uasset/.uexp/.ubulk land directly
+    // in out_dir sharing the same stem (so `with_extension(..)` finds siblings).
+    std::fs::create_dir_all(out_dir)?;
+    let leaf = asset_path.rsplit('/').next().unwrap_or(asset_path);
+    let out_rel = format!("{leaf}.uasset");
+
+    let log = Log::no_log();
+    // No verse script cells store: G1R textures are plain UTexture2D, and script
+    // cells are only needed to resolve Verse cell imports (none here).
+    let context = FZenPackageContext::create(store.as_ref(), None, &log, None);
+    let writer = FSFileWriter::new(out_dir);
+
+    build_legacy(&context, package_id, UEPath::new(&out_rel), &writer)?;
+
+    let uasset = out_dir.join(format!("{leaf}.uasset"));
+    Ok(uasset)
+}
+
 impl PartialOrd for TextureEntry {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
@@ -179,6 +275,45 @@ mod tests {
         }
         assert!(filtered.len() <= all.len());
         assert!(filtered.iter().all(|e| e.asset_path.contains("Hero")));
+    }
+
+    #[test]
+    fn unpacks_one_texture_asset() {
+        let Some(g) = game_dir() else {
+            eprintln!("skip: game not installed");
+            return;
+        };
+        let utoc = crate::paths::main_container(&g).unwrap();
+        let usmap = crate::paths::usmap(&g).unwrap();
+
+        // Take the first "T_" texture the container actually contains, so the
+        // test stays valid even if a specific path is renamed by a game patch.
+        let textures = list_textures(&utoc, &usmap, Some("T_")).unwrap();
+        let asset = textures
+            .first()
+            .map(|e| e.asset_path.clone())
+            .expect("expected at least one T_ texture in the container");
+        eprintln!("unpacking asset: {asset}");
+
+        let tmp = std::env::temp_dir().join("gore-tex-unpack-test");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let uasset = unpack_asset(&utoc, &usmap, &asset, &tmp).unwrap();
+        assert!(uasset.exists());
+        assert!(std::fs::metadata(&uasset).unwrap().len() > 0);
+
+        let uexp = uasset.with_extension("uexp");
+        let ubulk = uasset.with_extension("ubulk");
+        eprintln!(
+            "unpacked: {:?} ({} bytes); siblings: uexp={} ({} bytes) ubulk={} ({} bytes)",
+            uasset,
+            std::fs::metadata(&uasset).unwrap().len(),
+            uexp.exists(),
+            uexp.exists().then(|| std::fs::metadata(&uexp).unwrap().len()).unwrap_or(0),
+            ubulk.exists(),
+            ubulk.exists().then(|| std::fs::metadata(&ubulk).unwrap().len()).unwrap_or(0),
+        );
     }
 
     /// The real-container test above needs the game installed; this fast test pins
