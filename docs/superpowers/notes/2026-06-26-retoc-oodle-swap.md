@@ -38,13 +38,16 @@ and not needed by gore-tex.
 `retoc` is a Cargo workspace: lib crate `retoc/` + binary `retoc_cli/` +
 `load_logger/`. The lib exposes everything gore-tex needs for T4/T5:
 
-Entry point — open a container or a directory of containers:
+Entry point — open a container or a directory of containers
+(`iostore::open`, `vendor/retoc/src/iostore.rs:58`, signature
+`open<P: AsRef<Path>>(path: P, config: Arc<Config>) -> Result<Box<dyn IoStoreTrait>>`):
 ```rust
 use std::sync::Arc;
 use retoc::{Config, iostore};
-let store: Box<dyn retoc::iostore::IoStoreTrait> =
+let store: Box<dyn iostore::IoStoreTrait> =
     iostore::open("…/G1R-Windows.utoc", Arc::new(Config::default()))?;
 ```
+`Config` is `pub struct Config` (`lib.rs:184`) re-exported at the crate root, and
 `Config::default()` is fine for G1R (unencrypted + unsigned; no AES key needed).
 
 `IoStoreTrait` (`retoc/src/iostore.rs:81`) key methods:
@@ -64,37 +67,106 @@ let store: Box<dyn retoc::iostore::IoStoreTrait> =
 
 ### How T4 (list textures) will use it
 The container holds *cooked* assets; Texture2D class info lives inside the zen
-package header, not in chunk metadata. Two routes:
-- **Asset-registry route (cheap):** parse `AssetRegistry.bin` if present — gives
-  `asset_class` (e.g. `Texture2D`) per asset path. See `retoc::asset_registry::AssetRegistry::deserialize`.
-- **Package route (authoritative):** iterate `store.packages()`, for each read
-  the `ExportBundleData` chunk
-  (`FIoChunkId::from_package_id(pkg.id(), 0, EIoChunkType::ExportBundleData)`),
-  parse with `retoc::zen::FZenPackageHeader::deserialize(...)` (see usage in
-  `retoc_cli` `action_dump_test`, main.rs:984) and inspect export class names for
-  `Texture2D`/`TextureCube`/etc. `iostore::open` + `packages()` + `read()` are the
-  load-bearing calls; gore-tex implements the class filter itself.
+package header, not in chunk metadata. Two routes — **both use only `pub` API
+verified reachable from an external crate:**
+
+**Package route (authoritative, recommended).** `PackageInfo` exposes only
+`.id() -> FPackageId` and `.container()` (`iostore.rs:161-168`) — there is **no**
+`PackageInfo::path()`/`::name()`. The package name lives *inside* the zen header,
+so to map a package to a name you read its header chunk and call the public
+`zen::get_package_name`:
+```rust
+use retoc::{EIoChunkType, FIoChunkId};
+use retoc::iostore::IoStoreTrait;
+
+let hdr_ver = store.container_header_version().expect("container has header"); // EIoContainerHeaderVersion
+for pkg in store.packages() {                       // pkg: PackageInfo
+    let id = FIoChunkId::from_package_id(pkg.id(), 0, EIoChunkType::ExportBundleData);
+    let data = store.read(id)?;                      // fully decoded zen package bytes
+    let name = retoc::zen::get_package_name(&data, hdr_ver)?; // pub fn, zen.rs:21
+    // For the class filter, parse the full header instead of just the name:
+    //   let header = retoc::zen::FZenPackageHeader::deserialize(
+    //       &mut std::io::Cursor::new(&data),
+    //       store.package_store_entry(pkg.id()),     // Option<StoreEntry>
+    //       store.container_file_version().unwrap(), // EIoStoreTocVersion
+    //       hdr_ver,                                 // EIoContainerHeaderVersion
+    //       None,                                    // package_version_override: Option<FPackageFileVersion>
+    //   )?;
+    // then inspect header.exports / export class names for Texture2D/TextureCube/etc.
+}
+```
+Verified `pub`/reachable: `IoStoreTrait::{packages, read, container_header_version,
+container_file_version, package_store_entry}`, `PackageInfo::id`,
+`FIoChunkId::from_package_id` (`lib.rs:882`), `EIoChunkType` (`lib.rs:1239`),
+`zen::get_package_name` (`zen.rs:21`), `FZenPackageHeader::deserialize` (`zen.rs:871`).
+The export-class introspection on the parsed `FZenPackageHeader` is **not yet
+spelled out as verified copy-paste** — the exact public accessors for export
+class names still need to be confirmed against `zen.rs` when T4 is implemented;
+treat the `deserialize` call above as verified and the per-export class extraction
+as TODO-verify.
+
+**Asset-registry route (cheap, if `AssetRegistry.bin` is present).**
+`asset_registry::AssetRegistry::deserialize(stream)` (`asset_registry.rs:648`, pub)
+yields `AssetRegistry` whose `asset_data[].asset_class` (`asset_registry.rs:243/308`)
+gives the class (e.g. `Texture2D`) per asset path. You still locate the registry
+chunk via the package/chunk API above, then `Cursor::new(bytes)` into `deserialize`.
 
 ### How T5 (unpack one asset) will use it
-For a known package path, resolve its `FPackageId`
-(`FPackageId::from_name("/Game/…")`, lib.rs:731) then read its cooked parts by
-chunk type and write `.uasset`/`.uexp`/`.ubulk`:
+**Do not use `FPackageId::from_name`** — it is **private** (`lib.rs:731`, no `pub`)
+and so is the `lower_utf16_cityhash` helper it wraps, so neither is callable from
+gore-tex. Resolve the target `FPackageId` instead by **scanning `store.packages()`
+and matching the package name** (same loop as T4), which uses only public API:
 ```rust
 use retoc::{EIoChunkType, FIoChunkId, FPackageId};
-let pkg = FPackageId::from_name("/Game/Path/To/Asset");
-let uasset = store.read(FIoChunkId::from_package_id(pkg, 0, EIoChunkType::ExportBundleData))?; // header+exports
+use retoc::iostore::IoStoreTrait;
+
+let hdr_ver = store.container_header_version().expect("container has header");
+let target = "/Game/Path/To/Asset"; // package path WITHOUT extension
+
+// 1. Find the FPackageId for the target path.
+let mut pkg_id: Option<FPackageId> = None;
+for pkg in store.packages() {
+    let head = FIoChunkId::from_package_id(pkg.id(), 0, EIoChunkType::ExportBundleData);
+    let name = retoc::zen::get_package_name(&store.read(head)?, hdr_ver)?;
+    if name == target { pkg_id = Some(pkg.id()); break; }
+}
+let pkg = pkg_id.expect("package not found");
+
+// 2. Read its cooked parts by chunk type (header+exports, then optional bulk).
+let uasset = store.read(FIoChunkId::from_package_id(pkg, 0, EIoChunkType::ExportBundleData))?;
 let ubulk_id = FIoChunkId::from_package_id(pkg, 0, EIoChunkType::BulkData);
 let ubulk = store.has_chunk_id(ubulk_id).then(|| store.read(ubulk_id)).transpose()?;
+// OptionalBulkData / MemoryMappedBulkData are pulled the same way if has_chunk_id.
 ```
-(`action_dump_test` in main.rs:960 is the copy-paste reference: it pulls
-ExportBundleData + BulkData + OptionalBulkData + MemoryMappedBulkData for one
-`FPackageId`.) Note: in zen/IoStore form the `.uasset` header and `.uexp` exports
-are a single `ExportBundleData` chunk; producing legacy split
-`.uasset`/`.uexp` requires the zen→legacy conversion in
-`retoc::asset_conversion::build_legacy` (used by `to-legacy`).
+`FPackageId` is `pub struct FPackageId(pub u64)` (`lib.rs:713`) — its `u64` field is
+public, so if you already hold a raw id you can build one with `FPackageId(raw)`,
+and you can recover one from any chunk via `FIoChunkId::get_package_id()`
+(`lib.rs:911`, pub). What you **cannot** do externally is hash a *path string* into
+an id (that path is the private `from_name`); hence the name-scan above.
+
+Verified `pub`/reachable here: `FIoChunkId::{from_package_id, get_package_id}`,
+`EIoChunkType`, `FPackageId(pub u64)`, `IoStoreTrait::{packages, read, has_chunk_id,
+container_header_version}`, `PackageInfo::id`, `zen::get_package_name`.
+
+Note: in zen/IoStore form the `.uasset` header and `.uexp` exports are a single
+`ExportBundleData` chunk (the bytes above are the *zen* cooked form, not legacy
+split). Producing legacy split `.uasset`/`.uexp` requires the zen→legacy conversion
+`asset_conversion::build_legacy(package_context, package_id, out_path, file_writer)`
+(`asset_conversion.rs:1485`, pub). That call needs a `FZenPackageContext`, built via
+the pub `FZenPackageContext::create(store_access, fallback_package_file_version,
+log, script_cells)` (`asset_conversion.rs:48`); its `&Log` and
+`Option<Arc<ZenScriptCellsStore>>` arguments still need their construction verified
+against `vendor/retoc/src/` when T5's legacy-split path is implemented — treat
+`build_legacy`/`FZenPackageContext::create` as **reachable but not yet
+copy-paste-verified end to end.**
 
 ### CLI equivalents (for reference / shelling out, NOT how we integrate)
-Built from `retoc_cli` (`retoc/src/main.rs`):
+These are the *upstream* CLI verbs. **The CLI (`retoc_cli` / `src/main.rs`) was
+dropped from our vendor** (see §3), so these commands do not exist in our tree and
+none of the recipes above depend on them. They are listed only to describe the
+equivalent operations; the canonical source is upstream
+`https://github.com/trumank/retoc` @ `d7b6350` `src/main.rs` (the `action_*`
+handlers, e.g. `action_dump_test`), which is **upstream-only, not in this repo.**
 - List chunks w/ paths + sizes: `retoc list <utoc> --path --size --package`
 - Unpack all files via directory index: `retoc unpack <utoc> <out_dir> [-v]`
 - Dump one package's cooked parts: `retoc dump-test <utoc> <out_dir> <package_id>`
