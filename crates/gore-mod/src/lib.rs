@@ -379,16 +379,18 @@ fn prepare(bundle_dir: &Path, manifest: &ModManifest, gp: &GamePaths) -> Result<
 /// Apply the new mod's writes (fs ops only). On error the caller rolls these back to pristine.
 fn commit_new(plan: &DeployPlan, record: &mut DeployRecord) -> Result<()> {
     if let Some((src, dst)) = &plan.ue4ss {
-        // Record the target BEFORE installing so a partial install is cleaned up on rollback.
-        record.ue4ss_mod_dir = Some(dst.display().to_string());
         // Stage into a sibling temp dir, then swap into place — a failed/partial copy never
         // destroys a previous same-named UE4SS mod already at `dst`.
         let staging = staging_dir(dst);
         let _ = std::fs::remove_dir_all(&staging);
+        // If this copy fails, `dst` (a previous mod) is untouched and we have NOT yet recorded
+        // ue4ss_mod_dir, so rollback won't delete it.
         copy_dir(src, &staging)?;
         if dst.exists() {
             std::fs::remove_dir_all(dst).map_err(io("removing old ue4ss mod"))?;
         }
+        // Old removed — we now own `dst`; record it so a later rollback cleans it up.
+        record.ue4ss_mod_dir = Some(dst.display().to_string());
         std::fs::rename(&staging, dst).map_err(io("installing ue4ss mod"))?;
     }
     for (live, bytes) in &plan.writes {
@@ -453,22 +455,29 @@ fn bak_path(live: &Path) -> PathBuf {
 
 /// Restore every backup in `record` (copy `*.gore-bak` → live, delete the backup) and remove
 /// the deployed UE4SS mod. Best-effort; used by both undeploy and deploy-rollback.
-fn restore_record(record: &DeployRecord) {
+/// Returns true only if EVERY backup was restored (and the UE4SS mod removed). On any failure
+/// the corresponding `*.gore-bak` is kept so the restore can be retried.
+fn restore_record(record: &DeployRecord) -> bool {
+    let mut all_ok = true;
     for (live, bak) in &record.backups {
         let (live, bak) = (Path::new(live), Path::new(bak));
         if bak.exists() {
             // Only drop the backup once the live file is actually restored from it — never
             // delete the sole pristine copy while the restore write failed (locked/full disk).
-            if let Ok(bytes) = std::fs::read(bak) {
-                if atomic_write(live, &bytes).is_ok() {
+            match std::fs::read(bak) {
+                Ok(bytes) if atomic_write(live, &bytes).is_ok() => {
                     let _ = std::fs::remove_file(bak);
                 }
+                _ => all_ok = false,
             }
         }
     }
     if let Some(dir) = &record.ue4ss_mod_dir {
-        let _ = std::fs::remove_dir_all(dir);
+        if Path::new(dir).exists() && std::fs::remove_dir_all(dir).is_err() {
+            all_ok = false;
+        }
     }
+    all_ok
 }
 
 /// Undo the active gore-mod deployment at `game_root`: restore every backup and remove the
@@ -479,9 +488,17 @@ pub fn undeploy(game_root: &Path) -> Result<Option<DeployRecord>> {
         return Ok(None);
     };
     let record: DeployRecord = serde_json::from_slice(&bytes)?;
-    restore_record(&record);
-    let _ = std::fs::remove_file(&rp);
-    Ok(Some(record))
+    if restore_record(&record) {
+        let _ = std::fs::remove_file(&rp);
+        Ok(Some(record))
+    } else {
+        // Keep the record (and the surviving backups) so the restore can be retried.
+        Err(ModError::Other(
+            "some game files could not be restored (locked or unwritable); backups and the \
+             deploy record were kept — close the game and retry undeploy"
+                .into(),
+        ))
+    }
 }
 
 /// Back up `live` to `live.gore-bak` if no backup exists yet (preserving the pristine file),
