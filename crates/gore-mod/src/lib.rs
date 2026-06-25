@@ -174,6 +174,32 @@ fn is_safe_mod_name(name: &str) -> bool {
     matches!((comps.next(), comps.next()), (Some(Component::Normal(_)), None))
 }
 
+/// A safe single filename: non-empty, no separators, no `..`, no control chars.
+fn is_safe_filename(name: &str) -> bool {
+    is_safe_mod_name(name)
+}
+
+/// A safe relative path inside the bundle: non-empty, not absolute, every component a normal
+/// name (no `..`, no root/prefix), no control characters — so it can't escape the bundle dir.
+fn is_safe_rel_path(p: &str) -> bool {
+    use std::path::Component;
+    if p.is_empty() || p.chars().any(char::is_control) {
+        return false;
+    }
+    let path = Path::new(p);
+    if path.is_absolute() {
+        return false;
+    }
+    let mut any = false;
+    for c in path.components() {
+        match c {
+            Component::Normal(_) => any = true,
+            _ => return false,
+        }
+    }
+    any
+}
+
 // ── Game paths ──────────────────────────────────────────────────────────────────
 /// Resolved game-install locations. `root` is the game folder that contains `G1R/`.
 pub struct GamePaths {
@@ -286,9 +312,19 @@ fn prepare(bundle_dir: &Path, manifest: &ModManifest, gp: &GamePaths) -> Result<
     for comp in &manifest.components {
         match comp {
             Component::Ue4ssLua { name, path } => {
+                // The manifest may come from an untrusted bundle: reject names/paths that could
+                // escape the bundle source or the UE4SS Mods directory.
+                if !is_safe_mod_name(name) || !is_safe_rel_path(path) {
+                    return Err(ModError::Other(format!(
+                        "unsafe ue4ss component in manifest: name={name:?} path={path:?}"
+                    )));
+                }
                 plan.ue4ss = Some((bundle_dir.join(path), gp.ue4ss_mods.join(name)));
             }
             Component::LocPatch { path } => {
+                if !is_safe_rel_path(path) {
+                    return Err(ModError::Other(format!("unsafe loc patch path: {path:?}")));
+                }
                 let lcache = gp.lcache.clone().ok_or_else(|| {
                     ModError::Other("no AlkimiaLocalization .lcache found in game".into())
                 })?;
@@ -304,14 +340,23 @@ fn prepare(bundle_dir: &Path, manifest: &ModManifest, gp: &GamePaths) -> Result<
                 plan.writes.push((lcache, lc.encode()?));
             }
             Component::AudioPatch { path, banks: _ } => {
+                if !is_safe_rel_path(path) {
+                    return Err(ModError::Other(format!("unsafe audio patch path: {path:?}")));
+                }
                 let map: BTreeMap<String, BTreeMap<String, String>> = serde_json::from_slice(
                     &std::fs::read(bundle_dir.join(path).join("manifest.json")).map_err(io("reading audio manifest"))?,
                 )?;
                 for (bank, samples) in &map {
+                    if !is_safe_filename(bank) {
+                        return Err(ModError::Other(format!("unsafe bank name: {bank:?}")));
+                    }
                     let bank_path = gp.fmod_desktop.join(bank);
                     let pristine = read_pristine(&bank_path)?;
                     let mut repl = Vec::new();
                     for (sample, wav_rel) in samples {
+                        if !is_safe_rel_path(wav_rel) {
+                            return Err(ModError::Other(format!("unsafe wav path: {wav_rel:?}")));
+                        }
                         let wav = std::fs::read(bundle_dir.join(wav_rel)).map_err(io("reading patch wav"))?;
                         let (rate, ch, pcm) = gore_fmod::read_wav_pcm16(&wav).map_err(ModError::Fmod)?;
                         repl.push((

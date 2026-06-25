@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
 import 'app/domain/ui_settings.dart';
+import 'app/game_paths.dart';
 import 'app/ui/window_chrome.dart';
 import 'catalog/domain/catalog_provider.dart';
 import 'catalog/domain/item_entry.dart';
@@ -169,6 +170,9 @@ class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver
     final dirty = overridesState.count > 0 ||
         ref.watch(locEditsProvider).isDirty ||
         ref.watch(audioReplacementsProvider).count > 0;
+    // Keep Build/Deploy reachable when a game is configured even with no staged edits, so the
+    // dialog's Undeploy (restore *.gore-bak) stays available to GUI users.
+    final gameConfigured = gameRootFromExe(ref.watch(gameExePathProvider)) != null;
     final themeModeNotifier = ref.read(themeModeProvider.notifier);
     final scheme         = Theme.of(context).colorScheme;
     final isDark         = Theme.of(context).brightness == Brightness.dark;
@@ -222,7 +226,7 @@ class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver
             child: FilledButton.icon(
               icon: const Icon(Icons.rocket_launch_outlined, size: 18),
               label: const Text('Build / Deploy'),
-              onPressed: dirty
+              onPressed: (dirty || gameConfigured)
                   ? () => showDialog(
                         context: context,
                         builder: (_) => const BuildDeployDialog(),
