@@ -347,12 +347,21 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
                 }
             }
         }
-        // RVODEF marks a return whose value couldn't be recovered: substitute a type-correct
-        // default. A handle return defaults to `nullptr` (no local needed — and it sidesteps
-        // "no default constructor" for engine object types); everything else uses a default
-        // local `{ret} __r;` (works for primitives, enums and default-constructible structs).
-        if body.contains(RVODEF) {
-            // Object/AActor handles have no default constructor, so `{ret} __r;` fails to
+        // The hidden RVO return slot is named `__return` by the decompiler. When a store arm
+        // (RefCpyV / numeric-cast / etc.) writes that slot inside a branch — `__return = local_4;`
+        // — the slot must be a DECLARED local or the module fails to parse ("'__return' is not
+        // declared"). Declare it once (typed as the return type) whenever the body references it,
+        // and fold the RVODEF default-return into it so there is a single coherent return local.
+        // A handle return defaults to null on declaration, so `UFoo __return;` is valid (no
+        // "no default constructor" issue that bare struct RVODEF hits).
+        let uses_return_slot = body.contains("__return");
+        if uses_return_slot {
+            let _ = writeln!(s, "{ind}    {ret} __return;");
+            // Any unrecovered-default RET in this body returns the same slot.
+            s.push_str(&body.replace(RVODEF, "__return"));
+        } else if body.contains(RVODEF) {
+            // RVODEF marks a return whose value couldn't be recovered: substitute a type-correct
+            // default. Object/AActor handles have no default constructor, so `{ret} __r;` fails to
             // compile — return `nullptr` directly (this build's null-handle literal, matching
             // PshNull/CmpPtrNull). `render` strips `@`, so detect handles via the DataType flag.
             if f.ret.is_object_handle {
