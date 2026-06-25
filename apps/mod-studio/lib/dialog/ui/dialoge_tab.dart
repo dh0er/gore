@@ -6,6 +6,7 @@ import '../../app/domain/ui_settings.dart';
 import '../../loc/domain/loc_catalog_provider.dart';
 import '../../loc/domain/loc_edits_notifier.dart';
 import '../../loc/game_lang.dart';
+import '../../loc/primary_set.dart';
 import '../../loc/ui/lang_fields.dart';
 import '../domain/dialog_catalog_provider.dart';
 
@@ -203,9 +204,13 @@ class _DialogBrowserState extends ConsumerState<_DialogBrowser> {
                       );
                     }
                     final line = row as DialogLineRow;
-                    final preview =
+                    // Prefer the staged edit for the current language's set so the list preview
+                    // matches what the editor will deploy (and what search compares against).
+                    final stagedText =
+                        editedIds[line.id]?[primarySetFor(catalog, line.id, lang)];
+                    final preview = stagedText ??
                         resolveGameText(catalog, line.id, lang) ??
-                            _previewFor(line.id, catalog);
+                        _previewFor(line.id, catalog);
                     return ListTile(
                       dense: true,
                       selected: line.id == selectedId,

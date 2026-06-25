@@ -299,18 +299,22 @@ class _AudioBrowserState extends ConsumerState<_AudioBrowser> {
   Future<void> _preview(BuildContext context, AudioSampleInfo sample) async {
     final messenger = ScaffoldMessenger.of(context);
     try {
-      final ffi = ModFfi(ref.read(coreServiceProvider));
-      final oggPath = await ffi.audioExtract(_bankFullPath, sample.name);
+      // If the user has staged a replacement WAV for this sample, preview THAT instead of the
+      // original bank audio, so Preview reflects what will be deployed.
+      final bankName = _bankFullPath.split(RegExp(r'[\\/]')).last;
+      final staged = ref.read(audioReplacementsProvider).items['$bankName/${sample.name}'];
+      final path = staged?.wavPath ??
+          await ModFfi(ref.read(coreServiceProvider)).audioExtract(_bankFullPath, sample.name);
       if (Platform.isWindows) {
         await Process.start(
           'cmd',
-          ['/c', 'start', '', oggPath],
+          ['/c', 'start', '', path],
           runInShell: true,
         );
       } else if (Platform.isMacOS) {
-        await Process.start('open', [oggPath]);
+        await Process.start('open', [path]);
       } else {
-        await Process.start('xdg-open', [oggPath]);
+        await Process.start('xdg-open', [path]);
       }
     } catch (e) {
       messenger.showSnackBar(
