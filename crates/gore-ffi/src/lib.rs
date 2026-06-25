@@ -169,11 +169,11 @@ fn audio_list(payload: Value) -> Value {
         Ok(b) => b,
         Err(e) => return err("IO", format!("reading bank: {e}")),
     };
-    let key = payload
-        .get("key")
-        .and_then(Value::as_str)
-        .map(|s| s.as_bytes().to_vec())
-        .unwrap_or_else(|| gore_fmod::GOTHIC_STUDIO_KEY.to_vec());
+    let key = match payload.get("key").and_then(Value::as_str) {
+        Some(k) if k.is_empty() => return err("BAD_KEY", "encryption key must not be empty"),
+        Some(k) => k.as_bytes().to_vec(),
+        None => gore_fmod::GOTHIC_STUDIO_KEY.to_vec(),
+    };
     let fsb = match gore_fmod::bank_fsb0(&bytes, &key) {
         Ok(f) => f,
         Err(e) => return err("DECODE", e),
@@ -202,11 +202,11 @@ fn audio_extract(payload: Value) -> Value {
         Ok(b) => b,
         Err(e) => return err("IO", format!("reading bank: {e}")),
     };
-    let key = payload
-        .get("key")
-        .and_then(Value::as_str)
-        .map(|s| s.as_bytes().to_vec())
-        .unwrap_or_else(|| gore_fmod::GOTHIC_STUDIO_KEY.to_vec());
+    let key = match payload.get("key").and_then(Value::as_str) {
+        Some(k) if k.is_empty() => return err("BAD_KEY", "encryption key must not be empty"),
+        Some(k) => k.as_bytes().to_vec(),
+        None => gore_fmod::GOTHIC_STUDIO_KEY.to_vec(),
+    };
     let (block, fsb) = match gore_fmod::decrypt_fsb0(&bytes, &key) {
         Ok(v) => v,
         Err(e) => return err("DECODE", e),

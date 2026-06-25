@@ -352,8 +352,9 @@ fn commit(plan: &DeployPlan, prev: Option<&DeployRecord>, record: &mut DeployRec
     }
 
     if let Some((src, dst)) = &plan.ue4ss {
-        copy_dir(src, dst)?;
+        // Record the target BEFORE copying so a partial copy is still cleaned up on rollback.
         record.ue4ss_mod_dir = Some(dst.display().to_string());
+        copy_dir(src, dst)?;
     }
     for (live, bytes) in &plan.writes {
         backup(live, record)?;
@@ -388,10 +389,13 @@ fn restore_record(record: &DeployRecord) {
     for (live, bak) in &record.backups {
         let (live, bak) = (Path::new(live), Path::new(bak));
         if bak.exists() {
+            // Only drop the backup once the live file is actually restored from it — never
+            // delete the sole pristine copy while the restore write failed (locked/full disk).
             if let Ok(bytes) = std::fs::read(bak) {
-                let _ = atomic_write(live, &bytes);
+                if atomic_write(live, &bytes).is_ok() {
+                    let _ = std::fs::remove_file(bak);
+                }
             }
-            let _ = std::fs::remove_file(bak);
         }
     }
     if let Some(dir) = &record.ue4ss_mod_dir {

@@ -28,7 +28,10 @@ Future<void> saveProject(ModProject project, String path) async {
   final json = utf8.encode(const JsonEncoder.withIndent('  ').convert(embedded.toJson()));
   archive.addFile(ArchiveFile('project.json', json.length, json));
 
-  final zip = ZipEncoder().encode(archive) ?? <int>[];
+  final zip = ZipEncoder().encode(archive);
+  if (zip == null) {
+    throw const FormatException('failed to encode the project archive');
+  }
   await File(path).writeAsBytes(zip);
 }
 

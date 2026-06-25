@@ -28,14 +28,18 @@ pub fn u64_le(b: &[u8], o: usize) -> u64 {
 /// Decrypt an FSB5 sub-block in place. `key` = raw ASCII key bytes (no NUL).
 /// `plain[i] = reverse_bits(cipher[i]) ^ key[i % key.len()]`. Index 0 = block start.
 pub fn fsb5_decrypt(data: &mut [u8], key: &[u8]) {
-    debug_assert!(!key.is_empty());
+    if key.is_empty() {
+        return; // guard against `% key.len()` divide-by-zero; callers reject empty keys
+    }
     for (i, byte) in data.iter_mut().enumerate() {
         *byte = byte.reverse_bits() ^ key[i % key.len()];
     }
 }
 /// Inverse of [`fsb5_decrypt`]. `cipher[i] = reverse_bits(plain[i] ^ key[i % len])`.
 pub fn fsb5_encrypt(data: &mut [u8], key: &[u8]) {
-    debug_assert!(!key.is_empty());
+    if key.is_empty() {
+        return; // guard against `% key.len()` divide-by-zero; callers reject empty keys
+    }
     for (i, byte) in data.iter_mut().enumerate() {
         *byte = (*byte ^ key[i % key.len()]).reverse_bits();
     }

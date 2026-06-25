@@ -15,8 +15,19 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 fn key_bytes(key: Option<String>) -> Vec<u8> {
-    key.map(|s| s.into_bytes())
-        .unwrap_or_else(|| gore_fmod::GOTHIC_STUDIO_KEY.to_vec())
+    match key {
+        Some(k) if !k.is_empty() => k.into_bytes(),
+        _ => gore_fmod::GOTHIC_STUDIO_KEY.to_vec(),
+    }
+}
+
+/// Read a bank's PRISTINE bytes: its `*.gore-bak` if a prior in-place replace left one, else
+/// the live file. Replacing always works from pristine, so repeated in-place replaces don't
+/// compound (a previously-replaced bank already has 2 FSB5 and would reject another inject).
+fn read_pristine_bank(bank: &Path) -> Result<Vec<u8>> {
+    let bak = backup_path(bank);
+    let src = if bak.exists() { bak.as_path() } else { bank };
+    std::fs::read(src).with_context(|| format!("reading '{}'", src.display()))
 }
 
 /// Write `bytes` to `path` via a temp file + rename so a failed write never truncates the
@@ -85,7 +96,7 @@ fn sanitize(name: &str) -> String {
 
 pub fn replace(map: PathBuf, bank: PathBuf, out: Option<PathBuf>, key: Option<String>) -> Result<()> {
     let key = key_bytes(key);
-    let bytes = std::fs::read(&bank).with_context(|| format!("reading '{}'", bank.display()))?;
+    let bytes = read_pristine_bank(&bank)?;
 
     let map_json = std::fs::read_to_string(&map)
         .with_context(|| format!("reading map '{}'", map.display()))?;
@@ -174,7 +185,7 @@ pub fn export_patch(map: PathBuf, out: PathBuf) -> Result<()> {
 /// Apply a patch zip (from `export-patch`) to a bank.
 pub fn apply_patch(patch: PathBuf, bank: PathBuf, out: Option<PathBuf>, key: Option<String>) -> Result<()> {
     let key = key_bytes(key);
-    let bytes = std::fs::read(&bank).with_context(|| format!("reading '{}'", bank.display()))?;
+    let bytes = read_pristine_bank(&bank)?;
 
     let file = std::fs::File::open(&patch).with_context(|| format!("opening '{}'", patch.display()))?;
     let mut zip = zip::ZipArchive::new(file).context("reading patch zip")?;
