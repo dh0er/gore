@@ -275,6 +275,10 @@ pub fn deploy(bundle_dir: &Path, game_root: &Path) -> Result<DeployRecord> {
     let manifest_bytes = std::fs::read(bundle_dir.join("gore-mod.json"))
         .map_err(io("reading gore-mod.json"))?;
     let manifest: ModManifest = serde_json::from_slice(&manifest_bytes)?;
+    // An empty bundle has nothing to apply; deploying it would only retire the active mod.
+    if manifest.components.is_empty() {
+        return Err(ModError::Other("bundle has no components to deploy".into()));
+    }
     let gp = resolve_game_paths(game_root);
 
     // PHASE 1 — prepare (no game writes). The previous deployment is left intact if this fails.

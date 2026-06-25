@@ -78,6 +78,8 @@ class _BuildDeployDialogState extends ConsumerState<BuildDeployDialog> {
     final locEdits = ref.watch(locEditsProvider).entryCount;
     final audio = ref.watch(audioReplacementsProvider).count;
     final gameRoot = gameRootFromExe(ref.watch(gameExePathProvider));
+    // Building/deploying an empty bundle would only retire the active mod, so require content.
+    final hasContent = overrides + locEdits + audio > 0;
 
     return AlertDialog(
       title: const Text('Build & Deploy Mod'),
@@ -131,12 +133,12 @@ class _BuildDeployDialogState extends ConsumerState<BuildDeployDialog> {
             child: const Text('Undeploy'),
           ),
         OutlinedButton.icon(
-          onPressed: _busy ? null : _buildToFolder,
+          onPressed: (_busy || !hasContent) ? null : _buildToFolder,
           icon: const Icon(Icons.folder_zip_outlined, size: 18),
           label: const Text('Build to folder…'),
         ),
         FilledButton.icon(
-          onPressed: (_busy || gameRoot == null) ? null : () => _deploy(gameRoot),
+          onPressed: (_busy || gameRoot == null || !hasContent) ? null : () => _deploy(gameRoot),
           icon: const Icon(Icons.rocket_launch_outlined, size: 18),
           label: const Text('Deploy to game'),
         ),
