@@ -1330,6 +1330,11 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
             n2 if is_numeric_cast(n2) => {
                 flush!();
                 let (dst, src) = (name(w(ins, 0)), name(w(ins, 1)));
+                // a numeric conversion FROM an enum source needs an explicit int(enum) — AS has
+                // no implicit enum->int (e.g. sbTOi of an EQuestState param into an int slot).
+                let src = if ctx.slot_type(w(ins, 1)).as_deref().map(is_enum_name).unwrap_or(false) {
+                    format!("int({src})")
+                } else { src };
                 match narrowing_cast_target(n2) {
                     Some(t) => out.push(format!("{dst} = {t}({src});")),
                     None => out.push(format!("{dst} = {src};")),
