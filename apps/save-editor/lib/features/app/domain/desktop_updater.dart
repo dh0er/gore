@@ -27,7 +27,7 @@ final updaterNavigatorKey = GlobalKey<NavigatorState>();
 
 bool? _innoInstalled;
 bool _feedConfigured = false;
-bool _portablePolling = false;
+Timer? _portableTimer;
 
 /// Inno Setup always places an uninstaller (unins*.exe) next to the app;
 /// the portable zip ships without one. Distinguishes the installed copy
@@ -260,16 +260,24 @@ Future<void> initDesktopUpdater({required bool autoCheckEnabled}) async {
 
 /// Portable background poll: one check now, then every hour. WinSparkle owns
 /// its own scheduler; for portable we run a plain timer loop. Guarded so a
-/// re-enable can't stack a second loop.
+/// re-enable can't stack a second loop; [_stopPortablePolling] cancels it.
 Future<void> _pollPortablePeriodically() async {
-  if (_portablePolling) {
+  if (_portableTimer != null) {
     return;
   }
-  _portablePolling = true;
-  await _runPortableCheck(silentIfNoUpdate: true);
-  Timer.periodic(const Duration(seconds: _checkIntervalSeconds), (_) {
+  _portableTimer =
+      Timer.periodic(const Duration(seconds: _checkIntervalSeconds), (_) {
     unawaited(_runPortableCheck(silentIfNoUpdate: true));
   });
+  await _runPortableCheck(silentIfNoUpdate: true);
+}
+
+/// Stops the portable background poll so disabling auto-check takes effect
+/// immediately, matching WinSparkle's interval-0 behavior on the installed
+/// build.
+void _stopPortablePolling() {
+  _portableTimer?.cancel();
+  _portableTimer = null;
 }
 
 /// User-triggered check: always reports the result, including the up-to-date
@@ -294,9 +302,8 @@ Future<void> checkForUpdatesManually() async {
 
 /// Applies the auto-check setting at runtime. Installed: interval 0 stops
 /// WinSparkle's scheduled checks; re-enabling restores the interval and
-/// checks once. Portable: starts the background poll on enable (the timer
-/// loop is harmless to leave running, so disabling just stops new dialogs at
-/// next launch — the persisted flag gates startup).
+/// checks once. Portable: starts the background poll on enable and cancels
+/// the running poll on disable, so the change takes effect immediately.
 Future<void> setAutoUpdateCheckEnabled(bool enabled) async {
   if (!isUpdateCheckAvailable) {
     return;
@@ -304,6 +311,8 @@ Future<void> setAutoUpdateCheckEnabled(bool enabled) async {
   if (!isInstalledBuild) {
     if (enabled) {
       unawaited(_pollPortablePeriodically());
+    } else {
+      _stopPortablePolling();
     }
     return;
   }
