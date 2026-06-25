@@ -206,47 +206,58 @@ fn record_path(root: &Path) -> PathBuf {
     root.join(RECORD_NAME)
 }
 
-/// Deploy a built bundle dir into the game at `game_root`. Single active mod: any previous
-/// gore-mod deployment is undeployed first (restoring its backups). Transactional: if any
-/// component fails, all already-applied side effects are rolled back before returning.
-pub fn deploy(bundle_dir: &Path, game_root: &Path) -> Result<DeployRecord> {
-    // restore any previous deployment so loose-file edits never compound
-    let _ = undeploy(game_root);
+/// A fully-prepared deployment: everything to write, computed in memory so the failure-prone
+/// work happens BEFORE the game is touched.
+struct DeployPlan {
+    ue4ss: Option<(PathBuf, PathBuf)>, // (source dir in bundle, dest under ue4ss/Mods)
+    writes: Vec<(PathBuf, Vec<u8>)>,   // (live game file, new contents)
+}
 
-    let mut record = DeployRecord::default();
-    match deploy_inner(bundle_dir, game_root, &mut record) {
+/// Deploy a built bundle dir into the game at `game_root`. Two phases so a previous working
+/// deployment is never lost to a failed new one:
+/// 1. **prepare** — decode/inject/encode every change in memory; on any error the game is
+///    untouched and the previous mod stays active.
+/// 2. **commit** — revert the previous mod's footprint this deploy won't overwrite, then apply
+///    (fs ops only); if a commit write fails, the partial deploy is rolled back to pristine.
+/// Single active mod.
+pub fn deploy(bundle_dir: &Path, game_root: &Path) -> Result<DeployRecord> {
+    let manifest_bytes = std::fs::read(bundle_dir.join("gore-mod.json"))
+        .map_err(io("reading gore-mod.json"))?;
+    let manifest: ModManifest = serde_json::from_slice(&manifest_bytes)?;
+    let gp = resolve_game_paths(game_root);
+
+    // PHASE 1 — prepare (no game writes). The previous deployment is left intact if this fails.
+    let plan = prepare(bundle_dir, &manifest, &gp)?;
+
+    // PHASE 2 — commit.
+    let prev = read_record(game_root);
+    let mut record = DeployRecord { mod_name: manifest.mod_meta.name.clone(), ..Default::default() };
+    match commit(&plan, prev.as_ref(), &mut record) {
         Ok(()) => {
             let rec_bytes = serde_json::to_vec_pretty(&record)?;
             std::fs::write(record_path(game_root), rec_bytes).map_err(io("writing deploy record"))?;
             Ok(record)
         }
         Err(e) => {
-            restore_record(&record); // roll back partial deploy
+            restore_record(&record); // roll back this deploy's partial writes
             Err(e)
         }
     }
 }
 
-fn deploy_inner(bundle_dir: &Path, game_root: &Path, record: &mut DeployRecord) -> Result<()> {
-    let manifest_bytes = std::fs::read(bundle_dir.join("gore-mod.json"))
-        .map_err(io("reading gore-mod.json"))?;
-    let manifest: ModManifest = serde_json::from_slice(&manifest_bytes)?;
-    let gp = resolve_game_paths(game_root);
-    record.mod_name = manifest.mod_meta.name.clone();
-
+/// Build everything to write, in memory. Any error here leaves the game untouched.
+fn prepare(bundle_dir: &Path, manifest: &ModManifest, gp: &GamePaths) -> Result<DeployPlan> {
+    let mut plan = DeployPlan { ue4ss: None, writes: Vec::new() };
     for comp in &manifest.components {
         match comp {
             Component::Ue4ssLua { name, path } => {
-                let dst = gp.ue4ss_mods.join(name);
-                copy_dir(&bundle_dir.join(path), &dst)?;
-                record.ue4ss_mod_dir = Some(dst.display().to_string());
+                plan.ue4ss = Some((bundle_dir.join(path), gp.ue4ss_mods.join(name)));
             }
             Component::LocPatch { path } => {
                 let lcache = gp.lcache.clone().ok_or_else(|| {
                     ModError::Other("no AlkimiaLocalization .lcache found in game".into())
                 })?;
-                let bak = backup(&lcache, record)?;
-                let pristine = std::fs::read(&bak).map_err(io("reading pristine lcache"))?;
+                let pristine = read_pristine(&lcache)?;
                 let edits: BTreeMap<String, BTreeMap<String, String>> =
                     serde_json::from_slice(&std::fs::read(bundle_dir.join(path)).map_err(io("reading edits.json"))?)?;
                 let mut lc = gore_loc::loc::Lcache::decode(&pristine)?;
@@ -255,8 +266,7 @@ fn deploy_inner(bundle_dir: &Path, game_root: &Path, record: &mut DeployRecord) 
                         lc.set_value(id, set, text)?;
                     }
                 }
-                let out = lc.encode()?;
-                atomic_write(&lcache, &out)?;
+                plan.writes.push((lcache, lc.encode()?));
             }
             Component::AudioPatch { path, banks: _ } => {
                 let map: BTreeMap<String, BTreeMap<String, String>> = serde_json::from_slice(
@@ -264,13 +274,11 @@ fn deploy_inner(bundle_dir: &Path, game_root: &Path, record: &mut DeployRecord) 
                 )?;
                 for (bank, samples) in &map {
                     let bank_path = gp.fmod_desktop.join(bank);
-                    let bak = backup(&bank_path, record)?;
-                    let pristine = std::fs::read(&bak).map_err(io("reading pristine bank"))?;
+                    let pristine = read_pristine(&bank_path)?;
                     let mut repl = Vec::new();
                     for (sample, wav_rel) in samples {
                         let wav = std::fs::read(bundle_dir.join(wav_rel)).map_err(io("reading patch wav"))?;
-                        let (rate, ch, pcm) =
-                            gore_fmod::read_wav_pcm16(&wav).map_err(ModError::Fmod)?;
+                        let (rate, ch, pcm) = gore_fmod::read_wav_pcm16(&wav).map_err(ModError::Fmod)?;
                         repl.push((
                             sample.clone(),
                             gore_fmod::Pcm16Sample { name: sample.clone(), freq: rate, channels: ch, pcm },
@@ -278,12 +286,66 @@ fn deploy_inner(bundle_dir: &Path, game_root: &Path, record: &mut DeployRecord) 
                     }
                     let new_bank = gore_fmod::replace_samples(&pristine, gore_fmod::GOTHIC_STUDIO_KEY, repl)
                         .map_err(ModError::Fmod)?;
-                    atomic_write(&bank_path, &new_bank)?;
+                    plan.writes.push((bank_path, new_bank));
                 }
             }
         }
     }
+    Ok(plan)
+}
+
+/// Apply a prepared plan. Reverts the previous mod's footprint not overwritten by this deploy
+/// (keeping a single active mod), then writes the new contents with `*.gore-bak` backups.
+fn commit(plan: &DeployPlan, prev: Option<&DeployRecord>, record: &mut DeployRecord) -> Result<()> {
+    if let Some(prev) = prev {
+        // restore prior-modded loose files this deploy won't overwrite, back to pristine
+        for (live, bak) in &prev.backups {
+            let overwritten = plan.writes.iter().any(|(p, _)| p.display().to_string() == *live);
+            if !overwritten && Path::new(bak).exists() {
+                if let Ok(b) = std::fs::read(bak) {
+                    let _ = atomic_write(Path::new(live), &b);
+                }
+                let _ = std::fs::remove_file(bak);
+            }
+        }
+        // remove a previous UE4SS mod dir if this deploy uses a different one (or none)
+        if let Some(prev_dir) = &prev.ue4ss_mod_dir {
+            let new_dir = plan.ue4ss.as_ref().map(|(_, dst)| dst.display().to_string());
+            if new_dir.as_deref() != Some(prev_dir.as_str()) {
+                let _ = std::fs::remove_dir_all(prev_dir);
+            }
+        }
+    }
+
+    if let Some((src, dst)) = &plan.ue4ss {
+        copy_dir(src, dst)?;
+        record.ue4ss_mod_dir = Some(dst.display().to_string());
+    }
+    for (live, bytes) in &plan.writes {
+        backup(live, record)?;
+        atomic_write(live, bytes)?;
+    }
     Ok(())
+}
+
+fn read_record(game_root: &Path) -> Option<DeployRecord> {
+    std::fs::read(record_path(game_root))
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+}
+
+/// Pristine bytes for a game file: its `*.gore-bak` if a prior deploy preserved one, else the
+/// live file (assumed pristine). Never writes.
+fn read_pristine(live: &Path) -> Result<Vec<u8>> {
+    let bak = bak_path(live);
+    let src = if bak.exists() { bak.as_path() } else { live };
+    std::fs::read(src).map_err(io(&format!("reading pristine {}", live.display())))
+}
+
+fn bak_path(live: &Path) -> PathBuf {
+    let mut s = live.as_os_str().to_os_string();
+    s.push(".gore-bak");
+    PathBuf::from(s)
 }
 
 /// Restore every backup in `record` (copy `*.gore-bak` → live, delete the backup) and remove
@@ -322,9 +384,7 @@ fn backup(live: &Path, record: &mut DeployRecord) -> Result<PathBuf> {
     if !live.exists() {
         return Err(ModError::Other(format!("game file not found: {}", live.display())));
     }
-    let mut bak = live.as_os_str().to_os_string();
-    bak.push(".gore-bak");
-    let bak = PathBuf::from(bak);
+    let bak = bak_path(live);
     if !bak.exists() {
         std::fs::copy(live, &bak).map_err(io("creating backup"))?;
     }

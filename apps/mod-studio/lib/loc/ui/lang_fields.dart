@@ -42,6 +42,7 @@ class _LangField extends ConsumerStatefulWidget {
 
 class _LangFieldState extends ConsumerState<_LangField> {
   late final TextEditingController _controller;
+  late final FocusNode _focusNode;
 
   String get _set => primarySetFor(widget.catalog, widget.locId, widget.lang);
   String get _catalogValue =>
@@ -56,6 +57,7 @@ class _LangFieldState extends ConsumerState<_LangField> {
   void initState() {
     super.initState();
     _controller = TextEditingController(text: _currentValue());
+    _focusNode = FocusNode();
   }
 
   @override
@@ -69,6 +71,7 @@ class _LangFieldState extends ConsumerState<_LangField> {
   @override
   void dispose() {
     _controller.dispose();
+    _focusNode.dispose();
     super.dispose();
   }
 
@@ -83,6 +86,15 @@ class _LangFieldState extends ConsumerState<_LangField> {
 
   @override
   Widget build(BuildContext context) {
+    // Sync the field to EXTERNAL edit changes (project load, clear-all, remove row, clear
+    // line) without clobbering the user's in-progress typing — skipped while the field is
+    // focused, where the user's own onChanged already keeps the staged value current.
+    ref.listen(locEditsProvider, (_, _) {
+      final desired = _currentValue();
+      if (!_focusNode.hasFocus && _controller.text != desired) {
+        _controller.text = desired;
+      }
+    });
     // react to external edit changes (e.g. revert / project load) for the marker
     final modified =
         ref.watch(locEditsProvider).editFor(widget.locId, _set) != null;
@@ -100,6 +112,7 @@ class _LangFieldState extends ConsumerState<_LangField> {
         Expanded(
           child: TextField(
             controller: _controller,
+            focusNode: _focusNode,
             onChanged: _onChanged,
             minLines: 1,
             maxLines: 4,
