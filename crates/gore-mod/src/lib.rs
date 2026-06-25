@@ -284,32 +284,70 @@ pub fn deploy(bundle_dir: &Path, game_root: &Path) -> Result<DeployRecord> {
     // PHASE 1 — prepare (no game writes). The previous deployment is left intact if this fails.
     let plan = prepare(bundle_dir, &manifest, &gp)?;
 
-    // PHASE 2 — commit, ordered so a failure never leaves the install inconsistent:
+    // PHASE 2 — commit. `undo` captures the exact pre-deploy state (prior file bytes + the
+    // previous UE4SS mod kept aside), so any failure restores it precisely.
     let prev = read_record(game_root);
     let mut record = DeployRecord { mod_name: manifest.mod_meta.name.clone(), ..Default::default() };
+    let mut undo = Undo::default();
 
-    // (a) apply the new mod. On failure roll its writes back to pristine; the previous mod's
-    //     footprint has not been touched yet, so it stays intact.
-    if let Err(e) = commit_new(&plan, &mut record) {
-        restore_record(&record, true);
+    // (a) apply the new mod. On failure restore the exact prior state (previous mod or pristine).
+    if let Err(e) = commit_new(&plan, &mut record, &mut undo) {
+        undo.rollback();
         return Err(e);
     }
 
-    // (b) persist the record BEFORE retiring the previous mod, so a write failure here leaves
-    //     the previous mod fully intact (its record on disk still matches) and rolls the new
-    //     writes back to pristine.
+    // (b) persist the record BEFORE retiring the previous mod, so a write failure here restores
+    //     the previous mod fully and rolls the new writes back.
     let write_res = serde_json::to_vec_pretty(&record)
         .map_err(ModError::from)
         .and_then(|b| std::fs::write(record_path(game_root), b).map_err(io("writing deploy record")));
     if let Err(e) = write_res {
-        restore_record(&record, true);
+        undo.rollback();
         return Err(e);
     }
 
-    // (c) the new mod is live and recorded — retire the previous mod's leftovers (best-effort,
-    //     can't fail the deploy).
+    // (c) committed — drop the kept-aside previous UE4SS mod, then retire the previous mod's
+    //     remaining footprint (best-effort; can't fail the deploy).
+    undo.discard();
     retire_previous(prev.as_ref(), &plan);
     Ok(record)
+}
+
+/// Captures the exact pre-deploy state so a failed deploy can restore it precisely, rather than
+/// only reverting to the game-pristine `*.gore-bak`.
+#[derive(Default)]
+struct Undo {
+    /// (live, prior bytes) — write back on rollback to restore the exact pre-deploy content.
+    files: Vec<(PathBuf, Vec<u8>)>,
+    /// `*.gore-bak` files THIS deploy created — remove on rollback (adopted ones are kept).
+    created_baks: Vec<PathBuf>,
+    /// (old-aside dir, dst) — a previous UE4SS mod moved aside: restore on rollback, drop on success.
+    ue4ss_old: Option<(PathBuf, PathBuf)>,
+    /// a UE4SS mod installed where there was none — remove on rollback.
+    ue4ss_fresh: Option<PathBuf>,
+}
+
+impl Undo {
+    fn rollback(self) {
+        for (live, bytes) in &self.files {
+            let _ = atomic_write(live, bytes);
+        }
+        for bak in &self.created_baks {
+            let _ = std::fs::remove_file(bak);
+        }
+        if let Some((old, dst)) = &self.ue4ss_old {
+            let _ = std::fs::remove_dir_all(dst);
+            let _ = std::fs::rename(old, dst);
+        } else if let Some(dst) = &self.ue4ss_fresh {
+            let _ = std::fs::remove_dir_all(dst);
+        }
+    }
+
+    fn discard(self) {
+        if let Some((old, _)) = &self.ue4ss_old {
+            let _ = std::fs::remove_dir_all(old);
+        }
+    }
 }
 
 /// Build everything to write, in memory. Any error here leaves the game untouched.
@@ -383,26 +421,25 @@ fn prepare(bundle_dir: &Path, manifest: &ModManifest, gp: &GamePaths) -> Result<
 /// Apply a prepared plan. Reverts the previous mod's footprint not overwritten by this deploy
 /// (keeping a single active mod), then writes the new contents with `*.gore-bak` backups.
 /// Apply the new mod's writes (fs ops only). On error the caller rolls these back to pristine.
-fn commit_new(plan: &DeployPlan, record: &mut DeployRecord) -> Result<()> {
+fn commit_new(plan: &DeployPlan, record: &mut DeployRecord, undo: &mut Undo) -> Result<()> {
     if let Some((src, dst)) = &plan.ue4ss {
         // Stage into a sibling temp dir, then swap into place — a failed/partial copy never
         // destroys a previous same-named UE4SS mod already at `dst`.
         let staging = staging_dir(dst);
         let _ = std::fs::remove_dir_all(&staging);
-        // If this copy fails, `dst` (a previous mod) is untouched and we have NOT yet recorded
-        // ue4ss_mod_dir, so rollback won't delete it.
+        // If this copy fails, `dst` (a previous mod) is untouched and the undo is empty, so
+        // rollback won't delete it.
         copy_dir(src, &staging)?;
         if dst.exists() {
-            // Move the old mod aside (atomic), then swap the staged copy in. Only after the
-            // install succeeds do we drop the old one and take ownership of `dst`; if the swap
-            // fails, the previous mod is restored — it's never deleted before the replacement.
+            // Move the old mod aside (atomic), then swap the staged copy in. The old dir is kept
+            // (via the undo) until the whole deploy commits; on any failure it is moved back.
             let old = staging_old(dst);
             let _ = std::fs::remove_dir_all(&old);
             std::fs::rename(dst, &old).map_err(io("moving old ue4ss mod aside"))?;
             match std::fs::rename(&staging, dst) {
                 Ok(()) => {
                     record.ue4ss_mod_dir = Some(dst.display().to_string());
-                    let _ = std::fs::remove_dir_all(&old);
+                    undo.ue4ss_old = Some((old, dst.clone()));
                 }
                 Err(e) => {
                     let _ = std::fs::rename(&old, dst); // restore the previous mod
@@ -413,10 +450,17 @@ fn commit_new(plan: &DeployPlan, record: &mut DeployRecord) -> Result<()> {
         } else {
             std::fs::rename(&staging, dst).map_err(io("installing ue4ss mod"))?;
             record.ue4ss_mod_dir = Some(dst.display().to_string());
+            undo.ue4ss_fresh = Some(dst.clone());
         }
     }
     for (live, bytes) in &plan.writes {
-        backup(live, record)?;
+        // Snapshot the current (pre-deploy) bytes so rollback restores the EXACT prior state —
+        // the previous mod's content, not just the game-pristine backup.
+        undo.files.push((live.clone(), std::fs::read(live).unwrap_or_default()));
+        let (bak, created) = backup(live, record)?;
+        if created {
+            undo.created_baks.push(bak);
+        }
         atomic_write(live, bytes)?;
     }
     Ok(())
@@ -483,24 +527,23 @@ fn bak_path(live: &Path) -> PathBuf {
 
 /// Restore every backup in `record` (copy `*.gore-bak` → live, delete the backup) and remove
 /// the deployed UE4SS mod. Best-effort; used by both undeploy and deploy-rollback.
-/// Restore live files from their backups and remove the UE4SS mod. Returns true only if EVERY
-/// applicable restore succeeded; on failure the `*.gore-bak` is kept so it can be retried.
-/// When `only_created` is set (a deploy rollback), backups this deploy did NOT create — i.e.
-/// they belong to a previous deployment — are restored from but left in place, so the previous
-/// deployment's pristine copy is never deleted.
-fn restore_record(record: &DeployRecord, only_created: bool) -> bool {
+/// Undeploy: restore every live file from its backup and remove the UE4SS mod. Returns true
+/// only if EVERY file was restored — a missing recorded backup, a failed read, or a failed
+/// write all count as failure, and the surviving `*.gore-bak` files are kept so undeploy can be
+/// retried. (Deploy rollback uses [`Undo`] instead, to restore the exact prior state.)
+fn restore_record(record: &DeployRecord) -> bool {
     let mut all_ok = true;
-    for (live, bak, created) in &record.backups {
+    for (live, bak, _created) in &record.backups {
         let (live, bak) = (Path::new(live), Path::new(bak));
-        if bak.exists() {
-            match std::fs::read(bak) {
-                Ok(bytes) if atomic_write(live, &bytes).is_ok() => {
-                    if *created || !only_created {
-                        let _ = std::fs::remove_file(bak);
-                    }
-                }
-                _ => all_ok = false,
+        if !bak.exists() {
+            all_ok = false; // recorded backup is gone — this file can't be restored
+            continue;
+        }
+        match std::fs::read(bak) {
+            Ok(bytes) if atomic_write(live, &bytes).is_ok() => {
+                let _ = std::fs::remove_file(bak);
             }
+            _ => all_ok = false,
         }
     }
     if let Some(dir) = &record.ue4ss_mod_dir {
@@ -519,7 +562,7 @@ pub fn undeploy(game_root: &Path) -> Result<Option<DeployRecord>> {
         return Ok(None);
     };
     let record: DeployRecord = serde_json::from_slice(&bytes)?;
-    if restore_record(&record, false) {
+    if restore_record(&record) {
         let _ = std::fs::remove_file(&rp);
         Ok(Some(record))
     } else {
@@ -534,7 +577,7 @@ pub fn undeploy(game_root: &Path) -> Result<Option<DeployRecord>> {
 
 /// Back up `live` to `live.gore-bak` if no backup exists yet (preserving the pristine file),
 /// register it in `record`, and return the backup path. The backup is the pristine source.
-fn backup(live: &Path, record: &mut DeployRecord) -> Result<PathBuf> {
+fn backup(live: &Path, record: &mut DeployRecord) -> Result<(PathBuf, bool)> {
     if !live.exists() {
         return Err(ModError::Other(format!("game file not found: {}", live.display())));
     }
@@ -546,7 +589,7 @@ fn backup(live: &Path, record: &mut DeployRecord) -> Result<PathBuf> {
     record
         .backups
         .push((live.display().to_string(), bak.display().to_string(), created));
-    Ok(bak)
+    Ok((bak, created))
 }
 
 fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
