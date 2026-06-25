@@ -14,6 +14,8 @@ pub enum TexError {
     VirtualTexture(String),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("container read/parse error: {0}")]
+    Retoc(#[from] anyhow::Error),
 }
 
 pub type Result<T> = std::result::Result<T, TexError>;
