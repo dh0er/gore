@@ -378,7 +378,10 @@ fn prepare(bundle_dir: &Path, manifest: &ModManifest, gp: &GamePaths) -> Result<
                 let mut lc = gore_loc::loc::Lcache::decode(&pristine)?;
                 for (id, langs) in &edits {
                     for (set, text) in langs {
-                        lc.set_value(id, set, text)?;
+                        // Best-effort: an id/set absent from THIS install's .lcache (e.g. a
+                        // shared mod built against a different game version) is skipped rather
+                        // than aborting the entire deploy.
+                        let _ = lc.set_value(id, set, text);
                     }
                 }
                 plan.writes.push((lcache, lc.encode()?));
