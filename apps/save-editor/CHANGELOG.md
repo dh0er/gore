@@ -19,6 +19,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Inventory items are shown and searchable/filterable by their localized names.
 - Quest and knowledge-entry names are localized; NPCs and quests can be searched
   by name, and the sidebar groups entries for easier navigation.
+- The portable version can now check for updates too. It compares against the
+  latest release and, when a newer version exists, offers to open the download
+  page in your browser (the installed version still updates itself).
 
 ### Fixed
 

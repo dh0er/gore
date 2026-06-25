@@ -14,7 +14,10 @@ class UpdateSettingsCard extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final l10n = AppLocalizations.of(context);
     final autoCheck = ref.watch(autoUpdateCheckProvider);
-    final available = isDesktopUpdaterAvailable;
+    final available = isUpdateCheckAvailable;
+    // The portable build can check and point to a download, but cannot
+    // replace itself in place, so it shows a hint about copying the files.
+    final showPortableNotice = available && !isInstalledBuild;
     final textTheme = Theme.of(context).textTheme;
     return Card(
       child: Padding(
@@ -51,7 +54,7 @@ class UpdateSettingsCard extends ConsumerWidget {
                 ),
               ],
             ),
-            if (!available) ...[
+            if (showPortableNotice) ...[
               const SizedBox(height: 8),
               Text(
                 l10n.updatesPortableNotice,

@@ -686,7 +686,28 @@ class AppLocalizationsPt extends AppLocalizations {
 
   @override
   String get updatesPortableNotice =>
-      'As atualizações estão disponíveis apenas para versões instaladas. A versão portátil precisa ser atualizada manualmente.';
+      'A versão portátil abre a página de download no navegador. Substitua os ficheiros atuais pela nova transferência.';
+
+  @override
+  String get updateAvailableTitle => 'Atualização disponível';
+
+  @override
+  String updateAvailableMessage(Object version, Object current) {
+    return 'A versão $version está disponível. Tem a $current.';
+  }
+
+  @override
+  String get updateDownload => 'Transferir';
+
+  @override
+  String get updateLater => 'Mais tarde';
+
+  @override
+  String get updateUpToDate => 'Está a usar a versão mais recente.';
+
+  @override
+  String get updateCheckFailed =>
+      'Não foi possível procurar atualizações. Tente novamente mais tarde.';
 
   @override
   String get gameTextTitle => 'Texto do jogo';
@@ -1642,7 +1663,28 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
 
   @override
   String get updatesPortableNotice =>
-      'As atualizações estão disponíveis apenas para versões instaladas. A versão portátil precisa ser atualizada manualmente.';
+      'A versão portátil abre a página de download no navegador. Substitua os arquivos atuais pelo novo download.';
+
+  @override
+  String get updateAvailableTitle => 'Atualização disponível';
+
+  @override
+  String updateAvailableMessage(Object version, Object current) {
+    return 'A versão $version está disponível. Você tem a $current.';
+  }
+
+  @override
+  String get updateDownload => 'Baixar';
+
+  @override
+  String get updateLater => 'Mais tarde';
+
+  @override
+  String get updateUpToDate => 'Você está usando a versão mais recente.';
+
+  @override
+  String get updateCheckFailed =>
+      'Não foi possível verificar atualizações. Tente novamente mais tarde.';
 
   @override
   String get gameTextTitle => 'Texto do jogo';

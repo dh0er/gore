@@ -662,7 +662,27 @@ class AppLocalizationsZh extends AppLocalizations {
   String get checkForUpdatesNow => '立即检查更新';
 
   @override
-  String get updatesPortableNotice => '更新仅适用于已安装的版本。便携版需要手动更新。';
+  String get updatesPortableNotice => '便携版会在浏览器中打开下载页面。请用新下载的文件替换现有文件。';
+
+  @override
+  String get updateAvailableTitle => '有可用更新';
+
+  @override
+  String updateAvailableMessage(Object version, Object current) {
+    return '版本 $version 可用。您当前为 $current。';
+  }
+
+  @override
+  String get updateDownload => '下载';
+
+  @override
+  String get updateLater => '稍后';
+
+  @override
+  String get updateUpToDate => '您正在使用最新版本。';
+
+  @override
+  String get updateCheckFailed => '无法检查更新，请稍后重试。';
 
   @override
   String get gameTextTitle => '游戏文本';
@@ -1586,7 +1606,27 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   String get checkForUpdatesNow => '立即检查更新';
 
   @override
-  String get updatesPortableNotice => '更新仅适用于已安装的版本。便携版需要手动更新。';
+  String get updatesPortableNotice => '便携版会在浏览器中打开下载页面。请用新下载的文件替换现有文件。';
+
+  @override
+  String get updateAvailableTitle => '有可用更新';
+
+  @override
+  String updateAvailableMessage(Object version, Object current) {
+    return '版本 $version 可用。您当前为 $current。';
+  }
+
+  @override
+  String get updateDownload => '下载';
+
+  @override
+  String get updateLater => '稍后';
+
+  @override
+  String get updateUpToDate => '您正在使用最新版本。';
+
+  @override
+  String get updateCheckFailed => '无法检查更新，请稍后重试。';
 
   @override
   String get gameTextTitle => '游戏文本';

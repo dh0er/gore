@@ -686,7 +686,28 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get updatesPortableNotice =>
-      'Обновления доступны только для установленных сборок. Портативную версию нужно обновлять вручную.';
+      'Портативная версия открывает страницу загрузки в браузере. Замените имеющиеся файлы новым загруженным.';
+
+  @override
+  String get updateAvailableTitle => 'Доступно обновление';
+
+  @override
+  String updateAvailableMessage(Object version, Object current) {
+    return 'Доступна версия $version. У вас $current.';
+  }
+
+  @override
+  String get updateDownload => 'Скачать';
+
+  @override
+  String get updateLater => 'Позже';
+
+  @override
+  String get updateUpToDate => 'У вас установлена последняя версия.';
+
+  @override
+  String get updateCheckFailed =>
+      'Не удалось проверить обновления. Повторите попытку позже.';
 
   @override
   String get gameTextTitle => 'Текст игры';
