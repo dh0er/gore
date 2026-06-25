@@ -440,6 +440,9 @@ pub fn read_wav_pcm16(b: &[u8]) -> Result<(u32, u32, Vec<i16>), String> {
         off = body + sz + (sz & 1); // chunks are word-aligned
     }
     let (rate, channels, bits) = fmt.ok_or("WAV missing fmt chunk")?;
+    if channels == 0 {
+        return Err("WAV has zero channels".into());
+    }
     if bits != 16 {
         return Err(format!("WAV not 16-bit (got {bits}); convert to PCM16 first"));
     }
@@ -519,6 +522,9 @@ pub fn build_fsb5_pcm16_multi(samples: &[Pcm16Sample]) -> Result<Vec<u8>, String
     let mut data = Vec::new();
     let mut offsets = Vec::with_capacity(samples.len());
     for s in samples {
+        if s.channels == 0 {
+            return Err("channels must not be zero".into());
+        }
         if s.pcm.len() % s.channels as usize != 0 {
             return Err("pcm length not a multiple of channels".into());
         }

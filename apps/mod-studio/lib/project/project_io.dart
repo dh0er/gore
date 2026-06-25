@@ -51,19 +51,25 @@ Future<ModProject> loadProject(String path) async {
   final tmp = await Directory.systemTemp.createTemp('goremod_');
   final extractedAudio = <AudioReplacement>[];
   for (final a in project.audio) {
-    if (a.wavPath.startsWith('assets/')) {
+    final segs = a.wavPath.split('/');
+    // A .goremod is portable/shareable, so treat embedded paths as untrusted: only extract
+    // entries under assets/ with no '..' traversal or absolute path, and that resolve to a
+    // location strictly inside the temp dir — otherwise opening a malicious project could
+    // write arbitrary files on disk.
+    final safe = a.wavPath.startsWith('assets/') &&
+        !p.isAbsolute(a.wavPath) &&
+        !segs.contains('..');
+    if (safe) {
       final f = archive.findFile(a.wavPath);
-      if (f != null) {
-        // Preserve the (unique) embedded entry path under the temp dir rather than just the
-        // basename, so two replacements that share a filename can't overwrite each other.
-        final out = p.joinAll([tmp.path, ...a.wavPath.split('/')]);
+      final out = p.joinAll([tmp.path, ...segs]);
+      if (f != null && p.isWithin(tmp.path, out)) {
         await Directory(p.dirname(out)).create(recursive: true);
         await File(out).writeAsBytes(f.content as List<int>);
         extractedAudio.add(a.withWavPath(out));
         continue;
       }
     }
-    extractedAudio.add(a); // external path (shouldn't happen for saved projects)
+    extractedAudio.add(a); // unsafe or external path — left as-is, not extracted
   }
 
   return project.copyWith(audio: extractedAudio);

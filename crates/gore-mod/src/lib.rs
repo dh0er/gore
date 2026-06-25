@@ -331,26 +331,9 @@ fn prepare(bundle_dir: &Path, manifest: &ModManifest, gp: &GamePaths) -> Result<
 /// Apply a prepared plan. Reverts the previous mod's footprint not overwritten by this deploy
 /// (keeping a single active mod), then writes the new contents with `*.gore-bak` backups.
 fn commit(plan: &DeployPlan, prev: Option<&DeployRecord>, record: &mut DeployRecord) -> Result<()> {
-    if let Some(prev) = prev {
-        // restore prior-modded loose files this deploy won't overwrite, back to pristine
-        for (live, bak) in &prev.backups {
-            let overwritten = plan.writes.iter().any(|(p, _)| p.display().to_string() == *live);
-            if !overwritten && Path::new(bak).exists() {
-                if let Ok(b) = std::fs::read(bak) {
-                    let _ = atomic_write(Path::new(live), &b);
-                }
-                let _ = std::fs::remove_file(bak);
-            }
-        }
-        // remove a previous UE4SS mod dir if this deploy uses a different one (or none)
-        if let Some(prev_dir) = &prev.ue4ss_mod_dir {
-            let new_dir = plan.ue4ss.as_ref().map(|(_, dst)| dst.display().to_string());
-            if new_dir.as_deref() != Some(prev_dir.as_str()) {
-                let _ = std::fs::remove_dir_all(prev_dir);
-            }
-        }
-    }
-
+    // 1. Apply the new mod first. If anything here fails, the caller's restore_record rolls
+    //    back this deploy's writes to pristine while the PREVIOUS mod's footprint (below) is
+    //    still untouched — so a failed switch never silently drops the previous deployment.
     if let Some((src, dst)) = &plan.ue4ss {
         // Record the target BEFORE copying so a partial copy is still cleaned up on rollback.
         record.ue4ss_mod_dir = Some(dst.display().to_string());
@@ -359,6 +342,32 @@ fn commit(plan: &DeployPlan, prev: Option<&DeployRecord>, record: &mut DeployRec
     for (live, bytes) in &plan.writes {
         backup(live, record)?;
         atomic_write(live, bytes)?;
+    }
+
+    // 2. New mod fully applied — now retire the previous mod's leftover footprint (files this
+    //    deploy did not overwrite, and a UE4SS mod with a different name).
+    if let Some(prev) = prev {
+        for (live, bak) in &prev.backups {
+            let overwritten = plan.writes.iter().any(|(p, _)| p.display().to_string() == *live);
+            if overwritten {
+                continue;
+            }
+            let (live, bak) = (Path::new(live), Path::new(bak));
+            if bak.exists() {
+                // Only drop the backup once the live file is actually restored from it.
+                if let Ok(b) = std::fs::read(bak) {
+                    if atomic_write(live, &b).is_ok() {
+                        let _ = std::fs::remove_file(bak);
+                    }
+                }
+            }
+        }
+        if let Some(prev_dir) = &prev.ue4ss_mod_dir {
+            let new_dir = plan.ue4ss.as_ref().map(|(_, dst)| dst.display().to_string());
+            if new_dir.as_deref() != Some(prev_dir.as_str()) {
+                let _ = std::fs::remove_dir_all(prev_dir);
+            }
+        }
     }
     Ok(())
 }

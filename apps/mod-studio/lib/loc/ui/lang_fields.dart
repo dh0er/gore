@@ -16,7 +16,24 @@ class LangFieldsEditor extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final catalog = ref.watch(locCatalogProvider).value ?? const {};
+    final catalogAsync = ref.watch(locCatalogProvider);
+    final catalog = catalogAsync.value;
+    // Don't expose editable fields until the catalog is actually loaded with data: the target
+    // loc set is derived from the catalog, so editing against a still-loading or empty catalog
+    // could stage text on a set that differs once the catalog resolves.
+    if (catalog == null || catalog.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.all(8),
+        child: Text(
+          catalogAsync.isLoading
+              ? 'Loading localization…'
+              : 'Extract the localization catalog to edit names.',
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+        ),
+      );
+    }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
