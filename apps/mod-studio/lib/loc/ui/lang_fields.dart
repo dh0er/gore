@@ -62,8 +62,12 @@ class _LangFieldState extends ConsumerState<_LangField> {
   late final FocusNode _focusNode;
 
   String get _set => primarySetFor(widget.catalog, widget.locId, widget.lang);
+  // The value stored in THIS language's target set (not the English fallback that
+  // resolveGameText would return), so prefill, the edit-vs-original comparison, and what gets
+  // written all agree — otherwise a field shows English yet writes to an empty target set, and
+  // typing the fallback text would clear the edit.
   String get _catalogValue =>
-      resolveGameText(widget.catalog, widget.locId, widget.lang) ?? '';
+      widget.catalog[widget.locId.toLowerCase()]?[_set] ?? '';
 
   String _currentValue() {
     final staged = ref.read(locEditsProvider).editFor(widget.locId, _set);

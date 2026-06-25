@@ -744,14 +744,19 @@ pub fn inject_fsb5(
     let mut sndh = None;
     gather(bank, list_off + 8 + 4, metadata_end, &mut wavs, &mut sndh);
     let (_sndh_size_field, sndh_body, sndh_size) = sndh.ok_or("no SNDH")?;
-    let mut repoint_pos = Vec::with_capacity(repoints.len()); // (wav_body, new_subsound)
+    let mut repoint_pos = Vec::new(); // (wav_body, new_subsound)
     for &(t, new_idx) in repoints {
-        let wav_body = wavs
-            .iter()
-            .find(|(_, sb, ss)| *sb == 0 && *ss as usize == t)
-            .ok_or_else(|| format!("no WAV node for (0,{t})"))?
-            .0;
-        repoint_pos.push((wav_body, new_idx));
+        // Repoint EVERY waveform node that references the target subsound, not just the first —
+        // otherwise other events pointing at the same sample would still play the original.
+        let before = repoint_pos.len();
+        for (wav_body, sb, ss) in &wavs {
+            if *sb == 0 && *ss as usize == t {
+                repoint_pos.push((*wav_body, new_idx));
+            }
+        }
+        if repoint_pos.len() == before {
+            return Err(format!("no WAV node for (0,{t})"));
+        }
     }
 
     let p = sndh_body + sndh_size; // append point = end of SNDH body

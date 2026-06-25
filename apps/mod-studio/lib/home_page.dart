@@ -106,7 +106,35 @@ class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver
     }
   }
 
+  bool _hasUnsavedEdits() =>
+      ref.read(overridesProvider).count > 0 ||
+      ref.read(locEditsProvider).isDirty ||
+      ref.read(audioReplacementsProvider).count > 0;
+
+  /// Confirm before discarding staged (unsaved) edits. Returns true to proceed.
+  Future<bool> _confirmDiscardIfDirty() async {
+    if (!_hasUnsavedEdits()) return true;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Discard unsaved changes?'),
+        content: const Text(
+            'You have staged edits that are not saved to a project. Continue and discard them?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Discard')),
+        ],
+      ),
+    );
+    return ok ?? false;
+  }
+
+  Future<void> _newProject() async {
+    if (await _confirmDiscardIfDirty()) newProject(ref);
+  }
+
   Future<void> _openProject() async {
+    if (!await _confirmDiscardIfDirty()) return;
     try {
       final path = await openProjectInteractive(ref);
       if (path != null) _snack('Loaded project $path');
@@ -176,7 +204,7 @@ class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver
             onSelected: (v) {
               switch (v) {
                 case 'new':
-                  newProject(ref);
+                  _newProject();
                 case 'open':
                   _openProject();
                 case 'save':
