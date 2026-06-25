@@ -167,10 +167,12 @@ pub fn export_patch(map: PathBuf, out: PathBuf) -> Result<()> {
         zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
 
     let mut manifest = BTreeMap::new();
-    for (name, wav_rel) in &entries {
+    for (i, (name, wav_rel)) in entries.iter().enumerate() {
         let wav = std::fs::read(resolve(&base, wav_rel))
             .with_context(|| format!("reading wav for '{name}'"))?;
-        let entry = format!("audio/{}.wav", sanitize(name));
+        // Prefix with the index so distinct sample names that sanitize to the same string
+        // (e.g. "a:b" and "a/b") can't collide on one zip member.
+        let entry = format!("audio/{i}_{}.wav", sanitize(name));
         zip.start_file(&entry, opts).context("zip start_file")?;
         zip.write_all(&wav).context("zip write")?;
         manifest.insert(name.clone(), entry);

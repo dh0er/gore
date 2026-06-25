@@ -298,8 +298,22 @@ pub fn deploy(bundle_dir: &Path, game_root: &Path) -> Result<DeployRecord> {
         return Err(e);
     }
 
-    // (b) persist the record BEFORE retiring the previous mod, so a write failure here restores
-    //     the previous mod fully and rolls the new writes back.
+    // (b) Fold the previous mod's not-overwritten loose files into the record BEFORE persisting,
+    //     so even a crash between this write and retirement lets undeploy revert them. Then
+    //     persist the record before any retirement, so a write failure here restores the
+    //     previous mod fully and rolls the new writes back.
+    let leftovers: Vec<(String, String, bool)> = prev
+        .as_ref()
+        .map(|p| {
+            p.backups
+                .iter()
+                .filter(|(live, _, _)| !plan.writes.iter().any(|(pp, _)| same_path(pp, live)))
+                .map(|(l, b, _)| (l.clone(), b.clone(), false))
+                .collect()
+        })
+        .unwrap_or_default();
+    record.backups.extend(leftovers.iter().cloned());
+
     let write_res = serde_json::to_vec_pretty(&record)
         .map_err(ModError::from)
         .and_then(|b| std::fs::write(record_path(game_root), b).map_err(io("writing deploy record")));
@@ -309,11 +323,10 @@ pub fn deploy(bundle_dir: &Path, game_root: &Path) -> Result<DeployRecord> {
     }
 
     // (c) committed — drop the kept-aside previous UE4SS mod, then retire the previous mod's
-    //     remaining footprint (best-effort; can't fail the deploy).
+    //     footprint now (best-effort). Successfully-retired leftovers are dropped from the
+    //     record and it is re-persisted; ones that can't be restored yet stay tracked for undeploy.
     undo.discard();
-    // Retire the previous mod's remaining footprint. If a file couldn't be restored now, it was
-    // folded into the active record — re-persist so a later undeploy can retry it.
-    if retire_previous(prev.as_ref(), &plan, &mut record) {
+    if retire_leftovers(&leftovers, prev.as_ref(), &plan, &mut record) {
         if let Ok(b) = serde_json::to_vec_pretty(&record) {
             let _ = std::fs::write(record_path(game_root), b);
         }
@@ -479,40 +492,39 @@ fn commit_new(plan: &DeployPlan, record: &mut DeployRecord, undo: &mut Undo) -> 
     Ok(())
 }
 
-/// Retire the previous mod's leftover footprint after the new mod is live and recorded:
-/// restore loose files the new deploy did not overwrite, and remove a differently-named UE4SS
-/// mod. Best-effort — never fails the deploy, and only drops a `*.gore-bak` after a successful
-/// restore from it.
-fn retire_previous(prev: Option<&DeployRecord>, plan: &DeployPlan, record: &mut DeployRecord) -> bool {
-    let Some(prev) = prev else { return false };
+/// Retire the previous mod's leftover footprint (already folded into `record` and persisted):
+/// restore each leftover loose file to pristine now and, on success, drop the entry from the
+/// record so undeploy won't later look for a deleted backup. Leftovers that can't be restored
+/// yet stay tracked. Also removes a differently-named UE4SS mod. Returns whether `record`
+/// changed (and so should be re-persisted). Best-effort — never fails the deploy.
+fn retire_leftovers(
+    leftovers: &[(String, String, bool)],
+    prev: Option<&DeployRecord>,
+    plan: &DeployPlan,
+    record: &mut DeployRecord,
+) -> bool {
     let mut changed = false;
-    for (live_s, bak_s, _created) in &prev.backups {
-        // Compare by canonical path: a different spelling of the same file (relative vs
-        // absolute, symlink, Windows case) must still count as "overwritten by this deploy",
-        // or we'd restore pristine over the content commit_new just installed.
-        if plan.writes.iter().any(|(p, _)| same_path(p, live_s)) {
-            continue;
-        }
+    for (live_s, bak_s, _) in leftovers {
         let (live, bak) = (Path::new(live_s), Path::new(bak_s));
-        if !bak.exists() {
-            continue;
-        }
-        let restored = std::fs::read(bak)
-            .map(|b| atomic_write(live, &b).is_ok())
-            .unwrap_or(false);
-        if restored {
+        let retired = if !bak.exists() {
+            true // nothing to restore from; drop the stale entry
+        } else if std::fs::read(bak).map(|b| atomic_write(live, &b).is_ok()).unwrap_or(false) {
             let _ = std::fs::remove_file(bak);
+            true
         } else {
-            // Couldn't restore now (locked/unwritable). Track it in the active record so a later
-            // undeploy can retry, instead of leaving an untracked modded file + orphan backup.
-            record.backups.push((live_s.clone(), bak_s.clone(), false));
+            false // locked/unwritable — keep tracked for an undeploy retry
+        };
+        if retired {
+            record.backups.retain(|(l, b, _)| !(l == live_s && b == bak_s));
             changed = true;
         }
     }
-    if let Some(prev_dir) = &prev.ue4ss_mod_dir {
-        let new_dir = plan.ue4ss.as_ref().map(|(_, dst)| dst.display().to_string());
-        if new_dir.as_deref() != Some(prev_dir.as_str()) {
-            let _ = std::fs::remove_dir_all(prev_dir);
+    if let Some(prev) = prev {
+        if let Some(prev_dir) = &prev.ue4ss_mod_dir {
+            let new_dir = plan.ue4ss.as_ref().map(|(_, dst)| dst.display().to_string());
+            if new_dir.as_deref() != Some(prev_dir.as_str()) {
+                let _ = std::fs::remove_dir_all(prev_dir);
+            }
         }
     }
     changed
