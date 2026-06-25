@@ -98,8 +98,11 @@ pub fn build_bundle(spec: &BuildSpec) -> Result<Bundle> {
     let mut files = Files::new();
     let mut components = Vec::new();
     let name = &spec.meta.name;
-    if name.is_empty() {
-        return Err(ModError::Other("mod name must not be empty".into()));
+    if !is_safe_mod_name(name) {
+        return Err(ModError::Other(format!(
+            "invalid mod name {name:?}: must be a single path component with no \
+             separators, '..', or control characters"
+        )));
     }
 
     // overrides → UE4SS Lua mod
@@ -157,6 +160,20 @@ fn sanitize(s: &str) -> String {
         .collect()
 }
 
+/// A safe mod name is a single normal path component: non-empty, no path separators, no `..`,
+/// no control characters — so it can't escape the bundle/UE4SS Mods directory.
+fn is_safe_mod_name(name: &str) -> bool {
+    use std::path::Component;
+    if name.is_empty() || name.chars().any(char::is_control) {
+        return false;
+    }
+    if name.contains('/') || name.contains('\\') {
+        return false;
+    }
+    let mut comps = Path::new(name).components();
+    matches!((comps.next(), comps.next()), (Some(Component::Normal(_)), None))
+}
+
 // ── Game paths ──────────────────────────────────────────────────────────────────
 /// Resolved game-install locations. `root` is the game folder that contains `G1R/`.
 pub struct GamePaths {
@@ -174,13 +191,19 @@ pub fn resolve_game_paths(root: &Path) -> GamePaths {
     let lcache = {
         let cache = g1r.join("Story").join("Cache");
         std::fs::read_dir(&cache).ok().and_then(|rd| {
-            rd.filter_map(|e| e.ok())
+            let mut matches: Vec<PathBuf> = rd
+                .filter_map(|e| e.ok())
                 .map(|e| e.path())
-                .find(|p| {
+                .filter(|p| {
                     p.file_name()
                         .and_then(|n| n.to_str())
                         .is_some_and(|n| n.starts_with("AlkimiaLocalization") && n.ends_with(".lcache"))
                 })
+                .collect();
+            // Deterministic when several caches exist: pick the most recently modified
+            // (the active one), matching gore-loc's locator.
+            matches.sort_by_key(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok());
+            matches.pop()
         })
     };
     GamePaths {
@@ -234,9 +257,20 @@ pub fn deploy(bundle_dir: &Path, game_root: &Path) -> Result<DeployRecord> {
     let mut record = DeployRecord { mod_name: manifest.mod_meta.name.clone(), ..Default::default() };
     match commit(&plan, prev.as_ref(), &mut record) {
         Ok(()) => {
-            let rec_bytes = serde_json::to_vec_pretty(&record)?;
-            std::fs::write(record_path(game_root), rec_bytes).map_err(io("writing deploy record"))?;
-            Ok(record)
+            // The record is what undeploy relies on; if we can't persist it after patching
+            // the game, roll the patch back rather than leave modified files with no record.
+            let write_record = serde_json::to_vec_pretty(&record)
+                .map_err(ModError::from)
+                .and_then(|b| {
+                    std::fs::write(record_path(game_root), b).map_err(io("writing deploy record"))
+                });
+            match write_record {
+                Ok(()) => Ok(record),
+                Err(e) => {
+                    restore_record(&record);
+                    Err(e)
+                }
+            }
         }
         Err(e) => {
             restore_record(&record); // roll back this deploy's partial writes

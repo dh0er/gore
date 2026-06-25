@@ -51,7 +51,10 @@ Future<ModProject> loadProject(String path) async {
     if (a.wavPath.startsWith('assets/')) {
       final f = archive.findFile(a.wavPath);
       if (f != null) {
-        final out = p.join(tmp.path, p.basename(a.wavPath));
+        // Preserve the (unique) embedded entry path under the temp dir rather than just the
+        // basename, so two replacements that share a filename can't overwrite each other.
+        final out = p.joinAll([tmp.path, ...a.wavPath.split('/')]);
+        await Directory(p.dirname(out)).create(recursive: true);
         await File(out).writeAsBytes(f.content as List<int>);
         extractedAudio.add(a.withWavPath(out));
         continue;
