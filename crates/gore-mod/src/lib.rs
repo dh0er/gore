@@ -126,9 +126,11 @@ pub fn build_bundle(spec: &BuildSpec) -> Result<Bundle> {
     // audio → manifest + wavs (no game audio, just the replacements)
     if !spec.audio.is_empty() {
         let mut map: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
-        for a in &spec.audio {
+        for (i, a) in spec.audio.iter().enumerate() {
             let wav = std::fs::read(&a.wav_path).map_err(io(&format!("reading wav {}", a.wav_path)))?;
-            let fname = format!("{}__{}.wav", sanitize(&a.bank), sanitize(&a.sample));
+            // Prefix with the index so distinct samples that sanitize to the same name can't
+            // collide and overwrite each other.
+            let fname = format!("{i}_{}__{}.wav", sanitize(&a.bank), sanitize(&a.sample));
             files.insert(format!("audio/{fname}"), wav);
             map.entry(a.bank.clone()).or_default().insert(a.sample.clone(), format!("audio/{fname}"));
         }
@@ -458,8 +460,10 @@ fn commit_new(plan: &DeployPlan, record: &mut DeployRecord, undo: &mut Undo) -> 
     }
     for (live, bytes) in &plan.writes {
         // Snapshot the current (pre-deploy) bytes so rollback restores the EXACT prior state —
-        // the previous mod's content, not just the game-pristine backup.
-        undo.files.push((live.clone(), std::fs::read(live).unwrap_or_default()));
+        // the previous mod's content, not just the game-pristine backup. If this read fails we
+        // abort BEFORE writing, rather than snapshot empty and risk an empty-file rollback.
+        let prior = std::fs::read(live).map_err(io("reading live file for rollback snapshot"))?;
+        undo.files.push((live.clone(), prior));
         let (bak, created) = backup(live, record)?;
         if created {
             undo.created_baks.push(bak);
@@ -476,7 +480,10 @@ fn commit_new(plan: &DeployPlan, record: &mut DeployRecord, undo: &mut Undo) -> 
 fn retire_previous(prev: Option<&DeployRecord>, plan: &DeployPlan) {
     let Some(prev) = prev else { return };
     for (live, bak, _created) in &prev.backups {
-        if plan.writes.iter().any(|(p, _)| p.display().to_string() == *live) {
+        // Compare by canonical path: a different spelling of the same file (relative vs
+        // absolute, symlink, Windows case) must still count as "overwritten by this deploy",
+        // or we'd restore pristine over the content commit_new just installed.
+        if plan.writes.iter().any(|(p, _)| same_path(p, live)) {
             continue;
         }
         let (live, bak) = (Path::new(live), Path::new(bak));
@@ -506,6 +513,16 @@ fn staging_old(dst: &Path) -> PathBuf {
     let mut s = dst.as_os_str().to_os_string();
     s.push(".gore-old");
     PathBuf::from(s)
+}
+
+/// Whether `a` and the stored path string `b` refer to the same file, comparing canonical
+/// forms when both resolve (falling back to a lexical compare otherwise).
+fn same_path(a: &Path, b: &str) -> bool {
+    let b = Path::new(b);
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(ca), Ok(cb)) => ca == cb,
+        _ => a == b,
+    }
 }
 
 fn read_record(game_root: &Path) -> Option<DeployRecord> {
@@ -673,7 +690,7 @@ mod tests {
         assert!(bundle.files.contains_key("ue4ss/MyMod/enabled.txt"));
         assert!(bundle.files.contains_key("loc/edits.json"));
         assert!(bundle.files.contains_key("audio/manifest.json"));
-        assert!(bundle.files.contains_key("audio/SFX_bank__SFX_UI_X.wav"));
+        assert!(bundle.files.contains_key("audio/0_SFX_bank__SFX_UI_X.wav"));
         assert!(bundle.files.contains_key("gore-mod.json"));
         assert_eq!(bundle.manifest.components.len(), 3);
 

@@ -76,6 +76,9 @@ pub fn parse_bank(b: &[u8]) -> Result<Vec<BankEntry>, String> {
         found.ok_or("no top-level LIST chunk")?
     };
 
+    if list_body + 8 > b.len() {
+        return Err("truncated LIST chunk (no room for PROJ/BNKI)".into());
+    }
     if &b[list_body..list_body + 4] != b"PROJ" {
         return Err(format!(
             "LIST body not PROJ (got {:02x?})",
