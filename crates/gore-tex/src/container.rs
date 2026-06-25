@@ -2,13 +2,13 @@
 //!
 //! The container holds *cooked* zen packages; an asset's class (e.g. `Texture2D`)
 //! is not stored in chunk metadata but inside each package's zen header. For every
-//! package we parse the zen header, walk its export map, and resolve each export's
-//! `class_index` (a `FPackageObjectIndex`) against the container's global script
-//! objects to recover the class *name*. A package is reported as a texture if any
-//! of its exports has class `Texture2D` (the cooked Texture2D class, which also
-//! covers `LightMapTexture2D`/`ShadowMapTexture2D` only if they report that exact
-//! name -- they do not; they have their own classes, so this is an exact match on
-//! `Texture2D`).
+//! package we parse the zen header, walk its export map, and compare each export's
+//! `class_index` (a `FPackageObjectIndex`) against a single precomputed
+//! script-import index for `Texture2D` -- an exact integer/hash match, with no name
+//! lookup or table resolution involved. A package is reported as a texture if any
+//! of its exports' `class_index` equals that precomputed Texture2D index
+//! (`LightMapTexture2D`/`ShadowMapTexture2D` have their own distinct classes, so
+//! this is an exact match on `Texture2D` only).
 //!
 //! This is the "per-package class resolution" route from the task note. The
 //! global script-object *table* lives in the engine's `global.utoc`, not in the
@@ -64,43 +64,71 @@ pub fn list_textures(utoc: &Path, _usmap: &Path, filter: Option<&str>) -> Result
 
     let mut out = Vec::new();
 
+    // Silence the default panic hook for the duration of the loop so the panics we
+    // intentionally catch below (one per malformed package) don't spam stderr with
+    // backtraces. Restored before returning.
+    let prev_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+
     for pkg in store.packages() {
         let pkg_id = pkg.id();
-        let chunk_id =
-            FIoChunkId::from_package_id(pkg_id, 0, EIoChunkType::ExportBundleData);
 
-        // Some package entries may not have a readable export-bundle chunk; skip them
-        // rather than failing the whole listing.
-        let data = match store.read(chunk_id) {
-            Ok(d) => d,
-            Err(_) => continue,
-        };
+        // The per-package work below is panic-safe: a malformed package can not only
+        // return `Err` from `read`/`deserialize` but also *panic* deeper in retoc --
+        // e.g. `header.package_name()` -> `FNameMap::get` asserts on name kind and
+        // indexes `self.names` unchecked, so an out-of-range name index aborts. We
+        // wrap the whole body in `catch_unwind` so one bad package is skipped, not
+        // fatal to the entire listing. The closure returns `Some(entry)` for a
+        // matching texture, `None` for a non-match or any handled failure; a caught
+        // panic is treated exactly like the previous `Err(_) => continue` path.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let chunk_id =
+                FIoChunkId::from_package_id(pkg_id, 0, EIoChunkType::ExportBundleData);
 
-        let header = match FZenPackageHeader::deserialize(
-            &mut Cursor::new(&data),
-            store.package_store_entry(pkg_id),
-            container_version,
-            header_version,
-            None,
-        ) {
-            Ok(h) => h,
-            Err(_) => continue,
-        };
+            // Some package entries may not have a readable export-bundle chunk; skip
+            // them rather than failing the whole listing.
+            let data = match store.read(chunk_id) {
+                Ok(d) => d,
+                Err(_) => return None,
+            };
 
-        // Is any export a Texture2D? Compare each export's class import index to the
-        // precomputed Texture2D script-import index.
-        let is_texture = header
-            .export_map
-            .iter()
-            .any(|export| export.class_index == texture2d_class);
+            let header = match FZenPackageHeader::deserialize(
+                &mut Cursor::new(&data),
+                store.package_store_entry(pkg_id),
+                container_version,
+                header_version,
+                None,
+            ) {
+                Ok(h) => h,
+                Err(_) => return None,
+            };
 
-        if is_texture {
+            // Is any export a Texture2D? Compare each export's class import index to
+            // the precomputed Texture2D script-import index.
+            let is_texture = header
+                .export_map
+                .iter()
+                .any(|export| export.class_index == texture2d_class);
+
+            if !is_texture {
+                return None;
+            }
+
             let path = header.package_name();
             if filter.is_none_or(|f| path.contains(f)) {
-                out.push(TextureEntry { asset_path: path });
+                Some(TextureEntry { asset_path: path })
+            } else {
+                None
             }
+        }));
+
+        // Caught panic == skip this package (same as the `Err(_) => continue` arms).
+        if let Ok(Some(entry)) = result {
+            out.push(entry);
         }
     }
+
+    std::panic::set_hook(prev_hook);
 
     out.sort();
     out.dedup();
@@ -151,5 +179,43 @@ mod tests {
         }
         assert!(filtered.len() <= all.len());
         assert!(filtered.iter().all(|e| e.asset_path.contains("Hero")));
+    }
+
+    /// The real-container test above needs the game installed; this fast test pins
+    /// the panic-safety contract our per-package loop relies on, with no I/O.
+    ///
+    /// A malformed package can panic deep in retoc (e.g. `FNameMap::get`'s
+    /// `assert_eq!`/unchecked index, see module docs). Constructing such a package
+    /// for a unit test would require crafting a full on-disk IoStore container with
+    /// a deliberately corrupt zen header -- too expensive to be worthwhile. Instead
+    /// we verify the exact mechanism the loop uses: a panic inside the per-package
+    /// closure is caught and turned into "skip" (`None`), the surviving packages are
+    /// still collected, and the panic hook is restored afterwards.
+    #[test]
+    fn panicking_package_is_skipped_not_fatal() {
+        let prev_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+
+        let mut out: Vec<u32> = Vec::new();
+        // Package 1 -> ok, package 2 -> panics (stand-in for FNameMap::get aborting),
+        // package 3 -> ok. A non-panic-safe loop would die on package 2.
+        for pkg in [1u32, 2, 3] {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                if pkg == 2 {
+                    let names: Vec<&str> = Vec::new();
+                    // Unchecked out-of-range index, mirroring `self.names[idx]`.
+                    return Some(names[5].len() as u32);
+                }
+                Some(pkg)
+            }));
+            if let Ok(Some(v)) = result {
+                out.push(v);
+            }
+        }
+
+        std::panic::set_hook(prev_hook);
+
+        // Bad package skipped; good packages survived.
+        assert_eq!(out, vec![1, 3]);
     }
 }
