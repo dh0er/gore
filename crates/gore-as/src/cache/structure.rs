@@ -309,6 +309,21 @@ fn fmt_float(b: ConstBits, double: bool) -> String {
         ConstBits::W4(x) => f32::from_bits(x) as f64,
         ConstBits::W8(x) => f64::from_bits(x),
     };
+    // Rust's `{:?}` prints non-finite floats as `inf`/`-inf`/`NaN`, and the float32 branch then
+    // appends `f` -> `inff`, neither of which is a valid AngelScript literal ("'inff' is not
+    // declared"). AS has no inf/nan literal, so emit the closest compile-valid magnitude: the
+    // type's max finite value for ±inf (preserves the "very large / forever" sentinel intent
+    // these constants carry), and 0 for NaN.
+    if !v.is_finite() {
+        return match (v.is_nan(), v.is_sign_negative(), double) {
+            (true, _, true) => "0.0".into(),
+            (true, _, false) => "0.0f".into(),
+            (false, false, true) => format!("{:?}", f64::MAX),
+            (false, true, true) => format!("{:?}", f64::MIN),
+            (false, false, false) => format!("{:?}f", f32::MAX),
+            (false, true, false) => format!("{:?}f", f32::MIN),
+        };
+    }
     if double { format!("{v:?}") } else { format!("{:?}f", v as f32) }
 }
 
