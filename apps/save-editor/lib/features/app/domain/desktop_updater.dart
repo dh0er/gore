@@ -174,6 +174,13 @@ Future<void> _runPortableCheck({required bool silentIfNoUpdate}) async {
     return;
   }
 
+  // A silent (background) check may have been in flight when the user turned
+  // auto-check off; the cancelled timer leaves _portableTimer null. Don't
+  // surface an unsolicited dialog in that case. Manual checks always show.
+  if (silentIfNoUpdate && _portableTimer == null) {
+    return;
+  }
+
   await _showUpdateAvailableDialog(context, version: latest, current: current);
 }
 
