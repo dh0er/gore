@@ -6,9 +6,15 @@ license.workspace = true
 
 [dependencies]
 gore-oodle = { path = "../gore-oodle" }
+# Vendored fork of retoc (IoStore reader) with its Oodle DECODE backend redirected
+# to gore-oodle so no oo2core_9_win64.dll is fetched/linked. See vendor/retoc and
+# docs/superpowers/notes/2026-06-26-retoc-oodle-swap.md.
+retoc = { path = "../../vendor/retoc" }
 thiserror = "1"
 anyhow = "1"
 texture2ddecoder = "0.1"
 
 [dev-dependencies]
 sha2 = "0.10"
+# Used only by the scratch examples/decode_real_container.rs proof (Task 2).
+blake3 = "1"
