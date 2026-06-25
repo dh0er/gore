@@ -145,6 +145,18 @@ fn find_game() -> Value {
     })
 }
 
+/// Read a bank's PRISTINE bytes for listing/preview: its `*.gore-bak` if a deploy left one,
+/// else the file itself. So preview always reflects the true original sample (or the user's
+/// staged WAV), not a deployed bank that already carries an injected/repointed copy.
+fn read_bank_pristine(bank: &str) -> std::io::Result<Vec<u8>> {
+    let bak = format!("{bank}.gore-bak");
+    if std::path::Path::new(&bak).exists() {
+        std::fs::read(&bak)
+    } else {
+        std::fs::read(bank)
+    }
+}
+
 fn generate_mod(payload: Value) -> Value {
     let cfg: OverridesConfig = match serde_json::from_value(payload) {
         Ok(c) => c,
@@ -165,7 +177,7 @@ fn audio_list(payload: Value) -> Value {
     let Some(bank) = payload.get("bank").and_then(Value::as_str) else {
         return err("BAD_REQUEST", "missing 'bank'");
     };
-    let bytes = match std::fs::read(bank) {
+    let bytes = match read_bank_pristine(bank) {
         Ok(b) => b,
         Err(e) => return err("IO", format!("reading bank: {e}")),
     };
@@ -198,7 +210,7 @@ fn audio_extract(payload: Value) -> Value {
     ) else {
         return err("BAD_REQUEST", "missing 'bank' or 'sample'");
     };
-    let bytes = match std::fs::read(bank) {
+    let bytes = match read_bank_pristine(bank) {
         Ok(b) => b,
         Err(e) => return err("IO", format!("reading bank: {e}")),
     };

@@ -118,11 +118,14 @@ class _DialogBrowserState extends ConsumerState<_DialogBrowser> {
     String id,
     String query,
     Map<String, Map<String, String>> catalog,
+    Map<String, Map<String, String>> edits,
   ) {
     if (id.contains(query)) return true;
-    final entry = catalog[id];
-    if (entry == null) return false;
-    for (final v in entry.values) {
+    for (final v in catalog[id]?.values ?? const <String>[]) {
+      if (v.toLowerCase().contains(query)) return true;
+    }
+    // Also match staged edits, so search agrees with the (edited) subtitles + what deploys.
+    for (final v in edits[id]?.values ?? const <String>[]) {
       if (v.toLowerCase().contains(query)) return true;
     }
     return false;
@@ -136,6 +139,7 @@ class _DialogBrowserState extends ConsumerState<_DialogBrowser> {
     List<DialogRow> rows,
     String query,
     Map<String, Map<String, String>> catalog,
+    Map<String, Map<String, String>> edits,
   ) {
     final searching = query.isNotEmpty;
     final out = <DialogRow>[];
@@ -148,7 +152,7 @@ class _DialogBrowserState extends ConsumerState<_DialogBrowser> {
         headerEmitted = false;
         open = _isOpen(_groupKey(row.isBark, row.speaker), searching);
       } else if (row is DialogLineRow) {
-        if (searching && !_matches(row.id, query, catalog)) continue;
+        if (searching && !_matches(row.id, query, catalog, edits)) continue;
         if (header != null && !headerEmitted) {
           out.add(header);
           headerEmitted = true;
@@ -165,11 +169,11 @@ class _DialogBrowserState extends ConsumerState<_DialogBrowser> {
     final catalog = ref.watch(locCatalogProvider).value ?? const {};
     final allRows = ref.watch(dialogRowsProvider);
     final query = _query.trim().toLowerCase();
-    final rows = _visibleRows(allRows, query, catalog);
+    final editedIds = ref.watch(locEditsProvider).edits;
+    final rows = _visibleRows(allRows, query, catalog, editedIds);
 
     final lang = gameLangByCode(ref.watch(localeProvider));
     final selectedId = ref.watch(_selectedDialogIdProvider);
-    final editedIds = ref.watch(locEditsProvider).edits;
 
     return Column(
       children: [
