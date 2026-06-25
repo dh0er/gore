@@ -1,0 +1,14 @@
+[package]
+name = "gore-tex"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+gore-oodle = { path = "../gore-oodle" }
+thiserror = "1"
+anyhow = "1"
+texture2ddecoder = "0.1"
+
+[dev-dependencies]
+sha2 = "0.10"
