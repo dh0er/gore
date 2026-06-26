@@ -253,6 +253,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "slow: full container scan; run with --ignored"]
     fn lists_textures_from_real_container() {
         let Some(g) = game_dir() else {
             eprintln!("skip: game not installed");
@@ -278,6 +279,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "slow: full container scan; run with --ignored"]
     fn unpacks_one_texture_asset() {
         let Some(g) = game_dir() else {
             eprintln!("skip: game not installed");

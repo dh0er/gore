@@ -420,6 +420,7 @@ mod tests {
     /// the package, so this is slow (~10 min) -- expected; it only runs with the
     /// game present.
     #[test]
+    #[ignore = "slow: full container scan; run with --ignored"]
     fn parses_streamed_water_normal() {
         use std::path::PathBuf;
         let game = PathBuf::from(r"D:\SteamLibrary\steamapps\common\Gothic 1 Remake");
