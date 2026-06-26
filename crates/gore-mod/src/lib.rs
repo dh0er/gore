@@ -743,15 +743,31 @@ fn retire_leftovers(
 }
 
 fn staging_dir(dst: &Path) -> PathBuf {
-    let mut s = dst.as_os_str().to_os_string();
-    s.push(".gore-new");
-    PathBuf::from(s)
+    swap_temp(dst, ".gore-new")
 }
 
 fn staging_old(dst: &Path) -> PathBuf {
-    let mut s = dst.as_os_str().to_os_string();
-    s.push(".gore-old");
-    PathBuf::from(s)
+    swap_temp(dst, ".gore-old")
+}
+
+/// A temp path for the staged/aside UE4SS mod, placed ONE LEVEL ABOVE `ue4ss/Mods` (still on the
+/// same volume, so the rename into place stays atomic). Keeping these half-written/aside dirs out
+/// of `Mods` means UE4SS never scans them as enabled mods if a crash interrupts the swap — inside
+/// `Mods` their `enabled.txt` would make them loadable strays the deploy record doesn't track.
+fn swap_temp(dst: &Path, suffix: &str) -> PathBuf {
+    match (dst.file_name(), dst.parent().and_then(Path::parent)) {
+        (Some(name), Some(ue4ss_root)) => {
+            let mut fname = name.to_os_string();
+            fname.push(suffix);
+            ue4ss_root.join(fname)
+        }
+        _ => {
+            // Fallback: sibling-in-place (e.g. unexpected path shape).
+            let mut s = dst.as_os_str().to_os_string();
+            s.push(suffix);
+            PathBuf::from(s)
+        }
+    }
 }
 
 /// Whether `a` and the stored path string `b` refer to the same file, comparing canonical
