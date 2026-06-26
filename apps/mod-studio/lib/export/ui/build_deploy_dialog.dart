@@ -12,6 +12,7 @@ import '../../core/providers.dart';
 import '../../editor/domain/overrides_notifier.dart';
 import '../../loc/domain/loc_edits_notifier.dart';
 import '../../project/project_controller.dart';
+import '../../textures/domain/texture_replacements_notifier.dart';
 
 /// Build the unified mod bundle (overrides + loc + audio) and optionally deploy it to the
 /// game install. Mirrors the loc/audio delivery model: loc + audio are applied to the user's
@@ -93,9 +94,10 @@ class _BuildDeployDialogState extends ConsumerState<BuildDeployDialog> {
     final overrides = ref.watch(overridesProvider).count;
     final locEdits = ref.watch(locEditsProvider).entryCount;
     final audio = ref.watch(audioReplacementsProvider).count;
+    final textures = ref.watch(textureReplacementsProvider).count;
     final gameRoot = gameRootFromExe(ref.watch(gameExePathProvider));
     // Building/deploying an empty bundle would only retire the active mod, so require content.
-    final hasContent = overrides + locEdits + audio > 0;
+    final hasContent = overrides + locEdits + audio + textures > 0;
 
     return AlertDialog(
       title: const Text('Build & Deploy Mod'),
@@ -129,6 +131,7 @@ class _BuildDeployDialogState extends ConsumerState<BuildDeployDialog> {
             Text('• $overrides item override(s)'),
             Text('• $locEdits localized text edit(s)'),
             Text('• $audio audio replacement(s)'),
+            Text('• $textures texture replacement(s)'),
             const SizedBox(height: 12),
             if (gameRoot == null)
               Text(

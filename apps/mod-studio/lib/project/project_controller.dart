@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/legacy.dart';
 import '../audio/domain/audio_replacements_notifier.dart';
 import '../editor/domain/overrides_notifier.dart';
 import '../loc/domain/loc_edits_notifier.dart';
+import '../textures/domain/texture_replacements_notifier.dart';
 import 'project_io.dart';
 import 'project_model.dart';
 
@@ -63,6 +64,7 @@ ModProject gatherProject(WidgetRef ref) {
     overrides: ref.read(overridesProvider).entries,
     locEdits: ref.read(locEditsProvider).edits,
     audio: ref.read(audioReplacementsProvider).entries,
+    textures: ref.read(textureReplacementsProvider).entries,
   );
 }
 
@@ -78,6 +80,7 @@ void applyProject(WidgetRef ref, ModProject project) {
   }
   ref.read(locEditsProvider.notifier).loadAll(project.locEdits);
   ref.read(audioReplacementsProvider.notifier).loadAll(project.audio);
+  ref.read(textureReplacementsProvider.notifier).loadAll(project.textures);
 }
 
 /// Clear all editor state (New project).
@@ -89,6 +92,7 @@ void newProject(WidgetRef ref) {
   ref.read(overridesProvider.notifier).clearAll();
   ref.read(locEditsProvider.notifier).clearAll();
   ref.read(audioReplacementsProvider.notifier).clearAll();
+  ref.read(textureReplacementsProvider.notifier).clearAll();
   markProjectSaved(ref); // a fresh project is in a clean (nothing-unsaved) state
 }
 

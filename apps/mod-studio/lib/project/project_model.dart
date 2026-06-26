@@ -1,5 +1,6 @@
 import '../audio/domain/audio_replacements_notifier.dart';
 import '../editor/domain/override_entry.dart';
+import '../textures/domain/texture_replacements_notifier.dart';
 
 /// A saveable/loadable mod-studio project: the union of all editor domains. Serializes to
 /// `project.json` inside a `.goremod` zip (see project_io.dart), with source WAVs embedded.
@@ -12,6 +13,7 @@ class ModProject {
     this.overrides = const [],
     this.locEdits = const {},
     this.audio = const [],
+    this.textures = const [],
   });
 
   final String name;
@@ -21,8 +23,13 @@ class ModProject {
   final List<OverrideEntry> overrides;
   final Map<String, Map<String, String>> locEdits;
   final List<AudioReplacement> audio;
+  final List<TextureReplacement> textures;
 
-  ModProject copyWith({List<AudioReplacement>? audio}) => ModProject(
+  ModProject copyWith({
+    List<AudioReplacement>? audio,
+    List<TextureReplacement>? textures,
+  }) =>
+      ModProject(
         name: name,
         version: version,
         author: author,
@@ -30,6 +37,7 @@ class ModProject {
         overrides: overrides,
         locEdits: locEdits,
         audio: audio ?? this.audio,
+        textures: textures ?? this.textures,
       );
 
   Map<String, Object?> toJson() => {
@@ -42,6 +50,7 @@ class ModProject {
         ],
         'loc_edits': locEdits,
         'audio': [for (final a in audio) a.toJson()],
+        'textures': [for (final t in textures) t.toJson()],
       };
 
   factory ModProject.fromJson(Map<String, Object?> j) {
@@ -60,6 +69,10 @@ class ModProject {
         for (final a in (j['audio'] as List? ?? const []))
           AudioReplacement.fromJson((a as Map).cast<String, Object?>())
       ],
+      textures: [
+        for (final t in (j['textures'] as List? ?? const []))
+          TextureReplacement.fromJson((t as Map).cast<String, Object?>())
+      ],
     );
   }
 
@@ -70,6 +83,7 @@ class ModProject {
         'overrides': [for (final o in overrides) o.toFfiJson()],
         'loc_edits': locEdits,
         'audio': [for (final a in audio) a.toJson()],
+        'texture': [for (final t in textures) t.toJson()],
       };
 }
 
