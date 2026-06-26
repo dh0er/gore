@@ -256,6 +256,33 @@ pub struct DeployRecord {
     /// otherwise their enabled scripts would linger. `#[serde(default)]` keeps old records loadable.
     #[serde(default)]
     pub stale_ue4ss_dirs: Vec<String>,
+    /// live_path → hash of the modded bytes this deploy wrote there. On undeploy/rollback, if the
+    /// current live file no longer matches, the game was updated/verified externally (e.g. Steam),
+    /// so the recorded `*.gore-bak` is stale and restoring it would downgrade the newer asset —
+    /// the restore is skipped instead. `#[serde(default)]` keeps old records loadable.
+    #[serde(default)]
+    pub deployed_hashes: BTreeMap<String, String>,
+}
+
+/// Fast content fingerprint for drift detection (not cryptographic — only distinguishes our own
+/// deployed bytes from a later external overwrite).
+fn content_hash(bytes: &[u8]) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut h);
+    format!("{:016x}", h.finish())
+}
+
+/// Whether `live` should be restored from its backup: true unless we recorded what we deployed
+/// there and the current file no longer matches it (external update — restoring would downgrade).
+fn safe_to_restore(live: &str, deployed_hashes: &BTreeMap<String, String>) -> bool {
+    match deployed_hashes.get(live) {
+        Some(expected) => match std::fs::read(Path::new(live)) {
+            Ok(cur) => &content_hash(&cur) == expected,
+            Err(_) => true, // can't read current file; fall back to the normal restore attempt
+        },
+        None => true, // no drift info recorded — restore as before
+    }
 }
 
 const RECORD_NAME: &str = "gore-mod.deployed.json";
@@ -342,6 +369,16 @@ pub fn deploy(bundle_dir: &Path, game_root: &Path) -> Result<DeployRecord> {
         })
         .unwrap_or_default();
     record.backups.extend(leftovers.iter().cloned());
+
+    // Carry the previous deploy's drift hashes for the leftover (not-overwritten) files, so undeploy
+    // can still detect an external update of those files and skip a stale-backup restore.
+    if let Some(p) = prev.as_ref() {
+        for (live, _, _) in &leftovers {
+            if let Some(h) = p.deployed_hashes.get(live) {
+                record.deployed_hashes.insert(live.clone(), h.clone());
+            }
+        }
+    }
 
     // Crash-safety: if the previous deployment used DIFFERENT-named UE4SS dir(s), record them as
     // stale BEFORE persisting. apply_writes/retire_leftovers haven't removed them yet, so a crash
@@ -541,7 +578,7 @@ fn stage(plan: &DeployPlan, record: &mut DeployRecord, undo: &mut Undo) -> Resul
     if let Some((_, dst)) = &plan.ue4ss {
         record.ue4ss_mod_dir = Some(dst.display().to_string());
     }
-    for (live, _) in &plan.writes {
+    for (live, bytes) in &plan.writes {
         // Snapshot the current (pre-deploy) bytes so rollback restores the EXACT prior state —
         // the previous mod's content, not just the game-pristine backup. If this read fails we
         // abort BEFORE writing anything, rather than snapshot empty and risk an empty-file rollback.
@@ -551,6 +588,11 @@ fn stage(plan: &DeployPlan, record: &mut DeployRecord, undo: &mut Undo) -> Resul
         if created {
             undo.created_baks.push(bak);
         }
+        // Record what we're about to deploy here, so a later undeploy can detect an external
+        // overwrite (Steam update/verify) and refuse to restore the now-stale backup over it.
+        record
+            .deployed_hashes
+            .insert(live.display().to_string(), content_hash(bytes));
     }
     Ok(())
 }
@@ -614,7 +656,12 @@ fn retire_leftovers(
     let mut baks_to_delete = Vec::new();
     for (live_s, bak_s, _) in leftovers {
         let (live, bak) = (Path::new(live_s), Path::new(bak_s));
-        let retired = if !bak.exists() {
+        let retired = if !safe_to_restore(live_s, &record.deployed_hashes) {
+            // The file was updated externally (Steam) since the previous deploy; don't overwrite
+            // the newer asset. Drop the stale backup and stop tracking it.
+            baks_to_delete.push(bak.to_path_buf());
+            true
+        } else if !bak.exists() {
             // No backup to restore from — the live file was NOT reverted and may still hold the
             // old patch. Keep the entry so undeploy can warn/retry, rather than silently dropping
             // it as if it were cleanly retired.
@@ -630,6 +677,7 @@ fn retire_leftovers(
         };
         if retired {
             record.backups.retain(|(l, b, _)| !(l == live_s && b == bak_s));
+            record.deployed_hashes.remove(live_s);
             changed = true;
         }
     }
@@ -713,8 +761,15 @@ fn restore_record(record: &DeployRecord) -> bool {
     // Pass 1: restore every live file from its backup and remove the UE4SS mod, WITHOUT deleting
     // any backup yet. If anything fails, every *.gore-bak is kept so a retry can still recover.
     let mut all_ok = true;
-    for (live, bak, _created) in &record.backups {
-        let (live, bak) = (Path::new(live), Path::new(bak));
+    for (live_s, bak, _created) in &record.backups {
+        let (live, bak) = (Path::new(live_s), Path::new(bak));
+        // If the live file was updated/verified externally since we deployed (e.g. Steam), the
+        // recorded backup is stale — restoring it would downgrade the newer asset. Skip the
+        // restore but drop the stale backup; this is intentional, not a failure.
+        if !safe_to_restore(live_s, &record.deployed_hashes) {
+            let _ = std::fs::remove_file(bak);
+            continue;
+        }
         if !bak.exists() {
             all_ok = false; // recorded backup is gone — this file can't be restored
             continue;

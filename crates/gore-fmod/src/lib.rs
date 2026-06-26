@@ -214,6 +214,16 @@ const FREQ: [u32; 11] = [
     4000, 8000, 11000, 11025, 16000, 22050, 24000, 32000, 44100, 48000, 96000,
 ];
 
+/// Nearest FSB5 enum-table slot for a rate carried by an explicit FREQUENCY chunk — a sane
+/// fallback for readers that only look at the enum index.
+fn nearest_freq_idx(freq: u32) -> usize {
+    FREQ.iter()
+        .enumerate()
+        .min_by_key(|(_, &f)| (f as i64 - freq as i64).abs())
+        .map(|(i, _)| i)
+        .unwrap_or(0)
+}
+
 /// Parse a DECRYPTED FSB5 block.
 pub fn parse_fsb5(b: &[u8]) -> Result<Fsb5, String> {
     if b.len() < 0x3C || &b[0..4] != b"FSB5" {
@@ -558,13 +568,13 @@ pub fn build_fsb5_pcm16_multi(samples: &[Pcm16Sample]) -> Result<Vec<u8>, String
         }
     }
 
-    // sample header table: one 64-bit base word per sample, no extra chunks.
+    // sample header table: a 64-bit base word per sample, optionally followed by a FREQUENCY
+    // chunk for rates outside FSB5's fixed enum table.
     let mut shdr = Vec::with_capacity(samples.len() * 8);
     for (i, s) in samples.iter().enumerate() {
-        let freq_idx = FREQ
-            .iter()
-            .position(|&f| f == s.freq)
-            .ok_or("freq not in FSB5 table")? as u64;
+        if s.freq == 0 {
+            return Err("sample rate must not be zero".into());
+        }
         let ch_e: u64 = match s.channels {
             1 => 0,
             2 => 1,
@@ -573,12 +583,26 @@ pub fn build_fsb5_pcm16_multi(samples: &[Pcm16Sample]) -> Result<Vec<u8>, String
             _ => return Err("channels must be 1/2/6/8".into()),
         };
         let frames = (s.pcm.len() / s.channels as usize) as u64;
+        // Use the exact enum slot when the rate is in the table; otherwise emit an explicit
+        // FREQUENCY chunk (type 0x02) carrying the real rate — the same mechanism the game's own
+        // banks use (see parse_fsb5), so e.g. 88200 Hz is supported instead of rejected. The
+        // freq_idx field then holds the nearest table slot as a fallback for enum-only readers.
+        let table_idx = FREQ.iter().position(|&f| f == s.freq);
+        let use_chunk = table_idx.is_none();
+        let freq_idx = table_idx.unwrap_or_else(|| nearest_freq_idx(s.freq)) as u64;
         let mut m: u64 = 0;
+        m |= use_chunk as u64; // bit 0: more chunks follow the base word
         m |= (freq_idx & 0xF) << 1;
         m |= (ch_e & 0x3) << 5;
         m |= ((offsets[i] >> 5) & 0x07FF_FFFF) << 7;
         m |= (frames & 0x3FFF_FFFF) << 34;
         shdr.extend_from_slice(&m.to_le_bytes());
+        if use_chunk {
+            // chunk header: next=0, size=4, type=0x02 (FREQUENCY); then the u32 rate.
+            let w: u32 = (4u32 << 1) | (0x02u32 << 25);
+            shdr.extend_from_slice(&w.to_le_bytes());
+            shdr.extend_from_slice(&s.freq.to_le_bytes());
+        }
     }
 
     // name table: [u32 rel-offset]*n then NUL-terminated names; padded to 16.
@@ -821,4 +845,28 @@ pub fn inject_fsb5(
     let riff = (out.len() - 8) as u32;
     put_u32(&mut out, 0x04, riff);
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_fsb5_table_rate_roundtrips() {
+        // 44100 is in the enum table → no chunk; parse must read it back exactly.
+        let fsb = build_fsb5_pcm16("s", 44100, 1, &[0i16; 64]).unwrap();
+        let parsed = parse_fsb5(&fsb).unwrap();
+        assert_eq!(parsed.samples[0].freq, 44100);
+        assert_eq!(parsed.samples[0].channels, 1);
+    }
+
+    #[test]
+    fn build_fsb5_arbitrary_rate_roundtrips() {
+        // 88200 is NOT in the table → must be carried via a FREQUENCY chunk and read back exactly,
+        // and stereo channels must survive too.
+        let fsb = build_fsb5_pcm16("hi", 88200, 2, &[0i16; 128]).unwrap();
+        let parsed = parse_fsb5(&fsb).unwrap();
+        assert_eq!(parsed.samples[0].freq, 88200);
+        assert_eq!(parsed.samples[0].channels, 2);
+    }
 }
