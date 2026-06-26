@@ -90,6 +90,8 @@ fn dispatch(input: &str) -> Value {
         "mod_build" => mod_build(payload),
         "mod_deploy" => mod_deploy(payload),
         "mod_undeploy" => mod_undeploy(payload),
+        "texture_index" => texture_index(payload),
+        "texture_extract" => texture_extract(payload),
         other => err("UNKNOWN_COMMAND", format!("unknown command: {other}")),
     }
 }
@@ -268,6 +270,70 @@ fn audio_extract(payload: Value) -> Value {
         return err("IO", format!("writing wav: {e}"));
     }
     json!({"ok": true, "ogg_path": path.display().to_string(), "wav_path": path.display().to_string()})
+}
+
+/// `{ok, build_id, count, entries:{path:package_id_str}}` — load the cached index, building it
+/// if absent or if `payload.rebuild` is true. `payload.game` = install dir.
+fn texture_index(payload: Value) -> Value {
+    let game = match payload.get("game").and_then(Value::as_str) {
+        Some(g) => std::path::PathBuf::from(g),
+        None => return err("BAD_REQUEST", "missing game"),
+    };
+    let rebuild = payload.get("rebuild").and_then(Value::as_bool).unwrap_or(false);
+    let cache = gore_tex::paths::texture_index_path();
+    let idx = if !rebuild && cache.exists() {
+        match gore_tex::index::TextureIndex::load(&cache) {
+            Ok(i) => i, Err(e) => return err("INDEX_LOAD", e.to_string()) }
+    } else {
+        let utoc = match gore_tex::paths::main_container(&game) {
+            Ok(p) => p, Err(e) => return err("CONTAINER", e.to_string()) };
+        let usmap = match gore_tex::paths::usmap(&game) {
+            Ok(p) => p, Err(e) => return err("USMAP", e.to_string()) };
+        let build_id = usmap.file_name().and_then(|n| n.to_str()).unwrap_or("unknown").to_string();
+        let i = match gore_tex::index::build_index(&utoc, &build_id) {
+            Ok(i) => i, Err(e) => return err("INDEX_BUILD", e.to_string()) };
+        let _ = i.save(&cache);
+        i
+    };
+    let entries: serde_json::Map<String, Value> = idx.entries.iter()
+        .map(|(k, v)| (k.clone(), Value::String(v.to_string()))).collect();
+    json!({ "ok": true, "build_id": idx.build_id, "count": idx.entries.len(), "entries": entries })
+}
+
+/// `{ok, png_path, width, height, format}` — extract a texture to a temp PNG. `payload.game`,
+/// and either `payload.package_id` (string) or `payload.asset` (path).
+fn texture_extract(payload: Value) -> Value {
+    let game = match payload.get("game").and_then(Value::as_str) {
+        Some(g) => std::path::PathBuf::from(g), None => return err("BAD_REQUEST", "missing game") };
+    let utoc = match gore_tex::paths::main_container(&game) {
+        Ok(p) => p, Err(e) => return err("CONTAINER", e.to_string()) };
+    let usmap = match gore_tex::paths::usmap(&game) {
+        Ok(p) => p, Err(e) => return err("USMAP", e.to_string()) };
+    let asset = payload.get("asset").and_then(Value::as_str).unwrap_or("");
+    let leaf = asset.rsplit('/').next().unwrap_or("texture").to_string();
+    let (info, px) = if let Some(pid) = payload.get("package_id").and_then(Value::as_str).and_then(|s| s.parse::<u64>().ok()) {
+        match gore_tex::index::extract_by_package_id(&utoc, &usmap, pid, &leaf) {
+            Ok(x) => x, Err(e) => return err("EXTRACT", e.to_string()) }
+    } else if !asset.is_empty() {
+        let tmp = std::env::temp_dir().join("gore-tex-ffi-extract");
+        if std::fs::create_dir_all(&tmp).is_err() { return err("IO", "tmp"); }
+        let ua = match gore_tex::container::unpack_asset(&utoc, &usmap, asset, &tmp) {
+            Ok(p) => p, Err(e) => return err("UNPACK", e.to_string()) };
+        let info = match gore_tex::decode::parse(
+            &std::fs::read(&ua).unwrap_or_default(), &std::fs::read(ua.with_extension("uexp")).unwrap_or_default(),
+            &std::fs::read(ua.with_extension("ubulk")).unwrap_or_default(), &std::fs::read(&usmap).unwrap_or_default()) {
+            Ok(i) => i, Err(e) => return err("PARSE", e.to_string()) };
+        let px = match gore_tex::decode::to_rgba8(&info) {
+            Ok(p) => p, Err(e) => return err("DECODE", e.to_string()) };
+        (info, px)
+    } else { return err("BAD_REQUEST", "need package_id or asset"); };
+    let mut buf = Vec::with_capacity(px.len() * 4);
+    for p in px { buf.extend_from_slice(&[(p >> 16) as u8, (p >> 8) as u8, p as u8, (p >> 24) as u8]); }
+    let out = std::env::temp_dir().join(format!("gore-tex-preview-{leaf}.png"));
+    if image::save_buffer(&out, &buf, info.width, info.height, image::ColorType::Rgba8).is_err() {
+        return err("PNG", "save failed");
+    }
+    json!({ "ok": true, "png_path": out.display().to_string(), "width": info.width, "height": info.height, "format": info.format })
 }
 
 /// `{out_dir, spec:BuildSpec}` → build the unified bundle into `out_dir`.

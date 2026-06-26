@@ -905,6 +905,8 @@ dependencies = [
  "gore-mod",
  "gore-modgen",
  "gore-reflect",
+ "gore-tex",
+ "image",
  "serde",
  "serde_json",
 ]
