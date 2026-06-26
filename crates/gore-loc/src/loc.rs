@@ -351,12 +351,22 @@ impl Lcache {
     }
 
     /// Set the value for (key, language). Returns an error if either is absent.
+    ///
+    /// The key is matched exactly first, then case-insensitively: the editor/catalog canonicalizes
+    /// loc ids to lowercase while the `.lcache` keeps each record's original casing, so a lowercased
+    /// id must still update a mixed-case record rather than silently failing.
     pub fn set_value(&mut self, key: &str, lang: &str, text: &str) -> Result<(), LcacheError> {
-        let group = self
+        let idx = self
             .groups
-            .iter_mut()
-            .find(|g| g.main.key.text == key)
+            .iter()
+            .position(|g| g.main.key.text == key)
+            .or_else(|| {
+                self.groups
+                    .iter()
+                    .position(|g| g.main.key.text.eq_ignore_ascii_case(key))
+            })
             .ok_or_else(|| LcacheError::KeyNotFound(key.to_string()))?;
+        let group = &mut self.groups[idx];
         let pair = group
             .main
             .pairs
@@ -470,5 +480,15 @@ mod tests {
             lc.set_value("itfo_cheese", "klingon", "x"),
             Err(LcacheError::LangNotFound { .. })
         ));
+    }
+
+    #[test]
+    fn set_value_matches_key_case_insensitively() {
+        // The editor/catalog lowercases ids while the .lcache keeps original casing; a
+        // differently-cased id must still update the record instead of silently failing.
+        let mut lc = Lcache::decode(&synthetic()).unwrap();
+        lc.set_value("ITFO_Cheese", "english", "Gouda").unwrap();
+        let re = Lcache::decode(&lc.encode().unwrap()).unwrap();
+        assert_eq!(re.export(false)["itfo_cheese"]["english"], "Gouda");
     }
 }
