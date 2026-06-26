@@ -506,6 +506,9 @@ struct Undo {
     files: Vec<(PathBuf, Vec<u8>)>,
     /// `*.gore-bak` files THIS deploy created — remove on rollback (adopted ones are kept).
     created_baks: Vec<PathBuf>,
+    /// (bak path, prior bytes) for a STALE backup deleted during drift-refresh — write back on
+    /// rollback so the restored previous record doesn't point at a now-missing backup.
+    removed_baks: Vec<(PathBuf, Vec<u8>)>,
     /// (old-aside dir, dst) — a previous UE4SS mod moved aside: restore on rollback, drop on success.
     ue4ss_old: Option<(PathBuf, PathBuf)>,
     /// a UE4SS mod installed where there was none — remove on rollback.
@@ -519,6 +522,11 @@ impl Undo {
         }
         for bak in &self.created_baks {
             let _ = std::fs::remove_file(bak);
+        }
+        // Restore any stale backup we deleted for a drift-refresh (after removing the new one above,
+        // since they share the same path) so the rolled-back previous record still resolves.
+        for (bak, bytes) in &self.removed_baks {
+            let _ = atomic_write(bak, bytes);
         }
         if let Some((old, dst)) = &self.ue4ss_old {
             let _ = std::fs::remove_dir_all(dst);
@@ -648,12 +656,19 @@ fn stage(plan: &DeployPlan, record: &mut DeployRecord, undo: &mut Undo) -> Resul
         // backup, so fail the deploy now (stage runs pre-write, so the caller rolls back cleanly).
         if plan.refresh_baks.iter().any(|p| p == live) {
             let bak = bak_path(live);
-            if std::fs::remove_file(&bak).is_err() && bak.exists() {
-                return Err(ModError::Other(format!(
-                    "stale backup '{}' could not be removed (read-only or locked); close the game \
-                     and retry so the updated game file can be re-backed-up",
-                    bak.display()
-                )));
+            if bak.exists() {
+                // Snapshot the stale backup before deleting so rollback can put it back — otherwise
+                // a later-step failure would restore the previous record while its backup is gone.
+                if let Ok(prior_bak) = std::fs::read(&bak) {
+                    undo.removed_baks.push((bak.clone(), prior_bak));
+                }
+                if std::fs::remove_file(&bak).is_err() && bak.exists() {
+                    return Err(ModError::Other(format!(
+                        "stale backup '{}' could not be removed (read-only or locked); close the \
+                         game and retry so the updated game file can be re-backed-up",
+                        bak.display()
+                    )));
+                }
             }
         }
         let (bak, created) = backup(live, record)?;
