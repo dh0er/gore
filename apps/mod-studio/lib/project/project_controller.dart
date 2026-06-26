@@ -38,14 +38,18 @@ String _projectSignature(WidgetRef ref) => jsonEncode(gatherProject(ref).toJson(
 void markProjectSaved(WidgetRef ref) =>
     ref.read(savedProjectSignatureProvider.notifier).state = _projectSignature(ref);
 
-/// Whether there are staged changes NOT yet written to a project file. False when there's no
-/// content, or when the current state matches the last saved/loaded signature.
+/// Whether there are staged changes NOT yet written to a project file. Once a baseline exists
+/// (after a save/open/new), this is purely current-vs-saved — so even CLEARING a loaded project
+/// (which leaves no content but differs from the loaded signature) counts as unsaved. Before any
+/// baseline (a fresh session), an empty editor is clean and any staged content is unsaved.
 bool hasUnsavedChanges(WidgetRef ref) {
-  final hasContent = ref.read(overridesProvider).count > 0 ||
-      ref.read(locEditsProvider).isDirty ||
-      ref.read(audioReplacementsProvider).count > 0;
-  if (!hasContent) return false;
-  return _projectSignature(ref) != ref.read(savedProjectSignatureProvider);
+  final saved = ref.read(savedProjectSignatureProvider);
+  if (saved == null) {
+    return ref.read(overridesProvider).count > 0 ||
+        ref.read(locEditsProvider).isDirty ||
+        ref.read(audioReplacementsProvider).count > 0;
+  }
+  return _projectSignature(ref) != saved;
 }
 
 /// Snapshot all editor state into a [ModProject].
