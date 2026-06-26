@@ -105,7 +105,7 @@ pub struct PlatformData {
 // ---- format block math ----------------------------------------------------
 
 /// Bytes per 4x4 block for the supported BCn formats.
-fn block_bytes(format: &str) -> Option<u32> {
+pub(crate) fn block_bytes(format: &str) -> Option<u32> {
     match format {
         "PF_DXT1" => Some(8),
         "PF_DXT5" | "PF_BC5" | "PF_BC7" => Some(16),
@@ -1007,6 +1007,72 @@ fn rebuild_data_resources(
     }
 
     Ok(out)
+}
+
+/// `BULKDATA_PayloadInSeperateFile` — the streamed-payload (`.ubulk`) bit of an
+/// `FObjectDataResource`'s `legacy_bulk_data_flags`. When set, the payload bytes
+/// live in the separate `.ubulk` at `serial_offset`; when clear, they are inline
+/// in the `.uexp` export body.
+const BULKDATA_PAYLOAD_IN_SEPERATE_FILE: u32 = 0x100;
+
+/// Resolve a VT chunk's raw bytes from the cooked files via its data-resource
+/// index.
+///
+/// A cooked virtual texture's `FVirtualTextureDataChunk` serializes its bulk data
+/// (in retoc's legacy form) as a single `i32` index into the `.uasset`
+/// `FObjectDataResource` array — the same array [`rebuild_data_resources`]
+/// manages. This reads `data_resources[dr_index]` and slices the chunk bytes:
+///
+/// * `legacy_bulk_data_flags & PayloadInSeperateFile (0x100)` set -> the payload
+///   is streamed; `serial_offset` is **`.ubulk`-relative** (first chunk at 0), so
+///   slice `ubulk[serial_offset .. serial_offset + serial_size]`.
+/// * flag clear -> the payload is inline in the `.uexp` export body at the same
+///   `serial_offset`/`serial_size`.
+pub(crate) fn resolve_data_resource_bytes(
+    uasset: &[u8],
+    uexp: &[u8],
+    ubulk: &[u8],
+    dr_index: i32,
+) -> Result<Vec<u8>> {
+    use retoc::legacy_asset::FLegacyPackageHeader;
+    use retoc::version::EngineVersion;
+    use std::io::Cursor;
+
+    if dr_index < 0 {
+        return Err(corrupt(&format!("negative VT data-resource index {dr_index}")));
+    }
+    let fallback = EngineVersion::UE5_4.package_file_version();
+    let header = FLegacyPackageHeader::deserialize(&mut Cursor::new(uasset), Some(fallback))
+        .map_err(|e| corrupt(&format!("could not parse .uasset summary for VT chunk resolve: {e}")))?;
+
+    let dr = header
+        .data_resources
+        .get(dr_index as usize)
+        .ok_or_else(|| {
+            corrupt(&format!(
+                "VT data-resource index {dr_index} out of range ({} entries)",
+                header.data_resources.len()
+            ))
+        })?;
+
+    if dr.serial_offset < 0 || dr.serial_size < 0 {
+        return Err(corrupt("VT data-resource has negative serial_offset/size"));
+    }
+    let off = dr.serial_offset as usize;
+    let size = dr.serial_size as usize;
+
+    let src: &[u8] = if dr.legacy_bulk_data_flags & BULKDATA_PAYLOAD_IN_SEPERATE_FILE != 0 {
+        ubulk // offsets are `.ubulk`-relative
+    } else {
+        uexp // inline in the export body
+    };
+    let end = off
+        .checked_add(size)
+        .ok_or_else(|| corrupt("VT chunk slice overflow"))?;
+    let bytes = src
+        .get(off..end)
+        .ok_or_else(|| corrupt("VT chunk bytes run past end of cooked file"))?;
+    Ok(bytes.to_vec())
 }
 
 /// Repair the two header fields a trailing-section (data-resource array) resize

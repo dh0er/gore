@@ -75,9 +75,17 @@ pub struct TexInfo {
     pub height: u32,
     /// UE pixel format name, e.g. "PF_DXT1", "PF_DXT5", "PF_BC5", "PF_BC7".
     pub format: String,
-    /// Raw BCn bytes of mip 0 (largest), as stored on disk.
+    /// Raw BCn bytes of mip 0 (largest), as stored on disk. Empty for a virtual
+    /// texture (which has no single linear surface — its pixels come pre-decoded
+    /// in [`Self::decoded_rgba`]).
     pub mip0: Vec<u8>,
     pub is_virtual: bool,
+    /// Pre-decoded RGBA (`0xAARRGGBB`, `width * height` pixels) for inputs that
+    /// can't go through the plain BCn mip0 path — currently virtual textures,
+    /// whose layer-0 mip-0 surface is stitched from morton-ordered BCn tiles
+    /// (see [`crate::vt::decode_layer0`]). `None` for regular cooked textures;
+    /// [`to_rgba8`] returns it directly when present.
+    pub(crate) decoded_rgba: Option<Vec<u32>>,
 }
 
 // ---- supported formats & block math ---------------------------------------
@@ -120,11 +128,37 @@ pub fn parse(uasset: &[u8], uexp: &[u8], ubulk: &[u8], _usmap: &[u8]) -> Result<
     // the full region (all mips, trailer, FString encoding); we keep only mip0.
     let pd = crate::texdata::PlatformData::parse(uasset, uexp, ubulk)?;
 
-    // Virtual textures have no single linear mip0 surface; the v1 read path
-    // can't decode them (VT decode/stitch is Task 2). The codec now parses the
-    // VT block successfully (`pd.vt.is_some()`), so classify on that.
-    if pd.vt.is_some() {
-        return Err(TexError::VirtualTexture(pd.format));
+    // Virtual textures have no single linear mip0 surface: their layer-0 mip-0
+    // image is stitched from morton-ordered BCn tiles. Resolve every chunk's raw
+    // bytes (single-layer VTs reference all chunks from layer 0) and decode the
+    // preview here, carrying the result as pre-decoded RGBA.
+    if let Some(vt) = pd.vt.as_ref() {
+        let layer0_format = vt
+            .layer_types
+            .first()
+            .cloned()
+            .ok_or_else(|| corrupt("virtual texture has no layer types"))?;
+        if block_bytes(&layer0_format).is_none() {
+            return Err(TexError::UnsupportedFormat(layer0_format));
+        }
+        let mut chunk_bytes = Vec::with_capacity(vt.chunks.len());
+        for ch in &vt.chunks {
+            chunk_bytes.push(crate::texdata::resolve_data_resource_bytes(
+                uasset,
+                uexp,
+                ubulk,
+                ch.data_resource_index,
+            )?);
+        }
+        let (w, h, rgba) = crate::vt::decode_layer0(vt, &chunk_bytes, &layer0_format)?;
+        return Ok(TexInfo {
+            width: w,
+            height: h,
+            format: layer0_format,
+            mip0: Vec::new(),
+            is_virtual: true,
+            decoded_rgba: Some(rgba),
+        });
     }
     if block_bytes(&pd.format).is_none() {
         return Err(TexError::UnsupportedFormat(pd.format));
@@ -151,6 +185,7 @@ pub fn parse(uasset: &[u8], uexp: &[u8], ubulk: &[u8], _usmap: &[u8]) -> Result<
         format: pd.format,
         mip0: mip0_entry.data.clone(),
         is_virtual: false,
+        decoded_rgba: None,
     })
 }
 
@@ -184,6 +219,11 @@ pub fn parse(uasset: &[u8], uexp: &[u8], ubulk: &[u8], _usmap: &[u8]) -> Result<
 /// Any unrecognized `format` returns [`TexError::UnsupportedFormat`]; a decoder
 /// failure (e.g. truncated block data) returns [`TexError::DecodeFailed`].
 pub fn to_rgba8(info: &TexInfo) -> Result<Vec<u32>> {
+    // Pre-decoded inputs (virtual textures) carry their stitched RGBA directly.
+    if let Some(rgba) = &info.decoded_rgba {
+        return Ok(rgba.clone());
+    }
+
     let w = info.width as usize;
     let h = info.height as usize;
     let mut image = vec![0u32; w * h];
@@ -305,6 +345,7 @@ mod tests {
             format: "PF_DXT1".into(),
             mip0: block,
             is_virtual: false,
+            decoded_rgba: None,
         };
         let px = to_rgba8(&info).unwrap();
         assert_eq!(px.len(), 16);
