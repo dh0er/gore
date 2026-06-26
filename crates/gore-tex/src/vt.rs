@@ -301,6 +301,312 @@ pub fn decode_layer0(
     Ok((bmp_w, bmp_h, bitmap))
 }
 
+/// Box-downsample a `w`x`h` RGBA8 image to `(w/2)`x`(h/2)` by averaging each 2x2
+/// texel quad per channel (round-to-nearest). Clamps the right/bottom source
+/// sample for odd dims (so a 1-wide/high row degenerates to a copy). Mirrors
+/// [`crate::encode`]'s `downsample_2x2` so VT mips match the regular-texture path.
+fn downsample_2x2(src: &[u8], w: u32, h: u32) -> Vec<u8> {
+    let w = w as usize;
+    let h = h as usize;
+    let nw = (w / 2).max(1);
+    let nh = (h / 2).max(1);
+    let mut dst = vec![0u8; nw * nh * 4];
+    for y in 0..nh {
+        for x in 0..nw {
+            let (x0, y0) = (x * 2, y * 2);
+            let (x1, y1) = ((x0 + 1).min(w - 1), (y0 + 1).min(h - 1));
+            let idx = |px: usize, py: usize| (py * w + px) * 4;
+            let (a, b, c, d) = (idx(x0, y0), idx(x1, y0), idx(x0, y1), idx(x1, y1));
+            let dpx = (y * nw + x) * 4;
+            for ch in 0..4 {
+                let sum = src[a + ch] as u32
+                    + src[b + ch] as u32
+                    + src[c + ch] as u32
+                    + src[d + ch] as u32;
+                dst[dpx + ch] = ((sum + 2) / 4) as u8;
+            }
+        }
+    }
+    dst
+}
+
+/// Build the `template.num_mips` mip levels from a full-res RGBA8 image.
+/// Mip `i` dims = `max(w>>i,1) x max(h>>i,1)`; returned largest-first, each as a
+/// `(width, height, rgba)` triple. Mip 0 is an owned copy of the input.
+fn build_mip_pyramid(rgba: &[u8], w: u32, h: u32, num_mips: u32) -> Vec<(u32, u32, Vec<u8>)> {
+    let mut out = Vec::with_capacity(num_mips as usize);
+    let mut cur = rgba.to_vec();
+    let mut cw = w;
+    let mut ch = h;
+    for _ in 0..num_mips {
+        out.push((cw, ch, cur.clone()));
+        let (nw, nh) = ((cw >> 1).max(1), (ch >> 1).max(1));
+        if cw == 1 && ch == 1 {
+            // No further halving possible; subsequent levels (if any) repeat 1x1.
+            cur = vec![cur[0], cur[1], cur[2], cur[3]];
+        } else {
+            cur = downsample_2x2(&cur, cw, ch);
+        }
+        cw = nw;
+        ch = nh;
+    }
+    out
+}
+
+/// Pure-Rust SHA-1 (FIPS 180-4). VT chunk `FSHAHash bulkDataHash` is the 20-byte
+/// SHA-1 of the chunk's raw bytes (matches CUE4Parse `FSHAHash`/UE `FSHA1`).
+/// Self-contained to avoid a new crate dependency for one hash.
+fn sha1(data: &[u8]) -> [u8; 20] {
+    let mut h: [u32; 5] = [0x6745_2301, 0xEFCD_AB89, 0x98BA_DCFE, 0x1032_5476, 0xC3D2_E1F0];
+    let ml = (data.len() as u64).wrapping_mul(8);
+
+    // Pad: 0x80, then zeros, then 64-bit big-endian bit length, to a 64-byte mult.
+    let mut msg = data.to_vec();
+    msg.push(0x80);
+    while msg.len() % 64 != 56 {
+        msg.push(0);
+    }
+    msg.extend_from_slice(&ml.to_be_bytes());
+
+    for block in msg.chunks_exact(64) {
+        let mut w = [0u32; 80];
+        for (i, word) in block.chunks_exact(4).enumerate() {
+            w[i] = u32::from_be_bytes([word[0], word[1], word[2], word[3]]);
+        }
+        for i in 16..80 {
+            w[i] = (w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16]).rotate_left(1);
+        }
+        let (mut a, mut b, mut c, mut d, mut e) = (h[0], h[1], h[2], h[3], h[4]);
+        for (i, &wi) in w.iter().enumerate() {
+            let (f, k) = match i {
+                0..=19 => ((b & c) | ((!b) & d), 0x5A82_7999),
+                20..=39 => (b ^ c ^ d, 0x6ED9_EBA1),
+                40..=59 => ((b & c) | (b & d) | (c & d), 0x8F1B_BCDC),
+                _ => (b ^ c ^ d, 0xCA62_C1D6),
+            };
+            let tmp = a
+                .rotate_left(5)
+                .wrapping_add(f)
+                .wrapping_add(e)
+                .wrapping_add(k)
+                .wrapping_add(wi);
+            e = d;
+            d = c;
+            c = b.rotate_left(30);
+            b = a;
+            a = tmp;
+        }
+        h[0] = h[0].wrapping_add(a);
+        h[1] = h[1].wrapping_add(b);
+        h[2] = h[2].wrapping_add(c);
+        h[3] = h[3].wrapping_add(d);
+        h[4] = h[4].wrapping_add(e);
+    }
+
+    let mut out = [0u8; 20];
+    for (i, word) in h.iter().enumerate() {
+        out[i * 4..i * 4 + 4].copy_from_slice(&word.to_be_bytes());
+    }
+    out
+}
+
+/// Re-tile a same-dims single-layer RGBA8 image into the VT cooked format, using
+/// `template` as the structural blueprint (identical tile grid/addresses/mips).
+///
+/// `new_rgba` is row-major RGBA8 (byte order R,G,B,A — the natural image order,
+/// NOT the `0xAARRGGBB` u32s [`decode_layer0`] returns), `w`x`h` pixels. Because
+/// the dimensions, format and tile config are identical to `template`, every
+/// offset table (`BaseOffsetPerMip`, `TileOffsetData`, `ChunkIndexPerMip`,
+/// `TileDataOffsetPerLayer`, per-chunk `SizeInBytes`) is byte-for-byte reused;
+/// only the chunk *payloads* (re-encoded tile bytes) and per-chunk `FSHAHash`
+/// change.
+///
+/// Returns `(new_vt, chunk_bytes)` where `chunk_bytes[c]` is the rebuilt raw
+/// byte buffer for `new_vt.chunks[c]` (parallel to `template.chunks`, chunk
+/// order). `chunk_bytes[c].len() == template.chunks[c].size_in_bytes` (asserted —
+/// a mismatch means the same-dims layout assumption is wrong; it is an error).
+///
+/// # Border rule
+/// The `tile_border`-wide margin around each tile is filled by **clamp-to-edge**
+/// (replicating the nearest in-tile pixel) — the standard VT cooker rule. If the
+/// cooker used a different rule, in-game seams would reveal it (Task 6).
+///
+/// # Errors
+/// * Multi-layer template (`num_layers != 1`) — not supported.
+/// * Dimension mismatch (`w != template.width || h != template.height`).
+/// * Bad buffer length (`new_rgba.len() != w*h*4`).
+/// * Encode failure, or a rebuilt chunk length != the template's chunk size.
+pub fn retile(
+    new_rgba: &[u8],
+    w: u32,
+    h: u32,
+    template: &VtData,
+    layer0_format: &str,
+) -> Result<(VtData, Vec<Vec<u8>>)> {
+    // --- guards -----------------------------------------------------------
+    if template.num_layers != 1 {
+        return Err(TexError::VirtualTexture(
+            "multi-layer VT replace not supported".to_string(),
+        ));
+    }
+    if w != template.width || h != template.height {
+        return Err(TexError::VirtualTexture(format!(
+            "VT re-tile requires same dimensions: new image is {w}x{h} but template is {}x{}",
+            template.width, template.height
+        )));
+    }
+    let expected_len = (w as usize)
+        .checked_mul(h as usize)
+        .and_then(|wh| wh.checked_mul(4))
+        .ok_or_else(|| corrupt("VT re-tile: dimensions overflow"))?;
+    if new_rgba.len() != expected_len {
+        return Err(TexError::VirtualTexture(format!(
+            "VT re-tile: rgba length {} != w*h*4 ({expected_len}) for {w}x{h}",
+            new_rgba.len()
+        )));
+    }
+    if template.num_mips == 0 || template.tile_offset_data.is_empty() {
+        return Err(corrupt("VT re-tile: template has no mips"));
+    }
+    if template.is_legacy() {
+        return Err(TexError::VirtualTexture(
+            "VT re-tile: legacy tile layout not supported".to_string(),
+        ));
+    }
+
+    let tile_size = template.tile_size;
+    let border = template.tile_border_size as usize;
+    let phys = (tile_size + 2 * template.tile_border_size) as usize;
+    if phys == 0 {
+        return Err(corrupt("VT re-tile: physical tile size is zero"));
+    }
+
+    // Per-tile packed BCn size for the PHYSICAL (bordered) tile — must equal the
+    // template's per-tile stride (TileDataOffsetPerLayer.last(), single layer).
+    let bb = block_bytes(layer0_format)
+        .ok_or_else(|| TexError::UnsupportedFormat(layer0_format.to_string()))?
+        as usize;
+    let blocks = (phys + 3) / 4;
+    let packed_size = blocks * blocks * bb;
+    let per_tile_stride = *template
+        .tile_data_offset_per_layer
+        .last()
+        .ok_or_else(|| corrupt("VT re-tile: TileDataOffsetPerLayer is empty"))?
+        as usize;
+    if per_tile_stride != packed_size {
+        return Err(TexError::VirtualTexture(format!(
+            "VT re-tile: per-tile stride {per_tile_stride} != computed packed tile size \
+             {packed_size} for {layer0_format} phys {phys}x{phys} — layout assumption wrong"
+        )));
+    }
+
+    // Allocate one byte buffer per chunk, sized to the template's chunk size; we
+    // place every tile at exactly the offset the template's tables imply.
+    let mut chunk_bytes: Vec<Vec<u8>> = template
+        .chunks
+        .iter()
+        .map(|c| vec![0u8; c.size_in_bytes as usize])
+        .collect();
+
+    // Build the mip pyramid once, then tile each mip per the template's grid.
+    let pyramid = build_mip_pyramid(new_rgba, w, h, template.num_mips);
+    let ts = tile_size as usize;
+
+    for (level, mip) in template.tile_offset_data.iter().enumerate() {
+        let (mw, mh, ref img) = pyramid[level];
+        let mw = mw as usize;
+        let mh = mh as usize;
+
+        let chunk_index = *template
+            .chunk_index_per_mip
+            .get(level)
+            .ok_or_else(|| corrupt("VT re-tile: ChunkIndexPerMip missing a mip"))?
+            as usize;
+        let base = *template
+            .base_offset_per_mip
+            .get(level)
+            .ok_or_else(|| corrupt("VT re-tile: BaseOffsetPerMip missing a mip"))?
+            as usize;
+
+        for addr in 0..mip.max_address {
+            let tile_off = match mip.get_offset(addr) {
+                Some(o) => o as usize,
+                None => continue, // gap address — no tile
+            };
+
+            let tile_x = (reverse_morton2(addr) as usize) * ts;
+            let tile_y = (reverse_morton2(addr >> 1) as usize) * ts;
+
+            // Build the phys x phys bordered RGBA tile. For each physical-tile
+            // pixel, sample the mip image at the in-tile position, clamped to the
+            // tile's TileSize extent AND to the mip image bounds (clamp-to-edge).
+            let mut bordered = vec![0u8; phys * phys * 4];
+            for py in 0..phys {
+                // in-tile y in [0, tile_size): subtract the border, clamp to tile.
+                let in_ty = (py as isize - border as isize).clamp(0, ts as isize - 1) as usize;
+                let src_y = (tile_y + in_ty).min(mh.saturating_sub(1));
+                for px in 0..phys {
+                    let in_tx =
+                        (px as isize - border as isize).clamp(0, ts as isize - 1) as usize;
+                    let src_x = (tile_x + in_tx).min(mw.saturating_sub(1));
+                    let s = (src_y * mw + src_x) * 4;
+                    let d = (py * phys + px) * 4;
+                    bordered[d..d + 4].copy_from_slice(&img[s..s + 4]);
+                }
+            }
+
+            // BC-encode the bordered tile; result must be exactly packed_size.
+            let packed = crate::encode::encode_tile(&bordered, phys as u32, phys as u32, layer0_format)?;
+            if packed.len() != packed_size {
+                return Err(TexError::VirtualTexture(format!(
+                    "VT re-tile: encoded tile is {} bytes, expected {packed_size}",
+                    packed.len()
+                )));
+            }
+
+            // Place at base + tile_off*stride + layer0 (0) in this mip's chunk.
+            let dst = chunk_bytes
+                .get_mut(chunk_index)
+                .ok_or_else(|| corrupt("VT re-tile: mip references a missing chunk"))?;
+            let off = base + tile_off * per_tile_stride;
+            let end = off
+                .checked_add(packed_size)
+                .ok_or_else(|| corrupt("VT re-tile: tile offset overflow"))?;
+            if end > dst.len() {
+                return Err(TexError::VirtualTexture(format!(
+                    "VT re-tile: tile at chunk {chunk_index} offset {off}..{end} exceeds chunk \
+                     size {} — layout assumption wrong",
+                    dst.len()
+                )));
+            }
+            dst[off..end].copy_from_slice(&packed);
+        }
+    }
+
+    // Same-dims invariant: each rebuilt chunk must match the template's size.
+    for (c, (buf, ch)) in chunk_bytes.iter().zip(template.chunks.iter()).enumerate() {
+        if buf.len() != ch.size_in_bytes as usize {
+            return Err(TexError::VirtualTexture(format!(
+                "VT re-tile: rebuilt chunk {c} is {} bytes but template chunk is {} — STOP, the \
+                 layout assumption is wrong",
+                buf.len(),
+                ch.size_in_bytes
+            )));
+        }
+    }
+
+    // Clone the template structure; only chunk payloads + per-chunk hash change.
+    let mut new_vt = template.clone();
+    for (ch, buf) in new_vt.chunks.iter_mut().zip(chunk_bytes.iter()) {
+        ch.size_in_bytes = buf.len() as u32; // == template's (asserted above)
+        ch.bulk_data_hash = sha1(buf); // SHA-1 over the chunk's raw bytes
+        // codec_payload_size, codec (per-layer entries), data_resource_index all
+        // kept from the template (identical dims/format/tile config).
+    }
+
+    Ok((new_vt, chunk_bytes))
+}
+
 /// Read a `TArray<u32>` at `*pos`: `i32 count` then `count` u32 elements.
 fn read_u32_array(b: &[u8], pos: &mut usize) -> Result<Vec<u32>> {
     let count = rd_i32(b, *pos)?;
@@ -545,6 +851,163 @@ mod tests {
     }
 
     #[test]
+    fn sha1_matches_known_vectors() {
+        // FIPS 180-4 / RFC 3174 reference vectors.
+        let hex = |d: &[u8]| {
+            super::sha1(d)
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>()
+        };
+        assert_eq!(hex(b""), "da39a3ee5e6b4b0d3255bfef95601890afd80709");
+        assert_eq!(hex(b"abc"), "a9993e364706816aba3e25717850c26c9cd0d89d");
+        assert_eq!(
+            hex(b"The quick brown fox jumps over the lazy dog"),
+            "2fd4e1c67a2d28fced849ee1bb76e7391b93eb12"
+        );
+        // A 64-byte input exercises the multi-block padding boundary.
+        assert_eq!(
+            hex(&[b'a'; 64]),
+            "0098ba824b5c16427bd7a1122a5a442a25ec644d"
+        );
+    }
+
+    /// Build a tiny self-consistent single-layer VT template (1 mip, 1 tile,
+    /// PF_DXT1), `retile` a solid-color image into it, and assert the structure
+    /// is preserved and `decode_layer0` of the result recovers the color. Proves
+    /// the border-build + BC-encode + chunk-layout round-trips via our own decode.
+    #[test]
+    fn retile_synthetic_solid_roundtrips() {
+        const TILE: u32 = 8;
+        const BORDER: u32 = 4;
+        let phys = (TILE + 2 * BORDER) as usize; // 16
+        let blocks = (phys + 3) / 4; // 4
+        let packed = blocks * blocks * 8; // DXT1: 4*4*8 = 128 bytes
+
+        let template = VtData {
+            b_cooked: 1,
+            num_layers: 1,
+            width_in_blocks: TILE / 4,
+            height_in_blocks: TILE / 4,
+            tile_size: TILE,
+            tile_border_size: BORDER,
+            tile_data_offset_per_layer: vec![packed as u32],
+            num_mips: 1,
+            width: TILE,
+            height: TILE,
+            chunk_index_per_mip: vec![0],
+            base_offset_per_mip: vec![0],
+            tile_offset_data: vec![VtTileOffset {
+                width: 1,
+                height: 1,
+                max_address: 1,
+                addresses: vec![0],
+                offsets: vec![0],
+            }],
+            tile_index_per_chunk: vec![],
+            tile_index_per_mip: vec![],
+            tile_offset_in_chunk: vec![],
+            layer_types: vec!["PF_DXT1".to_string()],
+            layer_fallback_colors: vec![[0u8; 16]],
+            chunks: vec![VtChunk {
+                bulk_data_hash: [0u8; 20],
+                size_in_bytes: packed as u32,
+                codec_payload_size: 0,
+                codec: vec![(4, 0)], // RawGPU
+                data_resource_index: 0,
+            }],
+        };
+
+        // Solid color (orange-ish; avoid pure red so we exercise all channels).
+        let color = [200u8, 120, 40, 255];
+        let mut rgba = Vec::with_capacity((TILE * TILE * 4) as usize);
+        for _ in 0..(TILE * TILE) {
+            rgba.extend_from_slice(&color);
+        }
+
+        let (new_vt, chunk_bytes) = retile(&rgba, TILE, TILE, &template, "PF_DXT1").unwrap();
+
+        // Structure preserved (grid/addresses/offsets/sizes identical).
+        assert_eq!(new_vt.tile_offset_data, template.tile_offset_data);
+        assert_eq!(new_vt.chunk_index_per_mip, template.chunk_index_per_mip);
+        assert_eq!(new_vt.base_offset_per_mip, template.base_offset_per_mip);
+        assert_eq!(
+            new_vt.tile_data_offset_per_layer,
+            template.tile_data_offset_per_layer
+        );
+        assert_eq!(new_vt.num_mips, template.num_mips);
+        assert_eq!(new_vt.width, template.width);
+        assert_eq!(new_vt.height, template.height);
+        assert_eq!(chunk_bytes.len(), 1);
+        assert_eq!(chunk_bytes[0].len(), packed, "chunk size == template size");
+        assert_eq!(new_vt.chunks[0].size_in_bytes, packed as u32);
+        // Hash recomputed (no longer the all-zero placeholder).
+        assert_ne!(new_vt.chunks[0].bulk_data_hash, [0u8; 20]);
+        assert_eq!(new_vt.chunks[0].bulk_data_hash, super::sha1(&chunk_bytes[0]));
+
+        // Decode the re-tiled VT back and check the center pixel ~ the color.
+        let (dw, dh, px) = decode_layer0(&new_vt, &chunk_bytes, "PF_DXT1").unwrap();
+        assert_eq!((dw, dh), (TILE, TILE));
+        let center = px[(dh as usize / 2) * dw as usize + (dw as usize / 2)];
+        let r = ((center >> 16) & 0xff) as i32;
+        let g = ((center >> 8) & 0xff) as i32;
+        let b = (center & 0xff) as i32;
+        // BC1 565 quantization tolerance.
+        assert!((r - color[0] as i32).abs() <= 12, "R {r} vs {}", color[0]);
+        assert!((g - color[1] as i32).abs() <= 12, "G {g} vs {}", color[1]);
+        assert!((b - color[2] as i32).abs() <= 12, "B {b} vs {}", color[2]);
+    }
+
+    #[test]
+    fn retile_rejects_bad_inputs() {
+        let mut t = VtData {
+            b_cooked: 1,
+            num_layers: 1,
+            width_in_blocks: 1,
+            height_in_blocks: 1,
+            tile_size: 4,
+            tile_border_size: 0,
+            tile_data_offset_per_layer: vec![8],
+            num_mips: 1,
+            width: 4,
+            height: 4,
+            chunk_index_per_mip: vec![0],
+            base_offset_per_mip: vec![0],
+            tile_offset_data: vec![VtTileOffset {
+                width: 1,
+                height: 1,
+                max_address: 1,
+                addresses: vec![0],
+                offsets: vec![0],
+            }],
+            tile_index_per_chunk: vec![],
+            tile_index_per_mip: vec![],
+            tile_offset_in_chunk: vec![],
+            layer_types: vec!["PF_DXT1".to_string()],
+            layer_fallback_colors: vec![[0u8; 16]],
+            chunks: vec![VtChunk {
+                bulk_data_hash: [0u8; 20],
+                size_in_bytes: 8,
+                codec_payload_size: 0,
+                codec: vec![(4, 0)],
+                data_resource_index: 0,
+            }],
+        };
+        let good = vec![0u8; 4 * 4 * 4];
+
+        // Wrong dims.
+        assert!(retile(&good, 8, 4, &t, "PF_DXT1").is_err());
+        // Wrong buffer length.
+        assert!(retile(&vec![0u8; 10], 4, 4, &t, "PF_DXT1").is_err());
+        // Multi-layer.
+        t.num_layers = 2;
+        assert!(retile(&good, 4, 4, &t, "PF_DXT1").is_err());
+        t.num_layers = 1;
+        // OK baseline still works.
+        assert!(retile(&good, 4, 4, &t, "PF_DXT1").is_ok());
+    }
+
+    #[test]
     fn tile_offset_get_offset_and_validity() {
         // Two runs: [0,4) at base 100, a gap [4,8) (sentinel), [8,..) at base 200.
         let t = VtTileOffset {
@@ -692,5 +1155,83 @@ mod tests {
             .join("../../work/vt_t2_decode.png");
         write_png(&png, info.width, info.height, &rgba);
         eprintln!("wrote debug PNG: {}", png.display());
+    }
+
+    /// STRONG ORACLE: parse the real Biter VT, `retile` it with a same-dims solid
+    /// image, and assert (a) every rebuilt chunk length == the original chunk's
+    /// SizeInBytes (the same-dims layout invariant), and (b) `decode_layer0` of
+    /// the re-tiled result recovers the solid color across the whole image. This
+    /// validates border-build + BC-encode + the full multi-mip chunk layout
+    /// against a genuine cooked VT. Gated on the game install; slow.
+    #[test]
+    #[ignore = "slow: full container scan; run with --ignored"]
+    fn retile_biter_vt_solid_roundtrips() {
+        use std::path::PathBuf;
+        let game = PathBuf::from(r"D:\SteamLibrary\steamapps\common\Gothic 1 Remake");
+        if !game.exists() {
+            eprintln!("skip: game not installed");
+            return;
+        }
+        let utoc = crate::paths::main_container(&game).unwrap();
+        let usmap = crate::paths::usmap(&game).unwrap();
+
+        let asset =
+            "/Game/Assets/Characters/Creatures/Biter/Model/Armor/Textures/T_Biter_Armor_D";
+        let tmp = std::env::temp_dir().join("gore-tex-vt-retile-test");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let uasset_path = crate::container::unpack_asset(&utoc, &usmap, asset, &tmp).unwrap();
+        let uexp = std::fs::read(uasset_path.with_extension("uexp")).unwrap();
+        let ubulk = std::fs::read(uasset_path.with_extension("ubulk")).unwrap_or_default();
+        let uasset = std::fs::read(&uasset_path).unwrap();
+
+        let pd = crate::texdata::PlatformData::parse(&uasset, &uexp, &ubulk).unwrap();
+        let vt = pd.vt.as_ref().expect("Biter asset is a VT");
+        let fmt = vt.layer_types[0].clone();
+        eprintln!(
+            "Biter VT template: {}x{} {fmt} mips={} chunks={}",
+            vt.width, vt.height, vt.num_mips, vt.chunks.len()
+        );
+
+        // Same-dims solid-color RGBA8 (R,G,B,A byte order — encode input order).
+        let color = [80u8, 160, 220, 255];
+        let mut rgba = Vec::with_capacity((vt.width * vt.height * 4) as usize);
+        for _ in 0..(vt.width * vt.height) {
+            rgba.extend_from_slice(&color);
+        }
+
+        let (new_vt, chunk_bytes) = retile(&rgba, vt.width, vt.height, vt, &fmt).unwrap();
+
+        // (a) Same-dims invariant: every rebuilt chunk matches the original size.
+        for (c, (buf, ch)) in chunk_bytes.iter().zip(vt.chunks.iter()).enumerate() {
+            assert_eq!(
+                buf.len() as u32,
+                ch.size_in_bytes,
+                "chunk {c} rebuilt len {} != template SizeInBytes {}",
+                buf.len(),
+                ch.size_in_bytes
+            );
+        }
+        eprintln!(
+            "chunk sizes OK: {:?}",
+            new_vt.chunks.iter().map(|c| c.size_in_bytes).collect::<Vec<_>>()
+        );
+
+        // (b) Decode the re-tiled VT back; the whole image should be ~the color.
+        let (dw, dh, px) = decode_layer0(&new_vt, &chunk_bytes, &fmt).unwrap();
+        assert_eq!((dw, dh), (vt.width, vt.height));
+        let (mut max_dr, mut max_dg, mut max_db) = (0i32, 0i32, 0i32);
+        for &p in &px {
+            let r = ((p >> 16) & 0xff) as i32;
+            let g = ((p >> 8) & 0xff) as i32;
+            let b = (p & 0xff) as i32;
+            max_dr = max_dr.max((r - color[0] as i32).abs());
+            max_dg = max_dg.max((g - color[1] as i32).abs());
+            max_db = max_db.max((b - color[2] as i32).abs());
+        }
+        eprintln!("max per-channel deviation from solid: R{max_dr} G{max_dg} B{max_db}");
+        // BC1 565 quantization; a solid color stays well within a small band.
+        assert!(max_dr <= 12 && max_dg <= 12 && max_db <= 12, "re-tiled solid drifted");
     }
 }

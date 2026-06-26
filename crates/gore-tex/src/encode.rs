@@ -124,6 +124,46 @@ pub fn encode_mips(rgba: &[u8], width: u32, height: u32, format: &str) -> Result
     Ok(out)
 }
 
+/// BCn-encode a single arbitrary-size RGBA8 surface (`w`x`h`, both multiples of
+/// 4) to `format`, using the *same* `intel_tex_2` mapping [`encode_mips`] uses.
+///
+/// Unlike [`encode_mips`] this does **not** require power-of-two dims or build a
+/// mip chain — it's the per-tile encoder the VT re-tiler ([`crate::vt::retile`])
+/// needs for physical (bordered) tiles such as 136x136. The output length is
+/// verified against the format's BCn block math (`block_math(w,h,format)`).
+///
+/// # Errors
+/// * [`TexError::UnsupportedFormat`] if `format` is not a supported BCn format.
+/// * [`TexError::EncodeFailed`] if `w`/`h` are not multiples of 4, the buffer
+///   length is wrong, or the encoder output length doesn't match block math.
+pub(crate) fn encode_tile(rgba: &[u8], w: u32, h: u32, format: &str) -> Result<Vec<u8>> {
+    if block_bytes(format).is_none() {
+        return Err(TexError::UnsupportedFormat(format.to_string()));
+    }
+    if w == 0 || h == 0 {
+        return Err(TexError::EncodeFailed(format!(
+            "zero tile dimension not allowed: {w}x{h}"
+        )));
+    }
+    if w % 4 != 0 || h % 4 != 0 {
+        return Err(TexError::EncodeFailed(format!(
+            "tile dimensions {w}x{h} must both be multiples of 4 for BCn block encoding"
+        )));
+    }
+    let expected_len = (w as usize)
+        .checked_mul(h as usize)
+        .and_then(|wh| wh.checked_mul(4))
+        .ok_or_else(|| TexError::EncodeFailed(format!("tile dimensions {w}x{h} overflow")))?;
+    if rgba.len() != expected_len {
+        return Err(TexError::EncodeFailed(format!(
+            "tile rgba length {} != w*h*4 ({}) for {w}x{h}",
+            rgba.len(),
+            expected_len
+        )));
+    }
+    encode_level(rgba, w, h, format)
+}
+
 /// BCn-encode one mip level's RGBA8 (`w`x`h`) to `format`. Verifies the encoder
 /// output length matches the format's block math.
 fn encode_level(rgba: &[u8], w: u32, h: u32, format: &str) -> Result<Vec<u8>> {
