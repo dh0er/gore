@@ -850,9 +850,14 @@ fn restore_record(record: &DeployRecord) -> bool {
         let (live, bak) = (Path::new(live_s), Path::new(bak));
         // If the live file was updated/verified externally since we deployed (e.g. Steam), the
         // recorded backup is stale — restoring it would downgrade the newer asset. Skip the
-        // restore but drop the stale backup; this is intentional, not a failure.
+        // restore but DELETE the stale backup. The deletion must succeed: if the stale backup
+        // lingers (locked/read-only) and undeploy still drops the record, a future deploy (now
+        // without a hash record) would treat that pre-update backup as pristine and downgrade the
+        // updated asset. So a failed deletion is an undeploy failure — keep the record for retry.
         if !safe_to_restore(live_s, &record.deployed_hashes) {
-            let _ = std::fs::remove_file(bak);
+            if std::fs::remove_file(bak).is_err() && bak.exists() {
+                all_ok = false;
+            }
             continue;
         }
         if !bak.exists() {

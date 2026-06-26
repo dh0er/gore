@@ -146,7 +146,18 @@ fn write_result(bank: &Path, new_bank: &[u8], out: Option<PathBuf>, count: usize
         }
         None => {
             let bak = backup_path(bank);
-            if !bak.exists() {
+            // Refresh the backup from the CURRENT live bank when that bank is itself pristine (a
+            // single FSB5): this covers the first replace AND a Steam update/restore that refreshed
+            // the live bank while a stale pre-update *.gore-bak lingered — without this, that stale
+            // backup would survive and a later `restore` would write it over the updated bank. When
+            // the live bank is already injected, an existing backup is the true pristine: keep it.
+            let live = std::fs::read(bank).with_context(|| format!("reading '{}'", bank.display()))?;
+            let live_pristine = gore_fmod::parse_bank(&live).map(|e| e.len() <= 1).unwrap_or(true);
+            if live_pristine {
+                std::fs::write(&bak, &live)
+                    .with_context(|| format!("backing up to '{}'", bak.display()))?;
+                println!("backed up -> {}", bak.display());
+            } else if !bak.exists() {
                 std::fs::copy(bank, &bak)
                     .with_context(|| format!("backing up to '{}'", bak.display()))?;
                 println!("backed up -> {}", bak.display());
@@ -241,6 +252,10 @@ pub fn restore(bank: PathBuf) -> Result<()> {
     }
     let bytes = std::fs::read(&bak).with_context(|| format!("reading '{}'", bak.display()))?;
     write_atomic(&bank, &bytes)?;
+    // Drop the backup now that the bank is back to pristine: keeping it would let it go stale
+    // against a later Steam update, and a fresh one is re-created from the pristine bank on the
+    // next replace.
+    let _ = std::fs::remove_file(&bak);
     println!("restored {} from {}", bank.display(), bak.display());
     Ok(())
 }
