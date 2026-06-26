@@ -260,8 +260,20 @@ pub struct DeployRecord {
 
 const RECORD_NAME: &str = "gore-mod.deployed.json";
 
+/// Canonical install root for the deploy record. `resolve_game_paths` accepts both the install
+/// dir and its `G1R` child, so normalize to the install dir (the parent of `G1R`) — otherwise a
+/// deploy via `.../G1R` and an undeploy via the Steam-detected parent would use different record
+/// paths, leaving the mod silently un-undeployable.
+fn record_root(root: &Path) -> PathBuf {
+    if root.file_name().is_some_and(|n| n == "G1R") {
+        root.parent().map(Path::to_path_buf).unwrap_or_else(|| root.to_path_buf())
+    } else {
+        root.to_path_buf()
+    }
+}
+
 fn record_path(root: &Path) -> PathBuf {
-    root.join(RECORD_NAME)
+    record_root(root).join(RECORD_NAME)
 }
 
 /// A fully-prepared deployment: everything to write, computed in memory so the failure-prone
@@ -319,6 +331,19 @@ pub fn deploy(bundle_dir: &Path, game_root: &Path) -> Result<DeployRecord> {
         })
         .unwrap_or_default();
     record.backups.extend(leftovers.iter().cloned());
+
+    // Crash-safety: if the previous deployment used DIFFERENT-named UE4SS dir(s), record them as
+    // stale BEFORE persisting. apply_writes/retire_leftovers haven't removed them yet, so a crash
+    // in this window would otherwise leave them orphaned-and-active with no record to clean them
+    // up. retire_leftovers prunes any it later removes successfully.
+    if let Some(prev) = prev.as_ref() {
+        let new_dir = plan.ue4ss.as_ref().map(|(_, dst)| dst.display().to_string());
+        for d in prev.ue4ss_mod_dir.iter().chain(prev.stale_ue4ss_dirs.iter()) {
+            if new_dir.as_deref() != Some(d.as_str()) && !record.stale_ue4ss_dirs.contains(d) {
+                record.stale_ue4ss_dirs.push(d.clone());
+            }
+        }
+    }
 
     if let Err(e) = write_record_file(game_root, &record) {
         undo.rollback();
@@ -568,19 +593,25 @@ fn retire_leftovers(
     if let Some(prev) = prev {
         let new_dir = plan.ue4ss.as_ref().map(|(_, dst)| dst.display().to_string());
         // Retire the previous deploy's UE4SS dir AND any dirs it had already failed to remove
-        // (its own `stale_ue4ss_dirs`). For each, if it isn't the new mod's dir and can't be
-        // removed now (locked/permissions), carry it into the new record's stale list so a later
-        // undeploy still cleans it up — otherwise overwriting the record would orphan it.
-        let prev_dirs = prev.ue4ss_mod_dir.iter().chain(prev.stale_ue4ss_dirs.iter());
+        // (its own `stale_ue4ss_dirs`). These were pre-seeded into `record.stale_ue4ss_dirs` for
+        // crash-safety; here we actually remove them and reconcile the list: drop the ones we
+        // cleaned, keep (locked/permissions) ones so a later undeploy still cleans them up.
+        let prev_dirs: Vec<String> =
+            prev.ue4ss_mod_dir.iter().chain(prev.stale_ue4ss_dirs.iter()).cloned().collect();
         for prev_dir in prev_dirs {
             if new_dir.as_deref() == Some(prev_dir.as_str()) {
                 continue;
             }
-            if std::fs::remove_dir_all(prev_dir).is_err() && Path::new(prev_dir).exists() {
-                if !record.stale_ue4ss_dirs.iter().any(|d| d == prev_dir) {
-                    record.stale_ue4ss_dirs.push(prev_dir.clone());
+            let removed = std::fs::remove_dir_all(&prev_dir).is_ok() || !Path::new(&prev_dir).exists();
+            let tracked = record.stale_ue4ss_dirs.iter().position(|d| d == &prev_dir);
+            if removed {
+                if let Some(i) = tracked {
+                    record.stale_ue4ss_dirs.remove(i);
                     changed = true;
                 }
+            } else if tracked.is_none() {
+                record.stale_ue4ss_dirs.push(prev_dir.clone());
+                changed = true;
             }
         }
     }
