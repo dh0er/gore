@@ -338,11 +338,15 @@ pub fn parse_fsb5(b: &[u8]) -> Result<Fsb5, String> {
     let mut samples = Vec::with_capacity(n);
     for i in 0..n {
         let r = &raws[i];
-        let size = if i + 1 == n {
-            data_size - r.data_off
-        } else {
-            raws[i + 1].data_off - r.data_off
-        };
+        // Sample sizes are the gap to the next sample's offset (or to the data end for the last).
+        // A corrupt/user-modified bank could have non-monotonic offsets or an offset past the data
+        // section; validate the range before subtracting so it returns a decode error instead of
+        // underflowing (debug panic / release huge size that reads the wrong byte range).
+        let end = if i + 1 == n { data_size } else { raws[i + 1].data_off };
+        if end > data_size || r.data_off > end {
+            return Err("FSB5 sample offsets out of range (corrupt bank)".into());
+        }
+        let size = end - r.data_off;
         // Bounds-check the name-table offset array and the string offset before reading, so a
         // corrupt/truncated bank yields a synthesized name instead of an out-of-range panic.
         let name = if name_tbl_size > 0 && name_tbl + 4 * i + 4 <= b.len() {

@@ -85,7 +85,9 @@ pub fn extract(bank: PathBuf, out: PathBuf, sample: Option<String>, key: Option<
     for i in indices {
         match gore_fmod::extract_wav(&block, &fsb, i) {
             Ok(wav) => {
-                let path = out.join(format!("{}.wav", sanitize(&fsb.samples[i].name)));
+                // Prefix with the sample index so two names that sanitize to the same basename
+                // (e.g. differing only by punctuation) don't collide and silently overwrite.
+                let path = out.join(format!("{i}_{}.wav", sanitize(&fsb.samples[i].name)));
                 std::fs::write(&path, &wav)
                     .with_context(|| format!("writing '{}'", path.display()))?;
                 ok += 1;
