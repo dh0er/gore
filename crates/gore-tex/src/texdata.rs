@@ -573,6 +573,222 @@ fn expected_num_mips(w: u32, h: u32) -> usize {
     (32 - w.max(h).leading_zeros()) as usize
 }
 
+/// Unified texture-replace entry: takes a raw RGBA8 image (`new_rgba`, byte order
+/// R,G,B,A) at `new_w` x `new_h` and rewrites the cooked triple, branching on the
+/// ORIGINAL texture's shape:
+///
+/// * **Virtual texture** (`orig.vt.is_some()`) → re-tile the image into the
+///   cooked VT format via [`crate::vt::retile`] (single-layer, same-dims only),
+///   write the rebuilt chunk bytes back into the `.ubulk`/`.uexp`, and re-emit the
+///   `FVirtualTextureBuiltData` block. See [`replace_texture_vt`].
+/// * **Regular texture** → BC-encode the full mip pyramid for `new_w`/`new_h` in
+///   the original pixel format ([`crate::encode::encode_mips`]) and route through
+///   the existing [`replace_texture`] non-VT path.
+///
+/// `orig_format` is the UE pixel-format name of the layer-0 / mip surface (== the
+/// `format` field of [`crate::decode::parse`]); it drives BCn encoding for the
+/// non-VT branch and is validated against the VT layer format for the VT branch.
+///
+/// This is the single entry the callers (gore-mod prepare arm, CLI `texture
+/// replace`, FFI) should use: they always hold the source RGBA + dims, so passing
+/// the image (rather than pre-encoded mips) lets gore-tex decide whether to mip or
+/// re-tile. Returns `(new_uasset, new_uexp, new_ubulk)`.
+pub fn replace_texture_image(
+    uasset: &[u8],
+    uexp: &[u8],
+    ubulk: &[u8],
+    new_rgba: &[u8],
+    new_w: u32,
+    new_h: u32,
+    orig_format: &str,
+) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>)> {
+    // Parse once to learn whether this is a virtual texture. (The non-VT path
+    // re-parses internally; the VT path reuses this parse.)
+    let orig = PlatformData::parse(uasset, uexp, ubulk)?;
+    if orig.vt.is_some() {
+        return replace_texture_vt(uasset, uexp, ubulk, orig, new_rgba, new_w, new_h);
+    }
+    // Regular texture: BC-encode the new pyramid in the original format, then run
+    // the established non-VT rewrite.
+    let mips = crate::encode::encode_mips(new_rgba, new_w, new_h, orig_format)?;
+    replace_texture(uasset, uexp, ubulk, new_w, new_h, mips)
+}
+
+/// VT branch of [`replace_texture_image`]: re-tile `new_rgba` (RGBA8, `new_w` x
+/// `new_h`) into the cooked virtual-texture layout described by `orig.vt` and
+/// write the result back into the cooked triple. Returns
+/// `(new_uasset, new_uexp, new_ubulk)`.
+///
+/// ## Same-dims only (today)
+///
+/// [`crate::vt::retile`] requires the new image to match the template's
+/// dimensions and tile config exactly, so every offset table, chunk count, and
+/// per-chunk `SizeInBytes` is byte-for-byte reused — only the chunk PAYLOADS
+/// (re-encoded tile bytes) and per-chunk `FSHAHash` change. This same-dims
+/// invariant makes the rewrite a set of surgical, fixed-length edits:
+///
+/// 1. **`.uexp` platform-data region** — replace it with the re-serialized
+///    region carrying `new_vt`. Only the 20-byte per-chunk hashes (and identical
+///    `SizeInBytes`) differ, so the region length is UNCHANGED ⇒ export
+///    `SerialSize` delta is 0 (the `patch_uasset_serial_size` call is a no-op,
+///    but we run it for correctness).
+/// 2. **`.ubulk` / inline chunk bytes** — each VT chunk's bulk payload lives at
+///    `data_resources[chunk.data_resource_index]`. We write each rebuilt
+///    `chunk_bytes[c]` back at that data-resource's `serial_offset` (streamed →
+///    `.ubulk`; inline → the `.uexp` export body), exactly where the original
+///    chunk sat. Because sizes are unchanged the `.ubulk` length is unchanged.
+/// 3. **data-resources** — for same-dims every entry's `serial_size`/`raw_size`
+///    is unchanged, so the `FObjectDataResource` array needs NO edit. We VALIDATE
+///    that the rebuilt chunk sizes equal the data-resources' recorded sizes
+///    (proving the same-dims assumption end-to-end) and leave the `.uasset`
+///    header byte-identical — no summary fixup is required when nothing resizes.
+/// 4. **`ImportedSize`** — `new_w`/`new_h` == orig dims for a same-dims replace,
+///    so the property-block patch overwrites identical bytes (no-op); we still
+///    run it for correctness/future-proofing.
+fn replace_texture_vt(
+    uasset: &[u8],
+    uexp: &[u8],
+    ubulk: &[u8],
+    orig: PlatformData,
+    new_rgba: &[u8],
+    new_w: u32,
+    new_h: u32,
+) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>)> {
+    let template = orig
+        .vt
+        .as_ref()
+        .ok_or_else(|| corrupt("replace_texture_vt called on a non-VT texture"))?;
+    let layer0_format = template
+        .layer_types
+        .first()
+        .ok_or_else(|| corrupt("VT template has no layer types"))?
+        .clone();
+
+    // 1. Re-tile the image into the cooked VT format (single-layer + dims guards
+    //    live in retile). chunk_bytes[c] is parallel to template.chunks.
+    let (new_vt, chunk_bytes) = crate::vt::retile(new_rgba, new_w, new_h, template, &layer0_format)?;
+    if chunk_bytes.len() != template.chunks.len() {
+        return Err(corrupt("VT retile returned a different chunk count than the template"));
+    }
+
+    // 2. Re-serialize the platform-data region with the new VtData.
+    let mut new_pd = orig.clone();
+    new_pd.vt = Some(new_vt);
+    let new_region = new_pd.serialize_region()?;
+    let old_region_len = orig.region.end - orig.region.start;
+    let delta: i64 = new_region.len() as i64 - old_region_len as i64;
+
+    // 3. new_uexp = uexp with [region] replaced. For same-dims VT the region
+    //    length is unchanged (only the 20-byte chunk hashes differ), so delta == 0
+    //    and the tail (incl. any inline chunk bytes + the package magic) is
+    //    unmoved. We assert that here — a non-zero delta would mean a chunk size
+    //    changed, breaking the same-dims invariant the chunk-byte write relies on.
+    let mut new_uexp = uexp.to_vec();
+    new_uexp.splice(orig.region.clone(), new_region);
+    if delta != 0 {
+        return Err(corrupt(&format!(
+            "VT replace changed the platform-data region length by {delta}; same-dims VT must \
+             keep it constant — refusing to write inconsistent chunk offsets"
+        )));
+    }
+
+    // 3b. ImportedSize patch in the property block (no-op for same-dims; run for
+    //     correctness). The property block is new_uexp[0 .. orig.region.start).
+    let prop_block = new_uexp
+        .get_mut(..orig.region.start)
+        .ok_or_else(|| corrupt("region start runs past end of .uexp"))?;
+    let _ = patch_imported_size(prop_block, (orig.size_x, orig.size_y), (new_w, new_h))?;
+
+    // 4. Write each rebuilt chunk's bytes back into the cooked output at its
+    //    data-resource offset. Streamed chunks land in `.ubulk`; inline chunks
+    //    land in the `.uexp` export body. Same-dims ⇒ each chunk's serial_size is
+    //    unchanged, so this overwrites in place without moving any neighbor.
+    let mut new_ubulk = ubulk.to_vec();
+    write_vt_chunk_bytes(
+        uasset,
+        &mut new_uexp,
+        &mut new_ubulk,
+        new_pd.vt.as_ref().unwrap(),
+        &chunk_bytes,
+    )?;
+
+    // 5. Patch export SerialSize by delta (== 0 for same-dims → no-op; leaves the
+    //    .uasset byte-identical). The data-resource array needs no edit for
+    //    same-dims (sizes unchanged) — write_vt_chunk_bytes already validated each
+    //    chunk's size against its data-resource, so the header stays consistent.
+    let new_uasset = patch_uasset_serial_size(uasset, uexp, &orig.region, delta)?;
+
+    Ok((new_uasset, new_uexp, new_ubulk))
+}
+
+/// Write the rebuilt VT chunk bytes (`chunk_bytes[c]` ↔ `vt.chunks[c]`) into the
+/// cooked output at each chunk's data-resource offset.
+///
+/// A cooked VT chunk's bulk payload is located by its
+/// `data_resources[chunk.data_resource_index]` entry (the same array
+/// [`resolve_data_resource_bytes`] reads): streamed payloads (`legacy_bulk_data_flags
+/// & PayloadInSeperateFile`) live in `.ubulk` at `serial_offset`; inline payloads
+/// live in the `.uexp` export body at `serial_offset`. We validate each chunk's
+/// rebuilt length equals the data-resource's recorded `serial_size` (the same-dims
+/// invariant — VT retile asserts it, and we re-check it against the on-disk
+/// data-resource so a layout mismatch fails loud rather than corrupting offsets),
+/// then overwrite the payload bytes in place.
+fn write_vt_chunk_bytes(
+    uasset: &[u8],
+    uexp: &mut Vec<u8>,
+    ubulk: &mut Vec<u8>,
+    vt: &crate::vt::VtData,
+    chunk_bytes: &[Vec<u8>],
+) -> Result<()> {
+    use retoc::legacy_asset::FLegacyPackageHeader;
+    use retoc::version::EngineVersion;
+    use std::io::Cursor;
+
+    let fallback = EngineVersion::UE5_4.package_file_version();
+    let header = FLegacyPackageHeader::deserialize(&mut Cursor::new(uasset), Some(fallback))
+        .map_err(|e| corrupt(&format!("could not parse .uasset summary for VT chunk write: {e}")))?;
+
+    for (c, (chunk, bytes)) in vt.chunks.iter().zip(chunk_bytes.iter()).enumerate() {
+        let dr_index = chunk.data_resource_index;
+        if dr_index < 0 {
+            return Err(corrupt(&format!("VT chunk {c} has negative data-resource index {dr_index}")));
+        }
+        let dr = header.data_resources.get(dr_index as usize).ok_or_else(|| {
+            corrupt(&format!(
+                "VT chunk {c} data-resource index {dr_index} out of range ({} entries)",
+                header.data_resources.len()
+            ))
+        })?;
+        if dr.serial_offset < 0 || dr.serial_size < 0 {
+            return Err(corrupt(&format!("VT chunk {c} data-resource has negative serial_offset/size")));
+        }
+        // Same-dims invariant: the rebuilt chunk must be exactly the recorded size.
+        if bytes.len() as i64 != dr.serial_size {
+            return Err(corrupt(&format!(
+                "VT chunk {c} rebuilt to {} bytes but data-resource serial_size is {}; same-dims \
+                 layout assumption broken — refusing to write",
+                bytes.len(),
+                dr.serial_size
+            )));
+        }
+        let off = dr.serial_offset as usize;
+        let end = off
+            .checked_add(bytes.len())
+            .ok_or_else(|| corrupt("VT chunk write slice overflow"))?;
+
+        let dst: &mut Vec<u8> = if dr.legacy_bulk_data_flags & BULKDATA_PAYLOAD_IN_SEPERATE_FILE != 0 {
+            ubulk // streamed: offsets are `.ubulk`-relative
+        } else {
+            uexp // inline in the export body
+        };
+        let slot = dst
+            .get_mut(off..end)
+            .ok_or_else(|| corrupt(&format!("VT chunk {c} bytes run past end of cooked file")))?;
+        slot.copy_from_slice(bytes);
+    }
+    Ok(())
+}
+
 /// Rewrite the cooked files to carry `new_mips` (largest-first, from
 /// [`crate::encode::encode_mips`]) at `new_w` x `new_h`, keeping the original
 /// pixel format. Returns `(new_uasset, new_uexp, new_ubulk)`.
@@ -2029,5 +2245,165 @@ mod tests {
             "compressed .ucas ({ucas_len}) should be well under half the raw mip payload ({raw_bulk_len}); \
              Oodle compression appears ineffective"
         );
+    }
+
+    /// END-TO-END VT REPLACE ORACLE (short of in-game): unpack the Biter armor
+    /// virtual texture (4096² PF_DXT1), replace it with a same-dims solid-MAGENTA
+    /// RGBA image via the unified `replace_texture_image` (which routes to the VT
+    /// re-tile path), write the cooked triple under the mount path, repack through
+    /// retoc's zen builder, then reopen the produced triplet and decode the asset
+    /// back. Asserts it decodes to a 4096² image whose pixels are ~magenta — proving
+    /// retile → serialize → chunk-byte write → repack → readback works end-to-end.
+    #[test]
+    #[ignore = "slow: unpack+repack against real container (~10min)"]
+    fn replace_biter_vt_solid_roundtrips_through_zen() {
+        let g = std::path::PathBuf::from(r"D:\SteamLibrary\steamapps\common\Gothic 1 Remake");
+        if !g.exists() {
+            eprintln!("skip: game absent");
+            return;
+        }
+        let utoc = crate::paths::main_container(&g).unwrap();
+        let usmap = crate::paths::usmap(&g).unwrap();
+        let asset =
+            "/Game/Assets/Characters/Creatures/Biter/Model/Armor/Textures/T_Biter_Armor_D";
+        let leaf = "T_Biter_Armor_D";
+
+        let tmp = std::env::temp_dir().join("gore-tex-vt-replace-rt");
+        let _ = std::fs::remove_dir_all(&tmp);
+        // Cook-like mount layout: /Game/... -> G1R/Content/...
+        let cooked = tmp.join(
+            "G1R/Content/Assets/Characters/Creatures/Biter/Model/Armor/Textures",
+        );
+        std::fs::create_dir_all(&cooked).unwrap();
+
+        // Prefer the cached index for a fast by-id unpack; fall back to a scan.
+        let uasset = match crate::index::TextureIndex::load(&crate::paths::texture_index_path()) {
+            Ok(idx) => match idx.entries.get(asset) {
+                Some(&pid) => {
+                    crate::container::unpack_asset_by_id(&utoc, &usmap, pid, leaf, &cooked).unwrap()
+                }
+                None => crate::container::unpack_asset(&utoc, &usmap, asset, &cooked).unwrap(),
+            },
+            Err(_) => crate::container::unpack_asset(&utoc, &usmap, asset, &cooked).unwrap(),
+        };
+        let ua = std::fs::read(&uasset).unwrap();
+        let ue = std::fs::read(uasset.with_extension("uexp")).unwrap();
+        let ub = std::fs::read(uasset.with_extension("ubulk")).unwrap_or_default();
+
+        // Confirm the source is the 4096² PF_DXT1 single-layer VT we expect.
+        let src_pd = PlatformData::parse(&ua, &ue, &ub).unwrap();
+        let vt = src_pd.vt.as_ref().expect("Biter armor diffuse must parse as a VT");
+        assert_eq!((src_pd.size_x, src_pd.size_y), (4096, 4096), "source dims");
+        assert_eq!(vt.num_layers, 1, "single-layer VT");
+        let fmt = vt.layer_types[0].clone();
+        eprintln!(
+            "Biter VT: {}x{} {fmt} mips={} chunks={}",
+            vt.width, vt.height, vt.num_mips, vt.chunks.len()
+        );
+
+        // Same-dims OBVIOUS test image: solid magenta (R=255,G=0,B=255,A=255).
+        let (w, h) = (src_pd.size_x, src_pd.size_y);
+        let rgba: Vec<u8> = (0..w * h).flat_map(|_| [255u8, 0, 255, 255]).collect();
+
+        // Route through the unified entry (auto-detects VT -> retile path).
+        let (na, ne, nb) =
+            replace_texture_image(&ua, &ue, &ub, &rgba, w, h, &fmt).unwrap();
+
+        // Same-dims VT must keep the cooked sizes constant (no resize anywhere).
+        assert_eq!(na.len(), ua.len(), ".uasset length must be unchanged (same-dims VT)");
+        assert_eq!(ne.len(), ue.len(), ".uexp length must be unchanged (same-dims VT)");
+        assert_eq!(nb.len(), ub.len(), ".ubulk length must be unchanged (same-dims VT)");
+        // The .uasset header is byte-identical (delta == 0 -> no SerialSize/header fixup).
+        assert_eq!(na, ua, "same-dims VT replace must leave .uasset byte-identical");
+        // The .uexp must DIFFER (chunk hashes + any inline chunk bytes changed).
+        assert_ne!(ne, ue, ".uexp must change (new VT chunk hashes / inline bytes)");
+
+        // SANITY: re-parse the rewritten triple and re-resolve the VT chunk bytes
+        // from it, then decode locally. This proves the chunk-byte write landed at
+        // the right offsets BEFORE the (slow) repack.
+        {
+            let pd2 = PlatformData::parse(&na, &ne, &nb).unwrap();
+            let vt2 = pd2.vt.as_ref().unwrap();
+            let mut chunk_bytes = Vec::with_capacity(vt2.chunks.len());
+            for c in &vt2.chunks {
+                chunk_bytes
+                    .push(resolve_data_resource_bytes(&na, &ne, &nb, c.data_resource_index).unwrap());
+            }
+            let (dw, dh, px) = crate::vt::decode_layer0(vt2, &chunk_bytes, &fmt).unwrap();
+            assert_eq!((dw, dh), (4096, 4096), "re-resolved VT decodes at 4096²");
+            // Spot-check magenta across the image.
+            for idx in [0usize, px.len() / 2, px.len() - 1] {
+                let p = px[idx];
+                let (r, gch, bch) = ((p >> 16) & 0xff, (p >> 8) & 0xff, p & 0xff);
+                assert!(r > 200 && gch < 60 && bch > 200, "pre-repack pixel not magenta: {r},{gch},{bch}");
+            }
+            eprintln!("OK: rewritten triple re-resolves + decodes to magenta at 4096² (pre-repack)");
+        }
+
+        // Write the rewritten triple back into the cooked tree.
+        std::fs::write(&uasset, &na).unwrap();
+        std::fs::write(uasset.with_extension("uexp"), &ne).unwrap();
+        if nb.is_empty() {
+            let _ = std::fs::remove_file(uasset.with_extension("ubulk"));
+        } else {
+            std::fs::write(uasset.with_extension("ubulk"), &nb).unwrap();
+        }
+
+        // Repack to a zen triplet.
+        let out = tmp.join("out");
+        std::fs::create_dir_all(&out).unwrap();
+        let triplet =
+            crate::container::repack_to_zen(&tmp, "VtReplaceTest_P", &out, &g, false).unwrap();
+        for p in &triplet {
+            assert!(p.exists() && std::fs::metadata(p).unwrap().len() > 0);
+        }
+
+        // Copy global.* next to the produced triplet so the composite store has the
+        // script-object table to convert zen->legacy on read-back.
+        let game_paks = g.join("G1R/Content/Paks");
+        for ext in ["utoc", "ucas", "pak"] {
+            let src = game_paks.join(format!("global.{ext}"));
+            if src.exists() {
+                std::fs::copy(&src, out.join(format!("global.{ext}"))).unwrap();
+            }
+        }
+
+        // Reopen the produced triplet and decode the asset back.
+        let readback_dir = tmp.join("readback");
+        let _ = std::fs::remove_dir_all(&readback_dir);
+        std::fs::create_dir_all(&readback_dir).unwrap();
+        let rb_uasset =
+            crate::container::unpack_asset(&triplet[0], &usmap, asset, &readback_dir).unwrap();
+        let rb = crate::decode::parse(
+            &std::fs::read(&rb_uasset).unwrap(),
+            &std::fs::read(rb_uasset.with_extension("uexp")).unwrap(),
+            &std::fs::read(rb_uasset.with_extension("ubulk")).unwrap_or_default(),
+            &std::fs::read(&usmap).unwrap(),
+        )
+        .unwrap();
+        assert!(rb.is_virtual, "read-back asset must still be a virtual texture");
+        assert_eq!(rb.width, 4096, "width should stay 4096");
+        assert_eq!(rb.height, 4096, "height should stay 4096");
+        assert_eq!(rb.format, fmt, "VT layer format should be preserved");
+
+        // Decode to RGBA and assert it is ~magenta (the obvious test image).
+        let px = crate::decode::to_rgba8(&rb).unwrap();
+        assert_eq!(px.len(), (4096 * 4096) as usize, "pixel count != 4096²");
+        let (mut max_dr, mut max_dg, mut max_db) = (0i32, 0i32, 0i32);
+        for &p in &px {
+            let r = ((p >> 16) & 0xff) as i32;
+            let gch = ((p >> 8) & 0xff) as i32;
+            let bch = (p & 0xff) as i32;
+            max_dr = max_dr.max((r - 255).abs());
+            max_dg = max_dg.max((gch - 0).abs());
+            max_db = max_db.max((bch - 255).abs());
+        }
+        eprintln!("max per-channel deviation from magenta after readback: R{max_dr} G{max_dg} B{max_db}");
+        // BC1 565 quantization tolerance for a solid color.
+        assert!(
+            max_dr <= 12 && max_dg <= 12 && max_db <= 12,
+            "read-back VT did not decode to solid magenta (R{max_dr} G{max_dg} B{max_db})"
+        );
+        eprintln!("OK: read back 4096² magenta VT from the repacked triplet");
     }
 }

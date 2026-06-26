@@ -217,16 +217,17 @@ pub fn run(action: TextureAction) -> Result<()> {
             let (w, h) = img.dimensions();
             let rgba = img.into_raw();
 
-            // 3. Encode mips in the original pixel format, then rewrite the cooked files.
-            let mips = gore_tex::encode::encode_mips(&rgba, w, h, &format)
-                .with_context(|| format!("encoding mips ({w}x{h} {format})"))?;
-            let (new_uasset, new_uexp, new_ubulk) = gore_tex::texdata::replace_texture(
+            // 3. Rewrite the cooked files. The unified entry encodes mips (regular
+            //    texture) or re-tiles (virtual texture) internally based on the
+            //    original's shape, so we always pass the raw RGBA + format.
+            let (new_uasset, new_uexp, new_ubulk) = gore_tex::texdata::replace_texture_image(
                 &orig_uasset,
                 &orig_uexp,
                 &orig_ubulk,
+                &rgba,
                 w,
                 h,
-                mips,
+                &format,
             )
             .with_context(|| format!("rewriting cooked texture {asset}"))?;
 

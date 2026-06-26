@@ -751,9 +751,11 @@ fn prepare(
                     let (w, h) = (img.width(), img.height());
                     let info = gore_tex::decode::parse(&ua, &ue, &ub, &usmap_bytes)
                         .map_err(|e| ModError::Other(format!("parse {asset}: {e}")))?;
-                    let mips = gore_tex::encode::encode_mips(img.as_raw(), w, h, &info.format)
-                        .map_err(|e| ModError::Other(format!("encode {asset}: {e}")))?;
-                    let (na, ne, nb) = gore_tex::texdata::replace_texture(&ua, &ue, &ub, w, h, mips)
+                    // Unified entry: encodes mips (regular) or re-tiles (virtual
+                    // texture) internally based on the original's shape.
+                    let (na, ne, nb) = gore_tex::texdata::replace_texture_image(
+                        &ua, &ue, &ub, img.as_raw(), w, h, &info.format,
+                    )
                         .map_err(|e| ModError::Other(format!("replace {asset}: {e}")))?;
                     std::fs::write(dest_dir.join(format!("{leaf}.uasset")), &na).map_err(io("write uasset"))?;
                     std::fs::write(dest_dir.join(format!("{leaf}.uexp")), &ne).map_err(io("write uexp"))?;
