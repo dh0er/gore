@@ -10,6 +10,8 @@ pub enum TexError {
     AssetNotFound(String),
     #[error("unsupported pixel format: {0}")]
     UnsupportedFormat(String),
+    #[error("BCn decode failed for {format}: {reason}")]
+    DecodeFailed { format: String, reason: String },
     #[error("virtual textures are not supported in v1: {0}")]
     VirtualTexture(String),
     #[error("io error: {0}")]

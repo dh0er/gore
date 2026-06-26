@@ -331,6 +331,56 @@ fn read_mip0(uexp: &[u8], ubulk: &[u8], o: usize, expected: u64) -> Result<Vec<u
     Ok(payload.to_vec())
 }
 
+// ---- BCn -> RGBA decode ---------------------------------------------------
+
+/// Decode [`TexInfo::mip0`] (block-compressed BCn bytes) to a row-major RGBA8
+/// image, one `u32` per pixel. Returns `width * height` pixels.
+///
+/// ## Channel order of the returned `u32`s
+///
+/// Each pixel is packed **`0xAARRGGBB`** (ARGB in a native `u32`), which is the
+/// in-memory byte order **B, G, R, A** (BGRA) on a little-endian host. This is
+/// what `texture2ddecoder` emits: its internal `color(r, g, b, a)` constructs
+/// the pixel as `u32::from_le_bytes([b, g, r, a])`. Task 9 (PNG packing) must
+/// extract bytes as `r = (px >> 16) & 0xff`, `g = (px >> 8) & 0xff`,
+/// `b = px & 0xff`, `a = (px >> 24) & 0xff`.
+///
+/// ## Format dispatch
+///
+/// * `PF_DXT1` -> BC1   (`decode_bc1`)
+/// * `PF_DXT5` -> BC3   (`decode_bc3`)
+/// * `PF_BC5`  -> BC5   (`decode_bc5`)
+/// * `PF_BC7`  -> BC7   (`decode_bc7`)
+///
+/// **BC5 note:** BC5 is a two-channel (RG) format, used in this game for normal
+/// maps. `texture2ddecoder` fills R and G from the two compressed channels and
+/// leaves **B = 0, A = 255**. That is fine for a flat preview (the texture is a
+/// tangent-space normal map, not a color image) but the blue/alpha channels are
+/// not meaningful.
+///
+/// Any unrecognized `format` returns [`TexError::UnsupportedFormat`]; a decoder
+/// failure (e.g. truncated block data) returns [`TexError::DecodeFailed`].
+pub fn to_rgba8(info: &TexInfo) -> Result<Vec<u32>> {
+    let w = info.width as usize;
+    let h = info.height as usize;
+    let mut image = vec![0u32; w * h];
+
+    let res = match info.format.as_str() {
+        "PF_DXT1" => texture2ddecoder::decode_bc1(&info.mip0, w, h, &mut image),
+        "PF_DXT5" => texture2ddecoder::decode_bc3(&info.mip0, w, h, &mut image),
+        "PF_BC5" => texture2ddecoder::decode_bc5(&info.mip0, w, h, &mut image),
+        "PF_BC7" => texture2ddecoder::decode_bc7(&info.mip0, w, h, &mut image),
+        _ => return Err(TexError::UnsupportedFormat(info.format.clone())),
+    };
+
+    res.map_err(|reason| TexError::DecodeFailed {
+        format: info.format.clone(),
+        reason: reason.to_string(),
+    })?;
+
+    Ok(image)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -410,6 +460,59 @@ mod tests {
         assert_eq!(info.mip0.len(), expected);
         // mip0 is the first (largest) streamed mip, at .ubulk offset 0.
         assert_eq!(info.mip0, &ubulk[..expected]);
+    }
+
+    /// Pure unit test (no game, no fixture): hand-build a solid-red BC1 (DXT1)
+    /// block and assert every decoded pixel is red. Verifies both the format
+    /// dispatch and the documented `0xAARRGGBB` channel order.
+    #[test]
+    fn decode_solid_bc1_block_is_red() {
+        // BC1 (DXT1) 8-byte block: [c0:u16le, c1:u16le, 4 bytes of 2-bit idx].
+        // c0 = c1 = 0xF800 = RGB565 (R=31, G=0, B=0) => pure red. Indices all 0
+        // => every one of the 16 pixels selects color0.
+        let mut block = Vec::with_capacity(8);
+        block.extend_from_slice(&0xF800u16.to_le_bytes()); // c0
+        block.extend_from_slice(&0xF800u16.to_le_bytes()); // c1
+        block.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // indices
+
+        let info = TexInfo {
+            width: 4,
+            height: 4,
+            format: "PF_DXT1".into(),
+            mip0: block,
+            is_virtual: false,
+        };
+        let px = to_rgba8(&info).unwrap();
+        assert_eq!(px.len(), 16);
+
+        for (i, &p) in px.iter().enumerate() {
+            // Documented order: 0xAARRGGBB. Mask channels rather than hardcoding
+            // a single u32 so the assertion is robust regardless of host endian.
+            let a = (p >> 24) & 0xff;
+            let r = (p >> 16) & 0xff;
+            let g = (p >> 8) & 0xff;
+            let b = p & 0xff;
+            assert!(r >= 248, "pixel {i}: R={r} not ~255 ({p:#010x})");
+            assert_eq!(g, 0, "pixel {i}: G={g} not 0 ({p:#010x})");
+            assert_eq!(b, 0, "pixel {i}: B={b} not 0 ({p:#010x})");
+            assert_eq!(a, 255, "pixel {i}: A={a} not 255 ({p:#010x})");
+        }
+    }
+
+    /// Decode the local fixture's mip0 to RGBA. Gated: skips if the fixture is
+    /// absent so CI without the fixture stays green.
+    #[test]
+    fn decode_fixture_to_rgba() {
+        let (Some(ua), Some(ue), Some(um)) =
+            (fx("sample.uasset"), fx("sample.uexp"), fx("mappings.usmap"))
+        else {
+            eprintln!("skip: fixture absent");
+            return;
+        };
+        let ub = fx("sample.ubulk").unwrap_or_default();
+        let info = parse(&ua, &ue, &ub, &um).unwrap();
+        let px = to_rgba8(&info).unwrap();
+        assert_eq!(px.len(), (info.width * info.height) as usize);
     }
 
     #[test]
