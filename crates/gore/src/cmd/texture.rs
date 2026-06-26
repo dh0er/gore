@@ -73,6 +73,14 @@ pub enum TextureAction {
         #[arg(long)]
         name: String,
     },
+    /// Build the texture index (asset->package_id) and cache it to the shared dir
+    Index {
+        #[arg(long)]
+        game: PathBuf,
+        /// Output path (defaults to the shared gore-tools texture_index.json)
+        #[arg(short = 'o', long)]
+        out: Option<PathBuf>,
+    },
     /// Remove a previously-deployed triplet from the game's ~mods folder
     Undeploy {
         /// Path to the game install dir (contains G1R/Content/Paks/…)
@@ -289,6 +297,21 @@ pub fn run(action: TextureAction) -> Result<()> {
                 .with_context(|| format!("deploying {name}"))?;
             println!("deployed to ~mods; record: {}", record.display());
             println!("launch the game to see it.");
+            Ok(())
+        }
+        TextureAction::Index { game, out } => {
+            let utoc = gore_tex::paths::main_container(&game)?;
+            let usmap = gore_tex::paths::usmap(&game)?;
+            let build_id = usmap
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("unknown")
+                .to_string();
+            eprintln!("scanning container to build the texture index (a few minutes)...");
+            let idx = gore_tex::index::build_index(&utoc, &build_id)?;
+            let path = out.unwrap_or_else(gore_tex::paths::texture_index_path);
+            idx.save(&path)?;
+            println!("wrote {} ({} textures)", path.display(), idx.entries.len());
             Ok(())
         }
         TextureAction::Undeploy { game, name } => {
