@@ -211,18 +211,47 @@ pub fn unpack_asset(
 
     let package_id = found.ok_or_else(|| TexError::AssetNotFound(asset_path.into()))?;
 
-    // Build the legacy cooked files. `build_legacy` writes paths *relative* to
-    // the FSFileWriter's root dir, so we name the output after the asset's leaf
-    // and root the writer at `out_dir`: the .uasset/.uexp/.ubulk land directly
-    // in out_dir sharing the same stem (so `with_extension(..)` finds siblings).
     std::fs::create_dir_all(out_dir)?;
     let leaf = asset_path.rsplit('/').next().unwrap_or(asset_path);
+    legacy_from_package(store.as_ref(), package_id, leaf, out_dir)
+}
+
+/// Like `unpack_asset` but takes the package id directly (from the texture index),
+/// skipping the full-container name scan. Opens the parent Paks dir so global script
+/// objects resolve (same as `unpack_asset`). `leaf` is the output filename stem.
+pub fn unpack_asset_by_id(
+    utoc: &Path,
+    _usmap: &Path,
+    package_id: u64,
+    leaf: &str,
+    out_dir: &Path,
+) -> Result<PathBuf> {
+    let store_path = utoc.parent().unwrap_or(utoc);
+    let store = iostore::open(store_path, Arc::new(Config::default()))?;
+    std::fs::create_dir_all(out_dir)?;
+    legacy_from_package(store.as_ref(), FPackageId(package_id), leaf, out_dir)
+}
+
+/// Shared zen->legacy conversion tail. Given an already-resolved `FPackageId` and an
+/// open (composite) store, builds the legacy cooked `.uasset`/`.uexp`/`.ubulk` into
+/// `out_dir` (named after `leaf`) and returns the `.uasset` path.
+///
+/// `build_legacy` writes paths *relative* to the FSFileWriter's root dir, so we name
+/// the output after `leaf` and root the writer at `out_dir`: the
+/// .uasset/.uexp/.ubulk land directly in out_dir sharing the same stem (so
+/// `with_extension(..)` finds siblings).
+fn legacy_from_package(
+    store: &dyn iostore::IoStoreTrait,
+    package_id: FPackageId,
+    leaf: &str,
+    out_dir: &Path,
+) -> Result<PathBuf> {
     let out_rel = format!("{leaf}.uasset");
 
     let log = Log::no_log();
     // No verse script cells store: G1R textures are plain UTexture2D, and script
     // cells are only needed to resolve Verse cell imports (none here).
-    let context = FZenPackageContext::create(store.as_ref(), None, &log, None);
+    let context = FZenPackageContext::create(store, None, &log, None);
     let writer = FSFileWriter::new(out_dir);
 
     build_legacy(&context, package_id, UEPath::new(&out_rel), &writer)?;

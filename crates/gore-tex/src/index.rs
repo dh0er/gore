@@ -95,6 +95,22 @@ pub fn build_index(utoc: &Path, build_id: &str) -> Result<TextureIndex> {
     })
 }
 
+/// Extract a texture to RGBA by package id (fast: no scan). Returns (TexInfo, rgba u32 px).
+pub fn extract_by_package_id(
+    utoc: &Path, usmap: &Path, package_id: u64, leaf: &str,
+) -> Result<(crate::decode::TexInfo, Vec<u32>)> {
+    let tmp = std::env::temp_dir().join("gore-tex-idx-extract");
+    std::fs::create_dir_all(&tmp)?;
+    let uasset = crate::container::unpack_asset_by_id(utoc, usmap, package_id, leaf, &tmp)?;
+    let uexp = uasset.with_extension("uexp");
+    let ubulk = uasset.with_extension("ubulk");
+    let info = crate::decode::parse(
+        &std::fs::read(&uasset)?, &std::fs::read(&uexp)?,
+        &std::fs::read(&ubulk).unwrap_or_default(), &std::fs::read(usmap)?)?;
+    let px = crate::decode::to_rgba8(&info)?;
+    Ok((info, px))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -127,5 +143,28 @@ mod tests {
         );
         let pid = idx.entries.get("/Game/UI/Textures/Common/T_HardwareCursor");
         assert!(pid.is_some() && *pid.unwrap() != 0);
+    }
+
+    #[test]
+    #[ignore = "slow: unpack from real container"]
+    fn id_extract_matches_path_extract() {
+        let Some(g) = game_dir() else { eprintln!("skip"); return; };
+        let utoc = crate::paths::main_container(&g).unwrap();
+        let usmap = crate::paths::usmap(&g).unwrap();
+        let asset = "/Game/UI/Textures/Common/T_HardwareCursor";
+        let tmp = std::env::temp_dir().join("gore-tex-ref");
+        let _ = std::fs::remove_dir_all(&tmp); std::fs::create_dir_all(&tmp).unwrap();
+        let ua = crate::container::unpack_asset(&utoc, &usmap, asset, &tmp).unwrap();
+        let ref_info = crate::decode::parse(
+            &std::fs::read(&ua).unwrap(), &std::fs::read(ua.with_extension("uexp")).unwrap(),
+            &std::fs::read(ua.with_extension("ubulk")).unwrap_or_default(),
+            &std::fs::read(&usmap).unwrap()).unwrap();
+        let ref_px = crate::decode::to_rgba8(&ref_info).unwrap();
+        let idx = build_index(&utoc, "t").unwrap();
+        let pid = *idx.entries.get(asset).unwrap();
+        let (info, px) = extract_by_package_id(&utoc, &usmap, pid, "T_HardwareCursor").unwrap();
+        assert_eq!(info.width, ref_info.width);
+        assert_eq!(info.format, ref_info.format);
+        assert_eq!(px, ref_px);
     }
 }
