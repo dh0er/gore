@@ -566,13 +566,18 @@ fn retire_leftovers(
         }
     }
     if let Some(prev) = prev {
-        if let Some(prev_dir) = &prev.ue4ss_mod_dir {
-            let new_dir = plan.ue4ss.as_ref().map(|(_, dst)| dst.display().to_string());
-            if new_dir.as_deref() != Some(prev_dir.as_str()) {
-                // Remove the previous (differently-named) UE4SS mod dir. If it can't be removed
-                // (locked/permissions), keep it tracked so a later undeploy cleans it up — else
-                // its enabled scripts would linger untracked alongside the new mod.
-                if std::fs::remove_dir_all(prev_dir).is_err() && Path::new(prev_dir).exists() {
+        let new_dir = plan.ue4ss.as_ref().map(|(_, dst)| dst.display().to_string());
+        // Retire the previous deploy's UE4SS dir AND any dirs it had already failed to remove
+        // (its own `stale_ue4ss_dirs`). For each, if it isn't the new mod's dir and can't be
+        // removed now (locked/permissions), carry it into the new record's stale list so a later
+        // undeploy still cleans it up — otherwise overwriting the record would orphan it.
+        let prev_dirs = prev.ue4ss_mod_dir.iter().chain(prev.stale_ue4ss_dirs.iter());
+        for prev_dir in prev_dirs {
+            if new_dir.as_deref() == Some(prev_dir.as_str()) {
+                continue;
+            }
+            if std::fs::remove_dir_all(prev_dir).is_err() && Path::new(prev_dir).exists() {
+                if !record.stale_ue4ss_dirs.iter().any(|d| d == prev_dir) {
                     record.stale_ue4ss_dirs.push(prev_dir.clone());
                     changed = true;
                 }
