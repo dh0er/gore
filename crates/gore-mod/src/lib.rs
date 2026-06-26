@@ -441,7 +441,7 @@ pub fn deploy(bundle_dir: &Path, game_root: &Path) -> Result<DeployRecord> {
     // (d) committed — drop the kept-aside previous UE4SS mod, then retire the previous mod's
     //     footprint now (best-effort), pruning retired leftovers from the record.
     let aside_failed = undo.discard();
-    let (mut changed, baks_to_delete) = retire_leftovers(&leftovers, prev.as_ref(), &plan, &mut record);
+    let (mut changed, pending_deletes) = retire_leftovers(&leftovers, prev.as_ref(), &plan, &mut record);
     if let Some(old) = aside_failed {
         // The moved-aside previous mod couldn't be removed — track it so undeploy cleans it up.
         let s = old.display().to_string();
@@ -451,12 +451,27 @@ pub fn deploy(bundle_dir: &Path, game_root: &Path) -> Result<DeployRecord> {
         }
     }
     if changed {
-        // Persist the pruned record BEFORE deleting the restored backups. Only once that write
+        // Persist the pruned record BEFORE deleting the retired backups. Only once that write
         // succeeds is it safe to delete them — otherwise a failed rewrite would leave the on-disk
         // record referencing deleted backups, wedging a later undeploy.
         if write_record_file(game_root, &record).is_ok() {
-            for bak in &baks_to_delete {
-                let _ = std::fs::remove_file(bak);
+            let mut readded = false;
+            for (live, bak, hash) in pending_deletes {
+                let p = Path::new(&bak);
+                if std::fs::remove_file(p).is_ok() || !p.exists() {
+                    continue;
+                }
+                // The backup is locked/read-only and couldn't be deleted. Re-track it (with its
+                // drift hash) so it isn't orphaned without a record — else a future deploy could
+                // treat this stale backup as pristine and downgrade an updated game file.
+                record.backups.push((live.clone(), bak.clone(), false));
+                if let Some(h) = hash {
+                    record.deployed_hashes.insert(live, h);
+                }
+                readded = true;
+            }
+            if readded {
+                let _ = write_record_file(game_root, &record);
             }
         }
     }
@@ -695,23 +710,23 @@ fn apply_writes(plan: &DeployPlan, undo: &mut Undo) -> Result<()> {
 /// Retire the previous mod's leftover footprint (already folded into `record` and persisted):
 /// restore each leftover loose file to pristine now and, on success, drop the entry from the
 /// record so undeploy won't later look for a deleted backup. Leftovers that can't be restored
-/// yet stay tracked. Also removes a differently-named UE4SS mod. Returns `(changed, baks_to_delete)`
-/// — whether `record` changed (and so should be re-persisted), and the restored backups whose
-/// deletion the caller must DEFER until the pruned record is durable. Best-effort — never fails.
+/// yet stay tracked. Also removes a differently-named UE4SS mod. Returns `(changed, pending_deletes)`
+/// — whether `record` changed (and so should be re-persisted), and the retired entries
+/// `(live, bak, prior_hash)` whose backup deletion the caller must DEFER until the pruned record is
+/// durable (and re-track if deletion fails). Best-effort — never fails.
 fn retire_leftovers(
     leftovers: &[(String, String, bool)],
     prev: Option<&DeployRecord>,
     plan: &DeployPlan,
     record: &mut DeployRecord,
-) -> (bool, Vec<PathBuf>) {
+) -> (bool, Vec<(String, String, Option<String>)>) {
     let mut changed = false;
-    let mut baks_to_delete = Vec::new();
+    let mut pending_deletes = Vec::new();
     for (live_s, bak_s, _) in leftovers {
         let (live, bak) = (Path::new(live_s), Path::new(bak_s));
         let retired = if !safe_to_restore(live_s, &record.deployed_hashes) {
             // The file was updated externally (Steam) since the previous deploy; don't overwrite
-            // the newer asset. Drop the stale backup and stop tracking it.
-            baks_to_delete.push(bak.to_path_buf());
+            // the newer asset. The stale backup must be deleted (deferred below).
             true
         } else if !bak.exists() {
             // No backup to restore from — the live file was NOT reverted and may still hold the
@@ -722,14 +737,16 @@ fn retire_leftovers(
             // Restored. DEFER deleting the backup until the caller has durably persisted the
             // pruned record, so a failed record rewrite can't leave the on-disk record pointing
             // at an already-deleted backup (which would wedge a later undeploy).
-            baks_to_delete.push(bak.to_path_buf());
             true
         } else {
             false // locked/unwritable — keep tracked for an undeploy retry
         };
         if retired {
+            // Capture the prior hash so the caller can re-track this entry if the deferred backup
+            // deletion fails (a locked/read-only stale backup must not be orphaned untracked).
+            let hash = record.deployed_hashes.remove(live_s);
             record.backups.retain(|(l, b, _)| !(l == live_s && b == bak_s));
-            record.deployed_hashes.remove(live_s);
+            pending_deletes.push((live_s.clone(), bak_s.clone(), hash));
             changed = true;
         }
     }
@@ -758,7 +775,7 @@ fn retire_leftovers(
             }
         }
     }
-    (changed, baks_to_delete)
+    (changed, pending_deletes)
 }
 
 fn staging_dir(dst: &Path) -> PathBuf {
@@ -815,10 +832,24 @@ fn read_pristine(live: &Path, prev: Option<&DeployRecord>) -> Result<(Vec<u8>, b
     let bak = bak_path(live);
     if bak.exists() {
         let live_key = live.display().to_string();
-        if let Some(expected) = prev.and_then(|p| p.deployed_hashes.get(&live_key)) {
-            if let Ok(cur) = std::fs::read(live) {
-                if &content_hash(&cur) != expected {
-                    return Ok((cur, true)); // drifted — rebuild from the updated live file
+        match prev.and_then(|p| p.deployed_hashes.get(&live_key)) {
+            Some(expected) => {
+                if let Ok(cur) = std::fs::read(live) {
+                    if &content_hash(&cur) != expected {
+                        return Ok((cur, true)); // drifted — rebuild from the updated live file
+                    }
+                }
+            }
+            None => {
+                // No recorded hash to judge drift (e.g. a leftover backup from the CLI, or the
+                // record was cleared). Fall back to FMOD structure: if the live BANK isn't injected
+                // (a single FSB5), it is itself the current pristine — prefer it (covering a Steam
+                // verify/update that refreshed the bank) and refresh the possibly-stale backup. A
+                // non-bank (.lcache) or an already-injected bank has no such signal, so use the bak.
+                if let Ok(cur) = std::fs::read(live) {
+                    if gore_fmod::parse_bank(&cur).map(|e| e.len() == 1).unwrap_or(false) {
+                        return Ok((cur, true));
+                    }
                 }
             }
         }
@@ -874,10 +905,16 @@ fn restore_record(record: &DeployRecord) -> bool {
             all_ok = false;
         }
     }
-    // Pass 2: only once everything was restored do we drop the backups.
+    // Pass 2: only once everything was restored do we drop the backups. A deletion that fails
+    // (locked/read-only) counts as failure so the record is KEPT for retry — an orphaned backup
+    // with no deploy record could otherwise be treated as pristine by a later deploy and downgrade
+    // an updated game file.
     if all_ok {
         for (_, bak, _) in &record.backups {
-            let _ = std::fs::remove_file(bak);
+            let bak = Path::new(bak);
+            if std::fs::remove_file(bak).is_err() && bak.exists() {
+                all_ok = false;
+            }
         }
     }
     all_ok
