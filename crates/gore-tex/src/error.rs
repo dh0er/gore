@@ -16,6 +16,8 @@ pub enum TexError {
     EncodeFailed(String),
     #[error("virtual textures are not supported in v1: {0}")]
     VirtualTexture(String),
+    #[error("deploy record not found: {0}")]
+    DeployRecordNotFound(PathBuf),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
     #[error("container read/parse error: {0}")]

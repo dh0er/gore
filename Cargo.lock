@@ -971,6 +971,8 @@ dependencies = [
  "intel_tex_2",
  "repak",
  "retoc",
+ "serde",
+ "serde_json",
  "sha2",
  "texture2ddecoder",
  "thiserror 1.0.69",

@@ -367,6 +367,82 @@ pub fn repack_to_zen(
     Ok([utoc_path, ucas_path, pak_path])
 }
 
+/// The game's IoStore override folder: containers dropped here are mounted on top
+/// of the base game (additive override; later-mounting wins).
+fn mods_dir(game_dir: &Path) -> PathBuf {
+    game_dir.join("G1R/Content/Paks/~mods")
+}
+
+/// On-disk record of a deployed container, written next to the triplet as
+/// `<name>.gore-deploy.json`. Lists the absolute paths of every file we copied in
+/// so `undeploy` can remove exactly what it added (and nothing else).
+#[derive(serde::Serialize, serde::Deserialize)]
+struct DeployRecord {
+    name: String,
+    files: Vec<PathBuf>,
+}
+
+/// Copy a Zen triplet (`[utoc, ucas, pak]`) into the game's `~mods` override folder
+/// and write a JSON deploy record listing the copied file paths. Returns the path to
+/// the record (`<mods>/<name>.gore-deploy.json`).
+///
+/// Non-destructive: this is an *additive* override -- the game mounts the `~mods`
+/// container on top of the base game, so nothing in the base install is modified or
+/// backed up. `undeploy` reverses it by deleting exactly the files this recorded.
+pub fn deploy(triplet: &[PathBuf; 3], game_dir: &Path, name: &str) -> Result<PathBuf> {
+    let mods = mods_dir(game_dir);
+    std::fs::create_dir_all(&mods)?;
+
+    let mut copied: Vec<PathBuf> = Vec::with_capacity(3);
+    for src in triplet {
+        let leaf = src
+            .file_name()
+            .ok_or_else(|| TexError::AssetNotFound(format!("triplet path has no file name: {}", src.display())))?;
+        let dst = mods.join(leaf);
+        std::fs::copy(src, &dst)?;
+        copied.push(dst);
+    }
+
+    let record = DeployRecord {
+        name: name.to_string(),
+        files: copied,
+    };
+    let record_path = mods.join(format!("{name}.gore-deploy.json"));
+    let json = serde_json::to_string_pretty(&record)
+        .map_err(|e| TexError::Retoc(anyhow::anyhow!("serialising deploy record: {e}")))?;
+    std::fs::write(&record_path, json)?;
+
+    Ok(record_path)
+}
+
+/// Read `<mods>/<name>.gore-deploy.json` and delete every file it lists plus the
+/// record itself. Individually-missing files are tolerated (reported to stderr) so a
+/// partially-cleaned deploy can still be finished. Errors if the record is absent.
+pub fn undeploy(game_dir: &Path, name: &str) -> Result<()> {
+    let mods = mods_dir(game_dir);
+    let record_path = mods.join(format!("{name}.gore-deploy.json"));
+    if !record_path.exists() {
+        return Err(TexError::DeployRecordNotFound(record_path));
+    }
+
+    let json = std::fs::read_to_string(&record_path)?;
+    let record: DeployRecord = serde_json::from_str(&json)
+        .map_err(|e| TexError::Retoc(anyhow::anyhow!("parsing deploy record {}: {e}", record_path.display())))?;
+
+    for f in &record.files {
+        match std::fs::remove_file(f) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                eprintln!("warning: deployed file already gone: {}", f.display());
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+
+    std::fs::remove_file(&record_path)?;
+    Ok(())
+}
+
 /// Recursively collect `.uasset` files (that have a sibling `.uexp`) under `dir`,
 /// pushing each as a path relative to `root`.
 fn collect_uassets(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
@@ -534,6 +610,63 @@ mod tests {
 
         // Bad package skipped; good packages survived.
         assert_eq!(out, vec![1, 3]);
+    }
+
+    /// deploy/undeploy against a fake game dir (no real container needed): deploy
+    /// copies the triplet + writes the record into `~mods`; undeploy removes all 4
+    /// and leaves `~mods` empty.
+    #[test]
+    fn deploy_then_undeploy_roundtrip() {
+        let base = std::env::temp_dir().join(format!("gore-tex-deploy-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let game = base.join("game");
+        let src = base.join("src");
+        std::fs::create_dir_all(&game).unwrap();
+        std::fs::create_dir_all(&src).unwrap();
+
+        let name = "zzz_X_P";
+        let triplet = [
+            src.join(format!("{name}.utoc")),
+            src.join(format!("{name}.ucas")),
+            src.join(format!("{name}.pak")),
+        ];
+        for p in &triplet {
+            std::fs::write(p, b"dummy").unwrap();
+        }
+
+        let mods = game.join("G1R/Content/Paks/~mods");
+
+        // deploy: 3 triplet files + the record exist under ~mods.
+        let record = deploy(&triplet, &game, name).unwrap();
+        assert_eq!(record, mods.join(format!("{name}.gore-deploy.json")));
+        for ext in ["utoc", "ucas", "pak"] {
+            assert!(
+                mods.join(format!("{name}.{ext}")).exists(),
+                "missing deployed .{ext}"
+            );
+        }
+        assert!(record.exists(), "missing deploy record");
+
+        // undeploy: all 4 gone, ~mods is empty.
+        undeploy(&game, name).unwrap();
+        for ext in ["utoc", "ucas", "pak"] {
+            assert!(
+                !mods.join(format!("{name}.{ext}")).exists(),
+                ".{ext} not removed"
+            );
+        }
+        assert!(!record.exists(), "record not removed");
+        assert_eq!(
+            std::fs::read_dir(&mods).unwrap().count(),
+            0,
+            "~mods should be empty after undeploy"
+        );
+
+        // undeploy again -> record-missing error.
+        let err = undeploy(&game, name).unwrap_err();
+        assert!(matches!(err, TexError::DeployRecordNotFound(_)));
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     /// The to-zen write-path oracle: unpack an UNCHANGED asset, repack the cooked
