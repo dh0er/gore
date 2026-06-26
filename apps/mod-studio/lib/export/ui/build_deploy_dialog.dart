@@ -102,6 +102,20 @@ class _BuildDeployDialogState extends ConsumerState<BuildDeployDialog> {
               decoration: const InputDecoration(labelText: 'Mod name', isDense: true),
               onChanged: (v) => ref.read(modNameProvider.notifier).state = v,
             ),
+            const SizedBox(height: 8),
+            TextFormField(
+              initialValue: ref.read(modDelayMsProvider).toString(),
+              decoration: const InputDecoration(
+                labelText: 'UE4SS load delay (ms)',
+                helperText: 'Wait before applying overrides at game start (0 = none)',
+                isDense: true,
+              ),
+              keyboardType: TextInputType.number,
+              // Keep the provider in sync so build/deploy uses the chosen delay instead of always
+              // defaulting to 0. Blank or non-numeric input falls back to 0.
+              onChanged: (v) =>
+                  ref.read(modDelayMsProvider.notifier).state = int.tryParse(v.trim()) ?? 0,
+            ),
             const SizedBox(height: 12),
             Text('Contents', style: theme.textTheme.labelMedium),
             Text('• $overrides item override(s)'),
