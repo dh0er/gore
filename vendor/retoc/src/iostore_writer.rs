@@ -3,6 +3,7 @@ use crate::{
     chunk_id::FIoChunkIdRaw,
     container_header::{EIoContainerHeaderVersion, FIoContainerHeader, StoreEntry},
 };
+use crate::compression::{CompressionMethod, compress};
 use crate::{EIoStoreTocVersion, FIoChunkHash, FIoChunkId, FIoContainerId, FIoOffsetAndLength, FIoStoreTocCompressedBlockEntry, FIoStoreTocEntryMeta, FIoStoreTocEntryMetaFlags, Toc, ser::*};
 use anyhow::{Context, Result};
 use fs_err as fs;
@@ -30,6 +31,13 @@ impl IoStoreWriter {
 
         let mut toc = Toc::new();
         toc.compression_block_size = 0x10000;
+        // Register Oodle (Kraken) as compression method index 1. Index 0 is the
+        // implicit "None" (raw) method that UE always recognises and is never
+        // listed in the name table. `write_chunk` emits Oodle-compressed blocks
+        // with method index 1 (falling back to 0/raw per block when compression
+        // does not shrink the block), matching the base game's container which
+        // registers exactly one method name, "Oodle".
+        toc.compression_methods = vec![CompressionMethod::Oodle];
         toc.version = toc_version;
         toc.container_id = FIoContainerId::from_name(&name);
         toc.directory_index.mount_point = mount_point;
@@ -59,20 +67,45 @@ impl IoStoreWriter {
 
         let start_block = self.toc.compression_blocks.len();
 
+        // Method index 1 == Oodle (registered in `new`). Index 0 stays "None" (raw).
+        const OODLE_METHOD_INDEX: u8 = 1;
+
         let mut hasher = blake3::Hasher::new();
+        let mut any_block_compressed = false;
+        // The blake3 chunk hash is over the *uncompressed* chunk bytes -- it
+        // identifies the logical chunk, independent of how blocks are stored.
         for block in data.chunks(self.toc.compression_block_size as usize) {
-            self.cas_stream.write_all(block)?;
             hasher.update(block);
-            let compressed_size = block.len() as u32;
             let uncompressed_size = block.len() as u32;
-            let compression_method_index = 0; // "None"
+
+            // Try Oodle/Kraken (via gore-oodle) for this block.
+            let mut compressed: Vec<u8> = Vec::new();
+            compress(CompressionMethod::Oodle, block, &mut compressed)?;
+
+            // Per-block raw fallback (standard IoStore/UE behaviour): only keep the
+            // compressed block if it is strictly smaller than the raw block,
+            // otherwise store the block uncompressed with method index 0.
+            let (payload, compression_method_index): (&[u8], u8) = if compressed.len() < block.len() {
+                any_block_compressed = true;
+                (&compressed, OODLE_METHOD_INDEX)
+            } else {
+                (block, 0)
+            };
+
+            self.cas_stream.write_all(payload)?;
+            let compressed_size = payload.len() as u32;
             self.toc.compression_blocks.push(FIoStoreTocCompressedBlockEntry::new(offset, compressed_size, uncompressed_size, compression_method_index));
             offset += compressed_size as u64;
         }
         let hash = hasher.finalize();
+        // UE's FIoStoreTocEntryMeta::Compressed flag marks chunks that have at
+        // least one compressed block; the decode path is driven per-block by the
+        // block's method index, but the flag keeps chunk-info/`force_uncompressed`
+        // accounting correct and matches what the engine writes.
+        let flags = if any_block_compressed { FIoStoreTocEntryMetaFlags::Compressed } else { FIoStoreTocEntryMetaFlags::empty() };
         let meta = FIoStoreTocEntryMeta {
             chunk_hash: FIoChunkHash::from_blake3(hash.as_bytes()),
-            flags: FIoStoreTocEntryMetaFlags::empty(),
+            flags,
         };
 
         let offset_and_length = FIoOffsetAndLength::new(start_block as u64 * self.toc.compression_block_size as u64, data.len() as u64);

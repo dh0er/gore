@@ -1672,5 +1672,23 @@ mod tests {
             assert!(gch <= 8, "G not low (not red): {gch} at idx {idx}");
         }
         eprintln!("OK: read back 2048x2048 PF_BC5 red from the streamed-upscale triplet (delta={delta})");
+
+        // COMPRESSION SIZE ORACLE: the writer now Oodle-compresses .ucas blocks.
+        // This asset's mip0 alone is a ~4MB solid-red BC5 surface (highly
+        // compressible). Assert the produced .ucas is *meaningfully smaller* than
+        // the raw streamed mip payload it carries -- proof the Oodle path actually
+        // shrinks real texture data (vs the old raw method-0 writer).
+        let ucas_len = std::fs::metadata(&triplet[1]).unwrap().len();
+        let raw_bulk_len = nb.len() as u64;
+        eprintln!(
+            "compressed .ucas = {ucas_len} bytes vs raw streamed mip payload = {raw_bulk_len} bytes \
+             ({:.1}% of raw)",
+            ucas_len as f64 / raw_bulk_len as f64 * 100.0
+        );
+        assert!(
+            ucas_len < raw_bulk_len / 2,
+            "compressed .ucas ({ucas_len}) should be well under half the raw mip payload ({raw_bulk_len}); \
+             Oodle compression appears ineffective"
+        );
     }
 }
