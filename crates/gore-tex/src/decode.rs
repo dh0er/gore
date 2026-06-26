@@ -102,61 +102,8 @@ fn mip_byte_size(format: &str, w: u32, h: u32) -> Option<u64> {
     Some(blocks_x * blocks_y * bb)
 }
 
-// ---- little-endian readers (bounds-checked) -------------------------------
-
-fn rd_i32(b: &[u8], o: usize) -> Result<i32> {
-    let s = b
-        .get(o..o + 4)
-        .ok_or_else(|| corrupt("unexpected end of .uexp reading i32"))?;
-    Ok(i32::from_le_bytes(s.try_into().unwrap()))
-}
-fn rd_u32(b: &[u8], o: usize) -> Result<u32> {
-    let s = b
-        .get(o..o + 4)
-        .ok_or_else(|| corrupt("unexpected end of .uexp reading u32"))?;
-    Ok(u32::from_le_bytes(s.try_into().unwrap()))
-}
 fn corrupt(msg: &str) -> TexError {
     TexError::Retoc(anyhow::anyhow!("cooked texture parse: {msg}"))
-}
-
-/// Read a UE `FString` at `o`. Returns `(string, next_offset)`.
-/// `len > 0`: `len` UTF-8 bytes incl trailing NUL. `len < 0`: `-len` UTF-16LE
-/// units incl trailing NUL. `0`: empty.
-fn read_fstring(b: &[u8], o: usize) -> Result<(String, usize)> {
-    let len = rd_i32(b, o)?;
-    let mut p = o + 4;
-    if len == 0 {
-        return Ok((String::new(), p));
-    }
-    if len > 0 {
-        let n = len as usize;
-        let bytes = b
-            .get(p..p + n)
-            .ok_or_else(|| corrupt("FString utf8 runs past end"))?;
-        p += n;
-        // strip trailing NUL
-        let end = bytes.iter().position(|&c| c == 0).unwrap_or(bytes.len());
-        let s = String::from_utf8_lossy(&bytes[..end]).into_owned();
-        Ok((s, p))
-    } else {
-        let n = (-len) as usize;
-        let mut units = Vec::with_capacity(n);
-        for i in 0..n {
-            units.push(rd_u32_as_u16(b, p + i * 2)?);
-        }
-        p += n * 2;
-        let end = units.iter().position(|&c| c == 0).unwrap_or(units.len());
-        let s = String::from_utf16_lossy(&units[..end]);
-        Ok((s, p))
-    }
-}
-
-fn rd_u32_as_u16(b: &[u8], o: usize) -> Result<u16> {
-    let s = b
-        .get(o..o + 2)
-        .ok_or_else(|| corrupt("unexpected end of .uexp reading u16"))?;
-    Ok(u16::from_le_bytes(s.try_into().unwrap()))
 }
 
 /// Parse a cooked UTexture2D's platform data from its legacy cooked files.
@@ -167,168 +114,42 @@ fn rd_u32_as_u16(b: &[u8], o: usize) -> Result<u16> {
 /// for API symmetry; the locate-by-anchor strategy does not require either (the
 /// `.uasset` summary's `BulkDataStartOffset` is irrelevant because `build_legacy`
 /// emits no per-mip on-disk offsets to fix up).
-pub fn parse(_uasset: &[u8], uexp: &[u8], ubulk: &[u8], _usmap: &[u8]) -> Result<TexInfo> {
-    // Locate FTexturePlatformData by anchoring on a valid PF_* FString preceded
-    // by a sane (SizeX, SizeY, PackedData) triple and followed by a
-    // self-consistent mip table. We try every candidate and validate hard.
-    let mut last_err =
-        corrupt("no FTexturePlatformData found (no valid PF_* anchor in .uexp)");
+pub fn parse(uasset: &[u8], uexp: &[u8], ubulk: &[u8], _usmap: &[u8]) -> Result<TexInfo> {
+    // Delegate the byte-faithful FTexturePlatformData parse to the codec, then
+    // project the fields this read path needs into `TexInfo`. The codec captures
+    // the full region (all mips, trailer, FString encoding); we keep only mip0.
+    let pd = crate::texdata::PlatformData::parse(uasset, uexp, ubulk)?;
 
-    let mut search = 0usize;
-    while let Some(rel) = find_pf_anchor(uexp, search) {
-        // `rel` is the offset of the FString length prefix (PixelFormat).
-        // SizeX/SizeY/PackedData are the three i32 immediately before it.
-        if rel >= 12 {
-            let pd_start = rel - 12;
-            match try_parse_platform_data(uexp, ubulk, pd_start) {
-                Ok(info) => return Ok(info),
-                Err(e) => last_err = e,
-            }
-        }
-        search = rel + 1;
+    // bIsVirtual = bit31 of PackedData. v1 read path can't decode VTs.
+    if (pd.packed_data & 0x8000_0000) != 0 {
+        return Err(TexError::VirtualTexture(pd.format));
     }
-    Err(last_err)
-}
-
-/// Find the next `PF_*` `FString` length-prefix offset at/after `from`.
-/// Matches the on-disk form: `int32 len (>0)`, then `"PF_"` UTF-8 bytes.
-fn find_pf_anchor(uexp: &[u8], from: usize) -> Option<usize> {
-    // The FString content "PF_" appears at prefix+4. Search for the bytes "PF_"
-    // and back up to the length prefix, validating the prefix is the matching
-    // UTF-8 length.
-    let needle = b"PF_";
-    let mut i = from + 4;
-    while i + needle.len() <= uexp.len() {
-        if &uexp[i..i + needle.len()] == needle {
-            let prefix = i - 4;
-            if let Ok(len) = rd_i32(uexp, prefix) {
-                // UTF-8 FString: positive length incl trailing NUL; the bytes
-                // [i .. i+len] should be the format name + NUL.
-                if len > 0 && len < 64 {
-                    let end = i + (len as usize);
-                    if end <= uexp.len() && uexp[end - 1] == 0 {
-                        return Some(prefix);
-                    }
-                }
-            }
-        }
-        i += 1;
-    }
-    None
-}
-
-/// Attempt to parse FTexturePlatformData starting at `pd_start` (the offset of
-/// `SizeX`). Validates dims and the mip table; any inconsistency -> `Err` so the
-/// caller moves to the next candidate anchor.
-fn try_parse_platform_data(
-    uexp: &[u8],
-    ubulk: &[u8],
-    pd_start: usize,
-) -> Result<TexInfo> {
-    let size_x = rd_i32(uexp, pd_start)?;
-    let size_y = rd_i32(uexp, pd_start + 4)?;
-    let packed = rd_u32(uexp, pd_start + 8)?;
-
-    // Plausible texture dimensions: positive and not absurd. (Cooked mip dims
-    // for the platform data are <= 16384 in practice.)
-    if !(1..=16384).contains(&size_x) || !(1..=16384).contains(&size_y) {
-        return Err(corrupt("implausible texture dimensions at anchor"));
-    }
-    let width = size_x as u32;
-    let height = size_y as u32;
-
-    // bIsVirtual = bit31 of PackedData.
-    let is_virtual = (packed & 0x8000_0000) != 0;
-
-    // PixelFormat FString.
-    let (format, mut o) = read_fstring(uexp, pd_start + 12)?;
-    if !format.starts_with("PF_") {
-        return Err(corrupt("anchor FString is not a PF_* pixel format"));
+    if block_bytes(&pd.format).is_none() {
+        return Err(TexError::UnsupportedFormat(pd.format));
     }
 
-    if is_virtual {
-        return Err(TexError::VirtualTexture(format));
-    }
-    if block_bytes(&format).is_none() {
-        return Err(TexError::UnsupportedFormat(format));
-    }
+    // mip0 = the first (largest / first-serialized) mip. The codec already
+    // rejects FirstMipToSerialize != 0, so mips[0] is the base mip.
+    let mip0_entry = pd
+        .mips
+        .first()
+        .ok_or_else(|| corrupt("platform data has no mips"))?;
 
-    // FTexturePlatformData (UE5 cooked) after PixelFormat:
-    //   int32 FirstMipToSerialize
-    //   int32 NumMips
-    //   FTexture2DMipMap[NumMips]
-    let first_mip = rd_i32(uexp, o)?;
-    o += 4;
-    let num_mips = rd_i32(uexp, o)?;
-    o += 4;
-    if !(1..=20).contains(&num_mips) {
-        return Err(corrupt("implausible NumMips"));
-    }
-    // We only support FirstMipToSerialize == 0 (mip0 actually present). A
-    // non-zero value means the largest serialized mip is *not* the base mip, so
-    // `block_math(baseW, baseH)` would mis-size it -- fail loudly rather than
-    // returning a wrong/smaller mip. (`o` here is the first mip entry, so an
-    // anchor false-positive still surfaces as a different error below.)
-    if first_mip != 0 {
-        return Err(TexError::UnsupportedFormat(format!(
-            "FirstMipToSerialize={first_mip} not supported (mip0 not serialized)"
-        )));
-    }
-
-    // Mip 0 is the largest / first-serialized mip and is what we want.
-    let expected = mip_byte_size(&format, width, height)
+    // Hard validation: the captured byte length must equal the BCn block math
+    // for the base dims. This is what makes the heuristic safe.
+    let expected = mip_byte_size(&pd.format, pd.size_x, pd.size_y)
         .ok_or_else(|| corrupt("no block size for format"))?;
-
-    let mip0 = read_mip0(uexp, ubulk, o, expected)?;
-
-    // Hard validation: the extracted byte length must equal the BCn block math
-    // for the dims. This is what makes the heuristic safe.
-    if mip0.len() as u64 != expected {
+    if mip0_entry.data.len() as u64 != expected {
         return Err(corrupt("mip0 length does not match format/dimension block math"));
     }
 
     Ok(TexInfo {
-        width,
-        height,
-        format,
-        mip0,
+        width: pd.size_x,
+        height: pd.size_y,
+        format: pd.format,
+        mip0: mip0_entry.data.clone(),
         is_virtual: false,
     })
-}
-
-/// Locate and return mip-0's raw `expected`-byte BCn payload.
-///
-/// `o` is the offset of the first mip entry in the `.uexp` mip table (the
-/// `uint32 flags` word that precedes `SizeX, SizeY, SizeZ`). retoc's
-/// `build_legacy` does **not** write any `ElementCount`/`SizeOnDisk`/
-/// `OffsetInFile` for a streamed mip, so there is nothing to fix up; mip0 is
-/// located purely by where its payload physically lives:
-///
-/// * **`.ubulk` present and non-empty** -> mip0 is streamed and lives at the very
-///   start of the bulk file: `ubulk[0 .. expected]`. (`build_legacy` writes the
-///   streamed mips largest-first; mip0 is largest, so its offset is 0.)
-/// * **no/empty `.ubulk`** -> the chain is fully inline in `.uexp`; mip0's raw
-///   bytes follow its `flags` word: `uexp[o+4 .. o+4+expected]`.
-///
-/// Either way the slice is bounds-checked: an out-of-range range is a loud
-/// `Err`, never an OOB slice.
-fn read_mip0(uexp: &[u8], ubulk: &[u8], o: usize, expected: u64) -> Result<Vec<u8>> {
-    let n = expected as usize;
-
-    if !ubulk.is_empty() {
-        // Streamed: mip0 is the first (largest) streamed mip, at ubulk offset 0.
-        let payload = ubulk
-            .get(0..n)
-            .ok_or_else(|| corrupt("streamed mip0 runs past end of .ubulk"))?;
-        return Ok(payload.to_vec());
-    }
-
-    // Fully inline: skip the per-mip `uint32 flags`, then the raw payload.
-    let p = o + 4;
-    let payload = uexp
-        .get(p..p + n)
-        .ok_or_else(|| corrupt("inline mip0 payload runs past end of .uexp"))?;
-    Ok(payload.to_vec())
 }
 
 // ---- BCn -> RGBA decode ---------------------------------------------------
@@ -524,16 +345,5 @@ mod tests {
         // non-multiple-of-4 rounds up to whole blocks
         assert_eq!(mip_byte_size("PF_DXT5", 5, 5), Some(2 * 2 * 16));
         assert_eq!(mip_byte_size("PF_UNKNOWN", 4, 4), None);
-    }
-
-    #[test]
-    fn fstring_roundtrip() {
-        // len=8, "PF_DXT5\0"
-        let mut b = Vec::new();
-        b.extend_from_slice(&8i32.to_le_bytes());
-        b.extend_from_slice(b"PF_DXT5\0");
-        let (s, next) = read_fstring(&b, 0).unwrap();
-        assert_eq!(s, "PF_DXT5");
-        assert_eq!(next, b.len());
     }
 }

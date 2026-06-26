@@ -4,5 +4,6 @@ pub mod decode;
 pub mod encode;
 pub mod error;
 pub mod paths;
+pub mod texdata;
 
 pub use error::{Result, TexError};
