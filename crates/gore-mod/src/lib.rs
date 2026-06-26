@@ -629,8 +629,17 @@ fn stage(plan: &DeployPlan, record: &mut DeployRecord, undo: &mut Undo) -> Resul
         // If the live file drifted (game updated) since our last deploy, its preserved backup is
         // stale: drop it so backup() re-snapshots the current file as the new pristine, instead of
         // keeping a pre-update backup that a future undeploy would restore over the newer asset.
+        // The removal MUST succeed — if it can't (read-only/locked), backup() would keep the stale
+        // backup, so fail the deploy now (stage runs pre-write, so the caller rolls back cleanly).
         if plan.refresh_baks.iter().any(|p| p == live) {
-            let _ = std::fs::remove_file(bak_path(live));
+            let bak = bak_path(live);
+            if std::fs::remove_file(&bak).is_err() && bak.exists() {
+                return Err(ModError::Other(format!(
+                    "stale backup '{}' could not be removed (read-only or locked); close the game \
+                     and retry so the updated game file can be re-backed-up",
+                    bak.display()
+                )));
+            }
         }
         let (bak, created) = backup(live, record)?;
         if created {

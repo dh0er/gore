@@ -86,6 +86,12 @@ class _LangFieldState extends ConsumerState<_LangField> {
     super.didUpdateWidget(old);
     if (old.locId != widget.locId) {
       _controller.text = _currentValue();
+    } else if (!identical(old.catalog, widget.catalog) && !_focusNode.hasFocus) {
+      // The catalog was re-extracted/invalidated (a new map instance) while the same line stays
+      // selected: _set and _catalogValue derive from widget.catalog, so resync to the refreshed
+      // value rather than keep stale text (which a later edit would stage over the new catalog).
+      // Skipped while focused so we don't clobber the user's in-progress typing.
+      _controller.text = _currentValue();
     }
   }
 
