@@ -864,7 +864,9 @@ dependencies = [
  "clap",
  "gore-as",
  "gore-catalog",
+ "gore-fmod",
  "gore-loc",
+ "gore-mod",
  "gore-modgen",
  "gore-reflect",
  "gore-tex",
@@ -898,11 +900,20 @@ dependencies = [
 name = "gore-ffi"
 version = "0.0.0"
 dependencies = [
+ "gore-fmod",
  "gore-loc",
+ "gore-mod",
  "gore-modgen",
  "gore-reflect",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "gore-fmod"
+version = "0.0.0"
+dependencies = [
+ "lewton",
 ]
 
 [[package]]
@@ -914,6 +925,19 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "winreg",
+]
+
+[[package]]
+name = "gore-mod"
+version = "0.0.0"
+dependencies = [
+ "gore-fmod",
+ "gore-loc",
+ "gore-modgen",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -1286,6 +1310,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a79a3332a6609480d7d0c9eab957bca6b455b91bb84e66d19f5ff66294b85b8"
 
 [[package]]
+name = "lewton"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "777b48df9aaab155475a83a7df3070395ea1ac6902f5cd062b8f2b028075c030"
+dependencies = [
+ "byteorder",
+ "ogg",
+ "tinyvec",
+]
+
+[[package]]
 name = "libc"
 version = "0.2.186"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1505,6 +1540,15 @@ checksum = "91df4bbde75afed763b708b7eee1e8e7651e02d97f6d5dd763e89367e957b23b"
 dependencies = [
  "hermit-abi",
  "libc",
+]
+
+[[package]]
+name = "ogg"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6951b4e8bf21c8193da321bcce9c9dd2e13c858fe078bf9054a288b419ae5d6e"
+dependencies = [
+ "byteorder",
 ]
 
 [[package]]
