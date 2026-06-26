@@ -13,6 +13,7 @@ retoc = { path = "../../vendor/retoc" }
 thiserror = "1"
 anyhow = "1"
 texture2ddecoder = "0.1"
+intel_tex_2 = "0.5"
 
 [dev-dependencies]
 sha2 = "0.10"

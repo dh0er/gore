@@ -12,6 +12,8 @@ pub enum TexError {
     UnsupportedFormat(String),
     #[error("BCn decode failed for {format}: {reason}")]
     DecodeFailed { format: String, reason: String },
+    #[error("BCn encode failed: {0}")]
+    EncodeFailed(String),
     #[error("virtual textures are not supported in v1: {0}")]
     VirtualTexture(String),
     #[error("io error: {0}")]
