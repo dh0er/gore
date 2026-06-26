@@ -857,12 +857,13 @@ fn read_pristine(live: &Path, prev: Option<&DeployRecord>) -> Result<(Vec<u8>, b
             }
             None => {
                 // No recorded hash to judge drift (e.g. a leftover backup from the CLI, or the
-                // record was cleared). Fall back to FMOD structure: if the live BANK isn't injected
-                // (a single FSB5), it is itself the current pristine — prefer it (covering a Steam
-                // verify/update that refreshed the bank) and refresh the possibly-stale backup. A
-                // non-bank (.lcache) or an already-injected bank has no such signal, so use the bak.
+                // record was cleared). Fall back to FMOD structure: if the live BANK is a clean
+                // un-injected pristine (a single FSB5), it is itself the current pristine — prefer
+                // it (covering a Steam verify/update that refreshed the bank) and refresh the
+                // possibly-stale backup. A non-bank (.lcache), corrupt, or already-injected live
+                // has no such signal, so use the backup.
                 if let Ok(cur) = std::fs::read(live) {
-                    if gore_fmod::parse_bank(&cur).map(|e| e.len() == 1).unwrap_or(false) {
+                    if gore_fmod::is_pristine_bank(&cur) {
                         return Ok((cur, true));
                     }
                 }

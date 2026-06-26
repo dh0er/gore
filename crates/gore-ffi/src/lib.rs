@@ -153,8 +153,8 @@ fn find_game() -> Value {
 /// `read_pristine_bank`.
 fn read_bank_pristine(bank: &str) -> std::io::Result<Vec<u8>> {
     let live = std::fs::read(bank)?;
-    let injected = gore_fmod::parse_bank(&live).map(|e| e.len() > 1).unwrap_or(false);
-    if injected {
+    if !gore_fmod::is_pristine_bank(&live) {
+        // The live bank is injected (or unparseable) — its true pristine is the backup, if any.
         let bak = format!("{bank}.gore-bak");
         if std::path::Path::new(&bak).exists() {
             return std::fs::read(&bak);

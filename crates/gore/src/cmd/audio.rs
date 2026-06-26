@@ -28,8 +28,8 @@ fn key_bytes(key: Option<String>) -> Vec<u8> {
 /// replace — do we fall back to the backup, which holds the true pristine to avoid compounding.
 fn read_pristine_bank(bank: &Path) -> Result<Vec<u8>> {
     let live = std::fs::read(bank).with_context(|| format!("reading '{}'", bank.display()))?;
-    let injected = gore_fmod::parse_bank(&live).map(|e| e.len() > 1).unwrap_or(false);
-    if injected {
+    if !gore_fmod::is_pristine_bank(&live) {
+        // The live bank is injected (or unparseable) — its true pristine is the backup, if any.
         let bak = backup_path(bank);
         if bak.exists() {
             return std::fs::read(&bak).with_context(|| format!("reading '{}'", bak.display()));
@@ -152,8 +152,7 @@ fn write_result(bank: &Path, new_bank: &[u8], out: Option<PathBuf>, count: usize
             // backup would survive and a later `restore` would write it over the updated bank. When
             // the live bank is already injected, an existing backup is the true pristine: keep it.
             let live = std::fs::read(bank).with_context(|| format!("reading '{}'", bank.display()))?;
-            let live_pristine = gore_fmod::parse_bank(&live).map(|e| e.len() <= 1).unwrap_or(true);
-            if live_pristine {
+            if gore_fmod::is_pristine_bank(&live) {
                 std::fs::write(&bak, &live)
                     .with_context(|| format!("backing up to '{}'", bak.display()))?;
                 println!("backed up -> {}", bak.display());
@@ -250,12 +249,12 @@ pub fn restore(bank: PathBuf) -> Result<()> {
     if !bak.exists() {
         bail!("no backup found at '{}'", bak.display());
     }
-    // If the live bank isn't injected (a single FSB5), it is already the current pristine — e.g.
-    // Steam verified/updated it since we backed it up. Restoring the stale backup would downgrade
-    // the newer file, so just drop the stale backup instead.
+    // If the live bank is a clean, un-injected pristine (a single FSB5), it is already current —
+    // e.g. Steam verified/updated it since we backed it up. Restoring the stale backup would
+    // downgrade the newer file, so just drop the stale backup instead. A corrupt/injected live bank
+    // is NOT pristine, so it still gets restored from the backup.
     let live = std::fs::read(&bank).with_context(|| format!("reading '{}'", bank.display()))?;
-    let live_injected = gore_fmod::parse_bank(&live).map(|e| e.len() > 1).unwrap_or(false);
-    if !live_injected {
+    if gore_fmod::is_pristine_bank(&live) {
         let _ = std::fs::remove_file(&bak);
         println!(
             "{} is not injected (already pristine); removed stale backup {}",

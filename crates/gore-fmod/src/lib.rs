@@ -53,6 +53,13 @@ pub struct BankEntry {
 }
 
 /// Walk the RIFF/`FEV ` wrapper, return the (still-encrypted) embedded FSB5 slices.
+/// Whether `bank` is a usable PRISTINE bank: it parses cleanly AND holds exactly one FSB5 (i.e. it
+/// has not been injected). Returns false if parsing fails — a corrupt/truncated bank is NOT treated
+/// as pristine, so callers don't drop a good `*.gore-bak` or rebuild from broken bytes.
+pub fn is_pristine_bank(bank: &[u8]) -> bool {
+    parse_bank(bank).map(|e| e.len() == 1).unwrap_or(false)
+}
+
 pub fn parse_bank(b: &[u8]) -> Result<Vec<BankEntry>, String> {
     if b.len() < 0x18 || &b[0x00..0x04] != b"RIFF" || &b[0x08..0x0C] != b"FEV " {
         return Err("not a RIFF/FEV bank".into());
