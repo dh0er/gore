@@ -95,6 +95,11 @@ pub struct PlatformData {
     pub trailer: Vec<u8>,
     /// `[start, end)` of the platform-data region within `.uexp`.
     pub region: Range<usize>,
+    /// `Some` iff this is a cooked **virtual texture** (`NumMips == 0` +
+    /// `bIsVirtual == 1`). When set, `mips` is empty and the platform-data tail
+    /// is the `FVirtualTextureBuiltData` block (re-emitted via
+    /// [`crate::vt::serialize_into`]) instead of an `FTexture2DMipMap` array.
+    pub vt: Option<crate::vt::VtData>,
 }
 
 // ---- format block math ----------------------------------------------------
@@ -118,7 +123,7 @@ fn mip_byte_size(format: &str, w: u32, h: u32) -> Option<u64> {
 
 // ---- bounds-checked little-endian readers ---------------------------------
 
-fn corrupt(msg: &str) -> TexError {
+pub(crate) fn corrupt(msg: &str) -> TexError {
     TexError::Retoc(anyhow::anyhow!("FTexturePlatformData codec: {msg}"))
 }
 
@@ -147,13 +152,13 @@ fn keep_more_specific(first: TexError, second: TexError) -> TexError {
     }
 }
 
-fn rd_i32(b: &[u8], o: usize) -> Result<i32> {
+pub(crate) fn rd_i32(b: &[u8], o: usize) -> Result<i32> {
     let s = b
         .get(o..o + 4)
         .ok_or_else(|| corrupt("unexpected end reading i32"))?;
     Ok(i32::from_le_bytes(s.try_into().unwrap()))
 }
-fn rd_u32(b: &[u8], o: usize) -> Result<u32> {
+pub(crate) fn rd_u32(b: &[u8], o: usize) -> Result<u32> {
     let s = b
         .get(o..o + 4)
         .ok_or_else(|| corrupt("unexpected end reading u32"))?;
@@ -169,7 +174,7 @@ fn rd_u16(b: &[u8], o: usize) -> Result<u16> {
 /// Read a UE `FString` at `o`. Returns `(string, next_offset)`.
 /// `len > 0`: `len` UTF-8 bytes incl trailing NUL. `len < 0`: `-len` UTF-16LE
 /// units incl trailing NUL. `0`: empty.
-fn read_fstring(b: &[u8], o: usize) -> Result<(String, usize)> {
+pub(crate) fn read_fstring(b: &[u8], o: usize) -> Result<(String, usize)> {
     let len = rd_i32(b, o)?;
     let mut p = o + 4;
     if len == 0 {
@@ -201,7 +206,7 @@ fn read_fstring(b: &[u8], o: usize) -> Result<(String, usize)> {
 /// NUL (every `PF_*` name is ASCII). We re-emit exactly that form. We assert the
 /// name is ASCII so the round-trip cannot silently widen to UTF-16; a non-ASCII
 /// format name is rejected loudly (it would never be a real `PF_*`).
-fn write_fstring_ascii(out: &mut Vec<u8>, s: &str) -> Result<()> {
+pub(crate) fn write_fstring_ascii(out: &mut Vec<u8>, s: &str) -> Result<()> {
     if !s.is_ascii() {
         return Err(corrupt("pixel format name is not ASCII"));
     }
@@ -308,12 +313,38 @@ impl PlatformData {
         // single linear mip0 surface — so this is correctly unsupported here.)
         if num_mips == 0 {
             let b_is_virtual = rd_i32(uexp, o).unwrap_or(0);
-            if b_is_virtual == 1 {
-                return Err(TexError::VirtualTexture(format));
+            if b_is_virtual != 1 {
+                return Err(corrupt(
+                    "NumMips=0 at platform-data anchor but not a virtual texture — unhandled cooked-tail layout",
+                ));
             }
-            return Err(corrupt(
-                "NumMips=0 at platform-data anchor but not a virtual texture — unhandled cooked-tail layout",
-            ));
+            o += 4; // consume bIsVirtual
+            // Parse the FVirtualTextureBuiltData block byte-faithfully so the
+            // region re-serializes losslessly. The VT chunk bytes live in
+            // `.ubulk` (legacy data-resource indices), so parse only touches
+            // `.uexp` here.
+            let vt = crate::vt::parse(uexp, &mut o)?;
+            let region_end = find_package_tag(uexp, o)
+                .ok_or_else(|| corrupt("package magic not found after VT block"))?;
+            if region_end < o {
+                return Err(corrupt("computed region end precedes end of VT block"));
+            }
+            let trailer = uexp
+                .get(o..region_end)
+                .ok_or_else(|| corrupt("VT trailer runs past end of .uexp"))?
+                .to_vec();
+            return Ok(PlatformData {
+                size_x: width,
+                size_y: height,
+                packed_data: packed,
+                format,
+                opt_data,
+                first_mip: first_mip as u32,
+                mips: Vec::new(),
+                trailer,
+                region: pd_start..region_end,
+                vt: Some(vt),
+            });
         }
         if !(1..=20).contains(&num_mips) {
             return Err(corrupt("implausible NumMips"));
@@ -414,6 +445,7 @@ impl PlatformData {
             mips,
             trailer,
             region: pd_start..region_end,
+            vt: None,
         })
     }
 
@@ -442,6 +474,17 @@ impl PlatformData {
             out.extend_from_slice(&opt.num_mips_in_tail.to_le_bytes());
         }
         out.extend_from_slice(&(self.first_mip as i32).to_le_bytes());
+
+        // Virtual texture: NumMips == 0, then bIsVirtual == 1, then the
+        // FVirtualTextureBuiltData block (re-emitted byte-faithfully).
+        if let Some(vt) = &self.vt {
+            out.extend_from_slice(&0i32.to_le_bytes()); // NumMips
+            out.extend_from_slice(&1i32.to_le_bytes()); // bIsVirtual
+            crate::vt::serialize_into(&mut out, vt)?;
+            out.extend_from_slice(&self.trailer);
+            return Ok(out);
+        }
+
         out.extend_from_slice(&(self.mips.len() as i32).to_le_bytes());
 
         for m in &self.mips {
@@ -584,6 +627,9 @@ pub fn replace_texture(
 ) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>)> {
     // 1. Parse the original to capture format/packed_data/first_mip/trailer.
     let orig = PlatformData::parse(uasset, uexp, ubulk)?;
+    if orig.vt.is_some() {
+        return Err(TexError::VirtualTexture(orig.format));
+    }
     if orig.first_mip != 0 {
         return Err(corrupt("FirstMipToSerialize != 0 is not supported for rewrite"));
     }
@@ -700,6 +746,7 @@ pub fn replace_texture(
         mips,
         trailer: orig.trailer.clone(),
         region: orig.region.clone(),
+        vt: None,
     };
     let new_region = new_pd.serialize_region()?;
     let new_ubulk = new_pd.serialize_ubulk();
@@ -1310,19 +1357,16 @@ mod tests {
         assert_eq!(pd.serialize_ubulk(), ub, "streamed .ubulk must re-serialize byte-identically");
     }
 
-    /// Gated/slow: the previously-MASKED failing case. `T_Biter_Armor_D` is a
-    /// cooked **virtual texture** (4096x4096 PF_DXT1, `NumMips == 0` +
-    /// `bIsVirtual == 1`). Before the fix, `parse` read `NumMips == 0`, tripped
-    /// the `1..=20` range check, advanced to a stray `PF_*` anchor in the VT
-    /// chunk data, and surfaced a generic "implausible texture dimensions". After
-    /// the fix it must surface the SPECIFIC, correct `VirtualTexture` error from
-    /// the true anchor (the BCn mip path cannot decode a VT; the win is correct
-    /// classification, not a forced decode). This is the oracle for the
-    /// virtual-texture detection + masked-error fix that accounts for the bulk
-    /// (~77% in sampling) of previously-failing textures.
+    /// Gated/slow byte-faithful VT oracle. `T_Biter_Armor_D` is a cooked
+    /// **virtual texture** (4096x4096 PF_DXT1, `NumMips == 0` + `bIsVirtual ==
+    /// 1`, `FVirtualTextureBuiltData` tail). Parse must now SUCCEED with
+    /// `pd.vt.is_some()`, and re-serializing the platform-data region of the
+    /// `.uexp` must be BYTE-IDENTICAL to the original (`.ubulk` untouched). This
+    /// proves the full `FVirtualTextureBuiltData` field order/widths/count
+    /// prefixes are captured losslessly.
     #[test]
     #[ignore = "slow: unpacks from real container"]
-    fn biter_virtual_texture_is_classified_not_masked() {
+    fn roundtrip_biter_vt_uexp_region_byte_identical() {
         let g = std::path::PathBuf::from(r"D:\SteamLibrary\steamapps\common\Gothic 1 Remake");
         if !g.exists() {
             eprintln!("skip: game absent");
@@ -1330,29 +1374,58 @@ mod tests {
         }
         let utoc = crate::paths::main_container(&g).unwrap();
         let usmap = crate::paths::usmap(&g).unwrap();
+        let asset =
+            "/Game/Assets/Characters/Creatures/Biter/Model/Armor/Textures/T_Biter_Armor_D";
+        let leaf = "T_Biter_Armor_D";
         let tmp = std::env::temp_dir().join("gore-tex-td-vt");
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
-        let uasset = crate::container::unpack_asset(
-            &utoc,
-            &usmap,
-            "/Game/Assets/Characters/Creatures/Biter/Model/Armor/Textures/T_Biter_Armor_D",
-            &tmp,
-        )
-        .unwrap();
+
+        // Prefer the cached texture index (pid -> by-id unpack, no full scan);
+        // fall back to a name scan if the index is absent.
+        let uasset = match crate::index::TextureIndex::load(&crate::paths::texture_index_path()) {
+            Ok(idx) => match idx.entries.get(asset) {
+                Some(&pid) => {
+                    crate::container::unpack_asset_by_id(&utoc, &usmap, pid, leaf, &tmp).unwrap()
+                }
+                None => crate::container::unpack_asset(&utoc, &usmap, asset, &tmp).unwrap(),
+            },
+            Err(_) => crate::container::unpack_asset(&utoc, &usmap, asset, &tmp).unwrap(),
+        };
+
         let ua = std::fs::read(&uasset).unwrap();
         let ue = std::fs::read(uasset.with_extension("uexp")).unwrap();
         let ub = std::fs::read(uasset.with_extension("ubulk")).unwrap_or_default();
-        match PlatformData::parse(&ua, &ue, &ub) {
-            Err(TexError::VirtualTexture(fmt)) => {
-                assert_eq!(fmt, "PF_DXT1", "VT format should be the real PF_DXT1");
-            }
-            Err(e) => panic!("expected VirtualTexture, got masked/other error: {e}"),
-            Ok(pd) => panic!(
-                "expected VirtualTexture error, but parse succeeded ({}x{} {})",
-                pd.size_x, pd.size_y, pd.format
-            ),
+
+        let pd = PlatformData::parse(&ua, &ue, &ub).unwrap();
+        assert!(pd.vt.is_some(), "Biter armor diffuse must parse as a virtual texture");
+        assert_eq!(pd.format, "PF_DXT1", "VT format should be the real PF_DXT1");
+        assert_eq!(pd.size_x, 4096);
+        assert_eq!(pd.size_y, 4096);
+        assert!(pd.mips.is_empty(), "VT carries no FTexture2DMipMap entries");
+        let vt = pd.vt.as_ref().unwrap();
+        assert_eq!(vt.num_layers, 1);
+        assert!(!vt.is_legacy(), "G1R VT is the non-legacy form");
+        assert_eq!(vt.chunks.len(), 4, "Biter armor VT has 4 chunks");
+
+        let mut ue2 = ue.clone();
+        pd.serialize_into_uexp(&mut ue2, &ua).unwrap();
+        // Locate the first differing byte for a precise failure report.
+        if ue2 != ue {
+            let first = ue2
+                .iter()
+                .zip(ue.iter())
+                .position(|(a, b)| a != b)
+                .unwrap_or_else(|| ue.len().min(ue2.len()));
+            panic!(
+                "VT .uexp region NOT byte-identical; first diff at offset {first} \
+                 (region {:?}); got {:?} want {:?}",
+                pd.region,
+                ue2.get(first),
+                ue.get(first)
+            );
         }
+        assert_eq!(ue2, ue, "re-serialized VT .uexp must be byte-identical");
     }
 
     /// Same-dims replace on the inline fixture: re-encode-shaped bytes at the
@@ -1459,6 +1532,7 @@ mod tests {
             mips: entries,
             trailer: vec![0u8; 12],
             region: region_start..(region_start + 1), // end unused by mip_serial_layout
+            vt: None,
         }
     }
 

@@ -120,8 +120,10 @@ pub fn parse(uasset: &[u8], uexp: &[u8], ubulk: &[u8], _usmap: &[u8]) -> Result<
     // the full region (all mips, trailer, FString encoding); we keep only mip0.
     let pd = crate::texdata::PlatformData::parse(uasset, uexp, ubulk)?;
 
-    // bIsVirtual = bit31 of PackedData. v1 read path can't decode VTs.
-    if (pd.packed_data & 0x8000_0000) != 0 {
+    // Virtual textures have no single linear mip0 surface; the v1 read path
+    // can't decode them (VT decode/stitch is Task 2). The codec now parses the
+    // VT block successfully (`pd.vt.is_some()`), so classify on that.
+    if pd.vt.is_some() {
         return Err(TexError::VirtualTexture(pd.format));
     }
     if block_bytes(&pd.format).is_none() {
