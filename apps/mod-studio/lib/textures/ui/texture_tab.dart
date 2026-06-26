@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/domain/ui_settings.dart';
@@ -46,7 +47,7 @@ class _TextureTabState extends ConsumerState<TextureTab> {
           ],
         ),
       ),
-      error: (e, _) => Center(child: Text('Index error: $e')),
+      error: (e, _) => Center(child: SelectableText('Index error: $e')),
       data: (entries) {
         final matches =
             entries.keys
@@ -192,7 +193,6 @@ class _TextureTabState extends ConsumerState<TextureTab> {
   }
 
   Future<void> _preview(String gameDir, String asset, String? packageId) async {
-    final messenger = ScaffoldMessenger.of(context);
     try {
       // textureExtract throws on a non-ok FFI result, so on return the PNG path
       // is present; just read it.
@@ -205,8 +205,28 @@ class _TextureTabState extends ConsumerState<TextureTab> {
       if (!mounted) return;
       setState(() => _previewPng = r['png_path'] as String?);
     } catch (e) {
-      messenger.showSnackBar(
-        SnackBar(content: Text('Preview failed: $e')),
+      debugPrint('texture preview failed for $asset: $e');
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Preview failed'),
+          content: SingleChildScrollView(
+            child: SelectableText('$asset\n\n$e'),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Clipboard.setData(
+                ClipboardData(text: '$asset\n$e'),
+              ),
+              child: const Text('Copy'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Close'),
+            ),
+          ],
+        ),
       );
     }
   }
