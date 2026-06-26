@@ -935,6 +935,7 @@ dependencies = [
  "gore-loc",
  "gore-modgen",
  "gore-tex",
+ "image",
  "serde",
  "serde_json",
  "tempfile",
