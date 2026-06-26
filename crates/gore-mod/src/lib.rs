@@ -411,6 +411,17 @@ pub fn deploy(bundle_dir: &Path, game_root: &Path) -> Result<DeployRecord> {
         return Err(e);
     }
 
+    // (c2) The live files now actually hold our content, so the drift hashes are valid — record
+    //      them and persist. They were intentionally OMITTED from the pre-write record (b): had we
+    //      stored them earlier, a crash between the record write and the live writes would leave
+    //      the old content on disk with the new hashes recorded, and undeploy would mis-read that
+    //      as an external update — skipping the restore and dropping the backup. With no hash, a
+    //      crash in that window instead falls back to a plain pristine restore.
+    for (live, bytes) in &plan.writes {
+        record.deployed_hashes.insert(live.display().to_string(), content_hash(bytes));
+    }
+    let _ = write_record_file(game_root, &record);
+
     // (d) committed — drop the kept-aside previous UE4SS mod, then retire the previous mod's
     //     footprint now (best-effort), pruning retired leftovers from the record.
     let aside_failed = undo.discard();
@@ -582,7 +593,7 @@ fn stage(plan: &DeployPlan, record: &mut DeployRecord, undo: &mut Undo) -> Resul
     if let Some((_, dst)) = &plan.ue4ss {
         record.ue4ss_mod_dir = Some(dst.display().to_string());
     }
-    for (live, bytes) in &plan.writes {
+    for (live, _) in &plan.writes {
         // Snapshot the current (pre-deploy) bytes so rollback restores the EXACT prior state —
         // the previous mod's content, not just the game-pristine backup. If this read fails we
         // abort BEFORE writing anything, rather than snapshot empty and risk an empty-file rollback.
@@ -592,11 +603,6 @@ fn stage(plan: &DeployPlan, record: &mut DeployRecord, undo: &mut Undo) -> Resul
         if created {
             undo.created_baks.push(bak);
         }
-        // Record what we're about to deploy here, so a later undeploy can detect an external
-        // overwrite (Steam update/verify) and refuse to restore the now-stale backup over it.
-        record
-            .deployed_hashes
-            .insert(live.display().to_string(), content_hash(bytes));
     }
     Ok(())
 }
