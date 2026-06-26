@@ -306,10 +306,13 @@ class _AudioBrowserState extends ConsumerState<_AudioBrowser> {
       final path = staged?.wavPath ??
           await ModFfi(ref.read(coreServiceProvider)).audioExtract(_bankFullPath, sample.name);
       if (Platform.isWindows) {
+        // Pass the path as its own argument (no runInShell): Process.start quotes args with
+        // spaces when building the Windows command line, so `cmd /c start "" "<path>"` handles
+        // paths under e.g. "Program Files". runInShell would re-parse and drop that quoting.
         await Process.start(
           'cmd',
           ['/c', 'start', '', path],
-          runInShell: true,
+          runInShell: false,
         );
       } else if (Platform.isMacOS) {
         await Process.start('open', [path]);

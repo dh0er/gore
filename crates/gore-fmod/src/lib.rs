@@ -473,6 +473,18 @@ pub fn replace_samples(
     if replacements.is_empty() {
         return Err("no replacements".into());
     }
+    // The injection appends a 2nd FSB5 and repoints into it, so it requires a pristine
+    // single-FSB5 bank. If `bank` is already injected (>1 FSB5) — e.g. a re-deploy that read the
+    // live, already-modded bank because its `*.gore-bak` pristine backup is missing — fail with
+    // an actionable message instead of the cryptic "expected exactly 1 FSB5" from inject_fsb5.
+    let blocks = parse_bank(bank)?;
+    if blocks.len() != 1 {
+        return Err(format!(
+            "bank already contains modded audio ({} FSB5 blocks); restore the original bank \
+             (its *.gore-bak backup, or Steam → Verify integrity of game files) before replacing",
+            blocks.len()
+        ));
+    }
     let f0 = bank_fsb0(bank, key)?;
     let mut repoints = Vec::with_capacity(replacements.len());
     let mut samples = Vec::with_capacity(replacements.len());

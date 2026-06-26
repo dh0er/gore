@@ -251,6 +251,11 @@ pub struct DeployRecord {
     /// false when the `*.gore-bak` already existed (it belongs to a previous deployment), so a
     /// rollback restores from but does not delete it.
     pub backups: Vec<(String, String, bool)>,
+    /// Previous-deployment UE4SS mod dirs (different name from the new one) that couldn't be
+    /// removed at deploy time (locked/permissions). Tracked so undeploy still cleans them up;
+    /// otherwise their enabled scripts would linger. `#[serde(default)]` keeps old records loadable.
+    #[serde(default)]
+    pub stale_ue4ss_dirs: Vec<String>,
 }
 
 const RECORD_NAME: &str = "gore-mod.deployed.json";
@@ -340,7 +345,9 @@ pub fn deploy(bundle_dir: &Path, game_root: &Path) -> Result<DeployRecord> {
 
 fn write_record_file(game_root: &Path, record: &DeployRecord) -> Result<()> {
     let bytes = serde_json::to_vec_pretty(record)?;
-    std::fs::write(record_path(game_root), bytes).map_err(io("writing deploy record"))
+    // Write via temp + rename so a crash mid-write can't truncate an existing record (which
+    // undeploy needs to parse to restore game files / clean up backups).
+    atomic_write(&record_path(game_root), &bytes)
 }
 
 /// Restore the deploy record file to its pre-deploy contents on rollback (or remove it if there
@@ -348,7 +355,7 @@ fn write_record_file(game_root: &Path, record: &DeployRecord) -> Result<()> {
 fn restore_record_file(game_root: &Path, prev_bytes: Option<&[u8]>) {
     match prev_bytes {
         Some(b) => {
-            let _ = std::fs::write(record_path(game_root), b);
+            let _ = atomic_write(&record_path(game_root), b);
         }
         None => {
             let _ = std::fs::remove_file(record_path(game_root));
@@ -562,7 +569,13 @@ fn retire_leftovers(
         if let Some(prev_dir) = &prev.ue4ss_mod_dir {
             let new_dir = plan.ue4ss.as_ref().map(|(_, dst)| dst.display().to_string());
             if new_dir.as_deref() != Some(prev_dir.as_str()) {
-                let _ = std::fs::remove_dir_all(prev_dir);
+                // Remove the previous (differently-named) UE4SS mod dir. If it can't be removed
+                // (locked/permissions), keep it tracked so a later undeploy cleans it up — else
+                // its enabled scripts would linger untracked alongside the new mod.
+                if std::fs::remove_dir_all(prev_dir).is_err() && Path::new(prev_dir).exists() {
+                    record.stale_ue4ss_dirs.push(prev_dir.clone());
+                    changed = true;
+                }
             }
         }
     }
@@ -632,7 +645,7 @@ fn restore_record(record: &DeployRecord) -> bool {
             _ => all_ok = false,
         }
     }
-    if let Some(dir) = &record.ue4ss_mod_dir {
+    for dir in record.ue4ss_mod_dir.iter().chain(record.stale_ue4ss_dirs.iter()) {
         if Path::new(dir).exists() && std::fs::remove_dir_all(dir).is_err() {
             all_ok = false;
         }
