@@ -573,6 +573,13 @@ fn patch_uasset_serial_size(
     }
     // Single-export packages: fall back to export 0 if the range probe missed
     // (e.g. a tiny rounding in how the body offset is computed upstream).
+    // SAFE ONLY because these cooked texture packages are single-export: with one
+    // export, "export 0" is unambiguously the texture. For a MULTI-export package
+    // a region-probe miss would silently target export 0 (possibly the wrong one);
+    // the pre-patch SerialSize sanity check below (byte-located == parsed) is the
+    // backstop -- it would still verify we patched a real, correctly-sized field,
+    // but it cannot prove export 0 is the texture. If multi-export texture packages
+    // ever appear here, the probe must hit (no unwrap_or fallback).
     let target = target.unwrap_or(0);
     if target >= export_count {
         return Err(corrupt("target export index out of range"));
@@ -823,5 +830,128 @@ mod tests {
             assert!(r > 200 && gch < 60 && bch > 200, "pixel not magenta: {r},{gch},{bch}");
         }
         eprintln!("OK: read back 256x256 PF_DXT5 magenta from the triplet");
+    }
+
+    /// Streamed-source sibling of `upscale_cursor_2x_roundtrips_through_zen`:
+    /// upscale a real *streamed* `PF_BC5` texture (mip0 in `.ubulk`) 2x and read
+    /// it back out of the produced triplet. This exercises the parts the inline
+    /// cursor case can't: the `T`-threshold inline/stream split (large new mips go
+    /// to `.ubulk`, the small tail stays inline) and the non-zero SerialSize patch
+    /// (`delta != 0`) end-to-end through retoc's zen builder.
+    ///
+    /// Note on the mount path: `repack_to_zen` -> `build_zen_asset` takes the
+    /// package name from the legacy `.uasset`'s OWN summary (preserved verbatim by
+    /// `build_legacy` on unpack), NOT from the cooked-dir layout. So the read-back
+    /// package name equals the original `/DatasmithContent/...` package path
+    /// regardless of where we lay the files; we mirror the cursor test's
+    /// `G1R/Content/<asset path>` layout purely for a tidy, cook-like pak path.
+    #[test]
+    #[ignore = "slow: unpack+repack against real container"]
+    fn upscale_streamed_water_2x_roundtrips_through_zen() {
+        let g = std::path::PathBuf::from(r"D:\SteamLibrary\steamapps\common\Gothic 1 Remake");
+        if !g.exists() {
+            eprintln!("skip");
+            return;
+        }
+        let utoc = crate::paths::main_container(&g).unwrap();
+        let usmap = crate::paths::usmap(&g).unwrap();
+        // 1024x1024 PF_BC5 normal map, streamed (mip0 in .ubulk), 11 mips.
+        let asset = "/DatasmithContent/Materials/Water/Textures/T_Water_N";
+        let tmp = std::env::temp_dir().join("gore-tex-upscale-streamed-rt");
+        let _ = std::fs::remove_dir_all(&tmp);
+        // Mount-path layout mirrors the cursor test (`G1R/Content/<asset path>`).
+        // The package name is recovered from the .uasset summary, not this path.
+        let cooked = tmp.join("G1R/Content/DatasmithContent/Materials/Water/Textures");
+        std::fs::create_dir_all(&cooked).unwrap();
+        let uasset = crate::container::unpack_asset(&utoc, &usmap, asset, &cooked).unwrap();
+        let ua = std::fs::read(&uasset).unwrap();
+        let ue = std::fs::read(uasset.with_extension("uexp")).unwrap();
+        let ub = std::fs::read(uasset.with_extension("ubulk")).unwrap_or_default();
+
+        // Confirm the source really is the streamed BC5 texture we expect.
+        let src_pd = PlatformData::parse(&ua, &ue, &ub).unwrap();
+        assert_eq!(src_pd.size_x, 1024, "source SizeX");
+        assert_eq!(src_pd.size_y, 1024, "source SizeY");
+        assert_eq!(src_pd.format, "PF_BC5", "source format");
+        assert!(
+            src_pd.mips.iter().any(|m| !m.inline),
+            "source must stream at least one mip (this exercises the T split)"
+        );
+
+        // New content: a 2048x2048 solid RED RGBA, encoded to PF_BC5. BC5 only
+        // carries R,G; red => R high, G low after decode.
+        let (w, h) = (2048u32, 2048u32);
+        let rgba: Vec<u8> = (0..w * h).flat_map(|_| [255u8, 0, 0, 255]).collect();
+        let mips = crate::encode::encode_mips(&rgba, w, h, "PF_BC5").unwrap();
+        let (na, ne, nb) = replace_texture(&ua, &ue, &ub, w, h, mips).unwrap();
+
+        // SerialSize patch must have moved (delta != 0): the region grew with the
+        // larger dims. Surface the actual delta for the report.
+        let old_region_len = src_pd.region.end - src_pd.region.start;
+        let new_pd = PlatformData::parse(&na, &ne, &nb).unwrap();
+        let new_region_len = new_pd.region.end - new_pd.region.start;
+        let delta = new_region_len as i64 - old_region_len as i64;
+        assert_ne!(delta, 0, "upscale must change the platform-data region length");
+        // The upscaled .ubulk is large (2048x2048 BC5 mip0 alone is ~4MB).
+        assert!(nb.len() > 4_000_000, "expected a large streamed .ubulk, got {}", nb.len());
+        eprintln!(
+            "region delta = {delta} (old {old_region_len} -> new {new_region_len}); .ubulk = {} bytes",
+            nb.len()
+        );
+
+        std::fs::write(&uasset, &na).unwrap();
+        std::fs::write(uasset.with_extension("uexp"), &ne).unwrap();
+        if nb.is_empty() {
+            let _ = std::fs::remove_file(uasset.with_extension("ubulk"));
+        } else {
+            std::fs::write(uasset.with_extension("ubulk"), &nb).unwrap();
+        }
+
+        let out = tmp.join("out");
+        std::fs::create_dir_all(&out).unwrap();
+        let triplet =
+            crate::container::repack_to_zen(&tmp, "WaterUpscaleTest_P", &out, &g).unwrap();
+        for p in &triplet {
+            assert!(p.exists() && std::fs::metadata(p).unwrap().len() > 0);
+        }
+
+        // Copy global.* next to the produced triplet so the composite store has
+        // the script-object table to convert zen->legacy on read-back.
+        let game_paks = g.join("G1R/Content/Paks");
+        for ext in ["utoc", "ucas", "pak"] {
+            let src = game_paks.join(format!("global.{ext}"));
+            if src.exists() {
+                std::fs::copy(&src, out.join(format!("global.{ext}"))).unwrap();
+            }
+        }
+
+        let readback_dir = tmp.join("readback");
+        let _ = std::fs::remove_dir_all(&readback_dir);
+        std::fs::create_dir_all(&readback_dir).unwrap();
+        let rb_uasset =
+            crate::container::unpack_asset(&triplet[0], &usmap, asset, &readback_dir).unwrap();
+        let rb = crate::decode::parse(
+            &std::fs::read(&rb_uasset).unwrap(),
+            &std::fs::read(rb_uasset.with_extension("uexp")).unwrap(),
+            &std::fs::read(rb_uasset.with_extension("ubulk")).unwrap_or_default(),
+            &std::fs::read(&usmap).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(rb.width, 2048, "width should be 2048 after upscale");
+        assert_eq!(rb.height, 2048, "height should be 2048 after upscale");
+        assert_eq!(rb.format, "PF_BC5", "format should be preserved");
+
+        // BC5 decode reconstructs R,G (B=0, A=255). Red => R high, G low. Sample a
+        // few packed 0xAARRGGBB pixels.
+        let px = crate::decode::to_rgba8(&rb).unwrap();
+        assert_eq!(px.len(), (w * h) as usize, "pixel count != 2048*2048");
+        for idx in [0usize, px.len() / 2, px.len() - 1] {
+            let p = px[idx];
+            let r = (p >> 16) & 0xff;
+            let gch = (p >> 8) & 0xff;
+            assert!(r >= 248, "R not high (not red): {r} at idx {idx}");
+            assert!(gch <= 8, "G not low (not red): {gch} at idx {idx}");
+        }
+        eprintln!("OK: read back 2048x2048 PF_BC5 red from the streamed-upscale triplet (delta={delta})");
     }
 }
