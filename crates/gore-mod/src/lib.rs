@@ -452,8 +452,12 @@ fn commit_new(plan: &DeployPlan, record: &mut DeployRecord, undo: &mut Undo) -> 
         let staging = staging_dir(dst);
         let _ = std::fs::remove_dir_all(&staging);
         // If this copy fails, `dst` (a previous mod) is untouched and the undo is empty, so
-        // rollback won't delete it.
-        copy_dir(src, &staging)?;
+        // rollback won't delete it. Clean up the partial staging dir so UE4SS can't pick it up
+        // as a stray enabled mod.
+        if let Err(e) = copy_dir(src, &staging) {
+            let _ = std::fs::remove_dir_all(&staging);
+            return Err(e);
+        }
         if dst.exists() {
             // Move the old mod aside (atomic), then swap the staged copy in. The old dir is kept
             // (via the undo) until the whole deploy commits; on any failure it is moved back.

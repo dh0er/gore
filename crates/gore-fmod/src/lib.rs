@@ -306,11 +306,17 @@ pub fn parse_fsb5(b: &[u8]) -> Result<Fsb5, String> {
         } else {
             raws[i + 1].data_off - r.data_off
         };
-        let name = if name_tbl_size > 0 {
-            let rel = u32_le(b, name_tbl + 4 * i) as usize;
-            read_cstr(&b[name_tbl + rel..])
+        // Bounds-check the name-table offset array and the string offset before reading, so a
+        // corrupt/truncated bank yields a synthesized name instead of an out-of-range panic.
+        let name = if name_tbl_size > 0 && name_tbl + 4 * i + 4 <= b.len() {
+            let start = name_tbl + u32_le(b, name_tbl + 4 * i) as usize;
+            if start <= b.len() {
+                read_cstr(&b[start..])
+            } else {
+                format!("{i:04}")
+            }
         } else {
-            format!("{:04}", i)
+            format!("{i:04}")
         };
         samples.push(Fsb5Sample {
             name,
