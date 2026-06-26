@@ -260,6 +260,14 @@ pub struct DeployRecord {
 
 const RECORD_NAME: &str = "gore-mod.deployed.json";
 
+/// Absolutize the game root so every path derived from it (live files, `*.gore-bak`, UE4SS dirs)
+/// and persisted in the deploy record is absolute. Otherwise a deploy from the install dir with a
+/// relative root (e.g. `--game .`) would serialize relative paths, and a later undeploy from a
+/// different working directory would resolve them against the wrong tree.
+fn abs_root(root: &Path) -> PathBuf {
+    std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf())
+}
+
 /// Canonical install root for the deploy record. `resolve_game_paths` accepts both the install
 /// dir and its `G1R` child, so normalize to the install dir (the parent of `G1R`) — otherwise a
 /// deploy via `.../G1R` and an undeploy via the Steam-detected parent would use different record
@@ -298,6 +306,9 @@ pub fn deploy(bundle_dir: &Path, game_root: &Path) -> Result<DeployRecord> {
     if manifest.components.is_empty() {
         return Err(ModError::Other("bundle has no components to deploy".into()));
     }
+    // Absolutize up front so every persisted path (record location, backups, UE4SS dirs) is
+    // absolute and resolvable from any later working directory.
+    let game_root = &abs_root(game_root);
     let gp = resolve_game_paths(game_root);
 
     // PHASE 1 — prepare (no game writes). The previous deployment is left intact if this fails.
@@ -361,8 +372,16 @@ pub fn deploy(bundle_dir: &Path, game_root: &Path) -> Result<DeployRecord> {
 
     // (d) committed — drop the kept-aside previous UE4SS mod, then retire the previous mod's
     //     footprint now (best-effort), pruning retired leftovers from the record.
-    undo.discard();
-    let (changed, baks_to_delete) = retire_leftovers(&leftovers, prev.as_ref(), &plan, &mut record);
+    let aside_failed = undo.discard();
+    let (mut changed, baks_to_delete) = retire_leftovers(&leftovers, prev.as_ref(), &plan, &mut record);
+    if let Some(old) = aside_failed {
+        // The moved-aside previous mod couldn't be removed — track it so undeploy cleans it up.
+        let s = old.display().to_string();
+        if !record.stale_ue4ss_dirs.contains(&s) {
+            record.stale_ue4ss_dirs.push(s);
+            changed = true;
+        }
+    }
     if changed {
         // Persist the pruned record BEFORE deleting the restored backups. Only once that write
         // succeeds is it safe to delete them — otherwise a failed rewrite would leave the on-disk
@@ -426,10 +445,18 @@ impl Undo {
         }
     }
 
-    fn discard(self) {
+    /// Commit: drop the previous UE4SS mod that was moved aside (`<mod>.gore-old`). Returns that
+    /// dir if it couldn't be removed (locked/permissions/AV) so the caller can track it — left
+    /// untracked it would keep loading under `ue4ss/Mods` with no record for undeploy to clean up.
+    fn discard(self) -> Option<PathBuf> {
         if let Some((old, _)) = &self.ue4ss_old {
-            let _ = std::fs::remove_dir_all(old);
+            if std::fs::remove_dir_all(old).is_err() && old.exists() {
+                // Best-effort: stop it loading meanwhile by removing its enable flag.
+                let _ = std::fs::remove_file(old.join("enabled.txt"));
+                return Some(old.clone());
+            }
         }
+        None
     }
 }
 
@@ -714,6 +741,8 @@ fn restore_record(record: &DeployRecord) -> bool {
 /// Undo the active gore-mod deployment at `game_root`: restore every backup and remove the
 /// UE4SS mod. No-op if nothing is deployed.
 pub fn undeploy(game_root: &Path) -> Result<Option<DeployRecord>> {
+    // Match deploy's absolutization so the record file is found regardless of the caller's cwd.
+    let game_root = &abs_root(game_root);
     let rp = record_path(game_root);
     let Ok(bytes) = std::fs::read(&rp) else {
         return Ok(None);
