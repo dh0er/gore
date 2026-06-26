@@ -814,9 +814,15 @@ fn retire_leftovers(
                     record.stale_ue4ss_dirs.remove(i);
                     changed = true;
                 }
-            } else if tracked.is_none() {
-                record.stale_ue4ss_dirs.push(prev_dir.clone());
-                changed = true;
+            } else {
+                // Couldn't remove it (locked/permissions). Best-effort: remove its enable flag so
+                // UE4SS doesn't keep loading the old mod alongside the new one meanwhile, then track
+                // it for a later undeploy to clean up.
+                let _ = std::fs::remove_file(Path::new(&prev_dir).join("enabled.txt"));
+                if tracked.is_none() {
+                    record.stale_ue4ss_dirs.push(prev_dir.clone());
+                    changed = true;
+                }
             }
         }
     }
