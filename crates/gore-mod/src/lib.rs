@@ -429,7 +429,14 @@ pub fn deploy(bundle_dir: &Path, game_root: &Path) -> Result<DeployRecord> {
     for (live, bytes) in &plan.writes {
         record.deployed_hashes.insert(live.display().to_string(), content_hash(bytes));
     }
-    let _ = write_record_file(game_root, &record);
+    // This write must be durable: without the hashes, a later Steam update couldn't be detected
+    // and undeploy could restore a stale backup over an updated asset. The undo is still live
+    // here, so on failure roll the whole deploy back rather than returning a half-recorded success.
+    if let Err(e) = write_record_file(game_root, &record) {
+        undo.rollback();
+        restore_record_file(game_root, prev_record_bytes.as_deref());
+        return Err(e);
+    }
 
     // (d) committed — drop the kept-aside previous UE4SS mod, then retire the previous mod's
     //     footprint now (best-effort), pruning retired leftovers from the record.

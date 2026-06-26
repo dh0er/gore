@@ -21,13 +21,21 @@ fn key_bytes(key: Option<String>) -> Vec<u8> {
     }
 }
 
-/// Read a bank's PRISTINE bytes: its `*.gore-bak` if a prior in-place replace left one, else
-/// the live file. Replacing always works from pristine, so repeated in-place replaces don't
-/// compound (a previously-replaced bank already has 2 FSB5 and would reject another inject).
+/// Read a bank's PRISTINE bytes. The live bank is the source of truth when it isn't injected yet
+/// (a single FSB5): that covers the first replace AND the case where a `restore` or a Steam
+/// update refreshed the live bank, so we never rebuild from a stale `*.gore-bak` and downgrade the
+/// updated audio. Only when the live bank is already injected (>1 FSB5) — i.e. a repeated in-place
+/// replace — do we fall back to the backup, which holds the true pristine to avoid compounding.
 fn read_pristine_bank(bank: &Path) -> Result<Vec<u8>> {
-    let bak = backup_path(bank);
-    let src = if bak.exists() { bak.as_path() } else { bank };
-    std::fs::read(src).with_context(|| format!("reading '{}'", src.display()))
+    let live = std::fs::read(bank).with_context(|| format!("reading '{}'", bank.display()))?;
+    let injected = gore_fmod::parse_bank(&live).map(|e| e.len() > 1).unwrap_or(false);
+    if injected {
+        let bak = backup_path(bank);
+        if bak.exists() {
+            return std::fs::read(&bak).with_context(|| format!("reading '{}'", bak.display()));
+        }
+    }
+    Ok(live)
 }
 
 /// Write `bytes` to `path` via a temp file + rename so a failed write never truncates the
