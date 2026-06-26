@@ -43,8 +43,12 @@ class ModFfi {
   Future<void> modDeploy(String bundleDir, String gameRoot) =>
       _call('mod_deploy', {'bundle_dir': bundleDir, 'game_root': gameRoot});
 
-  Future<void> modUndeploy(String gameRoot) =>
-      _call('mod_undeploy', {'game_root': gameRoot});
+  /// Undeploy the active mod. Returns true if a deployment was actually undone, false if nothing
+  /// was deployed (the FFI returns a null record in that case).
+  Future<bool> modUndeploy(String gameRoot) async {
+    final r = await _call('mod_undeploy', {'game_root': gameRoot});
+    return r['record'] != null;
+  }
 
   /// Auto-detect the game install via Steam; returns the exe path hint, or null.
   Future<String?> findGameExe() async {

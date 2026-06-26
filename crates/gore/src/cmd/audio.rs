@@ -84,7 +84,7 @@ pub fn extract(bank: PathBuf, out: PathBuf, sample: Option<String>, key: Option<
             }
         }
     }
-    println!("extracted {ok} ogg file(s) to {} ({skipped} skipped)", out.display());
+    println!("extracted {ok} wav file(s) to {} ({skipped} skipped)", out.display());
     Ok(())
 }
 

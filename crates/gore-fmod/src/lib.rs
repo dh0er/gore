@@ -127,6 +127,12 @@ pub fn parse_bank(b: &[u8]) -> Result<Vec<BankEntry>, String> {
     let mut out = Vec::with_capacity(banks);
     for i in 0..banks {
         let base = sndh_off + 4 + entry_size * i;
+        // `banks` is derived from the (untrusted) SNDH size; a truncated/corrupt bank could make
+        // an entry run past the buffer. Bounds-check before reading so a bad file returns a decode
+        // error instead of panicking the CLI/FFI.
+        if base + entry_size > b.len() {
+            return Err("SNDH entry out of bounds (truncated bank)".into());
+        }
         let o = u32_le(b, base) as usize;
         let s = if entry_size == 8 {
             u32_le(b, base + 4) as usize

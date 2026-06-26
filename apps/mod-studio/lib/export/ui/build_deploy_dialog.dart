@@ -81,8 +81,10 @@ class _BuildDeployDialogState extends ConsumerState<BuildDeployDialog> {
       });
 
   Future<void> _undeploy(String gameRoot) => _run(() async {
-        await _ffi.modUndeploy(gameRoot);
-        _set('Undeployed — original game files restored.');
+        final undone = await _ffi.modUndeploy(gameRoot);
+        _set(undone
+            ? 'Undeployed — original game files restored.'
+            : 'Nothing was deployed — no changes to undo.');
       });
 
   @override
