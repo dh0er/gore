@@ -178,12 +178,12 @@ enum AudioAction {
         #[arg(long)]
         key: Option<String>,
     },
-    /// Extract samples to Ogg Vorbis (.ogg) for listening/editing
+    /// Extract samples to WAV (.wav) for listening/editing
     Extract {
         /// Path to a .bank file
         #[arg(long)]
         bank: PathBuf,
-        /// Output directory for .ogg files
+        /// Output directory for .wav files
         #[arg(short = 'o', long)]
         out: PathBuf,
         /// A single sample name, or "all" (default)
