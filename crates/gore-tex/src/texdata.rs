@@ -434,13 +434,49 @@ pub fn replace_texture(
     }
     let format = orig.format.clone();
 
-    // 2. Validate the new mip pyramid against the new dims + format.
-    let want = expected_num_mips(new_w, new_h);
-    if new_mips.len() != want {
-        return Err(corrupt(&format!(
-            "new_mips has {} levels but {new_w}x{new_h} needs {want} (log2(max)+1)",
-            new_mips.len()
-        )));
+    // 2. Decide how many mips to emit by honoring the ORIGINAL texture's
+    //    mip-gen POLICY. `replace_texture` keeps the original unversioned
+    //    PROPERTY block (trailer) verbatim, and that block governs the engine's
+    //    mip policy (NoMipmaps / streaming). The cooked mip COUNT must stay
+    //    consistent with it, or the engine reads mip data out of bounds.
+    //
+    //    Rule (only the 1-vs-many distinction is honored):
+    //    * orig_n == 1  -> the texture shipped with NO mip chain (NoMipmaps,
+    //      e.g. UI textures like the hardware cursor). Emit a SINGLE mip at the
+    //      new size: `new_mips[0]` (mip0 at new_w x new_h), discard the rest.
+    //      NumMips = 1.
+    //    * orig_n > 1   -> the original had a real mip chain. Emit the FULL
+    //      pyramid for the new size. NumMips = new_mips.len().
+    //
+    //    Limitation: a texture that shipped with a PARTIAL/custom mip count
+    //    (rare) is approximated here as "full chain". Only the 1-vs-many split
+    //    is honored -- that is the distinction that governs the
+    //    NoMipmaps/streaming behavior that otherwise crashes the engine.
+    let orig_n = orig.mips.len();
+    let new_mips: Vec<Vec<u8>> = if orig_n == 1 {
+        // NoMipmaps: keep only mip0 at the new size.
+        new_mips.into_iter().take(1).collect()
+    } else {
+        new_mips
+    };
+
+    // 3. Validate the emitted mip set against the new dims + format. For the
+    //    single-mip case the validation set is just `[new_mips[0]]`.
+    if orig_n == 1 {
+        if new_mips.len() != 1 {
+            return Err(corrupt(&format!(
+                "NoMipmaps source needs exactly 1 new mip, got {}",
+                new_mips.len()
+            )));
+        }
+    } else {
+        let want = expected_num_mips(new_w, new_h);
+        if new_mips.len() != want {
+            return Err(corrupt(&format!(
+                "new_mips has {} levels but {new_w}x{new_h} needs {want} (log2(max)+1)",
+                new_mips.len()
+            )));
+        }
     }
     for (i, m) in new_mips.iter().enumerate() {
         let mip_w = (new_w >> i).max(1);
@@ -454,7 +490,7 @@ pub fn replace_texture(
         }
     }
 
-    // 3. Inline/stream policy: derive the threshold from the original split.
+    // 4. Inline/stream policy: derive the threshold from the original split.
     //    `stream_threshold = Some(T)` means "stream mips with max-dim >= T";
     //    `None` means "keep everything inline" (original was fully inline).
     // UE streams the *large* mips and inlines the small tail, so the boundary is
@@ -466,7 +502,7 @@ pub fn replace_texture(
         .map(|m| m.width.max(m.height))
         .min();
 
-    // 4. Build the new mip entries.
+    // 5. Build the new mip entries.
     let mut mips: Vec<MipEntry> = Vec::with_capacity(new_mips.len());
     for (i, data) in new_mips.into_iter().enumerate() {
         let mip_w = (new_w >> i).max(1);
@@ -484,7 +520,7 @@ pub fn replace_texture(
         });
     }
 
-    // 5. Assemble the new PlatformData and serialize the new region + ubulk.
+    // 6. Assemble the new PlatformData and serialize the new region + ubulk.
     let new_pd = PlatformData {
         size_x: new_w,
         size_y: new_h,
@@ -501,12 +537,12 @@ pub fn replace_texture(
     let old_region_len = orig.region.end - orig.region.start;
     let delta: i64 = new_region.len() as i64 - old_region_len as i64;
 
-    // 6. new_uexp = uexp with [region] replaced (the tail incl. the package
+    // 7. new_uexp = uexp with [region] replaced (the tail incl. the package
     //    magic shifts by delta automatically).
     let mut new_uexp = uexp.to_vec();
     new_uexp.splice(orig.region.clone(), new_region);
 
-    // 7. new_uasset = uasset with the texture export's SerialSize patched by
+    // 8. new_uasset = uasset with the texture export's SerialSize patched by
     //    delta (no-op when delta == 0, i.e. a same-dims replace).
     let new_uasset = patch_uasset_serial_size(uasset, uexp, &orig.region, delta)?;
 
@@ -819,6 +855,18 @@ mod tests {
         assert_eq!(rb.height, 256, "height should be 256 after upscale");
         assert_eq!(rb.format, "PF_DXT5", "format should be preserved");
 
+        // The cursor shipped NoMipmaps (orig_n == 1), so the upscaled texture
+        // must ALSO carry a single cooked mip -- re-parse the read-back triplet's
+        // PlatformData and assert mips.len() == 1. (This is the crash fix: a full
+        // mip pyramid here diverges from the verbatim NoMipmaps property block.)
+        let rb_pd = PlatformData::parse(
+            &std::fs::read(&rb_uasset).unwrap(),
+            &std::fs::read(rb_uasset.with_extension("uexp")).unwrap(),
+            &std::fs::read(rb_uasset.with_extension("ubulk")).unwrap_or_default(),
+        )
+        .unwrap();
+        assert_eq!(rb_pd.mips.len(), 1, "NoMipmaps source must stay single-mip after upscale");
+
         // `to_rgba8` returns packed 0xAARRGGBB u32s. Spot-check a few are ~magenta.
         let px = crate::decode::to_rgba8(&rb).unwrap();
         assert_eq!(px.len(), (w * h) as usize, "pixel count != 256*256");
@@ -877,6 +925,12 @@ mod tests {
             src_pd.mips.iter().any(|m| !m.inline),
             "source must stream at least one mip (this exercises the T split)"
         );
+        // This source has a real mip chain (orig_n > 1), so the mip-gen policy
+        // branch must emit the FULL pyramid for the new dims (NOT single-mip).
+        assert!(
+            src_pd.mips.len() > 1,
+            "water source must have a full mip chain to exercise the orig_n>1 branch"
+        );
 
         // New content: a 2048x2048 solid RED RGBA, encoded to PF_BC5. BC5 only
         // carries R,G; red => R high, G low after decode.
@@ -892,6 +946,12 @@ mod tests {
         let new_region_len = new_pd.region.end - new_pd.region.start;
         let delta = new_region_len as i64 - old_region_len as i64;
         assert_ne!(delta, 0, "upscale must change the platform-data region length");
+        // orig_n > 1: the rewrite must emit the FULL pyramid for the new dims.
+        assert_eq!(
+            new_pd.mips.len(),
+            expected_num_mips(w, h),
+            "chain source must keep a full mip pyramid after upscale"
+        );
         // The upscaled .ubulk is large (2048x2048 BC5 mip0 alone is ~4MB).
         assert!(nb.len() > 4_000_000, "expected a large streamed .ubulk, got {}", nb.len());
         eprintln!(
