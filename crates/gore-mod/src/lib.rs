@@ -264,13 +264,17 @@ pub struct DeployRecord {
     pub deployed_hashes: BTreeMap<String, String>,
 }
 
-/// Fast content fingerprint for drift detection (not cryptographic — only distinguishes our own
-/// deployed bytes from a later external overwrite).
+/// Stable content fingerprint for drift detection (not cryptographic — only distinguishes our own
+/// deployed bytes from a later external overwrite). FNV-1a 64-bit: a fixed algorithm whose output
+/// never changes across Rust/tool versions, unlike `DefaultHasher` (SipHash), so a record written
+/// by one build is read back consistently by a later one.
 fn content_hash(bytes: &[u8]) -> String {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    bytes.hash(&mut h);
-    format!("{:016x}", h.finish())
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325; // FNV offset basis
+    for &b in bytes {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3); // FNV prime
+    }
+    format!("{h:016x}")
 }
 
 /// Whether `live` should be restored from its backup: true unless we recorded what we deployed
