@@ -525,6 +525,17 @@ impl Writeable for Toc {
         let mut container_flags = EIoContainerFlags::empty();
 
         container_flags |= EIoContainerFlags::Indexed;
+        // UE gates the compressed-block decode path on this container-level flag.
+        // Set it whenever ANY block was actually Oodle-compressed (method != 0),
+        // matching the base game's convention (Indexed|Compressed = 9). A purely
+        // raw container keeps only Indexed (8).
+        if self
+            .compression_blocks
+            .iter()
+            .any(|b| b.get_compression_method_index() != 0)
+        {
+            container_flags |= EIoContainerFlags::Compressed;
+        }
         let mut directory_index_buffer = vec![];
         self.directory_index.ser(&mut Cursor::new(&mut directory_index_buffer))?;
         // TODO encrypt directory index

@@ -720,6 +720,33 @@ mod tests {
             std::fs::metadata(&triplet[2]).unwrap().len(),
         );
 
+        // 2b. Re-dump the regenerated TOC and prove both byte-level fixes landed:
+        //     container_flags == 9 (Indexed|Compressed) AND every compressed-block
+        //     offset is 16-aligned in the .ucas. Reuses retoc's real Toc reader.
+        let (flags, comp_offsets) =
+            retoc::iostore_writer::dump_compressed_layout(&triplet[0]).unwrap();
+        eprintln!(
+            "container_flags={flags} (expect 9); {} compressed blocks",
+            comp_offsets.len()
+        );
+        assert_eq!(flags, 9, "container_flags must be Indexed|Compressed (9)");
+        assert!(
+            !comp_offsets.is_empty(),
+            "expected at least one compressed block to exercise the flag+alignment fixes"
+        );
+        for (i, off) in comp_offsets.iter().enumerate() {
+            assert_eq!(
+                off % 0x10,
+                0,
+                "compressed block {i} offset {off:#x} is not 16-aligned"
+            );
+        }
+        eprintln!(
+            "OK: container_flags=9 and all {} compressed block offsets 16-aligned (e.g. {:#x?})",
+            comp_offsets.len(),
+            &comp_offsets[..comp_offsets.len().min(4)]
+        );
+
         // 3. read the asset back out of the freshly-built triplet and decode it.
         //    Point `unpack_asset` at the produced `.utoc`: it opens the parent dir
         //    as a composite store, but the global script objects come from the

@@ -94,8 +94,19 @@ impl IoStoreWriter {
 
             self.cas_stream.write_all(payload)?;
             let compressed_size = payload.len() as u32;
+            // The block entry records the real (unpadded) compressed size and an
+            // offset that is 16-aligned (the base game's convention). UE mis-reads
+            // every block after the first if offsets are not 16-aligned, so pad the
+            // cas stream with zero bytes up to the next 16-byte boundary and advance
+            // `offset` to the aligned value. The first block already lands on an
+            // aligned offset; padding keeps every subsequent block aligned too.
             self.toc.compression_blocks.push(FIoStoreTocCompressedBlockEntry::new(offset, compressed_size, uncompressed_size, compression_method_index));
-            offset += compressed_size as u64;
+            let aligned_size = align_usize(payload.len(), 16);
+            let pad = aligned_size - payload.len();
+            if pad > 0 {
+                self.cas_stream.write_all(&vec![0u8; pad])?;
+            }
+            offset += aligned_size as u64;
         }
         let hash = hasher.finalize();
         // UE's FIoStoreTocEntryMeta::Compressed flag marks chunks that have at
@@ -149,6 +160,26 @@ impl IoStoreWriter {
         self.toc_stream.ser(&self.toc)?;
         Ok(())
     }
+}
+
+/// Read a written `.utoc` back and return its container-level flags plus, for
+/// every compressed block (method index != 0), its stored `.ucas` offset. Used
+/// by callers (and tests) to assert that a compressed container is flagged
+/// `Compressed` and that every compressed block offset is 16-aligned. The
+/// per-block accessors are `pub(crate)`, so this lives in retoc where it can
+/// reach them.
+pub fn dump_compressed_layout<P: AsRef<Path>>(toc_path: P) -> Result<(u8, Vec<u64>)> {
+    use crate::ser::ReadExt;
+    let bytes = fs::read(toc_path.as_ref())?;
+    let toc: Toc = Cursor::new(bytes).de()?;
+    let flags = toc.container_flags.bits();
+    let compressed_offsets = toc
+        .compression_blocks
+        .iter()
+        .filter(|b| b.get_compression_method_index() != 0)
+        .map(|b| b.get_offset())
+        .collect();
+    Ok((flags, compressed_offsets))
 }
 
 #[cfg(test)]
