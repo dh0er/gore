@@ -77,7 +77,10 @@ Future<ModProject> loadProject(String path) async {
         continue;
       }
     }
-    extractedAudio.add(a); // unsafe or external path — left as-is, not extracted
+    // Unsafe (absolute/'..'/outside assets) or missing archive entry: DROP it. A saved project is
+    // self-contained with audio embedded under assets/audio/, so keeping an external/absolute path
+    // would let a crafted .goremod pull arbitrary local files into a later save/bundle, or break
+    // the build on a missing file. Silently skipping is safer than preserving it.
   }
 
   return project.copyWith(audio: extractedAudio);
