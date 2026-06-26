@@ -882,54 +882,54 @@ fn bak_path(live: &Path) -> PathBuf {
     PathBuf::from(s)
 }
 
-/// Restore every backup in `record` (copy `*.gore-bak` → live, delete the backup) and remove
-/// the deployed UE4SS mod. Best-effort; used by both undeploy and deploy-rollback.
-/// Undeploy: restore every live file from its backup and remove the UE4SS mod. Returns true
-/// only if EVERY file was restored — a missing recorded backup, a failed read, or a failed
-/// write all count as failure, and the surviving `*.gore-bak` files are kept so undeploy can be
-/// retried. (Deploy rollback uses [`Undo`] instead, to restore the exact prior state.)
-fn restore_record(record: &DeployRecord) -> bool {
-    // Pass 1: restore every live file from its backup and remove the UE4SS mod, WITHOUT deleting
-    // any backup yet. If anything fails, every *.gore-bak is kept so a retry can still recover.
+/// Undeploy: restore every live file from its backup and remove the UE4SS mod. Each entry is
+/// finalized INDEPENDENTLY — restore (or skip-if-drifted) AND delete its backup as a unit, then
+/// drop it from `record` — so a later locked backup can't leave earlier, already-deleted backups
+/// dangling in a retained record. Returns true only if EVERYTHING was handled; otherwise the
+/// still-pending entries remain in `record` so the caller can persist a pruned record and retry.
+/// (Deploy rollback uses [`Undo`] instead, to restore the exact prior state.)
+fn restore_record(record: &mut DeployRecord) -> bool {
     let mut all_ok = true;
-    for (live_s, bak, _created) in &record.backups {
-        let (live, bak) = (Path::new(live_s), Path::new(bak));
+    let backups = std::mem::take(&mut record.backups);
+    for (live_s, bak_s, created) in backups {
+        let (live, bak) = (Path::new(&live_s), Path::new(&bak_s));
         // If the live file was updated/verified externally since we deployed (e.g. Steam), the
-        // recorded backup is stale — restoring it would downgrade the newer asset. Skip the
-        // restore but DELETE the stale backup. The deletion must succeed: if the stale backup
-        // lingers (locked/read-only) and undeploy still drops the record, a future deploy (now
-        // without a hash record) would treat that pre-update backup as pristine and downgrade the
-        // updated asset. So a failed deletion is an undeploy failure — keep the record for retry.
-        if !safe_to_restore(live_s, &record.deployed_hashes) {
-            if std::fs::remove_file(bak).is_err() && bak.exists() {
-                all_ok = false;
+        // recorded backup is stale — restoring it would downgrade the newer asset. Just delete the
+        // stale backup (the deletion must succeed; a lingering backup with no record could later be
+        // treated as pristine). Otherwise restore the live file from the backup, then delete it.
+        let done = if !safe_to_restore(&live_s, &record.deployed_hashes) {
+            std::fs::remove_file(bak).is_ok() || !bak.exists()
+        } else if !bak.exists() {
+            false // recorded backup is gone — this file can't be restored
+        } else {
+            match std::fs::read(bak) {
+                Ok(bytes) if atomic_write(live, &bytes).is_ok() => {
+                    std::fs::remove_file(bak).is_ok() || !bak.exists()
+                }
+                _ => false,
             }
-            continue;
-        }
-        if !bak.exists() {
-            all_ok = false; // recorded backup is gone — this file can't be restored
-            continue;
-        }
-        match std::fs::read(bak) {
-            Ok(bytes) if atomic_write(live, &bytes).is_ok() => {}
-            _ => all_ok = false,
-        }
-    }
-    for dir in record.ue4ss_mod_dir.iter().chain(record.stale_ue4ss_dirs.iter()) {
-        if Path::new(dir).exists() && std::fs::remove_dir_all(dir).is_err() {
+        };
+        if done {
+            record.deployed_hashes.remove(&live_s);
+        } else {
+            record.backups.push((live_s, bak_s, created)); // keep for a retry
             all_ok = false;
         }
     }
-    // Pass 2: only once everything was restored do we drop the backups. A deletion that fails
-    // (locked/read-only) counts as failure so the record is KEPT for retry — an orphaned backup
-    // with no deploy record could otherwise be treated as pristine by a later deploy and downgrade
-    // an updated game file.
-    if all_ok {
-        for (_, bak, _) in &record.backups {
-            let bak = Path::new(bak);
-            if std::fs::remove_file(bak).is_err() && bak.exists() {
-                all_ok = false;
-            }
+    if let Some(dir) = record.ue4ss_mod_dir.clone() {
+        if !Path::new(&dir).exists() || std::fs::remove_dir_all(&dir).is_ok() {
+            record.ue4ss_mod_dir = None;
+        } else {
+            all_ok = false;
+        }
+    }
+    let stale = std::mem::take(&mut record.stale_ue4ss_dirs);
+    for dir in stale {
+        if !Path::new(&dir).exists() || std::fs::remove_dir_all(&dir).is_ok() {
+            // cleaned — drop it
+        } else {
+            record.stale_ue4ss_dirs.push(dir); // keep for a retry
+            all_ok = false;
         }
     }
     all_ok
@@ -944,15 +944,19 @@ pub fn undeploy(game_root: &Path) -> Result<Option<DeployRecord>> {
     let Ok(bytes) = std::fs::read(&rp) else {
         return Ok(None);
     };
-    let record: DeployRecord = serde_json::from_slice(&bytes)?;
-    if restore_record(&record) {
+    let mut record: DeployRecord = serde_json::from_slice(&bytes)?;
+    if restore_record(&mut record) {
         let _ = std::fs::remove_file(&rp);
-        Ok(Some(record))
+        // Return the original record (pre-pruning) for reporting.
+        Ok(serde_json::from_slice(&bytes).ok())
     } else {
-        // Keep the record (and the surviving backups) so the restore can be retried.
+        // Persist the PRUNED record so a retry only processes what's still pending — entries whose
+        // file was restored and backup deleted are not re-attempted (and won't fail the next run on
+        // a now-missing backup). Then report failure so the user can resolve the lock and retry.
+        let _ = write_record_file(game_root, &record);
         Err(ModError::Other(
-            "some game files could not be restored (locked or unwritable); backups and the \
-             deploy record were kept — close the game and retry undeploy"
+            "some game files could not be restored (locked or unwritable); the remaining backups \
+             and a pruned deploy record were kept — close the game and retry undeploy"
                 .into(),
         ))
     }

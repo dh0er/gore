@@ -250,6 +250,20 @@ pub fn restore(bank: PathBuf) -> Result<()> {
     if !bak.exists() {
         bail!("no backup found at '{}'", bak.display());
     }
+    // If the live bank isn't injected (a single FSB5), it is already the current pristine — e.g.
+    // Steam verified/updated it since we backed it up. Restoring the stale backup would downgrade
+    // the newer file, so just drop the stale backup instead.
+    let live = std::fs::read(&bank).with_context(|| format!("reading '{}'", bank.display()))?;
+    let live_injected = gore_fmod::parse_bank(&live).map(|e| e.len() > 1).unwrap_or(false);
+    if !live_injected {
+        let _ = std::fs::remove_file(&bak);
+        println!(
+            "{} is not injected (already pristine); removed stale backup {}",
+            bank.display(),
+            bak.display()
+        );
+        return Ok(());
+    }
     let bytes = std::fs::read(&bak).with_context(|| format!("reading '{}'", bak.display()))?;
     write_atomic(&bank, &bytes)?;
     // Drop the backup now that the bank is back to pristine: keeping it would let it go stale
