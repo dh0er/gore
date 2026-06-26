@@ -12,7 +12,7 @@ class AppLocalizationsPl extends AppLocalizations {
   String get tabItems => 'Items';
 
   @override
-  String get tabOverrides => 'Overrides';
+  String get tabOverrides => 'Changes';
 
   @override
   String get tabSettings => 'Settings';

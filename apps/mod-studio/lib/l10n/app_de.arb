@@ -1,7 +1,7 @@
 {
   "@@locale": "de",
   "tabItems": "Items",
-  "tabOverrides": "Overrides",
+  "tabOverrides": "Änderungen",
   "tabSettings": "Einstellungen",
   "gameExecutable": "Spiel-Programmdatei",
   "gameExecutableSubtitle": "Pfad zur .exe des Spiels. Wird zur automatischen Erkennung der lokalisierten Texte und der Spielinstallation genutzt.",

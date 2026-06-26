@@ -127,6 +127,117 @@ enum Commands {
         #[arg(short = 'o', long)]
         out: PathBuf,
     },
+    /// Read/replace audio in the game's encrypted FMOD sound banks (.bank)
+    Audio {
+        #[command(subcommand)]
+        action: AudioAction,
+    },
+    /// Build / deploy / undeploy a unified mod bundle (overrides + loc + audio)
+    Mod {
+        #[command(subcommand)]
+        action: ModAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum ModAction {
+    /// Build a bundle dir from a BuildSpec JSON
+    Build {
+        /// Path to the build spec JSON
+        #[arg(long)]
+        spec: PathBuf,
+        /// Output directory (the bundle is written to <out>/<mod-name>)
+        #[arg(short = 'o', long)]
+        out: PathBuf,
+    },
+    /// Deploy a built bundle to the game install
+    Deploy {
+        /// Path to the bundle directory
+        #[arg(long)]
+        bundle: PathBuf,
+        /// Game root (the folder containing G1R/)
+        #[arg(long)]
+        game: PathBuf,
+    },
+    /// Undeploy the active mod (restore backups)
+    Undeploy {
+        /// Game root (the folder containing G1R/)
+        #[arg(long)]
+        game: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
+enum AudioAction {
+    /// List a bank's samples (name, codec, sample rate, channels, duration)
+    List {
+        /// Path to a .bank file
+        #[arg(long)]
+        bank: PathBuf,
+        /// Override the bank encryption key (defaults to the Gothic 1 Remake key)
+        #[arg(long)]
+        key: Option<String>,
+    },
+    /// Extract samples to WAV (.wav) for listening/editing
+    Extract {
+        /// Path to a .bank file
+        #[arg(long)]
+        bank: PathBuf,
+        /// Output directory for .wav files
+        #[arg(short = 'o', long)]
+        out: PathBuf,
+        /// A single sample name, or "all" (default)
+        #[arg(long)]
+        sample: Option<String>,
+        /// Override the bank encryption key
+        #[arg(long)]
+        key: Option<String>,
+    },
+    /// Replace samples with new audio (WAV) via PCM injection
+    Replace {
+        /// Path to map JSON: { "SampleName": "path/to/new.wav", ... } (WAV paths relative to it)
+        #[arg(long)]
+        map: PathBuf,
+        /// Path to the .bank to modify
+        #[arg(long)]
+        bank: PathBuf,
+        /// Output .bank (default: overwrite --bank in place, backing up to *.gore-bak)
+        #[arg(short = 'o', long)]
+        out: Option<PathBuf>,
+        /// Override the bank encryption key
+        #[arg(long)]
+        key: Option<String>,
+    },
+    /// Restore a bank from its *.gore-bak backup
+    Restore {
+        /// Path to the .bank to restore
+        #[arg(long)]
+        bank: PathBuf,
+    },
+    /// Build a shareable audio patch zip (manifest + replacement WAVs, no game audio)
+    ExportPatch {
+        /// Path to map JSON: { "SampleName": "path/to/new.wav", ... }
+        #[arg(long)]
+        map: PathBuf,
+        /// Output patch .zip
+        #[arg(short = 'o', long)]
+        out: PathBuf,
+    },
+    /// Apply a patch zip (from export-patch) to a bank
+    ApplyPatch {
+        /// Path to the patch .zip
+        #[arg(long)]
+        patch: PathBuf,
+        /// Path to the .bank to modify
+        #[arg(long)]
+        bank: PathBuf,
+        /// Output .bank (default: overwrite --bank in place, backing up to *.gore-bak)
+        #[arg(short = 'o', long)]
+        out: Option<PathBuf>,
+        /// Override the bank encryption key
+        #[arg(long)]
+        key: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -189,6 +300,19 @@ fn main() {
         Commands::DeployShared { src, game } => cmd::deploy_shared::run(src, game),
         Commands::As { cmd } => cmd::as_cache::run(cmd),
         Commands::Package { mod_dir, out } => cmd::package::run(mod_dir, out),
+        Commands::Audio { action } => match action {
+            AudioAction::List { bank, key } => cmd::audio::list(bank, key),
+            AudioAction::Extract { bank, out, sample, key } => cmd::audio::extract(bank, out, sample, key),
+            AudioAction::Replace { map, bank, out, key } => cmd::audio::replace(map, bank, out, key),
+            AudioAction::Restore { bank } => cmd::audio::restore(bank),
+            AudioAction::ExportPatch { map, out } => cmd::audio::export_patch(map, out),
+            AudioAction::ApplyPatch { patch, bank, out, key } => cmd::audio::apply_patch(patch, bank, out, key),
+        },
+        Commands::Mod { action } => match action {
+            ModAction::Build { spec, out } => cmd::modcmd::build(spec, out),
+            ModAction::Deploy { bundle, game } => cmd::modcmd::deploy(bundle, game),
+            ModAction::Undeploy { game } => cmd::modcmd::undeploy(game),
+        },
     };
     if let Err(e) = result {
         eprintln!("error: {e:#}");

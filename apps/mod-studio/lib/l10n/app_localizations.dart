@@ -125,7 +125,7 @@ abstract class AppLocalizations {
   /// No description provided for @tabOverrides.
   ///
   /// In en, this message translates to:
-  /// **'Overrides'**
+  /// **'Changes'**
   String get tabOverrides;
 
   /// No description provided for @tabSettings.

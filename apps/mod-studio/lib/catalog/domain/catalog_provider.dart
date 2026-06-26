@@ -15,24 +15,43 @@ import 'field_schema.dart';
 final catalogProvider = FutureProvider<List<CatalogItem>>((ref) async {
   final catalogJson = await rootBundle.loadString('assets/item_catalog.json');
 
-  final dumpPath = ref.watch(dumpPathProvider);
-  final String modelJson;
-  if (dumpPath != null) {
-    modelJson = await File(dumpPath).readAsString();
-  } else {
-    modelJson = await rootBundle.loadString('assets/model.json');
-  }
-
   final catalogList = (jsonDecode(catalogJson) as List)
       .whereType<Map<String, Object?>>()
       .toList();
 
   // model.json shape:
-  // { "classes": { "ItFo_Apple": { "fields": [ { "name": ..., "type": ... } ] } } }
-  final modelClasses = (
-    (jsonDecode(modelJson) as Map<String, Object?>?)?['classes']
-        as Map<String, Object?>?
-  ) ?? {};
+  // { "classes": { "ItFo_Apple": { "fields": [ { "name", "type", "default" } ] } } }
+  //
+  // The bundled assets/model.json is the COMPLETE base (schema + real default
+  // values for every catalog id). A loaded game-data dump (dumpPathProvider) is
+  // an OPTIONAL refresh from the user's installed game version: it OVERLAYS the
+  // bundle per class, but only for classes it actually carries fields for — so a
+  // missing, unreadable, partial, or empty dump (a gore-dump run that found no
+  // CDOs writes `{"classes":{}}`) can never strip a class's fields.
+  final bundled = await rootBundle.loadString('assets/model.json');
+  final modelClasses = <String, Object?>{
+    ...?(jsonDecode(bundled) as Map<String, Object?>?)?['classes']
+        as Map<String, Object?>?,
+  };
+
+  final dumpPath = ref.watch(dumpPathProvider);
+  if (dumpPath != null) {
+    try {
+      final dumpStr = await File(dumpPath).readAsString();
+      final dumpClasses = (jsonDecode(dumpStr) as Map<String, Object?>?)?['classes']
+          as Map<String, Object?>?;
+      if (dumpClasses != null) {
+        dumpClasses.forEach((id, cls) {
+          final fields = (cls as Map<String, Object?>?)?['fields'] as List?;
+          if (fields != null && fields.isNotEmpty) {
+            modelClasses[id] = cls; // overlay only classes the dump really has
+          }
+        });
+      }
+    } catch (_) {
+      // unreadable/invalid dump -> keep the bundled base
+    }
+  }
 
   return [
     for (final entry in catalogList)

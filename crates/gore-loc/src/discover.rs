@@ -75,6 +75,28 @@ pub fn find_lcache() -> Option<PathBuf> {
     None
 }
 
+/// Full auto-detect of the game install root through Steam. `None` if not found.
+pub fn find_game_root() -> Option<PathBuf> {
+    for lib in steam_libraries() {
+        let root = lib.join("steamapps").join("common").join(GAME_FOLDER);
+        if root.is_dir() {
+            return Some(root);
+        }
+    }
+    None
+}
+
+/// The game executable path under the auto-detected root (whether or not the file
+/// exists on disk), used as the saved game-path hint. `None` if the root isn't found.
+pub fn find_game_exe() -> Option<PathBuf> {
+    find_game_root().map(|root| {
+        root.join("G1R")
+            .join("Binaries")
+            .join("Win64")
+            .join("G1R-Win64-Shipping.exe")
+    })
+}
+
 fn is_lcache(p: &Path) -> bool {
     let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
     name.starts_with("AlkimiaLocalization") && name.ends_with(".lcache")
