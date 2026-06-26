@@ -3,6 +3,7 @@ pub mod container;
 pub mod decode;
 pub mod encode;
 pub mod error;
+pub mod index;
 pub mod paths;
 pub mod texdata;
 

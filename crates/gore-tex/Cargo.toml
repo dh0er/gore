@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 gore-oodle = { path = "../gore-oodle" }
+gore-loc = { path = "../gore-loc" }
 # Vendored fork of retoc (IoStore reader) with its Oodle DECODE backend redirected
 # to gore-oodle so no oo2core_9_win64.dll is fetched/linked. See vendor/retoc and
 # docs/superpowers/notes/2026-06-26-retoc-oodle-swap.md.

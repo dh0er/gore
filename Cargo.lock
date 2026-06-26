@@ -991,6 +991,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "blake3",
+ "gore-loc",
  "gore-oodle",
  "intel_tex_2",
  "repak",

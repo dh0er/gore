@@ -19,6 +19,11 @@ pub fn usmap(game_dir: &Path) -> Result<PathBuf> {
     found.ok_or_else(|| TexError::UsmapNotFound(dir))
 }
 
+/// The shared gore-tools cache path for the texture index (next to loc_catalog.json).
+pub fn texture_index_path() -> PathBuf {
+    gore_loc::paths::shared_data_dir().join("texture_index.json")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
