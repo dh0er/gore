@@ -107,10 +107,9 @@ class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver
     }
   }
 
-  bool _hasUnsavedEdits() =>
-      ref.read(overridesProvider).count > 0 ||
-      ref.read(locEditsProvider).isDirty ||
-      ref.read(audioReplacementsProvider).count > 0;
+  // Unsaved = there is staged content AND it differs from the last saved/loaded project, so a
+  // project that was just saved doesn't prompt to discard on New/Open.
+  bool _hasUnsavedEdits() => hasUnsavedChanges(ref);
 
   /// Confirm before discarding staged (unsaved) edits. Returns true to proceed.
   Future<bool> _confirmDiscardIfDirty() async {

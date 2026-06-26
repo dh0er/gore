@@ -151,6 +151,28 @@ fn find_game() -> Value {
 /// obsolete samples from a stale `*.gore-bak`. Only when the live bank is already injected
 /// (>1 FSB5) do we fall back to the backup, which holds the true original. Mirrors the CLI's
 /// `read_pristine_bank`.
+/// The install's recovered FMOD key (from the `gore_fmod_key.json` gore-dump writes to
+/// `Binaries/Win64`) when present and valid, else the compiled-in constant — so the Audio tab can
+/// browse/preview banks on installs whose key changed after a game patch.
+fn resolve_fmod_key_for_bank(bank: &str) -> Vec<u8> {
+    // bank == <...>/G1R/Content/FMOD/Desktop/<file>.bank; G1R is 4 levels up, then Binaries/Win64.
+    if let Some(g1r) = std::path::Path::new(bank).ancestors().nth(4) {
+        let key_file = g1r.join("Binaries").join("Win64").join("gore_fmod_key.json");
+        if let Ok(bytes) = std::fs::read(&key_file) {
+            if let Ok(v) = serde_json::from_slice::<Value>(&bytes) {
+                if v.get("found").and_then(Value::as_bool).unwrap_or(false) {
+                    if let Some(k) = v.get("encryption_key").and_then(Value::as_str) {
+                        if !k.is_empty() {
+                            return k.as_bytes().to_vec();
+                        }
+                    }
+                }
+            }
+        }
+    }
+    gore_fmod::GOTHIC_STUDIO_KEY.to_vec()
+}
+
 fn read_bank_pristine(bank: &str) -> std::io::Result<Vec<u8>> {
     let live = std::fs::read(bank)?;
     if !gore_fmod::is_pristine_bank(&live) {
@@ -190,7 +212,7 @@ fn audio_list(payload: Value) -> Value {
     let key = match payload.get("key").and_then(Value::as_str) {
         Some(k) if k.is_empty() => return err("BAD_KEY", "encryption key must not be empty"),
         Some(k) => k.as_bytes().to_vec(),
-        None => gore_fmod::GOTHIC_STUDIO_KEY.to_vec(),
+        None => resolve_fmod_key_for_bank(bank),
     };
     let fsb = match gore_fmod::bank_fsb0(&bytes, &key) {
         Ok(f) => f,
@@ -223,7 +245,7 @@ fn audio_extract(payload: Value) -> Value {
     let key = match payload.get("key").and_then(Value::as_str) {
         Some(k) if k.is_empty() => return err("BAD_KEY", "encryption key must not be empty"),
         Some(k) => k.as_bytes().to_vec(),
-        None => gore_fmod::GOTHIC_STUDIO_KEY.to_vec(),
+        None => resolve_fmod_key_for_bank(bank),
     };
     let (block, fsb) = match gore_fmod::decrypt_fsb0(&bytes, &key) {
         Ok(v) => v,

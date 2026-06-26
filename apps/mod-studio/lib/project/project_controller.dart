@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
@@ -23,6 +25,28 @@ bool projectIsDirty(WidgetRef ref) =>
     ref.watch(overridesProvider).count > 0 ||
     ref.watch(locEditsProvider).isDirty ||
     ref.watch(audioReplacementsProvider).count > 0;
+
+/// Signature of the last state written to / loaded from a `.goremod`. Used to tell whether the
+/// current staged state still matches what was saved, so a saved project isn't treated as having
+/// unsaved changes. Null until the first save/open/new in this session.
+final savedProjectSignatureProvider = StateProvider<String?>((ref) => null);
+
+/// A stable signature of the full current project (name + metadata + all editor domains).
+String _projectSignature(WidgetRef ref) => jsonEncode(gatherProject(ref).toJson());
+
+/// Record the current state as the saved baseline (after a save/open/new).
+void markProjectSaved(WidgetRef ref) =>
+    ref.read(savedProjectSignatureProvider.notifier).state = _projectSignature(ref);
+
+/// Whether there are staged changes NOT yet written to a project file. False when there's no
+/// content, or when the current state matches the last saved/loaded signature.
+bool hasUnsavedChanges(WidgetRef ref) {
+  final hasContent = ref.read(overridesProvider).count > 0 ||
+      ref.read(locEditsProvider).isDirty ||
+      ref.read(audioReplacementsProvider).count > 0;
+  if (!hasContent) return false;
+  return _projectSignature(ref) != ref.read(savedProjectSignatureProvider);
+}
 
 /// Snapshot all editor state into a [ModProject].
 ModProject gatherProject(WidgetRef ref) {
@@ -61,6 +85,7 @@ void newProject(WidgetRef ref) {
   ref.read(overridesProvider.notifier).clearAll();
   ref.read(locEditsProvider.notifier).clearAll();
   ref.read(audioReplacementsProvider.notifier).clearAll();
+  markProjectSaved(ref); // a fresh project is in a clean (nothing-unsaved) state
 }
 
 /// Prompt for a path and save the current project. Returns the path, or null if cancelled.
@@ -74,6 +99,7 @@ Future<String?> saveProjectInteractive(WidgetRef ref) async {
   );
   if (location == null) return null;
   await saveProject(gatherProject(ref), location.path);
+  markProjectSaved(ref); // current state now matches the file on disk
   return location.path;
 }
 
@@ -87,5 +113,6 @@ Future<String?> openProjectInteractive(WidgetRef ref) async {
   if (file == null) return null;
   final project = await loadProject(file.path);
   applyProject(ref, project);
+  markProjectSaved(ref); // freshly loaded state matches the file on disk
   return file.path;
 }
