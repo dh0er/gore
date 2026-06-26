@@ -360,10 +360,18 @@ pub fn deploy(bundle_dir: &Path, game_root: &Path) -> Result<DeployRecord> {
     }
 
     // (d) committed — drop the kept-aside previous UE4SS mod, then retire the previous mod's
-    //     footprint now (best-effort), pruning retired leftovers from the (re-persisted) record.
+    //     footprint now (best-effort), pruning retired leftovers from the record.
     undo.discard();
-    if retire_leftovers(&leftovers, prev.as_ref(), &plan, &mut record) {
-        let _ = write_record_file(game_root, &record);
+    let (changed, baks_to_delete) = retire_leftovers(&leftovers, prev.as_ref(), &plan, &mut record);
+    if changed {
+        // Persist the pruned record BEFORE deleting the restored backups. Only once that write
+        // succeeds is it safe to delete them — otherwise a failed rewrite would leave the on-disk
+        // record referencing deleted backups, wedging a later undeploy.
+        if write_record_file(game_root, &record).is_ok() {
+            for bak in &baks_to_delete {
+                let _ = std::fs::remove_file(bak);
+            }
+        }
     }
     Ok(record)
 }
@@ -566,21 +574,29 @@ fn apply_writes(plan: &DeployPlan, undo: &mut Undo) -> Result<()> {
 /// Retire the previous mod's leftover footprint (already folded into `record` and persisted):
 /// restore each leftover loose file to pristine now and, on success, drop the entry from the
 /// record so undeploy won't later look for a deleted backup. Leftovers that can't be restored
-/// yet stay tracked. Also removes a differently-named UE4SS mod. Returns whether `record`
-/// changed (and so should be re-persisted). Best-effort — never fails the deploy.
+/// yet stay tracked. Also removes a differently-named UE4SS mod. Returns `(changed, baks_to_delete)`
+/// — whether `record` changed (and so should be re-persisted), and the restored backups whose
+/// deletion the caller must DEFER until the pruned record is durable. Best-effort — never fails.
 fn retire_leftovers(
     leftovers: &[(String, String, bool)],
     prev: Option<&DeployRecord>,
     plan: &DeployPlan,
     record: &mut DeployRecord,
-) -> bool {
+) -> (bool, Vec<PathBuf>) {
     let mut changed = false;
+    let mut baks_to_delete = Vec::new();
     for (live_s, bak_s, _) in leftovers {
         let (live, bak) = (Path::new(live_s), Path::new(bak_s));
         let retired = if !bak.exists() {
-            true // nothing to restore from; drop the stale entry
+            // No backup to restore from — the live file was NOT reverted and may still hold the
+            // old patch. Keep the entry so undeploy can warn/retry, rather than silently dropping
+            // it as if it were cleanly retired.
+            false
         } else if std::fs::read(bak).map(|b| atomic_write(live, &b).is_ok()).unwrap_or(false) {
-            let _ = std::fs::remove_file(bak);
+            // Restored. DEFER deleting the backup until the caller has durably persisted the
+            // pruned record, so a failed record rewrite can't leave the on-disk record pointing
+            // at an already-deleted backup (which would wedge a later undeploy).
+            baks_to_delete.push(bak.to_path_buf());
             true
         } else {
             false // locked/unwritable — keep tracked for an undeploy retry
@@ -615,7 +631,7 @@ fn retire_leftovers(
             }
         }
     }
-    changed
+    (changed, baks_to_delete)
 }
 
 fn staging_dir(dst: &Path) -> PathBuf {
