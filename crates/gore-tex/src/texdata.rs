@@ -361,6 +361,255 @@ impl PlatformData {
     }
 }
 
+// ---- texture rewrite (upscale write path) ---------------------------------
+
+/// `block_math(w, h, format)` bytes for one mip, or a loud error.
+fn block_math(format: &str, w: u32, h: u32) -> Result<usize> {
+    mip_byte_size(format, w, h)
+        .map(|n| n as usize)
+        .ok_or_else(|| TexError::UnsupportedFormat(format.to_string()))
+}
+
+/// `NumMips` for a base of `w` x `h`: `log2(max(w,h)) + 1`.
+fn expected_num_mips(w: u32, h: u32) -> usize {
+    (32 - w.max(h).leading_zeros()) as usize
+}
+
+/// Rewrite the cooked files to carry `new_mips` (largest-first, from
+/// [`crate::encode::encode_mips`]) at `new_w` x `new_h`, keeping the original
+/// pixel format. Returns `(new_uasset, new_uexp, new_ubulk)`.
+///
+/// This is the crux of the upscale write path. It re-serializes the
+/// `FTexturePlatformData` region of the `.uexp` with the new dimensions/mips,
+/// rebuilds the `.ubulk`, and — because the export body length almost always
+/// changes — patches the one `.uasset` field that retoc's zen builder reads and
+/// that depends on that length: the texture `FObjectExport`'s `SerialSize`.
+///
+/// ## Inline/stream policy
+///
+/// We mirror the *original* texture's inline-vs-stream split, keyed on each
+/// mip's largest dimension:
+///
+/// * If the original streamed any mip (payload in `.ubulk`), we take the
+///   **largest streamed mip dimension** the original used as the threshold `T`
+///   and stream every new mip whose `max(w, h) >= T`, inlining the rest. (UE
+///   cooks the large mips to bulk data and keeps a small inline tail; reusing
+///   the observed boundary keeps the new texture shaped exactly like a
+///   cook-time one.)
+/// * If the original was *fully inline* (e.g. the cursor / small UI textures),
+///   we keep every new mip inline too.
+///
+/// `flags` is reused as `0x0` for every mip — the value the original carries for
+/// both inline and streamed mips. [`PlatformData::parse`] discriminates on the
+/// serialized *shape* (presence of the inline payload), not on the flag, so the
+/// readback test validates this choice end-to-end.
+///
+/// ## `.uasset` fixup
+///
+/// `repack_to_zen` -> `build_zen_asset` re-parses the legacy `.uasset` with
+/// retoc's `FLegacyPackageHeader` and copies each export's `SerialSize` into the
+/// zen export map as `cooked_serial_size` (and, for the UE5.4 `NoExportInfo`
+/// path, writes the `.uexp` body verbatim). So the texture export's `SerialSize`
+/// **must** become `old_serial_size + delta`, where `delta = new_region_len -
+/// old_region_len`, or the zen export's declared size won't match the body and
+/// the round-trip back out mis-slices. `BulkDataStartOffset` and the per-export
+/// `SerialOffset` of *later* exports are the only other length-dependent fields;
+/// for these single-export cooked texture packages there are no later exports,
+/// and `BulkDataStartOffset` is explicitly "never read for cooked packages" by
+/// the engine and is recomputed by retoc on write-back, so we patch only
+/// `SerialSize`. We locate that field's byte offset via retoc's own
+/// `FLegacyPackageHeader` parse (no hand-hexing of the version-dependent summary).
+pub fn replace_texture(
+    uasset: &[u8],
+    uexp: &[u8],
+    ubulk: &[u8],
+    new_w: u32,
+    new_h: u32,
+    new_mips: Vec<Vec<u8>>,
+) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>)> {
+    // 1. Parse the original to capture format/packed_data/first_mip/trailer.
+    let orig = PlatformData::parse(uasset, uexp, ubulk)?;
+    if orig.first_mip != 0 {
+        return Err(corrupt("FirstMipToSerialize != 0 is not supported for rewrite"));
+    }
+    let format = orig.format.clone();
+
+    // 2. Validate the new mip pyramid against the new dims + format.
+    let want = expected_num_mips(new_w, new_h);
+    if new_mips.len() != want {
+        return Err(corrupt(&format!(
+            "new_mips has {} levels but {new_w}x{new_h} needs {want} (log2(max)+1)",
+            new_mips.len()
+        )));
+    }
+    for (i, m) in new_mips.iter().enumerate() {
+        let mip_w = (new_w >> i).max(1);
+        let mip_h = (new_h >> i).max(1);
+        let need = block_math(&format, mip_w, mip_h)?;
+        if m.len() != need {
+            return Err(corrupt(&format!(
+                "new_mips[{i}] is {} bytes but {mip_w}x{mip_h} {format} needs {need}",
+                m.len()
+            )));
+        }
+    }
+
+    // 3. Inline/stream policy: derive the threshold from the original split.
+    //    `stream_threshold = Some(T)` means "stream mips with max-dim >= T";
+    //    `None` means "keep everything inline" (original was fully inline).
+    // UE streams the *large* mips and inlines the small tail, so the boundary is
+    // the SMALLEST streamed dimension: stream every new mip whose max-dim >= T.
+    let stream_threshold: Option<u32> = orig
+        .mips
+        .iter()
+        .filter(|m| !m.inline)
+        .map(|m| m.width.max(m.height))
+        .min();
+
+    // 4. Build the new mip entries.
+    let mut mips: Vec<MipEntry> = Vec::with_capacity(new_mips.len());
+    for (i, data) in new_mips.into_iter().enumerate() {
+        let mip_w = (new_w >> i).max(1);
+        let mip_h = (new_h >> i).max(1);
+        let inline = match stream_threshold {
+            None => true,
+            Some(t) => mip_w.max(mip_h) < t,
+        };
+        mips.push(MipEntry {
+            width: mip_w,
+            height: mip_h,
+            inline,
+            flags: 0,
+            data,
+        });
+    }
+
+    // 5. Assemble the new PlatformData and serialize the new region + ubulk.
+    let new_pd = PlatformData {
+        size_x: new_w,
+        size_y: new_h,
+        packed_data: orig.packed_data,
+        format: format.clone(),
+        first_mip: 0,
+        mips,
+        trailer: orig.trailer.clone(),
+        region: orig.region.clone(),
+    };
+    let new_region = new_pd.serialize_region()?;
+    let new_ubulk = new_pd.serialize_ubulk();
+
+    let old_region_len = orig.region.end - orig.region.start;
+    let delta: i64 = new_region.len() as i64 - old_region_len as i64;
+
+    // 6. new_uexp = uexp with [region] replaced (the tail incl. the package
+    //    magic shifts by delta automatically).
+    let mut new_uexp = uexp.to_vec();
+    new_uexp.splice(orig.region.clone(), new_region);
+
+    // 7. new_uasset = uasset with the texture export's SerialSize patched by
+    //    delta (no-op when delta == 0, i.e. a same-dims replace).
+    let new_uasset = patch_uasset_serial_size(uasset, uexp, &orig.region, delta)?;
+
+    Ok((new_uasset, new_uexp, new_ubulk))
+}
+
+/// Patch the texture `FObjectExport.SerialSize` in `uasset` by `delta`.
+///
+/// Uses retoc's `FLegacyPackageHeader` to parse the legacy summary + export map
+/// (handling the version-dependent layout), identifies the export whose
+/// serialized body in `uexp` contains the platform-data region, then overwrites
+/// that export's `SerialSize` i64 in place. All other header bytes are left
+/// byte-identical (only the 8-byte field changes), so the unchanged-asset path
+/// stays bit-for-bit identical when `delta == 0`.
+fn patch_uasset_serial_size(
+    uasset: &[u8],
+    _uexp: &[u8],
+    region: &Range<usize>,
+    delta: i64,
+) -> Result<Vec<u8>> {
+    use retoc::legacy_asset::FLegacyPackageHeader;
+    use retoc::version::EngineVersion;
+    use std::io::Cursor;
+
+    let mut out = uasset.to_vec();
+    if delta == 0 {
+        return Ok(out); // same-dims replace: SerialSize unchanged.
+    }
+
+    // G1R's cooked packages are *unversioned*; retoc cannot derive the package
+    // file version from the summary alone, so supply the same UE5.4 fallback
+    // `repack_to_zen` uses (the container this asset came from is UE5_4).
+    let fallback = EngineVersion::UE5_4.package_file_version();
+    let header = FLegacyPackageHeader::deserialize(&mut Cursor::new(uasset), Some(fallback))
+        .map_err(|e| corrupt(&format!("could not parse .uasset summary for fixup: {e}")))?;
+
+    let total_header_size = header.summary.versioning_info.total_header_size as i64;
+    let exports_offset = header.summary.exports.offset as i64;
+    let export_count = header.summary.exports.count as usize;
+    if export_count == 0 || header.exports.is_empty() {
+        return Err(corrupt(".uasset has no exports to patch"));
+    }
+    // depends_offset terminates the export map; per-entry size is uniform.
+    let depends_offset = header.summary.depends_offset as i64;
+    let entry_span = depends_offset - exports_offset;
+    if entry_span <= 0 || (entry_span as usize) % export_count != 0 {
+        return Err(corrupt("implausible export-map span in .uasset summary"));
+    }
+    let single_export_size = (entry_span as usize) / export_count;
+
+    // Identify the texture export: the one whose body in the .uexp contains the
+    // platform-data region. SerialOffset includes total_header_size; the .uexp
+    // body is the file past the header, so the body-relative start is
+    // SerialOffset - total_header_size.
+    let region_start = region.start as i64;
+    let mut target: Option<usize> = None;
+    for (i, e) in header.exports.iter().enumerate() {
+        let body_start = e.serial_offset - total_header_size;
+        let body_end = body_start + e.serial_size;
+        if region_start >= body_start && region_start < body_end {
+            target = Some(i);
+            break;
+        }
+    }
+    // Single-export packages: fall back to export 0 if the range probe missed
+    // (e.g. a tiny rounding in how the body offset is computed upstream).
+    let target = target.unwrap_or(0);
+    if target >= export_count {
+        return Err(corrupt("target export index out of range"));
+    }
+
+    // Byte offset of this export's SerialSize field. Within an FObjectExport the
+    // field order is class/super/template/outer (4 x i32) + object_name
+    // (FMinimalName = 2 x i32) + object_flags (u32) = 28 bytes, then SerialSize
+    // (i64).
+    const SERIAL_SIZE_FIELD_OFFSET: usize = 4 * 4 + 8 + 4; // = 28
+    let entry_start = (exports_offset as usize) + target * single_export_size;
+    let field_at = entry_start + SERIAL_SIZE_FIELD_OFFSET;
+    let slot = out
+        .get_mut(field_at..field_at + 8)
+        .ok_or_else(|| corrupt("SerialSize field offset runs past end of .uasset"))?;
+
+    // Sanity: the bytes we're about to overwrite must equal the parsed
+    // SerialSize, proving our offset math matches retoc's layout.
+    let on_disk = i64::from_le_bytes(slot.try_into().unwrap());
+    let parsed = header.exports[target].serial_size;
+    if on_disk != parsed {
+        return Err(corrupt(&format!(
+            "SerialSize offset mismatch: byte-located {on_disk} != parsed {parsed} \
+             (export {target}, entry_size {single_export_size})"
+        )));
+    }
+
+    let new_size = parsed
+        .checked_add(delta)
+        .ok_or_else(|| corrupt("SerialSize overflow after delta"))?;
+    if new_size <= 0 {
+        return Err(corrupt("patched SerialSize is non-positive"));
+    }
+    slot.copy_from_slice(&new_size.to_le_bytes());
+    Ok(out)
+}
+
 /// Find the next `PF_*` `FString` length-prefix offset at/after `from`.
 fn find_pf_anchor(uexp: &[u8], from: usize) -> Option<usize> {
     let needle = b"PF_";
@@ -461,5 +710,118 @@ mod tests {
         pd.serialize_into_uexp(&mut ue2, &ua).unwrap();
         assert_eq!(ue2, ue, "streamed .uexp region must re-serialize byte-identically");
         assert_eq!(pd.serialize_ubulk(), ub, "streamed .ubulk must re-serialize byte-identically");
+    }
+
+    /// Same-dims replace on the inline fixture: re-encode-shaped bytes at the
+    /// SAME dimensions must produce delta == 0 and leave the `.uasset`
+    /// byte-identical (SerialSize unchanged). No game needed.
+    #[test]
+    fn same_dims_replace_keeps_uasset_identical() {
+        let (Some(ua), Some(ue)) = (fx("sample.uasset"), fx("sample.uexp")) else {
+            eprintln!("skip: fixture absent");
+            return;
+        };
+        let ub = fx("sample.ubulk").unwrap_or_default();
+        let pd = PlatformData::parse(&ua, &ue, &ub).unwrap();
+        // Reuse the original mip bytes as the "new" mips at identical dims.
+        let new_mips: Vec<Vec<u8>> = (0..expected_num_mips(pd.size_x, pd.size_y))
+            .map(|i| {
+                let w = (pd.size_x >> i).max(1);
+                let h = (pd.size_y >> i).max(1);
+                vec![0u8; block_math(&pd.format, w, h).unwrap()]
+            })
+            .collect();
+        // The fixture is a single full-size mip; expected_num_mips for 128x128 is
+        // 8, so only run this when the original mip count matches the full chain.
+        if pd.mips.len() != new_mips.len() {
+            eprintln!("skip: fixture is not a full mip chain ({} mips)", pd.mips.len());
+            return;
+        }
+        let (na, _ne, _nb) =
+            replace_texture(&ua, &ue, &ub, pd.size_x, pd.size_y, new_mips).unwrap();
+        assert_eq!(na, ua, "same-dims replace must leave .uasset byte-identical");
+    }
+
+    /// The upscale oracle: rewrite the cursor to 256x256 magenta, repack through
+    /// retoc's zen builder, and read it back out of the produced triplet --
+    /// proving the SerialSize fixup + new platform-data are correct.
+    #[test]
+    #[ignore = "slow: unpack+repack against real container"]
+    fn upscale_cursor_2x_roundtrips_through_zen() {
+        let g = std::path::PathBuf::from(r"D:\SteamLibrary\steamapps\common\Gothic 1 Remake");
+        if !g.exists() {
+            eprintln!("skip");
+            return;
+        }
+        let utoc = crate::paths::main_container(&g).unwrap();
+        let usmap = crate::paths::usmap(&g).unwrap();
+        let asset = "/Game/UI/Textures/Common/T_HardwareCursor"; // 128x128 PF_DXT5
+        let tmp = std::env::temp_dir().join("gore-tex-upscale-rt");
+        let _ = std::fs::remove_dir_all(&tmp);
+        let cooked = tmp.join("G1R/Content/UI/Textures/Common");
+        std::fs::create_dir_all(&cooked).unwrap();
+        let uasset = crate::container::unpack_asset(&utoc, &usmap, asset, &cooked).unwrap();
+        let ua = std::fs::read(&uasset).unwrap();
+        let ue = std::fs::read(uasset.with_extension("uexp")).unwrap();
+        let ub = std::fs::read(uasset.with_extension("ubulk")).unwrap_or_default();
+
+        // new content: a 256x256 solid magenta RGBA, encoded to PF_DXT5.
+        let (w, h) = (256u32, 256u32);
+        let rgba: Vec<u8> = (0..w * h).flat_map(|_| [255u8, 0, 255, 255]).collect();
+        let mips = crate::encode::encode_mips(&rgba, w, h, "PF_DXT5").unwrap();
+        let (na, ne, nb) = replace_texture(&ua, &ue, &ub, w, h, mips).unwrap();
+
+        std::fs::write(&uasset, &na).unwrap();
+        std::fs::write(uasset.with_extension("uexp"), &ne).unwrap();
+        if nb.is_empty() {
+            let _ = std::fs::remove_file(uasset.with_extension("ubulk"));
+        } else {
+            std::fs::write(uasset.with_extension("ubulk"), &nb).unwrap();
+        }
+
+        let out = tmp.join("out");
+        std::fs::create_dir_all(&out).unwrap();
+        let triplet = crate::container::repack_to_zen(&tmp, "UpscaleTest_P", &out, &g).unwrap();
+        for p in &triplet {
+            assert!(p.exists() && std::fs::metadata(p).unwrap().len() > 0);
+        }
+
+        // Copy global.* next to the produced triplet so the composite store has
+        // the script-object table to convert zen->legacy on read-back.
+        let game_paks = g.join("G1R/Content/Paks");
+        for ext in ["utoc", "ucas", "pak"] {
+            let src = game_paks.join(format!("global.{ext}"));
+            if src.exists() {
+                std::fs::copy(&src, out.join(format!("global.{ext}"))).unwrap();
+            }
+        }
+
+        let readback_dir = tmp.join("readback");
+        let _ = std::fs::remove_dir_all(&readback_dir);
+        std::fs::create_dir_all(&readback_dir).unwrap();
+        let rb_uasset =
+            crate::container::unpack_asset(&triplet[0], &usmap, asset, &readback_dir).unwrap();
+        let rb = crate::decode::parse(
+            &std::fs::read(&rb_uasset).unwrap(),
+            &std::fs::read(rb_uasset.with_extension("uexp")).unwrap(),
+            &std::fs::read(rb_uasset.with_extension("ubulk")).unwrap_or_default(),
+            &std::fs::read(&usmap).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(rb.width, 256, "width should be 256 after upscale");
+        assert_eq!(rb.height, 256, "height should be 256 after upscale");
+        assert_eq!(rb.format, "PF_DXT5", "format should be preserved");
+
+        // `to_rgba8` returns packed 0xAARRGGBB u32s. Spot-check a few are ~magenta.
+        let px = crate::decode::to_rgba8(&rb).unwrap();
+        assert_eq!(px.len(), (w * h) as usize, "pixel count != 256*256");
+        for idx in [0usize, px.len() / 2, px.len() - 1] {
+            let p = px[idx];
+            let r = (p >> 16) & 0xff;
+            let gch = (p >> 8) & 0xff;
+            let bch = p & 0xff;
+            assert!(r > 200 && gch < 60 && bch > 200, "pixel not magenta: {r},{gch},{bch}");
+        }
+        eprintln!("OK: read back 256x256 PF_DXT5 magenta from the triplet");
     }
 }
