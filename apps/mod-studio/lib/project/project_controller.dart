@@ -12,6 +12,12 @@ import 'project_model.dart';
 /// build/deploy dialog and project save.
 final modNameProvider = StateProvider<String>((ref) => 'MyMod');
 
+/// Mod metadata carried through load → gather (save/build), so opening a project and saving or
+/// deploying it preserves the version, author, and UE4SS load delay instead of resetting them.
+final modVersionProvider = StateProvider<String>((ref) => '');
+final modAuthorProvider = StateProvider<String>((ref) => '');
+final modDelayMsProvider = StateProvider<int>((ref) => 0);
+
 /// Whether any editor domain has pending content to build/save.
 bool projectIsDirty(WidgetRef ref) =>
     ref.watch(overridesProvider).count > 0 ||
@@ -23,6 +29,9 @@ ModProject gatherProject(WidgetRef ref) {
   final name = ref.read(modNameProvider).trim();
   return ModProject(
     name: name.isEmpty ? 'MyMod' : name,
+    version: ref.read(modVersionProvider),
+    author: ref.read(modAuthorProvider),
+    delayMs: ref.read(modDelayMsProvider),
     overrides: ref.read(overridesProvider).entries,
     locEdits: ref.read(locEditsProvider).edits,
     audio: ref.read(audioReplacementsProvider).entries,
@@ -32,6 +41,9 @@ ModProject gatherProject(WidgetRef ref) {
 /// Replace all editor state from a loaded [ModProject].
 void applyProject(WidgetRef ref, ModProject project) {
   ref.read(modNameProvider.notifier).state = project.name;
+  ref.read(modVersionProvider.notifier).state = project.version;
+  ref.read(modAuthorProvider.notifier).state = project.author;
+  ref.read(modDelayMsProvider.notifier).state = project.delayMs;
   final overrides = ref.read(overridesProvider.notifier)..clearAll();
   for (final o in project.overrides) {
     overrides.setOverride(o);
@@ -43,6 +55,9 @@ void applyProject(WidgetRef ref, ModProject project) {
 /// Clear all editor state (New project).
 void newProject(WidgetRef ref) {
   ref.read(modNameProvider.notifier).state = 'MyMod';
+  ref.read(modVersionProvider.notifier).state = '';
+  ref.read(modAuthorProvider.notifier).state = '';
+  ref.read(modDelayMsProvider.notifier).state = 0;
   ref.read(overridesProvider.notifier).clearAll();
   ref.read(locEditsProvider.notifier).clearAll();
   ref.read(audioReplacementsProvider.notifier).clearAll();
