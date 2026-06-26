@@ -294,6 +294,32 @@ fn safe_to_restore(live: &str, deployed_hashes: &BTreeMap<String, String>) -> bo
 
 const RECORD_NAME: &str = "gore-mod.deployed.json";
 
+/// This install's FMOD bank encryption key: the one gore-dump recovered into `gore_fmod_key.json`
+/// (written to `Binaries/Win64`) if present and valid, else the known [`gore_fmod::GOTHIC_STUDIO_KEY`]
+/// constant. The key stays constant until a game patch changes it; a user who re-dumps after such a
+/// patch can then deploy audio without the build/deploy path being stuck on the old constant.
+fn resolve_fmod_key(gp: &GamePaths) -> Vec<u8> {
+    #[derive(Deserialize)]
+    struct FmodKeyFile {
+        #[serde(default)]
+        found: bool,
+        #[serde(default)]
+        encryption_key: String,
+    }
+    // gp.ue4ss_mods == <...>/Binaries/Win64/ue4ss/Mods, so its grandparent is Binaries/Win64.
+    if let Some(win64) = gp.ue4ss_mods.parent().and_then(Path::parent) {
+        let key_file = win64.join("gore_fmod_key.json");
+        if let Ok(bytes) = std::fs::read(&key_file) {
+            if let Ok(k) = serde_json::from_slice::<FmodKeyFile>(&bytes) {
+                if k.found && !k.encryption_key.is_empty() {
+                    return k.encryption_key.into_bytes();
+                }
+            }
+        }
+    }
+    gore_fmod::GOTHIC_STUDIO_KEY.to_vec()
+}
+
 /// Absolutize the game root so every path derived from it (live files, `*.gore-bak`, UE4SS dirs)
 /// and persisted in the deploy record is absolute. Otherwise a deploy from the install dir with a
 /// relative root (e.g. `--game .`) would serialize relative paths, and a later undeploy from a
@@ -602,6 +628,10 @@ fn prepare(
                 let map: BTreeMap<String, BTreeMap<String, String>> = serde_json::from_slice(
                     &std::fs::read(bundle_dir.join(path).join("manifest.json")).map_err(io("reading audio manifest"))?,
                 )?;
+                // Use this install's recovered FMOD bank key if gore-dump left a gore_fmod_key.json,
+                // so users whose key changed after a game patch can still deploy audio; else the
+                // known constant.
+                let fmod_key = resolve_fmod_key(gp);
                 for (bank, samples) in &map {
                     if !is_safe_filename(bank) {
                         return Err(ModError::Other(format!("unsafe bank name: {bank:?}")));
@@ -623,7 +653,7 @@ fn prepare(
                             gore_fmod::Pcm16Sample { name: sample.clone(), freq: rate, channels: ch, pcm },
                         ));
                     }
-                    let new_bank = gore_fmod::replace_samples(&pristine, gore_fmod::GOTHIC_STUDIO_KEY, repl)
+                    let new_bank = gore_fmod::replace_samples(&pristine, &fmod_key, repl)
                         .map_err(ModError::Fmod)?;
                     plan.writes.push((bank_path, new_bank));
                 }
