@@ -228,8 +228,11 @@ pub fn resolve_game_paths(root: &Path) -> GamePaths {
                         .is_some_and(|n| n.starts_with("AlkimiaLocalization") && n.ends_with(".lcache"))
                 })
                 .collect();
-            // Deterministic when several caches exist: pick the most recently modified
-            // (the active one), matching gore-loc's locator.
+            // Deterministic when several caches exist: pick the most recently modified (the active
+            // one). Sort by PATH first, then stably by mtime, then take the last — identical to
+            // gore-loc's locator, so deploy patches/backs up the SAME cache the catalog was
+            // extracted from even when mtimes tie or metadata can't be read.
+            matches.sort();
             matches.sort_by_key(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok());
             matches.pop()
         })

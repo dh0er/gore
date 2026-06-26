@@ -53,6 +53,9 @@ class _BuildDeployDialogState extends ConsumerState<BuildDeployDialog> {
   Future<void> _buildToFolder() => _run(() async {
         final dir = await getDirectoryPath();
         if (dir == null) return;
+        // The folder picker is async; bail if the dialog was dismissed meanwhile so we don't read
+        // a disposed WidgetRef or build after the UI is gone.
+        if (!mounted) return;
         final spec = gatherProject(ref).toBuildSpec();
         final bundle = await _ffi.modBuild(spec, dir);
         _set('Built bundle:\n$bundle');
@@ -61,6 +64,9 @@ class _BuildDeployDialogState extends ConsumerState<BuildDeployDialog> {
   Future<void> _deploy(String gameRoot) => _run(() async {
         final tmp = await Directory.systemTemp.createTemp('goremod_build_');
         try {
+          // createTemp is async; if the dialog closed while it ran, don't gather state from a
+          // disposed ref or deploy to the game after the UI is gone.
+          if (!mounted) return;
           final spec = gatherProject(ref).toBuildSpec();
           final bundle = await _ffi.modBuild(spec, tmp.path);
           await _ffi.modDeploy(bundle, gameRoot);

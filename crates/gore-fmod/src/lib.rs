@@ -283,6 +283,20 @@ pub fn parse_fsb5(b: &[u8]) -> Result<Fsb5, String> {
                 let more = w & 1;
                 let csz = ((w >> 1) & 0xFF_FFFF) as usize;
                 let ctyp = (w >> 25) & 0x7F;
+                // The chunk payload must fit in the buffer, and be large enough for the fields we
+                // read for this type — otherwise a corrupt/truncated bank would index past the end
+                // and panic instead of returning a decode error.
+                if co + 4 + csz > b.len() {
+                    return Err("FSB5 chunk payload out of bounds".into());
+                }
+                let need = match ctyp {
+                    0x01 => 1,
+                    0x02 | 0x0B | 0x0E => 4,
+                    _ => 0,
+                };
+                if csz < need {
+                    return Err("FSB5 chunk too small for its type".into());
+                }
                 match ctyp {
                     0x01 => ch = b[co + 4] as u32,
                     0x02 => freq = u32_le(b, co + 4),
@@ -868,5 +882,15 @@ mod tests {
         let parsed = parse_fsb5(&fsb).unwrap();
         assert_eq!(parsed.samples[0].freq, 88200);
         assert_eq!(parsed.samples[0].channels, 2);
+    }
+
+    #[test]
+    fn parse_fsb5_truncated_chunk_errors_not_panics() {
+        // A bank whose sample-header FREQUENCY chunk payload is cut off must return a decode error
+        // rather than indexing past the buffer and panicking. The 88200 sample has a 4-byte freq
+        // chunk at bytes 0x44..0x4C; truncating to 0x4A leaves the chunk header but not its payload.
+        let fsb = build_fsb5_pcm16("hi", 88200, 2, &[0i16; 128]).unwrap();
+        assert!(fsb.len() > 0x4A);
+        assert!(parse_fsb5(&fsb[..0x4A]).is_err());
     }
 }
