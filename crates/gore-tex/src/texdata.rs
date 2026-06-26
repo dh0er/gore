@@ -61,13 +61,34 @@ pub struct MipEntry {
     pub data: Vec<u8>,
 }
 
+/// The conditional `FOptTexturePlatformData` (UE5) serialized between the
+/// `PixelFormat` FString and `FirstMipToSerialize`. Present **iff**
+/// `PackedData & (1<<30)` (`HasOptData`). Two `u32`s: `ExtData` and
+/// `NumMipsInTail` (the count of smallest mips packed into a single tail bulk).
+///
+/// We capture both verbatim so [`PlatformData::serialize_region`] re-emits them
+/// byte-faithfully. For G1R's cook these are absent on every texture observed
+/// (every cooked `UTexture2D` sampled has `HasOptData == false`), but the field
+/// is part of the authoritative UE5.4 layout (see CUE4Parse
+/// `FTexturePlatformData`), so we honor it for correctness/future-proofing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OptData {
+    pub ext_data: u32,
+    pub num_mips_in_tail: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlatformData {
     pub size_x: u32,
     pub size_y: u32,
-    /// bit31 = bIsVirtual.
+    /// Packed flags: bit31=CubeMap, bit30=HasOptData, bit29=HasCpuCopy, bits
+    /// 0..28 = NumSlices. (Note: `bIsVirtual` is **not** here — it is a separate
+    /// i32 bool serialized *after* the mip array; see `parse_at`.)
     pub packed_data: u32,
     pub format: String,
+    /// `Some` iff `packed_data & (1<<30)` (HasOptData). Serialized between the
+    /// PixelFormat FString and `FirstMipToSerialize`.
+    pub opt_data: Option<OptData>,
     pub first_mip: u32,
     pub mips: Vec<MipEntry>,
     /// FTexturePlatformData bytes after the mip array, kept verbatim.
@@ -99,6 +120,31 @@ fn mip_byte_size(format: &str, w: u32, h: u32) -> Option<u64> {
 
 fn corrupt(msg: &str) -> TexError {
     TexError::Retoc(anyhow::anyhow!("FTexturePlatformData codec: {msg}"))
+}
+
+/// Rank a parse error by how *specific* (trustworthy) it is. A higher rank means
+/// "this came from a real platform-data anchor and names a concrete reason"; a
+/// lower rank is a generic structural error that a stray `PF_*` anchor produces.
+/// Used so the genuine reason (virtual texture / unsupported format) is never
+/// masked by a later stray anchor's "implausible dimensions".
+fn err_specificity(e: &TexError) -> u8 {
+    match e {
+        TexError::VirtualTexture(_) => 3,
+        TexError::UnsupportedFormat(_) => 2,
+        // Everything else (the generic "implausible …" / "unhandled …" corrupt
+        // errors) is least specific.
+        _ => 1,
+    }
+}
+
+/// Keep whichever of two errors is more specific (see [`err_specificity`]); on a
+/// tie, keep the first (earlier anchor — closer to the real platform data).
+fn keep_more_specific(first: TexError, second: TexError) -> TexError {
+    if err_specificity(&second) > err_specificity(&first) {
+        second
+    } else {
+        first
+    }
 }
 
 fn rd_i32(b: &[u8], o: usize) -> Result<i32> {
@@ -170,9 +216,16 @@ fn write_fstring_ascii(out: &mut Vec<u8>, s: &str) -> Result<()> {
 
 impl PlatformData {
     /// Parse from legacy cooked files.
+    ///
+    /// We scan every `PF_*` anchor (some `.uexp`s contain stray `PF_*` byte
+    /// sequences inside mip/VT payloads). The FIRST anchor with a sane 12-byte
+    /// prefix is the real `FTexturePlatformData`; a later stray anchor, if parsed,
+    /// yields a generic "implausible dimensions" error. To avoid that generic
+    /// error MASKING the real, specific reason (e.g. a virtual texture or an
+    /// unsupported pixel format identified at the true anchor), we keep the
+    /// *most specific* error seen rather than simply the last one.
     pub fn parse(_uasset: &[u8], uexp: &[u8], ubulk: &[u8]) -> Result<Self> {
-        let mut last_err =
-            corrupt("no FTexturePlatformData found (no valid PF_* anchor in .uexp)");
+        let mut best_err: Option<TexError> = None;
 
         let mut search = 0usize;
         while let Some(rel) = find_pf_anchor(uexp, search) {
@@ -180,12 +233,19 @@ impl PlatformData {
                 let pd_start = rel - 12;
                 match Self::parse_at(uexp, ubulk, pd_start) {
                     Ok(pd) => return Ok(pd),
-                    Err(e) => last_err = e,
+                    Err(e) => {
+                        best_err = Some(match best_err {
+                            Some(prev) => keep_more_specific(prev, e),
+                            None => e,
+                        });
+                    }
                 }
             }
             search = rel + 1;
         }
-        Err(last_err)
+        Err(best_err.unwrap_or_else(|| {
+            corrupt("no FTexturePlatformData found (no valid PF_* anchor in .uexp)")
+        }))
     }
 
     fn parse_at(uexp: &[u8], ubulk: &[u8], pd_start: usize) -> Result<Self> {
@@ -203,6 +263,32 @@ impl PlatformData {
         if !format.starts_with("PF_") {
             return Err(corrupt("anchor FString is not a PF_* pixel format"));
         }
+
+        // `FOptTexturePlatformData` (UE5): present iff PackedData bit30
+        // (HasOptData). Two u32s ExtData, NumMipsInTail. We MUST consume them
+        // here (before FirstMipToSerialize) so the FirstMip/NumMips reads land on
+        // the right offsets. `HasCpuCopy` (bit29) would insert an FSharedImage
+        // block here too, but no G1R texture sets it; reject loudly if seen so we
+        // never silently misalign.
+        if packed & (1 << 29) != 0 {
+            return Err(corrupt(
+                "FTexturePlatformData has CPUCopy (FSharedImage) block — unhandled cooked layout",
+            ));
+        }
+        let opt_data = if packed & (1 << 30) != 0 {
+            let ext_data = rd_u32(uexp, o)?;
+            let num_mips_in_tail = rd_u32(uexp, o + 4)?;
+            o += 8;
+            Some(OptData {
+                ext_data,
+                num_mips_in_tail,
+            })
+        } else {
+            None
+        };
+
+        // Reject unsupported (non-BCn) pixel formats AFTER consuming OptData so
+        // the error is the real "unsupported format", not a downstream misparse.
         if block_bytes(&format).is_none() {
             return Err(TexError::UnsupportedFormat(format));
         }
@@ -211,6 +297,24 @@ impl PlatformData {
         o += 4;
         let num_mips = rd_i32(uexp, o)?;
         o += 4;
+        // A cooked **virtual texture** serializes ZERO `FTexture2DMipMap`s and
+        // then `bIsVirtual` (an i32 bool) == 1, followed by an
+        // `FVirtualTextureBuiltData` block. The vast majority of G1R's character
+        // and environment textures are cooked this way. The old parser read
+        // `NumMips == 0`, tripped the `1..=20` range check, then `parse` advanced
+        // to a stray `PF_*` anchor inside the VT chunk data and surfaced a MASKED
+        // "implausible dimensions". Detect the VT shape and surface the REAL,
+        // specific reason. (The BCn mip0 read path cannot decode a VT — it has no
+        // single linear mip0 surface — so this is correctly unsupported here.)
+        if num_mips == 0 {
+            let b_is_virtual = rd_i32(uexp, o).unwrap_or(0);
+            if b_is_virtual == 1 {
+                return Err(TexError::VirtualTexture(format));
+            }
+            return Err(corrupt(
+                "NumMips=0 at platform-data anchor but not a virtual texture — unhandled cooked-tail layout",
+            ));
+        }
         if !(1..=20).contains(&num_mips) {
             return Err(corrupt("implausible NumMips"));
         }
@@ -305,6 +409,7 @@ impl PlatformData {
             size_y: height,
             packed_data: packed,
             format,
+            opt_data,
             first_mip: first_mip as u32,
             mips,
             trailer,
@@ -331,6 +436,11 @@ impl PlatformData {
         out.extend_from_slice(&(self.size_y as i32).to_le_bytes());
         out.extend_from_slice(&self.packed_data.to_le_bytes());
         write_fstring_ascii(&mut out, &self.format)?;
+        // FOptTexturePlatformData (ExtData, NumMipsInTail) — only when HasOptData.
+        if let Some(opt) = self.opt_data {
+            out.extend_from_slice(&opt.ext_data.to_le_bytes());
+            out.extend_from_slice(&opt.num_mips_in_tail.to_le_bytes());
+        }
         out.extend_from_slice(&(self.first_mip as i32).to_le_bytes());
         out.extend_from_slice(&(self.mips.len() as i32).to_le_bytes());
 
@@ -381,6 +491,9 @@ impl PlatformData {
         let mut rel: usize = 4 + 4 + 4; // SizeX + SizeY + PackedData
         // format FString: i32 len + (len) bytes (ASCII + NUL).
         rel += 4 + (self.format.len() + 1);
+        if self.opt_data.is_some() {
+            rel += 8; // FOptTexturePlatformData: ExtData + NumMipsInTail
+        }
         rel += 4 + 4; // FirstMipToSerialize + NumMips
 
         let mut ubulk_off: i64 = 0;
@@ -563,11 +676,26 @@ pub fn replace_texture(
     }
 
     // 6. Assemble the new PlatformData and serialize the new region + ubulk.
+    //
+    //    OptData on resize: `replace_texture` regenerates a FULL, un-tail-packed
+    //    mip pyramid (every mip is its own `FTexture2DMipMap`), so there is no
+    //    packed mip tail -> `NumMipsInTail` MUST be 0. We keep the OptData struct
+    //    present iff the original carried it (so `packed_data`'s HasOptData bit
+    //    stays consistent with the serialized bytes), preserve the opaque
+    //    `ExtData`, and zero `NumMipsInTail`. In practice no G1R texture sets
+    //    HasOptData, so `orig.opt_data` is `None` and this is a no-op; the branch
+    //    is here so a future OptData texture rewrites to a valid full-pyramid
+    //    layout rather than claiming a tail it no longer has.
+    let new_opt_data = orig.opt_data.map(|opt| OptData {
+        ext_data: opt.ext_data,
+        num_mips_in_tail: 0,
+    });
     let new_pd = PlatformData {
         size_x: new_w,
         size_y: new_h,
         packed_data: orig.packed_data,
         format: format.clone(),
+        opt_data: new_opt_data,
         first_mip: 0,
         mips,
         trailer: orig.trailer.clone(),
@@ -1182,6 +1310,51 @@ mod tests {
         assert_eq!(pd.serialize_ubulk(), ub, "streamed .ubulk must re-serialize byte-identically");
     }
 
+    /// Gated/slow: the previously-MASKED failing case. `T_Biter_Armor_D` is a
+    /// cooked **virtual texture** (4096x4096 PF_DXT1, `NumMips == 0` +
+    /// `bIsVirtual == 1`). Before the fix, `parse` read `NumMips == 0`, tripped
+    /// the `1..=20` range check, advanced to a stray `PF_*` anchor in the VT
+    /// chunk data, and surfaced a generic "implausible texture dimensions". After
+    /// the fix it must surface the SPECIFIC, correct `VirtualTexture` error from
+    /// the true anchor (the BCn mip path cannot decode a VT; the win is correct
+    /// classification, not a forced decode). This is the oracle for the
+    /// virtual-texture detection + masked-error fix that accounts for the bulk
+    /// (~77% in sampling) of previously-failing textures.
+    #[test]
+    #[ignore = "slow: unpacks from real container"]
+    fn biter_virtual_texture_is_classified_not_masked() {
+        let g = std::path::PathBuf::from(r"D:\SteamLibrary\steamapps\common\Gothic 1 Remake");
+        if !g.exists() {
+            eprintln!("skip: game absent");
+            return;
+        }
+        let utoc = crate::paths::main_container(&g).unwrap();
+        let usmap = crate::paths::usmap(&g).unwrap();
+        let tmp = std::env::temp_dir().join("gore-tex-td-vt");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let uasset = crate::container::unpack_asset(
+            &utoc,
+            &usmap,
+            "/Game/Assets/Characters/Creatures/Biter/Model/Armor/Textures/T_Biter_Armor_D",
+            &tmp,
+        )
+        .unwrap();
+        let ua = std::fs::read(&uasset).unwrap();
+        let ue = std::fs::read(uasset.with_extension("uexp")).unwrap();
+        let ub = std::fs::read(uasset.with_extension("ubulk")).unwrap_or_default();
+        match PlatformData::parse(&ua, &ue, &ub) {
+            Err(TexError::VirtualTexture(fmt)) => {
+                assert_eq!(fmt, "PF_DXT1", "VT format should be the real PF_DXT1");
+            }
+            Err(e) => panic!("expected VirtualTexture, got masked/other error: {e}"),
+            Ok(pd) => panic!(
+                "expected VirtualTexture error, but parse succeeded ({}x{} {})",
+                pd.size_x, pd.size_y, pd.format
+            ),
+        }
+    }
+
     /// Same-dims replace on the inline fixture: re-encode-shaped bytes at the
     /// SAME dimensions must produce delta == 0 and leave the `.uasset`
     /// byte-identical (SerialSize unchanged). No game needed.
@@ -1281,6 +1454,7 @@ mod tests {
             size_y: mips[0].1,
             packed_data: 0,
             format: format.to_string(),
+            opt_data: None,
             first_mip: 0,
             mips: entries,
             trailer: vec![0u8; 12],
