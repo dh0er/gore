@@ -542,11 +542,96 @@ pub fn replace_texture(
     let mut new_uexp = uexp.to_vec();
     new_uexp.splice(orig.region.clone(), new_region);
 
+    // 7b. Patch the texture's source-dimension UPROPERTY (`ImportedSize`, an
+    //     FIntPoint = two consecutive i32) in the unversioned PROPERTY BLOCK,
+    //     which lives in `new_uexp[0 .. orig.region.start)` (copied verbatim by
+    //     the splice above -- it only replaced `orig.region`).
+    //
+    //     WHY this is required: at load time the engine sizes the inline mip0
+    //     read from `ImportedSize`, NOT from the platform-data `SizeX/SizeY` we
+    //     already updated inside the region. If `ImportedSize` stays at the OLD
+    //     dims while the platform-data carries the NEW (larger) dims, the engine
+    //     reads only the old mip byte count (e.g. 128^2 DXT5 = 16384 B) where the
+    //     new mip is larger (256^2 = 65536 B), the stream cursor drifts by exactly
+    //     the old mip size, and the next field is parsed from BCn payload garbage
+    //     -> hard crash ("Bad name index ..."). Patching `ImportedSize` to the new
+    //     dims keeps the inline-read size in sync with the platform data.
+    //
+    //     Patching EVERY (orig_w, orig_h) i32 pair in the property block also
+    //     fixes any sibling cached-dimension field (e.g. a cached source/LOD size)
+    //     in one shot, hardening against a secondary stale-dimension crash. This
+    //     is a same-length 8-byte-per-occurrence edit -> region length and the
+    //     SerialSize delta are unaffected; the existing SerialSize patch below
+    //     stays correct.
+    let prop_block = new_uexp
+        .get_mut(..orig.region.start)
+        .ok_or_else(|| corrupt("region start runs past end of .uexp"))?;
+    let patched = patch_imported_size(
+        prop_block,
+        (orig.size_x, orig.size_y),
+        (new_w, new_h),
+    )?;
+    eprintln!(
+        "gore-tex: patched ImportedSize property block: {patched} occurrence(s) of \
+         ({},{}) -> ({new_w},{new_h})",
+        orig.size_x, orig.size_y
+    );
+
     // 8. new_uasset = uasset with the texture export's SerialSize patched by
     //    delta (no-op when delta == 0, i.e. a same-dims replace).
     let new_uasset = patch_uasset_serial_size(uasset, uexp, &orig.region, delta)?;
 
     Ok((new_uasset, new_uexp, new_ubulk))
+}
+
+/// Overwrite every occurrence of the source-dimension i32 pair `(orig.0, orig.1)`
+/// in `prop_block` (the unversioned UPROPERTY block, an 8-byte little-endian
+/// `FIntPoint`) with `(new.0, new.1)`.
+///
+/// This targets the texture's `ImportedSize` (`FIntPoint = i32 x, i32 y`), which
+/// the engine uses to size the inline mip read -- the platform-data
+/// `SizeX/SizeY` alone is insufficient (see the WHY in `replace_texture`).
+///
+/// Each match is an in-place same-length 8-byte edit, so the block length never
+/// changes. Returns the number of occurrences patched. Errors (fail loud, never
+/// ship a silently-broken mod) if ZERO occurrences are found: the `ImportedSize`
+/// wasn't where we expect, so we cannot trust the rewrite. When `orig == new`
+/// (same-dims replace) the scan still runs and overwrites identical bytes (no-op).
+fn patch_imported_size(
+    prop_block: &mut [u8],
+    orig: (u32, u32),
+    new: (u32, u32),
+) -> Result<usize> {
+    let mut needle = [0u8; 8];
+    needle[0..4].copy_from_slice(&(orig.0 as i32).to_le_bytes());
+    needle[4..8].copy_from_slice(&(orig.1 as i32).to_le_bytes());
+
+    let mut replacement = [0u8; 8];
+    replacement[0..4].copy_from_slice(&(new.0 as i32).to_le_bytes());
+    replacement[4..8].copy_from_slice(&(new.1 as i32).to_le_bytes());
+
+    let mut count = 0usize;
+    if prop_block.len() >= 8 {
+        let mut i = 0usize;
+        while i + 8 <= prop_block.len() {
+            if prop_block[i..i + 8] == needle {
+                prop_block[i..i + 8].copy_from_slice(&replacement);
+                count += 1;
+                i += 8; // non-overlapping; the just-written bytes aren't re-scanned
+            } else {
+                i += 1;
+            }
+        }
+    }
+
+    if count == 0 {
+        return Err(corrupt(&format!(
+            "ImportedSize ({},{}) not found in property block -- cannot patch source \
+             dimensions; refusing to ship a stale-dimension texture",
+            orig.0, orig.1
+        )));
+    }
+    Ok(count)
 }
 
 /// Patch the texture `FObjectExport.SerialSize` in `uasset` by `delta`.
@@ -785,6 +870,54 @@ mod tests {
         assert_eq!(na, ua, "same-dims replace must leave .uasset byte-identical");
     }
 
+    /// FAST: the property-block ImportedSize patch in isolation (no game).
+    #[test]
+    fn patch_imported_size_overwrites_pair() {
+        // Fake property block with the (128,128) i32 pair embedded among noise.
+        let mut block = Vec::new();
+        block.extend_from_slice(&[0xAA; 16]); // leading noise
+        block.extend_from_slice(&128i32.to_le_bytes()); // ImportedSize.X
+        block.extend_from_slice(&128i32.to_le_bytes()); // ImportedSize.Y
+        block.extend_from_slice(&[0xBB; 8]); // trailing noise
+        let offset = 16usize;
+
+        let n = patch_imported_size(&mut block, (128, 128), (256, 256)).unwrap();
+        assert_eq!(n, 1, "exactly one (128,128) pair expected");
+        assert_eq!(rd_i32(&block, offset).unwrap(), 256, "X patched");
+        assert_eq!(rd_i32(&block, offset + 4).unwrap(), 256, "Y patched");
+        // Surrounding noise untouched.
+        assert_eq!(&block[..16], &[0xAA; 16]);
+        assert_eq!(&block[offset + 8..], &[0xBB; 8]);
+    }
+
+    /// FAST: patches MULTIPLE distinct-dimension pairs (e.g. ImportedSize plus a
+    /// sibling cached-dimension field), and is a no-op when orig == new.
+    #[test]
+    fn patch_imported_size_multi_and_noop() {
+        let mut block = Vec::new();
+        block.extend_from_slice(&64i32.to_le_bytes());
+        block.extend_from_slice(&64i32.to_le_bytes());
+        block.extend_from_slice(&[0u8; 4]);
+        block.extend_from_slice(&64i32.to_le_bytes());
+        block.extend_from_slice(&64i32.to_le_bytes());
+        let n = patch_imported_size(&mut block, (64, 64), (128, 128)).unwrap();
+        assert_eq!(n, 2, "both (64,64) pairs patched");
+
+        // Same-dims no-op: pair still present, overwrites identical bytes.
+        let mut same = 128i32.to_le_bytes().to_vec();
+        same.extend_from_slice(&128i32.to_le_bytes());
+        let n2 = patch_imported_size(&mut same, (128, 128), (128, 128)).unwrap();
+        assert_eq!(n2, 1);
+    }
+
+    /// FAST: zero occurrences must fail loud (never ship a stale-dim texture).
+    #[test]
+    fn patch_imported_size_missing_errors() {
+        let mut block = vec![0u8; 32];
+        let err = patch_imported_size(&mut block, (128, 128), (256, 256));
+        assert!(err.is_err(), "missing ImportedSize must error");
+    }
+
     /// The upscale oracle: rewrite the cursor to 256x256 magenta, repack through
     /// retoc's zen builder, and read it back out of the produced triplet --
     /// proving the SerialSize fixup + new platform-data are correct.
@@ -812,7 +945,40 @@ mod tests {
         let (w, h) = (256u32, 256u32);
         let rgba: Vec<u8> = (0..w * h).flat_map(|_| [255u8, 0, 255, 255]).collect();
         let mips = crate::encode::encode_mips(&rgba, w, h, "PF_DXT5").unwrap();
+
+        // Capture the property block of the ORIGINAL (pre-rewrite) to locate the
+        // ImportedSize, then assert the rewrite patched it. The property block is
+        // uexp[0 .. region.start); the rewrite must leave NO (orig_w,orig_h) i32
+        // pair there and DO contain (new_w,new_h). Regression lock: the suite
+        // never checked the property block before -- a stale ImportedSize was the
+        // root cause of the upscale crash.
+        let orig_pd = PlatformData::parse(&ua, &ue, &ub).unwrap();
+        let (ow, oh) = (orig_pd.size_x, orig_pd.size_y);
+        let prop_start = orig_pd.region.start;
+
         let (na, ne, nb) = replace_texture(&ua, &ue, &ub, w, h, mips).unwrap();
+
+        // The platform-data region length is unchanged by the property-block edit,
+        // so the region start is stable; the property block is ne[0 .. prop_start).
+        let prop = &ne[..prop_start];
+        let old_pair = {
+            let mut p = (ow as i32).to_le_bytes().to_vec();
+            p.extend_from_slice(&(oh as i32).to_le_bytes());
+            p
+        };
+        let new_pair = {
+            let mut p = (w as i32).to_le_bytes().to_vec();
+            p.extend_from_slice(&(h as i32).to_le_bytes());
+            p
+        };
+        assert!(
+            !prop.windows(8).any(|wnd| wnd == old_pair.as_slice()),
+            "property block still contains stale ImportedSize ({ow},{oh})"
+        );
+        assert!(
+            prop.windows(8).any(|wnd| wnd == new_pair.as_slice()),
+            "property block missing patched ImportedSize ({w},{h})"
+        );
 
         std::fs::write(&uasset, &na).unwrap();
         std::fs::write(uasset.with_extension("uexp"), &ne).unwrap();
