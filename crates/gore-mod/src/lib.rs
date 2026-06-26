@@ -53,6 +53,13 @@ pub struct AudioReplacement {
     pub wav_path: String,
 }
 
+/// One texture replacement: put `image_path` (a PNG) in place of cooked `asset` (in-game path).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TextureReplacement {
+    pub asset: String,      // e.g. "/Game/UI/Textures/Common/T_HardwareCursor"
+    pub image_path: String, // a PNG on disk
+}
+
 /// Declarative build input — the union of the editor domains.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BuildSpec {
@@ -66,6 +73,8 @@ pub struct BuildSpec {
     pub loc_edits: BTreeMap<String, BTreeMap<String, String>>,
     #[serde(default)]
     pub audio: Vec<AudioReplacement>,
+    #[serde(default)]
+    pub texture: Vec<TextureReplacement>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -77,6 +86,9 @@ pub enum Component {
     LocPatch { path: String },
     /// Audio patch dir at `path` (manifest.json + wavs), applied to `banks`.
     AudioPatch { path: String, banks: Vec<String> },
+    /// Texture patch dir at `path` (manifest.json + pngs); deploy cooks + packs a Zen triplet
+    /// into `~mods` for `assets`. Additive — no in-place game-file patch, no `*.gore-bak`.
+    TexturePatch { path: String, assets: Vec<String> },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -137,6 +149,21 @@ pub fn build_bundle(spec: &BuildSpec) -> Result<Bundle> {
         let banks: Vec<String> = map.keys().cloned().collect();
         files.insert("audio/manifest.json".into(), serde_json::to_vec_pretty(&map)?);
         components.push(Component::AudioPatch { path: "audio".into(), banks });
+    }
+
+    // textures → manifest + pngs (source images; cooked+packed at deploy)
+    if !spec.texture.is_empty() {
+        let mut map: BTreeMap<String, String> = BTreeMap::new();
+        for (i, t) in spec.texture.iter().enumerate() {
+            let png = std::fs::read(&t.image_path)
+                .map_err(io(&format!("reading png {}", t.image_path)))?;
+            let fname = format!("{i}_{}.png", sanitize(&t.asset));
+            files.insert(format!("texture/{fname}"), png);
+            map.insert(t.asset.clone(), format!("texture/{fname}"));
+        }
+        let assets: Vec<String> = map.keys().cloned().collect();
+        files.insert("texture/manifest.json".into(), serde_json::to_vec_pretty(&map)?);
+        components.push(Component::TexturePatch { path: "texture".into(), assets });
     }
 
     let manifest = ModManifest { format: 1, mod_meta: spec.meta.clone(), components };
@@ -658,6 +685,14 @@ fn prepare(
                     plan.writes.push((bank_path, new_bank));
                 }
             }
+            Component::TexturePatch { .. } => {
+                // Texture deploy (cook + Zen-pack into `~mods`) is implemented in a later task;
+                // it is additive and does not go through the loose-file write/backup machinery
+                // here. Reject at deploy time so a texture bundle isn't silently ignored.
+                return Err(ModError::Other(
+                    "texture patch deploy is not yet implemented".into(),
+                ));
+            }
         }
     }
     Ok(plan)
@@ -1092,6 +1127,7 @@ mod tests {
                 sample: "SFX_UI_X".into(),
                 wav_path: wav.display().to_string(),
             }],
+            texture: vec![],
         };
 
         let bundle = build_bundle(&spec).unwrap();
@@ -1117,7 +1153,26 @@ mod tests {
             overrides: vec![],
             loc_edits: BTreeMap::new(),
             audio: vec![],
+            texture: vec![],
         };
         assert!(build_bundle(&spec).is_err());
+    }
+
+    #[test]
+    fn build_emits_texture_patch() {
+        let dir = std::env::temp_dir().join("gore-mod-tex-build");
+        let _ = std::fs::remove_dir_all(&dir); std::fs::create_dir_all(&dir).unwrap();
+        let png = dir.join("img.png");
+        std::fs::write(&png, b"\x89PNG\r\n\x1a\nfake").unwrap();
+        let spec = BuildSpec {
+            meta: ModMeta { name: "TestMod".into(), version: String::new(), author: String::new() },
+            delay_ms: 0, overrides: vec![], loc_edits: Default::default(), audio: vec![],
+            texture: vec![TextureReplacement { asset: "/Game/UI/T_X".into(), image_path: png.display().to_string() }],
+        };
+        let bundle = build_bundle(&spec).unwrap();
+        assert!(bundle.files.contains_key("texture/manifest.json"));
+        assert!(bundle.files.keys().any(|k| k.starts_with("texture/") && k.ends_with(".png")));
+        assert!(matches!(bundle.manifest.components.last(),
+            Some(Component::TexturePatch { assets, .. }) if assets == &vec!["/Game/UI/T_X".to_string()]));
     }
 }
