@@ -27,7 +27,7 @@ use retoc::iostore;
 use retoc::logging::Log;
 use retoc::script_objects::FPackageObjectIndex;
 use retoc::zen::FZenPackageHeader;
-use retoc::{Config, EIoChunkType, FIoChunkId, FPackageId, FSFileWriter, UEPath};
+use retoc::{Config, EIoChunkType, FIoChunkId, FPackageId, FSFileWriter, UEPath, UEPathBuf};
 
 use crate::error::{Result, TexError};
 
@@ -231,6 +231,186 @@ pub fn unpack_asset(
     Ok(uasset)
 }
 
+/// Pack a directory of edited legacy cooked files (laid out under their mount
+/// path, e.g. `cooked_dir/G1R/Content/UI/Textures/Common/T_HardwareCursor.uasset`)
+/// into a Zen triplet `out_dir/<name>.{utoc,ucas,pak}`, UE5.4. Returns the 3 paths
+/// `[utoc, ucas, pak]`. Chunks are written UNCOMPRESSED (method 0) -- valid and
+/// game-loadable (UE mounts uncompressed IoStore fine); no Oodle compression in v1.
+///
+/// This re-implements retoc's `to-zen` orchestration (`action_to_zen`, which was
+/// CLI-only) on top of the vendored lib's `pub` building blocks:
+///   1. open the game's Paks *directory* as a composite source store so its
+///      *global* script objects (in `global.utoc`) resolve -- exactly mirroring
+///      `unpack_asset`; `build_zen_asset` needs them to resolve each package's
+///      script imports;
+///   2. for every `.uasset` (with a sibling `.uexp`) found under `cooked_dir`,
+///      read the legacy cooked bytes into an `FSerializedAssetBundle`;
+///   3. `build_zen_asset(...)` (UE5_4: `NoExportInfo` header, `OnDemandMetaData`
+///      toc, `PropertyTagCompleteTypeName` pkg version) with mount point
+///      `../../../` and asset path `../../../<relative-cooked-path>`;
+///   4. `ConvertedZenAssetBundle::write` into the `IoStoreWriter`, then `finalize`
+///      (which serialises the TOC + container-header chunk);
+///   5. emit the empty `.pak` stub the game needs to detect/mount the container.
+///
+/// `game_dir` *is* required: a plain texture's package still references the
+/// Texture2D script class, whose `FPackageObjectIndex` must resolve against the
+/// global script-object table -- which lives in the game's `global.utoc`, not in
+/// the cooked input. Passing `None` for `script_objects` produces a container the
+/// game rejects (unresolved script imports). Verified: script objects ARE needed.
+pub fn repack_to_zen(
+    cooked_dir: &Path,
+    name: &str,
+    out_dir: &Path,
+    game_dir: &Path,
+) -> Result<[PathBuf; 3]> {
+    use retoc::iostore_writer::IoStoreWriter;
+    use retoc::legacy_asset::FSerializedAssetBundle;
+    use retoc::version::EngineVersion;
+    use retoc::zen_asset_conversion::build_zen_asset;
+    use retoc::{UEPath, UEPathBuf, build_verse_cell_store};
+
+    let ver = EngineVersion::UE5_4;
+    let toc_version = ver.toc_version();
+    let header_version = ver.container_header_version();
+    let pkg_file_version = ver.package_file_version();
+    let mount_point = UEPath::new("../../../");
+
+    // 1. Open the game's Paks directory as a composite source store so the global
+    //    script objects (in `global.utoc`) are available -- same rationale as
+    //    `unpack_asset`. `build_zen_asset` resolves each package's script imports
+    //    against these; without them the container's imports are unresolved and the
+    //    game refuses to load it.
+    let paks_dir = game_dir.join("G1R/Content/Paks");
+    let store = iostore::open(&paks_dir, Arc::new(Config::default()))?;
+    let script_objects = Some(Arc::new(store.load_script_objects()?));
+
+    // No Verse cells in plain cooked textures; an empty store mirrors the CLI's
+    // `Some(script_cell_store)` arg (the CLI always passes a constructed store).
+    let script_cells = Some(build_verse_cell_store(&Vec::new()));
+
+    // 2. Collect every `.uasset` (with a sibling `.uexp`) under `cooked_dir`, as a
+    //    path relative to `cooked_dir` (becomes the cooked/pak path inside the
+    //    mount, e.g. `G1R/Content/UI/Textures/Common/T_HardwareCursor.uasset`).
+    let mut asset_rels: Vec<PathBuf> = Vec::new();
+    collect_uassets(cooked_dir, cooked_dir, &mut asset_rels)?;
+    if asset_rels.is_empty() {
+        return Err(TexError::AssetNotFound(format!(
+            "no .uasset (with sibling .uexp) found under {}",
+            cooked_dir.display()
+        )));
+    }
+
+    // 3-4. Open the writer and convert+write each asset.
+    std::fs::create_dir_all(out_dir)?;
+    let utoc_path = out_dir.join(format!("{name}.utoc"));
+    let mut writer = IoStoreWriter::new(
+        &utoc_path,
+        toc_version,
+        Some(header_version),
+        UEPathBuf::from(mount_point),
+    )?;
+
+    let log = Log::no_log();
+    for rel in &asset_rels {
+        let abs = cooked_dir.join(rel);
+        // The path handed to `build_zen_asset` is the mount-relative cooked path
+        // (forward-slash, UE-style), prefixed with the `../../../` mount point.
+        let rel_ue = path_to_ue(rel);
+        let asset_ue_path = mount_point.join(&rel_ue);
+
+        let bundle = FSerializedAssetBundle {
+            asset_file_buffer: std::fs::read(&abs)?,
+            exports_file_buffer: std::fs::read(abs.with_extension("uexp"))?,
+            bulk_data_buffer: read_opt(&abs.with_extension("ubulk"))?,
+            optional_bulk_data_buffer: read_opt(&abs.with_extension("uptnl"))?,
+            // `.m.ubulk` -> the leaf gains a `.m` before `.ubulk`.
+            memory_mapped_bulk_data_buffer: read_opt(&with_double_ext(&abs, "m.ubulk"))?,
+        };
+
+        let mut converted = build_zen_asset(
+            bundle,
+            &std::collections::HashMap::new(), // no referenced shader maps for a plain texture
+            &asset_ue_path,
+            Some(pkg_file_version),
+            header_version,
+            false, // allow_fixup: UE4-only external-arc fixup; false for UE5_4 (NoExportInfo)
+            script_objects.clone(),
+            script_cells.clone(),
+            &log,
+        )?;
+
+        // NoExportInfo > Initial, so no import fix-up pass is needed: write directly.
+        converted.write(&mut writer)?;
+    }
+
+    // 5. Serialise the TOC + container-header chunk.
+    writer.finalize()?;
+
+    // The game needs an (even empty) `.pak` sidecar to detect and mount the
+    // IoStore container -- mirrors retoc's `action_to_zen`.
+    let pak_path = out_dir.join(format!("{name}.pak"));
+    {
+        use std::io::BufWriter;
+        let mut pak_file = BufWriter::new(std::fs::File::create(&pak_path)?);
+        repak::PakBuilder::new()
+            .writer(
+                &mut pak_file,
+                repak::Version::V11,
+                mount_point.to_string(),
+                None,
+            )
+            .write_index()
+            .map_err(|e| anyhow::anyhow!("failed to write empty .pak index: {e}"))?;
+    }
+
+    let ucas_path = utoc_path.with_extension("ucas");
+    Ok([utoc_path, ucas_path, pak_path])
+}
+
+/// Recursively collect `.uasset` files (that have a sibling `.uexp`) under `dir`,
+/// pushing each as a path relative to `root`.
+fn collect_uassets(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            collect_uassets(root, &path, out)?;
+        } else if path.extension().is_some_and(|e| e == "uasset")
+            && path.with_extension("uexp").exists()
+        {
+            if let Ok(rel) = path.strip_prefix(root) {
+                out.push(rel.to_path_buf());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `std::fs::read` but `Ok(None)` when the file is absent.
+fn read_opt(path: &Path) -> Result<Option<Vec<u8>>> {
+    match std::fs::read(path) {
+        Ok(b) => Ok(Some(b)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Replace a path's final extension with a compound one (e.g. `T_X.uasset` ->
+/// `T_X.m.ubulk`).
+fn with_double_ext(path: &Path, compound_ext: &str) -> PathBuf {
+    let stem = path.file_stem().map(|s| s.to_os_string()).unwrap_or_default();
+    let mut name = stem;
+    name.push(".");
+    name.push(compound_ext);
+    path.with_file_name(name)
+}
+
+/// Convert an OS relative path to a forward-slash UE path string.
+fn path_to_ue(rel: &Path) -> UEPathBuf {
+    let s = rel.to_string_lossy().replace('\\', "/");
+    UEPathBuf::from(s)
+}
+
 impl PartialOrd for TextureEntry {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
@@ -354,5 +534,97 @@ mod tests {
 
         // Bad package skipped; good packages survived.
         assert_eq!(out, vec![1, 3]);
+    }
+
+    /// The to-zen write-path oracle: unpack an UNCHANGED asset, repack the cooked
+    /// files into a fresh Zen triplet, then read the asset back OUT of that triplet
+    /// and confirm it decodes to the SAME pixels. Proves `repack_to_zen` (legacy ->
+    /// zen conversion + FBulkDataMapEntry regeneration + the IoStore writer) yields
+    /// a valid, game-readable container.
+    #[test]
+    #[ignore = "slow: unpack + repack against real container"]
+    fn repack_unchanged_roundtrips_to_same_pixels() {
+        let g = std::path::PathBuf::from(r"D:\SteamLibrary\steamapps\common\Gothic 1 Remake");
+        if !g.exists() {
+            eprintln!("skip: game absent");
+            return;
+        }
+        let utoc = crate::paths::main_container(&g).unwrap();
+        let usmap = crate::paths::usmap(&g).unwrap();
+        let asset = "/Game/UI/Textures/Common/T_HardwareCursor"; // small inline texture
+
+        // 1. unpack original + record its decoded pixels
+        let tmp = std::env::temp_dir().join("gore-tex-repack-rt");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let cooked = tmp.join("G1R/Content/UI/Textures/Common");
+        std::fs::create_dir_all(&cooked).unwrap();
+        let uasset = unpack_asset(&utoc, &usmap, asset, &cooked).unwrap();
+        let orig = crate::decode::parse(
+            &std::fs::read(&uasset).unwrap(),
+            &std::fs::read(uasset.with_extension("uexp")).unwrap(),
+            &std::fs::read(uasset.with_extension("ubulk")).unwrap_or_default(),
+            &std::fs::read(&usmap).unwrap(),
+        )
+        .unwrap();
+        let orig_px = crate::decode::to_rgba8(&orig).unwrap();
+
+        // 2. repack the (unchanged) cooked dir -> triplet
+        let out = tmp.join("out");
+        std::fs::create_dir_all(&out).unwrap();
+        let triplet = repack_to_zen(&tmp, "RepackRoundTrip_P", &out, &g).unwrap();
+        for p in &triplet {
+            assert!(
+                p.exists() && std::fs::metadata(p).unwrap().len() > 0,
+                "triplet member missing/empty: {}",
+                p.display()
+            );
+        }
+        eprintln!(
+            "triplet sizes: utoc={} ucas={} pak={}",
+            std::fs::metadata(&triplet[0]).unwrap().len(),
+            std::fs::metadata(&triplet[1]).unwrap().len(),
+            std::fs::metadata(&triplet[2]).unwrap().len(),
+        );
+
+        // 3. read the asset back out of the freshly-built triplet and decode it.
+        //    Point `unpack_asset` at the produced `.utoc`: it opens the parent dir
+        //    as a composite store, but the global script objects come from the
+        //    game's `global.utoc` -- which our `out` dir lacks. So copy `global.*`
+        //    next to our triplet first, giving the composite store the table it
+        //    needs to convert zen->legacy on the way back out.
+        let game_paks = g.join("G1R/Content/Paks");
+        for ext in ["utoc", "ucas", "pak"] {
+            let src = game_paks.join(format!("global.{ext}"));
+            if src.exists() {
+                std::fs::copy(&src, out.join(format!("global.{ext}"))).unwrap();
+            }
+        }
+
+        let readback_dir = tmp.join("readback");
+        let _ = std::fs::remove_dir_all(&readback_dir);
+        std::fs::create_dir_all(&readback_dir).unwrap();
+        let rb_uasset = unpack_asset(&triplet[0], &usmap, asset, &readback_dir).unwrap();
+        let rb = crate::decode::parse(
+            &std::fs::read(&rb_uasset).unwrap(),
+            &std::fs::read(rb_uasset.with_extension("uexp")).unwrap(),
+            &std::fs::read(rb_uasset.with_extension("ubulk")).unwrap_or_default(),
+            &std::fs::read(&usmap).unwrap(),
+        )
+        .unwrap();
+        let rb_px = crate::decode::to_rgba8(&rb).unwrap();
+
+        // The essential assertion: same pixels in == same pixels out.
+        assert_eq!(orig.width, rb.width, "width changed");
+        assert_eq!(orig.height, rb.height, "height changed");
+        assert_eq!(orig_px.len(), rb_px.len(), "pixel count changed");
+        assert!(
+            orig_px == rb_px,
+            "decoded pixels differ after repack round-trip"
+        );
+        eprintln!(
+            "OK: {}x{} px identical after repack round-trip",
+            orig.width, orig.height
+        );
     }
 }

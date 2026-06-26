@@ -10,6 +10,10 @@ gore-oodle = { path = "../gore-oodle" }
 # to gore-oodle so no oo2core_9_win64.dll is fetched/linked. See vendor/retoc and
 # docs/superpowers/notes/2026-06-26-retoc-oodle-swap.md.
 retoc = { path = "../../vendor/retoc" }
+# Same git source/version retoc itself uses (already in the workspace lockfile);
+# only needed to emit the empty `.pak` stub the game requires to detect and mount
+# the produced IoStore container (mirrors retoc's `action_to_zen`).
+repak = { git = "https://github.com/trumank/repak.git", version = "0.2.2" }
 thiserror = "1"
 anyhow = "1"
 texture2ddecoder = "0.1"
