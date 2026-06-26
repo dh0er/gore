@@ -359,6 +359,48 @@ impl PlatformData {
         }
         out
     }
+
+    /// For each mip in order, the `(serial_offset, serial_size, inline)` that the
+    /// legacy data-resource (`FObjectDataResource`) array must carry, computed to
+    /// match how [`serialize_region`] and [`serialize_ubulk`] lay the bytes out.
+    ///
+    /// * **Streamed mip** (`inline == false`): `serial_offset` is the cumulative
+    ///   byte offset into the `.ubulk` (mip0 at 0), exactly as `serialize_ubulk`
+    ///   concatenates them.
+    /// * **Inline mip** (`inline == true`): `serial_offset` is the ABSOLUTE byte
+    ///   offset into the `.uexp` body where that mip's BCn payload begins. The
+    ///   `.uexp` body starts at body byte 0 (export `serial_offset ==
+    ///   total_header_size`), and the platform-data region begins at
+    ///   `self.region.start`, so the payload offset is `region.start +
+    ///   (region-relative offset of the payload)` -- mirroring `serialize_region`'s
+    ///   layout (header + per-mip `flags`/payload/`SizeXYZ`).
+    ///
+    /// `serial_size` is always `block_math(format, mipW, mipH)`.
+    fn mip_serial_layout(&self) -> Result<Vec<(i64, i64, bool)>> {
+        // Region-relative running offset, mirroring `serialize_region`.
+        let mut rel: usize = 4 + 4 + 4; // SizeX + SizeY + PackedData
+        // format FString: i32 len + (len) bytes (ASCII + NUL).
+        rel += 4 + (self.format.len() + 1);
+        rel += 4 + 4; // FirstMipToSerialize + NumMips
+
+        let mut ubulk_off: i64 = 0;
+        let mut out = Vec::with_capacity(self.mips.len());
+        for m in &self.mips {
+            let size = block_math(&self.format, m.width, m.height)? as i64;
+            rel += 4; // flags
+            if m.inline {
+                // Payload begins here (region-relative), then absolute in .uexp.
+                let serial_offset = (self.region.start + rel) as i64;
+                rel += m.data.len(); // inline payload
+                out.push((serial_offset, size, true));
+            } else {
+                out.push((ubulk_off, size, false));
+                ubulk_off += size;
+            }
+            rel += 12; // SizeX,SizeY,SizeZ
+        }
+        Ok(out)
+    }
 }
 
 // ---- texture rewrite (upscale write path) ---------------------------------
@@ -571,17 +613,314 @@ pub fn replace_texture(
         (orig.size_x, orig.size_y),
         (new_w, new_h),
     )?;
-    eprintln!(
-        "gore-tex: patched ImportedSize property block: {patched} occurrence(s) of \
-         ({},{}) -> ({new_w},{new_h})",
-        orig.size_x, orig.size_y
-    );
+    if patched == 0 {
+        eprintln!(
+            "gore-tex: ImportedSize ({},{}) not found in property block -- skipping (non-fatal; \
+             not the crash cause, data-resource patch carries the fix)",
+            orig.size_x, orig.size_y
+        );
+    } else {
+        eprintln!(
+            "gore-tex: patched ImportedSize property block: {patched} occurrence(s) of \
+             ({},{}) -> ({new_w},{new_h})",
+            orig.size_x, orig.size_y
+        );
+    }
 
     // 8. new_uasset = uasset with the texture export's SerialSize patched by
     //    delta (no-op when delta == 0, i.e. a same-dims replace).
     let new_uasset = patch_uasset_serial_size(uasset, uexp, &orig.region, delta)?;
 
+    // 8b. REBUILD the legacy DATA-RESOURCE array (`FObjectDataResource`) in the
+    //     `.uasset`. Each entry's `serial_offset`/`serial_size`/`raw_size`
+    //     describes a mip's bulk payload; `build_zen_asset` copies these VERBATIM
+    //     into the zen `FBulkDataMapEntry`, which the ENGINE uses to LOCATE and
+    //     SIZE each mip read. If they stay at the OLD per-mip values while the
+    //     platform data carries the NEW (larger) mips, the engine reads too few
+    //     bytes, the stream cursor drifts, and the next field is parsed from BCn
+    //     garbage -> hard crash ("Bad name index ..."). CONFIRMED root cause of the
+    //     upscale crash (cursor: one entry, old serial_size 16384 -> new 65536).
+    //
+    //     We REBUILD (not merely patch in place) because an upscale can CHANGE the
+    //     mip COUNT (e.g. 1024^2 -> 2048^2 grows the pyramid 11 -> 12 mips), so the
+    //     array gains/loses entries. The array is the LAST header section (no
+    //     trailing padding -> total_header_size == header end), so we splice new
+    //     entry bytes in, then fix the two length-dependent header fields the size
+    //     change touches: summary `total_header_size` and the texture export's
+    //     `SerialOffset` (which embeds total_header_size).
+    let new_uasset = rebuild_data_resources(&new_uasset, &orig, &new_pd)?;
+
     Ok((new_uasset, new_uexp, new_ubulk))
+}
+
+/// Rebuild the legacy `FObjectDataResource` array in `new_uasset` to describe the
+/// NEW mip set (`new_pd`), then repair the header fields a header-length change
+/// touches.
+///
+/// ## Why a rebuild (not an in-place size patch)
+///
+/// `build_zen_asset` copies each data-resource's `serial_offset`,
+/// `duplicate_serial_offset`, `serial_size`, `flags`, and `cooked_index` verbatim
+/// into the zen `FBulkDataMapEntry`, which the engine uses to LOCATE and SIZE the
+/// mip payloads. An upscale changes every mip's size AND can change the mip COUNT
+/// (the pyramid grows), so the array generally gains/loses entries and the
+/// per-entry offsets all move -- an in-place same-length patch is insufficient.
+///
+/// ## Strategy (surgical, no retoc re-serialize)
+///
+/// retoc's `FLegacyPackageHeader::serialize` does NOT reproduce these unversioned
+/// G1R `.uasset`s byte-identically (verified: first diff mid-header), so we must
+/// NOT round-trip through it. Instead, since the data-resource array is the LAST
+/// structured header section and these packages carry NO trailing header padding
+/// (`total_header_size == ` array end), we:
+///
+/// 1. Parse via `FLegacyPackageHeader` to locate the array offset, the version
+///    (governs the per-entry `cooked_index` byte), and the per-mip-class template
+///    fields (`flags`, `legacy_bulk_data_flags`, `outer_index`) to reuse.
+/// 2. Build one entry per NEW mip, IN ORDER (data_resources[i] <-> new mip[i]):
+///    * `serial_offset`/`serial_size`/`raw_size` from [`PlatformData::mip_serial_layout`]
+///      (streamed -> `.ubulk` cumulative offset; inline -> absolute `.uexp` body
+///      offset of the payload).
+///    * `flags`/`legacy_bulk_data_flags`/`outer_index` copied from an ORIGINAL
+///      entry of the SAME class (inline vs streamed), so cooked semantics carry
+///      over. (Original entries are 1:1 with original mips in order, so the first
+///      streamed/inline original entry is the template for each class.)
+/// 3. Splice the new entry bytes over the old array region.
+/// 4. Repair `total_header_size` (summary field) and the texture export's
+///    `SerialOffset` (embeds total_header_size) by the byte-length delta of the
+///    array. These are the ONLY length-dependent fields a trailing-section resize
+///    touches for these single-export cooked packages; `.uexp`/`.ubulk` payload
+///    offsets are body-relative and unaffected.
+///
+/// VALIDATES the original array (count == orig mip count, each old serial_size ==
+/// the matching old mip's block-math size) before trusting the layout, and
+/// re-locates the patched fields by byte to prove the offset math -- never
+/// silently corrupt the size/offset fields that crash the game.
+fn rebuild_data_resources(
+    new_uasset: &[u8],
+    orig: &PlatformData,
+    new_pd: &PlatformData,
+) -> Result<Vec<u8>> {
+    use retoc::legacy_asset::{EObjectDataResourceVersion, FLegacyPackageHeader};
+    use retoc::version::EngineVersion;
+    use std::io::Cursor;
+
+    // Parse the (already SerialSize-patched) .uasset to locate the array + version.
+    let fallback = EngineVersion::UE5_4.package_file_version();
+    let header = FLegacyPackageHeader::deserialize(&mut Cursor::new(new_uasset), Some(fallback))
+        .map_err(|e| corrupt(&format!("could not parse .uasset summary for data-resource rebuild: {e}")))?;
+
+    if header.data_resources.is_empty() {
+        // No legacy data-resource array (some textures emit none). The
+        // platform-data region + export SerialSize patch already carry the fix.
+        return Ok(new_uasset.to_vec());
+    }
+
+    // Validate the ORIGINAL array is 1:1 with the original mips, in order, with
+    // matching old block-math sizes -- proves the correspondence we rely on.
+    if header.data_resources.len() != orig.mips.len() {
+        return Err(corrupt(&format!(
+            "data-resource count {} != original mip count {}; unexpected layout, refusing to rebuild",
+            header.data_resources.len(),
+            orig.mips.len()
+        )));
+    }
+    for (i, (dr, m)) in header.data_resources.iter().zip(orig.mips.iter()).enumerate() {
+        let want = block_math(&orig.format, m.width, m.height)? as i64;
+        if dr.serial_size != want {
+            return Err(corrupt(&format!(
+                "data-resource[{i}] serial_size {} != mip[{i}] old block-math size {want}; \
+                 correspondence unverified, refusing to rebuild",
+                dr.serial_size
+            )));
+        }
+    }
+
+    // Per-class templates from the original entries (flags/bulk-flags/outer differ
+    // between streamed and inline mips). Original entries are 1:1 with mips, so the
+    // first streamed / first inline original mip indexes the template entry.
+    let streamed_tmpl = orig
+        .mips
+        .iter()
+        .position(|m| !m.inline)
+        .map(|i| header.data_resources[i]);
+    let inline_tmpl = orig
+        .mips
+        .iter()
+        .position(|m| m.inline)
+        .map(|i| header.data_resources[i]);
+
+    // Build the new entry bytes from the new mip serial layout.
+    let version = header
+        .data_resource_version
+        .ok_or_else(|| corrupt("data-resources present but version missing"))?;
+    let layout = new_pd.mip_serial_layout()?;
+    if layout.len() != new_pd.mips.len() {
+        return Err(corrupt("mip_serial_layout length mismatch"));
+    }
+
+    let mut entries = Vec::new();
+    for (i, (serial_offset, serial_size, inline)) in layout.iter().enumerate() {
+        let tmpl = if *inline { inline_tmpl } else { streamed_tmpl }.ok_or_else(|| {
+            corrupt(&format!(
+                "new mip[{i}] is {} but the original texture had no {} mip to template the \
+                 data-resource entry from",
+                if *inline { "inline" } else { "streamed" },
+                if *inline { "inline" } else { "streamed" },
+            ))
+        })?;
+        // FObjectDataResource on-disk READ layout (see `write_data_resource_sizes`).
+        entries.extend_from_slice(&tmpl.flags.to_le_bytes());
+        if version >= EObjectDataResourceVersion::AddedCookedIndex {
+            entries.push(tmpl.cooked_index.unwrap_or(0));
+        }
+        entries.extend_from_slice(&serial_offset.to_le_bytes()); // serial_offset
+        entries.extend_from_slice(&0i64.to_le_bytes()); // duplicate_serial_offset (cooked: 0)
+        entries.extend_from_slice(&serial_size.to_le_bytes()); // serial_size
+        entries.extend_from_slice(&serial_size.to_le_bytes()); // raw_size == serial_size
+        entries.extend_from_slice(&tmpl.outer_index.index.to_le_bytes()); // outer_index (FPackageIndex i32)
+        entries.extend_from_slice(&tmpl.legacy_bulk_data_flags.to_le_bytes());
+    }
+
+    // Locate the old array byte span: [array_start .. array_end). The version u32
+    // and count i32 precede the entries; entries run to the end of the header.
+    let dr_offset = header.summary.data_resource_offset;
+    if dr_offset <= 0 {
+        return Err(corrupt("data_resource_offset non-positive but data-resources parsed"));
+    }
+    let count_field_at = dr_offset as usize + 4; // after version u32
+    let array_start = count_field_at + 4; // after count i32
+    let total_header_size = header.summary.versioning_info.total_header_size as usize;
+    // These packages carry no trailing header padding: the array ends at the header
+    // end. Assert it so a future padded asset fails loud instead of corrupting.
+    if total_header_size > new_uasset.len() {
+        return Err(corrupt("total_header_size exceeds .uasset length"));
+    }
+    let array_end = total_header_size;
+    if array_end < array_start {
+        return Err(corrupt("data-resource array end precedes its start"));
+    }
+    // Sanity: the old span length must equal old_count * old_stride.
+    let old_count = header.data_resources.len();
+    let cooked_len = if version >= EObjectDataResourceVersion::AddedCookedIndex { 1 } else { 0 };
+    let entry_stride = 4 + cooked_len + 8 + 8 + 8 + 8 + 4 + 4;
+    if array_end - array_start != old_count * entry_stride {
+        return Err(corrupt(&format!(
+            "data-resource span {} != old_count {old_count} * stride {entry_stride}; \
+             trailing header padding or layout mismatch -- refusing to rebuild",
+            array_end - array_start
+        )));
+    }
+
+    // Splice the new entries over the old array region.
+    let mut out = Vec::with_capacity(array_start + entries.len() + (new_uasset.len() - array_end));
+    out.extend_from_slice(&new_uasset[..array_start]);
+    out.extend_from_slice(&entries);
+    out.extend_from_slice(&new_uasset[array_end..]);
+
+    // Patch the new entry COUNT (i32) in the summary's array preamble.
+    let new_count = layout.len() as i32;
+    out.get_mut(count_field_at..count_field_at + 4)
+        .ok_or_else(|| corrupt("data-resource count field runs past end"))?
+        .copy_from_slice(&new_count.to_le_bytes());
+
+    // Header-length delta from the array resize (entries replaced version+count
+    // preamble untouched).
+    let header_delta: i64 = entries.len() as i64 - (old_count * entry_stride) as i64;
+    if header_delta != 0 {
+        patch_total_header_size_and_export_offset(&mut out, &header, header_delta)?;
+    }
+
+    Ok(out)
+}
+
+/// Repair the two header fields a trailing-section (data-resource array) resize
+/// touches: the summary `total_header_size` and the single texture export's
+/// `SerialOffset` (which embeds total_header_size). Both shift by `header_delta`.
+///
+/// `header` is the parse of the PRE-resize `.uasset` (offsets are stable for
+/// everything BEFORE the array, which is all of the summary + export map). We
+/// re-locate each field by byte and assert the on-disk value matches the parsed
+/// one before patching -- proving the offset math.
+fn patch_total_header_size_and_export_offset(
+    out: &mut [u8],
+    header: &retoc::legacy_asset::FLegacyPackageHeader,
+    header_delta: i64,
+) -> Result<()> {
+    // --- total_header_size: i32 in the summary versioning info (sits early, well
+    //     before the name map). Byte-locating it exactly is version-dependent
+    //     (saved-hash vs custom-versions layout), so we scan the summary PREFIX
+    //     (magic..name-map) for the parsed value and require it to be UNIQUE -- the
+    //     value equals the no-padding header size, distinct from the small version
+    //     ints before it and from `bulk_data_start_offset` (end of export body).
+    //     Uniqueness makes the scan safe; 0 or >1 matches fails loud. ---
+    let parsed_ths = header.summary.versioning_info.total_header_size;
+    let names_offset = header.summary.names.offset as usize; // name map start; summary precedes it
+    let summary_prefix_end = names_offset.min(out.len());
+    let ths_bytes = parsed_ths.to_le_bytes();
+    let new_ths = (parsed_ths as i64 + header_delta) as i32;
+    let mut matches: Vec<usize> = Vec::new();
+    {
+        // Start past the 4-byte package magic so a coincidental match there is
+        // impossible (magic is 0x9E2A83C1, not a plausible header size anyway).
+        let mut i = 4usize;
+        while i + 4 <= summary_prefix_end {
+            if out[i..i + 4] == ths_bytes {
+                matches.push(i);
+            }
+            i += 1;
+        }
+    }
+    if matches.len() != 1 {
+        return Err(corrupt(&format!(
+            "total_header_size i32 ({parsed_ths}) found {} time(s) in summary prefix (want exactly 1); \
+             refusing to patch ambiguously",
+            matches.len()
+        )));
+    }
+    out[matches[0]..matches[0] + 4].copy_from_slice(&new_ths.to_le_bytes());
+
+    // --- export SerialOffset: i64. The export map is at summary.exports.offset;
+    //     SerialOffset follows SerialSize within FObjectExport. Field order:
+    //     class/super/template/outer (4 x i32) + object_name (2 x i32) +
+    //     object_flags (u32) = 28, then SerialSize (i64, +8), then SerialOffset
+    //     (i64). So SerialOffset is at entry + 28 + 8 = 36. ---
+    let exports_offset = header.summary.exports.offset as usize;
+    let depends_offset = header.summary.depends_offset as usize;
+    let export_count = header.exports.len();
+    if export_count == 0 {
+        return Err(corrupt("no exports to patch SerialOffset"));
+    }
+    let entry_span = depends_offset.checked_sub(exports_offset)
+        .ok_or_else(|| corrupt("export-map span underflow"))?;
+    if entry_span == 0 || entry_span % export_count != 0 {
+        return Err(corrupt("implausible export-map span"));
+    }
+    let single_export_size = entry_span / export_count;
+    const SERIAL_OFFSET_FIELD: usize = 28 + 8; // after object header + SerialSize i64
+
+    // Patch SerialOffset for EVERY export whose body lies AFTER the header (all of
+    // them, for these cooked packages -- the body starts at total_header_size).
+    for (i, e) in header.exports.iter().enumerate() {
+        let entry_start = exports_offset + i * single_export_size;
+        let at = entry_start + SERIAL_OFFSET_FIELD;
+        let slot = out
+            .get_mut(at..at + 8)
+            .ok_or_else(|| corrupt("export SerialOffset field runs past end of .uasset"))?;
+        let on_disk = i64::from_le_bytes(slot.try_into().unwrap());
+        if on_disk != e.serial_offset {
+            return Err(corrupt(&format!(
+                "export[{i}] SerialOffset byte-located {on_disk} != parsed {} (offset math mismatch)",
+                e.serial_offset
+            )));
+        }
+        let new_off = on_disk
+            .checked_add(header_delta)
+            .ok_or_else(|| corrupt("SerialOffset overflow after delta"))?;
+        slot.copy_from_slice(&new_off.to_le_bytes());
+    }
+
+    Ok(())
 }
 
 /// Overwrite every occurrence of the source-dimension i32 pair `(orig.0, orig.1)`
@@ -593,10 +932,16 @@ pub fn replace_texture(
 /// `SizeX/SizeY` alone is insufficient (see the WHY in `replace_texture`).
 ///
 /// Each match is an in-place same-length 8-byte edit, so the block length never
-/// changes. Returns the number of occurrences patched. Errors (fail loud, never
-/// ship a silently-broken mod) if ZERO occurrences are found: the `ImportedSize`
-/// wasn't where we expect, so we cannot trust the rewrite. When `orig == new`
-/// (same-dims replace) the scan still runs and overwrites identical bytes (no-op).
+/// changes. Returns the number of occurrences patched (possibly zero).
+///
+/// `ImportedSize` is the texture's source dimension and is NOT the upscale-crash
+/// cause (the confirmed cause is the legacy data-resource `serial_size`, patched
+/// separately). Patching it when present is still more correct for the cooked
+/// texture, but a property block that lacks the exact `(orig_w,orig_h)` i32 pair
+/// is NOT a failure -- some textures simply don't store the source dims this way.
+/// So zero occurrences is a NON-FATAL `Ok(0)` (the caller logs it), not an error.
+/// When `orig == new` (same-dims replace) the scan still runs and overwrites
+/// identical bytes (no-op).
 fn patch_imported_size(
     prop_block: &mut [u8],
     orig: (u32, u32),
@@ -624,13 +969,10 @@ fn patch_imported_size(
         }
     }
 
-    if count == 0 {
-        return Err(corrupt(&format!(
-            "ImportedSize ({},{}) not found in property block -- cannot patch source \
-             dimensions; refusing to ship a stale-dimension texture",
-            orig.0, orig.1
-        )));
-    }
+    // Zero occurrences is non-fatal: ImportedSize is not the crash cause, and
+    // not every texture stores the source dims as this exact i32 pair. The caller
+    // logs the count; downstream the data-resource + platform-data patches carry
+    // the real fix.
     Ok(count)
 }
 
@@ -910,12 +1252,88 @@ mod tests {
         assert_eq!(n2, 1);
     }
 
-    /// FAST: zero occurrences must fail loud (never ship a stale-dim texture).
+    /// FAST: zero occurrences is now NON-FATAL (Ok with count 0). ImportedSize is
+    /// not the upscale-crash cause; the data-resource patch carries the fix, so a
+    /// property block without the source-dim pair must NOT abort the rewrite.
     #[test]
-    fn patch_imported_size_missing_errors() {
+    fn patch_imported_size_missing_is_ok_zero() {
         let mut block = vec![0u8; 32];
-        let err = patch_imported_size(&mut block, (128, 128), (256, 256));
-        assert!(err.is_err(), "missing ImportedSize must error");
+        let n = patch_imported_size(&mut block, (128, 128), (256, 256)).unwrap();
+        assert_eq!(n, 0, "missing ImportedSize is a non-fatal no-op (count 0)");
+    }
+
+    /// Build a synthetic `PlatformData` with the given mips (each `(w,h,inline)`),
+    /// filling inline mips with `block_math`-sized zero payloads. `region_start`
+    /// anchors the absolute `.uexp` body offsets for inline mips.
+    fn synth_pd(format: &str, mips: &[(u32, u32, bool)], region_start: usize) -> PlatformData {
+        let entries = mips
+            .iter()
+            .map(|&(w, h, inline)| MipEntry {
+                width: w,
+                height: h,
+                inline,
+                flags: 0,
+                data: vec![0u8; mip_byte_size(format, w, h).unwrap() as usize],
+            })
+            .collect();
+        PlatformData {
+            size_x: mips[0].0,
+            size_y: mips[0].1,
+            packed_data: 0,
+            format: format.to_string(),
+            first_mip: 0,
+            mips: entries,
+            trailer: vec![0u8; 12],
+            region: region_start..(region_start + 1), // end unused by mip_serial_layout
+        }
+    }
+
+    /// FAST: `mip_serial_layout` for a single INLINE mip (cursor case) -- the
+    /// serial_offset is the absolute `.uexp` payload offset and serial_size is the
+    /// new block-math size.
+    #[test]
+    fn mip_serial_layout_single_inline() {
+        // 256x256 DXT5 inline, region_start arbitrary.
+        let pd = synth_pd("PF_DXT5", &[(256, 256, true)], 88);
+        let layout = pd.mip_serial_layout().unwrap();
+        assert_eq!(layout.len(), 1);
+        let (off, size, inline) = layout[0];
+        assert!(inline);
+        assert_eq!(size, 65536, "256^2 DXT5 = 65536");
+        // Region header bytes before the first inline payload:
+        //   SizeX+SizeY+Packed = 12; format "PF_DXT5"=7 -> FString 4+8=12 (incl NUL);
+        //   FirstMip+NumMips = 8; mip flags = 4. Total = 36. Payload at region+36.
+        // "PF_DXT5" is 7 chars + NUL = 8 -> FString len i32(4) + 8 = 12.
+        assert_eq!(off, 88 + 12 + 12 + 8 + 4, "inline payload absolute uexp offset");
+    }
+
+    /// FAST: `mip_serial_layout` for a STREAMED multi-mip chain -- streamed mips
+    /// get cumulative `.ubulk` offsets; each serial_size is its block-math size.
+    #[test]
+    fn mip_serial_layout_streamed_chain() {
+        // 1024,512,256,128 streamed BC5, then 64,32 inline (mirrors water shape).
+        let pd = synth_pd(
+            "PF_BC5",
+            &[
+                (1024, 1024, false),
+                (512, 512, false),
+                (256, 256, false),
+                (128, 128, false),
+                (64, 64, true),
+                (32, 32, true),
+            ],
+            100,
+        );
+        let layout = pd.mip_serial_layout().unwrap();
+        // Streamed offsets are cumulative from 0.
+        assert_eq!(layout[0], (0, 1048576, false));
+        assert_eq!(layout[1], (1048576, 262144, false));
+        assert_eq!(layout[2], (1048576 + 262144, 65536, false));
+        assert_eq!(layout[3], (1048576 + 262144 + 65536, 16384, false));
+        // Inline mips: absolute uexp offsets, increasing; sizes correct.
+        assert!(layout[4].2 && layout[4].1 == 4096);
+        assert!(layout[5].2 && layout[5].1 == 1024);
+        assert!(layout[5].0 > layout[4].0, "inline payloads advance in .uexp");
     }
 
     /// The upscale oracle: rewrite the cursor to 256x256 magenta, repack through
@@ -957,6 +1375,41 @@ mod tests {
         let prop_start = orig_pd.region.start;
 
         let (na, ne, nb) = replace_texture(&ua, &ue, &ub, w, h, mips).unwrap();
+
+        // REGRESSION LOCK (the confirmed crash fix): the legacy data-resource
+        // array in the NEW .uasset must now carry the NEW mip size. The cursor is
+        // single-inline-mip (one data-resource): old 16384 (128^2 DXT5) -> new
+        // 65536 (256^2 DXT5). Re-parse `na` with retoc's FLegacyPackageHeader and
+        // assert every data-resource serial_size/raw_size == 65536. A stale 16384
+        // here is exactly what made the engine under-read and crash.
+        {
+            use retoc::legacy_asset::FLegacyPackageHeader;
+            use retoc::version::EngineVersion;
+            use std::io::Cursor;
+            let hdr = FLegacyPackageHeader::deserialize(
+                &mut Cursor::new(na.as_slice()),
+                Some(EngineVersion::UE5_4.package_file_version()),
+            )
+            .unwrap();
+            assert!(
+                !hdr.data_resources.is_empty(),
+                "cursor must have at least one data-resource to lock"
+            );
+            for (i, dr) in hdr.data_resources.iter().enumerate() {
+                assert_eq!(
+                    dr.serial_size, 65536,
+                    "data-resource[{i}] serial_size must be 65536 (new 256^2 DXT5), not stale 16384"
+                );
+                assert_eq!(
+                    dr.raw_size, 65536,
+                    "data-resource[{i}] raw_size must be 65536 (new 256^2 DXT5)"
+                );
+            }
+            eprintln!(
+                "OK: {} data-resource(s) patched to serial_size=65536 in the new .uasset",
+                hdr.data_resources.len()
+            );
+        }
 
         // The platform-data region length is unchanged by the property-block edit,
         // so the region start is stable; the property block is ne[0 .. prop_start).
@@ -1124,6 +1577,46 @@ mod tests {
             "region delta = {delta} (old {old_region_len} -> new {new_region_len}); .ubulk = {} bytes",
             nb.len()
         );
+
+        // MULTI-DATA-RESOURCE LOCK (the streamed multi-mip oracle for THIS fix):
+        // re-parse `na` and assert there are MULTIPLE data-resources and each
+        // carries its mip's NEW per-mip block-math size, in order. A streamed
+        // upscale that left these at the OLD per-mip sizes would crash exactly like
+        // the cursor did.
+        {
+            use retoc::legacy_asset::FLegacyPackageHeader;
+            use retoc::version::EngineVersion;
+            use std::io::Cursor;
+            let hdr = FLegacyPackageHeader::deserialize(
+                &mut Cursor::new(na.as_slice()),
+                Some(EngineVersion::UE5_4.package_file_version()),
+            )
+            .unwrap();
+            assert!(
+                hdr.data_resources.len() > 1,
+                "streamed water must have MULTIPLE data-resources to exercise the multi-mip path, got {}",
+                hdr.data_resources.len()
+            );
+            // data_resources[i] <-> mip[i]; new mip[i] = (2048>>i) BC5 block-math.
+            for (i, dr) in hdr.data_resources.iter().enumerate() {
+                let mw = (w >> i).max(1);
+                let mh = (h >> i).max(1);
+                let want = block_math("PF_BC5", mw, mh).unwrap() as i64;
+                assert_eq!(
+                    dr.serial_size, want,
+                    "data-resource[{i}] serial_size must be new mip {mw}x{mh} size {want}"
+                );
+                assert_eq!(
+                    dr.raw_size, want,
+                    "data-resource[{i}] raw_size must be new mip {mw}x{mh} size {want}"
+                );
+            }
+            eprintln!(
+                "OK: {} data-resources patched to new per-mip sizes (mip0={} bytes)",
+                hdr.data_resources.len(),
+                hdr.data_resources[0].serial_size
+            );
+        }
 
         std::fs::write(&uasset, &na).unwrap();
         std::fs::write(uasset.with_extension("uexp"), &ne).unwrap();
