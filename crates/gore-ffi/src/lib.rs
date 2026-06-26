@@ -145,16 +145,22 @@ fn find_game() -> Value {
     })
 }
 
-/// Read a bank's PRISTINE bytes for listing/preview: its `*.gore-bak` if a deploy left one,
-/// else the file itself. So preview always reflects the true original sample (or the user's
-/// staged WAV), not a deployed bank that already carries an injected/repointed copy.
+/// Read a bank's PRISTINE bytes for listing/preview. The live bank is the source of truth when it
+/// isn't injected yet (a single FSB5): that covers an un-deployed bank AND the case where a
+/// `restore` or a Steam update refreshed the live bank, so the Audio tab never lists/previews
+/// obsolete samples from a stale `*.gore-bak`. Only when the live bank is already injected
+/// (>1 FSB5) do we fall back to the backup, which holds the true original. Mirrors the CLI's
+/// `read_pristine_bank`.
 fn read_bank_pristine(bank: &str) -> std::io::Result<Vec<u8>> {
-    let bak = format!("{bank}.gore-bak");
-    if std::path::Path::new(&bak).exists() {
-        std::fs::read(&bak)
-    } else {
-        std::fs::read(bank)
+    let live = std::fs::read(bank)?;
+    let injected = gore_fmod::parse_bank(&live).map(|e| e.len() > 1).unwrap_or(false);
+    if injected {
+        let bak = format!("{bank}.gore-bak");
+        if std::path::Path::new(&bak).exists() {
+            return std::fs::read(&bak);
+        }
     }
+    Ok(live)
 }
 
 fn generate_mod(payload: Value) -> Value {

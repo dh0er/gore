@@ -208,13 +208,17 @@ class _DialogBrowserState extends ConsumerState<_DialogBrowser> {
                       );
                     }
                     final line = row as DialogLineRow;
-                    // Prefer the staged edit for the current language's set so the list preview
-                    // matches what the editor will deploy (and what search compares against).
-                    final stagedText =
-                        editedIds[line.id]?[primarySetFor(catalog, line.id, lang)];
+                    // Match the editor field exactly: the staged edit, else the value in THIS
+                    // language's target set — with NO English fallback. So the list preview shows
+                    // what editing/deploy actually change; a line empty in the current language
+                    // shows no preview (like its editor field), instead of misleading English copy.
+                    final set = primarySetFor(catalog, line.id, lang);
+                    final stagedText = editedIds[line.id]?[set];
+                    final langValue = catalog[line.id.toLowerCase()]?[set];
                     final preview = stagedText ??
-                        resolveGameText(catalog, line.id, lang) ??
-                        _previewFor(line.id, catalog);
+                        ((langValue != null && langValue.trim().isNotEmpty)
+                            ? langValue
+                            : null);
                     return ListTile(
                       dense: true,
                       selected: line.id == selectedId,
@@ -239,16 +243,6 @@ class _DialogBrowserState extends ConsumerState<_DialogBrowser> {
       ],
     );
   }
-}
-
-/// A short text preview for a line: its first non-empty set value, if any.
-String? _previewFor(String id, Map<String, Map<String, String>> catalog) {
-  final entry = catalog[id];
-  if (entry == null) return null;
-  for (final v in entry.values) {
-    if (v.trim().isNotEmpty) return v;
-  }
-  return null;
 }
 
 class _GroupHeader extends StatelessWidget {
