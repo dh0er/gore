@@ -985,6 +985,11 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
     tmp.push(".gore-tmp");
     let tmp = PathBuf::from(tmp);
     std::fs::write(&tmp, bytes).map_err(io("writing temp"))?;
+    // `std::fs::rename` REPLACES an existing destination on every platform we target: on Windows
+    // Rust implements it via `MoveFileExW(.., MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)`,
+    // not the bare `MoveFile`/`rename()` that fails when the target exists. So this safely overwrites
+    // existing game files / records in place; do NOT switch to remove-then-rename (that adds a
+    // non-atomic window where a crash leaves the destination missing).
     std::fs::rename(&tmp, path).map_err(io("renaming temp"))?;
     Ok(())
 }

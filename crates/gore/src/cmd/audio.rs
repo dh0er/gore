@@ -43,6 +43,10 @@ fn read_pristine_bank(bank: &Path) -> Result<Vec<u8>> {
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     let tmp = path.with_extension("gore-tmp");
     std::fs::write(&tmp, bytes).with_context(|| format!("writing '{}'", tmp.display()))?;
+    // `std::fs::rename` REPLACES an existing destination on Windows too — Rust implements it via
+    // `MoveFileExW(.., MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)`, not the bare
+    // `MoveFile`/`rename()` that fails when the target exists. So overwriting an existing .bank in
+    // place works; do NOT switch to remove-then-rename (it would add a non-atomic crash window).
     std::fs::rename(&tmp, path).with_context(|| format!("renaming into '{}'", path.display()))?;
     Ok(())
 }
