@@ -320,6 +320,9 @@ fn record_path(root: &Path) -> PathBuf {
 struct DeployPlan {
     ue4ss: Option<(PathBuf, PathBuf)>, // (source dir in bundle, dest under ue4ss/Mods)
     writes: Vec<(PathBuf, Vec<u8>)>,   // (live game file, new contents)
+    /// Live files whose preserved `*.gore-bak` is stale because the file drifted (game updated)
+    /// since we deployed: stage must drop that backup so it re-snapshots the current pristine.
+    refresh_baks: Vec<PathBuf>,
 }
 
 /// Deploy a built bundle dir into the game at `game_root`. Two phases so a previous working
@@ -342,13 +345,16 @@ pub fn deploy(bundle_dir: &Path, game_root: &Path) -> Result<DeployRecord> {
     let game_root = &abs_root(game_root);
     let gp = resolve_game_paths(game_root);
 
+    // The previous deployment's record — used both to detect externally-updated (drifted) files
+    // during prepare and to fold its leftovers during commit.
+    let prev = read_record(game_root);
+    let prev_record_bytes = std::fs::read(record_path(game_root)).ok();
+
     // PHASE 1 — prepare (no game writes). The previous deployment is left intact if this fails.
-    let plan = prepare(bundle_dir, &manifest, &gp)?;
+    let plan = prepare(bundle_dir, &manifest, &gp, prev.as_ref())?;
 
     // PHASE 2 — commit. `undo` captures the exact pre-deploy state for an in-process rollback;
     // the record is persisted BEFORE any live write so even a crash mid-write is recoverable.
-    let prev = read_record(game_root);
-    let prev_record_bytes = std::fs::read(record_path(game_root)).ok();
     let mut record = DeployRecord { mod_name: manifest.mod_meta.name.clone(), ..Default::default() };
     let mut undo = Undo::default();
 
@@ -513,8 +519,13 @@ impl Undo {
 }
 
 /// Build everything to write, in memory. Any error here leaves the game untouched.
-fn prepare(bundle_dir: &Path, manifest: &ModManifest, gp: &GamePaths) -> Result<DeployPlan> {
-    let mut plan = DeployPlan { ue4ss: None, writes: Vec::new() };
+fn prepare(
+    bundle_dir: &Path,
+    manifest: &ModManifest,
+    gp: &GamePaths,
+    prev: Option<&DeployRecord>,
+) -> Result<DeployPlan> {
+    let mut plan = DeployPlan { ue4ss: None, writes: Vec::new(), refresh_baks: Vec::new() };
     for comp in &manifest.components {
         match comp {
             Component::Ue4ssLua { name, path } => {
@@ -534,7 +545,10 @@ fn prepare(bundle_dir: &Path, manifest: &ModManifest, gp: &GamePaths) -> Result<
                 let lcache = gp.lcache.clone().ok_or_else(|| {
                     ModError::Other("no AlkimiaLocalization .lcache found in game".into())
                 })?;
-                let pristine = read_pristine(&lcache)?;
+                let (pristine, drifted) = read_pristine(&lcache, prev)?;
+                if drifted {
+                    plan.refresh_baks.push(lcache.clone());
+                }
                 let edits: BTreeMap<String, BTreeMap<String, String>> =
                     serde_json::from_slice(&std::fs::read(bundle_dir.join(path)).map_err(io("reading edits.json"))?)?;
                 let mut lc = gore_loc::loc::Lcache::decode(&pristine)?;
@@ -560,7 +574,10 @@ fn prepare(bundle_dir: &Path, manifest: &ModManifest, gp: &GamePaths) -> Result<
                         return Err(ModError::Other(format!("unsafe bank name: {bank:?}")));
                     }
                     let bank_path = gp.fmod_desktop.join(bank);
-                    let pristine = read_pristine(&bank_path)?;
+                    let (pristine, drifted) = read_pristine(&bank_path, prev)?;
+                    if drifted {
+                        plan.refresh_baks.push(bank_path.clone());
+                    }
                     let mut repl = Vec::new();
                     for (sample, wav_rel) in samples {
                         if !is_safe_rel_path(wav_rel) {
@@ -599,6 +616,12 @@ fn stage(plan: &DeployPlan, record: &mut DeployRecord, undo: &mut Undo) -> Resul
         // abort BEFORE writing anything, rather than snapshot empty and risk an empty-file rollback.
         let prior = std::fs::read(live).map_err(io("reading live file for rollback snapshot"))?;
         undo.files.push((live.clone(), prior));
+        // If the live file drifted (game updated) since our last deploy, its preserved backup is
+        // stale: drop it so backup() re-snapshots the current file as the new pristine, instead of
+        // keeping a pre-update backup that a future undeploy would restore over the newer asset.
+        if plan.refresh_baks.iter().any(|p| p == live) {
+            let _ = std::fs::remove_file(bak_path(live));
+        }
         let (bak, created) = backup(live, record)?;
         if created {
             undo.created_baks.push(bak);
@@ -747,12 +770,29 @@ fn read_record(game_root: &Path) -> Option<DeployRecord> {
         .and_then(|b| serde_json::from_slice(&b).ok())
 }
 
-/// Pristine bytes for a game file: its `*.gore-bak` if a prior deploy preserved one, else the
-/// live file (assumed pristine). Never writes.
-fn read_pristine(live: &Path) -> Result<Vec<u8>> {
+/// Pristine bytes to rebuild a modded file from, plus whether the live file has DRIFTED from what
+/// we previously deployed there (e.g. Steam verified/updated it). Normally the preserved
+/// `*.gore-bak` is the pristine source; but if `prev` recorded a hash for this file and the
+/// current live no longer matches it while a backup exists, that backup is stale (pre-update) —
+/// rebuilding from it would write an old asset over the newer game file. In that case the
+/// (updated) live IS the new pristine and the caller must refresh the stale backup. Never writes.
+fn read_pristine(live: &Path, prev: Option<&DeployRecord>) -> Result<(Vec<u8>, bool)> {
     let bak = bak_path(live);
-    let src = if bak.exists() { bak.as_path() } else { live };
-    std::fs::read(src).map_err(io(&format!("reading pristine {}", live.display())))
+    if bak.exists() {
+        let live_key = live.display().to_string();
+        if let Some(expected) = prev.and_then(|p| p.deployed_hashes.get(&live_key)) {
+            if let Ok(cur) = std::fs::read(live) {
+                if &content_hash(&cur) != expected {
+                    return Ok((cur, true)); // drifted — rebuild from the updated live file
+                }
+            }
+        }
+        let bytes = std::fs::read(&bak).map_err(io(&format!("reading pristine {}", live.display())))?;
+        return Ok((bytes, false));
+    }
+    // No backup yet — the live file is the pristine source (first deploy).
+    let bytes = std::fs::read(live).map_err(io(&format!("reading pristine {}", live.display())))?;
+    Ok((bytes, false))
 }
 
 fn bak_path(live: &Path) -> PathBuf {
