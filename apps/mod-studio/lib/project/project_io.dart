@@ -48,7 +48,15 @@ Future<ModProject> loadProject(String path) async {
   final project = ModProject.fromJson(
       jsonDecode(utf8.decode(pj.content as List<int>)) as Map<String, Object?>);
 
-  final tmp = await Directory.systemTemp.createTemp('goremod_');
+  // Reuse one fixed temp dir and clear it each load, so successive opens don't accumulate
+  // extracted-WAV directories under the system temp folder.
+  final tmp = Directory(p.join(Directory.systemTemp.path, 'goremod_loaded'));
+  if (tmp.existsSync()) {
+    try {
+      await tmp.delete(recursive: true);
+    } catch (_) {}
+  }
+  await tmp.create(recursive: true);
   final extractedAudio = <AudioReplacement>[];
   for (final a in project.audio) {
     final segs = a.wavPath.split('/');

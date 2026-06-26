@@ -60,10 +60,18 @@ class _BuildDeployDialogState extends ConsumerState<BuildDeployDialog> {
 
   Future<void> _deploy(String gameRoot) => _run(() async {
         final tmp = await Directory.systemTemp.createTemp('goremod_build_');
-        final spec = gatherProject(ref).toBuildSpec();
-        final bundle = await _ffi.modBuild(spec, tmp.path);
-        await _ffi.modDeploy(bundle, gameRoot);
-        _set('Deployed to game. Launch the game to see your changes.');
+        try {
+          final spec = gatherProject(ref).toBuildSpec();
+          final bundle = await _ffi.modBuild(spec, tmp.path);
+          await _ffi.modDeploy(bundle, gameRoot);
+          _set('Deployed to game. Launch the game to see your changes.');
+        } finally {
+          // The bundle was deployed (copied into the game); the temp build dir is no longer
+          // needed, so don't leave it behind under the system temp directory.
+          try {
+            await tmp.delete(recursive: true);
+          } catch (_) {}
+        }
       });
 
   Future<void> _undeploy(String gameRoot) => _run(() async {
