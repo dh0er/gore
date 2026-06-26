@@ -730,6 +730,9 @@ fn prepare(
                     let leaf = asset.rsplit('/').next().unwrap_or(asset);
                     let rel = asset.strip_prefix("/Game/").map(|r| format!("G1R/Content/{r}"))
                         .unwrap_or_else(|| format!("G1R/Content/{}", asset.trim_start_matches('/')));
+                    if !is_safe_rel_path(&rel) {
+                        return Err(ModError::Other(format!("unsafe asset path: {asset:?}")));
+                    }
                     let dest_dir = cook_dir.join(std::path::Path::new(&rel).parent()
                         .ok_or_else(|| ModError::Other(format!("bad asset path {asset}")))?);
                     std::fs::create_dir_all(&dest_dir).map_err(io("mkdir cook dir"))?;
@@ -1288,5 +1291,11 @@ mod tests {
         std::fs::write(record_path(&game), serde_json::to_vec(&rec).unwrap()).unwrap();
         undeploy(&game).unwrap();
         for f in &files { assert!(!std::path::Path::new(f).exists(), "triplet not removed: {f}"); }
+    }
+
+    #[test]
+    fn rel_path_with_dotdot_is_unsafe() {
+        assert!(!is_safe_rel_path("G1R/Content/../../../Foo"));
+        assert!(is_safe_rel_path("G1R/Content/UI/Textures/T_X"));
     }
 }
