@@ -234,8 +234,16 @@ pub fn unpack_asset(
 /// Pack a directory of edited legacy cooked files (laid out under their mount
 /// path, e.g. `cooked_dir/G1R/Content/UI/Textures/Common/T_HardwareCursor.uasset`)
 /// into a Zen triplet `out_dir/<name>.{utoc,ucas,pak}`, UE5.4. Returns the 3 paths
-/// `[utoc, ucas, pak]`. Chunks are written UNCOMPRESSED (method 0) -- valid and
-/// game-loadable (UE mounts uncompressed IoStore fine); no Oodle compression in v1.
+/// `[utoc, ucas, pak]`.
+///
+/// `compress` is opt-in. With `compress == false` (the default at every call
+/// site) chunks are written UNCOMPRESSED (method 0, `container_flags = 8`) --
+/// valid and game-loadable (UE mounts uncompressed IoStore fine), and proven to
+/// work in-game. With `compress == true` the writer Oodle-compresses `.ucas`
+/// blocks (16-aligned, `container_flags = Indexed|Compressed = 9`); the
+/// compression code is wired and framing-fixed but the game currently ignores
+/// our compressed containers (unresolved Oodle framing/encoder issue), so it is
+/// off by default.
 ///
 /// This re-implements retoc's `to-zen` orchestration (`action_to_zen`, which was
 /// CLI-only) on top of the vendored lib's `pub` building blocks:
@@ -262,6 +270,7 @@ pub fn repack_to_zen(
     name: &str,
     out_dir: &Path,
     game_dir: &Path,
+    compress: bool,
 ) -> Result<[PathBuf; 3]> {
     use retoc::iostore_writer::IoStoreWriter;
     use retoc::legacy_asset::FSerializedAssetBundle;
@@ -303,12 +312,17 @@ pub fn repack_to_zen(
     // 3-4. Open the writer and convert+write each asset.
     std::fs::create_dir_all(out_dir)?;
     let utoc_path = out_dir.join(format!("{name}.utoc"));
-    let mut writer = IoStoreWriter::new(
+    let writer = IoStoreWriter::new(
         &utoc_path,
         toc_version,
         Some(header_version),
         UEPathBuf::from(mount_point),
     )?;
+    // Compression is opt-in. Default (`compress == false`) writes raw blocks
+    // (`container_flags = 8`) -- the proven-in-game uncompressed path. When
+    // `compress == true` the writer Oodle-compresses blocks and the container is
+    // flagged `Indexed|Compressed` (9).
+    let mut writer = writer.set_compress(compress);
 
     let log = Log::no_log();
     for rel in &asset_rels {
@@ -705,7 +719,8 @@ mod tests {
         // 2. repack the (unchanged) cooked dir -> triplet
         let out = tmp.join("out");
         std::fs::create_dir_all(&out).unwrap();
-        let triplet = repack_to_zen(&tmp, "RepackRoundTrip_P", &out, &g).unwrap();
+        // DEFAULT (compress = false): the proven-in-game uncompressed write path.
+        let triplet = repack_to_zen(&tmp, "RepackRoundTrip_P", &out, &g, false).unwrap();
         for p in &triplet {
             assert!(
                 p.exists() && std::fs::metadata(p).unwrap().len() > 0,
@@ -720,32 +735,24 @@ mod tests {
             std::fs::metadata(&triplet[2]).unwrap().len(),
         );
 
-        // 2b. Re-dump the regenerated TOC and prove both byte-level fixes landed:
-        //     container_flags == 9 (Indexed|Compressed) AND every compressed-block
-        //     offset is 16-aligned in the .ucas. Reuses retoc's real Toc reader.
+        // 2b. Re-dump the regenerated TOC and prove the DEFAULT path is the
+        //     uncompressed one: container_flags == 8 (Indexed only, no Compressed
+        //     bit) and NO block carries a non-zero compression method. Reuses
+        //     retoc's real Toc reader. (The compress=true path -- flags==9 +
+        //     16-aligned compressed offsets -- is covered by the gated
+        //     `upscale_streamed_water_2x_roundtrips_through_zen` test.)
         let (flags, comp_offsets) =
             retoc::iostore_writer::dump_compressed_layout(&triplet[0]).unwrap();
         eprintln!(
-            "container_flags={flags} (expect 9); {} compressed blocks",
+            "container_flags={flags} (expect 8); {} compressed blocks",
             comp_offsets.len()
         );
-        assert_eq!(flags, 9, "container_flags must be Indexed|Compressed (9)");
+        assert_eq!(flags, 8, "container_flags must be Indexed only (8) for the uncompressed default");
         assert!(
-            !comp_offsets.is_empty(),
-            "expected at least one compressed block to exercise the flag+alignment fixes"
+            comp_offsets.is_empty(),
+            "uncompressed default must have no compressed blocks (method != 0)"
         );
-        for (i, off) in comp_offsets.iter().enumerate() {
-            assert_eq!(
-                off % 0x10,
-                0,
-                "compressed block {i} offset {off:#x} is not 16-aligned"
-            );
-        }
-        eprintln!(
-            "OK: container_flags=9 and all {} compressed block offsets 16-aligned (e.g. {:#x?})",
-            comp_offsets.len(),
-            &comp_offsets[..comp_offsets.len().min(4)]
-        );
+        eprintln!("OK: container_flags=8 (uncompressed), no compressed blocks");
 
         // 3. read the asset back out of the freshly-built triplet and decode it.
         //    Point `unpack_asset` at the produced `.utoc`: it opens the parent dir

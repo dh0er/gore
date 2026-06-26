@@ -55,6 +55,11 @@ pub enum TextureAction {
         /// Output dir for <name>.{utoc,ucas,pak}
         #[arg(short = 'o', long)]
         out: PathBuf,
+        /// Oodle-compress the .ucas blocks (opt-in). Default OFF: uncompressed
+        /// containers are proven to load in-game; compressed ones are currently
+        /// ignored by the game (unresolved Oodle framing issue).
+        #[arg(long)]
+        compress: bool,
     },
     /// Deploy a Zen triplet into the game's ~mods override folder
     Deploy {
@@ -255,8 +260,9 @@ pub fn run(action: TextureAction) -> Result<()> {
             mod_dir,
             name,
             out,
+            compress,
         } => {
-            let triplet = gore_tex::container::repack_to_zen(&mod_dir, &name, &out, &game)
+            let triplet = gore_tex::container::repack_to_zen(&mod_dir, &name, &out, &game, compress)
                 .with_context(|| format!("packing {} into {name}", mod_dir.display()))?;
             println!("wrote triplet:");
             for p in &triplet {

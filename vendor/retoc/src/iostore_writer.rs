@@ -20,6 +20,13 @@ pub struct IoStoreWriter {
     cas_stream: BufWriter<fs::File>,
     toc: Toc,
     container_header: Option<FIoContainerHeader>,
+    /// When `true`, `write_chunk` runs the per-block Oodle (Kraken) compression
+    /// path (16-aligned offsets, `Compressed` container flag). When `false`
+    /// (the default), every block is written RAW with method index 0, producing
+    /// an uncompressed container (`container_flags = 8`, no 16-alignment) -- the
+    /// pre-compression behaviour that is proven to load in-game. Toggle via
+    /// [`IoStoreWriter::set_compress`].
+    compress: bool,
 }
 
 impl IoStoreWriter {
@@ -51,7 +58,19 @@ impl IoStoreWriter {
             cas_stream,
             toc,
             container_header,
+            // Default OFF: write raw/uncompressed blocks. The compression path is
+            // opt-in via `set_compress(true)` because the game silently ignores
+            // our compressed containers (unresolved Oodle framing/encoder issue),
+            // while uncompressed containers are proven to load in-game.
+            compress: false,
         })
+    }
+    /// Enable (or disable) per-block Oodle compression for subsequently-written
+    /// chunks. Off by default; see the `compress` field. Returns `self` for
+    /// builder-style chaining.
+    pub fn set_compress(mut self, compress: bool) -> Self {
+        self.compress = compress;
+        self
     }
     pub fn write_chunk_raw(&mut self, chunk_id_raw: FIoChunkIdRaw, path: Option<&UEPath>, data: &[u8]) -> Result<()> {
         self.write_chunk(FIoChunkId::from_raw(chunk_id_raw, self.toc.version), path, data)
@@ -78,35 +97,47 @@ impl IoStoreWriter {
             hasher.update(block);
             let uncompressed_size = block.len() as u32;
 
-            // Try Oodle/Kraken (via gore-oodle) for this block.
-            let mut compressed: Vec<u8> = Vec::new();
-            compress(CompressionMethod::Oodle, block, &mut compressed)?;
+            if self.compress {
+                // OPT-IN compression path. Try Oodle/Kraken (via gore-oodle) for
+                // this block, keeping the compressed bytes only when they shrink
+                // it (standard IoStore per-block raw fallback to method 0).
+                let mut compressed: Vec<u8> = Vec::new();
+                compress(CompressionMethod::Oodle, block, &mut compressed)?;
 
-            // Per-block raw fallback (standard IoStore/UE behaviour): only keep the
-            // compressed block if it is strictly smaller than the raw block,
-            // otherwise store the block uncompressed with method index 0.
-            let (payload, compression_method_index): (&[u8], u8) = if compressed.len() < block.len() {
-                any_block_compressed = true;
-                (&compressed, OODLE_METHOD_INDEX)
+                let (payload, compression_method_index): (&[u8], u8) = if compressed.len() < block.len() {
+                    any_block_compressed = true;
+                    (&compressed, OODLE_METHOD_INDEX)
+                } else {
+                    (block, 0)
+                };
+
+                self.cas_stream.write_all(payload)?;
+                let compressed_size = payload.len() as u32;
+                // The block entry records the real (unpadded) compressed size and an
+                // offset that is 16-aligned (the base game's convention). UE mis-reads
+                // every block after the first if offsets are not 16-aligned, so pad the
+                // cas stream with zero bytes up to the next 16-byte boundary and advance
+                // `offset` to the aligned value. The first block already lands on an
+                // aligned offset; padding keeps every subsequent block aligned too.
+                // Alignment is GATED to the compressed path: an uncompressed
+                // container (below) must match the pre-compression byte layout.
+                self.toc.compression_blocks.push(FIoStoreTocCompressedBlockEntry::new(offset, compressed_size, uncompressed_size, compression_method_index));
+                let aligned_size = align_usize(payload.len(), 16);
+                let pad = aligned_size - payload.len();
+                if pad > 0 {
+                    self.cas_stream.write_all(&vec![0u8; pad])?;
+                }
+                offset += aligned_size as u64;
             } else {
-                (block, 0)
-            };
-
-            self.cas_stream.write_all(payload)?;
-            let compressed_size = payload.len() as u32;
-            // The block entry records the real (unpadded) compressed size and an
-            // offset that is 16-aligned (the base game's convention). UE mis-reads
-            // every block after the first if offsets are not 16-aligned, so pad the
-            // cas stream with zero bytes up to the next 16-byte boundary and advance
-            // `offset` to the aligned value. The first block already lands on an
-            // aligned offset; padding keeps every subsequent block aligned too.
-            self.toc.compression_blocks.push(FIoStoreTocCompressedBlockEntry::new(offset, compressed_size, uncompressed_size, compression_method_index));
-            let aligned_size = align_usize(payload.len(), 16);
-            let pad = aligned_size - payload.len();
-            if pad > 0 {
-                self.cas_stream.write_all(&vec![0u8; pad])?;
+                // DEFAULT raw path (pre-compression behaviour). Write the block
+                // verbatim with method index 0, no compression, no 16-alignment.
+                // The container reports `container_flags = 8` (Indexed only),
+                // since no block carries a non-zero method index.
+                self.cas_stream.write_all(block)?;
+                let block_size = block.len() as u32;
+                self.toc.compression_blocks.push(FIoStoreTocCompressedBlockEntry::new(offset, block_size, uncompressed_size, 0));
+                offset += block.len() as u64;
             }
-            offset += aligned_size as u64;
         }
         let hash = hasher.finalize();
         // UE's FIoStoreTocEntryMeta::Compressed flag marks chunks that have at

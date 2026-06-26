@@ -1443,7 +1443,7 @@ mod tests {
 
         let out = tmp.join("out");
         std::fs::create_dir_all(&out).unwrap();
-        let triplet = crate::container::repack_to_zen(&tmp, "UpscaleTest_P", &out, &g).unwrap();
+        let triplet = crate::container::repack_to_zen(&tmp, "UpscaleTest_P", &out, &g, false).unwrap();
         for p in &triplet {
             assert!(p.exists() && std::fs::metadata(p).unwrap().len() > 0);
         }
@@ -1628,11 +1628,36 @@ mod tests {
 
         let out = tmp.join("out");
         std::fs::create_dir_all(&out).unwrap();
+        // compress = TRUE: this is the single test that exercises the opt-in
+        // Oodle compression path end-to-end (flags==9, 16-aligned blocks, and the
+        // compressed-size oracle below). Every other repack test uses the default
+        // uncompressed path.
         let triplet =
-            crate::container::repack_to_zen(&tmp, "WaterUpscaleTest_P", &out, &g).unwrap();
+            crate::container::repack_to_zen(&tmp, "WaterUpscaleTest_P", &out, &g, true).unwrap();
         for p in &triplet {
             assert!(p.exists() && std::fs::metadata(p).unwrap().len() > 0);
         }
+
+        // Prove the compression path's byte-level invariants: container_flags == 9
+        // (Indexed|Compressed) AND every compressed-block offset is 16-aligned.
+        let (flags, comp_offsets) =
+            retoc::iostore_writer::dump_compressed_layout(&triplet[0]).unwrap();
+        assert_eq!(flags, 9, "container_flags must be Indexed|Compressed (9) with compress=true");
+        assert!(
+            !comp_offsets.is_empty(),
+            "expected at least one compressed block with compress=true"
+        );
+        for (i, off) in comp_offsets.iter().enumerate() {
+            assert_eq!(
+                off % 0x10,
+                0,
+                "compressed block {i} offset {off:#x} is not 16-aligned"
+            );
+        }
+        eprintln!(
+            "OK: container_flags=9 and all {} compressed block offsets 16-aligned",
+            comp_offsets.len()
+        );
 
         // Copy global.* next to the produced triplet so the composite store has
         // the script-object table to convert zen->legacy on read-back.
