@@ -7,7 +7,13 @@ import '../../core/providers.dart';
 
 /// Loads (building on first use) the texture index for the configured game. Returns
 /// asset_path -> packageIdString. Long on first build; the DLL call runs off the UI isolate.
-final textureIndexProvider = FutureProvider<Map<String, String>>((ref) async {
+///
+/// `autoDispose`: the map is dropped when the Textures tab is no longer watched, so leaving
+/// and re-entering the tab re-queries the Rust side (which validates the on-disk index's
+/// build_id against the current .usmap and rebuilds if a game patch made it stale) — the UI
+/// no longer serves an outdated asset->package-id map for the whole app session. Callers can
+/// also force a refresh with `ref.invalidate(textureIndexProvider)`.
+final textureIndexProvider = FutureProvider.autoDispose<Map<String, String>>((ref) async {
   final gamePath = ref.watch(gameExePathProvider);
   if (gamePath == null || gamePath.isEmpty) return {};
   final gameDir = gameRootFromExe(gamePath);

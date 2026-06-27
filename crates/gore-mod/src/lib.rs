@@ -467,6 +467,21 @@ pub fn deploy(bundle_dir: &Path, game_root: &Path) -> Result<DeployRecord> {
         }
     }
 
+    // Same for the previous deploy's additive ~mods texture triplets: any not re-created by this
+    // deploy must be retired. Pre-seed them into the record BEFORE persisting (crash-safety) so a
+    // crash mid-retire still lets undeploy remove them; retire_leftovers deletes + prunes the ones
+    // it cleans. Without this, redeploying (esp. a different mod name or a bundle with no texture
+    // component) would leave the old triplet mounted in ~mods with no record to undeploy it.
+    if let Some(prev) = prev.as_ref() {
+        let new_triplets: Vec<String> =
+            plan.texture_triplets.iter().map(|(_, dst)| dst.display().to_string()).collect();
+        for t in &prev.texture_triplets {
+            if !new_triplets.contains(t) && !record.texture_triplets.contains(t) {
+                record.texture_triplets.push(t.clone());
+            }
+        }
+    }
+
     if let Err(e) = write_record_file(game_root, &record) {
         undo.rollback();
         restore_record_file(game_root, prev_record_bytes.as_deref());
@@ -962,6 +977,26 @@ fn retire_leftovers(
                 }
             }
         }
+
+        // Retire the previous deploy's additive ~mods texture triplets not re-created by this
+        // deploy. They have no backup (additive override paks) — just delete the files. On success
+        // prune from record.texture_triplets (pre-seeded above); on failure (locked) keep them
+        // tracked so a later undeploy retries.
+        let new_triplets: Vec<String> =
+            plan.texture_triplets.iter().map(|(_, dst)| dst.display().to_string()).collect();
+        for t in prev.texture_triplets.iter() {
+            if new_triplets.contains(t) {
+                continue; // this deploy re-creates it; it stays as the active mod's triplet
+            }
+            let removed = std::fs::remove_file(Path::new(t)).is_ok() || !Path::new(t).exists();
+            if removed {
+                if let Some(i) = record.texture_triplets.iter().position(|x| x == t) {
+                    record.texture_triplets.remove(i);
+                    changed = true;
+                }
+            }
+            // not removed (locked) -> leave it in record.texture_triplets for undeploy to retry
+        }
     }
     (changed, pending_deletes)
 }
@@ -1284,6 +1319,29 @@ mod tests {
         assert!(bundle.files.keys().any(|k| k.starts_with("texture/") && k.ends_with(".png")));
         assert!(matches!(bundle.manifest.components.last(),
             Some(Component::TexturePatch { assets, .. }) if assets == &vec!["/Game/UI/T_X".to_string()]));
+    }
+
+    #[test]
+    fn retire_deletes_prev_texture_triplets_not_in_new_plan() {
+        // A prior deploy left a triplet in ~mods; the new deploy has no (or a differently-named)
+        // texture component. retire_leftovers must delete the stale triplet + prune it from the
+        // record so it neither lingers mounted nor escapes a later undeploy.
+        let dir = std::env::temp_dir().join("gore-mod-retire-tex");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let old: Vec<String> = ["zzz_Old_tex_P.utoc", "zzz_Old_tex_P.ucas", "zzz_Old_tex_P.pak"]
+            .iter()
+            .map(|n| { let p = dir.join(n); std::fs::write(&p, b"x").unwrap(); p.display().to_string() })
+            .collect();
+        let prev = DeployRecord { mod_name: "Old".into(), texture_triplets: old.clone(), ..Default::default() };
+        // The new record was pre-seeded with the prev triplets (as deploy() step (b) does).
+        let mut record = DeployRecord { mod_name: "New".into(), texture_triplets: old.clone(), ..Default::default() };
+        // New plan has NO texture triplets (e.g. a non-texture mod) -> all prev ones are stale.
+        let plan = DeployPlan { ue4ss: None, writes: Vec::new(), refresh_baks: Vec::new(), texture_triplets: Vec::new() };
+        let (changed, _) = retire_leftovers(&[], Some(&prev), &plan, &mut record);
+        assert!(changed);
+        for f in &old { assert!(!std::path::Path::new(f).exists(), "stale triplet not deleted: {f}"); }
+        assert!(record.texture_triplets.is_empty(), "stale triplets not pruned from record");
     }
 
     #[test]
