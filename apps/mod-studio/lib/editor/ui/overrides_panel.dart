@@ -4,12 +4,14 @@ import 'package:path/path.dart' as p;
 import '../../audio/domain/audio_replacements_notifier.dart';
 import '../../l10n/app_localizations.dart';
 import '../../loc/domain/loc_edits_notifier.dart';
+import '../../textures/domain/texture_replacements_notifier.dart';
 import '../domain/override_entry.dart';
 import '../domain/overrides_notifier.dart';
 
-/// Unified "Changes" panel: lists every staged mod change across the three
-/// domains (item value overrides, localized text edits, audio replacements),
-/// each row individually removable, with a single clear-all action.
+/// Unified "Changes" panel: lists every staged mod change across the four
+/// domains (item value overrides, localized text edits, audio replacements,
+/// texture replacements), each row individually removable, with a single
+/// clear-all action.
 class OverridesPanel extends ConsumerWidget {
   const OverridesPanel({super.key});
 
@@ -21,6 +23,8 @@ class OverridesPanel extends ConsumerWidget {
     final locEdits       = ref.read(locEditsProvider.notifier);
     final audioState     = ref.watch(audioReplacementsProvider);
     final audio          = ref.read(audioReplacementsProvider.notifier);
+    final textureState   = ref.watch(textureReplacementsProvider);
+    final textures       = ref.read(textureReplacementsProvider.notifier);
 
     final theme  = Theme.of(context);
     final scheme = theme.colorScheme;
@@ -33,8 +37,9 @@ class OverridesPanel extends ConsumerWidget {
           _LocEditRow(locId: outer.key, set: inner.key, text: inner.value),
     ];
     final audioEntries = audioState.entries;
+    final textureEntries = textureState.entries;
 
-    final total   = overridesState.count + locState.entryCount + audioState.count;
+    final total   = overridesState.count + locState.entryCount + audioState.count + textureState.count;
     final isEmpty = total == 0;
 
     return Column(
@@ -60,6 +65,7 @@ class OverridesPanel extends ConsumerWidget {
                     overrides.clearAll();
                     locEdits.clearAll();
                     audio.clearAll();
+                    textures.clearAll();
                   },
                 ),
             ],
@@ -92,6 +98,11 @@ class OverridesPanel extends ConsumerWidget {
                       const _SectionHeader('Audio'),
                       for (final entry in audioEntries)
                         _AudioRow(entry: entry, notifier: audio),
+                    ],
+                    if (textureEntries.isNotEmpty) ...[
+                      const _SectionHeader('Textures'),
+                      for (final entry in textureEntries)
+                        _TextureRow(entry: entry, notifier: textures),
                     ],
                   ],
                 ),
@@ -249,6 +260,53 @@ class _AudioRow extends StatelessWidget {
                 ),
                 Text(
                   p.basename(entry.wavPath),
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: scheme.primary,
+                    fontWeight: FontWeight.w600,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.remove_circle_outline, size: 18),
+            tooltip: AppLocalizations.of(context).removeOverride,
+            onPressed: () => notifier.remove(entry.key),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TextureRow extends StatelessWidget {
+  const _TextureRow({required this.entry, required this.notifier});
+
+  final TextureReplacement entry;
+  final TextureReplacementsNotifier notifier;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  entry.asset,
+                  style: const TextStyle(fontFamily: 'Consolas', fontSize: 12),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                Text(
+                  p.basename(entry.imagePath),
                   style: TextStyle(
                     fontSize: 12,
                     color: scheme.primary,
