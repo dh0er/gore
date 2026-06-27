@@ -49,6 +49,9 @@ class _TextureTabState extends ConsumerState<TextureTab> {
       ),
       error: (e, _) => Center(child: SelectableText('Index error: $e')),
       data: (entries) {
+        // No cap: filter the full index then sort. The ListView below is lazy
+        // (builder), so even the unfiltered ~13k entries render fine and every
+        // matching asset stays selectable (a fixed .take() silently hid the rest).
         final matches =
             entries.keys
                 .where(
@@ -56,7 +59,6 @@ class _TextureTabState extends ConsumerState<TextureTab> {
                       _query.isEmpty ||
                       p.toLowerCase().contains(_query.toLowerCase()),
                 )
-                .take(500)
                 .toList()
               ..sort();
         return Row(
