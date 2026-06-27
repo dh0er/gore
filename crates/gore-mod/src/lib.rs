@@ -720,7 +720,13 @@ fn prepare(
                 let usmap = gore_tex::paths::usmap(&game_dir)
                     .map_err(|e| ModError::Other(format!("usmap: {e}")))?;
                 let usmap_bytes = std::fs::read(&usmap).map_err(io("reading usmap"))?;
-                let index = gore_tex::index::TextureIndex::load(&gore_tex::paths::texture_index_path()).ok();
+                // Only use the cached index if it's current for this game build; a stale index
+                // (game patched, .usmap/build_id changed) would map paths to outdated package
+                // ids and cook the wrong texture. If stale/absent, fall back to a name scan.
+                let index = gore_tex::index::TextureIndex::load_current(
+                    &gore_tex::paths::texture_index_path(),
+                    &gore_tex::index::build_id_for(&usmap),
+                );
                 let cook_dir = std::env::temp_dir().join(format!("gore-mod-tex-cook-{}", std::process::id()));
                 let _ = std::fs::remove_dir_all(&cook_dir);
                 for (asset, png_rel) in &map {

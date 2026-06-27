@@ -42,6 +42,18 @@ impl TextureIndex {
     pub fn load(path: &Path) -> Result<Self> {
         Self::from_json(&std::fs::read(path)?)
     }
+    /// Load the cached index only if it is still current for this game build.
+    /// Returns `None` if the cache is absent, unreadable, or its `build_id` does not
+    /// match `expected_build_id` (e.g. a game patch changed the .usmap) — so a stale
+    /// cache mapping asset paths to outdated package ids is never trusted.
+    pub fn load_current(path: &Path, expected_build_id: &str) -> Option<Self> {
+        Self::load(path).ok().filter(|i| i.build_id == expected_build_id)
+    }
+}
+
+/// The build id for a game install = its `.usmap` filename (changes when the game patches).
+pub fn build_id_for(usmap: &Path) -> String {
+    usmap.file_name().and_then(|n| n.to_str()).unwrap_or("unknown").to_string()
 }
 
 /// Build the index by scanning the container once (same walk as `list_textures`,
@@ -120,6 +132,19 @@ mod tests {
         idx.entries.insert("/Game/UI/T_X".into(), 0x1122334455667788);
         let back = TextureIndex::from_json(&idx.to_json().unwrap()).unwrap();
         assert_eq!(idx, back);
+    }
+
+    #[test]
+    fn load_current_rejects_stale_build_id() {
+        let dir = std::env::temp_dir().join("gore-tex-idx-stale");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("texture_index.json");
+        let idx = TextureIndex { build_id: "G1R-5.4.3-old.usmap".into(), entries: BTreeMap::new() };
+        idx.save(&path).unwrap();
+        // Matching build id -> Some; mismatched (game patched) -> None; absent -> None.
+        assert!(TextureIndex::load_current(&path, "G1R-5.4.3-old.usmap").is_some());
+        assert!(TextureIndex::load_current(&path, "G1R-5.4.4-new.usmap").is_none());
+        assert!(TextureIndex::load_current(&dir.join("missing.json"), "x").is_none());
     }
 
     fn game_dir() -> Option<std::path::PathBuf> {

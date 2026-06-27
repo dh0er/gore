@@ -281,19 +281,22 @@ fn texture_index(payload: Value) -> Value {
     };
     let rebuild = payload.get("rebuild").and_then(Value::as_bool).unwrap_or(false);
     let cache = gore_tex::paths::texture_index_path();
-    let idx = if !rebuild && cache.exists() {
-        match gore_tex::index::TextureIndex::load(&cache) {
-            Ok(i) => i, Err(e) => return err("INDEX_LOAD", e.to_string()) }
-    } else {
-        let utoc = match gore_tex::paths::main_container(&game) {
-            Ok(p) => p, Err(e) => return err("CONTAINER", e.to_string()) };
-        let usmap = match gore_tex::paths::usmap(&game) {
-            Ok(p) => p, Err(e) => return err("USMAP", e.to_string()) };
-        let build_id = usmap.file_name().and_then(|n| n.to_str()).unwrap_or("unknown").to_string();
-        let i = match gore_tex::index::build_index(&utoc, &build_id) {
-            Ok(i) => i, Err(e) => return err("INDEX_BUILD", e.to_string()) };
-        let _ = i.save(&cache);
-        i
+    let usmap = match gore_tex::paths::usmap(&game) {
+        Ok(p) => p, Err(e) => return err("USMAP", e.to_string()) };
+    let build_id = gore_tex::index::build_id_for(&usmap);
+    // Only reuse the cache when it's current for THIS game build; a game patch changes the
+    // .usmap (build_id), so a stale cache mapping paths to outdated package ids is rebuilt.
+    let cached = if rebuild { None } else { gore_tex::index::TextureIndex::load_current(&cache, &build_id) };
+    let idx = match cached {
+        Some(i) => i,
+        None => {
+            let utoc = match gore_tex::paths::main_container(&game) {
+                Ok(p) => p, Err(e) => return err("CONTAINER", e.to_string()) };
+            let i = match gore_tex::index::build_index(&utoc, &build_id) {
+                Ok(i) => i, Err(e) => return err("INDEX_BUILD", e.to_string()) };
+            let _ = i.save(&cache);
+            i
+        }
     };
     let entries: serde_json::Map<String, Value> = idx.entries.iter()
         .map(|(k, v)| (k.clone(), Value::String(v.to_string()))).collect();
