@@ -44,6 +44,22 @@ pub fn usmap(game_dir: &Path) -> Result<PathBuf> {
     found.into_iter().next().ok_or_else(|| TexError::UsmapNotFound(dir))
 }
 
+/// Map a UE virtual asset path to its physical content-relative path inside a
+/// cooked container / mod tree, per UE mount rules: `/Game/X` → `G1R/Content/X`
+/// (the project mount) and `/Engine/X` → `Engine/Content/X`. Returns `None` for
+/// any other mount root (e.g. a plugin's `/PluginName/...`), which this tool
+/// can't place — callers must reject those rather than mis-mount them under the
+/// project content (where they would never override the intended asset).
+pub fn content_mount_rel(asset: &str) -> Option<String> {
+    if let Some(rest) = asset.strip_prefix("/Game/") {
+        Some(format!("G1R/Content/{rest}"))
+    } else if let Some(rest) = asset.strip_prefix("/Engine/") {
+        Some(format!("Engine/Content/{rest}"))
+    } else {
+        None
+    }
+}
+
 /// The shared gore-tools cache path for the texture index (next to loc_catalog.json).
 pub fn texture_index_path() -> PathBuf {
     gore_loc::paths::shared_data_dir().join("texture_index.json")
@@ -70,6 +86,21 @@ mod tests {
         std::fs::write(dir.join("notmap.txt"), b"x").unwrap();
         let got = usmap(&base).unwrap();
         assert_eq!(got.file_name().unwrap().to_str().unwrap(), "a_first.usmap");
+    }
+
+    #[test]
+    fn content_mount_rel_maps_known_roots() {
+        assert_eq!(
+            content_mount_rel("/Game/UI/Textures/T_X").as_deref(),
+            Some("G1R/Content/UI/Textures/T_X")
+        );
+        assert_eq!(
+            content_mount_rel("/Engine/EngineMaterials/Black").as_deref(),
+            Some("Engine/Content/EngineMaterials/Black")
+        );
+        // Plugin / unknown roots are not placeable -> None (caller rejects).
+        assert_eq!(content_mount_rel("/MyPlugin/Foo/T_Y"), None);
+        assert_eq!(content_mount_rel("NoLeadingSlash"), None);
     }
 
     #[test]

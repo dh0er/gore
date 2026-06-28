@@ -96,15 +96,17 @@ pub enum TextureAction {
 /// layout rule: `<mod_dir>/G1R/Content/` + (asset path with a leading `/Game/`
 /// replaced by `` and any other leading `/` stripped). Returns the directory the
 /// `<leaf>.{uasset,uexp,ubulk}` files should be written into.
-fn mount_dir(mod_dir: &std::path::Path, asset: &str) -> PathBuf {
-    let rel = if let Some(stripped) = asset.strip_prefix("/Game/") {
-        stripped.to_string()
-    } else {
-        asset.trim_start_matches('/').to_string()
-    };
-    // Drop the leaf (file stem); we only want the containing dir under Content/.
+fn mount_dir(mod_dir: &std::path::Path, asset: &str) -> Result<PathBuf> {
+    // Map the UE mount root to its physical content path (/Game -> G1R/Content,
+    // /Engine -> Engine/Content). Forcing a non-/Game asset under G1R/Content
+    // would place the override at the wrong virtual path so it never applies;
+    // unknown roots (plugins) are rejected.
+    let rel = gore_tex::paths::content_mount_rel(asset).ok_or_else(|| {
+        anyhow::anyhow!("unsupported asset mount root (only /Game and /Engine): {asset}")
+    })?;
+    // Drop the leaf (file stem); we only want the containing dir.
     let dir_rel = rel.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
-    mod_dir.join("G1R/Content").join(dir_rel)
+    Ok(mod_dir.join(dir_rel))
 }
 
 pub fn run(action: TextureAction) -> Result<()> {
@@ -231,7 +233,7 @@ pub fn run(action: TextureAction) -> Result<()> {
             .with_context(|| format!("rewriting cooked texture {asset}"))?;
 
             // 4. Write the rewritten triplet under the asset's mount path in mod_dir.
-            let dir = mount_dir(&mod_dir, &asset);
+            let dir = mount_dir(&mod_dir, &asset)?;
             std::fs::create_dir_all(&dir)
                 .with_context(|| format!("creating {}", dir.display()))?;
             let leaf = asset.rsplit('/').next().unwrap_or(&asset);

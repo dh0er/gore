@@ -774,8 +774,15 @@ fn prepare(
                         return Err(ModError::Other(format!("unsafe png path: {png_rel:?}")));
                     }
                     let leaf = asset.rsplit('/').next().unwrap_or(asset);
-                    let rel = asset.strip_prefix("/Game/").map(|r| format!("G1R/Content/{r}"))
-                        .unwrap_or_else(|| format!("G1R/Content/{}", asset.trim_start_matches('/')));
+                    // Map the UE mount root to its physical content path. Non-/Game
+                    // assets (e.g. /Engine/...) must NOT be forced under G1R/Content
+                    // or the override lands at the wrong virtual path and silently
+                    // does nothing; unknown roots (plugins) are rejected.
+                    let rel = gore_tex::paths::content_mount_rel(asset).ok_or_else(|| {
+                        ModError::Other(format!(
+                            "unsupported asset mount root (only /Game and /Engine): {asset}"
+                        ))
+                    })?;
                     if !is_safe_rel_path(&rel) {
                         return Err(ModError::Other(format!("unsafe asset path: {asset:?}")));
                     }
