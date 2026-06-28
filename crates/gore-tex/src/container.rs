@@ -443,13 +443,24 @@ pub fn deploy(triplet: &[PathBuf; 3], game_dir: &Path, name: &str) -> Result<Pat
     // should succeed).
     let mods = std::fs::canonicalize(&mods).unwrap_or(mods);
 
-    // Stage copies, rolling back (best-effort) any files already copied in THIS call
-    // if a later copy or the record write fails — otherwise a partial set of triplet
-    // files would mount on next launch with no record for undeploy to remove.
-    let mut copied: Vec<PathBuf> = Vec::with_capacity(3);
-    let cleanup = |copied: &[PathBuf]| {
-        for f in copied {
-            let _ = std::fs::remove_file(f);
+    // Stage copies, rolling back on failure. For each destination we snapshot its
+    // PRIOR contents before overwriting (`Some` = a file existed — i.e. an active
+    // deployment under the same name — and we overwrote it; `None` = fresh add).
+    // On a later copy/serialize/record-write failure, `cleanup` restores the prior
+    // bytes (so an existing deployment is left intact) and removes only the files
+    // we genuinely added. Without the snapshot, deleting an overwritten dst would
+    // destroy the previously working triplet.
+    let mut copied: Vec<(PathBuf, Option<Vec<u8>>)> = Vec::with_capacity(3);
+    let cleanup = |copied: &[(PathBuf, Option<Vec<u8>>)]| {
+        for (f, prior) in copied.iter().rev() {
+            match prior {
+                Some(bytes) => {
+                    let _ = std::fs::write(f, bytes);
+                }
+                None => {
+                    let _ = std::fs::remove_file(f);
+                }
+            }
         }
     };
     for src in triplet {
@@ -464,16 +475,18 @@ pub fn deploy(triplet: &[PathBuf; 3], game_dir: &Path, name: &str) -> Result<Pat
             }
         };
         let dst = mods.join(leaf);
+        // Snapshot before overwriting; `None` when the destination did not exist.
+        let prior = std::fs::read(&dst).ok();
         if let Err(e) = std::fs::copy(src, &dst) {
             cleanup(&copied);
             return Err(e.into());
         }
-        copied.push(dst);
+        copied.push((dst, prior));
     }
 
     let record = DeployRecord {
         name: name.to_string(),
-        files: copied.clone(),
+        files: copied.iter().map(|(p, _)| p.clone()).collect(),
     };
     let record_path = mods.join(format!("{name}.gore-deploy.json"));
     let json = match serde_json::to_string_pretty(&record) {
@@ -684,6 +697,49 @@ mod tests {
                 "partial deploy left files in ~mods: {leftovers:?}"
             );
         }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Redeploying an already-deployed name overwrites the live `~mods` triplet.
+    /// If a later copy fails, rollback must RESTORE the previous triplet's bytes,
+    /// not delete them (deletion would wipe the working deployment). Deploy v1,
+    /// then attempt v2 (same leaf names, 2nd src missing) and assert the first
+    /// destination still holds v1's bytes and the old record survives.
+    #[test]
+    fn deploy_redeploy_failure_restores_existing_triplet() {
+        let base = unique_tmp("redeploy");
+        let src1 = base.join("src1");
+        std::fs::create_dir_all(&src1).unwrap();
+        let v1 = fake_triplet(&src1, "zzz_mod_tex_P");
+        deploy(&v1, &base, "zzz_mod_tex_P").unwrap();
+        let mods = std::fs::canonicalize(mods_dir(&base)).unwrap();
+        let dst_utoc = mods.join("zzz_mod_tex_P.utoc");
+        let v1_utoc = std::fs::read(&dst_utoc).unwrap();
+
+        // v2: same leaf names so it targets the same destinations; 2nd src missing
+        // so the copy fails AFTER the first destination was overwritten.
+        let src2 = base.join("src2");
+        std::fs::create_dir_all(&src2).unwrap();
+        let s0 = src2.join("zzz_mod_tex_P.utoc");
+        std::fs::write(&s0, b"V2 NEW UTOC BYTES").unwrap();
+        let s1 = src2.join("zzz_mod_tex_P.ucas"); // intentionally NOT created
+        let s2 = src2.join("zzz_mod_tex_P.pak");
+        std::fs::write(&s2, b"v2 pak").unwrap();
+        let v2 = [s0, s1, s2];
+
+        let err = deploy(&v2, &base, "zzz_mod_tex_P");
+        assert!(err.is_err(), "expected redeploy to fail on missing src");
+
+        assert!(dst_utoc.exists(), "redeploy failure deleted the existing triplet");
+        assert_eq!(
+            std::fs::read(&dst_utoc).unwrap(),
+            v1_utoc,
+            "existing triplet bytes were not restored on rollback"
+        );
+        assert!(
+            mods.join("zzz_mod_tex_P.gore-deploy.json").exists(),
+            "old deploy record was removed"
+        );
         let _ = std::fs::remove_dir_all(&base);
     }
 
