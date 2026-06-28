@@ -13,6 +13,13 @@ static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
 pub fn unique_temp_dir(prefix: &str) -> std::io::Result<PathBuf> {
     let n = TEMP_SEQ.fetch_add(1, Ordering::Relaxed);
     let p = std::env::temp_dir().join(format!("{prefix}-{}-{n}", std::process::id()));
+    // The pid + per-process counter can collide with a directory a PRIOR process
+    // (same pid, since the counter restarts at 0) left behind. `create_dir_all`
+    // succeeds on an existing path, so it would reopen that stale directory and
+    // leave unrelated siblings in place (e.g. an old `.ubulk` next to freshly
+    // unpacked `.uasset`/`.uexp`, corrupting an inline-texture parse). Remove any
+    // leftover first so the returned directory is guaranteed empty.
+    let _ = std::fs::remove_dir_all(&p);
     std::fs::create_dir_all(&p)?;
     Ok(p)
 }
