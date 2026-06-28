@@ -475,8 +475,20 @@ pub fn deploy(triplet: &[PathBuf; 3], game_dir: &Path, name: &str) -> Result<Pat
             }
         };
         let dst = mods.join(leaf);
-        // Snapshot before overwriting; `None` when the destination did not exist.
-        let prior = std::fs::read(&dst).ok();
+        // Snapshot the destination's prior bytes before overwriting so rollback can
+        // restore them. NotFound -> None (a fresh add, removed on rollback). Any
+        // OTHER read error (e.g. the old triplet exists but is unreadable due to
+        // ACL/mode bits) means we cannot snapshot it — abort BEFORE touching it,
+        // rather than let a later failure run cleanup with prior == None and delete
+        // the existing-but-unsnapshotted triplet as if it were a fresh add.
+        let prior = match std::fs::read(&dst) {
+            Ok(bytes) => Some(bytes),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => {
+                cleanup(&copied);
+                return Err(e.into());
+            }
+        };
         // Record the rollback entry BEFORE copying: std::fs::copy creates/truncates
         // dst first, so a mid-copy failure (disk full, I/O error) leaves a partial
         // file that cleanup must still restore (prior bytes) or remove (fresh add).
