@@ -25,8 +25,13 @@ class _TextureTabState extends ConsumerState<TextureTab> {
   String _query = '';
   String? _selected;
   final TextEditingController _searchController = TextEditingController();
-  // Asset currently being extracted — drives the preview-pane spinner.
-  String? _loadingAsset;
+  // Assets with an extract currently in flight. Tracked as a set (not a single
+  // "current" asset) so re-selecting an asset whose earlier extract is still
+  // running doesn't start a second one racing on the same temp PNG.
+  final Set<String> _inFlight = {};
+  // Assets whose last extract attempt failed (an error dialog was shown). Lets
+  // the Replace tooltip explain the failure instead of saying "preview first".
+  final Set<String> _failed = {};
   // Identity of the index + game path the preview cache was built against. When
   // either changes (game switched, index rebuilt after a game update) the cached
   // PNGs are stale and must be dropped — they were decoded from the old source.
@@ -109,7 +114,8 @@ class _TextureTabState extends ConsumerState<TextureTab> {
             _evictPreview(pv);
           }
           _previewCache.clear();
-          _loadingAsset = null;
+          _inFlight.clear();
+          _failed.clear();
           _sourceEntries = entries;
           _sourceGame = game;
         }
@@ -365,11 +371,13 @@ class _TextureTabState extends ConsumerState<TextureTab> {
     // for virtual textures, whether its shape is retileable. Block while loading,
     // until previewed, and for anything the core marks not replaceable — staging
     // those would only fail later at build/cook time.
-    final loading = _loadingAsset == sel;
+    final loading = _inFlight.contains(sel);
     final pv = _previewCache[sel];
     final replaceBlocked = loading || pv == null || !pv.replaceable;
     final replaceReason = loading
         ? 'Loading texture…'
+        : _failed.contains(sel)
+        ? 'Preview failed for this texture — cannot replace'
         : pv == null
         ? 'Preview the texture first'
         : !pv.replaceable
@@ -459,7 +467,7 @@ class _TextureTabState extends ConsumerState<TextureTab> {
   /// to fit (never blown up to fill the pane), pan/zoom via [InteractiveViewer],
   /// and a dims + pixel-format caption.
   Widget _previewArea(String asset) {
-    if (_loadingAsset == asset) {
+    if (_inFlight.contains(asset)) {
       return const Center(child: CircularProgressIndicator());
     }
     final pv = _previewCache[asset];
@@ -547,11 +555,15 @@ class _TextureTabState extends ConsumerState<TextureTab> {
       setState(() => _previewCache[asset] = cached);
       return;
     }
-    // An extract for this asset is already in flight. Starting a second one would
-    // race on the FFI's deterministic per-asset temp PNG and can corrupt it, so
-    // skip — the running call will populate the cache.
-    if (_loadingAsset == asset) return;
-    setState(() => _loadingAsset = asset);
+    // An extract for this asset is already in flight (it may not be the most
+    // recent selection). Starting a second one would race on the FFI's
+    // deterministic per-asset temp PNG and can corrupt it, so skip — the running
+    // call will populate the cache.
+    if (_inFlight.contains(asset)) return;
+    setState(() {
+      _inFlight.add(asset);
+      _failed.remove(asset); // retrying clears a prior failure
+    });
     // Capture the source this extract is for; if the game/index changes while it
     // runs, the result is stale and must be discarded (the cache was cleared for
     // the new source) rather than re-polluting it under the same asset key.
@@ -595,6 +607,7 @@ class _TextureTabState extends ConsumerState<TextureTab> {
       });
     } catch (e) {
       debugPrint('texture preview failed for $asset: $e');
+      _failed.add(asset); // tooltip/gating reflects the failure (rebuilt in finally)
       if (!mounted) return;
       await showDialog<void>(
         context: context,
@@ -618,11 +631,10 @@ class _TextureTabState extends ConsumerState<TextureTab> {
         ),
       );
     } finally {
-      // Clear the spinner only if this call is still the active load (a newer
-      // selection may have taken over).
-      if (mounted && _loadingAsset == asset) {
-        setState(() => _loadingAsset = null);
-      }
+      // This asset's extract is done (success, stale, or failed) — clear its
+      // in-flight mark so the spinner/guard for it lift. Other assets' extracts
+      // are unaffected.
+      if (mounted) setState(() => _inFlight.remove(asset));
     }
   }
 }

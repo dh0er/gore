@@ -477,11 +477,14 @@ pub fn deploy(triplet: &[PathBuf; 3], game_dir: &Path, name: &str) -> Result<Pat
         let dst = mods.join(leaf);
         // Snapshot before overwriting; `None` when the destination did not exist.
         let prior = std::fs::read(&dst).ok();
+        // Record the rollback entry BEFORE copying: std::fs::copy creates/truncates
+        // dst first, so a mid-copy failure (disk full, I/O error) leaves a partial
+        // file that cleanup must still restore (prior bytes) or remove (fresh add).
+        copied.push((dst.clone(), prior));
         if let Err(e) = std::fs::copy(src, &dst) {
             cleanup(&copied);
             return Err(e.into());
         }
-        copied.push((dst, prior));
     }
 
     let record = DeployRecord {
