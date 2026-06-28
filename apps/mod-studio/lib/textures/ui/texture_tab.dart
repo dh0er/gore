@@ -360,12 +360,21 @@ class _TextureTabState extends ConsumerState<TextureTab> {
     if (sel == null) return const Center(child: Text('Select a texture'));
     final gameDir = gameRootFromExe(ref.read(gameExePathProvider));
     final replaced = staged.items[sel];
-    // Replace is blocked for formats we can preview but not re-encode — staging
-    // one would only fail later at build/cook time. Format is known once the
-    // preview (auto-loaded on select) has resolved.
+    // Replace is gated on the texture's format, which is only known after the
+    // preview (auto-loaded on select) resolves. Block it while extracting and
+    // until a format is known, and for formats we can preview but not re-encode —
+    // staging any of those would only fail later at build/cook time.
+    final loading = _loadingAsset == sel;
     final fmt = _previewCache[sel]?.format;
     final replaceBlocked =
-        fmt != null && _previewOnlyFormats.contains(fmt);
+        loading || fmt == null || _previewOnlyFormats.contains(fmt);
+    final replaceReason = loading
+        ? 'Loading texture…'
+        : fmt == null
+        ? 'Preview the texture first'
+        : _previewOnlyFormats.contains(fmt)
+        ? 'Replace not supported for $fmt yet (preview-only format)'
+        : 'Replace this texture with a PNG';
     return Padding(
       padding: const EdgeInsets.all(12),
       child: Column(
@@ -384,9 +393,7 @@ class _TextureTabState extends ConsumerState<TextureTab> {
               ),
               const SizedBox(width: 8),
               Tooltip(
-                message: replaceBlocked
-                    ? 'Replace not supported for $fmt yet (preview-only format)'
-                    : 'Replace this texture with a PNG',
+                message: replaceReason,
                 child: FilledButton.icon(
                   icon: const Icon(Icons.image),
                   label: const Text('Replace…'),

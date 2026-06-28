@@ -188,11 +188,11 @@ pub fn run(action: TextureAction) -> Result<()> {
             let utoc = gore_tex::paths::main_container(&game)?;
             let usmap = gore_tex::paths::usmap(&game)?;
 
-            // 1. Unpack the original cooked files + learn its format/dims.
-            let tmp = std::env::temp_dir().join("gore-tex-replace");
-            let _ = std::fs::remove_dir_all(&tmp);
-            std::fs::create_dir_all(&tmp)
-                .with_context(|| format!("creating temp dir {}", tmp.display()))?;
+            // 1. Unpack the original cooked files + learn its format/dims. Use a
+            //    per-call unique temp dir so concurrent `texture replace` runs don't
+            //    share (and delete) each other's unpacked cooked files.
+            let tmp = gore_tex::paths::unique_temp_dir("gore-tex-replace")
+                .with_context(|| "creating temp dir")?;
 
             let uasset = gore_tex::container::unpack_asset(&utoc, &usmap, &asset, &tmp)
                 .with_context(|| format!("unpacking asset {asset}"))?;
@@ -241,10 +241,15 @@ pub fn run(action: TextureAction) -> Result<()> {
                 .with_context(|| format!("writing {}", out_uasset.display()))?;
             std::fs::write(&out_uexp, &new_uexp)
                 .with_context(|| format!("writing {}", out_uexp.display()))?;
+            let out_ubulk = dir.join(format!("{leaf}.ubulk"));
             if !new_ubulk.is_empty() {
-                let out_ubulk = dir.join(format!("{leaf}.ubulk"));
                 std::fs::write(&out_ubulk, &new_ubulk)
                     .with_context(|| format!("writing {}", out_ubulk.display()))?;
+            } else {
+                // New rewrite is inline (no streamed bulk). Remove any stale
+                // `.ubulk` left by a prior replacement into this same mod dir,
+                // else `texture pack` would pair it with the new .uasset/.uexp.
+                let _ = std::fs::remove_file(&out_ubulk);
             }
 
             println!(
