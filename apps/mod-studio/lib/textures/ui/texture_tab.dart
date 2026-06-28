@@ -24,7 +24,25 @@ class TextureTab extends ConsumerStatefulWidget {
 class _TextureTabState extends ConsumerState<TextureTab> {
   String _query = '';
   String? _selected;
-  String? _previewPng;
+  // Cached preview per asset (png path + native dims + pixel format). Re-selecting
+  // an already-previewed asset shows instantly with no re-extract. The temp PNGs
+  // referenced here are deleted in dispose() and evicted from the image cache.
+  final Map<String, _Preview> _previewCache = {};
+
+  @override
+  void dispose() {
+    final cache = PaintingBinding.instance.imageCache;
+    for (final pv in _previewCache.values) {
+      try {
+        final file = File(pv.pngPath);
+        cache.evict(FileImage(file));
+        if (file.existsSync()) file.deleteSync();
+      } catch (_) {
+        // Best-effort cleanup: a locked/already-gone temp file is harmless.
+      }
+    }
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -94,10 +112,7 @@ class _TextureTabState extends ConsumerState<TextureTab> {
                           trailing: isReplaced
                               ? const Icon(Icons.check, size: 16)
                               : null,
-                          onTap: () => setState(() {
-                            _selected = p;
-                            _previewPng = null;
-                          }),
+                          onTap: () => setState(() => _selected = p),
                         );
                       },
                     ),
@@ -160,12 +175,7 @@ class _TextureTabState extends ConsumerState<TextureTab> {
             ],
           ),
           const SizedBox(height: 12),
-          if (_previewPng != null)
-            Expanded(child: Image.file(File(_previewPng!), fit: BoxFit.contain))
-          else
-            const Expanded(
-              child: Center(child: Text('Preview to see the current texture')),
-            ),
+          Expanded(child: _previewArea(sel)),
           if (replaced != null)
             Padding(
               padding: const EdgeInsets.only(top: 8),
@@ -194,10 +204,66 @@ class _TextureTabState extends ConsumerState<TextureTab> {
     );
   }
 
+  /// The preview pane for [asset]: a checkerboard backdrop (so transparent /
+  /// fully-black textures are visible), the image at its native size scaled DOWN
+  /// to fit (never blown up to fill the pane), pan/zoom via [InteractiveViewer],
+  /// and a dims + pixel-format caption.
+  Widget _previewArea(String asset) {
+    final pv = _previewCache[asset];
+    if (pv == null) {
+      return const Center(child: Text('Preview to see the current texture'));
+    }
+    final theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Expanded(
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              border: Border.all(color: theme.dividerColor),
+            ),
+            child: CustomPaint(
+              painter: _CheckerPainter(theme.brightness),
+              child: InteractiveViewer(
+                maxScale: 64,
+                child: Center(
+                  child: Image.file(
+                    File(pv.pngPath),
+                    // Native size, downscaled only when larger than the pane —
+                    // small textures stay small (zoom in to inspect) instead of
+                    // being stretched to full width.
+                    fit: BoxFit.scaleDown,
+                    // Texture data is pixels: nearest-neighbour keeps them crisp
+                    // when zoomed rather than blurring.
+                    filterQuality: FilterQuality.none,
+                    gaplessPlayback: true,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.only(top: 6),
+          child: Text(
+            '${pv.width} × ${pv.height} · ${pv.format}',
+            style: theme.textTheme.bodySmall,
+          ),
+        ),
+      ],
+    );
+  }
+
   Future<void> _preview(String gameDir, String asset, String? packageId) async {
+    // Already extracted this session — re-show instantly, skip the container
+    // unpack + decode.
+    if (_previewCache.containsKey(asset)) {
+      setState(() {});
+      return;
+    }
     try {
       // textureExtract throws on a non-ok FFI result, so on return the PNG path
-      // is present; just read it.
+      // and dims are present.
       final ffi = ModFfi(ref.read(coreServiceProvider));
       final r = await ffi.textureExtract(
         gameDir,
@@ -205,7 +271,14 @@ class _TextureTabState extends ConsumerState<TextureTab> {
         packageId: packageId,
       );
       if (!mounted) return;
-      setState(() => _previewPng = r['png_path'] as String?);
+      setState(() {
+        _previewCache[asset] = _Preview(
+          pngPath: r['png_path'] as String,
+          width: (r['width'] as num?)?.toInt() ?? 0,
+          height: (r['height'] as num?)?.toInt() ?? 0,
+          format: r['format'] as String? ?? '',
+        );
+      });
     } catch (e) {
       debugPrint('texture preview failed for $asset: $e');
       if (!mounted) return;
@@ -232,4 +305,49 @@ class _TextureTabState extends ConsumerState<TextureTab> {
       );
     }
   }
+}
+
+/// A cached texture preview: the temp PNG path plus the source's native
+/// dimensions and pixel format (for the caption).
+class _Preview {
+  const _Preview({
+    required this.pngPath,
+    required this.width,
+    required this.height,
+    required this.format,
+  });
+
+  final String pngPath;
+  final int width;
+  final int height;
+  final String format;
+}
+
+/// Paints a classic alpha checkerboard so transparent (and fully-black) textures
+/// read against the backdrop instead of vanishing into the pane colour.
+class _CheckerPainter extends CustomPainter {
+  _CheckerPainter(this.brightness);
+
+  final Brightness brightness;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    const cell = 12.0;
+    final isDark = brightness == Brightness.dark;
+    final light = Paint()
+      ..color = isDark ? const Color(0xFF3A3A3A) : const Color(0xFFE6E6E6);
+    final dark = Paint()
+      ..color = isDark ? const Color(0xFF2B2B2B) : const Color(0xFFC8C8C8);
+    canvas.drawRect(Offset.zero & size, light);
+    for (var y = 0.0; y < size.height; y += cell) {
+      for (var x = 0.0; x < size.width; x += cell) {
+        final odd =
+            (((x / cell).floor() + (y / cell).floor()) & 1) == 1;
+        if (odd) canvas.drawRect(Rect.fromLTWH(x, y, cell, cell), dark);
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(_CheckerPainter old) => old.brightness != brightness;
 }
