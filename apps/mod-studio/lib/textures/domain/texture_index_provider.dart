@@ -17,7 +17,15 @@ final textureIndexProvider = FutureProvider.autoDispose<Map<String, String>>((re
   final gamePath = ref.watch(gameExePathProvider);
   if (gamePath == null || gamePath.isEmpty) return {};
   final gameDir = gameRootFromExe(gamePath);
-  if (gameDir == null) return {};
+  // A non-empty but unresolvable path is a misconfiguration, not an empty game.
+  // Throw so the UI surfaces it via the error branch instead of silently showing
+  // "0 textures" (which reads as a valid install with no assets).
+  if (gameDir == null) {
+    throw StateError(
+      'Could not locate the game install from the configured path:\n$gamePath\n\n'
+      'Check the game path in Settings — it should point to the game executable.',
+    );
+  }
   final ffi = ModFfi(ref.read(coreServiceProvider));
   return ffi.textureIndex(gameDir);
 });
