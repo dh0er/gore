@@ -24,6 +24,9 @@ class TextureTab extends ConsumerStatefulWidget {
 class _TextureTabState extends ConsumerState<TextureTab> {
   String _query = '';
   String? _selected;
+  final TextEditingController _searchController = TextEditingController();
+  // Asset currently being extracted — drives the preview-pane spinner.
+  String? _loadingAsset;
   // LRU-capped preview cache, keyed by asset. Re-selecting an already-previewed
   // asset shows instantly with no re-extract. Dart maps keep insertion order, so
   // "least recently used" = the first key; touching an entry re-inserts it at the
@@ -52,6 +55,7 @@ class _TextureTabState extends ConsumerState<TextureTab> {
 
   @override
   void dispose() {
+    _searchController.dispose();
     for (final pv in _previewCache.values) {
       _evictPreview(pv);
     }
@@ -81,6 +85,7 @@ class _TextureTabState extends ConsumerState<TextureTab> {
       ),
       error: (e, _) => Center(child: SelectableText('Index error: $e')),
       data: (entries) {
+        final gameDir = gameRootFromExe(game);
         // No cap: filter the full index then sort. The ListView below is lazy
         // (builder), so even the unfiltered ~13k entries render fine and every
         // matching asset stays selectable (a fixed .take() silently hid the rest).
@@ -102,9 +107,20 @@ class _TextureTabState extends ConsumerState<TextureTab> {
                   Padding(
                     padding: const EdgeInsets.all(8),
                     child: TextField(
-                      decoration: const InputDecoration(
-                        prefixIcon: Icon(Icons.search),
+                      controller: _searchController,
+                      decoration: InputDecoration(
+                        prefixIcon: const Icon(Icons.search),
                         hintText: 'Search textures',
+                        suffixIcon: _query.isEmpty
+                            ? null
+                            : IconButton(
+                                icon: const Icon(Icons.clear),
+                                tooltip: 'Clear',
+                                onPressed: () {
+                                  _searchController.clear();
+                                  setState(() => _query = '');
+                                },
+                              ),
                       ),
                       onChanged: (v) => setState(() => _query = v),
                     ),
@@ -113,8 +129,8 @@ class _TextureTabState extends ConsumerState<TextureTab> {
                     // Browse = lazy folder tree; an active search = flat hit list
                     // (paths matched anywhere, not just by folder).
                     child: _query.isEmpty
-                        ? _treeBrowser(entries, staged)
-                        : _flatList(matches, staged),
+                        ? _treeBrowser(gameDir, entries, staged)
+                        : _flatList(gameDir, matches, entries, staged),
                   ),
                   Text(
                     _query.isEmpty
@@ -135,7 +151,18 @@ class _TextureTabState extends ConsumerState<TextureTab> {
 
   // -- Browser: flat (search) + lazy tree (browse) ------------------------
 
-  Widget _flatList(List<String> matches, TextureReplacementsState staged) {
+  /// Select an asset and auto-load its preview (no separate Preview button).
+  void _select(String? gameDir, String asset, String? packageId) {
+    setState(() => _selected = asset);
+    if (gameDir != null) _preview(gameDir, asset, packageId);
+  }
+
+  Widget _flatList(
+    String? gameDir,
+    List<String> matches,
+    Map<String, String> entries,
+    TextureReplacementsState staged,
+  ) {
     return ListView.builder(
       itemCount: matches.length,
       itemBuilder: (c, i) {
@@ -146,13 +173,14 @@ class _TextureTabState extends ConsumerState<TextureTab> {
           selected: p == _selected,
           title: Text(p, maxLines: 1, overflow: TextOverflow.ellipsis),
           trailing: isReplaced ? const Icon(Icons.check, size: 16) : null,
-          onTap: () => setState(() => _selected = p),
+          onTap: () => _select(gameDir, p, entries[p]),
         );
       },
     );
   }
 
   Widget _treeBrowser(
+    String? gameDir,
     Map<String, String> entries,
     TextureReplacementsState staged,
   ) {
@@ -184,7 +212,7 @@ class _TextureTabState extends ConsumerState<TextureTab> {
               leading: const Icon(Icons.image_outlined, size: 18),
               title: Text(n.label, maxLines: 1, overflow: TextOverflow.ellipsis),
               trailing: isReplaced ? const Icon(Icons.check, size: 16) : null,
-              onTap: () => setState(() => _selected = n.assetPath),
+              onTap: () => _select(gameDir, n.assetPath!, entries[n.assetPath]),
             ),
           );
         }
@@ -315,14 +343,6 @@ class _TextureTabState extends ConsumerState<TextureTab> {
           Row(
             children: [
               OutlinedButton.icon(
-                icon: const Icon(Icons.visibility),
-                label: const Text('Preview'),
-                onPressed: gameDir == null
-                    ? null
-                    : () => _preview(gameDir, sel, entries[sel]),
-              ),
-              const SizedBox(width: 8),
-              OutlinedButton.icon(
                 icon: const Icon(Icons.download),
                 label: const Text('Export PNG…'),
                 onPressed: gameDir == null
@@ -385,6 +405,9 @@ class _TextureTabState extends ConsumerState<TextureTab> {
   /// to fit (never blown up to fill the pane), pan/zoom via [InteractiveViewer],
   /// and a dims + pixel-format caption.
   Widget _previewArea(String asset) {
+    if (_loadingAsset == asset) {
+      return const Center(child: CircularProgressIndicator());
+    }
     final pv = _previewCache[asset];
     if (pv == null) {
       return const Center(child: Text('Preview to see the current texture'));
@@ -470,6 +493,7 @@ class _TextureTabState extends ConsumerState<TextureTab> {
       setState(() => _previewCache[asset] = cached);
       return;
     }
+    setState(() => _loadingAsset = asset);
     try {
       // textureExtract throws on a non-ok FFI result, so on return the PNG path
       // and dims are present.
@@ -518,6 +542,12 @@ class _TextureTabState extends ConsumerState<TextureTab> {
           ],
         ),
       );
+    } finally {
+      // Clear the spinner only if this call is still the active load (a newer
+      // selection may have taken over).
+      if (mounted && _loadingAsset == asset) {
+        setState(() => _loadingAsset = null);
+      }
     }
   }
 }
