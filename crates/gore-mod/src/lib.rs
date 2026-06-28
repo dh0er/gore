@@ -798,7 +798,8 @@ fn prepare(
                     }.map_err(|e| ModError::Other(format!("unpack {asset}: {e}")))?;
                     let ua = std::fs::read(&orig_uasset).map_err(io("read uasset"))?;
                     let ue = std::fs::read(orig_uasset.with_extension("uexp")).map_err(io("read uexp"))?;
-                    let ub = std::fs::read(orig_uasset.with_extension("ubulk")).unwrap_or_default();
+                    let ub = gore_tex::paths::read_optional(&orig_uasset.with_extension("ubulk"))
+                        .map_err(io("read ubulk"))?;
                     let img = image::open(bundle_dir.join(png_rel))
                         .map_err(|e| ModError::Other(format!("png {png_rel}: {e}")))?.to_rgba8();
                     let (w, h) = (img.width(), img.height());

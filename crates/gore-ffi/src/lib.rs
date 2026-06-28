@@ -337,7 +337,8 @@ fn texture_extract(payload: Value) -> Value {
         let ua_bytes = read_or_err!(&ua);
         let uexp_bytes = read_or_err!(ua.with_extension("uexp"));
         let usmap_bytes = read_or_err!(&usmap);
-        let ubulk_bytes = std::fs::read(ua.with_extension("ubulk")).unwrap_or_default();
+        let ubulk_bytes = match gore_tex::paths::read_optional(&ua.with_extension("ubulk")) {
+            Ok(b) => b, Err(e) => { let _ = std::fs::remove_dir_all(&tmp); return err("READ", e.to_string()) } };
         let info = match gore_tex::decode::parse(&ua_bytes, &uexp_bytes, &ubulk_bytes, &usmap_bytes) {
             Ok(i) => i, Err(e) => { let _ = std::fs::remove_dir_all(&tmp); return err("PARSE", e.to_string()) } };
         let px = match gore_tex::decode::to_rgba8(&info) {

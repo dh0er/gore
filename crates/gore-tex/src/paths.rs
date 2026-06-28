@@ -33,6 +33,19 @@ pub fn unique_temp_file(prefix: &str, ext: &str) -> PathBuf {
     std::env::temp_dir().join(format!("{prefix}-{}-{n}.{ext}", std::process::id()))
 }
 
+/// Read an OPTIONAL cooked sidecar (e.g. a texture's `.ubulk`, which inline-mip
+/// textures legitimately lack). A missing file yields empty bytes; any OTHER I/O
+/// error (permissions, partial read) is propagated rather than silently masked as
+/// "no bulk data", which would let a streamed texture decode/cook with the wrong
+/// (empty) bulk and produce a misleading result.
+pub fn read_optional(path: &Path) -> std::io::Result<Vec<u8>> {
+    match std::fs::read(path) {
+        Ok(bytes) => Ok(bytes),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(e) => Err(e),
+    }
+}
+
 /// Given a game install dir, return the main IoStore container `.utoc`.
 pub fn main_container(game_dir: &Path) -> Result<PathBuf> {
     let p = game_dir.join("G1R/Content/Paks/G1R-Windows.utoc");

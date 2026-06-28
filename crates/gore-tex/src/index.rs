@@ -138,7 +138,7 @@ pub fn extract_by_package_id(
         let ubulk = uasset.with_extension("ubulk");
         let info = crate::decode::parse(
             &std::fs::read(&uasset)?, &std::fs::read(&uexp)?,
-            &std::fs::read(&ubulk).unwrap_or_default(), &std::fs::read(usmap)?)?;
+            &crate::paths::read_optional(&ubulk)?, &std::fs::read(usmap)?)?;
         let px = crate::decode::to_rgba8(&info)?;
         Ok((info, px))
     })();

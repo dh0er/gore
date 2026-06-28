@@ -139,7 +139,8 @@ pub fn run(action: TextureAction) -> Result<()> {
                     .with_context(|| format!("reading {}", uasset.display()))?,
                 &std::fs::read(&uexp)
                     .with_context(|| format!("reading {}", uexp.display()))?,
-                &std::fs::read(&ubulk).unwrap_or_default(),
+                &gore_tex::paths::read_optional(&ubulk)
+                    .with_context(|| format!("reading {}", ubulk.display()))?,
                 &std::fs::read(&usmap)
                     .with_context(|| format!("reading {}", usmap.display()))?,
             )
@@ -209,7 +210,8 @@ pub fn run(action: TextureAction) -> Result<()> {
                 std::fs::read(&uasset).with_context(|| format!("reading {}", uasset.display()))?;
             let orig_uexp =
                 std::fs::read(&uexp).with_context(|| format!("reading {}", uexp.display()))?;
-            let orig_ubulk = std::fs::read(&ubulk).unwrap_or_default();
+            let orig_ubulk = gore_tex::paths::read_optional(&ubulk)
+                .with_context(|| format!("reading {}", ubulk.display()))?;
 
             // Originals are now in memory; drop the unpack temp dir so repeated
             // replaces don't accumulate cooked payloads in the system temp dir.
