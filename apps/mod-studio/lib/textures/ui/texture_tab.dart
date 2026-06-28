@@ -24,22 +24,30 @@ class TextureTab extends ConsumerStatefulWidget {
 class _TextureTabState extends ConsumerState<TextureTab> {
   String _query = '';
   String? _selected;
-  // Cached preview per asset (png path + native dims + pixel format). Re-selecting
-  // an already-previewed asset shows instantly with no re-extract. The temp PNGs
-  // referenced here are deleted in dispose() and evicted from the image cache.
+  // LRU-capped preview cache, keyed by asset. Re-selecting an already-previewed
+  // asset shows instantly with no re-extract. Dart maps keep insertion order, so
+  // "least recently used" = the first key; touching an entry re-inserts it at the
+  // end. When the cache exceeds [_previewCacheCap] the oldest entry is evicted:
+  // its temp PNG is deleted and dropped from the image cache, bounding disk/RAM
+  // however many textures get browsed. Everything is also freed in dispose().
+  static const _previewCacheCap = 24;
   final Map<String, _Preview> _previewCache = {};
+
+  /// Delete a cached preview's temp PNG and drop it from the image cache.
+  void _evictPreview(_Preview pv) {
+    try {
+      final file = File(pv.pngPath);
+      PaintingBinding.instance.imageCache.evict(FileImage(file));
+      if (file.existsSync()) file.deleteSync();
+    } catch (_) {
+      // Best-effort cleanup: a locked/already-gone temp file is harmless.
+    }
+  }
 
   @override
   void dispose() {
-    final cache = PaintingBinding.instance.imageCache;
     for (final pv in _previewCache.values) {
-      try {
-        final file = File(pv.pngPath);
-        cache.evict(FileImage(file));
-        if (file.existsSync()) file.deleteSync();
-      } catch (_) {
-        // Best-effort cleanup: a locked/already-gone temp file is harmless.
-      }
+      _evictPreview(pv);
     }
     super.dispose();
   }
@@ -256,9 +264,11 @@ class _TextureTabState extends ConsumerState<TextureTab> {
 
   Future<void> _preview(String gameDir, String asset, String? packageId) async {
     // Already extracted this session — re-show instantly, skip the container
-    // unpack + decode.
-    if (_previewCache.containsKey(asset)) {
-      setState(() {});
+    // unpack + decode. Touch it (remove + re-insert) so it becomes the most
+    // recently used entry and survives LRU eviction.
+    final cached = _previewCache.remove(asset);
+    if (cached != null) {
+      setState(() => _previewCache[asset] = cached);
       return;
     }
     try {
@@ -278,6 +288,12 @@ class _TextureTabState extends ConsumerState<TextureTab> {
           height: (r['height'] as num?)?.toInt() ?? 0,
           format: r['format'] as String? ?? '',
         );
+        // Evict least-recently-used entries once over the cap (oldest = first key).
+        while (_previewCache.length > _previewCacheCap) {
+          final oldestKey = _previewCache.keys.first;
+          final evicted = _previewCache.remove(oldestKey);
+          if (evicted != null) _evictPreview(evicted);
+        }
       });
     } catch (e) {
       debugPrint('texture preview failed for $asset: $e');
