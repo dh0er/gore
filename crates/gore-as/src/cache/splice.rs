@@ -186,6 +186,45 @@ fn append_merged_tables(
     }
 }
 
+/// Extract one module from `cache` into a standalone 1-module mini-cache: its `Modules`
+/// TMap entry followed by the cache's FULL global tail tables. Used to pull a dependency-
+/// heavy module (which can't be compiled standalone) out of a full-tree regen so it can be
+/// [`replace_module`]'d into the vanilla base. The loader has no integrity check, so the
+/// carried-over FGuid is harmless; the full tail tables guarantee every ref the module's
+/// bytecode uses is present, and `replace_module`'s merge folds them into the base.
+pub fn extract_module(cache: &[u8], target_name: &str) -> Result<Vec<u8>, SpliceError> {
+    let ranges = module_ranges(cache)?;
+    let (_, start, end) = ranges
+        .iter()
+        .find(|(n, _, _)| n == target_name)
+        .cloned()
+        .ok_or_else(|| SpliceError::NameNotFound(target_name.to_string()))?;
+    let tail_off = module_region_end(cache)?;
+    let mut out = Vec::with_capacity(0x18 + (end - start) + (cache.len() - tail_off));
+    out.extend_from_slice(&cache[..0x14]); // FGuid + magic
+    out.extend_from_slice(&1u32.to_le_bytes()); // Modules count = 1
+    out.extend_from_slice(&cache[start..end]); // the one module's TMap entry
+    out.extend_from_slice(&cache[tail_off..]); // full global tail tables
+    Ok(out)
+}
+
+/// Rewrite an extracted (regen-tables) 1-module mini's bytecode refs to the VANILLA `base`'s
+/// keys/ids and return a NEW 1-module mini with EMPTY tail tables (28 zero bytes), so it can be
+/// [`replace_module`]'d into `base` without appending any tail-table rows.
+///
+/// This is the REF-REMAPPING step (`work/reversing/gore-as/specs/ref-remap.md`): the 7 global
+/// tail tables are keyed by runtime pointers/ids captured at serialization, so a full-tree regen
+/// assigns DIFFERENT keys than vanilla for the SAME symbols. Splicing the regen mini verbatim
+/// would append every regen row (cache grows ~22 MB → boot crash). Here we resolve each ref
+/// operand by SYMBOL IDENTITY (name + module + namespace + signature) to the base's key, then
+/// ship empty tables so the merge adds nothing and the cache stays vanilla-sized.
+///
+/// Returns the remapped mini bytes. Any ref whose symbol is not present in `base` is a HARD
+/// ERROR (the module introduces a NEW symbol — minimal-row fallback is a later phase).
+pub fn remap_module_to_base(extracted_mini: &[u8], base: &[u8]) -> Result<Vec<u8>, super::remap::RemapError> {
+    super::remap::remap_module_to_base(extracted_mini, base).map(|(bytes, _counts)| bytes)
+}
+
 /// Replace an existing module in `base` with `new_mini`'s single module, keeping the
 /// `Modules` count UNCHANGED. The new module's tail-table entries are merged into `base`'s
 /// the same way [`splice_case_a`] does (per `case-a-tables-and-exec.md` §3): see

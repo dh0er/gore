@@ -91,6 +91,33 @@ pub enum AsCmd {
         #[arg(short, long)]
         out: PathBuf,
     },
+    /// Extract one module into a standalone 1-module mini-cache (module + full tail tables).
+    /// Lets a dependency-heavy edited module be pulled from a full-tree regen and Replace'd
+    /// into the vanilla base.
+    Extract {
+        /// Source cache (e.g. a full-tree regen).
+        cache: PathBuf,
+        /// Module name (the Modules TMap key) to extract.
+        module: String,
+        /// Output path for the 1-module mini-cache.
+        #[arg(short, long)]
+        out: PathBuf,
+    },
+    /// Extract one module from a regen cache AND remap its bytecode refs to a base (vanilla)
+    /// cache's keys, emitting a 1-module mini with EMPTY tail tables. The result can be
+    /// Replace'd into the base without growing the cache (no duplicate global tables). This is
+    /// the key step for editing EXISTING modules. See work/reversing/gore-as/specs/ref-remap.md.
+    ExtractRemap {
+        /// Regen cache (full-tree -as-generate-precompiled-data output) containing the edit.
+        regen_cache: PathBuf,
+        /// Module name (the Modules TMap key) to extract + remap.
+        module: String,
+        /// Base (vanilla) cache whose keys the module's refs are rewritten to.
+        base_cache: PathBuf,
+        /// Output path for the remapped 1-module mini-cache (empty tail tables).
+        #[arg(short, long)]
+        out: PathBuf,
+    },
 }
 
 /// Build the script-class hierarchy (class name -> super class name) from parsed modules.
@@ -325,6 +352,40 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                 base_b.len(),
                 spliced.len(),
                 out.display()
+            );
+        }
+        AsCmd::Extract { cache, module, out } => {
+            let b = std::fs::read(&cache).with_context(|| format!("reading {}", cache.display()))?;
+            let n = module_count(&b);
+            let mini = gore_as::cache::splice::extract_module(&b, &module).context("extract")?;
+            std::fs::write(&out, &mini).with_context(|| format!("writing {}", out.display()))?;
+            println!(
+                "extracted {:?} from {} modules -> 1-module mini ; {} bytes ; wrote {}",
+                module, n, mini.len(), out.display()
+            );
+        }
+        AsCmd::ExtractRemap { regen_cache, module, base_cache, out } => {
+            let regen_b = std::fs::read(&regen_cache)
+                .with_context(|| format!("reading {}", regen_cache.display()))?;
+            let base_b = std::fs::read(&base_cache)
+                .with_context(|| format!("reading {}", base_cache.display()))?;
+            let n = module_count(&regen_b);
+            let mini = gore_as::cache::splice::extract_module(&regen_b, &module)
+                .context("extract")?;
+            let (remapped, counts) =
+                gore_as::cache::remap::remap_module_to_base(&mini, &base_b)
+                    .context("remap")?;
+            std::fs::write(&out, &remapped)
+                .with_context(|| format!("writing {}", out.display()))?;
+            println!(
+                "extract-remap {:?} from {} modules -> remapped 1-module mini ; {} bytes ; wrote {}",
+                module, n, remapped.len(), out.display()
+            );
+            println!(
+                "refs remapped: {} total (bytecode: global={} func_ptr={} type_ptr={} func_id={} type_id={} ; embedded: type_ptr={} func_id={})",
+                counts.total(),
+                counts.global_ptr, counts.func_ptr, counts.type_ptr, counts.func_id, counts.type_id,
+                counts.embed_type_ptr, counts.embed_func_id
             );
         }
     }

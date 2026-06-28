@@ -9,6 +9,7 @@ pub mod header;
 pub mod isa;
 pub mod model;
 pub mod refs;
+pub mod remap;
 pub mod scan;
 pub mod splice;
 pub mod structure;
