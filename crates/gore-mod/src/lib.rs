@@ -783,6 +783,9 @@ fn prepare(
                     if !nb.is_empty() {
                         std::fs::write(dest_dir.join(format!("{leaf}.ubulk")), &nb).map_err(io("write ubulk"))?;
                     }
+                    // The unpacked original is consumed (rewritten into cook_dir); drop its unique
+                    // temp dir now so a many-texture mod doesn't leak one multi-MB dir per asset.
+                    let _ = std::fs::remove_dir_all(&tmp_orig);
                 }
                 let triplet_name = format!("zzz_{}_tex_P", sanitize(&manifest.mod_meta.name));
                 let pack_out = std::env::temp_dir().join(format!("gore-mod-tex-pack-{}", std::process::id()));
@@ -790,6 +793,10 @@ fn prepare(
                 std::fs::create_dir_all(&pack_out).map_err(io("mkdir pack"))?;
                 let triplet = gore_tex::container::repack_to_zen(&cook_dir, &triplet_name, &pack_out, &game_dir, false)
                     .map_err(|e| ModError::Other(format!("pack: {e}")))?;
+                // The cooked tree is now packed into the triplet; drop it. (cook_dir/pack_out are
+                // pid-scoped and cleared at the next deploy, so they don't leak per-deploy; the
+                // triplet in pack_out is consumed by apply_writes copying it into ~mods.)
+                let _ = std::fs::remove_dir_all(&cook_dir);
                 let mods_dir = game_dir.join("G1R").join("Content").join("Paks").join("~mods");
                 for src in triplet {
                     let dst = mods_dir.join(src.file_name()
