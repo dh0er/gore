@@ -27,6 +27,21 @@ class _TextureTabState extends ConsumerState<TextureTab> {
   final TextEditingController _searchController = TextEditingController();
   // Asset currently being extracted — drives the preview-pane spinner.
   String? _loadingAsset;
+  // Identity of the index + game path the preview cache was built against. When
+  // either changes (game switched, index rebuilt after a game update) the cached
+  // PNGs are stale and must be dropped — they were decoded from the old source.
+  Object? _sourceEntries;
+  String? _sourceGame;
+  // Pixel formats gore-tex can preview/decode but NOT yet re-encode for replace.
+  // Staging a replacement for these would fail later at cook time, so Replace is
+  // disabled for them. Keep in sync with the encode support in gore-tex.
+  static const _previewOnlyFormats = {
+    'PF_B8G8R8A8',
+    'PF_G8',
+    'PF_BC4',
+    'PF_BC6H',
+    'PF_FloatRGBA',
+  };
   // LRU-capped preview cache, keyed by asset. Re-selecting an already-previewed
   // asset shows instantly with no re-extract. Dart maps keep insertion order, so
   // "least recently used" = the first key; touching an entry re-inserts it at the
@@ -86,6 +101,18 @@ class _TextureTabState extends ConsumerState<TextureTab> {
       error: (e, _) => Center(child: SelectableText('Index error: $e')),
       data: (entries) {
         final gameDir = gameRootFromExe(game);
+        // Drop stale previews if the source (game path or index) changed since
+        // they were decoded — keying the cache by asset path alone is otherwise
+        // blind to a game switch / index rebuild.
+        if (!identical(_sourceEntries, entries) || _sourceGame != game) {
+          for (final pv in _previewCache.values) {
+            _evictPreview(pv);
+          }
+          _previewCache.clear();
+          _loadingAsset = null;
+          _sourceEntries = entries;
+          _sourceGame = game;
+        }
         // No cap: filter the full index then sort. The ListView below is lazy
         // (builder), so even the unfiltered ~13k entries render fine and every
         // matching asset stays selectable (a fixed .take() silently hid the rest).
@@ -333,6 +360,12 @@ class _TextureTabState extends ConsumerState<TextureTab> {
     if (sel == null) return const Center(child: Text('Select a texture'));
     final gameDir = gameRootFromExe(ref.read(gameExePathProvider));
     final replaced = staged.items[sel];
+    // Replace is blocked for formats we can preview but not re-encode — staging
+    // one would only fail later at build/cook time. Format is known once the
+    // preview (auto-loaded on select) has resolved.
+    final fmt = _previewCache[sel]?.format;
+    final replaceBlocked =
+        fmt != null && _previewOnlyFormats.contains(fmt);
     return Padding(
       padding: const EdgeInsets.all(12),
       child: Column(
@@ -350,23 +383,36 @@ class _TextureTabState extends ConsumerState<TextureTab> {
                     : () => _export(gameDir, sel, entries[sel]),
               ),
               const SizedBox(width: 8),
-              FilledButton.icon(
-                icon: const Icon(Icons.image),
-                label: const Text('Replace…'),
-                onPressed: () async {
-                  final f = await openFile(
-                    acceptedTypeGroups: [
-                      const XTypeGroup(label: 'PNG', extensions: ['png']),
-                    ],
-                  );
-                  if (f != null) {
-                    ref
-                        .read(textureReplacementsProvider.notifier)
-                        .setReplacement(
-                          TextureReplacement(asset: sel, imagePath: f.path),
-                        );
-                  }
-                },
+              Tooltip(
+                message: replaceBlocked
+                    ? 'Replace not supported for $fmt yet (preview-only format)'
+                    : 'Replace this texture with a PNG',
+                child: FilledButton.icon(
+                  icon: const Icon(Icons.image),
+                  label: const Text('Replace…'),
+                  onPressed: replaceBlocked
+                      ? null
+                      : () async {
+                          final f = await openFile(
+                            acceptedTypeGroups: [
+                              const XTypeGroup(
+                                label: 'PNG',
+                                extensions: ['png'],
+                              ),
+                            ],
+                          );
+                          if (f != null) {
+                            ref
+                                .read(textureReplacementsProvider.notifier)
+                                .setReplacement(
+                                  TextureReplacement(
+                                    asset: sel,
+                                    imagePath: f.path,
+                                  ),
+                                );
+                          }
+                        },
+                ),
               ),
             ],
           ),

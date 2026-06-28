@@ -435,25 +435,58 @@ struct DeployRecord {
 pub fn deploy(triplet: &[PathBuf; 3], game_dir: &Path, name: &str) -> Result<PathBuf> {
     let mods = mods_dir(game_dir);
     std::fs::create_dir_all(&mods)?;
+    // Canonicalize the mods dir so the deploy record holds ABSOLUTE paths even when
+    // `game_dir` is relative (e.g. `--game .`). Otherwise a later `undeploy --game
+    // <absolute>` run from a different cwd would resolve the recorded relative paths
+    // against the wrong directory and fail to remove the mounted triplet. Falls back
+    // to the un-canonicalized path if canonicalize fails (dir was just created, so it
+    // should succeed).
+    let mods = std::fs::canonicalize(&mods).unwrap_or(mods);
 
+    // Stage copies, rolling back (best-effort) any files already copied in THIS call
+    // if a later copy or the record write fails — otherwise a partial set of triplet
+    // files would mount on next launch with no record for undeploy to remove.
     let mut copied: Vec<PathBuf> = Vec::with_capacity(3);
+    let cleanup = |copied: &[PathBuf]| {
+        for f in copied {
+            let _ = std::fs::remove_file(f);
+        }
+    };
     for src in triplet {
-        let leaf = src
-            .file_name()
-            .ok_or_else(|| TexError::AssetNotFound(format!("triplet path has no file name: {}", src.display())))?;
+        let leaf = match src.file_name() {
+            Some(l) => l,
+            None => {
+                cleanup(&copied);
+                return Err(TexError::AssetNotFound(format!(
+                    "triplet path has no file name: {}",
+                    src.display()
+                )));
+            }
+        };
         let dst = mods.join(leaf);
-        std::fs::copy(src, &dst)?;
+        if let Err(e) = std::fs::copy(src, &dst) {
+            cleanup(&copied);
+            return Err(e.into());
+        }
         copied.push(dst);
     }
 
     let record = DeployRecord {
         name: name.to_string(),
-        files: copied,
+        files: copied.clone(),
     };
     let record_path = mods.join(format!("{name}.gore-deploy.json"));
-    let json = serde_json::to_string_pretty(&record)
-        .map_err(|e| TexError::Retoc(anyhow::anyhow!("serialising deploy record: {e}")))?;
-    std::fs::write(&record_path, json)?;
+    let json = match serde_json::to_string_pretty(&record) {
+        Ok(j) => j,
+        Err(e) => {
+            cleanup(&copied);
+            return Err(TexError::Retoc(anyhow::anyhow!("serialising deploy record: {e}")));
+        }
+    };
+    if let Err(e) = std::fs::write(&record_path, json) {
+        cleanup(&copied);
+        return Err(e.into());
+    }
 
     Ok(record_path)
 }
@@ -549,6 +582,109 @@ mod tests {
     fn game_dir() -> Option<PathBuf> {
         let p = PathBuf::from(r"D:\SteamLibrary\steamapps\common\Gothic 1 Remake");
         p.exists().then_some(p)
+    }
+
+    /// A unique throwaway dir under the system temp dir (no `tempfile` dep).
+    fn unique_tmp(tag: &str) -> PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static N: AtomicU64 = AtomicU64::new(0);
+        let p = std::env::temp_dir().join(format!(
+            "gore-tex-test-{tag}-{}-{}",
+            std::process::id(),
+            N.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&p);
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    /// Build a fake triplet `[utoc, ucas, pak]` of small files in `dir`.
+    fn fake_triplet(dir: &Path, stem: &str) -> [PathBuf; 3] {
+        let exts = ["utoc", "ucas", "pak"];
+        let mut out: Vec<PathBuf> = Vec::new();
+        for ext in exts {
+            let p = dir.join(format!("{stem}.{ext}"));
+            std::fs::write(&p, format!("{stem}.{ext} contents").as_bytes()).unwrap();
+            out.push(p);
+        }
+        [out[0].clone(), out[1].clone(), out[2].clone()]
+    }
+
+    /// [5] Deploying with a NON-canonical / relative-style `game_dir` must still
+    /// record ABSOLUTE paths, so an `undeploy` invoked with a differently-spelled
+    /// (absolute) `game_dir` from another cwd resolves them correctly. We pass a
+    /// game dir containing a `.` component (the same non-canonical shape `--game .`
+    /// produces) and assert every recorded file path is absolute, then undeploy via
+    /// the plain absolute dir and confirm the recorded files are gone.
+    #[test]
+    fn deploy_records_absolute_paths_for_relative_game_dir() {
+        let base = unique_tmp("relgame");
+        let src_dir = base.join("src");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        let triplet = fake_triplet(&src_dir, "zzz_mod_tex_P");
+
+        // Non-canonical game dir: `<base>/./.` — `canonicalize` in `deploy` must
+        // collapse this so the record holds absolute, canonical paths rather than a
+        // path carrying the `.` components.
+        let noncanon_game = base.join(".").join(".");
+        let record_path = deploy(&triplet, &noncanon_game, "zzz_mod_tex_P").unwrap();
+        let json = std::fs::read_to_string(&record_path).unwrap();
+        let record: DeployRecord = serde_json::from_str(&json).unwrap();
+        assert_eq!(record.files.len(), 3);
+        for f in &record.files {
+            assert!(f.is_absolute(), "record path not absolute: {}", f.display());
+            assert!(f.exists(), "record path missing: {}", f.display());
+            assert!(
+                !f.components().any(|c| c == std::path::Component::CurDir),
+                "record path not canonical (has '.'): {}",
+                f.display()
+            );
+        }
+
+        // Undeploy via the plain absolute base (different spelling) still finds and
+        // removes exactly the recorded files + the record.
+        undeploy(&base, "zzz_mod_tex_P").unwrap();
+        for f in &record.files {
+            assert!(!f.exists(), "undeploy left file: {}", f.display());
+        }
+        assert!(!record_path.exists());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// [4] If a triplet copy fails partway, no files from this `deploy` call may be
+    /// left in `~mods` (and no record is written) — otherwise a partial IoStore set
+    /// mounts on next launch with nothing for undeploy to remove. We force failure
+    /// by giving a triplet whose 2nd entry's source does not exist.
+    #[test]
+    fn deploy_rolls_back_partial_on_copy_failure() {
+        let base = unique_tmp("partial");
+        let src_dir = base.join("src");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        // First src exists; second does NOT -> copy of #2 fails after #1 copied.
+        let s0 = src_dir.join("zzz_mod_tex_P.utoc");
+        std::fs::write(&s0, b"utoc").unwrap();
+        let s1 = src_dir.join("zzz_mod_tex_P.ucas"); // intentionally NOT created
+        let s2 = src_dir.join("zzz_mod_tex_P.pak");
+        std::fs::write(&s2, b"pak").unwrap();
+        let triplet = [s0, s1, s2];
+
+        let err = deploy(&triplet, &base, "zzz_mod_tex_P");
+        assert!(err.is_err(), "expected deploy to fail on missing src");
+
+        // The first file's copy succeeded then was rolled back: ~mods must hold
+        // neither the copied file nor a deploy record.
+        let mods = mods_dir(&base);
+        if mods.exists() {
+            let leftovers: Vec<_> = std::fs::read_dir(&mods)
+                .unwrap()
+                .filter_map(|e| e.ok().map(|e| e.file_name()))
+                .collect();
+            assert!(
+                leftovers.is_empty(),
+                "partial deploy left files in ~mods: {leftovers:?}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
@@ -679,9 +815,15 @@ mod tests {
 
         let mods = game.join("G1R/Content/Paks/~mods");
 
-        // deploy: 3 triplet files + the record exist under ~mods.
+        // deploy: 3 triplet files + the record exist under ~mods. `deploy`
+        // canonicalizes the mods dir (so records hold absolute paths even for a
+        // relative `--game`), so compare canonicalized paths rather than the exact
+        // spelling.
         let record = deploy(&triplet, &game, name).unwrap();
-        assert_eq!(record, mods.join(format!("{name}.gore-deploy.json")));
+        assert_eq!(
+            std::fs::canonicalize(&record).unwrap(),
+            std::fs::canonicalize(mods.join(format!("{name}.gore-deploy.json"))).unwrap()
+        );
         for ext in ["utoc", "ucas", "pak"] {
             assert!(
                 mods.join(format!("{name}.{ext}")).exists(),

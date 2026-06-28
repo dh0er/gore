@@ -212,6 +212,7 @@ fn decode_bcn_tile(bytes: &[u8], phys: usize, format: &str) -> Result<Vec<u32>> 
         "PF_DXT5" => texture2ddecoder::decode_bc3(bytes, phys, phys, &mut out),
         "PF_BC5" => texture2ddecoder::decode_bc5(bytes, phys, phys, &mut out),
         "PF_BC7" => texture2ddecoder::decode_bc7(bytes, phys, phys, &mut out),
+        "PF_BC4" => texture2ddecoder::decode_bc4(bytes, phys, phys, &mut out),
         "PF_BC6H" => texture2ddecoder::decode_bc6(bytes, phys, phys, &mut out, false),
         _ => return Err(TexError::UnsupportedFormat(format.to_string())),
     };
@@ -219,6 +220,16 @@ fn decode_bcn_tile(bytes: &[u8], phys: usize, format: &str) -> Result<Vec<u32>> 
         format: format.to_string(),
         reason: reason.to_string(),
     })?;
+    // BC4 is single-channel: decode_bc4 writes only R (channel 2 == R in the
+    // 0xAARRGGBB layout) and leaves G=B=A=0. Promote to an opaque grayscale
+    // preview — splat R into G and B and force A=255 — exactly like
+    // crate::decode::to_rgba8.
+    if format == "PF_BC4" {
+        for px in out.iter_mut() {
+            let r = (*px >> 16) & 0xff;
+            *px = (0xFF << 24) | (r << 16) | (r << 8) | r;
+        }
+    }
     Ok(out)
 }
 

@@ -642,9 +642,16 @@ pub fn replace_texture_image(
     if orig.vt.is_some() {
         return replace_texture_vt(uasset, uexp, ubulk, orig, new_rgba, new_w, new_h);
     }
-    // Regular texture: BC-encode the new pyramid in the original format, then run
-    // the established non-VT rewrite.
-    let mips = crate::encode::encode_mips(new_rgba, new_w, new_h, orig_format)?;
+    // Regular texture. If the original shipped with NO mip chain (NoMipmaps —
+    // e.g. UI / cursor textures), `replace_texture` only keeps mip0, so there is
+    // no need (and no requirement) for power-of-two dimensions: encode just the
+    // single mip0 surface via `encode_tile` (multiple-of-4 only). Otherwise
+    // BC-encode the full power-of-two mip pyramid via `encode_mips`.
+    let mips = if orig.mips.len() == 1 {
+        vec![crate::encode::encode_tile(new_rgba, new_w, new_h, orig_format)?]
+    } else {
+        crate::encode::encode_mips(new_rgba, new_w, new_h, orig_format)?
+    };
     replace_texture(uasset, uexp, ubulk, new_w, new_h, mips)
 }
 

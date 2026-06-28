@@ -332,6 +332,25 @@ mod tests {
         assert!(matches!(err, TexError::EncodeFailed(_)));
     }
 
+    /// Single-mip (NoMipmaps) replacements bypass the POT requirement: a
+    /// multiple-of-4 but non-power-of-two surface (192x128, e.g. a cursor) is
+    /// REJECTED by the mip-chain encoder but ACCEPTED by `encode_tile`, which the
+    /// `replace_texture_image` orig.mips.len()==1 branch uses. (Bug [6].)
+    #[test]
+    fn single_mip_non_pot_accepted_by_encode_tile() {
+        let rgba = solid(192, 128, [10, 20, 30, 255]);
+        // The mip-chain path rejects non-POT dims...
+        let err = encode_mips(&rgba, 192, 128, "PF_DXT5").unwrap_err();
+        assert!(
+            matches!(err, TexError::EncodeFailed(_)),
+            "192x128 mip chain should be EncodeFailed, got {err:?}"
+        );
+        // ...but a single tile encodes fine (multiple-of-4 dims, no mip chain).
+        let tile = encode_tile(&rgba, 192, 128, "PF_DXT5").unwrap();
+        // BC3 192x128 = (192/4)*(128/4) blocks * 16 bytes.
+        assert_eq!(tile.len(), (192 / 4) * (128 / 4) * 16);
+    }
+
     /// BC3 (DXT5) solid-color round-trip: encode a solid green RGBA, decode mip0
     /// back, assert green survives (incl. opaque alpha).
     #[test]

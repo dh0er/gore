@@ -312,6 +312,14 @@ fn content_hash(bytes: &[u8]) -> String {
     format!("{h:016x}")
 }
 
+/// Short stable hash of an arbitrary string for disambiguating filenames. FNV-1a 64-bit (same
+/// fixed algorithm as [`content_hash`]) truncated to 8 hex chars: distinct mod names that sanitize
+/// to the same stem (e.g. `A+B` vs `A B` -> `A_B`) get distinct triplet names because this hashes
+/// the ORIGINAL (unsanitized) name.
+fn name_hash(s: &str) -> String {
+    content_hash(s.as_bytes())[..8].to_string()
+}
+
 /// Whether `live` should be restored from its backup: true unless we recorded what we deployed
 /// there and the current file no longer matches it (external update — restoring would downgrade).
 fn safe_to_restore(live: &str, deployed_hashes: &BTreeMap<String, String>) -> bool {
@@ -589,8 +597,11 @@ struct Undo {
     ue4ss_old: Option<(PathBuf, PathBuf)>,
     /// a UE4SS mod installed where there was none — remove on rollback.
     ue4ss_fresh: Option<PathBuf>,
-    /// Additive texture triplet files copied into `~mods` — delete on rollback (best-effort).
-    texture_files: Vec<PathBuf>,
+    /// Texture triplet files copied into `~mods`, each with its PRE-OVERWRITE bytes: `None` if the
+    /// file did not exist before this deploy (delete on rollback), `Some(bytes)` if it did (a same-
+    /// named redeploy overwrote a currently-active triplet — restore the OLD bytes on rollback so a
+    /// later-step failure doesn't leave the prior active deployment missing/inconsistent).
+    texture_files: Vec<(PathBuf, Option<Vec<u8>>)>,
 }
 
 impl Undo {
@@ -612,9 +623,18 @@ impl Undo {
         } else if let Some(dst) = &self.ue4ss_fresh {
             let _ = std::fs::remove_dir_all(dst);
         }
-        // Delete any additive texture triplet files this deploy copied into `~mods`.
-        for f in &self.texture_files {
-            let _ = std::fs::remove_file(f);
+        // Restore each texture triplet file we copied into `~mods`: put back the bytes it had
+        // before this deploy overwrote them (a same-named redeploy), or delete it if it's a fresh
+        // addition. Best-effort.
+        for (f, prior) in &self.texture_files {
+            match prior {
+                Some(bytes) => {
+                    let _ = atomic_write(f, bytes);
+                }
+                None => {
+                    let _ = std::fs::remove_file(f);
+                }
+            }
         }
     }
 
@@ -646,7 +666,7 @@ fn prepare(
         refresh_baks: Vec::new(),
         texture_triplets: Vec::new(),
     };
-    for comp in &manifest.components {
+    for (comp_idx, comp) in manifest.components.iter().enumerate() {
         match comp {
             Component::Ue4ssLua { name, path } => {
                 // The manifest may come from an untrusted bundle: reject names/paths that could
@@ -742,7 +762,12 @@ fn prepare(
                     &gore_tex::paths::texture_index_path(),
                     &gore_tex::index::build_id_for(&utoc, &usmap),
                 );
-                let cook_dir = std::env::temp_dir().join(format!("gore-mod-tex-cook-{}", std::process::id()));
+                // Scope temp dirs by component index too (not just pid): a bundle with >1
+                // TexturePatch must not have a later component's `remove_dir_all` wipe an earlier
+                // one's cooked tree / packed triplet (whose src paths are already queued in
+                // `plan.texture_triplets`).
+                let cook_dir = std::env::temp_dir()
+                    .join(format!("gore-mod-tex-cook-{}-{}", std::process::id(), comp_idx));
                 let _ = std::fs::remove_dir_all(&cook_dir);
                 for (asset, png_rel) in &map {
                     if !is_safe_rel_path(png_rel) {
@@ -787,15 +812,25 @@ fn prepare(
                     // temp dir now so a many-texture mod doesn't leak one multi-MB dir per asset.
                     let _ = std::fs::remove_dir_all(&tmp_orig);
                 }
-                let triplet_name = format!("zzz_{}_tex_P", sanitize(&manifest.mod_meta.name));
-                let pack_out = std::env::temp_dir().join(format!("gore-mod-tex-pack-{}", std::process::id()));
+                // Triplet name must be unique across DISTINCT mods (so one mod's mounted pak can't
+                // be clobbered by another whose name sanitizes to the same stem) AND across multiple
+                // texture components WITHIN this bundle. Append a stable hash of the original
+                // (unsanitized) mod name for the former and the component index for the latter.
+                let triplet_name = format!(
+                    "zzz_{}_{}_{}_tex_P",
+                    sanitize(&manifest.mod_meta.name),
+                    name_hash(&manifest.mod_meta.name),
+                    comp_idx
+                );
+                let pack_out = std::env::temp_dir()
+                    .join(format!("gore-mod-tex-pack-{}-{}", std::process::id(), comp_idx));
                 let _ = std::fs::remove_dir_all(&pack_out);
                 std::fs::create_dir_all(&pack_out).map_err(io("mkdir pack"))?;
                 let triplet = gore_tex::container::repack_to_zen(&cook_dir, &triplet_name, &pack_out, &game_dir, false)
                     .map_err(|e| ModError::Other(format!("pack: {e}")))?;
                 // The cooked tree is now packed into the triplet; drop it. (cook_dir/pack_out are
-                // pid-scoped and cleared at the next deploy, so they don't leak per-deploy; the
-                // triplet in pack_out is consumed by apply_writes copying it into ~mods.)
+                // pid+component scoped and cleared at the next deploy, so they don't leak per-deploy;
+                // the triplet in pack_out is consumed by apply_writes copying it into ~mods.)
                 let _ = std::fs::remove_dir_all(&cook_dir);
                 let mods_dir = game_dir.join("G1R").join("Content").join("Paks").join("~mods");
                 for src in triplet {
@@ -896,14 +931,23 @@ fn apply_writes(plan: &DeployPlan, undo: &mut Undo) -> Result<()> {
             undo.ue4ss_fresh = Some(dst.clone());
         }
     }
-    // Copy each additive texture triplet file into `~mods`, tracking it for rollback. These are
-    // pure additions (no backup); a failed deploy removes them via undo.
+    // Copy each texture triplet file into `~mods`, tracking it for rollback. Snapshot any bytes
+    // already at `dst` BEFORE overwriting (a same-named redeploy targets the same paths as the
+    // currently-active deployment) so rollback restores the prior active triplet rather than
+    // deleting it; `None` marks a fresh addition that rollback should delete.
     for (src, dst) in &plan.texture_triplets {
         if let Some(p) = dst.parent() {
             std::fs::create_dir_all(p).map_err(io("mkdir ~mods"))?;
         }
+        // Read the prior bytes first: if the copy below fails after partially writing, rollback
+        // still has the original content to restore (or knows to delete a fresh file).
+        let prior = match std::fs::read(dst) {
+            Ok(b) => Some(b),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(io(&format!("snapshot existing triplet {}", dst.display()))(e)),
+        };
+        undo.texture_files.push((dst.clone(), prior));
         std::fs::copy(src, dst).map_err(io(&format!("copy triplet to {}", dst.display())))?;
-        undo.texture_files.push(dst.clone());
     }
     for (live, bytes) in &plan.writes {
         atomic_write(live, bytes)?;
@@ -1241,6 +1285,29 @@ fn copy_dir(src: &Path, dst: &Path) -> Result<()> {
 mod tests {
     use super::*;
     use gore_modgen::gen::OverrideValue;
+
+    /// [8] Distinct mod names that sanitize to the SAME stem (chars folded to `_`)
+    /// must still produce DIFFERENT texture triplet names, so one mod's mounted pak
+    /// can't clobber another's. The triplet stem mirrors the deploy code:
+    /// `zzz_{sanitize(name)}_{name_hash(name)}_{idx}_tex_P`.
+    #[test]
+    fn distinct_mod_names_folding_to_same_stem_get_distinct_triplets() {
+        let a = "A+B";
+        let b = "A B";
+        // Sanitize alone collides...
+        assert_eq!(sanitize(a), sanitize(b), "precondition: stems must collide");
+        // ...but the hash of the ORIGINAL name disambiguates.
+        assert_ne!(name_hash(a), name_hash(b), "name_hash must differ");
+
+        let name_for = |n: &str, idx: usize| {
+            format!("zzz_{}_{}_{}_tex_P", sanitize(n), name_hash(n), idx)
+        };
+        assert_ne!(name_for(a, 0), name_for(b, 0), "triplet names must differ");
+        // Same name, different component index -> still distinct (bug [2]).
+        assert_ne!(name_for(a, 0), name_for(a, 1), "per-component names must differ");
+        // Stable across calls (no RNG / SipHash).
+        assert_eq!(name_hash(a), name_hash(a));
+    }
 
     #[test]
     fn build_bundle_overrides_loc_audio() {
