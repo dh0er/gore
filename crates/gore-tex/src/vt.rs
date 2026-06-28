@@ -44,7 +44,10 @@
 //! round-trip test in [`crate::texdata`].
 
 use crate::error::{Result, TexError};
-use crate::texdata::{block_bytes, corrupt, rd_i32, rd_u32, read_fstring, write_fstring_ascii};
+use crate::texdata::{
+    block_bytes, corrupt, rd_i32, rd_u32, read_fstring, uncompressed_bytes_per_pixel,
+    write_fstring_ascii,
+};
 
 /// One `FVirtualTextureTileOffsetData` (per-mip tile address/offset tables).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -147,14 +150,69 @@ fn reverse_morton2(mut x: u32) -> u32 {
     x
 }
 
-/// Decode a physical `phys`x`phys` BCn tile (`bytes`) to RGBA (`0xAARRGGBB`).
+/// Decode a physical `phys`x`phys` tile (`bytes`) to RGBA (`0xAARRGGBB`).
+///
+/// Handles both block-compressed (BCn) and uncompressed (linear) layer formats:
+/// the tile is sized by [`crate::decode::to_rgba8`]'s format rules
+/// (`block_bytes` for BCn, `uncompressed_bytes_per_pixel` for linear), and the
+/// per-pixel decode mirrors the regular-texture path (BC6H/FloatRGBA are HDR and
+/// tonemapped to LDR for the preview).
 fn decode_bcn_tile(bytes: &[u8], phys: usize, format: &str) -> Result<Vec<u32>> {
     let mut out = vec![0u32; phys * phys];
+
+    // Uncompressed (linear) layer formats: the tile bytes ARE the pixels.
+    if let Some(bpp) = uncompressed_bytes_per_pixel(format) {
+        let need = phys * phys * bpp as usize;
+        if bytes.len() < need {
+            return Err(TexError::DecodeFailed {
+                format: format.to_string(),
+                reason: format!("{format} VT tile is {} bytes, need {need}", bytes.len()),
+            });
+        }
+        match format {
+            "PF_FloatRGBA" => {
+                // 8 bytes/pixel: four 16-bit half-floats R,G,B,A. Tonemap (clamp
+                // [0,1]*255) like crate::decode::to_rgba8.
+                let to_u8 = |b: &[u8]| -> u32 {
+                    let bits = u16::from_le_bytes([b[0], b[1]]);
+                    let v = half::f16::from_bits(bits).to_f32();
+                    (v.clamp(0.0, 1.0) * 255.0).round() as u32
+                };
+                for (i, px) in out.iter_mut().enumerate() {
+                    let base = i * 8;
+                    let r = to_u8(&bytes[base..base + 2]);
+                    let g = to_u8(&bytes[base + 2..base + 4]);
+                    let b = to_u8(&bytes[base + 4..base + 6]);
+                    let a = to_u8(&bytes[base + 6..base + 8]);
+                    *px = (a << 24) | (r << 16) | (g << 8) | b;
+                }
+            }
+            "PF_B8G8R8A8" => {
+                for (i, px) in out.iter_mut().enumerate() {
+                    let b = bytes[i * 4] as u32;
+                    let g = bytes[i * 4 + 1] as u32;
+                    let r = bytes[i * 4 + 2] as u32;
+                    let a = bytes[i * 4 + 3] as u32;
+                    *px = (a << 24) | (r << 16) | (g << 8) | b;
+                }
+            }
+            "PF_G8" => {
+                for (i, px) in out.iter_mut().enumerate() {
+                    let g = bytes[i] as u32;
+                    *px = (0xFF << 24) | (g << 16) | (g << 8) | g;
+                }
+            }
+            _ => return Err(TexError::UnsupportedFormat(format.to_string())),
+        }
+        return Ok(out);
+    }
+
     let res = match format {
         "PF_DXT1" => texture2ddecoder::decode_bc1(bytes, phys, phys, &mut out),
         "PF_DXT5" => texture2ddecoder::decode_bc3(bytes, phys, phys, &mut out),
         "PF_BC5" => texture2ddecoder::decode_bc5(bytes, phys, phys, &mut out),
         "PF_BC7" => texture2ddecoder::decode_bc7(bytes, phys, phys, &mut out),
+        "PF_BC6H" => texture2ddecoder::decode_bc6(bytes, phys, phys, &mut out, false),
         _ => return Err(TexError::UnsupportedFormat(format.to_string())),
     };
     res.map_err(|reason| TexError::DecodeFailed {
@@ -203,11 +261,16 @@ pub fn decode_layer0(
     let bmp_h = grid_h * tile_size;
     let mut bitmap = vec![0u32; (bmp_w as usize) * (bmp_h as usize)];
 
-    // Per-tile packed BCn size for the PHYSICAL (bordered) tile.
-    let bb = block_bytes(layer0_format)
-        .ok_or_else(|| TexError::UnsupportedFormat(layer0_format.to_string()))? as usize;
-    let blocks = (phys + 3) / 4;
-    let packed_size = blocks * blocks * bb;
+    // Per-tile size for the PHYSICAL (bordered) tile. Block-compressed: block
+    // math (ceil(phys/4)^2 * block_bytes). Uncompressed (linear): phys^2 * bpp.
+    let packed_size = if let Some(bb) = block_bytes(layer0_format) {
+        let blocks = (phys + 3) / 4;
+        blocks * blocks * bb as usize
+    } else if let Some(bpp) = uncompressed_bytes_per_pixel(layer0_format) {
+        phys * phys * bpp as usize
+    } else {
+        return Err(TexError::UnsupportedFormat(layer0_format.to_string()));
+    };
 
     // Per-tile stride across all layers (== TileDataOffsetPerLayer[NumLayers]);
     // layer 0's intra-tile offset is TileDataOffsetPerLayer[0] == 0.

@@ -113,7 +113,7 @@ pub(crate) fn block_bytes(format: &str) -> Option<u32> {
         // 8 bytes / 4x4 block
         "PF_DXT1" | "PF_BC4" => Some(8),
         // 16 bytes / 4x4 block
-        "PF_DXT5" | "PF_BC5" | "PF_BC7" => Some(16),
+        "PF_DXT5" | "PF_BC5" | "PF_BC7" | "PF_BC6H" => Some(16),
         _ => None,
     }
 }
@@ -124,6 +124,8 @@ pub(crate) fn uncompressed_bytes_per_pixel(format: &str) -> Option<u32> {
     match format {
         "PF_B8G8R8A8" => Some(4),
         "PF_G8" => Some(1),
+        // 4 channels x 16-bit half-float = 8 bytes/pixel (HDR; tonemapped on decode).
+        "PF_FloatRGBA" => Some(8),
         _ => None,
     }
 }

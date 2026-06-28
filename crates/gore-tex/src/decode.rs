@@ -98,7 +98,7 @@ fn block_bytes(format: &str) -> Option<u32> {
         // 8 bytes / 4x4 block
         "PF_DXT1" | "PF_BC4" => Some(8),
         // 16 bytes / 4x4 block
-        "PF_DXT5" | "PF_BC5" | "PF_BC7" => Some(16),
+        "PF_DXT5" | "PF_BC5" | "PF_BC7" | "PF_BC6H" => Some(16),
         _ => None,
     }
 }
@@ -109,6 +109,8 @@ fn uncompressed_bytes_per_pixel(format: &str) -> Option<u32> {
     match format {
         "PF_B8G8R8A8" => Some(4),
         "PF_G8" => Some(1),
+        // 4 channels x 16-bit half-float = 8 bytes/pixel (HDR; tonemapped on decode).
+        "PF_FloatRGBA" => Some(8),
         _ => None,
     }
 }
@@ -161,7 +163,7 @@ pub fn parse(uasset: &[u8], uexp: &[u8], ubulk: &[u8], _usmap: &[u8]) -> Result<
             .first()
             .cloned()
             .ok_or_else(|| corrupt("virtual texture has no layer types"))?;
-        if block_bytes(&layer0_format).is_none() {
+        if !is_supported_format(&layer0_format) {
             return Err(TexError::UnsupportedFormat(layer0_format));
         }
         let mut chunk_bytes = Vec::with_capacity(vt.chunks.len());
@@ -233,8 +235,10 @@ pub fn parse(uasset: &[u8], uexp: &[u8], ubulk: &[u8], _usmap: &[u8]) -> Result<
 /// * `PF_BC5`      -> BC5   (`decode_bc5`)
 /// * `PF_BC7`      -> BC7   (`decode_bc7`)
 /// * `PF_BC4`      -> BC4   (`decode_bc4`, single-channel -> grayscale, see note)
+/// * `PF_BC6H`     -> BC6H HDR (`decode_bc6` unsigned; tonemapped to LDR by the decoder)
 /// * `PF_B8G8R8A8` -> linear BGRA8 (bytes ARE pixels; repacked to 0xAARRGGBB)
 /// * `PF_G8`       -> linear 8-bit gray (one byte/pixel -> opaque gray)
+/// * `PF_FloatRGBA`-> linear 16-bit half-float RGBA (HDR; clamped/tonemapped to 8-bit)
 ///
 /// **BC5 note:** BC5 is a two-channel (RG) format, used in this game for normal
 /// maps. `texture2ddecoder` fills R and G from the two compressed channels and
@@ -304,6 +308,36 @@ pub fn to_rgba8(info: &TexInfo) -> Result<Vec<u32>> {
             }
             return Ok(image);
         }
+        "PF_FloatRGBA" => {
+            // 8 bytes/pixel: four 16-bit IEEE half-floats in R,G,B,A order (HDR).
+            // Decode each half to f32 and TONEMAP to 8-bit for a usable preview:
+            // simple clamp to [0,1] then *255 (no exposure/Reinhard curve — these
+            // are preview thumbnails, and clamping ensures values >1.0 don't wrap).
+            let need = w * h * 8;
+            if info.mip0.len() < need {
+                return Err(TexError::DecodeFailed {
+                    format: info.format.clone(),
+                    reason: format!(
+                        "FloatRGBA mip0 is {} bytes, need {need} for {w}x{h}",
+                        info.mip0.len()
+                    ),
+                });
+            }
+            let to_u8 = |bytes: &[u8]| -> u32 {
+                let bits = u16::from_le_bytes([bytes[0], bytes[1]]);
+                let v = half::f16::from_bits(bits).to_f32();
+                (v.clamp(0.0, 1.0) * 255.0).round() as u32
+            };
+            for (i, px) in image.iter_mut().enumerate() {
+                let base = i * 8;
+                let r = to_u8(&info.mip0[base..base + 2]);
+                let g = to_u8(&info.mip0[base + 2..base + 4]);
+                let b = to_u8(&info.mip0[base + 4..base + 6]);
+                let a = to_u8(&info.mip0[base + 6..base + 8]);
+                *px = (a << 24) | (r << 16) | (g << 8) | b;
+            }
+            return Ok(image);
+        }
         _ => {}
     }
 
@@ -313,6 +347,11 @@ pub fn to_rgba8(info: &TexInfo) -> Result<Vec<u32>> {
         "PF_BC5" => texture2ddecoder::decode_bc5(&info.mip0, w, h, &mut image),
         "PF_BC7" => texture2ddecoder::decode_bc7(&info.mip0, w, h, &mut image),
         "PF_BC4" => texture2ddecoder::decode_bc4(&info.mip0, w, h, &mut image),
+        // BC6H is HDR; UE cooks it UNSIGNED for nearly all assets, so decode as
+        // unsigned (signed=false). texture2ddecoder tonemaps internally
+        // (f16 -> clamp [0,1] * 255) and emits opaque 0xAARRGGBB LDR u32s, so the
+        // output is used directly like the other BCn arms — no extra clamp here.
+        "PF_BC6H" => texture2ddecoder::decode_bc6(&info.mip0, w, h, &mut image, false),
         _ => return Err(TexError::UnsupportedFormat(info.format.clone())),
     };
 
@@ -528,6 +567,48 @@ mod tests {
         assert_eq!(px, vec![0xFF00_0000, 0xFF7F_7F7F]);
     }
 
+    /// Pure unit test: a `PF_FloatRGBA` pixel built from half-floats
+    /// (1.0, 0.0, 0.0, 1.0) decodes to opaque red `0xFFFF0000`.
+    #[test]
+    fn decode_floatrgba_opaque_red() {
+        let mut mip0 = Vec::new();
+        for v in [1.0f32, 0.0, 0.0, 1.0] {
+            mip0.extend_from_slice(&half::f16::from_f32(v).to_bits().to_le_bytes());
+        }
+        let info = TexInfo {
+            width: 1,
+            height: 1,
+            format: "PF_FloatRGBA".into(),
+            mip0,
+            is_virtual: false,
+            decoded_rgba: None,
+        };
+        let px = to_rgba8(&info).unwrap();
+        assert_eq!(px, vec![0xFFFF_0000]);
+    }
+
+    /// Pure unit test: an HDR `PF_FloatRGBA` value > 1.0 (half 4.0 in R) CLAMPS to
+    /// 255 rather than wrapping. Verifies the tonemap clamp.
+    #[test]
+    fn decode_floatrgba_hdr_clamps_not_wraps() {
+        let mut mip0 = Vec::new();
+        // R=4.0 (HDR, >1), G=0, B=0, A=1.0
+        for v in [4.0f32, 0.0, 0.0, 1.0] {
+            mip0.extend_from_slice(&half::f16::from_f32(v).to_bits().to_le_bytes());
+        }
+        let info = TexInfo {
+            width: 1,
+            height: 1,
+            format: "PF_FloatRGBA".into(),
+            mip0,
+            is_virtual: false,
+            decoded_rgba: None,
+        };
+        let px = to_rgba8(&info).unwrap();
+        // R clamps to 255 (not wrapped), opaque red.
+        assert_eq!(px, vec![0xFFFF_0000]);
+    }
+
     /// Pure unit test: a solid BC4 block (single channel) decodes to opaque gray.
     /// A BC4 block is the BC3 alpha-block layout: [a0, a1, 6 bytes of 3-bit idx].
     /// a0 = a1 = 0xC0 with all indices 0 selects a0 for every pixel -> gray 0xC0,
@@ -574,6 +655,17 @@ mod tests {
     fn pid_for(asset: &str) -> Option<u64> {
         let idx = crate::index::TextureIndex::load(&crate::paths::texture_index_path()).ok()?;
         idx.entries.get(asset).copied()
+    }
+
+    /// Resolve the first index entry whose asset path CONTAINS `needle` to its
+    /// `(asset_path, package_id)`. Used for assets we know by leaf/substring rather
+    /// than full path. `None` if the index is absent or nothing matches.
+    fn pid_containing(needle: &str) -> Option<(String, u64)> {
+        let idx = crate::index::TextureIndex::load(&crate::paths::texture_index_path()).ok()?;
+        idx.entries
+            .iter()
+            .find(|(path, _)| path.contains(needle))
+            .map(|(path, &pid)| (path.clone(), pid))
     }
 
     /// True if the image has at least two distinct pixel values (i.e. not a
@@ -648,5 +740,102 @@ mod tests {
         assert!(info.width >= 1 && info.height >= 1 && info.width <= 16384 && info.height <= 16384);
         assert_eq!(px.len(), (info.width * info.height) as usize);
         assert!(is_real_image(&px), "BC4 decoded to a flat/identical image");
+    }
+
+    /// PF_FloatRGBA: the engine `Black_1x1_EXR_Texture_VT` asset that previously
+    /// failed with "unsupported pixel format: PF_FloatRGBA". It is a 1x1 BLACK
+    /// virtual texture, so we assert it DECODES cleanly with the right format and
+    /// pixel count — NOT that it is a non-flat image (all-black is the expected,
+    /// correct content here).
+    #[test]
+    #[ignore = "slow: unpacks from real container; needs game + cached index"]
+    fn decode_real_floatrgba_black_1x1_exr() {
+        let Some(g) = game_dir() else {
+            eprintln!("skip: game not installed");
+            return;
+        };
+        let Some((asset, pid)) = pid_containing("Black_1x1_EXR_Texture_VT") else {
+            eprintln!("skip: cached index absent or asset not found");
+            return;
+        };
+        let utoc = crate::paths::main_container(&g).unwrap();
+        let usmap = crate::paths::usmap(&g).unwrap();
+        let leaf = asset.rsplit('/').next().unwrap_or(&asset);
+        let (info, px) =
+            crate::index::extract_by_package_id(&utoc, &usmap, pid, leaf).unwrap();
+        eprintln!(
+            "Black_1x1_EXR_Texture_VT ({asset}): {}x{} {} px={}",
+            info.width, info.height, info.format, px.len()
+        );
+        assert_eq!(info.format, "PF_FloatRGBA");
+        assert!(info.width >= 1 && info.height >= 1 && info.width <= 16384 && info.height <= 16384);
+        assert_eq!(px.len(), (info.width * info.height) as usize);
+        // Black EXR fill texture: every pixel has RGB == 0 (the expected content).
+        // Do NOT require non-flat content — a flat black image is correct here.
+        // (Alpha is whatever the source EXR carries — observed A=0, i.e. fully
+        // transparent black — so we do NOT assert opacity, only that R=G=B=0.)
+        for (i, &p) in px.iter().enumerate() {
+            let r = (p >> 16) & 0xff;
+            let g = (p >> 8) & 0xff;
+            let b = p & 0xff;
+            assert_eq!((r, g, b), (0, 0, 0), "pixel {i}: RGB not black ({p:#010x})");
+        }
+    }
+
+    /// PF_BC6H (HDR block). Scans the cached index for a real BC6H asset by
+    /// decoding candidates; if none is found quickly it SKIPS with an eprintln
+    /// rather than failing (BC6H is rare in this game's cook). When found, asserts
+    /// it decodes to a real (non-flat) image.
+    #[test]
+    #[ignore = "slow: scans real container for a BC6H asset; needs game + cached index"]
+    fn decode_real_bc6h_if_present() {
+        let Some(g) = game_dir() else {
+            eprintln!("skip: game not installed");
+            return;
+        };
+        let Some(idx) =
+            crate::index::TextureIndex::load(&crate::paths::texture_index_path()).ok()
+        else {
+            eprintln!("skip: cached index absent");
+            return;
+        };
+        let utoc = crate::paths::main_container(&g).unwrap();
+        let usmap = crate::paths::usmap(&g).unwrap();
+
+        // Prefer paths that hint at HDR/cubemap content to keep the scan short.
+        let mut candidates: Vec<(&String, &u64)> = idx
+            .entries
+            .iter()
+            .filter(|(p, _)| {
+                let lp = p.to_ascii_lowercase();
+                lp.contains("hdr")
+                    || lp.contains("cubemap")
+                    || lp.contains("_cube")
+                    || lp.contains("skylight")
+                    || lp.contains("specular")
+            })
+            .collect();
+        candidates.extend(idx.entries.iter());
+
+        let mut scanned = 0usize;
+        for (asset, &pid) in candidates.into_iter().take(400) {
+            scanned += 1;
+            let leaf = asset.rsplit('/').next().unwrap_or(asset);
+            let Ok((info, px)) =
+                crate::index::extract_by_package_id(&utoc, &usmap, pid, leaf)
+            else {
+                continue;
+            };
+            if info.format == "PF_BC6H" {
+                eprintln!(
+                    "BC6H asset found after {scanned} candidates: {asset} {}x{} px={}",
+                    info.width, info.height, px.len()
+                );
+                assert_eq!(px.len(), (info.width * info.height) as usize);
+                assert!(is_real_image(&px), "BC6H decoded to a flat/identical image");
+                return;
+            }
+        }
+        eprintln!("skip: no PF_BC6H asset located in {scanned} scanned index entries");
     }
 }

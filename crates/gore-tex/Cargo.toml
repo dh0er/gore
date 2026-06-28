@@ -21,6 +21,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 texture2ddecoder = "0.1"
 intel_tex_2 = "0.5"
+# IEEE half-float -> f32 for decoding PF_FloatRGBA (16-bit RGBA) previews.
+half = "2"
 
 [dev-dependencies]
 sha2 = "0.10"
