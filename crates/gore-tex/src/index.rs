@@ -130,15 +130,20 @@ pub fn extract_by_package_id(
 ) -> Result<(crate::decode::TexInfo, Vec<u32>)> {
     // Unique per-call temp dir so overlapping extracts don't clobber each other's cooked files.
     let tmp = crate::paths::unique_temp_dir("gore-tex-idx-extract")?;
-    let uasset = crate::container::unpack_asset_by_id(utoc, usmap, package_id, leaf, &tmp)?;
-    let uexp = uasset.with_extension("uexp");
-    let ubulk = uasset.with_extension("ubulk");
-    let info = crate::decode::parse(
-        &std::fs::read(&uasset)?, &std::fs::read(&uexp)?,
-        &std::fs::read(&ubulk).unwrap_or_default(), &std::fs::read(usmap)?)?;
-    let px = crate::decode::to_rgba8(&info)?;
+    // Run the fallible work in a closure so the temp dir is removed on EVERY path (incl. an
+    // unpack/parse/decode error), not just success.
+    let result = (|| -> Result<(crate::decode::TexInfo, Vec<u32>)> {
+        let uasset = crate::container::unpack_asset_by_id(utoc, usmap, package_id, leaf, &tmp)?;
+        let uexp = uasset.with_extension("uexp");
+        let ubulk = uasset.with_extension("ubulk");
+        let info = crate::decode::parse(
+            &std::fs::read(&uasset)?, &std::fs::read(&uexp)?,
+            &std::fs::read(&ubulk).unwrap_or_default(), &std::fs::read(usmap)?)?;
+        let px = crate::decode::to_rgba8(&info)?;
+        Ok((info, px))
+    })();
     let _ = std::fs::remove_dir_all(&tmp); // transient cooked files; pixels are in memory now
-    Ok((info, px))
+    result
 }
 
 #[cfg(test)]

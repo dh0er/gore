@@ -290,18 +290,25 @@ fn texture_index(payload: Value) -> Value {
     // name AND the container's identity, so a game patch (even one keeping the .usmap name) that
     // rewrites the container invalidates a cache mapping paths to outdated package ids.
     let cached = if rebuild { None } else { gore_tex::index::TextureIndex::load_current(&cache, &build_id) };
+    let mut cache_saved = true; // a loaded cache is, by definition, already persisted
     let idx = match cached {
         Some(i) => i,
         None => {
             let i = match gore_tex::index::build_index(&utoc, &build_id) {
                 Ok(i) => i, Err(e) => return err("INDEX_BUILD", e.to_string()) };
-            let _ = i.save(&cache);
+            // Don't silently ignore a failed persist: the index is usable in-memory this call,
+            // but a failed write means every later load rebuilds. Surface it (warning + flag)
+            // instead of reporting unqualified success.
+            if let Err(e) = i.save(&cache) {
+                eprintln!("warning: failed to persist texture index cache: {e}");
+                cache_saved = false;
+            }
             i
         }
     };
     let entries: serde_json::Map<String, Value> = idx.entries.iter()
         .map(|(k, v)| (k.clone(), Value::String(v.to_string()))).collect();
-    json!({ "ok": true, "build_id": idx.build_id, "count": idx.entries.len(), "entries": entries })
+    json!({ "ok": true, "build_id": idx.build_id, "count": idx.entries.len(), "cache_saved": cache_saved, "entries": entries })
 }
 
 /// `{ok, png_path, width, height, format}` — extract a texture to a temp PNG. `payload.game`,
@@ -331,10 +338,16 @@ fn texture_extract(payload: Value) -> Value {
         let tmp = match gore_tex::paths::unique_temp_dir("gore-tex-ffi-extract") {
             Ok(t) => t, Err(_) => return err("IO", "tmp") };
         let ua = match gore_tex::container::unpack_asset(&utoc, &usmap, asset, &tmp) {
-            Ok(p) => p, Err(e) => return err("UNPACK", e.to_string()) };
-        let info = match gore_tex::decode::parse(
-            &std::fs::read(&ua).unwrap_or_default(), &std::fs::read(ua.with_extension("uexp")).unwrap_or_default(),
-            &std::fs::read(ua.with_extension("ubulk")).unwrap_or_default(), &std::fs::read(&usmap).unwrap_or_default()) {
+            Ok(p) => p, Err(e) => { let _ = std::fs::remove_dir_all(&tmp); return err("UNPACK", e.to_string()) } };
+        // Surface read failures instead of defaulting to empty bytes (which would yield a
+        // misleading PARSE/DECODE error). `.ubulk` is legitimately optional (inline-mip textures).
+        macro_rules! read_or_err { ($p:expr) => { match std::fs::read($p) {
+            Ok(b) => b, Err(e) => { let _ = std::fs::remove_dir_all(&tmp); return err("READ", e.to_string()) } } }; }
+        let ua_bytes = read_or_err!(&ua);
+        let uexp_bytes = read_or_err!(ua.with_extension("uexp"));
+        let usmap_bytes = read_or_err!(&usmap);
+        let ubulk_bytes = std::fs::read(ua.with_extension("ubulk")).unwrap_or_default();
+        let info = match gore_tex::decode::parse(&ua_bytes, &uexp_bytes, &ubulk_bytes, &usmap_bytes) {
             Ok(i) => i, Err(e) => { let _ = std::fs::remove_dir_all(&tmp); return err("PARSE", e.to_string()) } };
         let px = match gore_tex::decode::to_rgba8(&info) {
             Ok(p) => p, Err(e) => { let _ = std::fs::remove_dir_all(&tmp); return err("DECODE", e.to_string()) } };
