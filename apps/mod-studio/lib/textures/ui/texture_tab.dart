@@ -33,6 +33,12 @@ class _TextureTabState extends ConsumerState<TextureTab> {
   static const _previewCacheCap = 24;
   final Map<String, _Preview> _previewCache = {};
 
+  // Tree-browser state: the set of expanded folder ids, plus a compressed tree
+  // built once per index (rebuilt only when the entries map identity changes).
+  final Set<String> _expanded = {};
+  Map<String, String>? _treeEntries;
+  _DisplayNode? _treeRoot;
+
   /// Delete a cached preview's temp PNG and drop it from the image cache.
   void _evictPreview(_Preview pv) {
     try {
@@ -104,29 +110,16 @@ class _TextureTabState extends ConsumerState<TextureTab> {
                     ),
                   ),
                   Expanded(
-                    child: ListView.builder(
-                      itemCount: matches.length,
-                      itemBuilder: (c, i) {
-                        final p = matches[i];
-                        final isReplaced = staged.items.containsKey(p);
-                        return ListTile(
-                          dense: true,
-                          selected: p == _selected,
-                          title: Text(
-                            p,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          trailing: isReplaced
-                              ? const Icon(Icons.check, size: 16)
-                              : null,
-                          onTap: () => setState(() => _selected = p),
-                        );
-                      },
-                    ),
+                    // Browse = lazy folder tree; an active search = flat hit list
+                    // (paths matched anywhere, not just by folder).
+                    child: _query.isEmpty
+                        ? _treeBrowser(entries, staged)
+                        : _flatList(matches, staged),
                   ),
                   Text(
-                    '${matches.length} shown / ${entries.length} total',
+                    _query.isEmpty
+                        ? '${entries.length} textures'
+                        : '${matches.length} match / ${entries.length} total',
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
                 ],
@@ -138,6 +131,173 @@ class _TextureTabState extends ConsumerState<TextureTab> {
         );
       },
     );
+  }
+
+  // -- Browser: flat (search) + lazy tree (browse) ------------------------
+
+  Widget _flatList(List<String> matches, TextureReplacementsState staged) {
+    return ListView.builder(
+      itemCount: matches.length,
+      itemBuilder: (c, i) {
+        final p = matches[i];
+        final isReplaced = staged.items.containsKey(p);
+        return ListTile(
+          dense: true,
+          selected: p == _selected,
+          title: Text(p, maxLines: 1, overflow: TextOverflow.ellipsis),
+          trailing: isReplaced ? const Icon(Icons.check, size: 16) : null,
+          onTap: () => setState(() => _selected = p),
+        );
+      },
+    );
+  }
+
+  Widget _treeBrowser(
+    Map<String, String> entries,
+    TextureReplacementsState staged,
+  ) {
+    final root = _ensureTree(entries);
+    // Flatten only the currently-expanded nodes (default collapsed → just the
+    // top level), so this stays cheap regardless of the ~13k leaves.
+    final visible = <_DisplayNode>[];
+    void walk(List<_DisplayNode> nodes) {
+      for (final n in nodes) {
+        visible.add(n);
+        if (!n.isLeaf && _expanded.contains(n.id)) walk(n.children!);
+      }
+    }
+
+    walk(root.children!);
+    final scheme = Theme.of(context).colorScheme;
+    return ListView.builder(
+      itemCount: visible.length,
+      itemBuilder: (c, i) {
+        final n = visible[i];
+        final indent = n.depth * 14.0;
+        if (n.isLeaf) {
+          final isReplaced = staged.items.containsKey(n.assetPath);
+          return Padding(
+            padding: EdgeInsets.only(left: indent),
+            child: ListTile(
+              dense: true,
+              selected: n.assetPath == _selected,
+              leading: const Icon(Icons.image_outlined, size: 18),
+              title: Text(n.label, maxLines: 1, overflow: TextOverflow.ellipsis),
+              trailing: isReplaced ? const Icon(Icons.check, size: 16) : null,
+              onTap: () => setState(() => _selected = n.assetPath),
+            ),
+          );
+        }
+        final isOpen = _expanded.contains(n.id);
+        return Padding(
+          padding: EdgeInsets.only(left: indent),
+          child: ListTile(
+            dense: true,
+            leading: Icon(
+              isOpen ? Icons.expand_more : Icons.chevron_right,
+              size: 18,
+            ),
+            title: Row(
+              children: [
+                Icon(
+                  isOpen ? Icons.folder_open : Icons.folder,
+                  size: 18,
+                  color: scheme.primary,
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    n.label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  '${n.leafCount}',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+            onTap: () => setState(() {
+              if (isOpen) {
+                _expanded.remove(n.id);
+              } else {
+                _expanded.add(n.id);
+              }
+            }),
+          ),
+        );
+      },
+    );
+  }
+
+  /// Build (and cache) the compressed display tree for [entries]. Rebuilt only
+  /// when the entries map identity changes (i.e. the index reloaded).
+  _DisplayNode _ensureTree(Map<String, String> entries) {
+    if (identical(_treeEntries, entries) && _treeRoot != null) {
+      return _treeRoot!;
+    }
+    final raw = _RawNode('');
+    for (final p in entries.keys) {
+      var node = raw;
+      for (final seg in p.split('/')) {
+        if (seg.isEmpty) continue;
+        node = node.children.putIfAbsent(seg, () => _RawNode(seg));
+      }
+      node.assetPath = p;
+    }
+    final children = raw.children.values
+        .map((c) => _toDisplay(c, 0, ''))
+        .toList()
+      ..sort(_nodeSort);
+    final root = _DisplayNode(label: '', depth: -1, id: '', leafCount: 0)
+      ..children = children;
+    _treeEntries = entries;
+    _treeRoot = root;
+    return root;
+  }
+
+  /// Convert a raw segment node to a display node, compressing single-child
+  /// folder chains ("A" whose only child is folder "B" → "A/B") so deep paths
+  /// don't cost one click per level.
+  _DisplayNode _toDisplay(_RawNode raw, int depth, String parentId) {
+    var label = raw.label;
+    var cur = raw;
+    while (cur.assetPath == null && cur.children.length == 1) {
+      final only = cur.children.values.first;
+      if (only.assetPath != null) break; // single child is a texture — keep folder
+      label = '$label/${only.label}';
+      cur = only;
+    }
+    final id = parentId.isEmpty ? label : '$parentId/$label';
+    if (cur.assetPath != null) {
+      return _DisplayNode(
+        label: label,
+        depth: depth,
+        id: cur.assetPath!,
+        assetPath: cur.assetPath,
+        leafCount: 1,
+      );
+    }
+    final kids = cur.children.values
+        .map((c) => _toDisplay(c, depth + 1, id))
+        .toList()
+      ..sort(_nodeSort);
+    var count = 0;
+    for (final k in kids) {
+      count += k.leafCount;
+    }
+    return _DisplayNode(label: label, depth: depth, id: id, leafCount: count)
+      ..children = kids;
+  }
+
+  /// Folders before leaves, then case-insensitive alpha.
+  int _nodeSort(_DisplayNode a, _DisplayNode b) {
+    if (a.isLeaf != b.isLeaf) return a.isLeaf ? 1 : -1;
+    return a.label.toLowerCase().compareTo(b.label.toLowerCase());
   }
 
   Widget _detail(Map<String, String> entries, TextureReplacementsState staged) {
@@ -360,6 +520,34 @@ class _TextureTabState extends ConsumerState<TextureTab> {
       );
     }
   }
+}
+
+/// Raw prefix-tree node: one per path segment, built directly from asset paths.
+class _RawNode {
+  _RawNode(this.label);
+  final String label;
+  final Map<String, _RawNode> children = {};
+  String? assetPath; // non-null = a texture leaf
+}
+
+/// Display node: a compressed folder (possibly merged segments, with [children])
+/// or a texture leaf ([assetPath] set). [id] is the stable folder path used for
+/// expand/collapse tracking; [leafCount] is the texture count beneath it.
+class _DisplayNode {
+  _DisplayNode({
+    required this.label,
+    required this.depth,
+    required this.id,
+    required this.leafCount,
+    this.assetPath,
+  });
+  final String label;
+  final int depth;
+  final String id;
+  final int leafCount;
+  final String? assetPath;
+  List<_DisplayNode>? children;
+  bool get isLeaf => assetPath != null;
 }
 
 /// A cached texture preview: the temp PNG path plus the source's native
