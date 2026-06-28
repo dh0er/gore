@@ -24,6 +24,15 @@ pub fn unique_temp_dir(prefix: &str) -> std::io::Result<PathBuf> {
     Ok(p)
 }
 
+/// A FRESH, UNIQUE temp file path (not created) for one output, e.g. a preview
+/// PNG. Keyed by pid + the same atomic counter as [`unique_temp_dir`], so two
+/// extractions never collide on the same path — the caller owns and deletes
+/// exactly the file it was given.
+pub fn unique_temp_file(prefix: &str, ext: &str) -> PathBuf {
+    let n = TEMP_SEQ.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!("{prefix}-{}-{n}.{ext}", std::process::id()))
+}
+
 /// Given a game install dir, return the main IoStore container `.utoc`.
 pub fn main_container(game_dir: &Path) -> Result<PathBuf> {
     let p = game_dir.join("G1R/Content/Paks/G1R-Windows.utoc");

@@ -322,15 +322,6 @@ fn texture_extract(payload: Value) -> Value {
         Ok(p) => p, Err(e) => return err("USMAP", e.to_string()) };
     let asset = payload.get("asset").and_then(Value::as_str).unwrap_or("");
     let leaf = asset.rsplit('/').next().unwrap_or("texture").to_string();
-    // Unique preview-file tag so two assets sharing a leaf (same filename, different
-    // dirs) don't overwrite each other's temp PNG. Prefer the package id; else hash the
-    // full asset path.
-    let preview_tag = payload.get("package_id").and_then(Value::as_str).map(str::to_string)
-        .unwrap_or_else(|| {
-            let mut h = std::collections::hash_map::DefaultHasher::new();
-            std::hash::Hash::hash(asset, &mut h);
-            format!("{:016x}", std::hash::Hasher::finish(&h))
-        });
     let (info, px) = if let Some(pid) = payload.get("package_id").and_then(Value::as_str).and_then(|s| s.parse::<u64>().ok()) {
         match gore_tex::index::extract_by_package_id(&utoc, &usmap, pid, &leaf) {
             Ok(x) => x, Err(e) => return err("EXTRACT", e.to_string()) }
@@ -356,7 +347,11 @@ fn texture_extract(payload: Value) -> Value {
     } else { return err("BAD_REQUEST", "need package_id or asset"); };
     let mut buf = Vec::with_capacity(px.len() * 4);
     for p in px { buf.extend_from_slice(&[(p >> 16) as u8, (p >> 8) as u8, p as u8, (p >> 24) as u8]); }
-    let out = std::env::temp_dir().join(format!("gore-tex-preview-{leaf}-{preview_tag}.png"));
+    // Unique per-request output path: a deterministic name would let two
+    // extractions of the same texture (e.g. a stale request finishing after a
+    // game/index change) race on one file. Each call owns its own PNG and the UI
+    // deletes exactly the file it was handed.
+    let out = gore_tex::paths::unique_temp_file(&format!("gore-tex-preview-{leaf}"), "png");
     if image::save_buffer(&out, &buf, info.width, info.height, image::ColorType::Rgba8).is_err() {
         return err("PNG", "save failed");
     }

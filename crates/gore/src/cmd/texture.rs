@@ -145,6 +145,10 @@ pub fn run(action: TextureAction) -> Result<()> {
             )
             .with_context(|| format!("decoding texture {asset}"))?;
 
+            // Cooked files are now in `info`; drop the unpack temp dir so repeated
+            // extracts don't accumulate large .uasset/.uexp/.ubulk payloads in temp.
+            let _ = std::fs::remove_dir_all(&tmp);
+
             let px = gore_tex::decode::to_rgba8(&info)
                 .with_context(|| format!("rgba decode of {asset}"))?;
 
@@ -206,6 +210,10 @@ pub fn run(action: TextureAction) -> Result<()> {
             let orig_uexp =
                 std::fs::read(&uexp).with_context(|| format!("reading {}", uexp.display()))?;
             let orig_ubulk = std::fs::read(&ubulk).unwrap_or_default();
+
+            // Originals are now in memory; drop the unpack temp dir so repeated
+            // replaces don't accumulate cooked payloads in the system temp dir.
+            let _ = std::fs::remove_dir_all(&tmp);
 
             let info = gore_tex::decode::parse(&orig_uasset, &orig_uexp, &orig_ubulk, &std::fs::read(&usmap)?)
                 .with_context(|| format!("decoding original texture {asset}"))?;

@@ -85,6 +85,10 @@ pub struct TexInfo {
     /// `n > 1` is a multi-layer VT [`crate::vt::retile`] rejects. Populated from
     /// `FVirtualTextureBuiltData::NumLayers` (== `vt.layer_types.len()`).
     pub vt_layers: Option<u32>,
+    /// True for a *legacy* VT tile layout, which [`crate::vt::retile`] rejects.
+    /// `false` for regular textures and modern VTs. Gates Replace alongside
+    /// `vt_layers` so a legacy VT isn't reported as replaceable.
+    pub vt_legacy: bool,
     /// Pre-decoded RGBA (`0xAARRGGBB`, `width * height` pixels) for inputs that
     /// can't go through the plain BCn mip0 path — currently virtual textures,
     /// whose layer-0 mip-0 surface is stitched from morton-ordered BCn tiles
@@ -188,6 +192,7 @@ pub fn parse(uasset: &[u8], uexp: &[u8], ubulk: &[u8], _usmap: &[u8]) -> Result<
             mip0: Vec::new(),
             is_virtual: true,
             vt_layers: Some(vt.num_layers),
+            vt_legacy: vt.is_legacy(),
             decoded_rgba: Some(rgba),
         });
     }
@@ -217,6 +222,7 @@ pub fn parse(uasset: &[u8], uexp: &[u8], ubulk: &[u8], _usmap: &[u8]) -> Result<
         mip0: mip0_entry.data.clone(),
         is_virtual: false,
         vt_layers: None,
+        vt_legacy: false,
         decoded_rgba: None,
     })
 }
@@ -236,15 +242,15 @@ pub fn parse(uasset: &[u8], uexp: &[u8], ubulk: &[u8], _usmap: &[u8]) -> Result<
 ///   physical tile via `block_bytes`, so non-BCn formats error). Hence we require
 ///   `vt_layers == Some(1)` AND `encode::supports_format(&format)`.
 ///
-/// Note: `retile` additionally rejects *legacy* VT tile layouts, but legacy is
-/// not observed in G1R's cook (`is_legacy()` keys on the legacy-only
-/// `TileOffsetInChunk` array, always empty here) and is not represented in
-/// [`TexInfo`]; the single-layer + encodable-format gate covers every VT the UI
-/// can actually surface. A legacy multi-layer/odd VT would still fail loudly at
-/// cook rather than producing a bad asset.
+/// `retile` additionally rejects *legacy* VT tile layouts, so a legacy VT is
+/// reported as not replaceable too (via [`TexInfo::vt_legacy`]). Legacy isn't
+/// observed in G1R's cook, but gating on it keeps the flag honest rather than
+/// letting such a texture fail only later at cook.
 pub fn replace_supported(info: &TexInfo) -> bool {
     if info.is_virtual {
-        info.vt_layers == Some(1) && crate::encode::supports_format(&info.format)
+        info.vt_layers == Some(1)
+            && !info.vt_legacy
+            && crate::encode::supports_format(&info.format)
     } else {
         crate::encode::supports_format(&info.format)
     }
@@ -511,6 +517,7 @@ mod tests {
             mip0: block,
             is_virtual: false,
             vt_layers: None,
+            vt_legacy: false,
             decoded_rgba: None,
         };
         let px = to_rgba8(&info).unwrap();
@@ -581,15 +588,17 @@ mod tests {
             mip0: Vec::new(),
             is_virtual: false,
             vt_layers: None,
+            vt_legacy: false,
             decoded_rgba: None,
         };
-        let vt = |fmt: &str, layers: u32| TexInfo {
+        let vt = |fmt: &str, layers: u32, legacy: bool| TexInfo {
             width: 4,
             height: 4,
             format: fmt.into(),
             mip0: Vec::new(),
             is_virtual: true,
             vt_layers: Some(layers),
+            vt_legacy: legacy,
             decoded_rgba: Some(vec![0u32; 16]),
         };
 
@@ -600,10 +609,12 @@ mod tests {
         assert!(!replace_supported(&regular("PF_B8G8R8A8")));
 
         // Virtual: single-layer + encodable -> true; multi-layer -> false even if
-        // the tile format is encodable; non-encodable single-layer -> false.
-        assert!(replace_supported(&vt("PF_DXT1", 1)));
-        assert!(!replace_supported(&vt("PF_DXT1", 2)));
-        assert!(!replace_supported(&vt("PF_BC6H", 1)));
+        // the tile format is encodable; non-encodable single-layer -> false; a
+        // legacy layout -> false even when single-layer + encodable.
+        assert!(replace_supported(&vt("PF_DXT1", 1, false)));
+        assert!(!replace_supported(&vt("PF_DXT1", 2, false)));
+        assert!(!replace_supported(&vt("PF_BC6H", 1, false)));
+        assert!(!replace_supported(&vt("PF_DXT1", 1, true)));
     }
 
     /// Pure unit test: a 2x1 `PF_B8G8R8A8` surface. Input bytes are B,G,R,A per
@@ -620,6 +631,7 @@ mod tests {
             mip0,
             is_virtual: false,
             vt_layers: None,
+            vt_legacy: false,
             decoded_rgba: None,
         };
         let px = to_rgba8(&info).unwrap();
@@ -637,6 +649,7 @@ mod tests {
             mip0,
             is_virtual: false,
             vt_layers: None,
+            vt_legacy: false,
             decoded_rgba: None,
         };
         let px = to_rgba8(&info).unwrap();
@@ -658,6 +671,7 @@ mod tests {
             mip0,
             is_virtual: false,
             vt_layers: None,
+            vt_legacy: false,
             decoded_rgba: None,
         };
         let px = to_rgba8(&info).unwrap();
@@ -680,6 +694,7 @@ mod tests {
             mip0,
             is_virtual: false,
             vt_layers: None,
+            vt_legacy: false,
             decoded_rgba: None,
         };
         let px = to_rgba8(&info).unwrap();
@@ -702,6 +717,7 @@ mod tests {
             mip0: block,
             is_virtual: false,
             vt_layers: None,
+            vt_legacy: false,
             decoded_rgba: None,
         };
         let px = to_rgba8(&info).unwrap();
