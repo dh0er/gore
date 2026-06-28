@@ -265,12 +265,19 @@ pub fn decode_layer0(
         return Err(corrupt("VT physical tile size is zero"));
     }
 
-    // Stitched bitmap: grid (in tiles) * tile_size.
+    // The tile grid is padded up to whole tiles; the texture's LOGICAL size
+    // (vt.width/height) can be smaller (edge-padded VTs). Allocate and report the
+    // logical size and clip tile copies at the right/bottom edges — otherwise the
+    // preview carries padding pixels and its dimensions won't equal what `retile`
+    // requires for a replacement (template.width/height), breaking the
+    // export-then-replace round-trip.
     let grid_w = mip.width;
     let grid_h = mip.height;
-    let bmp_w = grid_w * tile_size;
-    let bmp_h = grid_h * tile_size;
-    let mut bitmap = vec![0u32; (bmp_w as usize) * (bmp_h as usize)];
+    let grid_px_w = grid_w * tile_size;
+    let grid_px_h = grid_h * tile_size;
+    let out_w = if vt.width == 0 { grid_px_w } else { vt.width.min(grid_px_w) };
+    let out_h = if vt.height == 0 { grid_px_h } else { vt.height.min(grid_px_h) };
+    let mut bitmap = vec![0u32; (out_w as usize) * (out_h as usize)];
 
     // Per-tile size for the PHYSICAL (bordered) tile. Block-compressed: block
     // math (ceil(phys/4)^2 * block_bytes). Uncompressed (linear): phys^2 * bpp.
@@ -365,14 +372,26 @@ pub fn decode_layer0(
         let tile_y = (reverse_morton2(addr >> 1) * tile_size) as usize;
         let b = border as usize;
         let ts = tile_size as usize;
+        let ow = out_w as usize;
+        let oh = out_h as usize;
+        // Skip tiles wholly past the logical right edge; clip the rest.
+        if tile_x >= ow {
+            continue;
+        }
+        let copy_w = ts.min(ow - tile_x);
         for y in 0..ts {
+            let dy = tile_y + y;
+            if dy >= oh {
+                break; // past the logical bottom edge
+            }
             let src_row = (y + b) * phys + b;
-            let dst_row = (tile_y + y) * (bmp_w as usize) + tile_x;
-            bitmap[dst_row..dst_row + ts].copy_from_slice(&decoded[src_row..src_row + ts]);
+            let dst_row = dy * ow + tile_x;
+            bitmap[dst_row..dst_row + copy_w]
+                .copy_from_slice(&decoded[src_row..src_row + copy_w]);
         }
     }
 
-    Ok((bmp_w, bmp_h, bitmap))
+    Ok((out_w, out_h, bitmap))
 }
 
 /// Box-downsample a `w`x`h` RGBA8 image to `(w/2)`x`(h/2)` by averaging each 2x2
