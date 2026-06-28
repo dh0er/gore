@@ -25,7 +25,8 @@ final modDelayMsProvider = StateProvider<int>((ref) => 0);
 bool projectIsDirty(WidgetRef ref) =>
     ref.watch(overridesProvider).count > 0 ||
     ref.watch(locEditsProvider).isDirty ||
-    ref.watch(audioReplacementsProvider).count > 0;
+    ref.watch(audioReplacementsProvider).count > 0 ||
+    ref.watch(textureReplacementsProvider).count > 0;
 
 /// Signature of the last state written to / loaded from a `.goremod`. Used to tell whether the
 /// current staged state still matches what was saved, so a saved project isn't treated as having
@@ -48,7 +49,8 @@ bool hasUnsavedChanges(WidgetRef ref) {
   if (saved == null) {
     return ref.read(overridesProvider).count > 0 ||
         ref.read(locEditsProvider).isDirty ||
-        ref.read(audioReplacementsProvider).count > 0;
+        ref.read(audioReplacementsProvider).count > 0 ||
+        ref.read(textureReplacementsProvider).count > 0;
   }
   return _projectSignature(ref) != saved;
 }
