@@ -496,7 +496,20 @@ pub fn deploy(triplet: &[PathBuf; 3], game_dir: &Path, name: &str) -> Result<Pat
             return Err(TexError::Retoc(anyhow::anyhow!("serialising deploy record: {e}")));
         }
     };
-    if let Err(e) = std::fs::write(&record_path, json) {
+    // Write the record atomically: a direct write to `record_path` would
+    // truncate an existing record first, so a mid-write failure (e.g. disk full
+    // on a redeploy of the same name) would leave the prior deployment — whose
+    // triplet bytes `cleanup` restores — without a usable record for undeploy.
+    // Write to a temp sibling then rename into place; the old record stays intact
+    // until the new one is complete.
+    let tmp_record = mods.join(format!("{name}.gore-deploy.json.tmp"));
+    if let Err(e) = std::fs::write(&tmp_record, json) {
+        let _ = std::fs::remove_file(&tmp_record);
+        cleanup(&copied);
+        return Err(e.into());
+    }
+    if let Err(e) = std::fs::rename(&tmp_record, &record_path) {
+        let _ = std::fs::remove_file(&tmp_record);
         cleanup(&copied);
         return Err(e.into());
     }
