@@ -547,6 +547,10 @@ class _TextureTabState extends ConsumerState<TextureTab> {
       setState(() => _previewCache[asset] = cached);
       return;
     }
+    // An extract for this asset is already in flight. Starting a second one would
+    // race on the FFI's deterministic per-asset temp PNG and can corrupt it, so
+    // skip — the running call will populate the cache.
+    if (_loadingAsset == asset) return;
     setState(() => _loadingAsset = asset);
     // Capture the source this extract is for; if the game/index changes while it
     // runs, the result is stale and must be discarded (the cache was cleared for
