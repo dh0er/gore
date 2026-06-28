@@ -104,17 +104,48 @@ pub struct PlatformData {
 
 // ---- format block math ----------------------------------------------------
 
-/// Bytes per 4x4 block for the supported BCn formats.
+/// Bytes per 4x4 block for the supported *block-compressed* (BCn) formats.
+/// Returns `None` for non-block formats (uncompressed and unsupported alike) —
+/// callers that need to size any supported mip must use [`mip_byte_size`], which
+/// also handles the linear (uncompressed) formats.
 pub(crate) fn block_bytes(format: &str) -> Option<u32> {
     match format {
-        "PF_DXT1" => Some(8),
+        // 8 bytes / 4x4 block
+        "PF_DXT1" | "PF_BC4" => Some(8),
+        // 16 bytes / 4x4 block
         "PF_DXT5" | "PF_BC5" | "PF_BC7" => Some(16),
         _ => None,
     }
 }
 
-/// Bytes of a single mip of `format` at `w` x `h` (BCn, 4x4 blocks).
+/// Bytes per pixel for the supported *uncompressed* (linear) formats. Returns
+/// `None` for block-compressed or unsupported formats.
+pub(crate) fn uncompressed_bytes_per_pixel(format: &str) -> Option<u32> {
+    match format {
+        "PF_B8G8R8A8" => Some(4),
+        "PF_G8" => Some(1),
+        _ => None,
+    }
+}
+
+/// Whether the read/decode path supports `format` at all — either a
+/// block-compressed BCn format or a known uncompressed (linear) one. (The texture
+/// *rewrite* path is narrower: it only supports the BCn formats — see
+/// [`block_math`].)
+pub(crate) fn is_supported_format(format: &str) -> bool {
+    block_bytes(format).is_some() || uncompressed_bytes_per_pixel(format).is_some()
+}
+
+/// Bytes of a single mip of `format` at `w` x `h`.
+///
+/// * Block-compressed (BCn): `ceil(w/4) * ceil(h/4) * block_bytes`.
+/// * Uncompressed (linear): `w * h * bytes_per_pixel` — NOT block math.
+///
+/// Returns `None` for an unsupported format.
 fn mip_byte_size(format: &str, w: u32, h: u32) -> Option<u64> {
+    if let Some(bpp) = uncompressed_bytes_per_pixel(format) {
+        return Some((w as u64) * (h as u64) * (bpp as u64));
+    }
     let bb = block_bytes(format)? as u64;
     let blocks_x = ((w as u64) + 3) / 4;
     let blocks_y = ((h as u64) + 3) / 4;
@@ -292,9 +323,10 @@ impl PlatformData {
             None
         };
 
-        // Reject unsupported (non-BCn) pixel formats AFTER consuming OptData so
-        // the error is the real "unsupported format", not a downstream misparse.
-        if block_bytes(&format).is_none() {
+        // Reject unsupported pixel formats AFTER consuming OptData so the error is
+        // the real "unsupported format", not a downstream misparse. Supported =
+        // BCn (block) OR a known uncompressed/linear format (B8G8R8A8 / G8).
+        if !is_supported_format(&format) {
             return Err(TexError::UnsupportedFormat(format));
         }
 

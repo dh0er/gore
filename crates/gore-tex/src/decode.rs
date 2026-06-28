@@ -90,20 +90,43 @@ pub struct TexInfo {
 
 // ---- supported formats & block math ---------------------------------------
 
-/// Pixel formats this v1 read path understands. Each is a BCn block-compressed
-/// format laid out as 4x4 blocks.
+/// Bytes per 4x4 block for the supported BCn (block-compressed) formats. Returns
+/// `None` for uncompressed/linear formats — use [`mip_byte_size`] to size any
+/// supported mip (it also covers the linear formats).
 fn block_bytes(format: &str) -> Option<u32> {
     match format {
         // 8 bytes / 4x4 block
-        "PF_DXT1" => Some(8),
+        "PF_DXT1" | "PF_BC4" => Some(8),
         // 16 bytes / 4x4 block
         "PF_DXT5" | "PF_BC5" | "PF_BC7" => Some(16),
         _ => None,
     }
 }
 
-/// Bytes of a single mip of `format` at `w` x `h` (BCn, 4x4 blocks).
+/// Bytes per pixel for the supported uncompressed (linear) formats. `None` for
+/// block-compressed or unsupported formats.
+fn uncompressed_bytes_per_pixel(format: &str) -> Option<u32> {
+    match format {
+        "PF_B8G8R8A8" => Some(4),
+        "PF_G8" => Some(1),
+        _ => None,
+    }
+}
+
+/// Whether this read/decode path supports `format` (BCn block OR a known
+/// uncompressed/linear format).
+fn is_supported_format(format: &str) -> bool {
+    block_bytes(format).is_some() || uncompressed_bytes_per_pixel(format).is_some()
+}
+
+/// Bytes of a single mip of `format` at `w` x `h`.
+///
+/// * BCn (block): `ceil(w/4) * ceil(h/4) * block_bytes`.
+/// * Uncompressed (linear): `w * h * bytes_per_pixel`.
 fn mip_byte_size(format: &str, w: u32, h: u32) -> Option<u64> {
+    if let Some(bpp) = uncompressed_bytes_per_pixel(format) {
+        return Some((w as u64) * (h as u64) * (bpp as u64));
+    }
     let bb = block_bytes(format)? as u64;
     let blocks_x = ((w as u64) + 3) / 4;
     let blocks_y = ((h as u64) + 3) / 4;
@@ -160,7 +183,7 @@ pub fn parse(uasset: &[u8], uexp: &[u8], ubulk: &[u8], _usmap: &[u8]) -> Result<
             decoded_rgba: Some(rgba),
         });
     }
-    if block_bytes(&pd.format).is_none() {
+    if !is_supported_format(&pd.format) {
         return Err(TexError::UnsupportedFormat(pd.format));
     }
 
@@ -205,16 +228,26 @@ pub fn parse(uasset: &[u8], uexp: &[u8], ubulk: &[u8], _usmap: &[u8]) -> Result<
 ///
 /// ## Format dispatch
 ///
-/// * `PF_DXT1` -> BC1   (`decode_bc1`)
-/// * `PF_DXT5` -> BC3   (`decode_bc3`)
-/// * `PF_BC5`  -> BC5   (`decode_bc5`)
-/// * `PF_BC7`  -> BC7   (`decode_bc7`)
+/// * `PF_DXT1`     -> BC1   (`decode_bc1`)
+/// * `PF_DXT5`     -> BC3   (`decode_bc3`)
+/// * `PF_BC5`      -> BC5   (`decode_bc5`)
+/// * `PF_BC7`      -> BC7   (`decode_bc7`)
+/// * `PF_BC4`      -> BC4   (`decode_bc4`, single-channel -> grayscale, see note)
+/// * `PF_B8G8R8A8` -> linear BGRA8 (bytes ARE pixels; repacked to 0xAARRGGBB)
+/// * `PF_G8`       -> linear 8-bit gray (one byte/pixel -> opaque gray)
 ///
 /// **BC5 note:** BC5 is a two-channel (RG) format, used in this game for normal
 /// maps. `texture2ddecoder` fills R and G from the two compressed channels and
 /// leaves **B = 0, A = 255**. That is fine for a flat preview (the texture is a
 /// tangent-space normal map, not a color image) but the blue/alpha channels are
 /// not meaningful.
+///
+/// **BC4 note:** BC4 is a single-channel format. `texture2ddecoder::decode_bc4`
+/// writes the decompressed value into the **R** channel ONLY (it reuses the BC3
+/// alpha-block path with channel index 2 == R in this crate's 0xAARRGGBB layout)
+/// and leaves G, B, A untouched (zero from the cleared buffer) — so its raw output
+/// is R-only with A = 0 (fully transparent). For a usable grayscale preview we
+/// post-process each pixel: splat R into G and B and force A = 255.
 ///
 /// Any unrecognized `format` returns [`TexError::UnsupportedFormat`]; a decoder
 /// failure (e.g. truncated block data) returns [`TexError::DecodeFailed`].
@@ -228,11 +261,58 @@ pub fn to_rgba8(info: &TexInfo) -> Result<Vec<u32>> {
     let h = info.height as usize;
     let mut image = vec![0u32; w * h];
 
+    // Uncompressed (linear) formats: the mip0 bytes ARE the pixels — no block
+    // decode. Validate the length against w*h*bpp, then repack to 0xAARRGGBB.
+    match info.format.as_str() {
+        "PF_B8G8R8A8" => {
+            // Each pixel is 4 bytes in B, G, R, A order. Repack to the pipeline's
+            // 0xAARRGGBB u32 (= in-memory B,G,R,A on a little-endian host).
+            let need = w * h * 4;
+            if info.mip0.len() < need {
+                return Err(TexError::DecodeFailed {
+                    format: info.format.clone(),
+                    reason: format!(
+                        "B8G8R8A8 mip0 is {} bytes, need {need} for {w}x{h}",
+                        info.mip0.len()
+                    ),
+                });
+            }
+            for (i, px) in image.iter_mut().enumerate() {
+                let b = info.mip0[i * 4] as u32;
+                let g = info.mip0[i * 4 + 1] as u32;
+                let r = info.mip0[i * 4 + 2] as u32;
+                let a = info.mip0[i * 4 + 3] as u32;
+                *px = (a << 24) | (r << 16) | (g << 8) | b;
+            }
+            return Ok(image);
+        }
+        "PF_G8" => {
+            // One byte per pixel = gray; emit opaque gray (R=G=B=g, A=255).
+            let need = w * h;
+            if info.mip0.len() < need {
+                return Err(TexError::DecodeFailed {
+                    format: info.format.clone(),
+                    reason: format!(
+                        "G8 mip0 is {} bytes, need {need} for {w}x{h}",
+                        info.mip0.len()
+                    ),
+                });
+            }
+            for (i, px) in image.iter_mut().enumerate() {
+                let g = info.mip0[i] as u32;
+                *px = (0xFF << 24) | (g << 16) | (g << 8) | g;
+            }
+            return Ok(image);
+        }
+        _ => {}
+    }
+
     let res = match info.format.as_str() {
         "PF_DXT1" => texture2ddecoder::decode_bc1(&info.mip0, w, h, &mut image),
         "PF_DXT5" => texture2ddecoder::decode_bc3(&info.mip0, w, h, &mut image),
         "PF_BC5" => texture2ddecoder::decode_bc5(&info.mip0, w, h, &mut image),
         "PF_BC7" => texture2ddecoder::decode_bc7(&info.mip0, w, h, &mut image),
+        "PF_BC4" => texture2ddecoder::decode_bc4(&info.mip0, w, h, &mut image),
         _ => return Err(TexError::UnsupportedFormat(info.format.clone())),
     };
 
@@ -240,6 +320,16 @@ pub fn to_rgba8(info: &TexInfo) -> Result<Vec<u32>> {
         format: info.format.clone(),
         reason: reason.to_string(),
     })?;
+
+    // BC4 is single-channel: decode_bc4 writes only R (channel 2 == R in the
+    // 0xAARRGGBB layout) and leaves G=B=A=0. Promote to an opaque grayscale
+    // preview: splat R into G and B and force A=255.
+    if info.format == "PF_BC4" {
+        for px in image.iter_mut() {
+            let r = (*px >> 16) & 0xff;
+            *px = (0xFF << 24) | (r << 16) | (r << 8) | r;
+        }
+    }
 
     Ok(image)
 }
@@ -388,5 +478,175 @@ mod tests {
         // non-multiple-of-4 rounds up to whole blocks
         assert_eq!(mip_byte_size("PF_DXT5", 5, 5), Some(2 * 2 * 16));
         assert_eq!(mip_byte_size("PF_UNKNOWN", 4, 4), None);
+        // BC4: 8 bytes / 4x4 block (like BC1).
+        assert_eq!(mip_byte_size("PF_BC4", 128, 128), Some(8192));
+        assert_eq!(mip_byte_size("PF_BC4", 5, 5), Some(2 * 2 * 8));
+        // Uncompressed (linear): w*h*bpp, NOT block math.
+        assert_eq!(mip_byte_size("PF_B8G8R8A8", 4, 4), Some(4 * 4 * 4));
+        assert_eq!(mip_byte_size("PF_B8G8R8A8", 1, 1), Some(4));
+        assert_eq!(mip_byte_size("PF_G8", 4, 4), Some(16));
+        assert_eq!(mip_byte_size("PF_G8", 3, 5), Some(15));
+        // Supported-format gate.
+        assert!(is_supported_format("PF_BC4"));
+        assert!(is_supported_format("PF_B8G8R8A8"));
+        assert!(is_supported_format("PF_G8"));
+        assert!(!is_supported_format("PF_UNKNOWN"));
+    }
+
+    /// Pure unit test: a 2x1 `PF_B8G8R8A8` surface. Input bytes are B,G,R,A per
+    /// pixel; the output must be 0xAARRGGBB (so previews are not channel-swapped).
+    #[test]
+    fn decode_b8g8r8a8_channel_order() {
+        // px0 = B=0x10 G=0x20 R=0x30 A=0x40 -> 0x40302010
+        // px1 = B=0xAA G=0xBB R=0xCC A=0xFF -> 0xFFCCBBAA
+        let mip0 = vec![0x10, 0x20, 0x30, 0x40, 0xAA, 0xBB, 0xCC, 0xFF];
+        let info = TexInfo {
+            width: 2,
+            height: 1,
+            format: "PF_B8G8R8A8".into(),
+            mip0,
+            is_virtual: false,
+            decoded_rgba: None,
+        };
+        let px = to_rgba8(&info).unwrap();
+        assert_eq!(px, vec![0x4030_2010, 0xFFCC_BBAA]);
+    }
+
+    /// Pure unit test: a 2x1 `PF_G8` surface decodes to opaque gray (R=G=B=g, A=255).
+    #[test]
+    fn decode_g8_is_opaque_gray() {
+        let mip0 = vec![0x00, 0x7F];
+        let info = TexInfo {
+            width: 2,
+            height: 1,
+            format: "PF_G8".into(),
+            mip0,
+            is_virtual: false,
+            decoded_rgba: None,
+        };
+        let px = to_rgba8(&info).unwrap();
+        assert_eq!(px, vec![0xFF00_0000, 0xFF7F_7F7F]);
+    }
+
+    /// Pure unit test: a solid BC4 block (single channel) decodes to opaque gray.
+    /// A BC4 block is the BC3 alpha-block layout: [a0, a1, 6 bytes of 3-bit idx].
+    /// a0 = a1 = 0xC0 with all indices 0 selects a0 for every pixel -> gray 0xC0,
+    /// promoted to R=G=B=0xC0, A=255.
+    #[test]
+    fn decode_solid_bc4_block_is_opaque_gray() {
+        let mut block = vec![0xC0u8, 0xC0];
+        block.extend_from_slice(&[0u8; 6]); // all indices 0
+        let info = TexInfo {
+            width: 4,
+            height: 4,
+            format: "PF_BC4".into(),
+            mip0: block,
+            is_virtual: false,
+            decoded_rgba: None,
+        };
+        let px = to_rgba8(&info).unwrap();
+        assert_eq!(px.len(), 16);
+        for (i, &p) in px.iter().enumerate() {
+            let a = (p >> 24) & 0xff;
+            let r = (p >> 16) & 0xff;
+            let g = (p >> 8) & 0xff;
+            let b = p & 0xff;
+            assert_eq!(a, 255, "pixel {i}: A={a} not opaque ({p:#010x})");
+            assert_eq!(r, 0xC0, "pixel {i}: R={r} not 0xC0 ({p:#010x})");
+            assert_eq!(g, r, "pixel {i}: G != R ({p:#010x})");
+            assert_eq!(b, r, "pixel {i}: B != R ({p:#010x})");
+        }
+    }
+
+    // ---- gated real-asset decode tests -----------------------------------
+    //
+    // Each unpacks a real cooked texture (via the cached texture index ->
+    // by-id unpack, no full scan) and asserts it decodes to a real image.
+    // Skips cleanly when the game or the cached index is absent.
+
+    fn game_dir() -> Option<std::path::PathBuf> {
+        let p = std::path::PathBuf::from(r"D:\SteamLibrary\steamapps\common\Gothic 1 Remake");
+        p.exists().then_some(p)
+    }
+
+    /// Resolve `asset` to its package id via the cached texture index. `None` if
+    /// the index is absent or the asset is not in it.
+    fn pid_for(asset: &str) -> Option<u64> {
+        let idx = crate::index::TextureIndex::load(&crate::paths::texture_index_path()).ok()?;
+        idx.entries.get(asset).copied()
+    }
+
+    /// True if the image has at least two distinct pixel values (i.e. not a
+    /// flat/all-zero/all-identical surface) — a cheap "is this a real image" check.
+    fn is_real_image(px: &[u32]) -> bool {
+        px.first()
+            .map(|&first| px.iter().any(|&p| p != first))
+            .unwrap_or(false)
+    }
+
+    fn extract(asset: &str, leaf: &str) -> Option<(TexInfo, Vec<u32>)> {
+        let g = game_dir()?;
+        let utoc = crate::paths::main_container(&g).unwrap();
+        let usmap = crate::paths::usmap(&g).unwrap();
+        let pid = pid_for(asset)?;
+        Some(crate::index::extract_by_package_id(&utoc, &usmap, pid, leaf).unwrap())
+    }
+
+    #[test]
+    #[ignore = "slow: unpacks from real container; needs game + cached index"]
+    fn decode_real_b8g8r8a8_default_alpha_texture() {
+        let Some((info, px)) =
+            extract("/Engine/EditorLandscapeResources/DefaultAlphaTexture", "DefaultAlphaTexture")
+        else {
+            eprintln!("skip: game or cached index absent");
+            return;
+        };
+        eprintln!(
+            "DefaultAlphaTexture: {}x{} {} px={}",
+            info.width, info.height, info.format, px.len()
+        );
+        assert_eq!(info.format, "PF_B8G8R8A8");
+        assert!(info.width >= 1 && info.height >= 1 && info.width <= 16384 && info.height <= 16384);
+        assert_eq!(px.len(), (info.width * info.height) as usize);
+        assert!(is_real_image(&px), "B8G8R8A8 decoded to a flat/identical image");
+    }
+
+    #[test]
+    #[ignore = "slow: unpacks from real container; needs game + cached index"]
+    fn decode_real_g8_roboto_distance_field() {
+        let Some((info, px)) =
+            extract("/Engine/EngineFonts/RobotoDistanceField", "RobotoDistanceField")
+        else {
+            eprintln!("skip: game or cached index absent");
+            return;
+        };
+        eprintln!(
+            "RobotoDistanceField: {}x{} {} px={}",
+            info.width, info.height, info.format, px.len()
+        );
+        assert_eq!(info.format, "PF_G8");
+        assert!(info.width >= 1 && info.height >= 1 && info.width <= 16384 && info.height <= 16384);
+        assert_eq!(px.len(), (info.width * info.height) as usize);
+        assert!(is_real_image(&px), "G8 decoded to a flat/identical image");
+    }
+
+    #[test]
+    #[ignore = "slow: unpacks from real container; needs game + cached index"]
+    fn decode_real_bc4_meatbug_eye_mask() {
+        let Some((info, px)) = extract(
+            "/Game/Assets/Characters/Creatures/Meatbug_Crushed/Model/Textures/Optimized/T_MeatBug_Crushed_EyeMask",
+            "T_MeatBug_Crushed_EyeMask",
+        ) else {
+            eprintln!("skip: game or cached index absent");
+            return;
+        };
+        eprintln!(
+            "T_MeatBug_Crushed_EyeMask: {}x{} {} px={}",
+            info.width, info.height, info.format, px.len()
+        );
+        assert_eq!(info.format, "PF_BC4");
+        assert!(info.width >= 1 && info.height >= 1 && info.width <= 16384 && info.height <= 16384);
+        assert_eq!(px.len(), (info.width * info.height) as usize);
+        assert!(is_real_image(&px), "BC4 decoded to a flat/identical image");
     }
 }
