@@ -80,6 +80,11 @@ pub struct TexInfo {
     /// in [`Self::decoded_rgba`]).
     pub mip0: Vec<u8>,
     pub is_virtual: bool,
+    /// Number of VT layers for a virtual texture; `None` for a regular texture.
+    /// `Some(1)` is the single-layer VT the replace path supports; `Some(n)` with
+    /// `n > 1` is a multi-layer VT [`crate::vt::retile`] rejects. Populated from
+    /// `FVirtualTextureBuiltData::NumLayers` (== `vt.layer_types.len()`).
+    pub vt_layers: Option<u32>,
     /// Pre-decoded RGBA (`0xAARRGGBB`, `width * height` pixels) for inputs that
     /// can't go through the plain BCn mip0 path — currently virtual textures,
     /// whose layer-0 mip-0 surface is stitched from morton-ordered BCn tiles
@@ -182,6 +187,7 @@ pub fn parse(uasset: &[u8], uexp: &[u8], ubulk: &[u8], _usmap: &[u8]) -> Result<
             format: layer0_format,
             mip0: Vec::new(),
             is_virtual: true,
+            vt_layers: Some(vt.num_layers),
             decoded_rgba: Some(rgba),
         });
     }
@@ -210,8 +216,38 @@ pub fn parse(uasset: &[u8], uexp: &[u8], ubulk: &[u8], _usmap: &[u8]) -> Result<
         format: pd.format,
         mip0: mip0_entry.data.clone(),
         is_virtual: false,
+        vt_layers: None,
         decoded_rgba: None,
     })
+}
+
+/// Whether the texture **rewrite** ("Replace") path can handle `info` — the
+/// authoritative capability flag the mod-studio UI gates the Replace button on.
+/// It mirrors, WITHOUT a replacement image, exactly the structural constraints
+/// [`crate::texdata::replace_texture_image`] enforces at build/cook time:
+///
+/// * **Regular texture** (`!is_virtual`): the pixel format must be re-encodable,
+///   i.e. [`crate::encode::supports_format`] (BCn: `PF_DXT1`/`PF_DXT5`/`PF_BC5`/
+///   `PF_BC7`). Linear and `PF_BC4`/`PF_BC6H` textures decode for preview but the
+///   encoder cannot produce them, so Replace is unsupported.
+/// * **Virtual texture** (`is_virtual`): [`crate::vt::retile`] hard-requires a
+///   SINGLE-LAYER VT (`num_layers == 1` — it returns "multi-layer VT replace not
+///   supported" otherwise) whose layer-0 tile format is encodable (it sizes the
+///   physical tile via `block_bytes`, so non-BCn formats error). Hence we require
+///   `vt_layers == Some(1)` AND `encode::supports_format(&format)`.
+///
+/// Note: `retile` additionally rejects *legacy* VT tile layouts, but legacy is
+/// not observed in G1R's cook (`is_legacy()` keys on the legacy-only
+/// `TileOffsetInChunk` array, always empty here) and is not represented in
+/// [`TexInfo`]; the single-layer + encodable-format gate covers every VT the UI
+/// can actually surface. A legacy multi-layer/odd VT would still fail loudly at
+/// cook rather than producing a bad asset.
+pub fn replace_supported(info: &TexInfo) -> bool {
+    if info.is_virtual {
+        info.vt_layers == Some(1) && crate::encode::supports_format(&info.format)
+    } else {
+        crate::encode::supports_format(&info.format)
+    }
 }
 
 // ---- BCn -> RGBA decode ---------------------------------------------------
@@ -474,6 +510,7 @@ mod tests {
             format: "PF_DXT1".into(),
             mip0: block,
             is_virtual: false,
+            vt_layers: None,
             decoded_rgba: None,
         };
         let px = to_rgba8(&info).unwrap();
@@ -532,6 +569,43 @@ mod tests {
         assert!(!is_supported_format("PF_UNKNOWN"));
     }
 
+    /// `replace_supported` mirrors the rewrite path's structural gating:
+    /// regular textures need an encodable format; VTs additionally need exactly
+    /// one layer.
+    #[test]
+    fn replace_supported_gates_correctly() {
+        let regular = |fmt: &str| TexInfo {
+            width: 4,
+            height: 4,
+            format: fmt.into(),
+            mip0: Vec::new(),
+            is_virtual: false,
+            vt_layers: None,
+            decoded_rgba: None,
+        };
+        let vt = |fmt: &str, layers: u32| TexInfo {
+            width: 4,
+            height: 4,
+            format: fmt.into(),
+            mip0: Vec::new(),
+            is_virtual: true,
+            vt_layers: Some(layers),
+            decoded_rgba: Some(vec![0u32; 16]),
+        };
+
+        // Regular: encodable -> true; non-encodable (BC6H, linear) -> false.
+        assert!(replace_supported(&regular("PF_DXT5")));
+        assert!(replace_supported(&regular("PF_BC7")));
+        assert!(!replace_supported(&regular("PF_BC6H")));
+        assert!(!replace_supported(&regular("PF_B8G8R8A8")));
+
+        // Virtual: single-layer + encodable -> true; multi-layer -> false even if
+        // the tile format is encodable; non-encodable single-layer -> false.
+        assert!(replace_supported(&vt("PF_DXT1", 1)));
+        assert!(!replace_supported(&vt("PF_DXT1", 2)));
+        assert!(!replace_supported(&vt("PF_BC6H", 1)));
+    }
+
     /// Pure unit test: a 2x1 `PF_B8G8R8A8` surface. Input bytes are B,G,R,A per
     /// pixel; the output must be 0xAARRGGBB (so previews are not channel-swapped).
     #[test]
@@ -545,6 +619,7 @@ mod tests {
             format: "PF_B8G8R8A8".into(),
             mip0,
             is_virtual: false,
+            vt_layers: None,
             decoded_rgba: None,
         };
         let px = to_rgba8(&info).unwrap();
@@ -561,6 +636,7 @@ mod tests {
             format: "PF_G8".into(),
             mip0,
             is_virtual: false,
+            vt_layers: None,
             decoded_rgba: None,
         };
         let px = to_rgba8(&info).unwrap();
@@ -581,6 +657,7 @@ mod tests {
             format: "PF_FloatRGBA".into(),
             mip0,
             is_virtual: false,
+            vt_layers: None,
             decoded_rgba: None,
         };
         let px = to_rgba8(&info).unwrap();
@@ -602,6 +679,7 @@ mod tests {
             format: "PF_FloatRGBA".into(),
             mip0,
             is_virtual: false,
+            vt_layers: None,
             decoded_rgba: None,
         };
         let px = to_rgba8(&info).unwrap();
@@ -623,6 +701,7 @@ mod tests {
             format: "PF_BC4".into(),
             mip0: block,
             is_virtual: false,
+            vt_layers: None,
             decoded_rgba: None,
         };
         let px = to_rgba8(&info).unwrap();

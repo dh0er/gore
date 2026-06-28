@@ -44,6 +44,18 @@ fn block_bytes(format: &str) -> Option<u32> {
     }
 }
 
+/// Whether the **encode** (write) path can produce `format`. This is the
+/// authoritative set of pixel formats [`encode_tile`] / [`encode_mips`] can
+/// actually emit — exactly the BCn formats with a [`block_bytes`] entry
+/// (`PF_DXT1`, `PF_DXT5`, `PF_BC5`, `PF_BC7`). It is deliberately NARROWER than
+/// [`crate::decode`]'s read support (which also covers `PF_BC4`, `PF_BC6H`, and
+/// the linear `PF_B8G8R8A8` / `PF_G8` / `PF_FloatRGBA` formats we can decode but
+/// cannot re-encode). Callers gating a "Replace" action must use THIS, not the
+/// decode-side support check.
+pub fn supports_format(format: &str) -> bool {
+    block_bytes(format).is_some()
+}
+
 /// Encoded byte size of a single `w` x `h` mip in `format` (BCn, 4x4 blocks,
 /// dims rounded up to whole blocks). `None` for an unknown format.
 fn mip_byte_size(format: &str, w: u32, h: u32) -> Option<usize> {
@@ -393,6 +405,25 @@ mod tests {
             assert!(g <= 4, "pixel {i}: G={g} not ~0");
             assert!(b >= 251, "pixel {i}: B={b} not ~255");
             assert!(a >= 251, "pixel {i}: A={a} not ~255");
+        }
+    }
+
+    /// `supports_format` is true for exactly the formats the encoder can
+    /// produce, and false for read-only formats (BC4/BC6H, the linear formats).
+    #[test]
+    fn supports_format_matches_encodable_set() {
+        for f in ["PF_DXT1", "PF_DXT5", "PF_BC5", "PF_BC7"] {
+            assert!(supports_format(f), "{f} should be encodable");
+        }
+        for f in [
+            "PF_B8G8R8A8",
+            "PF_G8",
+            "PF_BC4",
+            "PF_BC6H",
+            "PF_FloatRGBA",
+            "PF_UNKNOWN",
+        ] {
+            assert!(!supports_format(f), "{f} should NOT be encodable");
         }
     }
 

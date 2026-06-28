@@ -360,7 +360,13 @@ fn texture_extract(payload: Value) -> Value {
     if image::save_buffer(&out, &buf, info.width, info.height, image::ColorType::Rgba8).is_err() {
         return err("PNG", "save failed");
     }
-    json!({ "ok": true, "png_path": out.display().to_string(), "width": info.width, "height": info.height, "format": info.format })
+    // `replaceable` is the AUTHORITATIVE capability flag the UI gates the Replace
+    // button on (always a plain bool, present on both the package_id and asset
+    // extract paths since both bind `info`). `is_virtual`/`vt_layers` are exposed
+    // for diagnostics.
+    json!({ "ok": true, "png_path": out.display().to_string(), "width": info.width, "height": info.height,
+        "format": info.format, "replaceable": gore_tex::decode::replace_supported(&info),
+        "is_virtual": info.is_virtual, "vt_layers": info.vt_layers })
 }
 
 /// `{out_dir, spec:BuildSpec}` → build the unified bundle into `out_dir`.

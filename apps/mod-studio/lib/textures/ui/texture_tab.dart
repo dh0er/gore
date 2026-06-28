@@ -360,20 +360,21 @@ class _TextureTabState extends ConsumerState<TextureTab> {
     if (sel == null) return const Center(child: Text('Select a texture'));
     final gameDir = gameRootFromExe(ref.read(gameExePathProvider));
     final replaced = staged.items[sel];
-    // Replace is gated on the texture's format, which is only known after the
-    // preview (auto-loaded on select) resolves. Block it while extracting and
-    // until a format is known, and for formats we can preview but not re-encode —
-    // staging any of those would only fail later at build/cook time.
+    // Replace capability is only known after the preview (auto-loaded on select)
+    // resolves: the FFI reports whether the texture's format is re-encodable and,
+    // for virtual textures, whether its shape is retileable. Block while loading,
+    // until previewed, and for anything the core marks not replaceable — staging
+    // those would only fail later at build/cook time.
     final loading = _loadingAsset == sel;
-    final fmt = _previewCache[sel]?.format;
-    final replaceBlocked =
-        loading || fmt == null || _previewOnlyFormats.contains(fmt);
+    final pv = _previewCache[sel];
+    final replaceBlocked = loading || pv == null || !pv.replaceable;
     final replaceReason = loading
         ? 'Loading texture…'
-        : fmt == null
+        : pv == null
         ? 'Preview the texture first'
-        : _previewOnlyFormats.contains(fmt)
-        ? 'Replace not supported for $fmt yet (preview-only format)'
+        : !pv.replaceable
+        ? 'Replace not supported for this texture'
+            '${pv.format.isEmpty ? '' : ' (${pv.format})'} yet'
         : 'Replace this texture with a PNG';
     return Padding(
       padding: const EdgeInsets.all(12),
@@ -547,6 +548,11 @@ class _TextureTabState extends ConsumerState<TextureTab> {
       return;
     }
     setState(() => _loadingAsset = asset);
+    // Capture the source this extract is for; if the game/index changes while it
+    // runs, the result is stale and must be discarded (the cache was cleared for
+    // the new source) rather than re-polluting it under the same asset key.
+    final reqEntries = _sourceEntries;
+    final reqGame = _sourceGame;
     try {
       // textureExtract throws on a non-ok FFI result, so on return the PNG path
       // and dims are present.
@@ -557,12 +563,24 @@ class _TextureTabState extends ConsumerState<TextureTab> {
         packageId: packageId,
       );
       if (!mounted) return;
+      if (!identical(_sourceEntries, reqEntries) || _sourceGame != reqGame) {
+        // Source switched mid-extract — drop the now-stale PNG instead of caching.
+        try {
+          File(r['png_path'] as String).deleteSync();
+        } catch (_) {}
+        return;
+      }
       setState(() {
+        final fmt = r['format'] as String? ?? '';
         _previewCache[asset] = _Preview(
           pngPath: r['png_path'] as String,
           width: (r['width'] as num?)?.toInt() ?? 0,
           height: (r['height'] as num?)?.toInt() ?? 0,
-          format: r['format'] as String? ?? '',
+          format: fmt,
+          // Prefer the FFI's authoritative flag; fall back to the format denylist
+          // when running against an older core that doesn't return it yet.
+          replaceable:
+              (r['replaceable'] as bool?) ?? !_previewOnlyFormats.contains(fmt),
         );
         // Evict least-recently-used entries once over the cap (oldest = first key).
         while (_previewCache.length > _previewCacheCap) {
@@ -641,12 +659,16 @@ class _Preview {
     required this.width,
     required this.height,
     required this.format,
+    required this.replaceable,
   });
 
   final String pngPath;
   final int width;
   final int height;
   final String format;
+  // Authoritative "can be replaced" flag from the FFI (encode-supported format
+  // and a retileable shape for virtual textures). Gates the Replace button.
+  final bool replaceable;
 }
 
 /// Paints a classic alpha checkerboard so transparent (and fully-black) textures
