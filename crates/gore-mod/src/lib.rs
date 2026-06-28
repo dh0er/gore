@@ -1141,12 +1141,17 @@ fn restore_record(record: &mut DeployRecord) -> bool {
             all_ok = false;
         }
     }
-    // Additive texture triplet files in `~mods` are pure additions with no backup — best-effort
-    // delete them. Drained unconditionally; a failed delete doesn't block undeploy completion.
+    // Additive texture triplet files in `~mods` (no backup) — delete them. A failed delete
+    // (locked) must KEEP the entry and fail the undeploy (all_ok=false), so the record is not
+    // deleted and a retry can still remove the lingering override; otherwise the triplet would
+    // be orphaned on disk with nothing tracking it.
     for f in std::mem::take(&mut record.texture_triplets) {
         let p = Path::new(&f);
-        if p.exists() {
-            let _ = std::fs::remove_file(p);
+        if !p.exists() || std::fs::remove_file(p).is_ok() {
+            // removed (or already gone) — drop it
+        } else {
+            record.texture_triplets.push(f); // locked — keep for a retry
+            all_ok = false;
         }
     }
     all_ok
