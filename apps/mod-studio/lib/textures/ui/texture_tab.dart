@@ -162,6 +162,14 @@ class _TextureTabState extends ConsumerState<TextureTab> {
                     : () => _preview(gameDir, sel, entries[sel]),
               ),
               const SizedBox(width: 8),
+              OutlinedButton.icon(
+                icon: const Icon(Icons.download),
+                label: const Text('Export PNG…'),
+                onPressed: gameDir == null
+                    ? null
+                    : () => _export(gameDir, sel, entries[sel]),
+              ),
+              const SizedBox(width: 8),
               FilledButton.icon(
                 icon: const Icon(Icons.image),
                 label: const Text('Replace…'),
@@ -260,6 +268,37 @@ class _TextureTabState extends ConsumerState<TextureTab> {
         ),
       ],
     );
+  }
+
+  /// Export the asset's decoded texture as a PNG to a user-chosen path. Reuses
+  /// the cached preview when present; otherwise extracts first (the same path the
+  /// Preview button takes, including its error dialog on failure).
+  Future<void> _export(String gameDir, String asset, String? packageId) async {
+    if (!_previewCache.containsKey(asset)) {
+      await _preview(gameDir, asset, packageId);
+    }
+    final pv = _previewCache[asset];
+    if (pv == null || !mounted) return; // extract failed — dialog already shown.
+    final leaf = asset.split('/').last;
+    final loc = await getSaveLocation(
+      suggestedName: '$leaf.png',
+      acceptedTypeGroups: [
+        const XTypeGroup(label: 'PNG', extensions: ['png']),
+      ],
+    );
+    if (loc == null || !mounted) return;
+    try {
+      await File(pv.pngPath).copy(loc.path);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Saved $leaf.png')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Export failed: $e')),
+      );
+    }
   }
 
   Future<void> _preview(String gameDir, String asset, String? packageId) async {
