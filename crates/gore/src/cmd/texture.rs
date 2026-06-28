@@ -124,9 +124,8 @@ pub fn run(action: TextureAction) -> Result<()> {
             let utoc = gore_tex::paths::main_container(&game)?;
             let usmap = gore_tex::paths::usmap(&game)?;
 
-            let tmp = std::env::temp_dir().join("gore-tex-extract");
-            std::fs::create_dir_all(&tmp)
-                .with_context(|| format!("creating temp dir {}", tmp.display()))?;
+            let tmp = gore_tex::paths::unique_temp_dir("gore-tex-extract")
+                .with_context(|| "creating temp dir")?;
 
             let uasset = gore_tex::container::unpack_asset(&utoc, &usmap, &asset, &tmp)
                 .with_context(|| format!("unpacking asset {asset}"))?;

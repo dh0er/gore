@@ -757,9 +757,9 @@ fn prepare(
                     let dest_dir = cook_dir.join(std::path::Path::new(&rel).parent()
                         .ok_or_else(|| ModError::Other(format!("bad asset path {asset}")))?);
                     std::fs::create_dir_all(&dest_dir).map_err(io("mkdir cook dir"))?;
-                    let tmp_orig = std::env::temp_dir().join("gore-mod-tex-orig");
-                    let _ = std::fs::remove_dir_all(&tmp_orig);
-                    std::fs::create_dir_all(&tmp_orig).map_err(io("mkdir orig"))?;
+                    // Unique per-asset temp dir so concurrent deploys don't clobber each other.
+                    let tmp_orig = gore_tex::paths::unique_temp_dir("gore-mod-tex-orig")
+                        .map_err(io("mkdir orig"))?;
                     let orig_uasset = match index.as_ref().and_then(|i| i.entries.get(asset)) {
                         Some(&pid) => gore_tex::container::unpack_asset_by_id(&utoc, &usmap, pid, leaf, &tmp_orig),
                         None => gore_tex::container::unpack_asset(&utoc, &usmap, asset, &tmp_orig),

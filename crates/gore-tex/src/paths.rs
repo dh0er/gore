@@ -1,7 +1,21 @@
 //! Auto-resolve the game container + .usmap from an install dir.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use crate::error::{Result, TexError};
+
+static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// Create and return a FRESH, UNIQUE temp subdir for one unpack/extract call, so concurrent
+/// callers (e.g. overlapping previews, or a preview during a deploy) don't clobber each other's
+/// cooked `.uasset`/`.uexp`/`.ubulk` files in a shared fixed directory. Keyed by process id + an
+/// atomic counter, so it's unique within and across processes.
+pub fn unique_temp_dir(prefix: &str) -> std::io::Result<PathBuf> {
+    let n = TEMP_SEQ.fetch_add(1, Ordering::Relaxed);
+    let p = std::env::temp_dir().join(format!("{prefix}-{}-{n}", std::process::id()));
+    std::fs::create_dir_all(&p)?;
+    Ok(p)
+}
 
 /// Given a game install dir, return the main IoStore container `.utoc`.
 pub fn main_container(game_dir: &Path) -> Result<PathBuf> {

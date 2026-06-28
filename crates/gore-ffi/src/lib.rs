@@ -328,16 +328,17 @@ fn texture_extract(payload: Value) -> Value {
         match gore_tex::index::extract_by_package_id(&utoc, &usmap, pid, &leaf) {
             Ok(x) => x, Err(e) => return err("EXTRACT", e.to_string()) }
     } else if !asset.is_empty() {
-        let tmp = std::env::temp_dir().join("gore-tex-ffi-extract");
-        if std::fs::create_dir_all(&tmp).is_err() { return err("IO", "tmp"); }
+        let tmp = match gore_tex::paths::unique_temp_dir("gore-tex-ffi-extract") {
+            Ok(t) => t, Err(_) => return err("IO", "tmp") };
         let ua = match gore_tex::container::unpack_asset(&utoc, &usmap, asset, &tmp) {
             Ok(p) => p, Err(e) => return err("UNPACK", e.to_string()) };
         let info = match gore_tex::decode::parse(
             &std::fs::read(&ua).unwrap_or_default(), &std::fs::read(ua.with_extension("uexp")).unwrap_or_default(),
             &std::fs::read(ua.with_extension("ubulk")).unwrap_or_default(), &std::fs::read(&usmap).unwrap_or_default()) {
-            Ok(i) => i, Err(e) => return err("PARSE", e.to_string()) };
+            Ok(i) => i, Err(e) => { let _ = std::fs::remove_dir_all(&tmp); return err("PARSE", e.to_string()) } };
         let px = match gore_tex::decode::to_rgba8(&info) {
-            Ok(p) => p, Err(e) => return err("DECODE", e.to_string()) };
+            Ok(p) => p, Err(e) => { let _ = std::fs::remove_dir_all(&tmp); return err("DECODE", e.to_string()) } };
+        let _ = std::fs::remove_dir_all(&tmp);
         (info, px)
     } else { return err("BAD_REQUEST", "need package_id or asset"); };
     let mut buf = Vec::with_capacity(px.len() * 4);
