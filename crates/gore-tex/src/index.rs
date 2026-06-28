@@ -51,9 +51,26 @@ impl TextureIndex {
     }
 }
 
-/// The build id for a game install = its `.usmap` filename (changes when the game patches).
-pub fn build_id_for(usmap: &Path) -> String {
-    usmap.file_name().and_then(|n| n.to_str()).unwrap_or("unknown").to_string()
+/// The build id for a game install, used to invalidate a stale cached index. Keyed on the
+/// `.usmap` filename PLUS the IoStore container's identity (`.utoc` length + mtime) — the
+/// container is the actual source of the package ids the index maps to, so any game patch that
+/// rewrites it invalidates the cache even when the `.usmap` keeps the same name. (`fs::metadata`
+/// is a cheap stat — no file read.)
+pub fn build_id_for(utoc: &Path, usmap: &Path) -> String {
+    let name = usmap.file_name().and_then(|n| n.to_str()).unwrap_or("unknown");
+    let (len, mtime) = std::fs::metadata(utoc)
+        .ok()
+        .map(|m| {
+            let secs = m
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            (m.len(), secs)
+        })
+        .unwrap_or((0, 0));
+    format!("{name}|utoc:{len}:{mtime}")
 }
 
 /// Build the index by scanning the container once (same walk as `list_textures`,

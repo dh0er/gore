@@ -283,15 +283,16 @@ fn texture_index(payload: Value) -> Value {
     let cache = gore_tex::paths::texture_index_path();
     let usmap = match gore_tex::paths::usmap(&game) {
         Ok(p) => p, Err(e) => return err("USMAP", e.to_string()) };
-    let build_id = gore_tex::index::build_id_for(&usmap);
-    // Only reuse the cache when it's current for THIS game build; a game patch changes the
-    // .usmap (build_id), so a stale cache mapping paths to outdated package ids is rebuilt.
+    let utoc = match gore_tex::paths::main_container(&game) {
+        Ok(p) => p, Err(e) => return err("CONTAINER", e.to_string()) };
+    let build_id = gore_tex::index::build_id_for(&utoc, &usmap);
+    // Only reuse the cache when it's current for THIS game build; build_id keys on the .usmap
+    // name AND the container's identity, so a game patch (even one keeping the .usmap name) that
+    // rewrites the container invalidates a cache mapping paths to outdated package ids.
     let cached = if rebuild { None } else { gore_tex::index::TextureIndex::load_current(&cache, &build_id) };
     let idx = match cached {
         Some(i) => i,
         None => {
-            let utoc = match gore_tex::paths::main_container(&game) {
-                Ok(p) => p, Err(e) => return err("CONTAINER", e.to_string()) };
             let i = match gore_tex::index::build_index(&utoc, &build_id) {
                 Ok(i) => i, Err(e) => return err("INDEX_BUILD", e.to_string()) };
             let _ = i.save(&cache);

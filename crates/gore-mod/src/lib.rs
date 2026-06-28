@@ -740,7 +740,7 @@ fn prepare(
                 // ids and cook the wrong texture. If stale/absent, fall back to a name scan.
                 let index = gore_tex::index::TextureIndex::load_current(
                     &gore_tex::paths::texture_index_path(),
-                    &gore_tex::index::build_id_for(&usmap),
+                    &gore_tex::index::build_id_for(&utoc, &usmap),
                 );
                 let cook_dir = std::env::temp_dir().join(format!("gore-mod-tex-cook-{}", std::process::id()));
                 let _ = std::fs::remove_dir_all(&cook_dir);

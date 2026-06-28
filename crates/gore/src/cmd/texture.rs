@@ -303,11 +303,7 @@ pub fn run(action: TextureAction) -> Result<()> {
         TextureAction::Index { game, out } => {
             let utoc = gore_tex::paths::main_container(&game)?;
             let usmap = gore_tex::paths::usmap(&game)?;
-            let build_id = usmap
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("unknown")
-                .to_string();
+            let build_id = gore_tex::index::build_id_for(&utoc, &usmap);
             eprintln!("scanning container to build the texture index (a few minutes)...");
             let idx = gore_tex::index::build_index(&utoc, &build_id)?;
             let path = out.unwrap_or_else(gore_tex::paths::texture_index_path);
