@@ -5508,6 +5508,9 @@ fn apply_private_knowledge_add_character_to_payload(
 /// always be looked up by value, never hardcoded.
 const MAIN_CONTAINER_ENUM_LABEL: &str = "EInventoryTypes::MainContainer";
 
+/// Enum label of the player's worn-armor container in the inventory map.
+const ARMOR_SLOT_ENUM_LABEL: &str = "EInventoryTypes::ArmorSlot";
+
 /// `m_PlayerID` of the controlled player among `m_SavedPlayers`. A save may hold
 /// several saved players (party members); inventory edits target this one — the
 /// same anchor the transform/attribute editors use.
@@ -5629,6 +5632,49 @@ struct MainContainerSummary {
     /// addItem can use as a template. Without one, addItem cannot succeed, so it
     /// must not be advertised.
     has_clean_template: bool,
+}
+
+/// The item-definition paths currently in the player's `ArmorSlot` container —
+/// i.e. the worn armor. At most one in practice, modeled as a set for
+/// robustness. `None` when the inventory or the ArmorSlot container is absent.
+struct ArmorSlotSummary {
+    equipped_paths: std::collections::HashSet<String>,
+}
+
+/// Resolve the player's `ArmorSlot` container and collect the item-definition
+/// paths it holds. Mirrors `main_container_summary`'s container resolution.
+fn armor_slot_summary(root: &properties::RootObject) -> Option<ArmorSlotSummary> {
+    let inventory_path = resolve_inventory_path(root)?;
+    let resolve_child = |suffix: &[&str]| -> Option<properties::PropertyValue> {
+        let mut segs = inventory_path.clone();
+        segs.extend(suffix.iter().map(|s| s.to_string()));
+        let parsed = properties::parse_path(&segs).ok()?;
+        properties::resolve(&root.properties, &parsed)
+            .ok()
+            .map(|prop| prop.value.clone())
+    };
+    let properties::PropertyValue::Array { elements: keys } = resolve_child(&["m_Keys"])? else {
+        return None;
+    };
+    let index = keys.iter().position(|element| {
+        matches!(element, properties::PropertyValue::Enum(label)
+            if label == ARMOR_SLOT_ENUM_LABEL)
+    })?;
+    let segment = format!("[{index}]");
+    let properties::PropertyValue::Array { elements: slots } =
+        resolve_child(&["m_Values", "Items", &segment, "m_Slots"])?
+    else {
+        return None;
+    };
+    let mut equipped_paths = std::collections::HashSet::new();
+    for slot in &slots {
+        if let Some(path) = slot_item_definition(slot) {
+            if !path.is_empty() {
+                equipped_paths.insert(path.to_string());
+            }
+        }
+    }
+    Some(ArmorSlotSummary { equipped_paths })
 }
 
 /// Summarize the player's MainContainer. addItem and removeItem only operate on
@@ -10679,6 +10725,18 @@ mod tests {
         assert_eq!(root.consumed, payload.len(), "byte-faithful: no trailing/lost bytes");
         let summary = main_container_summary(&root).expect("main container");
         assert!(summary.all_paths.contains(armor_path), "armor now in MainContainer");
+    }
+
+    #[test]
+    #[ignore = "needs GORESAVE_PAYLOAD_BIN=<a decompressed host.bin>"]
+    fn armor_slot_summary_finds_equipped_armor() {
+        let path = std::env::var("GORESAVE_PAYLOAD_BIN").expect("set GORESAVE_PAYLOAD_BIN");
+        let payload = std::fs::read(path).unwrap();
+        let root = properties::parse_private_root(&payload).unwrap();
+        let summary = armor_slot_summary(&root).expect("armor slot container resolves");
+        assert!(summary.equipped_paths.contains("/Script/Angelscript.Ore_Armor_H"));
+        assert!(!summary.equipped_paths.contains("/Script/Angelscript.Crw_Armor_H"));
+        assert!(!summary.equipped_paths.contains("/Script/Angelscript.Ore_Armor_M"));
     }
 
     #[test]
