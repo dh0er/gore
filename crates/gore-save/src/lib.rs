@@ -10666,6 +10666,22 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "needs GORESAVE_PAYLOAD_BIN=<a decompressed host.bin>"]
+    fn add_armor_item_roundtrips_on_real_payload() {
+        let path = std::env::var("GORESAVE_PAYLOAD_BIN").expect("set GORESAVE_PAYLOAD_BIN");
+        let mut payload = std::fs::read(path).unwrap();
+        // An armor NOT already in this save's MainContainer.
+        let armor_path = "/Script/Angelscript.Vlk_Armor_L";
+        assert!(is_item_definition_class(armor_path), "armor must be in the catalog allow-list");
+        let edit = PrivateInventoryAddItemEdit { path: armor_path.to_string(), count: 1 };
+        apply_private_inventory_add_item_to_payload(&mut payload, &edit).unwrap();
+        let root = properties::parse_private_root(&payload).unwrap();
+        assert_eq!(root.consumed, payload.len(), "byte-faithful: no trailing/lost bytes");
+        let summary = main_container_summary(&root).expect("main container");
+        assert!(summary.all_paths.contains(armor_path), "armor now in MainContainer");
+    }
+
+    #[test]
     fn typed_container_edits_apply_and_validate() {
         let mut payload = fstring("/Script/Test.Save");
         payload.push(0);
