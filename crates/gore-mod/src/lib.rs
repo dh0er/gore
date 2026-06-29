@@ -957,6 +957,21 @@ fn apply_writes(plan: &DeployPlan, undo: &mut Undo) -> Result<()> {
         undo.texture_files.push((dst.clone(), prior));
         std::fs::copy(src, dst).map_err(io(&format!("copy triplet to {}", dst.display())))?;
     }
+    // The packed triplets are now in ~mods; remove their temp pack dirs
+    // (gore-mod-tex-pack-<pid>-<idx>) so a successful deploy doesn't leave a full
+    // .utoc/.ucas/.pak behind in the system temp dir on every restart / pid change.
+    // Done only after all copies succeed (a failed copy returns above and leaves
+    // the dirs for the rollback / next run).
+    let mut pack_dirs: Vec<&std::path::Path> = plan
+        .texture_triplets
+        .iter()
+        .filter_map(|(src, _)| src.parent())
+        .collect();
+    pack_dirs.sort();
+    pack_dirs.dedup();
+    for dir in pack_dirs {
+        let _ = std::fs::remove_dir_all(dir);
+    }
     for (live, bytes) in &plan.writes {
         atomic_write(live, bytes)?;
     }
