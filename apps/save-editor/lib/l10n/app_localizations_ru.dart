@@ -327,6 +327,9 @@ class AppLocalizationsRu extends AppLocalizations {
   String get itemCategoryAmmunition => 'Боеприпасы';
 
   @override
+  String get itemCategoryArmor => 'Броня';
+
+  @override
   String get itemCategoryRune => 'Руны';
 
   @override

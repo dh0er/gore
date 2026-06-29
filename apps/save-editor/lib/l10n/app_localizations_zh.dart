@@ -319,6 +319,9 @@ class AppLocalizationsZh extends AppLocalizations {
   String get itemCategoryAmmunition => '弹药';
 
   @override
+  String get itemCategoryArmor => '护甲';
+
+  @override
   String get itemCategoryRune => '符文';
 
   @override
@@ -1261,6 +1264,9 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get itemCategoryAmmunition => '弹药';
+
+  @override
+  String get itemCategoryArmor => '护甲';
 
   @override
   String get itemCategoryRune => '符文';

@@ -329,6 +329,9 @@ class AppLocalizationsEs extends AppLocalizations {
   String get itemCategoryAmmunition => 'Munición';
 
   @override
+  String get itemCategoryArmor => 'Armaduras';
+
+  @override
   String get itemCategoryRune => 'Runas';
 
   @override

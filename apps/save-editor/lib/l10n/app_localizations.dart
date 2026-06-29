@@ -680,6 +680,12 @@ abstract class AppLocalizations {
   /// **'Ammunition'**
   String get itemCategoryAmmunition;
 
+  /// No description provided for @itemCategoryArmor.
+  ///
+  /// In en, this message translates to:
+  /// **'Armor'**
+  String get itemCategoryArmor;
+
   /// No description provided for @itemCategoryRune.
   ///
   /// In en, this message translates to:

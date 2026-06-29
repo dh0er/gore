@@ -327,6 +327,9 @@ class AppLocalizationsPt extends AppLocalizations {
   String get itemCategoryAmmunition => 'Munição';
 
   @override
+  String get itemCategoryArmor => 'Armaduras';
+
+  @override
   String get itemCategoryRune => 'Runas';
 
   @override
@@ -1302,6 +1305,9 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
 
   @override
   String get itemCategoryAmmunition => 'Munição';
+
+  @override
+  String get itemCategoryArmor => 'Armaduras';
 
   @override
   String get itemCategoryRune => 'Runas';

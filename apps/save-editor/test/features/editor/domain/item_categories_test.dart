@@ -23,8 +23,17 @@ void main() {
     expect(itemCategoryFromId('ItAt_Ring_OfLife'), ItemCategory.ring);
   });
 
+  test('armor classes categorize as armor', () {
+    expect(itemCategoryFromId('Ore_Armor_H'), ItemCategory.armor);
+    expect(itemCategoryFromId('Org_Armor'), ItemCategory.armor);
+    expect(itemCategoryFromId('Armor_OC_Gomez'), ItemCategory.armor);
+    expect(itemCategoryFromId('Org_Armor_Top_H_01'), ItemCategory.armor);
+    // non-armor unaffected
+    expect(itemCategoryFromId('ItMi_Orenugget'), ItemCategory.misc);
+    expect(itemCategoryFromId('SomethingElse'), ItemCategory.other);
+  });
+
   test('unknown ids map to other', () {
-    expect(itemCategoryFromId('Armor_OC_EBR_Gomez_100'), ItemCategory.other);
     expect(itemCategoryFromId(''), ItemCategory.other);
     expect(itemCategoryFromId('ItIg_Worldsplitter'), ItemCategory.other);
   });
