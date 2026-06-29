@@ -112,13 +112,46 @@ pub fn emit_module(m: &Module, refs: &RefResolver) -> String {
     }
 
     // free functions = module.functions that aren't generator-synthesized accessors
+    let mut seen_free: HashSet<String> = HashSet::new();
     for f in &m.functions {
-        if is_generated(f, &class_names, &class_members) {
+        if is_generated(f, &class_names, &class_members) || is_generated_spawn(f, refs) {
             continue;
+        }
+        if !seen_free.insert(format!("{}({})", f.name, param_sig(f, refs))) {
+            continue; // duplicate signature -> "function ... already exists"
         }
         emit_function(&mut s, f, refs, false, false, 0);
     }
     s
+}
+
+/// The AngelScript-UE binding auto-generates factory free functions for every actor/component
+/// class. The cache also carries them as module functions, so emitting them duplicates the native
+/// binding ("a function with the same name and parameters already exists" — un-stubbable, the
+/// declaration itself collides). Skip the exact generated shapes:
+///   - actor:     `<Actor> Spawn(const FVector&, const FRotator&, const FName&, bool, ULevel)`
+///   - component: `<Comp> Get|GetOrCreate|Create(const AActor, const FName&)`
+fn is_generated_spawn(f: &Func, refs: &RefResolver) -> bool {
+    if !f.ret.is_object_handle {
+        return false;
+    }
+    let p0 = f.params.first().map(|p| p.ty.base_name(refs));
+    let p0 = p0.as_deref();
+    if f.name == "Spawn" && f.params.len() == 5 && p0 == Some("FVector") {
+        return true;
+    }
+    if matches!(f.name.as_str(), "Get" | "GetOrCreate" | "Create")
+        && f.params.len() == 2
+        && p0 == Some("AActor")
+        && f.params.get(1).map(|p| p.ty.base_name(refs)).as_deref() == Some("FName")
+    {
+        return true;
+    }
+    // subsystem/singleton accessor: `<Subsystem> Get()` / `GetG1R()` (0 params, handle return).
+    if matches!(f.name.as_str(), "Get" | "GetG1R") && f.params.is_empty() {
+        return true;
+    }
+    false
 }
 
 fn emit_class(s: &mut String, c: &Class, refs: &RefResolver) {
@@ -151,6 +184,11 @@ fn emit_class(s: &mut String, c: &Class, refs: &RefResolver) {
     for ctor in &c.ctors {
         emit_function_ctor(s, ctor, refs, true, true, 1, super_name, Some(&field_types), Some(&c.name));
     }
+    // Dedup methods by name+parameters: the cache can carry two entries that render to the same
+    // signature (e.g. a const- and non-const-return overload that collapse once the meaningless
+    // return `const` is stripped), which AngelScript rejects as "a function with the same name
+    // and parameters already exists".
+    let mut seen_sigs: HashSet<String> = HashSet::new();
     for m in &c.methods {
         // `__InitDefaults` (and other `__`-prefixed generator methods) set the CDO defaults
         // via raw `__StaticType_*` symbols and untyped literals we can't reconstruct offline;
@@ -158,6 +196,9 @@ fn emit_class(s: &mut String, c: &Class, refs: &RefResolver) {
         // class compiles. (Runtime UPROPERTY defaults are lost; real script logic is intact.)
         if m.name.starts_with("__") {
             continue;
+        }
+        if !seen_sigs.insert(format!("{}({})", m.name, param_sig(m, refs))) {
+            continue; // duplicate signature
         }
         emit_function_ctor(s, m, refs, true, false, 1, None, Some(&field_types), Some(&c.name));
     }
@@ -171,7 +212,10 @@ fn emit_function(s: &mut String, f: &Func, refs: &RefResolver, is_method: bool, 
 #[allow(clippy::too_many_arguments)]
 fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: bool, is_ctor: bool, depth: usize, super_ctor: Option<&str>, fields: Option<&HashMap<String, String>>, class_name: Option<&str>) {
     let ind = "    ".repeat(depth);
-    let ret = f.ret.render(refs);
+    // Strip a leading `const` from the return type: a return-by-value `const` is meaningless in
+    // AngelScript, and the cache sets the const flag inconsistently between a base method and its
+    // override -> "must have the same return type as in the base class". Stripping makes them match.
+    let ret = f.ret.render(refs).trim_start_matches("const ").to_string();
     let params = render_params(f, refs);
     if f.is_ufunction {
         let _ = writeln!(s, "{ind}UFUNCTION()");
@@ -187,28 +231,86 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
         func: f.name.clone(),
         is_method,
         param_names: f.params.iter().map(|p| p.name.clone()).collect(),
+        param_types: f.params.iter().map(|p| p.ty.clone()).collect(),
+        ret: f.ret.clone(),
         bytecode: f.bytecode.clone(),
     };
     let param_types: Vec<String> = f.params.iter().map(|p| p.ty.base_name(refs)).collect();
     // object-local slot -> type name, so the decompiler can insert downcasts on stores.
-    let local_types: HashMap<i32, String> = f.obj_locals.iter().map(|(slot, tinfo)| {
+    let mut local_types: HashMap<i32, String> = f.obj_locals.iter().map(|(slot, tinfo)| {
         let ty = super::types::DataType { token: 5, type_info: *tinfo, is_object_handle: true, ..Default::default() }.base_name(refs);
         (*slot, ty)
     }).collect();
+    // consumer-side override: never-written arg slots get the type their callee expects (fixes
+    // mis-typed default/optional-arg slots — FName->UAIState_DailyRoutine, TSubclassOf<X>->X).
+    let slot_overrides = infer_slot_types(f, refs);
+    for (slot, ty) in &slot_overrides {
+        local_types.insert(*slot, ty.clone());
+    }
+    // member-access-derived types: the field's declaring class is the strongest signal for a
+    // slot used as a member-access base; apply AFTER (overriding) the call-arg guess.
+    let member_overrides = infer_slot_types_from_members(f, refs);
+    for (slot, ty) in &member_overrides {
+        local_types.insert(*slot, ty.clone());
+    }
     let body = body_statements_ctor(&fc, refs, depth + 1, super_ctor, Some(&f.ret), fields, Some(&param_types), class_name, Some(&local_types));
     // hoist every referenced local; infer_locals types what it can, the rest default to `int`
     // (a wrong type just becomes a compile error the in-game loop force-stubs, rather than the
     // whole function stubbing on an undeclared identifier).
+    let used = used_locals(&body);
     let mut locals = infer_locals(f, refs);
-    for n in used_locals(&body) {
+    for &n in &used {
         locals.entry(n).or_insert_with(|| "int".to_string());
     }
+    // declare never-written consumer-typed slots with their inferred type (not the cache's wrong one)
+    for (slot, ty) in &slot_overrides {
+        if used.contains(slot) {
+            // Never let a consumer-derived `?` (the AngelScript template type, e.g. an opCast
+            // out-param slot) clobber a concrete type already inferred for the slot — declaring
+            // `? local_N;` is a syntax error that stubs the whole function. Keep the concrete
+            // type (e.g. the opCast retype) when the override is the unusable `?`.
+            if ty == "?" && locals.get(slot).map(|t| t != "?").unwrap_or(false) {
+                continue;
+            }
+            // Never let an ARGLESS template head (e.g. a `TArray` opAssign/copy-ctor param whose
+            // own DataType carries no SubTypes) downgrade an already-specific instantiation from
+            // the authoritative obj_locals type (`TArray<EQuestState>`). Declaring a bare `TArray`
+            // is invalid (template needs args) and would stub the function; the cache's recorded
+            // object-local type is the better signal, so keep it when the override is just its
+            // template head with the `<...>` stripped.
+            if !ty.contains('<') {
+                if let Some(prev) = locals.get(slot) {
+                    if let Some(head) = prev.split('<').next() {
+                        if prev.contains('<') && head == ty {
+                            continue;
+                        }
+                    }
+                }
+            }
+            locals.insert(*slot, ty.clone());
+        }
+    }
+    // member-derived declaring-class types override the cache's wrong/general slot type
+    for (slot, ty) in &member_overrides {
+        if used.contains(slot) {
+            locals.insert(*slot, ty.clone());
+        }
+    }
+    // Drop locals never referenced in the body: `obj_locals` includes profiling temporaries like
+    // FScopeCycleCounter / FStatID that the body never uses, and they have no default constructor,
+    // so declaring an unused one fails ("No default constructor"). An unused declaration is dead.
+    locals.retain(|slot, _| used.contains(slot));
     // arg slots the bytecode reads beyond the declared parameter list (the signature parse
     // undercounts some value-type / defaulted params). Declare them as `int` locals so the
     // body compiles instead of stubbing wholesale; a wrong type the in-game loop force-stubs.
     let mut oor_args: Vec<i32> =
         used_idents(&body, "arg").into_iter().filter(|&n| n as usize >= f.params.len()).collect();
     oor_args.sort_unstable();
+    // §3.3 safety net: an unmapped `argN` (signature undercount / RVO-return slot) declared as
+    // `int` breaks any member/operator use on it ("Illegal operation on 'int'"). Type it from
+    // its CONSUMER instead — the RHS of `argN = <expr>` (a field/local/param whose type we know)
+    // — so the declaration is member-compatible. Falls back to `int` when nothing is recoverable.
+    let oor_arg_types = infer_oor_arg_types(&body, &oor_args, fields, &locals, &param_types);
 
     // force-stub functions the in-game compile flagged as unrecoverable (by Class::method).
     let qid = match class_name {
@@ -232,14 +334,34 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
             }
         }
         for n in &oor_args {
-            let _ = writeln!(s, "{ind}    int arg{n} = 0;");
+            match oor_arg_types.get(n) {
+                Some(ty) if is_primitive(ty) => {
+                    let _ = writeln!(s, "{ind}    {ty} arg{n} = {};", default_for(ty));
+                }
+                Some(ty) => {
+                    // object/struct/handle local: default-constructs itself (no initializer).
+                    let _ = writeln!(s, "{ind}    {ty} arg{n};");
+                }
+                None => {
+                    let _ = writeln!(s, "{ind}    int arg{n} = 0;");
+                }
+            }
         }
-        // RVODEF marks a return whose value couldn't be recovered: substitute a type-correct
-        // default. A handle return defaults to `nullptr` (no local needed — and it sidesteps
-        // "no default constructor" for engine object types); everything else uses a default
-        // local `{ret} __r;` (works for primitives, enums and default-constructible structs).
-        if body.contains(RVODEF) {
-            // Object/AActor handles have no default constructor, so `{ret} __r;` fails to
+        // The hidden RVO return slot is named `__return` by the decompiler. When a store arm
+        // (RefCpyV / numeric-cast / etc.) writes that slot inside a branch — `__return = local_4;`
+        // — the slot must be a DECLARED local or the module fails to parse ("'__return' is not
+        // declared"). Declare it once (typed as the return type) whenever the body references it,
+        // and fold the RVODEF default-return into it so there is a single coherent return local.
+        // A handle return defaults to null on declaration, so `UFoo __return;` is valid (no
+        // "no default constructor" issue that bare struct RVODEF hits).
+        let uses_return_slot = body.contains("__return");
+        if uses_return_slot {
+            let _ = writeln!(s, "{ind}    {ret} __return;");
+            // Any unrecovered-default RET in this body returns the same slot.
+            s.push_str(&body.replace(RVODEF, "__return"));
+        } else if body.contains(RVODEF) {
+            // RVODEF marks a return whose value couldn't be recovered: substitute a type-correct
+            // default. Object/AActor handles have no default constructor, so `{ret} __r;` fails to
             // compile — return `nullptr` directly (this build's null-handle literal, matching
             // PshNull/CmpPtrNull). `render` strips `@`, so detect handles via the DataType flag.
             if f.ret.is_object_handle {
@@ -266,6 +388,31 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
         }
     }
     let _ = writeln!(s, "{ind}}}");
+}
+
+/// AngelScript overload identity ignores parameter NAMES — two functions are the same overload
+/// when their parameter TYPES + reference modifiers match. Use this (not `render_params`, which
+/// appends names) as the dedup key, so two cache entries with the same name+types but different
+/// stored arg-names don't both get emitted (which fails with "a function with the same name and
+/// parameters already exists").
+fn param_sig(f: &Func, refs: &RefResolver) -> String {
+    f.params
+        .iter()
+        .map(|p| {
+            let ty = p.ty.render(refs);
+            let amp = if p.ty.is_reference {
+                match p.flags & 3 {
+                    2 => "&out",
+                    3 => "&inout",
+                    _ => "&in",
+                }
+            } else {
+                ""
+            };
+            format!("{ty}{amp}")
+        })
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 fn render_params(f: &Func, refs: &RefResolver) -> String {
@@ -384,6 +531,228 @@ fn used_locals(body: &str) -> HashSet<i32> {
     out
 }
 
+/// Consumer-side slot typing: a slot that is NEVER written but is passed as a call argument takes
+/// the type that call's parameter expects (e.g. an optional/default-arg slot the cache mis-typed —
+/// FName where UAIState_DailyRoutine is wanted, or TSubclassOf<X> where X is wanted). Returns an
+/// override `slot -> type` ONLY for never-written slots with a single consistent consumer object
+/// type, so it can never clobber a real producer type. Pairs args from the stack TOP (robust to the
+/// cache counting the implicit `this` in a method's param list).
+/// True if a return type name denotes a struct/template returned BY VALUE via a hidden RVO
+/// out-slot (`F*` engine struct, `T*` template value like TSubclassOf). Enums/primitives/objects
+/// return in a register, not an out-slot, so they are excluded.
+fn ret_is_struct(ty: &str) -> bool {
+    matches!(ty.split('<').next().unwrap_or(ty).bytes().next(), Some(b'F') | Some(b'T'))
+}
+
+fn infer_slot_types(f: &Func, refs: &RefResolver) -> HashMap<i32, String> {
+    let instrs = match disassemble(&f.bytecode) {
+        Ok(i) => i,
+        Err(_) => return HashMap::new(),
+    };
+    let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32);
+    let writes = |op: &str| {
+        op.starts_with("SetV") || op.starts_with("CpyVtoV") || op.starts_with("CpyRtoV")
+            || op.starts_with("RDR") || op.contains("TO") || op == "STOREOBJ" || op == "PopRPtr"
+            || op.starts_with("ADD") || op.starts_with("SUB") || op.starts_with("MUL")
+            || op.starts_with("DIV") || op.starts_with("MOD") || op.starts_with("NEG")
+            || op.starts_with("Inc") || op.starts_with("Dec") || op == "NOT"
+            || op.starts_with("B") || op == "ALLOC"
+    };
+    let mut written: HashSet<i32> = HashSet::new();
+    for ins in &instrs {
+        if writes(ins.op.name) {
+            if let Some(d) = w0(ins) {
+                if d > 0 {
+                    written.insert(d);
+                }
+            }
+        }
+    }
+    let mut ostack: Vec<Option<i32>> = Vec::new();
+    let mut cand: HashMap<i32, Option<String>> = HashMap::new(); // slot -> Some(type) | None(conflict)
+    let mut pair = |ostack: &mut Vec<Option<i32>>, params: Option<&[super::types::DataType]>, is_method: bool, ret_struct: bool, cand: &mut HashMap<i32, Option<String>>| {
+        let Some(params) = params else { ostack.clear(); return; };
+        // A method returning a struct BY VALUE (F/T/E) carries a hidden RVO out-slot pushed as the
+        // last user arg (just before the receiver); count it so it is consumed, but exclude it from
+        // pairing (it is NOT params[last] — pairing it would shift every real arg one param over and
+        // mis-type the slot, e.g. the TSubclassOf out param landing on an EQuestState param).
+        let rvo = (ret_struct && is_method) as usize;
+        let total = if is_method { params.len() + 1 + rvo } else { params.len() };
+        let take = total.min(ostack.len());
+        let popped = ostack.split_off(ostack.len() - take);
+        // method: top popped entry is the receiver -> drop it (plus the RVO out-slot just below it);
+        // the rest are the user args.
+        let args = if is_method && !popped.is_empty() {
+            &popped[..popped.len().saturating_sub(1 + rvo)]
+        } else { &popped[..] };
+        // pair from the TOP: last arg <-> last param (so a leading `this` param, if the cache
+        // counts it, never shifts the user-arg pairing).
+        for (i, slot) in args.iter().rev().enumerate() {
+            if let Some(s) = slot {
+                if let Some(pt) = params.len().checked_sub(1 + i).and_then(|j| params.get(j)) {
+                    let ty = pt.base_name(refs);
+                    match cand.get(s) {
+                        None => { cand.insert(*s, Some(ty)); }
+                        Some(Some(prev)) if *prev != ty => { cand.insert(*s, None); }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    };
+    for ins in &instrs {
+        match ins.op.name {
+            "PshVPtr" | "PshV4" | "PshV8" | "PSF" => {
+                let s = w0(ins).unwrap_or(0);
+                ostack.push(if s > 0 { Some(s) } else { None });
+            }
+            "PshC4" | "PshC8" | "PshNull" | "PGA" | "PshGPtr" | "PshG4" | "PshRPtr" | "STR"
+            | "TYPEID" | "OBJTYPE" | "PshListElmnt" => ostack.push(None),
+            "CALL" | "CALLINTF" | "CALLBND" => {
+                let id = ins.dwords.first().copied().unwrap_or(0) as i32;
+                let rs = refs.func_ret_by_id(id).map(|d| ret_is_struct(&d.base_name(refs))).unwrap_or(false);
+                pair(&mut ostack, refs.func_params_by_id(id), refs.is_method_by_id(id), rs, &mut cand);
+            }
+            "CALLSYS" | "Thiscall1" => {
+                let ptr = ins.qwords.first().copied().unwrap_or(0) as i64;
+                // `$beh0` is the in-place CONSTRUCT behaviour: `<arg> ; PSF <slot> ; CALLSYS $beh0`
+                // constructs the value AT the PSF'd receiver slot (top of stack). That slot's type
+                // is the construct OWNER (e.g. TSubclassOf<UQuest>), not any callee param — pairing
+                // it as an ordinary arg mis-types it (EQuestState). Type the receiver from the owner
+                // and consume the behaviour's operands without arg-pairing.
+                if refs.func_by_ptr(ptr) == Some("$beh0") {
+                    let owner = refs.func_owner_by_ptr(ptr).map(|s| s.to_string());
+                    // receiver = top operand; ctor args = the params below it.
+                    if let Some(Some(rslot)) = ostack.last().copied() {
+                        if let Some(ty) = owner {
+                            if !ty.is_empty() {
+                                match cand.get(&rslot) {
+                                    None => { cand.insert(rslot, Some(ty)); }
+                                    Some(Some(prev)) if *prev != ty => { cand.insert(rslot, None); }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                    // pop receiver + ctor args off the operand stack so they don't leak.
+                    let nargs = refs.func_params_by_ptr(ptr).map(|p| p.len()).unwrap_or(0);
+                    let drop_n = (1 + nargs).min(ostack.len());
+                    ostack.truncate(ostack.len() - drop_n);
+                    continue;
+                }
+                let rs = refs.func_ret_by_ptr(ptr).map(|d| ret_is_struct(&d.base_name(refs))).unwrap_or(false);
+                pair(&mut ostack, refs.func_params_by_ptr(ptr), refs.is_method_by_ptr(ptr), rs, &mut cand);
+            }
+            _ => {}
+        }
+    }
+    cand.into_iter()
+        .filter_map(|(slot, ty)| match ty {
+            Some(t) if !written.contains(&slot) && !is_primitive(t.trim_end_matches('@')) && t != "void" && !t.is_empty() => Some((slot, t)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Member-access-driven slot typing: a `LoadRObjR`/`LoadVObjR base, off, tid` reads field
+/// `member(tid,off)` off the object in `base`; `member_type(tid,off)` is the field's DECLARING
+/// class — exactly the type `base` must have for `base.field` to compile. The cache often types
+/// the slot too generally (`UObject`) or wrong (`FGameplayTag` for a `FGameplayTagContainer`),
+/// or not at all (`int`), producing "<field> is not a member of <T>". Override the slot with the
+/// declaring class. Conservative: LOCAL slots only (base > 0), single consistent declaring type
+/// (conflict -> drop), non-empty non-primitive.
+fn infer_slot_types_from_members(f: &Func, refs: &RefResolver) -> HashMap<i32, String> {
+    let instrs = match disassemble(&f.bytecode) {
+        Ok(i) => i,
+        Err(_) => return HashMap::new(),
+    };
+    let mut cand: HashMap<i32, Option<String>> = HashMap::new();
+    for ins in &instrs {
+        if matches!(ins.op.name, "LoadRObjR" | "LoadVObjR") {
+            let base = match ins.words.first() {
+                Some(w) => *w as i16 as i32,
+                None => continue,
+            };
+            if base <= 0 {
+                continue; // this / param-as-receiver: skip (only local slots here)
+            }
+            let off = ins.words.get(1).copied().unwrap_or(0) as i32;
+            let tid = ins.dwords.first().copied().unwrap_or(0) as i32;
+            let Some(ty) = refs.member_type(tid, off) else { continue };
+            if ty.is_empty() || is_primitive(ty) {
+                continue;
+            }
+            match cand.get(&base) {
+                None => { cand.insert(base, Some(ty.to_string())); }
+                Some(Some(prev)) if prev != ty => { cand.insert(base, None); }
+                _ => {}
+            }
+        }
+    }
+    cand.into_iter().filter_map(|(s, t)| t.map(|t| (s, t))).collect()
+}
+
+/// §3.3 consumer-driven typing of out-of-range `argN` slots. Scans the body for the RHS of an
+/// `argN = <expr>` assignment (including `return argN = <expr>;`) and resolves `<expr>`'s type
+/// from the maps we already have: `this.<field>` -> field type, `local_M` -> local type,
+/// `<param>` -> param type. A type that supports member access makes `argN.Member` legal where a
+/// bare `int` would not. Anything unresolved is left out (declared `int`, as before — no regression).
+fn infer_oor_arg_types(
+    body: &str,
+    oor_args: &[i32],
+    fields: Option<&HashMap<String, String>>,
+    locals: &BTreeMap<i32, String>,
+    param_types: &[String],
+) -> HashMap<i32, String> {
+    let mut out: HashMap<i32, String> = HashMap::new();
+    if oor_args.is_empty() {
+        return out;
+    }
+    // a primitive/enum int-ish RHS isn't worth retyping (int default already works); only adopt a
+    // type that is NOT a bare primitive (i.e. a struct/handle/array the member access needs).
+    let adopt = |out: &mut HashMap<i32, String>, n: i32, ty: String| {
+        if !ty.is_empty() && !is_primitive(&ty) {
+            out.entry(n).or_insert(ty);
+        }
+    };
+    for line in body.lines() {
+        let t = line.trim();
+        let t = t.strip_prefix("return ").unwrap_or(t);
+        // parse `argN = RHS;`
+        let Some(rest) = t.strip_prefix("arg") else { continue };
+        let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        let Ok(n) = digits.parse::<i32>() else { continue };
+        if !oor_args.contains(&n) {
+            continue;
+        }
+        let after = rest[digits.len()..].trim_start();
+        let Some(rhs) = after.strip_prefix("= ") else { continue };
+        let rhs = rhs.trim().trim_end_matches(';').trim();
+        // `this.<field>` (single member hop) -> the field's type.
+        if let Some(field) = rhs.strip_prefix("this.") {
+            if !field.contains('.') && !field.contains('(') {
+                if let Some(ty) = fields.and_then(|m| m.get(field)) {
+                    adopt(&mut out, n, ty.clone());
+                    continue;
+                }
+            }
+        }
+        // `local_M` -> that local's inferred type.
+        if let Some(m) = rhs.strip_prefix("local_") {
+            if let Ok(slot) = m.parse::<i32>() {
+                if let Some(ty) = locals.get(&slot) {
+                    adopt(&mut out, n, ty.clone());
+                    continue;
+                }
+            }
+        }
+        // a bare parameter name -> its declared type (param_types is index-aligned to params,
+        // but we only have names in the body; skip — names aren't carried here). Left for future.
+        let _ = param_types;
+    }
+    out
+}
+
 /// Infer (slot, type) for primitive + object locals to hoist as declarations.
 fn infer_locals(f: &Func, refs: &RefResolver) -> BTreeMap<i32, String> {
     let mut locals: BTreeMap<i32, String> = BTreeMap::new();
@@ -437,6 +806,48 @@ fn infer_locals(f: &Func, refs: &RefResolver) -> BTreeMap<i32, String> {
                 locals.insert(dst, ty);
             }
             _ => {}
+        }
+    }
+    // opCast retype: a script-handle downcast `T@ dst = Cast<T>(src)` lowers to
+    // `TYPEID <tid> ; PSF <dst> ; PshVPtr <src> ; CALLSYS opCast`, and the cache types the
+    // out-slot `dst` as the AngelScript `?` template type. Declaring `? local_N;` is a syntax
+    // error ("Expected expression value, instead found '?'") that stubs the whole function.
+    // Retype `dst` to the cast's resolved target T (from the preceding TYPEID) so it declares
+    // as e.g. `UGothicFinalDataGame local_N;` and the recovered `local_N = Cast<T>(src);`
+    // type-checks. This is the declaration-side counterpart of the structure.rs opCast recovery.
+    {
+        let mut last_tid: Option<i32> = None;
+        let mut last_psf: Option<i32> = None;
+        for ins in &instrs {
+            match ins.op.name {
+                "TYPEID" => {
+                    last_tid = ins.dwords.first().map(|d| *d as i32);
+                    last_psf = None;
+                }
+                "PSF" => {
+                    // first PSF after a TYPEID is the opCast out-slot destination
+                    if last_tid.is_some() {
+                        last_psf = ins.words.first().map(|w| *w as i16 as i32);
+                    }
+                }
+                "CALLSYS" | "Thiscall1" => {
+                    let ptr = ins.qwords.first().copied().unwrap_or(0) as i64;
+                    if refs.func_by_ptr(ptr) == Some("opCast") {
+                        if let (Some(tid), Some(dst)) = (last_tid, last_psf) {
+                            if dst > 0 {
+                                if let Some(t) = super::structure::resolve_cast_typeid(refs, tid) {
+                                    if t.starts_with('U') || t.starts_with('A') {
+                                        locals.insert(dst, t);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    last_tid = None;
+                    last_psf = None;
+                }
+                _ => {}
+            }
         }
     }
     let _ = token_keyword; // keep import used if obj path elided

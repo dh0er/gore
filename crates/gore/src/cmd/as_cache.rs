@@ -1,7 +1,30 @@
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::Subcommand;
+
+/// Rename whole-word free occurrences of `name` to `newname` in `src` — occurrences NOT preceded
+/// by `.` (so member calls `obj.name(...)` are left alone; only the decl + free calls change).
+fn rename_free_fn(src: &str, name: &str, newname: &str) -> String {
+    let (b, nb) = (src.as_bytes(), name.as_bytes());
+    let word = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    let mut out: Vec<u8> = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        let hit = b[i..].starts_with(nb)
+            && (i == 0 || (!word(b[i - 1]) && b[i - 1] != b'.' && b[i - 1] != b':'))
+            && (i + nb.len() >= b.len() || !word(b[i + nb.len()]));
+        if hit {
+            out.extend_from_slice(newname.as_bytes());
+            i += nb.len();
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).unwrap_or_else(|_| src.to_string())
+}
 use gore_as::cache::header::CacheHeader;
 use gore_as::cache::scan::scan_strings;
 use gore_as::cache::splice::splice_auto;
@@ -65,6 +88,33 @@ pub enum AsCmd {
         /// Mini-cache from -as-generate-precompiled-data (one primitive-only module).
         mini: PathBuf,
         /// Output path for the spliced cache.
+        #[arg(short, long)]
+        out: PathBuf,
+    },
+    /// Extract one module into a standalone 1-module mini-cache (module + full tail tables).
+    /// Lets a dependency-heavy edited module be pulled from a full-tree regen and Replace'd
+    /// into the vanilla base.
+    Extract {
+        /// Source cache (e.g. a full-tree regen).
+        cache: PathBuf,
+        /// Module name (the Modules TMap key) to extract.
+        module: String,
+        /// Output path for the 1-module mini-cache.
+        #[arg(short, long)]
+        out: PathBuf,
+    },
+    /// Extract one module from a regen cache AND remap its bytecode refs to a base (vanilla)
+    /// cache's keys, emitting a 1-module mini with EMPTY tail tables. The result can be
+    /// Replace'd into the base without growing the cache (no duplicate global tables). This is
+    /// the key step for editing EXISTING modules. See work/reversing/gore-as/specs/ref-remap.md.
+    ExtractRemap {
+        /// Regen cache (full-tree -as-generate-precompiled-data output) containing the edit.
+        regen_cache: PathBuf,
+        /// Module name (the Modules TMap key) to extract + remap.
+        module: String,
+        /// Base (vanilla) cache whose keys the module's refs are rewritten to.
+        base_cache: PathBuf,
+        /// Output path for the remapped 1-module mini-cache (empty tail tables).
         #[arg(short, long)]
         out: PathBuf,
     },
@@ -163,9 +213,70 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             // cache paths against that real root. (create_dir_all so canonicalize succeeds.)
             std::fs::create_dir_all(&outdir).with_context(|| format!("creating {}", outdir.display()))?;
             let outdir = outdir.canonicalize().with_context(|| format!("resolving {}", outdir.display()))?;
+            // Cross-module free-function collisions: AngelScript compiles all loose .as into ONE
+            // global scope, so two modules each defining `Foo(<same params>)` (even with different
+            // return types) collide as "a function with the same name and parameters already
+            // exists". Find such names and rename each per-module — a function's decl and its
+            // intra-module free calls live in the same emitted file, so a file-local rename
+            // de-collides without breaking resolution (cross-module calls of these don't occur).
+            let mut sig_mods: HashMap<String, HashSet<usize>> = HashMap::new();
+            for (i, m) in mods.iter().enumerate() {
+                for f in &m.functions {
+                    // generated factory accessors are skipped at emit (not free-emitted) — never
+                    // rename them, or free CALLS to the native binding would be broken.
+                    if matches!(f.name.as_str(),
+                        "Spawn" | "Get" | "GetOrCreate" | "Create" | "GetG1R" | "StaticClass") {
+                        continue;
+                    }
+                    // precise signature (render, not base_name) so only GENUINE same-signature
+                    // collisions are flagged — a coarse match falsely flags distinct overloads and
+                    // would rename (and break) functions that are validly called cross-module.
+                    let ptys: Vec<String> = f.params.iter().map(|p| p.ty.render(&refs)).collect();
+                    sig_mods.entry(format!("{}({})", f.name, ptys.join(","))).or_default().insert(i);
+                }
+            }
+            // A name is safe to file-locally rename in a module only if EVERY emittable free
+            // function of that name in the module has a colliding signature. If the module also has
+            // a NON-colliding same-name overload, the name-based `rename_free_fn` would rewrite that
+            // overload's decl + calls too, breaking other modules that call it by its original name.
+            // In that mixed case leave the name un-renamed: the genuine collision then surfaces at
+            // generate as a "already exists" stub (rare, safe) instead of silently breaking a valid
+            // cross-module call to the non-colliding overload.
+            let colliding_sigs: HashSet<&str> = sig_mods
+                .iter()
+                .filter(|(_, modset)| modset.len() > 1)
+                .map(|(sig, _)| sig.as_str())
+                .collect();
+            let mut colliding_in: HashMap<usize, HashSet<String>> = HashMap::new();
+            for (i, m) in mods.iter().enumerate() {
+                let mut sigs_by_name: HashMap<&str, Vec<String>> = HashMap::new();
+                for f in &m.functions {
+                    if matches!(f.name.as_str(),
+                        "Spawn" | "Get" | "GetOrCreate" | "Create" | "GetG1R" | "StaticClass") {
+                        continue;
+                    }
+                    let ptys: Vec<String> = f.params.iter().map(|p| p.ty.render(&refs)).collect();
+                    sigs_by_name
+                        .entry(f.name.as_str())
+                        .or_default()
+                        .push(format!("{}({})", f.name, ptys.join(",")));
+                }
+                for (name, sigs) in sigs_by_name {
+                    if sigs.iter().any(|s| colliding_sigs.contains(s.as_str()))
+                        && sigs.iter().all(|s| colliding_sigs.contains(s.as_str()))
+                    {
+                        colliding_in.entry(i).or_default().insert(name.to_string());
+                    }
+                }
+            }
             let (mut written, mut stubbed) = (0usize, 0usize);
-            for m in &mods {
-                let src = gore_as::cache::emit::emit_module(m, &refs);
+            for (mi, m) in mods.iter().enumerate() {
+                let mut src = gore_as::cache::emit::emit_module(m, &refs);
+                if let Some(names) = colliding_in.get(&mi) {
+                    for name in names {
+                        src = rename_free_fn(&src, name, &format!("{name}_g{mi}"));
+                    }
+                }
                 if src.contains("not fully recovered") {
                     stubbed += 1;
                 }
@@ -266,6 +377,40 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                 base_b.len(),
                 spliced.len(),
                 out.display()
+            );
+        }
+        AsCmd::Extract { cache, module, out } => {
+            let b = std::fs::read(&cache).with_context(|| format!("reading {}", cache.display()))?;
+            let n = module_count(&b);
+            let mini = gore_as::cache::splice::extract_module(&b, &module).context("extract")?;
+            std::fs::write(&out, &mini).with_context(|| format!("writing {}", out.display()))?;
+            println!(
+                "extracted {:?} from {} modules -> 1-module mini ; {} bytes ; wrote {}",
+                module, n, mini.len(), out.display()
+            );
+        }
+        AsCmd::ExtractRemap { regen_cache, module, base_cache, out } => {
+            let regen_b = std::fs::read(&regen_cache)
+                .with_context(|| format!("reading {}", regen_cache.display()))?;
+            let base_b = std::fs::read(&base_cache)
+                .with_context(|| format!("reading {}", base_cache.display()))?;
+            let n = module_count(&regen_b);
+            let mini = gore_as::cache::splice::extract_module(&regen_b, &module)
+                .context("extract")?;
+            let (remapped, counts) =
+                gore_as::cache::remap::remap_module_to_base(&mini, &base_b)
+                    .context("remap")?;
+            std::fs::write(&out, &remapped)
+                .with_context(|| format!("writing {}", out.display()))?;
+            println!(
+                "extract-remap {:?} from {} modules -> remapped 1-module mini ; {} bytes ; wrote {}",
+                module, n, remapped.len(), out.display()
+            );
+            println!(
+                "refs remapped: {} total (bytecode: global={} func_ptr={} type_ptr={} func_id={} type_id={} ; embedded: type_ptr={} func_id={})",
+                counts.total(),
+                counts.global_ptr, counts.func_ptr, counts.type_ptr, counts.func_id, counts.type_id,
+                counts.embed_type_ptr, counts.embed_func_id
             );
         }
     }

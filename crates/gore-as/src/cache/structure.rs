@@ -31,19 +31,28 @@ struct Arg {
     /// Raw bits if this is an integer CONSTANT (`PshC4`/`PshC8`) — so a constant feeding a
     /// float/double parameter can be reinterpreted as its real IEEE-754 value.
     cbits: Option<ConstBits>,
+    /// True when this arg was pushed via `PSF` (push stack-frame address of a local) — i.e. it
+    /// is the ADDRESS of a slot, used as an out / RVO / in-place-ctor receiver. Lets the CALLSYS
+    /// handler recover `slot = T(args)` from a `$beh0` construct behaviour instead of dropping it.
+    is_psf: bool,
 }
 impl Arg {
     fn int(s: String) -> Arg {
-        Arg { s, is_int: true, ty: None, cbits: None }
+        Arg { s, is_int: true, ty: None, cbits: None, is_psf: false }
     }
     fn iconst(s: String, cbits: ConstBits) -> Arg {
-        Arg { s, is_int: true, ty: None, cbits: Some(cbits) }
+        Arg { s, is_int: true, ty: None, cbits: Some(cbits), is_psf: false }
     }
     fn obj(s: String) -> Arg {
-        Arg { s, is_int: false, ty: None, cbits: None }
+        Arg { s, is_int: false, ty: None, cbits: None, is_psf: false }
     }
     fn typed(s: String, ty: Option<String>) -> Arg {
-        Arg { s, is_int: false, ty, cbits: None }
+        Arg { s, is_int: false, ty, cbits: None, is_psf: false }
+    }
+    /// A `PSF`-pushed slot address (out / RVO / in-place-ctor receiver), carrying the slot's
+    /// recovered type so the construct can render `slot = <ty>(args)`.
+    fn psf(s: String, ty: Option<String>) -> Arg {
+        Arg { s, is_int: false, ty, cbits: None, is_psf: true }
     }
 }
 
@@ -82,13 +91,34 @@ pub fn body_statements_ctor(f: &FuncCode, refs: &RefResolver, depth: usize, supe
     };
     let g = cfg::build(&instrs);
     let float_slots = float_operand_slots(&instrs);
-    let ctx = Ctx { f, refs, instrs: &instrs, super_ctor, ret_ty, fields, param_types, class_name, local_types, float_slots };
+    // AS_PTR_SIZE-aware frame-offset -> param-index map (2-dword handles/refs + hidden RVO slot),
+    // self-correcting on observed offsets. Built once per function; consulted by slot_name/slot_type.
+    let (param_off_map, rvo_off) = super::decompile::build_param_off_map_rvo(f, &instrs, refs);
+    let ctx = Ctx { f, refs, instrs: &instrs, super_ctor, ret_ty, fields, param_types, class_name, local_types, float_slots, param_off_map, rvo_off };
     let idx_of: HashMap<usize, usize> =
         g.blocks.iter().enumerate().map(|(i, b)| (b.start_dw, i)).collect();
     let mut body = String::new();
     let mut st = Structurer { ctx: &ctx, g: &g, idx_of: &idx_of };
     st.emit_range(0, g.blocks.len(), depth, &mut body);
     body
+}
+
+/// If `v` is a top-level assignment expression `lhs = rhs` (the RVO return-slot write pattern),
+/// return the RHS — `return lhs = rhs;` is a parse error, the RHS is the real returned value.
+fn strip_return_assign(v: &str) -> &str {
+    let b = v.as_bytes();
+    let mut depth = 0i32;
+    let mut i = 0;
+    while i + 2 < b.len() {
+        match b[i] {
+            b'(' | b'[' => depth += 1,
+            b')' | b']' => depth -= 1,
+            b' ' if depth == 0 && b[i + 1] == b'=' && b[i + 2] == b' ' => return v[i + 3..].trim(),
+            _ => {}
+        }
+        i += 1;
+    }
+    v
 }
 
 /// Decompile a function to a self-contained `function(...) { ... }` (readable, not recompilable).
@@ -121,6 +151,11 @@ struct Ctx<'a> {
     /// Slots that appear as an operand of a float/double arithmetic or compare op, so a
     /// `SetV4`/`SetV8` constant written to one is rendered as a float literal, not raw int bits.
     float_slots: std::collections::HashSet<i32>,
+    /// AS_PTR_SIZE-aware frame-offset -> parameter-index map (see `model::param_slot_map`).
+    param_off_map: HashMap<i32, usize>,
+    /// Frame offset of the hidden RVO out-pointer slot for a by-value-struct return, if any.
+    /// A `CopyScript` writing this slot is the function's `return <src>`.
+    rvo_off: Option<i32>,
 }
 
 /// Collect slots used as an operand of a float/double arithmetic or compare op. Every word
@@ -148,15 +183,16 @@ impl Ctx<'_> {
         if off > 0 {
             return format!("local_{off}");
         }
-        if self.f.is_method {
-            if off == 0 {
-                return "this".into();
-            }
-            let idx = (-off - AS_PTR_SIZE) as usize;
-            return self.param_or_arg(idx);
+        if self.f.is_method && off == 0 {
+            return "this".into();
         }
-        // free function: params at off 0, -1, -2, ...
-        self.param_or_arg((-off) as usize)
+        // The hidden RVO out-pointer slot is NOT a parameter — naming it via the param fallback
+        // mislabels it as parameter 0 (e.g. `_QuestClass`). Give it a distinct synthetic name so
+        // a stray reference is recognisable; the CopyScript-to-return rewrite normally consumes it.
+        if self.rvo_off == Some(off) {
+            return "__return".into();
+        }
+        self.param_or_arg(self.param_idx(off))
     }
 
     /// Recovered base type name for a slot: object-local type for `off > 0`, parameter type
@@ -165,15 +201,24 @@ impl Ctx<'_> {
         if off > 0 {
             return self.local_types.and_then(|m| m.get(&off)).cloned();
         }
-        let idx = if self.f.is_method {
-            (-off - AS_PTR_SIZE) as usize
-        } else {
-            (-off) as usize
-        };
+        let idx = self.param_idx(off);
         self.param_types
             .and_then(|p| p.get(idx))
             .filter(|t| !t.is_empty())
             .cloned()
+    }
+
+    /// Resolve a negative frame offset to its parameter index via the AS_PTR_SIZE-aware map,
+    /// falling back to the old linear formula for an unmapped (variadic/defaulted-tail) slot.
+    fn param_idx(&self, off: i32) -> usize {
+        if let Some(&idx) = self.param_off_map.get(&off) {
+            return idx;
+        }
+        if self.f.is_method {
+            (-off - AS_PTR_SIZE) as usize
+        } else {
+            (-off) as usize
+        }
     }
 
     /// Name for parameter slot `idx`: the stored name, else `arg{idx}` — which MUST match
@@ -205,6 +250,24 @@ fn scan_back_retval(ctx: &Ctx, before: usize) -> Option<String> {
             }
             "RET" => return None,
             _ => {}
+        }
+    }
+    None
+}
+
+/// Resolve a Cast/TYPEID operand to a target typename. AngelScript bytecode typeids carry
+/// flag bits in the high word — most notably `asTYPEID_OBJHANDLE` (0x40000000) and
+/// `asTYPEID_HANDLETOCONST` (0x20000000) — that are NOT part of the key stored in the cache's
+/// TypeIdReferenceToPointer table (which keys on the object-type id incl. SCRIPTOBJECT/TEMPLATE
+/// bits but WITHOUT the handle/const flags). Strip those flags before lookup, trying the raw id
+/// first for robustness. Returns the resolved typename, or None if unresolvable.
+pub(crate) fn resolve_cast_typeid(refs: &RefResolver, tid: i32) -> Option<String> {
+    const OBJHANDLE: u32 = 0x4000_0000;
+    const HANDLETOCONST: u32 = 0x2000_0000;
+    let raw = tid as u32;
+    for cand in [raw, raw & !OBJHANDLE, raw & !(OBJHANDLE | HANDLETOCONST)] {
+        if let Some(t) = refs.type_by_id(cand as i32) {
+            return Some(t.to_string());
         }
     }
     None
@@ -246,6 +309,21 @@ fn fmt_float(b: ConstBits, double: bool) -> String {
         ConstBits::W4(x) => f32::from_bits(x) as f64,
         ConstBits::W8(x) => f64::from_bits(x),
     };
+    // Rust's `{:?}` prints non-finite floats as `inf`/`-inf`/`NaN`, and the float32 branch then
+    // appends `f` -> `inff`, neither of which is a valid AngelScript literal ("'inff' is not
+    // declared"). AS has no inf/nan literal, so emit the closest compile-valid magnitude: the
+    // type's max finite value for ±inf (preserves the "very large / forever" sentinel intent
+    // these constants carry), and 0 for NaN.
+    if !v.is_finite() {
+        return match (v.is_nan(), v.is_sign_negative(), double) {
+            (true, _, true) => "0.0".into(),
+            (true, _, false) => "0.0f".into(),
+            (false, false, true) => format!("{:?}", f64::MAX),
+            (false, true, true) => format!("{:?}", f64::MIN),
+            (false, false, false) => format!("{:?}f", f32::MAX),
+            (false, true, false) => format!("{:?}f", f32::MIN),
+        };
+    }
     if double { format!("{v:?}") } else { format!("{:?}f", v as f32) }
 }
 
@@ -269,40 +347,117 @@ struct Cmp {
 /// last-pushed entry (top of stack); the rest are args in push order. Operator-overload
 /// methods (opAssign/opAdd/opEquals/...) render as the source operator. Returns None for
 /// compiler-generated behaviors ($behN construct/destruct) that have no source form.
-fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option<&str>, params: Option<&[DataType]>, native_arity: Option<usize>, refs: &RefResolver) -> Option<String> {
+#[allow(clippy::too_many_arguments)]
+fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option<&str>, params: Option<&[DataType]>, native_arity: Option<usize>, trusted_arity: Option<usize>, target_owner: Option<&str>, cur_class: Option<&str>, non_virtual: bool, ret_ty: Option<&str>, refs: &RefResolver) -> Option<String> {
     if f.starts_with('$') || f.starts_with('~') || f == "__STATIC_NAME" {
+        // EDIT C (the dominant FName form): `__STATIC_NAME` is the synthesized name-table accessor
+        // that produces an FName from a pushed name-table INDEX into the return register; a
+        // following `PshRPtr` re-pushes it as the ENCLOSING call's arg. Dropping it (return None)
+        // loses that arg → `this.GetCharacter()` (0-arg). Recover it as a renderable `FName(<idx>)`
+        // value so it FLOWS into `pending` and PshRPtr restores ARITY (`this.GetCharacter(FName(...))`).
+        // The literal is the name-table index, not the string (acceptable per spec: correct arity
+        // beats a dropped arg). Gate: exactly one int operand on top (the index).
+        if f == "__STATIC_NAME" {
+            if let Some(top) = stack.last() {
+                if top.is_int && !top.s.is_empty() {
+                    let idx = stack.pop().unwrap();
+                    return Some(format!("FName({})", idx.s));
+                }
+            }
+        }
         // generated construct/destruct behavior ($beh, ~Dtor — implicit in AS source) and the
         // synthesized static-name accessor (__STATIC_NAME) have no valid source form; emitting
         // them produces stray `~`/identifier tokens that abort the whole module's parse.
-        stack.clear();
+        //
+        // EDIT A: clearing the WHOLE stack also annihilates an ENCLOSING call's already-pushed
+        // args when this behaviour runs in the MIDDLE of that call's arg-push sequence (the RVO /
+        // by-value out-param idiom). Truncate ONLY this behaviour's own receiver + params (the
+        // PSF'd slot it constructs + its declared args) so enclosing operands survive.
+        match params {
+            Some(p) => {
+                let consume = (p.len() + 1).min(stack.len()); // ctor args + 1 receiver(PSF out-slot)
+                stack.truncate(stack.len() - consume);
+            }
+            // No param info: drop only a top PSF out-slot (the thing it just constructed); never a
+            // genuine sibling arg. If the top isn't a PSF slot, leave the stack untouched.
+            None => {
+                if stack.last().map(|a| a.is_psf).unwrap_or(false) {
+                    stack.pop();
+                }
+            }
+        }
         return None;
     }
-    let mut a: Vec<Arg> = std::mem::take(stack)
+    // EDIT B-PRIME: `mem::take` empties the ENTIRE operand stack — so a NESTED call eats the
+    // enclosing call's deeper args (proven: GetHero/GetDistanceTo). When a TRUSTED arity is known
+    // (script param count, which is authoritative; or Binds native arity), take ONLY the top
+    // `need` entries (this call's receiver + args) and LEAVE deeper entries for the enclosing call.
+    // Untrusted -> keep the original take-all (cache native param counts are unreliable).
+    // A method returning a struct BY VALUE (F*/T* head) also pushes a hidden RVO out-slot, so its
+    // frame is params + receiver + 1; account for it or the split drops a real leading arg.
+    let rvo_slot = is_method && ret_ty
+        .map(|t| matches!(t.split('<').next().unwrap_or(t).bytes().next(), Some(b'F') | Some(b'T')))
+        .unwrap_or(false);
+    let need = trusted_arity.map(|n| n + is_method as usize + rvo_slot as usize);
+    let mut a: Vec<Arg> = match need {
+        Some(k) if stack.len() > k => {
+            // Split off this call's own operands (top `k`); the deeper entries belong to an
+            // ENCLOSING call. BUT only PRESERVE deeper entries that are plausibly real enclosing
+            // args (typed locals/globals/PSF slots) — a stranded plain int/const literal left over
+            // from an unmodeled push is dead and, if preserved, pollutes the enclosing call's arg
+            // list and force-stubs it (regression). Drop such dead leading constants here, which is
+            // exactly what the old whole-stack `mem::take` did for them.
+            let own = stack.split_off(stack.len() - k);
+            stack.retain(|x| !x.is_int);
+            own
+        }
+        _ => std::mem::take(stack),
+    }
         .into_iter()
         .filter(|x| !x.s.is_empty() && x.s != UNRESOLVED)
         .collect();
-    // Effective arity for receiver detection + phantom trimming: the in-game compile validates
-    // against the shipped Binds.Cache, so its native arity is authoritative — prefer it over the
-    // script FunctionReferences param count (which can disagree). Falls back to the script count.
+    // Effective arity: the in-game compile validates against the shipped Binds.Cache, so its native
+    // arity is authoritative — prefer it over the script FunctionReferences param count. Falls back.
     let arity = native_arity.or_else(|| params.map(|p| p.len()));
-    // Receiver detection by COUNT, not the unreliable bIsMethod flag: AngelScript pushes
-    // receiver + N args (N+1 entries) for a method, N for a free call, and the cache's param
-    // count N is reliable. The recovered stack often carries phantom extras (values the
-    // decompiler couldn't attribute to an earlier consumer) at the BOTTOM, so when the count
-    // overshoots a known arity we pop the receiver (top) and keep only the last N args,
-    // dropping the leading noise — this is what `recv.Get0Param()` getters need.
-    let has_recv = match arity {
-        Some(w) if a.len() == w => false,                   // exact free arity
-        // receiver + w only when this is actually a method; for a free call w+1 is a phantom
-        // extra (trimmed below), not a receiver — else a real arg gets mislabeled as `recv`.
-        Some(w) if a.len() == w + 1 => is_method,
-        // overshoot/undershoot/no signature: trust the bIsMethod hint.
-        Some(_) | None => is_method && !a.is_empty(),
-    };
+    // Receiver: a METHOD call always pushes its receiver as the top entry (the cache param count is
+    // unreliable here — it often COUNTS the implicit `this`), so detect by the bIsMethod flag.
+    let has_recv = is_method && !a.is_empty();
     if has_recv {
         let recv = a.pop().unwrap();
-        // trim phantom extras: keep only the last `w` pushed values as the call args.
+        // Fix b3 — RVO STRUCT-RETURN: a script method returning a struct BY VALUE
+        // (`FQuestRequirement MakeRequirement(...)`) is lowered as: push real args; push a hidden
+        // `PSF <out_slot>` RVO destination; push receiver; CALL/CALLINTF. The callee writes its
+        // return into `<out_slot>`. Recover it as `out_slot = f(real_args);` (analogous to the
+        // existing `$beh0`/`opCast` PSF out-slot arms) instead of dropping the result. Run BEFORE
+        // the arity trim: the hidden out-slot inflates the arg count one past `arity`, so removing
+        // it first restores the correct count (else the trim drops a real leading arg).
+        //
+        // EXCLUDE operator-overload methods (opAssign/opAdd/opEquals/...): they return their
+        // operand type (often a struct/template returned BY REFERENCE, not via an RVO out-slot)
+        // and are lowered as `recv <op> arg` below. Their PSF'd value arg can share the return
+        // type's head (e.g. `member.opAssign(states)` returning `TArray` with a PSF'd `TArray`
+        // value), which would falsely match the out-slot probe and rewrite `states = opAssign()`.
+        fn head(s: &str) -> &str { s.split('<').next().unwrap_or(s) }
+        let is_operator = assign_op(f).is_some() || binop_method(f).is_some();
+        if let Some(rh) = ret_ty.map(head).filter(|_| !is_operator) {
+            if matches!(rh.bytes().next(), Some(b'F') | Some(b'T') | Some(b'E')) {
+                // the RVO out-slot = a PSF arg whose type head equals the return-type head
+                if let Some(pos) = a.iter().position(|x| x.is_psf
+                    && x.ty.as_deref().map(head) == Some(rh)) {
+                    let out = a.remove(pos).s;
+                    if let Some(w) = arity {
+                        let w = w.min(a.len());
+                        if a.len() > w { a.drain(..a.len() - w); }
+                    }
+                    maybe_reverse_args(&mut a, params, refs);
+                    return Some(format!("{out} = {f}({})", render_args(&a, params, refs)));
+                }
+            }
+        }
+        // trim phantom extras: keep only the last `w` user args (the cache arity may include the
+        // now-popped `this`, so cap below the popped count, never above).
         if let Some(w) = arity {
+            let w = w.min(a.len());
             if a.len() > w {
                 a.drain(..a.len() - w);
             }
@@ -311,6 +466,16 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
         // super name is itself a type name).
         if super_ctor == Some(f) && recv.s == "this" {
             return Some(format!("super({})", render_args(&a, params, refs)));
+        }
+        // BUG (a) — SUPER-CALL: a NON-VIRTUAL (`CALL`) dispatch on `this` to a method owned by a
+        // STRICT ANCESTOR of the current class is a `Super::method()` call, not `this.method()`
+        // (a genuine virtual self-call compiles to CALLINTF, never a CALL to the base func-id).
+        if non_virtual && recv.s == "this" {
+            if let (Some(owner), Some(cur)) = (target_owner, cur_class) {
+                if owner != cur && refs.is_subclass(cur, owner) {
+                    return Some(format!("Super::{f}({})", render_args(&a, params, refs)));
+                }
+            }
         }
         // a call whose name is a type = an in-place constructor (member struct default ctor) —
         // implicit in AS source, emit nothing.
@@ -338,9 +503,22 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
                 return Some(format!("({} {op} {})", recv.s, r));
             }
         }
+        maybe_reverse_args(&mut a, params, refs);
         Some(format!("{}.{f}({})", recv.s, render_args(&a, params, refs)))
     } else {
         if refs.is_type_name(f) {
+            // EDIT C: a value-type factory call (FName/E*/T* — NOT U*/A*, which use ALLOC) whose
+            // result is built into the return register and re-pushed by a following `PshRPtr` as
+            // an ENCLOSING call's arg. Dropping it (return None) loses that arg → the consuming
+            // call renders 0-arg (`this.GetCharacter()`). Instead render it as `T(args)` so it
+            // FLOWS into `pending` and PshRPtr recovers it (`this.GetCharacter(FName(...))`).
+            // Restores ARITY; the literal may be a name-table index (acceptable per spec). Gate
+            // strictly: value type AND non-empty args (a 0-arg in-place default ctor stays None).
+            let is_value = matches!(f.bytes().next(), Some(b'F') | Some(b'E') | Some(b'T'));
+            if is_value && !a.is_empty() {
+                maybe_reverse_args(&mut a, params, refs);
+                return Some(format!("{f}({})", render_args(&a, params, refs)));
+            }
             return None; // free-standing in-place constructor — implicit in AS source
         }
         // an operator-overload method with no stack receiver (its target was in the reference
@@ -355,7 +533,68 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
                 a.drain(..a.len() - w);
             }
         }
+        maybe_reverse_args(&mut a, params, refs);
         Some(format!("{f}({})", render_args(&a, params, refs)))
+    }
+}
+
+/// Count DEFINITE type mismatches when pairing args[i] with params[i] (mirrors `cast_arg`'s
+/// "this arg can't possibly match" rule). A value-type (F/E/T) head-mismatch or an object
+/// arg that is a known non-subclass of a known-script param both count; everything else
+/// (unknown types, int->primitive casts, engine upcasts) is treated as a possible match so
+/// the score never penalizes a legitimately-ordered call.
+fn arg_mismatch_count(a: &[Arg], params: &[DataType], refs: &RefResolver) -> usize {
+    let head = |s: &str| s.split('<').next().unwrap_or(s).to_string();
+    let is_value = |s: &str| matches!(s.bytes().next(), Some(b'F') | Some(b'E') | Some(b'T'));
+    let is_obj = |s: &str| matches!(s.bytes().next(), Some(b'U') | Some(b'A'));
+    let mut n = 0;
+    for (i, arg) in a.iter().enumerate() {
+        let Some(pt) = params.get(i) else { continue };
+        if pt.token != 5 {
+            continue; // primitive/enum param: int casts handle it, not a definite mismatch
+        }
+        let Some(at) = &arg.ty else { continue };
+        let (ph, ah) = (head(&pt.base_name(refs)), head(at));
+        if is_value(&ph) && is_value(&ah) && ph != ah {
+            n += 1;
+        } else if is_obj(&ph) && is_obj(&ah) && ah != ph
+            && refs.is_script_class(&ah) && refs.is_script_class(&ph)
+            && !refs.is_subclass(&ah, &ph)
+        {
+            n += 1;
+        } else if is_value(&ph) && is_obj(&ah) {
+            n += 1; // an object can never satisfy a value-struct (F/E/T) parameter
+        } else if is_obj(&ph) && is_value(&ah) {
+            n += 1; // a value-struct can never satisfy an object parameter
+        }
+    }
+    n
+}
+
+/// AngelScript pushes call arguments such that, for some calls (notably mixin/member-style
+/// calls), the collected stack order is the REVERSE of the source parameter order. Detect this
+/// purely by type evidence: if reversing the args produces STRICTLY fewer definite type
+/// mismatches against the declared params, the call was reverse-pushed -> reverse it. This is
+/// self-validating (a correctly-ordered call already has 0 mismatches, so it is never touched),
+/// so it cannot regress calls that already type-check.
+///
+/// Handles trailing-default omission: a call may pass FEWER args than the callee has params
+/// (the trailing ones default), e.g. `NewObject(Outer, Class)` for `NewObject(Outer, Class,
+/// Name=, bTransient=, Template=)`. The provided args still align to the FIRST params, so the
+/// reversal is scored against `params[0..a.len()]` (more args than params is never valid -> skip).
+fn maybe_reverse_args(a: &mut Vec<Arg>, params: Option<&[DataType]>, refs: &RefResolver) {
+    let Some(params) = params else { return };
+    if a.len() < 2 || a.len() > params.len() {
+        return;
+    }
+    let fwd = arg_mismatch_count(a, params, refs);
+    if fwd == 0 {
+        return; // already matches -> leave untouched
+    }
+    let mut rev = a.clone();
+    rev.reverse();
+    if arg_mismatch_count(&rev, params, refs) < fwd {
+        a.reverse();
     }
 }
 
@@ -468,6 +707,23 @@ fn field_assign_rhs(rhs: &str, tyname: &str) -> String {
     }
 }
 
+/// True if `tyname` is a UE enum type (`E<Upper>...`) — same shape `cast_to_typename` keys on.
+fn is_enum_name(tyname: &str) -> bool {
+    let b = tyname.as_bytes();
+    b.len() >= 2 && b[0] == b'E' && b[1].is_ascii_uppercase()
+}
+
+/// Wrap an enum-typed RHS being stored into an INT slot as `int(expr)`. AngelScript has no
+/// implicit enum->int conversion, so an enum field-read / enum-returning call stored into an
+/// `int` local fails to compile. Only fires when the value is a known enum AND the dest is an
+/// int slot (so enum->enum and enum->enum-param copies stay bare).
+fn enum_to_int(rhs: String, src_ty: Option<&str>, dst_is_int: bool) -> String {
+    match src_ty {
+        Some(t) if dst_is_int && is_enum_name(t) => format!("int({rhs})"),
+        _ => rhs,
+    }
+}
+
 /// Cast an int RHS to a named target type: `bool` -> `(x != 0)`, UE enum
 /// (`E<Upper>...`) -> `EEnum(x)`. Returns None when no cast applies.
 fn cast_to_typename(rhs: &str, tyname: &str) -> Option<String> {
@@ -542,6 +798,10 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
     let mut pending: Option<String> = None; // unconsumed call/ctor result
     let mut pending_ty: Option<String> = None; // recovered type of `pending` (call return type)
     let mut ret_val: Option<String> = None;
+    // Target type of the most recent TYPEID push — the implicit type operand of the following
+    // `opCast` behaviour call (the lowered form of `Cast<T>(x)`). Resolved to a typename so the
+    // opCast can be rendered as `Cast<T>(src)` instead of a discarded `src.opCast(out)`.
+    let mut last_typeid: Option<String> = None;
     let name = |off: i32| ctx.slot_name(off);
     let w = |ins: &Instr, i: usize| s16(ins.words.get(i).copied().unwrap_or(0));
 
@@ -551,6 +811,24 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
             if let Some(p) = pending.take() {
                 out.push(format!("{p};"));
             }
+        };
+    }
+
+    // Fix b2 — flush a still-pending statement-position call result before the NEXT call would
+    // overwrite/drop it (e.g. `MakeRequirement(...)` then `Add(...)`, then a dtor that returns
+    // None). UNLIKE `flush!`, this DROPS a pending that carries an ARGMISMATCH sentinel (\u{2})
+    // or is unresolved: at the call boundary such a result was previously silently overwritten by
+    // the next call's `pending = ...`. Surfacing it as an emitted statement would propagate the
+    // sentinel and force-stub the whole function (regression). So only genuinely-recovered,
+    // statement-valid results are emitted; bad ones stay dropped exactly as before.
+    macro_rules! flush_b2 {
+        () => {
+            if let Some(p) = pending.take() {
+                if !p.contains('\u{2}') && !p.contains(UNRESOLVED) {
+                    out.push(format!("{p};"));
+                }
+            }
+            pending_ty = None;
         };
     }
 
@@ -590,16 +868,24 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 // &local, unless it's the destination of a following ALLOC
                 if insns.get(k + 1).map(|i| i.op.name) != Some("ALLOC") {
                     // &local at the AS source level is implicit (param decides &in/&out) — no `&`.
-                    stack.push(Arg::typed(name(w(ins, 0)), ctx.slot_type(w(ins, 0))));
+                    // Tag is_psf so a following `$beh0` construct can recover `slot = T(args)`.
+                    stack.push(Arg::psf(name(w(ins, 0)), ctx.slot_type(w(ins, 0))));
                 }
                 // else: this PSF is the destination local for the following ALLOC; don't push.
             }
             "PshRPtr" => {
-                let (s, ty) = match value_reg.take() {
-                    Some(v) => (v, None),
-                    None => (ref_reg.clone().unwrap_or_else(|| UNRESOLVED.into()), ref_reg_ty.clone()),
-                };
-                stack.push(Arg::typed(s, ty));
+                // The value register holds a just-completed call's return value; PshRPtr pushes it
+                // back onto the operand stack as the NEXT call's argument (e.g. the receiver/arg of
+                // a chained call). Prefer that live call result over the stale member-ref register.
+                if let Some(p) = pending.take() {
+                    stack.push(Arg::typed(p, pending_ty.take()));
+                } else {
+                    let (s, ty) = match value_reg.take() {
+                        Some(v) => (v, None),
+                        None => (ref_reg.clone().unwrap_or_else(|| UNRESOLVED.into()), ref_reg_ty.clone()),
+                    };
+                    stack.push(Arg::typed(s, ty));
+                }
             }
             "PGA" | "PshGPtr" | "PshG4" => {
                 let ptr = ins.qwords.first().copied().unwrap_or(0) as i64;
@@ -661,7 +947,10 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
             _ if n.starts_with("RDR") => {
                 flush!();
                 if let Some(r) = &ref_reg {
-                    out.push(format!("{} = {};", name(w(ins, 0)), r));
+                    let dst_slot = w(ins, 0);
+                    let dst_is_int = dst_slot > 0 && ctx.slot_type(dst_slot).is_none();
+                    let rhs = enum_to_int(r.clone(), ref_reg_ty.as_deref(), dst_is_int);
+                    out.push(format!("{} = {rhs};", name(dst_slot)));
                 }
             }
             _ if n.starts_with("WRTV") => {
@@ -730,14 +1019,28 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 flush!();
                 out.push(format!("{0} = {0} - 1;", name(w(ins, 0))));
             }
+            // asBC_INCi/DECi (NO_ARG): ++/-- the int at the value/ref register — an lvalue that
+            // is a member or deref (LoadThisR/LoadRObjR set ref_reg), unlike IncVi/DecVi which
+            // carry a slot operand. Render as a compound assignment on the recovered member expr.
+            "INCi" | "INCi64" | "INCi16" | "INCi8" => {
+                flush!();
+                if let Some(r) = &ref_reg { out.push(format!("{0} = {0} + 1;", r)); }
+            }
+            "DECi" | "DECi64" | "DECi16" | "DECi8" => {
+                flush!();
+                if let Some(r) = &ref_reg { out.push(format!("{0} = {0} - 1;", r)); }
+            }
             "NEGi" | "NEGf" | "NEGd" => {
                 flush!();
                 out.push(format!("{0} = -{0};", name(w(ins, 0))));
             }
-            // asBC NOT (opcode 6) is the boolean logical invert, not numeric negation.
+            // asBC NOT (opcode 6) is the boolean logical invert. The slot is held as `int` (and
+            // is often also written with integer values like `= 1`), and AngelScript rejects `!`
+            // on int ("Illegal operation on this datatype"); render an int-safe toggle instead.
             "NOT" => {
                 flush!();
-                out.push(format!("{0} = !{0};", name(w(ins, 0))));
+                let s = name(w(ins, 0));
+                out.push(format!("{s} = int({s} == 0);"));
             }
             // ---- comparisons ----
             "CMPi" | "CMPu" | "CMPf" | "CMPd" | "CMPi64" | "CMPu64" => {
@@ -745,7 +1048,13 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
             }
             "CMPIi" | "CMPIu" => {
                 let c = ins.dwords.first().copied().unwrap_or(0) as i32;
-                cmp = Some(Cmp { a: name(w(ins, 0)), b: c.to_string(), ..Default::default() });
+                let s = w(ins, 0);
+                // an enum compared to an int literal needs explicit int(enum) — AngelScript has
+                // no implicit enum<->int (e.g. `if (_AlternativeState != 0)`).
+                let a = if ctx.slot_type(s).as_deref().map(is_enum_name).unwrap_or(false) {
+                    format!("int({})", name(s))
+                } else { name(s) };
+                cmp = Some(Cmp { a, b: c.to_string(), ..Default::default() });
             }
             // CMPIf's dword immediate is an IEEE-754 float payload, not an int — render it as
             // a float literal so e.g. `x < 1.0f` doesn't become `x < 1065353216`.
@@ -768,35 +1077,146 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
             "TNP" => { if let Some(c) = &mut cmp { c.op = Some("<="); } }
             // ---- calls ----
             "CALL" | "CALLINTF" | "CALLBND" => {
+                // Fix b2 — FLUSH a pending statement-position call result before this call starts,
+                // so a chained statement call (e.g. MakeRequirement then Add) isn't silently
+                // overwritten. Drops sentinel/unresolved pendings (see flush_b2 doc).
+                flush_b2!();
                 let id = ins.dwords.first().copied().unwrap_or(0) as i32;
                 let f = ctx.refs.func_by_id(id).unwrap_or("func?").to_string();
                 pending = if f == "StaticClass" {
-                    stack.clear();
+                    // Fix b1 — StaticClass takes 0 operands; the stack holds the ENCLOSING call's
+                    // already-pushed args. Do NOT clear it (clearing destroys those args).
                     pending_ty = None;
-                    Some(format!("{}::StaticClass()", ctx.class_name.unwrap_or("UObject")))
+                    // The class is the StaticClass func's NAMESPACE last-segment (objtype is
+                    // NULL for StaticClass; the target class lives in the namespace), not the
+                    // calling class — `local = UFoo::StaticClass()` from inside UBar must say UFoo.
+                    let cls = ctx.refs.staticclass_class_by_id(id)
+                        .or_else(|| ctx.refs.func_owner_by_id(id))
+                        .or(ctx.class_name).unwrap_or("UObject");
+                    Some(format!("{cls}::StaticClass()"))
                 } else {
                     pending_ty = ctx.refs.func_ret_by_id(id).map(|d| d.base_name(ctx.refs));
                     let na = ctx.refs.native_arity_by_id(id, &f);
-                    build_call(&mut stack, &f, ctx.refs.is_method_by_id(id), ctx.super_ctor, ctx.refs.func_params_by_id(id), na, ctx.refs)
+                    // SCRIPT call by id: the cache FunctionReference param count is authoritative
+                    // (only NATIVE param lists undercount), so trust it for the EDIT B-PRIME split.
+                    let trusted = ctx.refs.func_params_by_id(id).map(|p| p.len());
+                    let owner = ctx.refs.func_owner_by_id(id);
+                    build_call(&mut stack, &f, ctx.refs.is_method_by_id(id), ctx.super_ctor, ctx.refs.func_params_by_id(id), na, trusted, owner, ctx.class_name, n == "CALL", pending_ty.as_deref(), ctx.refs)
                 };
             }
             "CALLSYS" | "Thiscall1" => {
+                // Fix b2 — flush a pending statement-position call result before this call begins
+                // (e.g. MakeRequirement's result must be emitted before `Add(...)` overwrites it).
+                flush_b2!();
                 let ptr = ins.qwords.first().copied().unwrap_or(0) as i64;
                 let f = ctx.refs.func_by_ptr(ptr).unwrap_or("syscall?").to_string();
+                if f == "opCast" {
+                    // `opCast` is the AngelScript handle-downcast behaviour — the lowered form of
+                    // `T@ dst = Cast<T>(src)`. The cache renders it `src.opCast(out)` with the cast
+                    // RESULT written into the `out` arg slot, then a following RefCpyV copies that
+                    // slot into the real destination/return local. Emitting the bare `opCast` call
+                    // (and dropping the out-write) leaves the destination unwritten → the function
+                    // returns null. Recover it as an assignment `out = Cast<T>(src);` so the value
+                    // FLOWS into the store/return. T comes from the preceding TYPEID.
+                    let src = stack.pop().map(|a| a.s); // top = receiver = source handle
+                    let dst = stack.pop().map(|a| a.s); // next = the `out` destination slot
+                    let t = last_typeid.take();
+                    if let (Some(dst), Some(src)) = (dst, src) {
+                        flush!();
+                        // Emit a typed `Cast<T>(src)` only for a real object/script target type
+                        // (U*/A*); fall back to a bare passthrough `dst = src` when T is
+                        // unresolved or not an object — the value must still FLOW into the store
+                        // so the destination/return local is written (never a discarded cast).
+                        let rhs = match &t {
+                            Some(ty) if ty.starts_with('U') || ty.starts_with('A') => {
+                                format!("Cast<{ty}>({src})")
+                            }
+                            _ => src,
+                        };
+                        out.push(format!("{dst} = {rhs};"));
+                    }
+                    continue;
+                }
+                if f == "$beh0" {
+                    // `$beh0` is the AngelScript value-type / struct in-place CONSTRUCT behaviour:
+                    // `PSF <slot> ; <args...> ; CALLSYS $beh0` constructs the value AT the PSF'd
+                    // slot (the receiver, top of stack). build_call drops every `$`-prefixed
+                    // behaviour and clears the stack, so the construct AND its write to the slot
+                    // vanished, leaving the slot uninitialised (then read downstream as garbage /
+                    // passed to a call). Recover it as `slot = T(args);` so the value FLOWS.
+                    if let Some(recv) = stack.last().cloned() {
+                        // Gate (a): receiver is a PSF'd slot with a known VALUE/struct/template
+                        // type (F*/T*/E*). Never a `$`/`?` placeholder, never an object (U*/A*):
+                        // object construction uses ALLOC, not this in-place behaviour.
+                        let is_value = recv.ty.as_deref()
+                            .and_then(|t| t.bytes().next())
+                            .map(|b| matches!(b, b'F' | b'T' | b'E'))
+                            .unwrap_or(false);
+                        if recv.is_psf && is_value {
+                            let ty = recv.ty.clone().unwrap();
+                            stack.pop(); // remove the receiver; the rest are the ctor args
+                            let params = ctx.refs.func_params_by_ptr(ptr);
+                            // Consume ONLY this ctor's own args from the TOP (mirror build_call's
+                            // EDIT A/B-PRIME) — a whole-stack `mem::take` would also drain the
+                            // ENCLOSING call's operands (the 4 EQuestState args of MakeRequirement),
+                            // re-dropping them once Fix b1 keeps them on the stack.
+                            let args: Vec<Arg> = match params.map(|p| p.len()) {
+                                Some(k) if stack.len() > k => stack.split_off(stack.len() - k),
+                                _ => std::mem::take(&mut stack),
+                            }
+                                .into_iter()
+                                .filter(|x| !x.s.is_empty() && x.s != UNRESOLVED).collect();
+                            // Gate (b): no arg is itself a PSF slot — that is a copy/convert ctor
+                            // whose true source is an unrecovered pending call result; rendering it
+                            // as `T(&slot)` would be wrong, so drop (prior behaviour).
+                            let any_psf_arg = args.iter().any(|a| a.is_psf);
+                            // Gate (c): arg count matches the ctor's declared param count (no
+                            // spurious leftover operands on the stack).
+                            let count_ok = params.map(|p| p.len() == args.len()).unwrap_or(false);
+                            if !args.is_empty() && !any_psf_arg && count_ok {
+                                let rendered = render_args(&args, params, ctx.refs);
+                                // Gate (d): a definite arg-type mismatch -> drop (keep prior
+                                // behaviour: slot unwritten) rather than emit the `\u{2}` sentinel
+                                // that would force-stub the whole function.
+                                if !rendered.contains('\u{2}') {
+                                    flush!();
+                                    out.push(format!("{} = {ty}({rendered});", recv.s));
+                                }
+                            }
+                            continue;
+                        }
+                    }
+                    // not a recoverable in-place construct -> fall through to the generic `$` drop.
+                }
                 pending = if f == "StaticClass" {
-                    stack.clear();
+                    // Fix b1 — do NOT clear the stack; StaticClass takes 0 operands and the entries
+                    // present belong to an ENCLOSING call.
                     pending_ty = None;
-                    Some(format!("{}::StaticClass()", ctx.class_name.unwrap_or("UObject")))
+                    let cls = ctx.refs.staticclass_class_by_ptr(ptr)
+                        .or_else(|| ctx.refs.func_owner_by_ptr(ptr))
+                        .or(ctx.class_name).unwrap_or("UObject");
+                    Some(format!("{cls}::StaticClass()"))
                 } else {
                     pending_ty = ctx.refs.func_ret_by_ptr(ptr).map(|d| d.base_name(ctx.refs));
                     let na = ctx.refs.native_arity_by_ptr(ptr, &f);
-                    build_call(&mut stack, &f, ctx.refs.is_method_by_ptr(ptr), ctx.super_ctor, ctx.refs.func_params_by_ptr(ptr), na, ctx.refs)
+                    // A free/static native function in a namespace (Gameplay, Math, System, ...)
+                    // must be called qualified `Namespace::func(...)` or the global lookup fails
+                    // with "No matching signatures". (Methods carry no namespace -> rendered via
+                    // their receiver, unchanged. Arity lookup still uses the bare name + owner.)
+                    let qualified = match ctx.refs.func_ns_by_ptr(ptr) {
+                        Some(ns) => format!("{ns}::{f}"),
+                        None => f.clone(),
+                    };
+                    // NATIVE call by ptr: the cache param list undercounts, so trust ONLY the
+                    // Binds native arity (`na`) for the EDIT B-PRIME split; None falls back to
+                    // take-all (byte-identical to today when Binds is absent).
+                    build_call(&mut stack, &qualified, ctx.refs.is_method_by_ptr(ptr), ctx.super_ctor, ctx.refs.func_params_by_ptr(ptr), na, na, None, ctx.class_name, false, pending_ty.as_deref(), ctx.refs)
                 };
             }
             "CallPtr" => {
                 let f = name(w(ins, 0));
                 pending_ty = None;
-                pending = build_call(&mut stack, &f, false, ctx.super_ctor, None, None, ctx.refs);
+                pending = build_call(&mut stack, &f, false, ctx.super_ctor, None, None, None, None, ctx.class_name, false, None, ctx.refs);
             }
             // ---- object construction ----
             "ALLOC" => {
@@ -817,7 +1237,11 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
             }
             "CpyRtoV4" | "CpyRtoV8" => {
                 if let Some(p) = pending.take() {
-                    out.push(format!("{} = {};", name(w(ins, 0)), p));
+                    // an enum-returning call stored into an int slot needs an explicit int(...)
+                    let dst_slot = w(ins, 0);
+                    let dst_is_int = dst_slot > 0 && ctx.slot_type(dst_slot).is_none();
+                    let rhs = enum_to_int(p, pending_ty.as_deref(), dst_is_int);
+                    out.push(format!("{} = {rhs};", name(dst_slot)));
                 }
                 pending_ty = None;
             }
@@ -851,6 +1275,11 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 }
                 match v {
                     Some(v) => {
+                        // RVO: a non-trivial return is built by writing the hidden return slot
+                        // then returning it -> the decompiler renders `return slot = <value>;`,
+                        // which is a syntax error (aborts the whole module's parse). The
+                        // assignment RHS is the actual returned value.
+                        let v = strip_return_assign(&v).to_string();
                         let v = match ctx.ret_ty {
                             Some(rt) if looks_int(&v) => {
                                 let tn = if rt.token == 0x41 { "bool".to_string() } else { rt.base_name(ctx.refs) };
@@ -875,20 +1304,52 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                     ref_reg_ty = top.ty;
                 }
             }
-            // Handle-copy (asBC stack_inc -2): pop the source pointer to BALANCE the operand
-            // stack (the dominant phantom-arg cause). We deliberately do NOT emit `slot = src`:
-            // the source is often a const/derived handle whose direct assignment to the dest
-            // local fails to compile, and the value is re-read where it's actually used.
-            "RefCpyV" | "REFCPY" => { stack.pop(); }
+            // RefCpyV (wW_ARG): copy the top-of-stack handle into the destination slot named by
+            // the word operand — `dst_slot = src`. This is the step that moves an opCast result
+            // (or any local handle) from a temp into the real destination/return local; dropping
+            // it was a primary cause of `return`ing an unwritten (null) local. Emit it as a
+            // statement (NOT a stack push) so it cannot reintroduce phantom call args.
+            //
+            // GUARD: only emit when the source is a recovered local slot (`local_N`) or a
+            // `Cast<...>` expression — a genuine temporary whose copy completes a recovered
+            // dataflow. Copying a const PARAMETER (rendered as its bare name) into a non-const
+            // local yields "Can't implicitly convert from 'const X' to 'X'", so those stay
+            // dropped (the prior conservative behaviour); the value is re-read where used.
+            "RefCpyV" => {
+                let dst = name(w(ins, 0));
+                if let Some(top) = stack.pop() {
+                    let ok = !top.s.is_empty()
+                        && top.s != dst
+                        && (top.s.starts_with("local_") || top.s.starts_with("Cast<"));
+                    if ok {
+                        flush!();
+                        out.push(format!("{dst} = {};", top.s));
+                    }
+                }
+            }
+            // REFCPY (NO_ARG): a pure stack handle-copy with no destination slot operand — just
+            // balance the operand stack (the dominant phantom-arg cause); the value is re-read
+            // where it is actually used.
+            "REFCPY" => { stack.pop(); }
             // The TYPEID push is the implicit type operand of the following opCast/cast syscall
-            // (NOT counted in the cache param list) — drop it so the cast block stays balanced.
-            "TYPEID" => {}
+            // (NOT counted in the cache param list) — it is not a real stack arg, so don't push
+            // it. Capture its resolved typename as the target T of the upcoming `opCast` so the
+            // cast renders `Cast<T>(src)` instead of a discarded `src.opCast(out)`.
+            "TYPEID" => {
+                let tid = ins.dwords.first().copied().unwrap_or(0) as i32;
+                last_typeid = resolve_cast_typeid(ctx.refs, tid);
+            }
             // primitive numeric conversions (iTOf/fTOi/dTOf/sbTOi/...): `dst = src`. A
             // float/double -> integer narrowing must be made EXPLICIT (`dst = int(src)`) or the
             // compiler rejects it as an implicit precision loss; widenings stay implicit.
             n2 if is_numeric_cast(n2) => {
                 flush!();
                 let (dst, src) = (name(w(ins, 0)), name(w(ins, 1)));
+                // a numeric conversion FROM an enum source needs an explicit int(enum) — AS has
+                // no implicit enum->int (e.g. sbTOi of an EQuestState param into an int slot).
+                let src = if ctx.slot_type(w(ins, 1)).as_deref().map(is_enum_name).unwrap_or(false) {
+                    format!("int({src})")
+                } else { src };
                 match narrowing_cast_target(n2) {
                     Some(t) => out.push(format!("{dst} = {t}({src});")),
                     None => out.push(format!("{dst} = {src};")),
@@ -904,7 +1365,51 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
             "OBJTYPE" => stack.push(Arg::obj("objtype".into())), // +2: RTTI objtype ptr
             "STR" => stack.push(Arg::obj("\"\"".into())),         // +3: string-constant push
             "PshListElmnt" => stack.push(Arg::int(name(w(ins, 0)))), // +2: list element
-            "COPY" | "Cast" => { stack.pop(); }                  // -2: pop the source ptr
+            "COPY" => { stack.pop(); }                           // -2: pop the source ptr
+            // asBC_CopyScript (QW_ARG = object-type ptr; stack -2): a script value-type / struct
+            // copy = the source-level assignment `dest = src;`. Per asBC_COPY (as_context.cpp) the
+            // DESTINATION pointer is popped FIRST (it is the stack TOP), the SOURCE is the next
+            // entry below it. The compiler pushes SRC first then DEST, so DEST ends up on top —
+            // e.g. `PSF <localSrc>; PshVPtr this; ADDSi <member>; CopyScript` is `this.member =
+            // localSrc;`, and the RVO struct-return `PSF <local>; PshVPtr <retSlot>; CopyScript`
+            // is `<retSlot> = <local>;`. (Earlier this arm had src/dst swapped, which emitted
+            // every struct copy/member-init/RVO-return BACKWARDS — `local = this.member` and
+            // `local = retSlot`.) Both operands arrive as fully-rendered member/local exprs;
+            // dropping it left the destination (member or RVO temp) unwritten -> garbage/null.
+            "CopyScript" => {
+                let dst = stack.pop();
+                let src = stack.pop();
+                if let (Some(dst), Some(src)) = (dst, src) {
+                    if !src.s.is_empty() && src.s != UNRESOLVED {
+                        // RVO struct-return: a copy whose DEST is the hidden return slot is the
+                        // function's `return <src>;` — capture it as the return value (the slot
+                        // itself has no source name) instead of emitting `__return = <src>;`.
+                        if dst.s == "__return" {
+                            ret_val = Some(src.s);
+                        } else if !dst.s.is_empty() && dst.s != UNRESOLVED && dst.s != src.s {
+                            flush!();
+                            out.push(format!("{} = {};", dst.s, src.s));
+                        }
+                    }
+                }
+            }
+            // asBC_Cast (DW_ARG=target typeid): a script-handle DOWNCAST. Pop the source handle
+            // and push the cast RESULT `Cast<T>(src)` (typed) so the following store writes the
+            // real object instead of dropping it. T is the instruction's own typeid operand.
+            // (This opcode is unused by the current cache — the fork lowers casts to the `opCast`
+            // behaviour above — but is handled for completeness/robustness.) Fall back to a bare
+            // passthrough when T is unresolved or not an object, so the value always FLOWS.
+            "Cast" => {
+                if let Some(src) = stack.pop() {
+                    let tid = ins.dwords.first().copied().unwrap_or(0) as i32;
+                    match resolve_cast_typeid(ctx.refs, tid) {
+                        Some(ty) if ty.starts_with('U') || ty.starts_with('A') => {
+                            stack.push(Arg::typed(format!("Cast<{ty}>({})", src.s), Some(ty)));
+                        }
+                        _ => stack.push(src),
+                    }
+                }
+            }
             // conditional jump: if no comparison was recovered, the tested value is the live
             // call result / bool register — use it as the branch condition (consume so it's
             // not flushed as a stray statement).
