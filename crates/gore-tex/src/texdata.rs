@@ -961,13 +961,22 @@ pub fn replace_texture(
         .min();
 
     // 5. Build the new mip entries.
+    //    A single-mip source keeps its ORIGINAL inline/streamed class: applying the
+    //    size threshold to a lone STREAMED mip that's being downscaled would flip
+    //    it to inline, but `rebuild_data_resources` then has no inline template and
+    //    errors — so a supported single-mip downscale would wrongly fail.
+    let single_mip = new_mips.len() == 1 && orig.mips.len() == 1;
     let mut mips: Vec<MipEntry> = Vec::with_capacity(new_mips.len());
     for (i, data) in new_mips.into_iter().enumerate() {
         let mip_w = (new_w >> i).max(1);
         let mip_h = (new_h >> i).max(1);
-        let inline = match stream_threshold {
-            None => true,
-            Some(t) => mip_w.max(mip_h) < t,
+        let inline = if single_mip {
+            orig.mips[0].inline
+        } else {
+            match stream_threshold {
+                None => true,
+                Some(t) => mip_w.max(mip_h) < t,
+            }
         };
         mips.push(MipEntry {
             width: mip_w,
