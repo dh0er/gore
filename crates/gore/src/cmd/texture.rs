@@ -109,6 +109,20 @@ fn mount_dir(mod_dir: &std::path::Path, asset: &str) -> Result<PathBuf> {
     Ok(mod_dir.join(dir_rel))
 }
 
+/// Reject a triplet `--name` that isn't a single filename component. Without
+/// this, a value like `../foo` or `a/b` flows into `format!("{name}.utoc")` joins
+/// (pack/deploy) and would write or delete files OUTSIDE the intended directory.
+fn validate_triplet_name(name: &str) -> Result<()> {
+    use std::path::Component;
+    let mut comps = std::path::Path::new(name).components();
+    match (comps.next(), comps.next()) {
+        (Some(Component::Normal(_)), None) => Ok(()),
+        _ => anyhow::bail!(
+            "invalid --name {name:?}: must be a single filename with no path separators or '..'"
+        ),
+    }
+}
+
 pub fn run(action: TextureAction) -> Result<()> {
     match action {
         TextureAction::List { game, filter } => {
@@ -287,6 +301,7 @@ pub fn run(action: TextureAction) -> Result<()> {
             out,
             compress,
         } => {
+            validate_triplet_name(&name)?;
             let triplet = gore_tex::container::repack_to_zen(&mod_dir, &name, &out, &game, compress)
                 .with_context(|| format!("packing {} into {name}", mod_dir.display()))?;
             println!("wrote triplet:");
@@ -300,6 +315,7 @@ pub fn run(action: TextureAction) -> Result<()> {
             triplet_dir,
             name,
         } => {
+            validate_triplet_name(&name)?;
             let triplet = [
                 triplet_dir.join(format!("{name}.utoc")),
                 triplet_dir.join(format!("{name}.ucas")),
@@ -328,6 +344,7 @@ pub fn run(action: TextureAction) -> Result<()> {
             Ok(())
         }
         TextureAction::Undeploy { game, name } => {
+            validate_triplet_name(&name)?;
             gore_tex::container::undeploy(&game, &name)
                 .with_context(|| format!("undeploying {name}"))?;
             println!("undeployed {name} (removed from ~mods).");
