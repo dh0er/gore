@@ -89,6 +89,12 @@ pub struct TexInfo {
     /// `false` for regular textures and modern VTs. Gates Replace alongside
     /// `vt_layers` so a legacy VT isn't reported as replaceable.
     pub vt_legacy: bool,
+    /// True when a regular (non-virtual) texture shipped a full mip chain
+    /// (`mips.len() > 1`). Such sources go through `encode_mips` on replace, which
+    /// requires power-of-two dimensions; a single-mip source uses `encode_tile`
+    /// (multiple-of-4 only). The UI uses this to validate a replacement's size up
+    /// front. `false` for single-mip and virtual textures.
+    pub mipmapped: bool,
     /// Pre-decoded RGBA (`0xAARRGGBB`, `width * height` pixels) for inputs that
     /// can't go through the plain BCn mip0 path — currently virtual textures,
     /// whose layer-0 mip-0 surface is stitched from morton-ordered BCn tiles
@@ -193,6 +199,7 @@ pub fn parse(uasset: &[u8], uexp: &[u8], ubulk: &[u8], _usmap: &[u8]) -> Result<
             is_virtual: true,
             vt_layers: Some(vt.num_layers),
             vt_legacy: vt.is_legacy(),
+            mipmapped: false,
             decoded_rgba: Some(rgba),
         });
     }
@@ -223,6 +230,7 @@ pub fn parse(uasset: &[u8], uexp: &[u8], ubulk: &[u8], _usmap: &[u8]) -> Result<
         is_virtual: false,
         vt_layers: None,
         vt_legacy: false,
+        mipmapped: pd.mips.len() > 1,
         decoded_rgba: None,
     })
 }
@@ -518,6 +526,7 @@ mod tests {
             is_virtual: false,
             vt_layers: None,
             vt_legacy: false,
+            mipmapped: false,
             decoded_rgba: None,
         };
         let px = to_rgba8(&info).unwrap();
@@ -589,6 +598,7 @@ mod tests {
             is_virtual: false,
             vt_layers: None,
             vt_legacy: false,
+            mipmapped: false,
             decoded_rgba: None,
         };
         let vt = |fmt: &str, layers: u32, legacy: bool| TexInfo {
@@ -599,6 +609,7 @@ mod tests {
             is_virtual: true,
             vt_layers: Some(layers),
             vt_legacy: legacy,
+            mipmapped: false,
             decoded_rgba: Some(vec![0u32; 16]),
         };
 
@@ -632,6 +643,7 @@ mod tests {
             is_virtual: false,
             vt_layers: None,
             vt_legacy: false,
+            mipmapped: false,
             decoded_rgba: None,
         };
         let px = to_rgba8(&info).unwrap();
@@ -650,6 +662,7 @@ mod tests {
             is_virtual: false,
             vt_layers: None,
             vt_legacy: false,
+            mipmapped: false,
             decoded_rgba: None,
         };
         let px = to_rgba8(&info).unwrap();
@@ -672,6 +685,7 @@ mod tests {
             is_virtual: false,
             vt_layers: None,
             vt_legacy: false,
+            mipmapped: false,
             decoded_rgba: None,
         };
         let px = to_rgba8(&info).unwrap();
@@ -695,6 +709,7 @@ mod tests {
             is_virtual: false,
             vt_layers: None,
             vt_legacy: false,
+            mipmapped: false,
             decoded_rgba: None,
         };
         let px = to_rgba8(&info).unwrap();
@@ -718,6 +733,7 @@ mod tests {
             is_virtual: false,
             vt_layers: None,
             vt_legacy: false,
+            mipmapped: false,
             decoded_rgba: None,
         };
         let px = to_rgba8(&info).unwrap();

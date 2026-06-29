@@ -371,7 +371,7 @@ fn texture_extract(payload: Value) -> Value {
     let replaceable = gore_tex::decode::replace_supported(&info) && deployable_root;
     json!({ "ok": true, "png_path": out.display().to_string(), "width": info.width, "height": info.height,
         "format": info.format, "replaceable": replaceable,
-        "is_virtual": info.is_virtual, "vt_layers": info.vt_layers })
+        "is_virtual": info.is_virtual, "vt_layers": info.vt_layers, "mipmapped": info.mipmapped })
 }
 
 /// `{out_dir, spec:BuildSpec}` → build the unified bundle into `out_dir`.

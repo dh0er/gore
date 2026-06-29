@@ -448,6 +448,44 @@ class _TextureTabState extends ConsumerState<TextureTab> {
                               );
                               return;
                             }
+                          } else {
+                            // Regular texture: the encoder needs multiple-of-4
+                            // dims, and power-of-two too when the source is
+                            // mipmapped (encode_mips). Reject up front.
+                            final dims = await _imageDimensions(f.path);
+                            if (!mounted) return;
+                            if (dims != null) {
+                              final mult4 = dims.$1 % 4 == 0 && dims.$2 % 4 == 0;
+                              final pot =
+                                  _isPow2(dims.$1) && _isPow2(dims.$2);
+                              if (!mult4 || (pv.mipmapped && !pot)) {
+                                await showDialog<void>(
+                                  context: context,
+                                  builder: (ctx) => AlertDialog(
+                                    title: const Text('Unsupported size'),
+                                    content: Text(
+                                      pv.mipmapped
+                                          ? 'This texture has mipmaps: the '
+                                                'replacement must be power-of-two '
+                                                'and a multiple of 4 (e.g. '
+                                                '512×512, 1024×2048). The PNG is '
+                                                '${dims.$1}×${dims.$2}.'
+                                          : 'The replacement dimensions must be a '
+                                                'multiple of 4. The PNG is '
+                                                '${dims.$1}×${dims.$2}.',
+                                    ),
+                                    actions: [
+                                      TextButton(
+                                        onPressed: () =>
+                                            Navigator.of(ctx).pop(),
+                                        child: const Text('OK'),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                                return;
+                              }
+                            }
                           }
                           ref
                               .read(textureReplacementsProvider.notifier)
@@ -576,6 +614,8 @@ class _TextureTabState extends ConsumerState<TextureTab> {
     }
   }
 
+  static bool _isPow2(int n) => n > 0 && (n & (n - 1)) == 0;
+
   /// Decode just the pixel dimensions of the image at [path]; null on failure
   /// (then the dimension check is skipped and the build path surfaces any error).
   Future<(int, int)?> _imageDimensions(String path) async {
@@ -652,6 +692,7 @@ class _TextureTabState extends ConsumerState<TextureTab> {
           replaceable:
               (r['replaceable'] as bool?) ?? !_previewOnlyFormats.contains(fmt),
           isVirtual: r['is_virtual'] as bool? ?? false,
+          mipmapped: r['mipmapped'] as bool? ?? false,
         );
         // Evict least-recently-used entries once over the cap (oldest = first key).
         while (_previewCache.length > _previewCacheCap) {
@@ -732,6 +773,7 @@ class _Preview {
     required this.format,
     required this.replaceable,
     required this.isVirtual,
+    required this.mipmapped,
   });
 
   final String pngPath;
@@ -744,6 +786,9 @@ class _Preview {
   // Virtual texture: retile only supports SAME-dimension replacement, so the UI
   // enforces a dimension match before staging a VT replacement.
   final bool isVirtual;
+  // Regular texture shipped a full mip chain → replace runs encode_mips, which
+  // requires power-of-two dimensions. Single-mip sources only need multiple-of-4.
+  final bool mipmapped;
 }
 
 /// Paints a classic alpha checkerboard so transparent (and fully-black) textures
