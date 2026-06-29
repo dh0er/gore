@@ -677,6 +677,7 @@ class PrivateInventoryItem {
     required this.path,
     this.count,
     this.removable = false,
+    this.equipped = false,
   });
 
   factory PrivateInventoryItem.fromJson(Map<Object?, Object?> json) {
@@ -685,6 +686,7 @@ class PrivateInventoryItem {
       path: json['path'] as String? ?? '',
       count: (json['count'] as num?)?.toInt(),
       removable: json['removable'] as bool? ?? false,
+      equipped: json['equipped'] as bool? ?? false,
     );
   }
 
@@ -694,6 +696,9 @@ class PrivateInventoryItem {
   // True only for rows in the player's MainContainer, which the core's
   // removeItem op can delete. Rows from other containers are not removable.
   final bool removable;
+
+  /// True for the worn armor (the item in the player's ArmorSlot container).
+  final bool equipped;
 }
 
 class InventoryItemCountChange {

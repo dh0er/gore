@@ -318,6 +318,23 @@ void main() {
     ]);
   });
 
+  test('PrivateInventoryItem parses equipped flag', () {
+    final equipped = PrivateInventoryItem.fromJson({
+      'id': 'Ore_Armor_H',
+      'path': '/Script/Angelscript.Ore_Armor_H',
+      'count': 1,
+      'equipped': true,
+    });
+    expect(equipped.equipped, isTrue);
+
+    final plain = PrivateInventoryItem.fromJson({
+      'id': 'ItMi_Orenugget',
+      'path': '/Script/Angelscript.ItMi_Orenugget',
+      'count': 5,
+    });
+    expect(plain.equipped, isFalse);
+  });
+
   test('SaveInspection reads structured progression overview', () {
     final inspection = SaveInspection.fromJson({
       'format': 'GSAV',
