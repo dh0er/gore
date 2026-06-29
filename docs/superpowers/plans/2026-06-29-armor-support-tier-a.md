@@ -381,7 +381,7 @@ grep -c 'VisualsDefinition\|VisualDefinition' apps/save-editor/assets/item_catal
 grep -E '"id": "(Ore_Armor_H|Crw_Armor_H|Ore_Armor_M|Org_Armor)"' apps/save-editor/assets/item_catalog.json
 ```
 
-Expected: first count > 0 (roughly ~110, base armors only — tier pieces excluded); second count == 0; the four known real-save armors all present.
+Expected: first count > 0 (~33 for the 2026-06-12 dump — base + per-NPC armors only, tier pieces and visual-defs excluded); second count == 0; the four known real-save armors all present.
 
 - [ ] **Step 3: Confirm the Rust core embed still compiles (catalog is `include_str!`-embedded)**
 
