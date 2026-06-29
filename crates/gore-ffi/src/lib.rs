@@ -363,8 +363,12 @@ fn texture_extract(payload: Value) -> Value {
     // asset under any other root (e.g. /DatasmithContent) must report not
     // replaceable rather than appear supported and fail later at build/deploy.
     // `is_virtual`/`vt_layers` are exposed for diagnostics.
-    let replaceable = gore_tex::decode::replace_supported(&info)
-        && gore_tex::paths::content_mount_rel(asset).is_some();
+    // Only enforce mount-root deployability when we actually know the asset path.
+    // A package_id-only extract passes an empty asset, where mount resolution
+    // can't run — don't let that wrongly mark an encodable /Game texture as not
+    // replaceable.
+    let deployable_root = asset.is_empty() || gore_tex::paths::content_mount_rel(asset).is_some();
+    let replaceable = gore_tex::decode::replace_supported(&info) && deployable_root;
     json!({ "ok": true, "png_path": out.display().to_string(), "width": info.width, "height": info.height,
         "format": info.format, "replaceable": replaceable,
         "is_virtual": info.is_virtual, "vt_layers": info.vt_layers })

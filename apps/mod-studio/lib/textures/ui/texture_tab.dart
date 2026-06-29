@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
@@ -417,16 +418,45 @@ class _TextureTabState extends ConsumerState<TextureTab> {
                               ),
                             ],
                           );
-                          if (f != null) {
-                            ref
-                                .read(textureReplacementsProvider.notifier)
-                                .setReplacement(
-                                  TextureReplacement(
-                                    asset: sel,
-                                    imagePath: f.path,
+                          if (f == null) return;
+                          // Virtual textures only support same-dimension retiling;
+                          // reject a mismatched PNG here instead of failing opaquely
+                          // at build/cook. (pv is non-null: the button is disabled
+                          // until a preview resolves.)
+                          if (pv.isVirtual) {
+                            final dims = await _imageDimensions(f.path);
+                            if (!mounted) return;
+                            if (dims != null &&
+                                (dims.$1 != pv.width ||
+                                    dims.$2 != pv.height)) {
+                              await showDialog<void>(
+                                context: context,
+                                builder: (ctx) => AlertDialog(
+                                  title: const Text('Size mismatch'),
+                                  content: Text(
+                                    'This is a virtual texture: the replacement '
+                                    'must be exactly ${pv.width}×${pv.height}, '
+                                    'but the PNG is ${dims.$1}×${dims.$2}.',
                                   ),
-                                );
+                                  actions: [
+                                    TextButton(
+                                      onPressed: () => Navigator.of(ctx).pop(),
+                                      child: const Text('OK'),
+                                    ),
+                                  ],
+                                ),
+                              );
+                              return;
+                            }
                           }
+                          ref
+                              .read(textureReplacementsProvider.notifier)
+                              .setReplacement(
+                                TextureReplacement(
+                                  asset: sel,
+                                  imagePath: f.path,
+                                ),
+                              );
                         },
                 ),
               ),
@@ -546,6 +576,23 @@ class _TextureTabState extends ConsumerState<TextureTab> {
     }
   }
 
+  /// Decode just the pixel dimensions of the image at [path]; null on failure
+  /// (then the dimension check is skipped and the build path surfaces any error).
+  Future<(int, int)?> _imageDimensions(String path) async {
+    try {
+      final bytes = await File(path).readAsBytes();
+      final codec = await ui.instantiateImageCodec(bytes);
+      final frame = await codec.getNextFrame();
+      final w = frame.image.width;
+      final h = frame.image.height;
+      frame.image.dispose();
+      codec.dispose();
+      return (w, h);
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<void> _preview(String gameDir, String asset, String? packageId) async {
     // Already extracted this session — re-show instantly, skip the container
     // unpack + decode. Touch it (remove + re-insert) so it becomes the most
@@ -578,7 +625,14 @@ class _TextureTabState extends ConsumerState<TextureTab> {
         asset: asset,
         packageId: packageId,
       );
-      if (!mounted) return;
+      if (!mounted) {
+        // Tab was disposed mid-extract: the FFI already wrote the PNG but it will
+        // never be cached (so dispose() can't evict it). Delete it here.
+        try {
+          File(r['png_path'] as String).deleteSync();
+        } catch (_) {}
+        return;
+      }
       if (!identical(_sourceEntries, reqEntries) || _sourceGame != reqGame) {
         // Source switched mid-extract — drop the now-stale PNG instead of caching.
         try {
@@ -597,6 +651,7 @@ class _TextureTabState extends ConsumerState<TextureTab> {
           // when running against an older core that doesn't return it yet.
           replaceable:
               (r['replaceable'] as bool?) ?? !_previewOnlyFormats.contains(fmt),
+          isVirtual: r['is_virtual'] as bool? ?? false,
         );
         // Evict least-recently-used entries once over the cap (oldest = first key).
         while (_previewCache.length > _previewCacheCap) {
@@ -676,6 +731,7 @@ class _Preview {
     required this.height,
     required this.format,
     required this.replaceable,
+    required this.isVirtual,
   });
 
   final String pngPath;
@@ -685,6 +741,9 @@ class _Preview {
   // Authoritative "can be replaced" flag from the FFI (encode-supported format
   // and a retileable shape for virtual textures). Gates the Replace button.
   final bool replaceable;
+  // Virtual texture: retile only supports SAME-dimension replacement, so the UI
+  // enforces a dimension match before staging a VT replacement.
+  final bool isVirtual;
 }
 
 /// Paints a classic alpha checkerboard so transparent (and fully-black) textures
