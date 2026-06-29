@@ -74,6 +74,9 @@ class AppLocalizationsDe extends AppLocalizations {
   String get add => 'Hinzufügen';
 
   @override
+  String get equippedBadge => 'Angelegt';
+
+  @override
   String get browse => 'Durchsuchen';
 
   @override

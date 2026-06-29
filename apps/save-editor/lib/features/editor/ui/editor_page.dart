@@ -1957,17 +1957,51 @@ class _PrivateInventorySummaryCardState
                                         leading: const Icon(
                                           Icons.category_outlined,
                                         ),
-                                        title: Text(
-                                          localizedGameName(
-                                                locCatalog,
-                                                lang,
-                                                item.id,
-                                              ) ??
-                                              (item.id.isEmpty
-                                                  ? item.path
-                                                  : item.id),
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
+                                        title: Row(
+                                          children: [
+                                            Flexible(
+                                              child: Text(
+                                                localizedGameName(
+                                                      locCatalog,
+                                                      lang,
+                                                      item.id,
+                                                    ) ??
+                                                    (item.id.isEmpty
+                                                        ? item.path
+                                                        : item.id),
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                              ),
+                                            ),
+                                            if (item.equipped) ...[
+                                              const SizedBox(width: 8),
+                                              Container(
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                      horizontal: 6,
+                                                      vertical: 2,
+                                                    ),
+                                                decoration: BoxDecoration(
+                                                  color: theme
+                                                      .colorScheme
+                                                      .primaryContainer,
+                                                  borderRadius:
+                                                      BorderRadius.circular(4),
+                                                ),
+                                                child: Text(
+                                                  l10n.equippedBadge,
+                                                  style: theme
+                                                      .textTheme
+                                                      .labelSmall
+                                                      ?.copyWith(
+                                                        color: theme
+                                                            .colorScheme
+                                                            .onPrimaryContainer,
+                                                      ),
+                                                ),
+                                              ),
+                                            ],
+                                          ],
                                         ),
                                         subtitle: item.path.isEmpty
                                             ? null

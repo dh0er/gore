@@ -74,6 +74,9 @@ class AppLocalizationsFr extends AppLocalizations {
   String get add => 'Ajouter';
 
   @override
+  String get equippedBadge => 'Équipé';
+
+  @override
   String get browse => 'Parcourir';
 
   @override

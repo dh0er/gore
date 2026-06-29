@@ -74,6 +74,9 @@ class AppLocalizationsRu extends AppLocalizations {
   String get add => 'Добавить';
 
   @override
+  String get equippedBadge => 'Надето';
+
+  @override
   String get browse => 'Обзор';
 
   @override

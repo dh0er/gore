@@ -74,6 +74,9 @@ class AppLocalizationsIt extends AppLocalizations {
   String get add => 'Aggiungi';
 
   @override
+  String get equippedBadge => 'Equipaggiato';
+
+  @override
   String get browse => 'Sfoglia';
 
   @override
