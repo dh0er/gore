@@ -90,6 +90,8 @@ fn dispatch(input: &str) -> Value {
         "mod_build" => mod_build(payload),
         "mod_deploy" => mod_deploy(payload),
         "mod_undeploy" => mod_undeploy(payload),
+        "texture_index" => texture_index(payload),
+        "texture_extract" => texture_extract(payload),
         other => err("UNKNOWN_COMMAND", format!("unknown command: {other}")),
     }
 }
@@ -268,6 +270,108 @@ fn audio_extract(payload: Value) -> Value {
         return err("IO", format!("writing wav: {e}"));
     }
     json!({"ok": true, "ogg_path": path.display().to_string(), "wav_path": path.display().to_string()})
+}
+
+/// `{ok, build_id, count, entries:{path:package_id_str}}` — load the cached index, building it
+/// if absent or if `payload.rebuild` is true. `payload.game` = install dir.
+fn texture_index(payload: Value) -> Value {
+    let game = match payload.get("game").and_then(Value::as_str) {
+        Some(g) => std::path::PathBuf::from(g),
+        None => return err("BAD_REQUEST", "missing game"),
+    };
+    let rebuild = payload.get("rebuild").and_then(Value::as_bool).unwrap_or(false);
+    let cache = gore_tex::paths::texture_index_path();
+    let usmap = match gore_tex::paths::usmap(&game) {
+        Ok(p) => p, Err(e) => return err("USMAP", e.to_string()) };
+    let utoc = match gore_tex::paths::main_container(&game) {
+        Ok(p) => p, Err(e) => return err("CONTAINER", e.to_string()) };
+    let build_id = gore_tex::index::build_id_for(&utoc, &usmap);
+    // Only reuse the cache when it's current for THIS game build; build_id keys on the .usmap
+    // name AND the container's identity, so a game patch (even one keeping the .usmap name) that
+    // rewrites the container invalidates a cache mapping paths to outdated package ids.
+    let cached = if rebuild { None } else { gore_tex::index::TextureIndex::load_current(&cache, &build_id) };
+    let mut cache_saved = true; // a loaded cache is, by definition, already persisted
+    let idx = match cached {
+        Some(i) => i,
+        None => {
+            let i = match gore_tex::index::build_index(&utoc, &build_id) {
+                Ok(i) => i, Err(e) => return err("INDEX_BUILD", e.to_string()) };
+            // Don't silently ignore a failed persist: the index is usable in-memory this call,
+            // but a failed write means every later load rebuilds. Surface it (warning + flag)
+            // instead of reporting unqualified success.
+            if let Err(e) = i.save(&cache) {
+                eprintln!("warning: failed to persist texture index cache: {e}");
+                cache_saved = false;
+            }
+            i
+        }
+    };
+    let entries: serde_json::Map<String, Value> = idx.entries.iter()
+        .map(|(k, v)| (k.clone(), Value::String(v.to_string()))).collect();
+    json!({ "ok": true, "build_id": idx.build_id, "count": idx.entries.len(), "cache_saved": cache_saved, "entries": entries })
+}
+
+/// `{ok, png_path, width, height, format}` — extract a texture to a temp PNG. `payload.game`,
+/// and either `payload.package_id` (string) or `payload.asset` (path).
+fn texture_extract(payload: Value) -> Value {
+    let game = match payload.get("game").and_then(Value::as_str) {
+        Some(g) => std::path::PathBuf::from(g), None => return err("BAD_REQUEST", "missing game") };
+    let utoc = match gore_tex::paths::main_container(&game) {
+        Ok(p) => p, Err(e) => return err("CONTAINER", e.to_string()) };
+    let usmap = match gore_tex::paths::usmap(&game) {
+        Ok(p) => p, Err(e) => return err("USMAP", e.to_string()) };
+    let asset = payload.get("asset").and_then(Value::as_str).unwrap_or("");
+    let leaf = asset.rsplit('/').next().unwrap_or("texture").to_string();
+    let (info, px) = if let Some(pid) = payload.get("package_id").and_then(Value::as_str).and_then(|s| s.parse::<u64>().ok()) {
+        match gore_tex::index::extract_by_package_id(&utoc, &usmap, pid, &leaf) {
+            Ok(x) => x, Err(e) => return err("EXTRACT", e.to_string()) }
+    } else if !asset.is_empty() {
+        let tmp = match gore_tex::paths::unique_temp_dir("gore-tex-ffi-extract") {
+            Ok(t) => t, Err(_) => return err("IO", "tmp") };
+        let ua = match gore_tex::container::unpack_asset(&utoc, &usmap, asset, &tmp) {
+            Ok(p) => p, Err(e) => { let _ = std::fs::remove_dir_all(&tmp); return err("UNPACK", e.to_string()) } };
+        // Surface read failures instead of defaulting to empty bytes (which would yield a
+        // misleading PARSE/DECODE error). `.ubulk` is legitimately optional (inline-mip textures).
+        macro_rules! read_or_err { ($p:expr) => { match std::fs::read($p) {
+            Ok(b) => b, Err(e) => { let _ = std::fs::remove_dir_all(&tmp); return err("READ", e.to_string()) } } }; }
+        let ua_bytes = read_or_err!(&ua);
+        let uexp_bytes = read_or_err!(ua.with_extension("uexp"));
+        let usmap_bytes = read_or_err!(&usmap);
+        let ubulk_bytes = match gore_tex::paths::read_optional(&ua.with_extension("ubulk")) {
+            Ok(b) => b, Err(e) => { let _ = std::fs::remove_dir_all(&tmp); return err("READ", e.to_string()) } };
+        let info = match gore_tex::decode::parse(&ua_bytes, &uexp_bytes, &ubulk_bytes, &usmap_bytes) {
+            Ok(i) => i, Err(e) => { let _ = std::fs::remove_dir_all(&tmp); return err("PARSE", e.to_string()) } };
+        let px = match gore_tex::decode::to_rgba8(&info) {
+            Ok(p) => p, Err(e) => { let _ = std::fs::remove_dir_all(&tmp); return err("DECODE", e.to_string()) } };
+        let _ = std::fs::remove_dir_all(&tmp);
+        (info, px)
+    } else { return err("BAD_REQUEST", "need package_id or asset"); };
+    let mut buf = Vec::with_capacity(px.len() * 4);
+    for p in px { buf.extend_from_slice(&[(p >> 16) as u8, (p >> 8) as u8, p as u8, (p >> 24) as u8]); }
+    // Unique per-request output path: a deterministic name would let two
+    // extractions of the same texture (e.g. a stale request finishing after a
+    // game/index change) race on one file. Each call owns its own PNG and the UI
+    // deletes exactly the file it was handed.
+    let out = gore_tex::paths::unique_temp_file(&format!("gore-tex-preview-{leaf}"), "png");
+    if image::save_buffer(&out, &buf, info.width, info.height, image::ColorType::Rgba8).is_err() {
+        return err("PNG", "save failed");
+    }
+    // `replaceable` is the AUTHORITATIVE capability flag the UI gates the Replace
+    // button on (always a plain bool). It requires BOTH a re-encodable
+    // texture shape (`replace_supported`) AND a deployable mount root: the deploy
+    // path can only place /Game and /Engine assets (`content_mount_rel`), so an
+    // asset under any other root (e.g. /DatasmithContent) must report not
+    // replaceable rather than appear supported and fail later at build/deploy.
+    // `is_virtual`/`vt_layers` are exposed for diagnostics.
+    // Only enforce mount-root deployability when we actually know the asset path.
+    // A package_id-only extract passes an empty asset, where mount resolution
+    // can't run — don't let that wrongly mark an encodable /Game texture as not
+    // replaceable.
+    let deployable_root = asset.is_empty() || gore_tex::paths::content_mount_rel(asset).is_some();
+    let replaceable = gore_tex::decode::replace_supported(&info) && deployable_root;
+    json!({ "ok": true, "png_path": out.display().to_string(), "width": info.width, "height": info.height,
+        "format": info.format, "replaceable": replaceable,
+        "is_virtual": info.is_virtual, "vt_layers": info.vt_layers, "mipmapped": info.mipmapped })
 }
 
 /// `{out_dir, spec:BuildSpec}` → build the unified bundle into `out_dir`.

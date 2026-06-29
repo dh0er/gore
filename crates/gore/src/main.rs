@@ -137,6 +137,11 @@ enum Commands {
         #[command(subcommand)]
         action: ModAction,
     },
+    /// Extract/replace game textures (Gothic 1 Remake, UE5 IoStore)
+    Texture {
+        #[command(subcommand)]
+        action: cmd::texture::TextureAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -313,6 +318,7 @@ fn main() {
             ModAction::Deploy { bundle, game } => cmd::modcmd::deploy(bundle, game),
             ModAction::Undeploy { game } => cmd::modcmd::undeploy(game),
         },
+        Commands::Texture { action } => cmd::texture::run(action),
     };
     if let Err(e) = result {
         eprintln!("error: {e:#}");

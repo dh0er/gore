@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/legacy.dart';
 import '../audio/domain/audio_replacements_notifier.dart';
 import '../editor/domain/overrides_notifier.dart';
 import '../loc/domain/loc_edits_notifier.dart';
+import '../textures/domain/texture_replacements_notifier.dart';
 import 'project_io.dart';
 import 'project_model.dart';
 
@@ -24,7 +25,8 @@ final modDelayMsProvider = StateProvider<int>((ref) => 0);
 bool projectIsDirty(WidgetRef ref) =>
     ref.watch(overridesProvider).count > 0 ||
     ref.watch(locEditsProvider).isDirty ||
-    ref.watch(audioReplacementsProvider).count > 0;
+    ref.watch(audioReplacementsProvider).count > 0 ||
+    ref.watch(textureReplacementsProvider).count > 0;
 
 /// Signature of the last state written to / loaded from a `.goremod`. Used to tell whether the
 /// current staged state still matches what was saved, so a saved project isn't treated as having
@@ -47,7 +49,8 @@ bool hasUnsavedChanges(WidgetRef ref) {
   if (saved == null) {
     return ref.read(overridesProvider).count > 0 ||
         ref.read(locEditsProvider).isDirty ||
-        ref.read(audioReplacementsProvider).count > 0;
+        ref.read(audioReplacementsProvider).count > 0 ||
+        ref.read(textureReplacementsProvider).count > 0;
   }
   return _projectSignature(ref) != saved;
 }
@@ -63,6 +66,7 @@ ModProject gatherProject(WidgetRef ref) {
     overrides: ref.read(overridesProvider).entries,
     locEdits: ref.read(locEditsProvider).edits,
     audio: ref.read(audioReplacementsProvider).entries,
+    textures: ref.read(textureReplacementsProvider).entries,
   );
 }
 
@@ -78,6 +82,7 @@ void applyProject(WidgetRef ref, ModProject project) {
   }
   ref.read(locEditsProvider.notifier).loadAll(project.locEdits);
   ref.read(audioReplacementsProvider.notifier).loadAll(project.audio);
+  ref.read(textureReplacementsProvider.notifier).loadAll(project.textures);
 }
 
 /// Clear all editor state (New project).
@@ -89,6 +94,7 @@ void newProject(WidgetRef ref) {
   ref.read(overridesProvider.notifier).clearAll();
   ref.read(locEditsProvider.notifier).clearAll();
   ref.read(audioReplacementsProvider.notifier).clearAll();
+  ref.read(textureReplacementsProvider.notifier).clearAll();
   markProjectSaved(ref); // a fresh project is in a clean (nothing-unsaved) state
 }
 

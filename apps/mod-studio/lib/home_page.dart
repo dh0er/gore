@@ -25,6 +25,8 @@ import 'loc/game_lang.dart';
 import 'loc/ui/loc_extract_flow.dart';
 import 'project/project_controller.dart';
 import 'settings/ui/settings_tab.dart';
+import 'textures/domain/texture_replacements_notifier.dart';
+import 'textures/ui/texture_tab.dart';
 
 final _selectedItemProvider = StateProvider<CatalogItem?>((ref) => null);
 
@@ -168,7 +170,8 @@ class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver
     final overridesState = ref.watch(overridesProvider);
     final dirty = overridesState.count > 0 ||
         ref.watch(locEditsProvider).isDirty ||
-        ref.watch(audioReplacementsProvider).count > 0;
+        ref.watch(audioReplacementsProvider).count > 0 ||
+        ref.watch(textureReplacementsProvider).count > 0;
     // Keep Build/Deploy reachable when a game is configured even with no staged edits, so the
     // dialog's Undeploy (restore *.gore-bak) stays available to GUI users.
     final gameConfigured = gameRootFromExe(ref.watch(gameExePathProvider)) != null;
@@ -238,7 +241,7 @@ class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver
         ],
       ),
       body: DefaultTabController(
-        length: 5,
+        length: 6,
         child: Column(
           children: [
             Container(
@@ -260,6 +263,10 @@ class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver
                         const Tab(
                           icon: Icon(Icons.audiotrack_outlined),
                           text: 'Audio',
+                        ),
+                        const Tab(
+                          icon: Icon(Icons.texture),
+                          text: 'Textures',
                         ),
                         Tab(
                           icon: const Icon(Icons.edit_note_outlined),
@@ -337,6 +344,8 @@ class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver
                   const DialogeTab(),
                   // Audio: FMOD bank sample browser + replacement.
                   const AudioTab(),
+                  // Textures: texture asset browser + replacement.
+                  const TextureTab(),
                   // Changes: all staged item/loc/audio changes, centred.
                   Align(
                     alignment: Alignment.topCenter,

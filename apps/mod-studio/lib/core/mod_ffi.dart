@@ -50,6 +50,21 @@ class ModFfi {
     return r['record'] != null;
   }
 
+  /// Load (or build, if absent/`rebuild`) the texture index. Returns {assetPath: packageIdString}.
+  Future<Map<String, String>> textureIndex(String game, {bool rebuild = false}) async {
+    final r = await _call('texture_index', {'game': game, 'rebuild': rebuild});
+    final entries = (r['entries'] as Map).cast<String, Object?>();
+    return entries.map((k, v) => MapEntry(k, v as String));
+  }
+
+  /// Extract a texture to a temp PNG; returns the FFI result map (png_path, width, height, format).
+  Future<Map<String, Object?>> textureExtract(String game, {String? asset, String? packageId}) async {
+    final payload = <String, Object?>{'game': game};
+    if (asset != null) payload['asset'] = asset;
+    if (packageId != null) payload['package_id'] = packageId;
+    return _call('texture_extract', payload);
+  }
+
   /// Auto-detect the game install via Steam; returns the exe path hint, or null.
   Future<String?> findGameExe() async {
     final r = await _call('find_game', const {});
