@@ -5,19 +5,30 @@ Status: Draft (pending user review)
 
 ## Problem
 
-The save editor neither displays armor the player owns nor lets the user add
-armor. Reported by the user: "the player can have multiple armors and switch
-them, so armor must be carried in the bag too — but the editor shows nothing
-and offers no way to add it."
+The save editor does not surface armor as armor and offers no way to add it.
+Reported by the user: "the player can have multiple armors and switch them, so
+armor must be carried in the bag too — but the editor shows nothing and offers
+no way to add it."
 
-Root cause: every layer of the inventory pipeline is hard-wired to the `It*`
-item-class prefix. Armor item classes are **not** `It*` — they are
-`<Faction>_Armor_*` (e.g. `Ore_Armor_H`, `Crw_Armor_H`, `Org_Armor`) and
-per-NPC `Armor_<Camp>_<NPC>_NNN`. So armor is filtered out at catalog-build
-time (never addable) and at display-scan time (never shown).
+Verified actual behavior (probed `inspect_save` on the user's G1R-019):
 
-This was a scoping gap, not an intentional exclusion — the original item
-catalog was defined as "the `It*` class universe" and armor lives outside it.
+- **Display**: armor rows ARE returned by the core scan (the display filter
+  `looks_item_definition_path` accepts any `/Script/Angelscript.*` path). All
+  three of the save's armors appear in `private.inventory.items`. But the UI
+  categorizes by class-name prefix (`itemCategoryFromId`), and armor classes
+  match no `It*` prefix, so they fall into the **`Other`** category with an
+  auto-generated name and no equipped indicator — effectively invisible to a
+  user looking for an "Armor" section.
+- **Add**: armor is genuinely not addable. The add picker and the core's
+  addItem allow-list are both built from `item_catalog.json`, generated with a
+  hard `name.starts_with("It")` filter — armor (`<Faction>_Armor_*`,
+  `Armor_<Camp>_<NPC>_NNN`) is excluded, so it never appears in the picker and
+  `addItem` rejects the path.
+- **Equip / upgrades**: not represented at all.
+
+Root cause for the catalog/category gaps: the item pipeline was defined as "the
+`It*` class universe" and armor lives outside it. A scoping gap, not an
+intentional exclusion.
 
 ## Verified data model
 
@@ -129,13 +140,15 @@ Full feature (user-approved A+B+C):
 
 ### Layer 2 — Display scan (`crates/gore-save`)
 
-- `looks_inventory_candidate` / `looks_item_definition_path`
-  (`lib.rs:~4043`): recognize armor class names so armor rows survive the scan
-  (covers armor already present in any container).
+- The display filter already passes armor (`looks_item_definition_path` accepts
+  any `/Script/Angelscript.*`), so NO change is needed to make armor rows
+  appear — verified: all three G1R-019 armors are returned today.
 - `summarize_private_inventory_items` (`lib.rs:~3829`): surface each row's
   owning container type (`EInventoryTypes`) so the UI can mark the `ArmorSlot`
-  item as equipped. (The scan already walks the player inventory region; add
-  the container/inventory-type to each emitted row.)
+  item as equipped. The current FString-ref scan does not know the container;
+  the equipped indicator requires deriving the container per row (either by
+  extending the scan, or by a typed-tree pass that maps item path → container
+  enum). This is the only core display change.
 
 ### Layer 3 — Add (existing path, now armor-eligible)
 
