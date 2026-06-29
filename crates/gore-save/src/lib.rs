@@ -2821,8 +2821,16 @@ fn inspect_private_payload(
                 .as_ref()
                 .and_then(|r| r.as_ref().ok())
                 .and_then(main_container_summary);
-            let inventory =
-                summarize_private_inventory_payload(&payload, &refs, main_container.as_ref());
+            let armor_slot = typed_result
+                .as_ref()
+                .and_then(|r| r.as_ref().ok())
+                .and_then(armor_slot_summary);
+            let inventory = summarize_private_inventory_payload(
+                &payload,
+                &refs,
+                main_container.as_ref(),
+                armor_slot.as_ref(),
+            );
             let typed_parse = summarize_typed_parse_result(&payload, typed_result.as_ref());
             let typed_ok = typed_parse["status"] == "ok";
             let progression = summarize_private_progression_overview(
@@ -2980,6 +2988,7 @@ fn summarize_private_inventory_payload(
     payload: &[u8],
     refs: &[FStringRef],
     main_container: Option<&MainContainerSummary>,
+    armor_slot: Option<&ArmorSlotSummary>,
 ) -> Value {
     let script_paths = unique_strings(
         refs.iter().map(|r| r.value.as_str()).filter(|value| {
@@ -3010,6 +3019,13 @@ fn summarize_private_inventory_payload(
         let path = item["path"].as_str().unwrap_or("");
         item["removable"] = json!(
             !path.is_empty() && main_container.is_some_and(|mc| mc.removable_paths.contains(path))
+        );
+    }
+    for item in &mut items {
+        let path = item["path"].as_str().unwrap_or("");
+        item["equipped"] = json!(
+            !path.is_empty()
+                && armor_slot.is_some_and(|a| a.equipped_paths.contains(path))
         );
     }
     // setItemCount patches an existing scanned stack in place, so it depends on
@@ -9646,12 +9662,14 @@ mod tests {
                     "path": "/Script/Angelscript.ItMi_Orenugget",
                     "count": 99,
                     "removable": false,
+                    "equipped": false,
                 },
                 {
                     "id": "ItFo_Cheese",
                     "path": "/Script/Angelscript.ItFo_Cheese",
                     "count": 1,
                     "removable": false,
+                    "equipped": false,
                 }
             ])
         );
@@ -10361,6 +10379,7 @@ mod tests {
                 "path": "/Script/Angelscript.ItMi_Orenugget",
                 "count": 42,
                 "removable": false,
+                "equipped": false,
             })
         );
     }
@@ -10462,6 +10481,7 @@ mod tests {
                 "path": "/Script/Angelscript.ItMi_Orenugget",
                 "count": 23,
                 "removable": false,
+                "equipped": false,
             }])
         );
     }
@@ -10737,6 +10757,35 @@ mod tests {
         assert!(summary.equipped_paths.contains("/Script/Angelscript.Ore_Armor_H"));
         assert!(!summary.equipped_paths.contains("/Script/Angelscript.Crw_Armor_H"));
         assert!(!summary.equipped_paths.contains("/Script/Angelscript.Ore_Armor_M"));
+    }
+
+    #[test]
+    #[ignore = "needs GORESAVE_PAYLOAD_BIN=<a decompressed host.bin>"]
+    fn inventory_rows_flag_equipped_armor() {
+        let path = std::env::var("GORESAVE_PAYLOAD_BIN").expect("set GORESAVE_PAYLOAD_BIN");
+        let payload = std::fs::read(path).unwrap();
+        let refs = scan_fstrings(&payload, 0);
+        let root = properties::parse_private_root(&payload).unwrap();
+        let main_container = main_container_summary(&root);
+        let armor_slot = armor_slot_summary(&root);
+        let inv = summarize_private_inventory_payload(
+            &payload,
+            &refs,
+            main_container.as_ref(),
+            armor_slot.as_ref(),
+        );
+        let items = inv["items"].as_array().unwrap();
+        let equipped: Vec<&str> = items
+            .iter()
+            .filter(|i| i["equipped"].as_bool() == Some(true))
+            .map(|i| i["path"].as_str().unwrap_or(""))
+            .collect();
+        assert!(equipped.contains(&"/Script/Angelscript.Ore_Armor_H"));
+        assert!(!equipped.contains(&"/Script/Angelscript.Crw_Armor_H"));
+        assert!(items.iter().all(|i| {
+            let p = i["path"].as_str().unwrap_or("");
+            !p.contains("ItMi_") || i["equipped"].as_bool() == Some(false)
+        }));
     }
 
     #[test]
