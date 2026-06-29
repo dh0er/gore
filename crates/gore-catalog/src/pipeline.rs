@@ -25,6 +25,55 @@ use serde::Serialize;
 
 // ─── Item catalog ────────────────────────────────────────────────────────────
 
+/// True when an Angelscript class name is an armor *item* class (a class that
+/// can occupy an inventory slot), as opposed to its paired visual-definition
+/// companion, an upgrade-component tier piece, or unrelated noise that merely
+/// contains "Armor".
+///
+/// Armor item classes are NOT `It*`. They are faction-armor families
+/// (`<Fac>_Armor[_suffix]`, e.g. `Ore_Armor_H`, `Org_Armor`) and per-NPC
+/// armors (`Armor_<CAMP>_<NPC>_NNN`). Each is paired with a
+/// `*_VisualsDefinition` / `*_VisualDefinition` companion that is NOT an item.
+/// The `_{Top,Mid,Bot}_` tier pieces are armor-customization components stored
+/// in `BoughtArmorUpgrades.AvailableUpgrades` and applied via the worn armor's
+/// upgrade string-map (Tier C) — they are not standalone bag items.
+fn is_armor_item_class(name: &str) -> bool {
+    if !name.contains("Armor") {
+        return false;
+    }
+    // Companions / bases / non-item definitions.
+    if name.ends_with("Definition") || name.ends_with("_Base") {
+        return false;
+    }
+    if name.starts_with("ArmorVisualsDefinition") {
+        return false;
+    }
+    // Upgrade-component tier pieces (Org_Armor_Top_H_01, Sld_Armor_Mid_L_02 ...).
+    if name.contains("_Top_") || name.contains("_Mid_") || name.contains("_Bot_") {
+        return false;
+    }
+    // Non-item families that contain "Armor"/"Armory"/"SuperArmor".
+    const NON_ITEM_PREFIXES: &[&str] = &[
+        "GE_", "GA_", "GC_", "GVL_", "CS_", "Choice", "Document", "Conversation",
+        "DailyRoutine", "Module_", "AIAgent", "CharacterDefinition",
+        "CharacterVisuals", "AllArmors", "Quest", "Memory", "Spawner",
+        "Glossary", "Gothic", "Hit_", "SpawnAIAgent", "SpawnMeshes", "OC_",
+    ];
+    if NON_ITEM_PREFIXES.iter().any(|p| name.starts_with(p)) {
+        return false;
+    }
+    // Item families: `<2-4 alpha>_Armor...` or `Armor_<CAMP>_...`.
+    let faction_armor = {
+        let mut parts = name.splitn(2, '_');
+        let head = parts.next().unwrap_or("");
+        let tail = parts.next().unwrap_or("");
+        (2..=4).contains(&head.len())
+            && head.chars().all(|c| c.is_ascii_alphabetic())
+            && tail.starts_with("Armor")
+    };
+    faction_armor || name.starts_with("Armor_")
+}
+
 /// Regex-equivalent: capture group 1 of `ASClass /Script/Angelscript.(It[A-Za-z0-9_]+)`.
 fn parse_item_classes(lines: &[&str]) -> Vec<String> {
     let prefix = "ASClass /Script/Angelscript.";
@@ -36,7 +85,7 @@ fn parse_item_classes(lines: &[&str]) -> Vec<String> {
                 .chars()
                 .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
                 .collect();
-            if name.starts_with("It") {
+            if name.starts_with("It") || is_armor_item_class(&name) {
                 names.insert(name);
             }
         }
@@ -405,6 +454,40 @@ mod tests {
         let ids: Vec<&str> = entries.iter().map(|e| e.id.as_str()).collect();
         assert!(ids.contains(&"ChoiceDiegoStart"), "got: {ids:?}");
         assert!(!ids.contains(&"Choice"), "bare Choice must be excluded: {ids:?}");
+    }
+
+    #[test]
+    fn armor_discriminator_accepts_items_rejects_companions() {
+        // Real base/per-NPC armor item classes -> accepted.
+        assert!(is_armor_item_class("Ore_Armor_H"));
+        assert!(is_armor_item_class("Ore_Armor_M"));
+        assert!(is_armor_item_class("Crw_Armor_H"));
+        assert!(is_armor_item_class("Org_Armor"));
+        assert!(is_armor_item_class("Vlk_Armor_L"));
+        assert!(is_armor_item_class("Ebr_Armor_H_01"));
+        assert!(is_armor_item_class("Armor_SK_OC_WOC_Velaya_108_02"));
+        assert!(is_armor_item_class("Armor_OC_EBR_Gomez_100"));
+
+        // Visual-definition companions and bases -> rejected.
+        assert!(!is_armor_item_class("Ore_Armor_H_VisualsDefinition"));
+        assert!(!is_armor_item_class("Armor_OC_EBR_Gomez_100_VisualDefinition"));
+        assert!(!is_armor_item_class("BaseArmorDefinition"));
+        assert!(!is_armor_item_class("ArmorVisualsDefinition_Human"));
+
+        // Upgrade-component tier pieces -> rejected (edited via Tier C, not added).
+        assert!(!is_armor_item_class("Org_Armor_Top_H_01"));
+        assert!(!is_armor_item_class("Sld_Armor_Mid_L_02"));
+
+        // Non-item noise that merely contains "Armor" -> rejected.
+        assert!(!is_armor_item_class("GE_Crw_Armor_H"));
+        assert!(!is_armor_item_class("GothicAchievement_Armor_01"));
+        assert!(!is_armor_item_class("OC_Armory_Door"));
+        assert!(!is_armor_item_class("Spawner_OC_Castle_Armory_Misc_01"));
+        assert!(!is_armor_item_class("Hit_SuperArmor_Player"));
+        assert!(!is_armor_item_class("CharacterVisualsDefinition_OreArmor"));
+
+        // Ordinary It* items are not armor.
+        assert!(!is_armor_item_class("ItMi_Orenugget"));
     }
 
     #[test]
