@@ -157,7 +157,9 @@ pub fn build_item_catalog(lines: &[&str]) -> (Vec<ItemEntry>, Vec<String>) {
             skipped.push(name.clone());
             continue;
         }
-        let category: String = if let Some(cat) = item_explicit(name) {
+        let category: String = if is_armor_item_class(name) {
+            "armor".to_string()
+        } else if let Some(cat) = item_explicit(name) {
             cat.to_string()
         } else {
             let mut found = None;
@@ -488,6 +490,28 @@ mod tests {
 
         // Ordinary It* items are not armor.
         assert!(!is_armor_item_class("ItMi_Orenugget"));
+    }
+
+    #[test]
+    fn armor_entries_get_armor_category() {
+        let lines = [
+            "[0001] ASClass /Script/Angelscript.Ore_Armor_H [n: 1] [c: 2]",
+            "[0002] ASClass /Script/Angelscript.Ore_Armor_H_VisualsDefinition [n: 1] [c: 2]",
+            "[0003] ASClass /Script/Angelscript.Armor_OC_EBR_Gomez_100 [n: 1] [c: 2]",
+            "[0004] ASClass /Script/Angelscript.ItMi_Orenugget [n: 1] [c: 2]",
+            "[0005] ASClass /Script/Angelscript.Org_Armor_Top_H_01 [n: 1] [c: 2]",
+        ];
+        let (entries, _skipped) = build_item_catalog(&lines);
+        let by_id: std::collections::HashMap<&str, &ItemEntry> =
+            entries.iter().map(|e| (e.id.as_str(), e)).collect();
+
+        assert_eq!(by_id["Ore_Armor_H"].category, "armor");
+        assert_eq!(by_id["Ore_Armor_H"].path, "/Script/Angelscript.Ore_Armor_H");
+        assert_eq!(by_id["Armor_OC_EBR_Gomez_100"].category, "armor");
+        assert_eq!(by_id["ItMi_Orenugget"].category, "misc");
+        // companion + tier piece are not catalog entries at all
+        assert!(!by_id.contains_key("Ore_Armor_H_VisualsDefinition"));
+        assert!(!by_id.contains_key("Org_Armor_Top_H_01"));
     }
 
     #[test]
