@@ -443,16 +443,19 @@ pub fn deploy(triplet: &[PathBuf; 3], game_dir: &Path, name: &str) -> Result<Pat
     // should succeed).
     let mods = std::fs::canonicalize(&mods).unwrap_or(mods);
 
-    // Stage copies, rolling back on failure. For each destination we snapshot its
-    // PRIOR contents before overwriting (`Some` = a file existed — i.e. an active
-    // deployment under the same name — and we overwrote it; `None` = fresh add).
-    // On a later copy/serialize/record-write failure, `cleanup` restores the prior
-    // bytes (so an existing deployment is left intact) and removes only the files
-    // we genuinely added. Without the snapshot, deleting an overwritten dst would
-    // destroy the previously working triplet.
-    let mut copied: Vec<(PathBuf, Option<Vec<u8>>)> = Vec::with_capacity(3);
-    let cleanup = |copied: &[(PathBuf, Option<Vec<u8>>)]| {
-        for (f, prior) in copied.iter().rev() {
+    // Crash-safety + rollback: write the deploy RECORD first, then copy the triplet
+    // files. The record journals the intended destinations, so if the process is
+    // killed or power is lost mid-copy, a record always exists for `undeploy` (or a
+    // later redeploy) to remove the partial triplet — the copied .utoc/.ucas/.pak
+    // never linger mounted with nothing to find them. Each on-disk mutation (the
+    // record, then each triplet file) snapshots its PRIOR bytes before being
+    // overwritten; on any RETURNED error `cleanup` restores those bytes (`Some`) or
+    // removes a genuinely-new file (`None`), so a failed (re)deploy leaves the
+    // previous state intact. An existing-but-unreadable file aborts before any
+    // write rather than risk a rollback deleting it as if it were fresh.
+    let mut written: Vec<(PathBuf, Option<Vec<u8>>)> = Vec::with_capacity(4);
+    let cleanup = |written: &[(PathBuf, Option<Vec<u8>>)]| {
+        for (f, prior) in written.iter().rev() {
             match prior {
                 Some(bytes) => {
                     let _ = std::fs::write(f, bytes);
@@ -463,70 +466,66 @@ pub fn deploy(triplet: &[PathBuf; 3], game_dir: &Path, name: &str) -> Result<Pat
             }
         }
     };
-    for src in triplet {
-        let leaf = match src.file_name() {
-            Some(l) => l,
-            None => {
-                cleanup(&copied);
-                return Err(TexError::AssetNotFound(format!(
-                    "triplet path has no file name: {}",
-                    src.display()
-                )));
-            }
-        };
-        let dst = mods.join(leaf);
-        // Snapshot the destination's prior bytes before overwriting so rollback can
-        // restore them. NotFound -> None (a fresh add, removed on rollback). Any
-        // OTHER read error (e.g. the old triplet exists but is unreadable due to
-        // ACL/mode bits) means we cannot snapshot it — abort BEFORE touching it,
-        // rather than let a later failure run cleanup with prior == None and delete
-        // the existing-but-unsnapshotted triplet as if it were a fresh add.
-        let prior = match std::fs::read(&dst) {
-            Ok(bytes) => Some(bytes),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-            Err(e) => {
-                cleanup(&copied);
-                return Err(e.into());
-            }
-        };
-        // Record the rollback entry BEFORE copying: std::fs::copy creates/truncates
-        // dst first, so a mid-copy failure (disk full, I/O error) leaves a partial
-        // file that cleanup must still restore (prior bytes) or remove (fresh add).
-        copied.push((dst.clone(), prior));
-        if let Err(e) = std::fs::copy(src, &dst) {
-            cleanup(&copied);
-            return Err(e.into());
+    // Snapshot prior bytes of a path we're about to overwrite. NotFound -> None
+    // (fresh add). Any other error -> abort (we can't safely roll it back).
+    let snapshot = |path: &Path| -> Result<Option<Vec<u8>>> {
+        match std::fs::read(path) {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e.into()),
         }
+    };
+
+    // Resolve destination paths up front — the record must list them before any
+    // file is copied.
+    let mut dsts: Vec<PathBuf> = Vec::with_capacity(3);
+    for src in triplet {
+        let leaf = src.file_name().ok_or_else(|| {
+            TexError::AssetNotFound(format!("triplet path has no file name: {}", src.display()))
+        })?;
+        dsts.push(mods.join(leaf));
     }
 
+    let record_path = mods.join(format!("{name}.gore-deploy.json"));
     let record = DeployRecord {
         name: name.to_string(),
-        files: copied.iter().map(|(p, _)| p.clone()).collect(),
+        files: dsts.clone(),
     };
-    let record_path = mods.join(format!("{name}.gore-deploy.json"));
-    let json = match serde_json::to_string_pretty(&record) {
-        Ok(j) => j,
-        Err(e) => {
-            cleanup(&copied);
-            return Err(TexError::Retoc(anyhow::anyhow!("serialising deploy record: {e}")));
-        }
-    };
-    // Write the record atomically: a direct write to `record_path` would
-    // truncate an existing record first, so a mid-write failure (e.g. disk full
-    // on a redeploy of the same name) would leave the prior deployment — whose
-    // triplet bytes `cleanup` restores — without a usable record for undeploy.
-    // Write to a temp sibling then rename into place; the old record stays intact
-    // until the new one is complete.
+    let json = serde_json::to_string_pretty(&record)
+        .map_err(|e| TexError::Retoc(anyhow::anyhow!("serialising deploy record: {e}")))?;
+
+    // 1. Write the record FIRST (atomically: temp sibling + rename, so an existing
+    //    record is never left truncated). Register its prior bytes for rollback.
+    let prior_record = snapshot(&record_path)?;
+    written.push((record_path.clone(), prior_record));
     let tmp_record = mods.join(format!("{name}.gore-deploy.json.tmp"));
-    if let Err(e) = std::fs::write(&tmp_record, json) {
+    if let Err(e) = std::fs::write(&tmp_record, &json) {
         let _ = std::fs::remove_file(&tmp_record);
-        cleanup(&copied);
+        cleanup(&written);
         return Err(e.into());
     }
     if let Err(e) = std::fs::rename(&tmp_record, &record_path) {
         let _ = std::fs::remove_file(&tmp_record);
-        cleanup(&copied);
+        cleanup(&written);
         return Err(e.into());
+    }
+
+    // 2. Copy each triplet file, snapshotting its prior bytes before the copy
+    //    (std::fs::copy creates/truncates the dst first, so a mid-copy failure
+    //    leaves a partial file the rollback must restore or remove).
+    for (src, dst) in triplet.iter().zip(dsts.iter()) {
+        let prior = match snapshot(dst) {
+            Ok(p) => p,
+            Err(e) => {
+                cleanup(&written);
+                return Err(e);
+            }
+        };
+        written.push((dst.clone(), prior));
+        if let Err(e) = std::fs::copy(src, dst) {
+            cleanup(&written);
+            return Err(e.into());
+        }
     }
 
     Ok(record_path)
