@@ -117,7 +117,7 @@ pub fn emit_module(m: &Module, refs: &RefResolver) -> String {
         if is_generated(f, &class_names, &class_members) || is_generated_spawn(f, refs) {
             continue;
         }
-        if !seen_free.insert(format!("{}({})", f.name, render_params(f, refs))) {
+        if !seen_free.insert(format!("{}({})", f.name, param_sig(f, refs))) {
             continue; // duplicate signature -> "function ... already exists"
         }
         emit_function(&mut s, f, refs, false, false, 0);
@@ -197,7 +197,7 @@ fn emit_class(s: &mut String, c: &Class, refs: &RefResolver) {
         if m.name.starts_with("__") {
             continue;
         }
-        if !seen_sigs.insert(format!("{}({})", m.name, render_params(m, refs))) {
+        if !seen_sigs.insert(format!("{}({})", m.name, param_sig(m, refs))) {
             continue; // duplicate signature
         }
         emit_function_ctor(s, m, refs, true, false, 1, None, Some(&field_types), Some(&c.name));
@@ -388,6 +388,31 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
         }
     }
     let _ = writeln!(s, "{ind}}}");
+}
+
+/// AngelScript overload identity ignores parameter NAMES — two functions are the same overload
+/// when their parameter TYPES + reference modifiers match. Use this (not `render_params`, which
+/// appends names) as the dedup key, so two cache entries with the same name+types but different
+/// stored arg-names don't both get emitted (which fails with "a function with the same name and
+/// parameters already exists").
+fn param_sig(f: &Func, refs: &RefResolver) -> String {
+    f.params
+        .iter()
+        .map(|p| {
+            let ty = p.ty.render(refs);
+            let amp = if p.ty.is_reference {
+                match p.flags & 3 {
+                    2 => "&out",
+                    3 => "&inout",
+                    _ => "&in",
+                }
+            } else {
+                ""
+            };
+            format!("{ty}{amp}")
+        })
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 fn render_params(f: &Func, refs: &RefResolver) -> String {

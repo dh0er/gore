@@ -235,12 +235,37 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                     sig_mods.entry(format!("{}({})", f.name, ptys.join(","))).or_default().insert(i);
                 }
             }
+            // A name is safe to file-locally rename in a module only if EVERY emittable free
+            // function of that name in the module has a colliding signature. If the module also has
+            // a NON-colliding same-name overload, the name-based `rename_free_fn` would rewrite that
+            // overload's decl + calls too, breaking other modules that call it by its original name.
+            // In that mixed case leave the name un-renamed: the genuine collision then surfaces at
+            // generate as a "already exists" stub (rare, safe) instead of silently breaking a valid
+            // cross-module call to the non-colliding overload.
+            let colliding_sigs: HashSet<&str> = sig_mods
+                .iter()
+                .filter(|(_, modset)| modset.len() > 1)
+                .map(|(sig, _)| sig.as_str())
+                .collect();
             let mut colliding_in: HashMap<usize, HashSet<String>> = HashMap::new();
-            for (sig, modset) in &sig_mods {
-                if modset.len() > 1 {
-                    let name = sig.split('(').next().unwrap_or("").to_string();
-                    for &i in modset {
-                        colliding_in.entry(i).or_default().insert(name.clone());
+            for (i, m) in mods.iter().enumerate() {
+                let mut sigs_by_name: HashMap<&str, Vec<String>> = HashMap::new();
+                for f in &m.functions {
+                    if matches!(f.name.as_str(),
+                        "Spawn" | "Get" | "GetOrCreate" | "Create" | "GetG1R" | "StaticClass") {
+                        continue;
+                    }
+                    let ptys: Vec<String> = f.params.iter().map(|p| p.ty.render(&refs)).collect();
+                    sigs_by_name
+                        .entry(f.name.as_str())
+                        .or_default()
+                        .push(format!("{}({})", f.name, ptys.join(",")));
+                }
+                for (name, sigs) in sigs_by_name {
+                    if sigs.iter().any(|s| colliding_sigs.contains(s.as_str()))
+                        && sigs.iter().all(|s| colliding_sigs.contains(s.as_str()))
+                    {
+                        colliding_in.entry(i).or_default().insert(name.to_string());
                     }
                 }
             }
