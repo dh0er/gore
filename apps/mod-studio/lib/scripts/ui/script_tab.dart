@@ -36,7 +36,10 @@ class ScriptTab extends ConsumerWidget {
           child: selected == null
               ? Center(child: Text('Select or add a script mod',
                   style: TextStyle(color: scheme.onSurfaceVariant)))
-              : _ModDetail(mod: selected),
+              // Key the detail pane to the selected mod so switching selection builds a FRESH
+              // _ModDetailState — otherwise the old state (and its _busy/_status/_error compile UI)
+              // is reused for the next mod.
+              : _ModDetail(key: ValueKey(selected.key), mod: selected),
         ),
       ],
     );
@@ -236,7 +239,7 @@ class _ModulePickerState extends State<_ModulePicker> {
 }
 
 class _ModDetail extends ConsumerStatefulWidget {
-  const _ModDetail({required this.mod});
+  const _ModDetail({super.key, required this.mod});
   final ScriptMod mod;
   @override
   ConsumerState<_ModDetail> createState() => _ModDetailState();
@@ -302,17 +305,28 @@ class _ModDetailState extends ConsumerState<_ModDetail> {
       );
 
   Future<void> _pickSource() async {
+    // Capture the target mod + notifier BEFORE the await. With the per-mod Key, switching
+    // selection during the file picker disposes this state; reading widget.mod/ref afterwards
+    // would target the wrong mod (or throw on a disposed ref).
+    final mod = widget.mod;
+    final notifier = ref.read(scriptModsProvider.notifier);
     final file = await openFile(acceptedTypeGroups: const [
       XTypeGroup(label: 'AngelScript', extensions: ['as']),
     ]);
     if (file == null) return;
-    // Changing the source invalidates any prior compile.
-    ref.read(scriptModsProvider.notifier)
-        .setMod(widget.mod.withAsPath(file.path).withMiniPath(''));
+    // Changing the source invalidates any prior compile. Operate on the captured mod.
+    notifier.setMod(mod.withAsPath(file.path).withMiniPath(''));
   }
 
   Future<void> _compile() async {
+    // Capture the target mod + every provider handle BEFORE any await. With the per-mod Key,
+    // a selection change during the (long) compile disposes this state, so reading widget.mod
+    // or ref afterwards would write the result to the wrong mod (or throw on the disposed ref).
+    final mod = widget.mod;
+    final notifier = ref.read(scriptModsProvider.notifier);
+    final selNotifier = ref.read(_selectedModuleProvider.notifier);
     final gameRoot = gameRootFromExe(ref.read(gameExePathProvider));
+    final ffi = ModFfi(ref.read(coreServiceProvider));
     if (gameRoot == null) {
       setState(() { _error = true; _status = 'Set the game path in Settings to compile.'; });
       return;
@@ -320,30 +334,34 @@ class _ModDetailState extends ConsumerState<_ModDetail> {
     setState(() { _busy = true; _error = false; _status = 'Compiling via game…'; });
     try {
       final work = await Directory.systemTemp.createTemp('goremod_as_compile_');
-      final r = await ModFfi(ref.read(coreServiceProvider)).scriptCompile(
+      final r = await ffi.scriptCompile(
         gameDir: gameRoot,
-        op: scriptOpToString(widget.mod.op),
-        moduleName: widget.mod.moduleName,
-        relPath: widget.mod.relPath,
-        asPath: widget.mod.asPath,
+        op: scriptOpToString(mod.op),
+        moduleName: mod.moduleName,
+        relPath: mod.relPath,
+        asPath: mod.asPath,
         workDir: work.path,
       );
       final mini = r['mini_path'] as String;
-      final resolvedName = (r['module'] as String?) ?? widget.mod.moduleName;
+      final resolvedName = (r['module'] as String?) ?? mod.moduleName;
       // The user may have removed this mod (or cleared the list) while the game was compiling.
-      // Don't resurrect a deleted mod with the late result — discard it instead.
-      final notifier = ref.read(scriptModsProvider.notifier);
-      if (!ref.read(scriptModsProvider).items.containsKey(widget.mod.key)) {
+      // Don't resurrect a deleted mod with the late result — discard it instead. Check via the
+      // captured notifier (using ref here could throw if this state was disposed). Reading the
+      // notifier's protected `state` directly is intentional — `ref` is off-limits post-dispose.
+      // ignore: invalid_use_of_protected_member, invalid_use_of_visible_for_testing_member
+      if (!notifier.state.items.containsKey(mod.key)) {
         if (mounted) setState(() { _status = 'Compiled, but the mod was removed — discarded.'; });
         return;
       }
       // The compile may resolve the real module name (esp. for "add"); update + re-key.
       final updated = ScriptMod(
-        op: widget.mod.op, moduleName: resolvedName, relPath: widget.mod.relPath,
-        asPath: widget.mod.asPath, miniPath: mini);
-      if (resolvedName != widget.mod.moduleName) notifier.remove(widget.mod.key);
+        op: mod.op, moduleName: resolvedName, relPath: mod.relPath,
+        asPath: mod.asPath, miniPath: mini);
+      if (resolvedName != mod.key) notifier.remove(mod.key);
       notifier.setMod(updated);
-      ref.read(_selectedModuleProvider.notifier).state = updated.key;
+      // Only move the selection if this state is still mounted (i.e. still the active mod);
+      // otherwise the user has navigated away and we mustn't yank their selection.
+      if (mounted) selNotifier.state = updated.key;
       if (mounted) setState(() => _status = 'Compiled ✓');
     } catch (e) {
       if (mounted) setState(() { _error = true; _status = '$e'; });
