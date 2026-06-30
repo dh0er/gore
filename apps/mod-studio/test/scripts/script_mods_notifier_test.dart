@@ -85,7 +85,8 @@ void main() {
     n.setMod(const ScriptMod(op: ScriptOp.add, moduleName: 'M1', relPath: 'M1.as', asPath: 'a'));
     n.setMod(const ScriptMod(op: ScriptOp.add, moduleName: 'M2', relPath: 'M2.as', asPath: 'b'));
     expect(n.state.count, 2);
-    n.remove('M1');
+    // The staging key is relPath, not moduleName — remove by the relPath key.
+    n.remove('M1.as');
     expect(n.state.count, 1);
     expect(n.state.entries.single.moduleName, 'M2');
     n.loadAll([const ScriptMod(op: ScriptOp.edit, moduleName: 'M3', relPath: 'M3.as', asPath: 'c')]);
@@ -93,5 +94,23 @@ void main() {
     expect(n.state.entries.single.op, ScriptOp.edit);
     n.clearAll();
     expect(n.state.count, 0);
+  });
+
+  test('mods sharing a moduleName but differing in relPath coexist (keyed by relPath)', () {
+    final n = ScriptModsNotifier();
+    // Two distinct game-relative paths that flatten to the SAME module basename (`Foo`). Keying by
+    // moduleName would overwrite one with the other; keying by relPath keeps both.
+    n.setMod(const ScriptMod(op: ScriptOp.add, moduleName: 'Foo', relPath: 'AI/Foo.as', asPath: 'a'));
+    n.setMod(const ScriptMod(op: ScriptOp.add, moduleName: 'Foo', relPath: 'Quest/Foo.as', asPath: 'b'));
+    expect(n.state.count, 2);
+    expect(n.state.items.keys.toSet(), {'AI/Foo.as', 'Quest/Foo.as'});
+    // Removing one relPath leaves the other intact.
+    n.remove('AI/Foo.as');
+    expect(n.state.count, 1);
+    expect(n.state.entries.single.relPath, 'Quest/Foo.as');
+    // Re-staging the SAME relPath overwrites in place (same target — correct), no duplicate.
+    n.setMod(const ScriptMod(op: ScriptOp.add, moduleName: 'Bar', relPath: 'Quest/Foo.as', asPath: 'c'));
+    expect(n.state.count, 1);
+    expect(n.state.entries.single.moduleName, 'Bar');
   });
 }

@@ -330,7 +330,6 @@ class _ModDetailState extends ConsumerState<_ModDetail> {
     // or ref afterwards would write the result to the wrong mod (or throw on the disposed ref).
     final mod = widget.mod;
     final notifier = ref.read(scriptModsProvider.notifier);
-    final selNotifier = ref.read(_selectedModuleProvider.notifier);
     final gameRoot = gameRootFromExe(ref.read(gameExePathProvider));
     final ffi = ModFfi(ref.read(coreServiceProvider));
     if (gameRoot == null) {
@@ -369,15 +368,13 @@ class _ModDetailState extends ConsumerState<_ModDetail> {
         if (mounted) setState(() { _status = 'Compiled, but the mod was removed — discarded.'; });
         return;
       }
-      // The compile may resolve the real module name (esp. for "add"); update + re-key.
+      // The key is relPath (stable across compile); only moduleName may change as the regen
+      // resolves the real name. So just update in place under the SAME key — no re-key needed.
       final updated = ScriptMod(
         op: mod.op, moduleName: resolvedName, relPath: mod.relPath,
         asPath: mod.asPath, miniPath: mini, compiledHash: hash);
-      if (resolvedName != mod.key) notifier.remove(mod.key);
       notifier.setMod(updated);
-      // Only move the selection if this state is still mounted (i.e. still the active mod);
-      // otherwise the user has navigated away and we mustn't yank their selection.
-      if (mounted) selNotifier.state = updated.key;
+      // Selection stores mod.key (relPath) and is unchanged by the compile, so it stays valid.
       // Be honest when fingerprinting the .as failed (hash == ''): compiledHash is empty, so
       // scriptCompileFresh is false and Build/Deploy stays disabled — don't claim "Compiled ✓".
       if (mounted) {

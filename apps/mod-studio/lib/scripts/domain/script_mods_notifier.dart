@@ -42,7 +42,11 @@ class ScriptMod {
   final String miniPath;     // compiled mini-cache on disk ('' until compiled)
   final String compiledHash; // FNV-1a of the .as content at compile time ('' until compiled)
 
-  String get key => moduleName;
+  /// Staging identity: the unique game-relative path. NOT [moduleName] — two distinct paths can
+  /// share a basename (e.g. AI/Foo.as and Quest/Foo.as both → module `Foo`), and keying by name
+  /// would silently overwrite one with the other. [relPath] is stable across compile (only
+  /// [moduleName] may change when the regen resolves the real name), so it's also a stable map key.
+  String get key => relPath;
   bool get compiled => miniPath.isNotEmpty;
 
   Map<String, Object?> toJson() => {
