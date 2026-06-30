@@ -1,39 +1,347 @@
 # gore
 
 **gore** (Go-thic Re-make) is a modding and save-editing toolsuite for the
-Gothic Remake. It is version-agnostic across Gothic 1 Remake (G1R) and
-Gothic 2 Remake (G2R) — they share the same engine and AngelScript stack — so
-the same tools work on either game.
+Gothic Remake.
 
-The suite spans three axes of tooling:
+## What's in the repo
 
-1. **Save editing** — [`save-editor`](apps/save-editor) edits GSAV save files
-   (player, inventory, progression, difficulty), backup-first.
-2. **Mod authoring** — the [`gore`](crates/gore) CLI and
-   [`mod-studio`](apps/mod-studio) GUI author UE4SS Lua CDO-override mods,
-   built on a shared [`lua`](lua) SDK that ships into the game.
-3. **AngelScript reverse engineering** — [`gore-as`](crates/gore-as) decodes,
-   emits, and splices the game's precompiled AngelScript cache (surfaced via
-   `gore as`).
+- **[`gore`](crates/gore) CLI** (`gore.exe`) — the one binary that does *all*
+  modding from the terminal: item values, text/dialogs, audio, textures,
+  scripts. Start here if you want to mod.
+- **[`mod-studio`](apps/mod-studio)** — a no-code Windows GUI over the same
+  modding engine (everything except AngelScript).
+- **[`save-editor`](apps/save-editor)** — a Windows GUI for editing your save
+  files (a separate job from modding — it never touches the game install).
+- **[`gorelib`](lua)** — a Lua SDK that ships into the game, for hand-writing
+  UE4SS mods.
+- **Supporting Rust crates** — the format codecs and data models the above
+  share (see [Projects / layout](#projects--layout)), plus example mods under
+  [`mods/`](mods).
 
-The `gore` CLI is the single binary that does everything; the Flutter apps are
-GUIs that reuse the same Rust crates through a `dart:ffi` bridge.
+The Flutter GUIs reuse the exact same Rust crates as the CLI through a
+`dart:ffi` bridge — the CLI is always the most complete surface.
 
-## Projects / layout
+---
+
+# Modding with the `gore` CLI
+
+This is the full how-to-mod guide. Every domain below is driven entirely from
+the `gore` binary — no GUI required.
+
+Get the binary by building it (`cargo build --release -p gore` →
+`target/release/gore`) or downloading a `gore-cli-v*`
+[release](https://github.com/dh0er/goresave/releases). Examples below assume
+`gore` is on your `PATH` and use `"$GAME"` for your install root (the folder
+that contains `G1R/`). The exact `--game`/path each subcommand expects is always
+in `gore <cmd> --help`.
+
+Each domain produces a mod a different way:
+
+| Domain | Mechanism | Touches |
+|--------|-----------|---------|
+| Item/stat values | UE4SS Lua CDO override, applied at runtime | a new mod folder under `ue4ss/Mods/` |
+| Text & dialogs | re-encrypted `.lcache` | the localization cache, in place |
+| Audio | re-packed FMOD `.bank` | the sound bank, in place |
+| Textures | additive UE5 IoStore Zen triplet | the game's `~mods/` folder |
+| Scripts | edited precompiled AngelScript cache | the script cache (experimental) |
+
+You can ship each on its own, or combine the first four into one deployable
+**bundle** (see [Bundling & deploying](#bundling--deploying)).
+
+## Item & stat values (overrides)
+
+Change any default value on an item/NPC/ability class — weapon damage, item
+value, weight, etc. Write an `overrides.toml`:
+
+```toml
+[meta]
+name = "MyBalanceMod"
+delay_ms = 0            # 0 = apply on first tick; >0 = apply after N ms
+
+[[override]]
+class = "ItFo_Apple"    # AngelScript class name
+field = "m_Value"
+value_int = 500
+
+[[override]]
+class = "ItMw_1H_Sword_01"
+field = "m_Weight"
+value_float = 1.5
+```
+
+Compile it into a runtime UE4SS Lua mod, written straight into the game:
+
+```sh
+gore gen overrides.toml -o "$GAME/G1R/Binaries/Win64/ue4ss/Mods"
+# optional: validate field names/types against a reflection model first
+gore gen overrides.toml -o "$GAME/.../Mods" --model model.json
+```
+
+The emitted mod looks up each class's CDO
+(`StaticFindObject("/Script/<module>.Default__<class>")`) and sets the field at
+load. It is self-contained — it does **not** need the gorelib SDK.
+
+**Finding class & field names.** Item/NPC/knowledge classes are listed in the
+bundled catalogs (`apps/save-editor/assets/*_catalog.json`). To (re)generate the
+data model yourself from a UE4SS dump:
+
+```sh
+gore catalog --kind item "UE4SS_ObjectDump.txt" -o item_catalog.json   # also: npc, knowledge
+gore dump   "CXXHeaderDump/" -o model.json        # field schema (types) for validation
+gore stubs  model.json -o stubs/                  # optional LuaLS/EmmyLua type stubs
+```
+
+For the *real* in-game default values (so the GUI/editor shows accurate
+numbers), run the `gore-dump` mod in-game, then fold its output back in:
+
+```sh
+gore dump-mod --model model.json --catalog item_catalog.json -o "$GAME/.../Mods"  # generate the mod
+# …launch the game once with it enabled → writes gore_game_data.json…
+gore sync --dump gore_game_data.json --catalog item_catalog.json -o model.json
+```
+
+## Text & dialogs (localization)
+
+All UI text and NPC dialog lines live in the encrypted AlkimiaLocalization
+`.lcache`. Decrypt every language to JSON, edit, re-encrypt:
+
+```sh
+gore loc export --lcache "$GAME/.../AlkimiaLocalization_Game.lcache" -o loc.json
+# edit loc.json:  { "some_text_id": { "german": "Neuer Text", "english": "New text" }, … }
+gore loc import --lcache "$GAME/.../AlkimiaLocalization_Game.lcache" --edits loc.json
+```
+
+`gore loc import` overwrites the cache in place (pass `-o` to write elsewhere) —
+keep a copy first, or use the [bundle](#bundling--deploying) path, which backs up
+to `*.gore-bak`. Helpers: `gore loc extract` auto-detects the game and writes the
+shared catalog; `gore loc status` shows what's loaded.
+
+## Audio
+
+The game's sounds and music are encrypted FMOD `.bank` files at
+`$GAME/G1R/Content/FMOD/Desktop/*.bank`. `gore audio` reads and replaces samples
+in pure Rust (no FMOD install needed); the Gothic encryption key is built in.
+
+```sh
+gore audio list    --bank "$GAME/.../SFX.bank"               # name, codec, rate, channels, length
+gore audio extract --bank "$GAME/.../SFX.bank" -o wavs/      # all samples to .wav (or --sample NAME)
+# map.json:  { "SampleName": "path/to/new.wav", … }
+gore audio replace --map map.json --bank "$GAME/.../SFX.bank"   # in place, *.gore-bak backup
+gore audio restore --bank "$GAME/.../SFX.bank"                  # undo from *.gore-bak
+```
+
+Replacement re-encodes your WAV as PCM16 in an appended sub-bank and repoints the
+sample — any length, no whole-bank re-encode. Share a patch without shipping game
+audio:
+
+```sh
+gore audio export-patch --map map.json -o patch.zip
+gore audio apply-patch  --patch patch.zip --bank "$GAME/.../SFX.bank"
+```
+
+## Textures
+
+Replace any `Texture2D` packed in the UE5 IoStore container. Output is an
+**additive** Zen triplet (`.utoc`/`.ucas`/`.pak`) dropped into the game's
+`~mods/` folder — no original game file is modified.
+
+```sh
+gore texture list    --game "$GAME" --filter T_Hardware           # find asset paths
+gore texture extract --game "$GAME" /Game/UI/Textures/Common/T_HardwareCursor -o cur.png
+# edit cur.png (RGBA8/RGB8; dimensions need not match the original)
+gore texture replace --game "$GAME" /Game/UI/Textures/Common/T_HardwareCursor \
+                     --image new.png --mod-dir moddir/
+gore texture pack    --game "$GAME" --mod-dir moddir/ --name zzz_MyMod_P -o out/
+gore texture deploy  --game "$GAME" --triplet-dir out/ --name zzz_MyMod_P
+gore texture undeploy --game "$GAME" --name zzz_MyMod_P            # remove it
+```
+
+(`gore texture index` builds/caches the asset→package-id map used to resolve
+assets. Compression is opt-in via `--compress` on `pack`, but uncompressed
+containers are what currently load reliably in-game.)
+
+## Scripts (AngelScript) — experimental
+
+The game's compiled AngelScript lives in a precompiled cache
+(`PrecompiledScript_Shipping.Cache`). `gore as` can read it and splice edited
+modules back in. This is reverse-engineering-stage tooling, not yet part of the
+deployable bundle.
+
+```sh
+gore as info       PrecompiledScript_Shipping.Cache         # module count + splice point
+gore as decompile  PrecompiledScript_Shipping.Cache <needle>   # → readable AngelScript
+gore as emit-all   PrecompiledScript_Shipping.Cache out_as/    # all modules as recompilable .as
+gore as disasm     PrecompiledScript_Shipping.Cache <needle>   # asBC bytecode listing
+```
+
+To actually change behavior: edit a module's `.as`, regenerate a cache with the
+game's own `-as-generate-precompiled-data`, then splice just your edited module
+into the vanilla cache:
+
+```sh
+# existing module — remap refs to the vanilla cache, then replace in place:
+gore as extract-remap regen.Cache <Module> vanilla.Cache -o mini.Cache
+gore as replace       vanilla.Cache mini.Cache <Module>  -o modded.Cache
+# new primitive-only module — splice directly:
+gore as splice        vanilla.Cache mini.Cache -o modded.Cache
+```
+
+Decompilation/emit resolve native-call arities from a `Binds.Cache` placed next
+to the input cache (or `GORE_AS_BINDS`).
+
+## Bundling & deploying
+
+Combine overrides + text + audio + textures into one mod, then deploy/undeploy it
+against your install. Write a build spec (`spec.json`):
+
+```json
+{
+  "meta": { "name": "MyMod", "version": "1.0.0", "author": "you" },
+  "overrides": [ { "class": "ItFo_Apple", "field": "m_Value", "value_int": 500 } ],
+  "loc_edits": { "some_text_id": { "german": "…" } },
+  "audio":   [ { "bank": "SFX.bank", "sample": "Foo", "wav_path": "foo.wav" } ],
+  "texture": [ { "asset": "/Game/UI/.../T_Foo", "image_path": "foo.png" } ]
+}
+```
+
+```sh
+gore mod build   --spec spec.json -o build/            # → build/MyMod/ (gore-mod.json manifest + payloads)
+gore mod deploy  --bundle build/MyMod --game "$GAME"   # overrides→Mods, loc/audio in place(*.gore-bak), textures→~mods
+gore mod undeploy --game "$GAME"                       # restore everything
+```
+
+This is the same engine [`mod-studio`](#mod-studio-gui) drives. Other helpers:
+
+```sh
+gore scaffold MyMod -o "$GAME/.../Mods"   # empty hand-written gorelib mod skeleton
+gore deploy-shared --game "$GAME/.../Win64"   # install the gorelib SDK (for custom Lua mods)
+gore package mod_dir/ -o MyMod.zip        # zip a Lua mod for sharing
+```
+
+## CLI reference
+
+Every subcommand of the `gore` binary:
+
+| Command | Action(s) | Purpose |
+|---------|-----------|---------|
+| `gen` | — | Compile `overrides.toml` → a UE4SS Lua override mod. |
+| `mod` | `build` · `deploy` · `undeploy` | Build/deploy/undeploy a unified bundle (overrides + loc + audio + textures). |
+| `loc` | `extract` · `status` · `export` · `import` | Read/edit localized text & dialogs in the encrypted `.lcache`. |
+| `audio` | `list` · `extract` · `replace` · `restore` · `export-patch` · `apply-patch` | Read/replace FMOD `.bank` audio (PCM injection, `*.gore-bak`). |
+| `texture` | `list` · `extract` · `replace` · `pack` · `deploy` · `index` · `undeploy` | Extract/replace IoStore textures → Zen triplet in `~mods`. |
+| `as` | `info` · `decode-header` · `walk` · `decompile` · `disasm` · `emit` · `emit-all` · `replace` · `splice` · `extract` · `extract-remap` | AngelScript precompiled-cache tooling (experimental). |
+| `catalog` | `--kind item\|npc\|knowledge` | Generate a catalog JSON from a UE4SS object dump. |
+| `dump` | — | Parse a UE4SS SDK header dump into a reflection model JSON. |
+| `stubs` | — | Emit LuaLS/EmmyLua type stubs from `model.json`. |
+| `gui-model` · `sync` · `dump-mod` | — | Build/refresh the data model (incl. real in-game defaults via the `gore-dump` mod). |
+| `scaffold` | — | Create a hand-written gorelib mod skeleton. |
+| `deploy-shared` | — | Install the gorelib SDK into `ue4ss/Mods/shared`. |
+| `package` | — | Zip a mod folder into distributable UE4SS layout. |
+
+---
+
+# mod-studio (GUI)
+
+A no-code Windows app over the same bundle engine as the CLI — point-and-click
+modding with live previews and `.goremod` project files. Auto-updates on launch
+(WinSparkle).
+
+**It can:**
+- Edit **item/stat values** by browsing the categorized item catalog and editing
+  fields (the override domain).
+- Edit **localized text & dialogs**.
+- Replace **audio** — browse a bank's samples, preview, and swap in your own.
+- Replace **textures** — pick an asset, preview, drop in a PNG.
+- **Build a bundle** and **deploy/undeploy** it to your game install
+  (overrides + loc + audio + textures, with backups), or **export a standalone
+  Lua override mod** to share.
+
+**It can not:**
+- Edit **AngelScript** — scripts are CLI-only (`gore as`).
+- Edit **save files** — that's [save-editor](#save-editor-gui).
+- Hand-write custom Lua logic — use `gore scaffold` + the [gorelib SDK](#the-gorelib-lua-sdk).
+- Patch arbitrary game files outside the four supported domains.
+
+---
+
+# save-editor (GUI)
+
+A Windows app (`goresave`) for editing your **save games**, backup-first. This is
+*not* modding — it changes your saved progress, never the game install.
+Auto-updates on launch (WinSparkle). Tested against Steam build CL168781; should
+work across versions.
+
+**It can:**
+- **Profile** — change difficulty settings.
+- **Player** — edit stats, skills, location, and more.
+- **Inventory** — change counts of existing items; add new items from a bundled,
+  categorized catalog.
+- **Progression** — edit quest markers, NPC knowledge, and events.
+- **Raw properties** — edit almost any internal property value directly
+  (experimental; can corrupt a save).
+- Write an automatic **backup** before every change.
+
+**It can not:**
+- Mod the game (no overrides, audio, textures, or scripts) — use the
+  [`gore` CLI](#modding-with-the-gore-cli) or [mod-studio](#mod-studio-gui).
+- Touch the game install in any way.
+- Guarantee experimental raw edits are safe — keep your own copy of important
+  saves.
+
+---
+
+# The gorelib Lua SDK
+
+[`gorelib`](lua) is a shared UE4SS SDK for **hand-writing** Gothic Remake mods in
+Lua — the path for behavior the override generator can't express (hooks,
+keybinds, console commands, live attribute tweaks). Override mods produced by
+`gore gen`/`mod-studio` do **not** use it; it's for custom mods.
+
+How a mod uses it:
+
+```sh
+gore deploy-shared --game "$GAME/.../Win64"   # copy gorelib into ue4ss/Mods/shared (once)
+gore scaffold MyMod -o "$GAME/.../Mods"       # new mod with the loader wired in
+```
+
+```lua
+local gore = require("gorelib")
+gore.cheat.god(true)                       -- toggle god mode on the live CombatConfig + CDOs
+gore.gas.heal()                            -- set Health to MaxHealth
+gore.ui.text("hello from my mod")          -- on-screen message via the game's HUD
+gore.cmd.command("mycmd", function() … end)-- register a console command
+```
+
+The API spans `gore.obj` (objects/CDOs/properties), `gore.player`
+(controller/pawn/world), `gore.ui` (on-screen text + log), `gore.gas` (gameplay
+attributes), `gore.cheat`, `gore.cmd` (commands/keybinds/game-thread), and
+`gore.help`/`gore.selftest`. Every helper pcall-guards its reflection and returns
+`nil`/`false` on failure — it never crashes the consuming mod. Full reference:
+[`lua/README.md`](lua/README.md) (or `gore.help.list()` at runtime).
+
+`gore deploy-shared` installs the SDK; UE4SS loads any mod folder containing an
+`enabled.txt`.
+
+---
+
+# Projects / layout
 
 ```
 gore/
 ├─ Cargo.toml              flat workspace (members = ["crates/*"])
-├─ build.py                orchestrator: python build.py <project> build|dist|installer|test|release
+├─ build.py                orchestrator: python build.py <project> build|run|dist|installer|test|release
 ├─ crates/
 │  ├─ gore/                THE unified CLI binary (gore.exe)
 │  ├─ gore-reflect/        UE reflection model + UE4SS SDK dump parser
 │  ├─ gore-catalog/        item/npc/knowledge catalog model + pipelines
 │  ├─ gore-loc/            AlkimiaLocalization .lcache crypto + game-dir discovery + shared paths
 │  ├─ gore-modgen/         overrides.toml → UE4SS Lua mod generation + validation
+│  ├─ gore-mod/            unified mod-bundle engine (overrides + loc + audio + textures)
+│  ├─ gore-fmod/           FMOD .bank decrypt/parse + Vorbis (audio backend, pure Rust)
+│  ├─ gore-tex/            UE5 IoStore texture extract/replace (Zen .utoc/.ucas/.pak)
 │  ├─ gore-ffi/            cdylib dart:ffi bridge for mod-studio (gore_ffi.dll)
 │  ├─ gore-save/           GSAV savegame parse/edit core + its cdylib (gore_save.dll)
-│  ├─ gore-oodle/          Oodle/Kraken codec
+│  ├─ gore-oodle/          Oodle/Kraken codec (vendored ooz, no oo2core DLL)
 │  └─ gore-as/             AngelScript precompiled-cache decoder/emitter/splicer (surfaced via `gore as`)
 ├─ apps/
 │  ├─ save-editor/         Flutter (Windows) savegame editor — WinSparkle auto-update
@@ -42,41 +350,28 @@ gore/
 ├─ mods/                   first-party UE4SS mod folders
 │  ├─ example/             sample mod using gorelib
 │  └─ gore-dump/           generated dump mod (regen: `gore dump-mod`)
+├─ vendor/
+│  └─ retoc/               vendored IoStore reader fork (Oodle decode routed to gore-oodle)
+├─ scripts/                release helpers (appcast.py — WinSparkle appcast generator)
 └─ docs/
 ```
 
-| Component | Kind | What it does |
-|-----------|------|--------------|
-| [`gore`](crates/gore) | Rust CLI (`gore.exe`) | The unified binary. Subcommands: `dump`, `stubs`, `catalog`, `gui-model`, `sync`, `dump-mod`, `loc`, `scaffold`, `gen`, `deploy-shared`, `package`, and `as` (AngelScript cache: `decode-header`/`walk`/`info`/`decompile`/`emit`/`emit-all`/`disasm`/`replace`/`splice`). |
+| Crate | Kind | What it does |
+|-------|------|--------------|
+| [`gore`](crates/gore) | Rust CLI (`gore.exe`) | The unified binary — see [CLI reference](#cli-reference). |
 | [`gore-reflect`](crates/gore-reflect) | Rust lib | UE reflection model + UE4SS SDK dump parser. |
 | [`gore-catalog`](crates/gore-catalog) | Rust lib | Item/NPC/knowledge catalog model + generation pipelines. |
 | [`gore-loc`](crates/gore-loc) | Rust lib | AlkimiaLocalization `.lcache` crypto, game-dir discovery, shared paths. |
-| [`gore-modgen`](crates/gore-modgen) | Rust lib | `overrides.toml` → UE4SS Lua mod generation + validation. |
-| [`gore-ffi`](crates/gore-ffi) | Rust cdylib | `dart:ffi` bridge for mod-studio (`gore_ffi.dll`). |
+| [`gore-modgen`](crates/gore-modgen) | Rust lib | `overrides.toml` → UE4SS Lua mod generation + field-level validation. |
+| [`gore-mod`](crates/gore-mod) | Rust lib | Unified bundle engine: `BuildSpec` → bundle (manifest + payloads) → deploy/undeploy. |
+| [`gore-fmod`](crates/gore-fmod) | Rust lib | FMOD `.bank` decrypt/parse + Vorbis decode (audio backend; pure Rust). |
+| [`gore-tex`](crates/gore-tex) | Rust lib | IoStore texture extract/replace; cooks + packs a Zen triplet. Built on vendored [`retoc`](vendor/retoc) + `gore-oodle`. |
+| [`gore-ffi`](crates/gore-ffi) | Rust cdylib | `dart:ffi` bridge for mod-studio (`gore_ffi.dll`) over the full mod engine. |
 | [`gore-save`](crates/gore-save) | Rust lib + cdylib | GSAV savegame parse/edit core (`gore_save.dll`). |
-| [`gore-oodle`](crates/gore-oodle) | Rust lib | Oodle/Kraken codec. |
-| [`gore-as`](crates/gore-as) | Rust lib | AngelScript precompiled-cache decoder/emitter/splicer. |
-| [`save-editor`](apps/save-editor) | Flutter app | GSAV savegame editor GUI (auto-updating). |
-| [`mod-studio`](apps/mod-studio) | Flutter app | No-code UE4SS Lua mod authoring GUI. |
-| [`lua`](lua) | Lua SDK | Shared `gorelib` UE4SS SDK, deployed into the game's `Mods/shared` by `gore deploy-shared`. |
-| [`mods`](mods) | UE4SS mods | First-party mod folders: `example` (sample using gorelib) and `gore-dump` (generated by `gore dump-mod`, harvests in-game CDO defaults for `gore sync`). End-user mods are emitted by `gore`/`mod-studio` into the game, not stored here. |
+| [`gore-oodle`](crates/gore-oodle) | Rust lib | Oodle/Kraken codec (vendored ooz; no proprietary `oo2core` DLL). |
+| [`gore-as`](crates/gore-as) | Rust lib | AngelScript precompiled-cache decoder/emitter/decompiler/splicer. |
 
-## The mod artifact
-
-The two modding front-ends — the [`gore`](crates/gore) CLI and
-[`mod-studio`](apps/mod-studio) — emit the **same thing**: a UE4SS Lua mod
-folder the player drops into `<game>/Binaries/Win64/ue4ss/Mods/`. The Lua
-applies **CDO overrides** (and optionally hooks) at game load — e.g. set an
-item's value via
-`StaticFindObject("/Script/Angelscript.Default__<Class>")` then
-`cdo.m_Value = ...`. The front-ends are authoring tools; they do **not** patch
-game files — the produced mod does its work at runtime, against a shared
-[`lua`](lua) SDK that the CLI deploys into the game.
-
-[`save-editor`](apps/save-editor) is a different axis entirely: it edits **save
-files**, not game behavior.
-
-## Build
+# Build
 
 The Rust workspace spans every crate:
 
@@ -85,25 +380,35 @@ cargo build
 cargo test
 ```
 
-Products (apps and shippable artifacts) are driven by the top-level
-orchestrator:
+Products (apps and shippable artifacts) are driven by the top-level orchestrator.
+The registered projects are **`gore-save`** (save-editor), **`gore-mod`**
+(mod-studio), and **`gore`** (the CLI):
 
 ```sh
 python build.py <project> build      # debug build
-python build.py <project> dist       # release bundle
-python build.py <project> installer  # Windows installer
+python build.py <project> run        # build if missing, then launch
+python build.py <project> dist       # release bundle (+ packaged zip)
+python build.py <project> installer  # dist + Windows installer
 python build.py <project> test       # run the project's test suite
 ```
 
-Per-project build/run details live in each component's own README (e.g.
+`python test.py all` runs the full suite (Rust `cargo test`, Python tools,
+Flutter `analyze` + `test`) — this is what CI executes. Per-project build/run
+details live in each component's own README (e.g.
 [`apps/save-editor/README.md`](apps/save-editor/README.md)).
 
-### Versioning
+## Versioning
 
-Per-product independent semver — `save-editor` (`gore-save-v*`), `mod-studio`
-(`gore-mod-v*`), and the CLI (`gore-cli-v*`). Internal libraries share one
-workspace version.
+Per-product independent semver, with prefixed release tags driving the Release
+workflow:
 
-## License
+- `save-editor` → `gore-save-v*` (publishes with `make_latest=true`; its updater
+  polls `releases/latest`)
+- `mod-studio` → `gore-mod-v*` (updater reads a fixed `gore-mod-appcast` release)
+- the CLI → `gore-cli-v*`
+
+Internal libraries share one workspace version.
+
+# License
 
 MIT. See [LICENSE](LICENSE).
