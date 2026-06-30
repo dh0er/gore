@@ -1,11 +1,14 @@
 import 'dart:io';
 
 import 'package:file_selector/file_selector.dart';
+import 'package:goresave/features/editor/domain/actor.dart';
 import 'package:goresave/features/editor/domain/core_service.dart';
 import 'package:goresave/features/editor/domain/editor_models.dart';
 import 'package:goresave/features/editor/domain/editor_settings_store.dart';
 import 'package:goresave/features/editor/domain/game_time.dart';
 import 'package:goresave/features/editor/domain/hero_attributes.dart';
+import 'package:goresave/features/editor/domain/npc_actors_page.dart';
+import 'package:goresave/features/editor/domain/npc_attributes.dart';
 import 'package:goresave/features/editor/domain/pending_edits.dart';
 import 'package:goresave/features/editor/domain/progression_models.dart';
 import 'package:goresave/utils/default_paths.dart';
@@ -67,6 +70,8 @@ class EditorState {
     this.codecError,
     this.lastWriteMessage,
     this.pendingEdits = const {},
+    this.selectedActor = const Actor.player(),
+    this.invalidNpcEditKey,
   });
 
   final String saveDir;
@@ -91,10 +96,24 @@ class EditorState {
   /// different save, or selection change.
   final Map<String, PendingSaveEdit> pendingEdits;
 
+  /// The actor (player or a specific NPC) the actor-aware editor tabs operate
+  /// on. Shared so the attribute and inventory tabs stay in sync. Defaults to
+  /// the player so existing behavior — player shown first — is unchanged.
+  final Actor selectedActor;
+
   /// True when there are any unsaved edits. The profile-switch guard blocks on
   /// this. Difficulty is edited separately (a profile-level dialog that writes
   /// immediately) and is never part of the pending set.
   bool get hasUnsavedEdits => pendingEdits.isNotEmpty;
+
+  /// Pending-edit key of the NPC whose attribute panel currently has an invalid
+  /// (empty/non-numeric) field, or null. Its stored draft is KEPT (so switching
+  /// actors does not lose earlier valid edits) but Save is blocked while set, so
+  /// the now-stale stored value is never written behind an invalid field.
+  final String? invalidNpcEditKey;
+
+  /// True while an NPC attribute field is invalid — global Save is disabled.
+  bool get hasInvalidNpcEdit => invalidNpcEditKey != null;
 
   final String? error;
 
@@ -176,6 +195,8 @@ class EditorState {
     String? codecError,
     String? lastWriteMessage,
     Map<String, PendingSaveEdit>? pendingEdits,
+    Actor? selectedActor,
+    Object? invalidNpcEditKey = _unchanged,
     bool clearInspection = false,
     bool clearBackups = false,
     bool clearError = false,
@@ -212,6 +233,14 @@ class EditorState {
       pendingEdits: clearPendingEdits
           ? const {}
           : pendingEdits ?? this.pendingEdits,
+      selectedActor: selectedActor ?? this.selectedActor,
+      // A fresh inspection re-seed (clearPendingEdits) also drops any standing
+      // NPC validation block — the invalid in-progress field is gone with it.
+      invalidNpcEditKey: clearPendingEdits
+          ? null
+          : identical(invalidNpcEditKey, _unchanged)
+          ? this.invalidNpcEditKey
+          : invalidNpcEditKey as String?,
     );
   }
 }
@@ -399,6 +428,12 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// value without reaching into the protected `state`.
   String? get selectedPath => state.selectedPath;
 
+  /// The pending edit registered under [key], or null. Lets UI surfaces
+  /// rehydrate their local draft from a previously-registered per-actor entry
+  /// (e.g. a per-NPC inventory/attribute draft kept across an actor switch)
+  /// without reaching into the protected `state`.
+  PendingSaveEdit? pendingEditFor(String key) => state.pendingEdits[key];
+
   /// Dismiss the current error banner.
   void dismissError() {
     if (state.error != null) state = state.copyWith(clearError: true);
@@ -490,6 +525,25 @@ class EditorNotifier extends StateNotifier<EditorState> {
     return pending;
   }
 
+  /// Select the actor (player or a specific NPC) the actor-aware editor tabs
+  /// operate on. Updates shared state so the attribute and inventory tabs
+  /// rebuild against the new selection. No-op if [actor] is already selected.
+  void selectActor(Actor actor) {
+    if (state.selectedActor == actor) return;
+    // Switching actor abandons any in-progress invalid NPC field, so drop the
+    // validation block — the previous NPC's stored (valid) draft survives.
+    state = state.copyWith(selectedActor: actor, invalidNpcEditKey: null);
+  }
+
+  /// Mark (`pendingKey`) or clear (`null`) the NPC attribute panel's invalid
+  /// field state. While set, global Save is disabled ([EditorState.hasInvalidNpcEdit])
+  /// so a now-stale stored draft is never written behind an invalid field; the
+  /// stored draft itself is left intact.
+  void setNpcEditInvalid(String? pendingKey) {
+    if (state.invalidNpcEditKey == pendingKey) return;
+    state = state.copyWith(invalidNpcEditKey: pendingKey);
+  }
+
   // ---------------------------------------------------------------------------
   // Pending-edit registry
   // ---------------------------------------------------------------------------
@@ -536,11 +590,16 @@ class EditorNotifier extends StateNotifier<EditorState> {
     // wipe those mid-write registry entries anyway, but the snapshot-key
     // path is the explicit safety net for any failed-then-refreshed scenarios.
     final snapshotKeys = state.pendingEdits.keys.toList()..sort();
-    final allEdits = <Map<String, Object?>>[];
+    // Each flattened edit remembers which snapshot key it came from, so a
+    // partially-successful save can clear exactly the keys whose sub-write
+    // committed (and keep the rest pending for retry).
+    final allEdits = <_KeyedEdit>[];
     var syncPersistent = false;
     for (final key in snapshotKeys) {
       final entry = state.pendingEdits[key]!;
-      allEdits.addAll(entry.edits);
+      for (final edit in entry.edits) {
+        allEdits.add(_KeyedEdit(key, edit));
+      }
       if (entry.syncPersistentDataList) syncPersistent = true;
     }
 
@@ -549,7 +608,8 @@ class EditorNotifier extends StateNotifier<EditorState> {
     // silently let sorted-key order pick the winner — refuse instead and let
     // the user resolve the conflict.
     final seenTypedPaths = <String>{};
-    for (final edit in allEdits) {
+    for (final keyed in allEdits) {
+      final edit = keyed.edit;
       if (edit['path'] != 'private.typed.setValue') continue;
       final value = edit['value'];
       if (value is! Map) continue;
@@ -565,67 +625,132 @@ class EditorNotifier extends StateNotifier<EditorState> {
       }
     }
 
-    // A structural inventory edit (addItem/removeItem) splices the MainContainer
-    // slot array and shifts every byte after the splice point. The core applies
-    // a batch in one write round, so ANY other edit in the same write is unsafe:
-    // a typed edit re-resolves a now-shifted array index, and an in-place
-    // setItemCount patches byte offsets that the splice invalidates. Require a
-    // structural inventory edit to be the only edit in the write.
-    final hasStructuralInventory = allEdits.any(
-      (edit) =>
-          edit['path'] == 'private.inventory.addItem' ||
-          edit['path'] == 'private.inventory.removeItem',
-    );
-    if (hasStructuralInventory && allEdits.length > 1) {
-      state = state.copyWith(
-        error:
-            'An inventory add or remove shifts item indices, so it must be '
-            'saved on its own. Save or reset your other unsaved changes first, '
-            'then save the inventory change.',
-      );
-      return false;
-    }
+    // Splicing structural edits (addItem/removeItem, knowledge.addCharacter,
+    // npc.revive) insert or remove bytes mid-payload and shift every
+    // offset/index after the splice point; the core rejects a write that mixes
+    // one with ANY peer edit. Mirror the core's list and give each splicing edit
+    // its OWN write_save; everything else (fixed-size, in-place) batches into a
+    // single trailing write. Because the core re-reads the file fresh on every
+    // write_save and re-resolves symbolic paths per edit, sequential writes
+    // chain safely — even two splices on the same NPC, where the second
+    // re-parses the first's already-spliced tag container.
+    const splicingPaths = {
+      'private.inventory.addItem',
+      'private.inventory.removeItem',
+      'private.knowledge.addCharacter',
+      'private.npc.revive',
+    };
+    final splicing = allEdits
+        .where((k) => splicingPaths.contains(k.edit['path']))
+        .toList();
+    final fixedBatch = allEdits
+        .where((k) => !splicingPaths.contains(k.edit['path']))
+        .toList();
+
+    // Build the worklist: ONE write for the fixed-size batch (if any) FIRST,
+    // then one write per splicing edit. Backup is taken on the FIRST sub-write
+    // only, so a Save makes exactly one pristine snapshot regardless of
+    // sub-write count.
+    //
+    // The fixed batch leads for two reasons:
+    //  - It carries syncPersistentDataList, so making it the backup-taking write
+    //    means the PersistentDataList.sav companion is updated WITH a restorable
+    //    companion backup (the synced write must be the one that takes backup).
+    //  - A splicing npc.revive writes HP (restore→Max). Running the fixed batch
+    //    first means a conflicting manual Health edit on the SAME NPC is applied
+    //    BEFORE revive, so the Revive action's HP wins (last write).
+    // If there is no fixed batch, the first splice takes backup:true instead.
+    final worklist = <_SubWrite>[
+      if (fixedBatch.isNotEmpty)
+        _SubWrite(
+          edits: [for (final keyed in fixedBatch) keyed.edit],
+          keys: {for (final keyed in fixedBatch) keyed.key},
+          // syncPersistentDataList keys off a public/fixed edit, so it rides the
+          // fixed-size batch.
+          syncPersistentDataList: syncPersistent,
+        ),
+      for (final keyed in splicing)
+        _SubWrite(edits: [keyed.edit], keys: {keyed.key}),
+    ];
 
     final n = allEdits.length;
-    // `slotCommitted` tracks that write_save put the bytes on disk, captured
-    // BEFORE refresh() so we still converge (clear the snapshot keys) even if a
-    // later refresh fails — leaving committed edits pending would make the
-    // editor think on-disk changes are unsaved and a retry double-apply them.
-    var slotCommitted = false;
+    // Keys whose sub-write committed bytes to disk, captured BEFORE the trailing
+    // refresh() so we still converge (clear them) even if that refresh fails.
+    final committedKeys = <String>{};
+    // The first (backup-taking) sub-write's response data drives the success
+    // message: its `backupPath` is the one pristine snapshot for this Save.
+    Map<String, Object?> firstData = const {};
+    String? failureError;
     var ok = false;
     await _withLoading(() async {
-      final response = await _execute(
-        'write_save',
-        payload: {
-          'path': savePath,
-          'backup': true,
-          if (syncPersistent) 'syncPersistentDataList': true,
-          'edits': allEdits,
-        },
-      );
-      if (response['ok'] != true) {
-        // write_save failed: nothing committed. Keep ALL pending edits.
-        state = state.copyWith(error: _errorMessage(response));
+      for (var i = 0; i < worklist.length; i++) {
+        final sub = worklist[i];
+        final response = await _execute(
+          'write_save',
+          payload: {
+            'path': savePath,
+            // Backup-once: only the first sub-write snapshots the pristine file.
+            'backup': i == 0,
+            if (sub.syncPersistentDataList) 'syncPersistentDataList': true,
+            'edits': sub.edits,
+          },
+        );
+        if (response['ok'] != true) {
+          // Stop on the first failure. Earlier sub-writes already committed.
+          failureError = _errorMessage(response);
+          break;
+        }
+        if (i == 0) {
+          firstData = (response['data'] as Map?)?.cast<String, Object?>() ??
+              const {};
+        }
+        committedKeys.addAll(sub.keys);
+      }
+
+      if (failureError == null) {
+        // All sub-writes succeeded.
+        state = state.copyWith(
+          lastWriteMessage: _backupMessage(
+            '$n change${n == 1 ? '' : 's'} saved with backup',
+            firstData,
+          ),
+        );
+        // Single trailing refresh after the last successful write.
+        await refresh();
+        ok = true;
         return;
       }
-      slotCommitted = true;
-      final data = (response['data'] as Map).cast<String, Object?>();
-      state = state.copyWith(
-        lastWriteMessage: _backupMessage(
-          '$n change${n == 1 ? '' : 's'} saved with backup',
-          data,
-        ),
-      );
-      await refresh();
-      ok = true;
+
+      // A sub-write failed AFTER an earlier one already committed bytes to disk.
+      // The panes are still seeded from the pre-save inspection, so refresh to
+      // show the new on-disk state — but PRESERVE the still-unsaved (uncommitted)
+      // pending edits so the user can retry them. refresh() clears every pending
+      // edit AND the error, so snapshot the uncommitted ones, refresh, re-apply
+      // them, then re-surface the error. With nothing committed yet, the panes
+      // already match disk, so skip the refresh and just surface the error.
+      if (committedKeys.isNotEmpty) {
+        final preserved = <String, PendingSaveEdit>{
+          for (final entry in state.pendingEdits.entries)
+            if (!committedKeys.contains(entry.key)) entry.key: entry.value,
+        };
+        // Refresh from disk and restore the still-unsaved edits ATOMICALLY with
+        // the new inspection — but only if we land back on the same save they
+        // target. refresh() may clear/auto-switch selectedPath (this save
+        // vanished, or another slot was auto-selected); the preserved edits
+        // target the ORIGINAL file, so they are dropped in that case rather than
+        // re-targeted at the wrong save. Restoring inside the inspection re-seed
+        // (vs. re-adding afterward) means the kept-alive editors rehydrate WITH
+        // them, so a preserved inventory add/remove is shown, not just counted.
+        await refresh(preservedEdits: preserved, preservedForPath: savePath);
+      }
+      state = state.copyWith(error: failureError);
     });
 
-    // The snapshot edits are on disk now — clear them explicitly so a failed
-    // re-inspect still converges (refresh()'s _inspect clears on success).
-    if (slotCommitted) {
-      for (final key in snapshotKeys) {
-        clearPendingEdit(key);
-      }
+    // The committed edits are on disk now — clear exactly their keys so a failed
+    // re-inspect still converges, and a partial save keeps only the unsaved keys
+    // pending for retry.
+    for (final key in committedKeys) {
+      clearPendingEdit(key);
     }
     return ok;
   }
@@ -656,7 +781,17 @@ class EditorNotifier extends StateNotifier<EditorState> {
     await refresh();
   }
 
-  Future<void> refresh() async {
+  /// Re-scan the save folder and re-inspect the (possibly re-selected) save.
+  ///
+  /// [preservedEdits] + [preservedForPath]: a partial-save retry can carry the
+  /// still-uncommitted edits across the refresh. They are restored ONLY when the
+  /// post-refresh selection is still [preservedForPath] (the save they target) —
+  /// and atomically with the new inspection, so the editors rehydrate with them.
+  /// If the save vanished or another slot was auto-selected, they are dropped.
+  Future<void> refresh({
+    Map<String, PendingSaveEdit>? preservedEdits,
+    String? preservedForPath,
+  }) async {
     final seq = ++_loadSeq;
     _loadStarted();
     state = state.copyWith(isLoading: true, clearError: true);
@@ -712,14 +847,31 @@ class EditorNotifier extends StateNotifier<EditorState> {
       // Pending edits are cleared by _inspect once the fresh inspection
       // actually lands (so a failed re-inspect keeps them retryable); only
       // when nothing remains selected is there no inspect to do it.
-      state = newState.copyWith(
-        selectedPath: selectedPath,
-        clearInspection: selectedPath == null,
-        clearBackups: selectedPath == null,
-        clearPendingEdits: selectedPath == null,
-      );
-      if (selectedPath != null) {
-        await _inspect(selectedPath);
+      //
+      // Do NOT pre-set selectedPath when an inspect will follow: _inspect derives
+      // `switchingSlot` from `state.selectedPath != path` and must still see the
+      // PREVIOUS path, so a real slot switch (the old save disappeared / the
+      // folder changed) resets the actor-aware tabs to the player. Pre-setting it
+      // here made switchingSlot always false on refresh, leaking a stale NPC
+      // GlobalId into the newly inspected save.
+      if (selectedPath == null) {
+        state = newState.copyWith(
+          selectedPath: null,
+          clearInspection: true,
+          clearBackups: true,
+          clearPendingEdits: true,
+        );
+      } else {
+        state = newState;
+        await _inspect(
+          selectedPath,
+          // Restore the preserved partial-save edits only if we landed back on
+          // the same save they target (atomic with the inspection re-seed).
+          restorePendingEdits:
+              (preservedForPath != null && selectedPath == preservedForPath)
+              ? preservedEdits
+              : null,
+        );
       }
     } catch (error) {
       // A thrown core call (e.g. invalid/null native JSON) must surface as an
@@ -736,7 +888,11 @@ class EditorNotifier extends StateNotifier<EditorState> {
     await _inspect(path, clearWriteMessage: true);
   }
 
-  Future<void> _inspect(String path, {bool clearWriteMessage = false}) async {
+  Future<void> _inspect(
+    String path, {
+    bool clearWriteMessage = false,
+    Map<String, PendingSaveEdit>? restorePendingEdits,
+  }) async {
     final seq = ++_loadSeq;
     // Switching slots: drop the previous slot's inspection/backups so the panes
     // don't keep showing stale data while the new load runs.
@@ -779,13 +935,29 @@ class EditorNotifier extends StateNotifier<EditorState> {
       // does not drop the save metadata/private views that already loaded.
       // The fresh inspection re-seeds every editor, so pending edits are
       // discarded in the same state change — never earlier (see above).
+      // A fresh inspection re-seeds every editor; drop the cached full NPC list
+      // so the ActorSelector re-fetches against the new save state.
+      _invalidateNpcCache();
       state = state.copyWith(
         inspection: SaveInspection.fromJson(data),
         // The fresh inspection re-seeds every editor, so discard all pending
         // edits — including any pending difficulty edit, which clearPendingEdits
         // also clears. The card re-seeds its controls from the new inspection's
-        // stored difficulty.
-        clearPendingEdits: true,
+        // stored difficulty. EXCEPTION: a same-save partial-save refresh passes
+        // the preserved uncommitted edits here so they are restored IN THE SAME
+        // state-apply as the new inspection — the kept-alive editors then
+        // rehydrate WITH them, instead of rehydrating empty and only counting
+        // (but not showing) edits re-added after the fact.
+        clearPendingEdits: restorePendingEdits == null,
+        pendingEdits: restorePendingEdits,
+        // On a SLOT SWITCH, reset the actor-aware tabs to the player: the
+        // selected NPC's GlobalId belongs to the PREVIOUS save, so keeping it
+        // would make the attribute/inventory tabs run loadNpcAttributes/
+        // loadNpcInventory with a stale id against the new save. On a same-save
+        // refresh (after a save/reset) the selected NPC is still valid, so keep
+        // it (null = unchanged) — otherwise NPC editing jumps back to Player
+        // after every save.
+        selectedActor: switchingSlot ? const Actor.player() : null,
       );
       final backupSnapshot = await _loadBackups(path, seq);
       if (backupSnapshot == null) return;
@@ -1173,6 +1345,173 @@ class EditorNotifier extends StateNotifier<EditorState> {
     return MemoryCharactersPage.fromJson(data);
   }
 
+  /// Load one page of NPC actors from the core `private.npc.list` command for
+  /// the currently selected save. Mirrors [loadMemoryCharacters]: server-side
+  /// pagination + optional query, returning a typed page that carries an inline
+  /// error instead of throwing so the ActorSelector can render it. The full NPC
+  /// set (~1484) is large, so callers MUST paginate rather than fetch it all.
+  Future<NpcActorsPage> loadNpcActors({
+    String query = '',
+    int offset = 0,
+    int limit = 100,
+    String? path,
+  }) async {
+    // `path` lets a multi-page caller PIN the save it started against so a
+    // mid-fetch save switch can't mix pages from two files (see
+    // [loadAllNpcActors]); single-shot callers omit it and use the live path.
+    final resolvedPath = path ?? state.selectedPath;
+    if (resolvedPath == null) {
+      return const NpcActorsPage(error: 'No save selected.');
+    }
+    try {
+      final response = await _execute(
+        'private.npc.list',
+        payload: {
+          'path': resolvedPath,
+          if (query.isNotEmpty) 'query': query,
+          'offset': offset,
+          'limit': limit,
+        },
+      );
+      if (response['ok'] != true) {
+        return NpcActorsPage(error: _errorMessage(response));
+      }
+      return NpcActorsPage.fromJson(
+        (response['data'] as Map).cast<String, Object?>(),
+      );
+    } catch (error) {
+      return NpcActorsPage(error: 'NPC list failed: $error');
+    }
+  }
+
+  /// Cached full NPC list, memoized per inspection. The ActorSelector fetches
+  /// the ENTIRE list once (no server `query`) and filters/paginates it
+  /// client-side, so both the Attribute and Inventory tabs — and every
+  /// keystroke — reuse a single decompress instead of re-hitting the core. The
+  /// cache is keyed by the inspection identity it was loaded for; a refresh /
+  /// slot switch produces a fresh inspection, which invalidates it (see
+  /// [_invalidateNpcCache]).
+  Future<NpcActorsPage>? _allNpcActorsFuture;
+  SaveInspection? _allNpcActorsFor;
+
+  /// Drop the cached full NPC list. Called whenever a fresh inspection lands so
+  /// the next selector load re-fetches against the new save state.
+  void _invalidateNpcCache() {
+    _allNpcActorsFuture = null;
+    _allNpcActorsFor = null;
+  }
+
+  /// Load (and memoize) the FULL NPC list for the current inspection. The
+  /// signature matches [NpcActorsLoader] so the ActorSelector can pass it
+  /// directly; [query]/[offset]/[limit] are ignored — the selector filters and
+  /// paginates client-side. Subsequent calls within the same inspection return
+  /// the cached future (one decompress shared across both tabs + all
+  /// keystrokes). A failed load is NOT cached, so a transient error can retry.
+  Future<NpcActorsPage> loadAllNpcActors({
+    String query = '',
+    int offset = 0,
+    int limit = 100,
+  }) {
+    final inspection = state.inspection;
+    // Pin the save path for the WHOLE multi-page fetch. If the user switches
+    // saves mid-fetch, every page still comes from the file this fetch started
+    // against, so pages from two different saves can never be merged into one
+    // list (the stale future's cache slot is invalidated by the new inspection).
+    final pinnedPath = state.selectedPath;
+    final cached = _allNpcActorsFuture;
+    if (cached != null && identical(_allNpcActorsFor, inspection)) {
+      return cached;
+    }
+    final future = () async {
+      // The core clamps `private.npc.list` `limit` to 1000, but real saves have
+      // ~1484+ NPCs — a single request would silently drop everyone past the
+      // first page. PAGE through with an increasing offset, accumulating until
+      // we have `total`, then return one combined page. The decode is cached
+      // per-inspection in the core, so follow-up pages are cheap.
+      final npcs = <NpcActor>[];
+      var offset = 0;
+      var total = 0;
+      while (true) {
+        final page = await loadNpcActors(
+          offset: offset,
+          limit: 1000,
+          path: pinnedPath,
+        );
+        // Don't cache an error result — let the next call retry.
+        if (page.error != null) {
+          _invalidateNpcCache();
+          return page;
+        }
+        npcs.addAll(page.npcs);
+        total = page.total;
+        offset += page.npcs.length;
+        // Stop once we've collected every NPC, or the core returns an empty
+        // page (defensive: never loop forever on a stuck/empty response).
+        if (page.npcs.isEmpty || offset >= total) break;
+      }
+      return NpcActorsPage(npcs: npcs, total: total, offset: 0, limit: total);
+    }();
+    _allNpcActorsFuture = future;
+    _allNpcActorsFor = inspection;
+    return future;
+  }
+
+  /// Load every attribute of a single NPC (by GlobalId) from the core
+  /// `private.npc.attributes` command for the currently selected save. Real
+  /// NPCs return ~46 rows. Each row carries the FULL typed Base/Current paths
+  /// that `private.typed.setValue` resolves, so the NPC attribute editor can
+  /// register edits via the same pending-edit mechanism the player uses.
+  /// Returns a result carrying an inline error instead of throwing, mirroring
+  /// [loadHeroAttributes].
+  Future<NpcAttributesResult> loadNpcAttributes(String id) async {
+    final path = state.selectedPath;
+    if (path == null) {
+      return const NpcAttributesResult(error: 'No save selected.');
+    }
+    try {
+      final response = await _execute(
+        'private.npc.attributes',
+        payload: {'path': path, 'id': id},
+      );
+      if (response['ok'] != true) {
+        return NpcAttributesResult(error: _errorMessage(response));
+      }
+      return NpcAttributesResult.fromJson(
+        (response['data'] as Map).cast<String, Object?>(),
+      );
+    } catch (error) {
+      return NpcAttributesResult(error: 'NPC attributes failed: $error');
+    }
+  }
+
+  /// Load a single NPC's inventory (by GlobalId) from the core
+  /// `private.npc.inventory` command for the currently selected save. The
+  /// payload has the SAME shape as the player inventory summary
+  /// ([PrivateInventorySummary]), so the inventory card renders it unchanged;
+  /// queued edits carry `actorId: <id>` so they target this NPC's container.
+  /// Returns a result carrying an inline error instead of throwing, mirroring
+  /// [loadNpcAttributes].
+  Future<NpcInventoryResult> loadNpcInventory(String id) async {
+    final path = state.selectedPath;
+    if (path == null) {
+      return const NpcInventoryResult(error: 'No save selected.');
+    }
+    try {
+      final response = await _execute(
+        'private.npc.inventory',
+        payload: {'path': path, 'id': id},
+      );
+      if (response['ok'] != true) {
+        return NpcInventoryResult(error: _errorMessage(response));
+      }
+      return NpcInventoryResult.fromJson(
+        (response['data'] as Map).cast<String, Object?>(),
+      );
+    } catch (error) {
+      return NpcInventoryResult(error: 'NPC inventory failed: $error');
+    }
+  }
+
   Future<MemoryEventsPage> loadMemoryEvents(
     String character, {
     String query = '',
@@ -1278,6 +1617,87 @@ class EditorNotifier extends StateNotifier<EditorState> {
     );
   }
 
+  /// Register a PENDING revive of an NPC under the per-NPC key `npc.revive:$id`.
+  /// The global Save button applies it via [saveAllPending], which submits
+  /// `private.npc.revive` as its own write_save (the core rejects batching this
+  /// splicing edit with peers, so [saveAllPending] splits it out).
+  ///
+  /// Reviving clears the NPC's defeat/kill memory events AND restores HP→Max.
+  /// Registering a draft only — no write fires here, mirroring every other
+  /// editor surface's pending contribution. Re-invoking for the same NPC simply
+  /// overwrites its key (idempotent).
+  void setPendingNpcRevive(String id) {
+    setPendingEdit(
+      'npc.revive:$id',
+      PendingSaveEdit(
+        edits: [
+          {
+            'path': 'private.npc.revive',
+            'value': {'id': id},
+          },
+        ],
+      ),
+    );
+  }
+
+  /// Load the player's per-guild crime tally from the core
+  /// `private.factions.list` command for the currently selected save. Returns a
+  /// page carrying an inline error instead of throwing, mirroring
+  /// [loadNpcAttributes].
+  Future<FactionsPage> loadFactions() async {
+    final path = state.selectedPath;
+    if (path == null) {
+      return const FactionsPage(error: 'No save selected.');
+    }
+    try {
+      final response = await _execute(
+        'private.factions.list',
+        payload: {'path': path},
+      );
+      if (response['ok'] != true) {
+        return FactionsPage(error: _errorMessage(response));
+      }
+      return FactionsPage.fromJson(
+        (response['data'] as Map).cast<String, Object?>(),
+      );
+    } catch (error) {
+      return FactionsPage(error: 'Faction list failed: $error');
+    }
+  }
+
+  /// Pending-edit key prefix for a queued faction forgive (`<prefix><guild>`).
+  static const _factionForgivePrefix = 'factions.forgive:';
+
+  /// Register a PENDING forgive of a guild under the per-guild key
+  /// `factions.forgive:$guild`. `private.factions.forgive` is a FIXED-size edit
+  /// (it only flips `bIsForgiven`/`bIsSuppressed` bools), so it is NOT in
+  /// [saveAllPending]'s splicingPaths set and rides the normal fixed-size batch
+  /// when the global Save runs. Registering a draft only — no write fires here,
+  /// mirroring every other editor surface's pending contribution. Re-invoking
+  /// for the same guild simply overwrites its key (idempotent).
+  void setPendingFactionForgive(String guild) {
+    setPendingEdit(
+      '$_factionForgivePrefix$guild',
+      PendingSaveEdit(
+        edits: [
+          {
+            'path': 'private.factions.forgive',
+            'value': {'guild': guild},
+          },
+        ],
+      ),
+    );
+  }
+
+  /// The guild tags with a queued (pending) forgive, read from the pending-edit
+  /// registry. The UI derives its optimistic "being forgiven…" reflect from this
+  /// so the state survives a partial-save refresh (which re-applies still-pending
+  /// forgives into the registry) rather than relying on a local cache.
+  Set<String> pendingForgiveGuilds() => state.pendingEdits.keys
+      .where((k) => k.startsWith(_factionForgivePrefix))
+      .map((k) => k.substring(_factionForgivePrefix.length))
+      .toSet();
+
   String _errorMessage(Map<String, Object?> response) {
     final error = (response['error'] as Map?)?.cast<String, Object?>();
     return error?['message'] as String? ?? 'Unknown core error';
@@ -1343,4 +1763,27 @@ class _BackupSnapshot {
 
   final List<BackupEntry> backups;
   final List<BackupEntry> companionBackups;
+}
+
+/// A single flattened pending edit paired with the snapshot key it came from, so
+/// [EditorNotifier.saveAllPending] can clear committed keys per sub-write.
+class _KeyedEdit {
+  const _KeyedEdit(this.key, this.edit);
+
+  final String key;
+  final Map<String, Object?> edit;
+}
+
+/// One write_save unit in [EditorNotifier.saveAllPending]'s worklist: the edits
+/// to submit and the snapshot keys to clear once it commits.
+class _SubWrite {
+  const _SubWrite({
+    required this.edits,
+    required this.keys,
+    this.syncPersistentDataList = false,
+  });
+
+  final List<Map<String, Object?>> edits;
+  final Set<String> keys;
+  final bool syncPersistentDataList;
 }

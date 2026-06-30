@@ -93,7 +93,7 @@ String _localizedState(AppLocalizations l10n, String? rawState) {
 }
 
 /// Sidebar section entries for the Progression tab.
-enum _ProgSection { quests, knowledge, events }
+enum _ProgSection { quests, knowledge, events, factions }
 
 /// Progression tab: structured quests / dialog knowledge / memory events.
 /// Full-height sidebar layout (no outer scroll). [reloadKey] is the
@@ -179,6 +179,13 @@ class _ProgressionPanelState extends State<ProgressionPanel> {
                       onTap: () =>
                           setState(() => _selected = _ProgSection.events),
                     ),
+                    _SidebarTile(
+                      icon: Icons.gavel_outlined,
+                      label: l10n.factionsSidebar,
+                      selected: _selected == _ProgSection.factions,
+                      onTap: () =>
+                          setState(() => _selected = _ProgSection.factions),
+                    ),
                   ],
                 ),
               ),
@@ -220,6 +227,16 @@ class _ProgressionPanelState extends State<ProgressionPanel> {
                   offstage: _selected != _ProgSection.events,
                   child: _EventsDetail(
                     key: const ValueKey('events'),
+                    notifier: widget.notifier,
+                    editable: widget.editable,
+                    reloadKey: reloadKey,
+                    theme: theme,
+                  ),
+                ),
+                Offstage(
+                  offstage: _selected != _ProgSection.factions,
+                  child: _FactionsDetail(
+                    key: const ValueKey('factions'),
                     notifier: widget.notifier,
                     editable: widget.editable,
                     reloadKey: reloadKey,
@@ -2090,6 +2107,260 @@ class _EventsDetailState extends ConsumerState<_EventsDetail> {
                   ),
                 ],
               ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Factions detail — list of guilds the player has crimes against + forgive
+// ---------------------------------------------------------------------------
+
+/// Localized friendly name for a camp-level guild tag (or the `Other` bucket),
+/// falling back to the core-supplied [label], then the raw [guild] tag.
+String _localizedGuildLabel(
+  AppLocalizations l10n,
+  String guild,
+  String label,
+) {
+  switch (guild) {
+    case 'Guild.Human.OldCamp':
+      return l10n.factionGuildOldCamp;
+    case 'Guild.Human.NewCamp':
+      return l10n.factionGuildNewCamp;
+    case 'Guild.Human.SwampCamp':
+      return l10n.factionGuildSwampCamp;
+    case 'Other':
+      return l10n.factionGuildOther;
+    default:
+      return label.isNotEmpty ? label : guild;
+  }
+}
+
+/// A compact "·"-joined breakdown of UN-FORGIVEN crimes by type, omitting zero
+/// categories, e.g. "3 Morde · 1 Übergriff · 5 Diebstähle". Empty when the
+/// guild has no un-forgiven crimes.
+String _crimeBreakdownText(AppLocalizations l10n, FactionGuild g) {
+  final c = g.crimes;
+  final parts = <String>[];
+  if (c.murder > 0) parts.add(l10n.crimeMurder(c.murder));
+  if (c.assault > 0) parts.add(l10n.crimeAssault(c.assault));
+  if (c.theft > 0) parts.add(l10n.crimeTheft(c.theft));
+  if (c.trespassing > 0) parts.add(l10n.crimeTrespassing(c.trespassing));
+  if (c.threat > 0) parts.add(l10n.crimeThreat(c.threat));
+  if (c.other > 0) parts.add(l10n.crimeOther(c.other));
+  return parts.join(' · ');
+}
+
+/// A small rounded status pill (Feindselig / Friedlich / being-forgiven).
+class _StatusBadge extends StatelessWidget {
+  const _StatusBadge({required this.label, required this.color});
+
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withValues(alpha: 0.5)),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          color: color,
+          fontWeight: FontWeight.w600,
+          fontSize: 12,
+        ),
+      ),
+    );
+  }
+}
+
+class _FactionsDetail extends ConsumerStatefulWidget {
+  const _FactionsDetail({
+    super.key,
+    required this.notifier,
+    required this.editable,
+    required this.reloadKey,
+    required this.theme,
+  });
+
+  final EditorNotifier notifier;
+  final bool editable;
+  final SaveInspection reloadKey;
+  final ThemeData theme;
+
+  @override
+  ConsumerState<_FactionsDetail> createState() => _FactionsDetailState();
+}
+
+class _FactionsDetailState extends ConsumerState<_FactionsDetail> {
+  FactionsPage _page = const FactionsPage();
+  bool _loading = false;
+  int _reloadEpoch = 0;
+
+  /// Guild tags with a queued (pending) forgive, DERIVED from the global
+  /// pending-edit registry rather than cached locally. A partial save refreshes
+  /// the inspection and re-applies still-uncommitted pending edits (including
+  /// `factions.forgive:*`); deriving from the registry keeps the optimistic
+  /// "being forgiven…" reflect in sync across that refresh, whereas a local
+  /// cache cleared on reload silently lost it.
+  Set<String> get _pendingForgiven => widget.notifier.pendingForgiveGuilds();
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void didUpdateWidget(covariant _FactionsDetail oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.reloadKey != oldWidget.reloadKey) {
+      // Reload the fresh tallies. The pending-forgive reflect is derived from
+      // the registry (see _pendingForgiven), so it stays correct across the
+      // post-save refresh without any local state to clear.
+      _load();
+    }
+  }
+
+  Future<void> _load() async {
+    final epoch = ++_reloadEpoch;
+    setState(() => _loading = true);
+    final page = await widget.notifier.loadFactions();
+    if (!mounted || epoch != _reloadEpoch) return;
+    setState(() {
+      _loading = false;
+      _page = page;
+    });
+  }
+
+  void _forgive(FactionGuild guild) {
+    // Registers the pending edit in the global registry; _pendingForgiven is
+    // derived from it, so just rebuild to reflect the queued forgive.
+    widget.notifier.setPendingFactionForgive(guild.guild);
+    setState(() {});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    final scheme = widget.theme.colorScheme;
+    // Only guilds with open crimes are actionable; keep all in the list so the
+    // player sees forgiven/total context too.
+    final guilds = _page.guilds;
+    // Derive the queued-forgive set once from the registry for this build.
+    final pendingForgiven = _pendingForgiven;
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // Header
+            Row(
+              children: [
+                Icon(Icons.gavel_outlined, color: scheme.primary),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    l10n.factionsSidebar,
+                    style: widget.theme.textTheme.titleMedium,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            if (_page.error != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text(
+                  _page.error!,
+                  style: TextStyle(color: scheme.error),
+                ),
+              ),
+            Expanded(
+              child: _loading && guilds.isEmpty
+                  ? const Center(child: CircularProgressIndicator())
+                  : guilds.isEmpty
+                  ? Center(
+                      child: Text(
+                        l10n.factionsEmpty,
+                        style: TextStyle(color: scheme.onSurfaceVariant),
+                      ),
+                    )
+                  : ListView.separated(
+                      itemCount: guilds.length,
+                      separatorBuilder: (_, _) => const Divider(height: 1),
+                      itemBuilder: (context, index) {
+                        final g = guilds[index];
+                        final isPending = pendingForgiven.contains(g.guild);
+                        // Optimistic: a queued forgive clears the record →
+                        // friendly, no un-forgiven crimes, button disabled.
+                        final isHostile = isPending ? false : g.isHostile;
+                        // Forgiving is allowed whenever there is any un-forgiven
+                        // crime — even a "friendly" guild's record can be wiped.
+                        final canForgive =
+                            widget.editable && !isPending && g.unforgiven > 0;
+                        final breakdown = _crimeBreakdownText(l10n, g);
+                        return ListTile(
+                          leading: Icon(
+                            isHostile
+                                ? Icons.gpp_bad_outlined
+                                : Icons.verified_user_outlined,
+                            color: isHostile ? scheme.error : Colors.green,
+                          ),
+                          title: Text(
+                            _localizedGuildLabel(l10n, g.guild, g.label),
+                          ),
+                          subtitle: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const SizedBox(height: 4),
+                              // Prominent hostile/friendly status badge.
+                              _StatusBadge(
+                                label: isPending
+                                    ? l10n.factionsForgiveQueued
+                                    : (isHostile
+                                          ? l10n.factionHostile
+                                          : l10n.factionFriendly),
+                                color: isPending
+                                    ? scheme.primary
+                                    : (isHostile ? scheme.error : Colors.green),
+                              ),
+                              // Compact un-forgiven crime-type breakdown.
+                              if (!isPending && breakdown.isNotEmpty)
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 4),
+                                  child: Text(
+                                    breakdown,
+                                    style: widget.theme.textTheme.bodySmall
+                                        ?.copyWith(
+                                          color: scheme.onSurfaceVariant,
+                                        ),
+                                  ),
+                                ),
+                            ],
+                          ),
+                          isThreeLine: true,
+                          trailing: widget.editable
+                              ? FilledButton.tonal(
+                                  onPressed:
+                                      canForgive ? () => _forgive(g) : null,
+                                  child: Text(l10n.factionsForgiveButton),
+                                )
+                              : null,
+                        );
+                      },
+                    ),
             ),
           ],
         ),

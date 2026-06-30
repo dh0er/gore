@@ -1,5 +1,7 @@
 pub mod codec_backend;
 mod codec_calibration;
+pub mod factions;
+pub mod npc;
 pub mod properties;
 
 use base64::{Engine as _, engine::general_purpose};
@@ -414,6 +416,30 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
             let ooz_backend = codec_backend::OozKrakenBackend::default();
             let codec_backend = Some(&ooz_backend as &dyn codec_backend::CodecBackend);
             query_progression(&path, &payload, codec_backend)
+        }
+        "private.npc.list" => {
+            let path = required_path(&payload)?;
+            let ooz_backend = codec_backend::OozKrakenBackend::default();
+            let codec_backend = Some(&ooz_backend as &dyn codec_backend::CodecBackend);
+            list_npcs_command(&path, &payload, codec_backend)
+        }
+        "private.npc.attributes" => {
+            let path = required_path(&payload)?;
+            let ooz_backend = codec_backend::OozKrakenBackend::default();
+            let codec_backend = Some(&ooz_backend as &dyn codec_backend::CodecBackend);
+            npc_attributes_command(&path, &payload, codec_backend)
+        }
+        "private.npc.inventory" => {
+            let path = required_path(&payload)?;
+            let ooz_backend = codec_backend::OozKrakenBackend::default();
+            let codec_backend = Some(&ooz_backend as &dyn codec_backend::CodecBackend);
+            npc_inventory_command(&path, &payload, codec_backend)
+        }
+        "private.factions.list" => {
+            let path = required_path(&payload)?;
+            let ooz_backend = codec_backend::OozKrakenBackend::default();
+            let codec_backend = Some(&ooz_backend as &dyn codec_backend::CodecBackend);
+            list_guild_crimes_command(&path, codec_backend)
         }
         "validate_roundtrip" => {
             let path = required_path(&payload)?;
@@ -2839,6 +2865,29 @@ fn inspect_private_payload(
                     .and_then(|r| r.as_ref().ok())
                     .filter(|_| typed_ok),
             );
+            // NPC capability block: the frontend feature-detects the "Attribute"
+            // tab from this. `hasNpcs` is true only when the typed parse succeeds
+            // and the save's _Attributes map yields at least one NPC. Attribute
+            // editing itself rides on the already-advertised
+            // `private.typed.setValue`; here we surface the two NPC-specific
+            // structural edits.
+            let npc = summarize_private_npc_payload(
+                typed_result
+                    .as_ref()
+                    .and_then(|r| r.as_ref().ok())
+                    .filter(|_| typed_ok),
+            );
+            // Faction crime block: per-camp-guild crime counts for the player. The
+            // forgive edit is advertised only when at least one guild has an
+            // unforgiven Hero crime (so write_save never rejects an advertised op).
+            let faction_guilds = typed_result
+                .as_ref()
+                .and_then(|r| r.as_ref().ok())
+                .filter(|_| typed_ok)
+                .map(factions::list_guild_crimes)
+                .unwrap_or_default();
+            let any_unforgiven = faction_guilds.iter().any(|g| g.unforgiven > 0);
+            let factions = json!({ "guilds": faction_guilds });
             let mut writable = vec!["private.replaceFString"];
             if typed_parse["status"] == "ok" {
                 writable.extend([
@@ -2852,6 +2901,9 @@ fn inspect_private_payload(
                     // main_container gating).
                     "private.knowledge.addCharacter",
                 ]);
+                if any_unforgiven {
+                    writable.push("private.factions.forgive");
+                }
                 // addItem/removeItem are gated per save (clean template /
                 // removable item); mirror the inventory summary's gating so the
                 // top-level writable list never advertises an op write_save
@@ -2886,6 +2938,8 @@ fn inspect_private_payload(
                 "player": player,
                 "inventory": inventory,
                 "progression": progression,
+                "npc": npc,
+                "factions": factions,
                 "typedParse": typed_parse,
                 "writable": writable,
             }))
@@ -3094,6 +3148,28 @@ fn summarize_private_inventory_payload(
         "equippedArmorPaths": equipped_armor_paths,
         "scriptPaths": script_paths,
         "properties": properties,
+        "writable": writable,
+    })
+}
+
+/// NPC capability block for `inspect_save`. `hasNpcs` is true when the typed
+/// parse succeeded and the save's `_Attributes` map yields at least one NPC.
+/// When NPCs are present, `writable` advertises the two NPC-specific structural
+/// edits (per-attribute editing rides on the already-advertised
+/// `private.typed.setValue`). Mirrors the inventory/progression blocks: always
+/// emit the object, with `hasNpcs: false` + empty `writable` when the private
+/// payload doesn't parse or has no NPCs.
+fn summarize_private_npc_payload(root: Option<&properties::RootObject>) -> Value {
+    let has_npcs = root
+        .and_then(|r| npc::list_npcs(r).ok())
+        .is_some_and(|npcs| !npcs.is_empty());
+    let writable: &[&str] = if has_npcs {
+        &["private.npc.revive"]
+    } else {
+        &[]
+    };
+    json!({
+        "hasNpcs": has_npcs,
         "writable": writable,
     })
 }
@@ -3329,6 +3405,216 @@ fn query_progression(
             "unknown progression section {other:?}"
         ))),
     }
+}
+
+/// `private.npc.list`: a paginated, id-filtered list of NPCs over the decoded
+/// private payload. Decodes the save through the same path as
+/// [`query_progression`] (GSAV split + chunked stream + cached decode +
+/// `parse_private_root`), then lists, filters, sorts, and paginates NPC summaries.
+///
+/// Payload: `{ path, query?: string, offset?: u32, limit?: u32 }`.
+/// Returns `{ npcs: [NpcSummary], total, offset, limit }`.
+/// Shared decode prelude for the `private.npc.*` read commands: read the file,
+/// reject non-GSAV inputs, split the GSAV container, decode the (cached) private
+/// payload through `backend`, and parse it into a typed [`properties::RootObject`].
+/// The three NPC commands (`list_npcs_command`, `npc_attributes_command`,
+/// `npc_inventory_command`) share this exact sequence and differ only in what
+/// they build from the resulting root.
+/// `private.factions.list`: the player's crime counts per camp-level guild (plus
+/// an `Other` bucket for individual/unmappable crimes). Decodes the save through
+/// the same path as the NPC commands. Returns `{ guilds: [GuildCrimes] }` sorted
+/// by `unforgiven` desc.
+fn list_guild_crimes_command(
+    path: &Path,
+    backend: Option<&dyn codec_backend::CodecBackend>,
+) -> Result<Value, CoreError> {
+    let backend = backend.ok_or_else(|| {
+        CoreError::Codec("listing faction crimes requires a working codec backend".to_string())
+    })?;
+    let root = decode_private_root(path, backend)?;
+    let guilds = factions::list_guild_crimes(&root);
+    Ok(json!({ "guilds": guilds }))
+}
+
+fn decode_private_root(
+    path: &Path,
+    backend: &dyn codec_backend::CodecBackend,
+) -> Result<properties::RootObject, CoreError> {
+    let data = fs::read(path)?;
+    if !data.starts_with(b"GSAV") {
+        return Err(CoreError::UnsupportedEdit(
+            "NPC commands are only available for GSAV files".to_string(),
+        ));
+    }
+    let parts = split_gsav(&data)?;
+    let stream = parse_compressed_stream(&data, 13 + parts.public_payload.len())?;
+    let decoded = decoded_private_payload_cached(path, &data, &stream, backend)?;
+    properties::parse_private_root(&decoded)
+}
+
+fn list_npcs_command(
+    path: &Path,
+    payload: &Value,
+    backend: Option<&dyn codec_backend::CodecBackend>,
+) -> Result<Value, CoreError> {
+    let backend = backend.ok_or_else(|| {
+        CoreError::Codec("listing NPCs requires a working codec backend".to_string())
+    })?;
+    let query = payload.get("query").and_then(Value::as_str).unwrap_or("");
+    let offset = payload
+        .get("offset")
+        .and_then(Value::as_u64)
+        .map(|v| v as usize)
+        .unwrap_or(0);
+    let limit = payload
+        .get("limit")
+        .and_then(Value::as_u64)
+        .map(|v| v as usize)
+        .unwrap_or(100)
+        .clamp(1, 1000);
+
+    let root = decode_private_root(path, backend)?;
+
+    let all = npc::list_npcs(&root)?;
+    let page = npc::paginate_npcs(all, query, offset, limit);
+    Ok(json!({
+        "npcs": page.npcs,
+        "total": page.total,
+        "offset": page.offset,
+        "limit": page.limit,
+    }))
+}
+
+/// `private.npc.attributes`: the editable attributes of one NPC, each with the
+/// full typed `basePath`/`currentPath` that `private.typed.setValue` resolves.
+/// Decodes the save through the same path as [`list_npcs_command`].
+///
+/// Payload: `{ path, id }`. Returns `{ attributes: [NpcAttributeRow] }`.
+fn npc_attributes_command(
+    path: &Path,
+    payload: &Value,
+    backend: Option<&dyn codec_backend::CodecBackend>,
+) -> Result<Value, CoreError> {
+    let backend = backend.ok_or_else(|| {
+        CoreError::Codec("reading NPC attributes requires a working codec backend".to_string())
+    })?;
+    let id = payload
+        .get("id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| CoreError::InvalidRequest("missing payload.id".to_string()))?;
+
+    let root = decode_private_root(path, backend)?;
+
+    let attributes = npc::npc_attributes(&root, id)?;
+    Ok(json!({ "attributes": attributes }))
+}
+
+/// Build the inventory summary for one actor's MainContainer from a parsed
+/// typed root. `actor_id` is `None` for the controlled player or `Some(id)` for
+/// an NPC (resolved via [`npc::npc_inventory_path`]). Mirrors the player
+/// inventory summary's displayable shape — `items: [{id, path, count,
+/// removable}]`, `mainContainerPaths`, `writable` — but is built from the typed
+/// MainContainer slots (via [`inventory_main_container_view`]) so the same
+/// builder serves the player and any NPC.
+///
+/// `writable` advertises the inventory edit commands the same way the player
+/// summary does — gated on container presence: `setItemCount` when the
+/// MainContainer holds at least one row, `addItem` when a clean template slot
+/// exists, `removeItem` when at least one globally-unique (removable) path is
+/// present. The command names are identical to the player's; the frontend
+/// attaches `actorId` for the NPC case.
+fn actor_inventory_summary(root: &properties::RootObject, actor_id: Option<&str>) -> Value {
+    let Some(view) = inventory_main_container_view(root, actor_id) else {
+        return json!({
+            "items": [],
+            "mainContainerPaths": [],
+            "writable": [],
+        });
+    };
+    // NPC removal targets a specific container's slot precisely via
+    // (containerType, slotId), so any row with a stable slot id is removable —
+    // even a unique weapon/ore outside MainContainer, and even duplicate-path
+    // slots. The player removeItem edit is path-addressed (no slot id), so only
+    // globally-unique MainContainer paths are unambiguously removable there.
+    let is_npc = actor_id.is_some();
+    let items = view
+        .rows
+        .iter()
+        .map(|(path, count, slot_id, container_label)| {
+            let removable = if is_npc {
+                slot_id.is_some()
+            } else {
+                view.summary.removable_paths.contains(path)
+            };
+            json!({
+                "id": item_id_from_path(path),
+                "path": path,
+                "count": count,
+                "removable": removable,
+                // Stable per-slot discriminator (`m_Id`). Lets the frontend pin a
+                // count edit to one specific stack when two slots share a path.
+                "slotId": slot_id,
+                // Short container label (e.g. `MainContainer`/`MeleeSlot`/`Pouch`).
+                // For NPC rows the frontend must echo this back as `containerType`
+                // on a per-container edit so the right container's slot is
+                // addressed; player rows are always `MainContainer`.
+                "containerType": container_label,
+            })
+        })
+        .collect::<Vec<_>>();
+    let mut writable = Vec::new();
+    if !view.rows.is_empty() {
+        writable.push("private.inventory.setItemCount");
+    }
+    if view.summary.has_clean_template {
+        writable.push("private.inventory.addItem");
+    }
+    // removeItem is offered when at least one emitted row is removable (NPC: any
+    // row with a slot id; player: any globally-unique MainContainer path).
+    let any_removable = if is_npc {
+        view.rows.iter().any(|(_, _, slot_id, _)| slot_id.is_some())
+    } else {
+        !view.summary.removable_paths.is_empty()
+    };
+    if any_removable {
+        writable.push("private.inventory.removeItem");
+    }
+    let mut main_paths: Vec<&String> = view.summary.all_paths.iter().collect();
+    main_paths.sort();
+    json!({
+        "items": items,
+        "mainContainerPaths": main_paths,
+        "writable": writable,
+    })
+}
+
+/// `private.npc.inventory`: the displayable inventory summary for one NPC's
+/// MainContainer, scoped by `id` (a NPC GlobalId). Decodes the save through the
+/// same path as [`list_npcs_command`] / [`npc_attributes_command`], then builds
+/// the same shape the player inventory summary produces (via
+/// [`actor_inventory_summary`]) but pointed at the NPC's inventory.
+///
+/// Payload: `{ path, id }`. Returns `{ id, items, mainContainerPaths, writable }`.
+fn npc_inventory_command(
+    path: &Path,
+    payload: &Value,
+    backend: Option<&dyn codec_backend::CodecBackend>,
+) -> Result<Value, CoreError> {
+    let backend = backend.ok_or_else(|| {
+        CoreError::Codec("reading NPC inventory requires a working codec backend".to_string())
+    })?;
+    let id = payload
+        .get("id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| CoreError::InvalidRequest("missing payload.id".to_string()))?;
+
+    let root = decode_private_root(path, backend)?;
+
+    let mut summary = actor_inventory_summary(&root, Some(id));
+    if let Value::Object(map) = &mut summary {
+        map.insert("id".to_string(), json!(id));
+    }
+    Ok(summary)
 }
 
 /// Property lookup inside a struct-valued map entry (tagged property list or
@@ -4060,6 +4346,16 @@ fn looks_item_definition_path(value: &str) -> bool {
     value.starts_with("/Script/Angelscript.") || looks_inventory_candidate(value)
 }
 
+/// Non-lootable equipment markers an NPC carries that are not real inventory: the
+/// fist "weapons" every humanoid equips (`HumanFist_*`) and the watch/idle fight
+/// weapon placeholder (`WatchFightWeapon`). These occupy equipment-slot
+/// containers (e.g. MeleeSlot) but are engine-internal markers, never loot, so
+/// they are hidden from the NPC inventory view. Matched on the short item id (the
+/// tail of the m_ItemDefinition path, as produced by [`item_id_from_path`]).
+fn is_non_lootable_marker(id: &str) -> bool {
+    id.starts_with("HumanFist") || id == "WatchFightWeapon"
+}
+
 /// The bundled item catalog, embedded at build time. addItem only accepts a
 /// path in this allow-list, so a typo or non-item class (even a well-formed
 /// `/Script/Angelscript.It*` name) cannot persist an unresolvable
@@ -4628,6 +4924,12 @@ fn apply_private_edits(
                     parse_private_typed_container_edit(edit, edit.path.as_str())
                         .map(PrivateEdit::TypedContainer)
                 }
+                "private.npc.revive" => {
+                    parse_private_npc_revive_edit(edit).map(PrivateEdit::NpcRevive)
+                }
+                "private.factions.forgive" => {
+                    parse_private_factions_forgive_edit(edit).map(PrivateEdit::FactionsForgive)
+                }
                 "private.knowledge.addCharacter" => {
                     let name = edit
                         .value
@@ -4675,9 +4977,13 @@ fn apply_private_edits(
     }
     // A splicing structural edit inserts or removes bytes mid-payload and shifts
     // every byte after the splice point:
-    //   - inventory addItem/removeItem splice the MainContainer slot array, and
+    //   - inventory addItem/removeItem splice the MainContainer slot array,
     //   - knowledge.addCharacter inserts a new entry into the
-    //     CharacterKnowledgeByUniqueName MapProperty.
+    //     CharacterKnowledgeByUniqueName MapProperty, and
+    //   - npc.revive strips the authoritative State.Dead/KillBounty/Executed loose
+    //     tags from LooseTagsByGlobalId, removes defeat/kill memory events from
+    //     MemorizedEvents (own + cross-owner), drops the m_SavedInventories corpse
+    //     entry, and restores HP — each a separate re-parse/splice.
     // Any peer edit in the same batch is unsafe: a later edit resolves its target
     // against the pre-splice layout — an in-place setItemCount patches stale byte
     // offsets, and a typed setValue re-resolves a now-shifted array index — so it
@@ -4690,15 +4996,17 @@ fn apply_private_edits(
                 PrivateEdit::InventoryAddItem(_)
                     | PrivateEdit::InventoryRemoveItem(_)
                     | PrivateEdit::KnowledgeAddCharacter(_)
+                    | PrivateEdit::NpcRevive(_)
             )
         })
         .count();
     if splicing_structural_edits >= 1 && edit_specs.len() > 1 {
         return Err(CoreError::UnsupportedEdit(
             "a write containing private.inventory.addItem, private.inventory.removeItem, \
-             or private.knowledge.addCharacter must contain no other edits — the \
-             structural splice (slot-array or map insert) shifts the byte offsets and \
-             array indices later edits resolve against; submit them as separate writes"
+             private.knowledge.addCharacter, or private.npc.revive must contain no other \
+             edits — the structural splice (slot-array, map insert, or memory-event removal) \
+             shifts the byte offsets and array indices later edits resolve against; submit \
+             them as separate writes"
                 .to_string(),
         ));
     }
@@ -4758,22 +5066,53 @@ struct PrivatePlayerTransformEdit {
     rotation: Option<PrivateRotatorEdit>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 struct PrivateInventoryItemCountEdit {
     id: Option<String>,
     path: Option<String>,
     count: i32,
+    /// Optional NPC GlobalId. `None` targets the player inventory; `Some(id)`
+    /// targets that NPC's inventory. Parsed here; APPLY wiring is Task 16.
+    actor_id: Option<String>,
+    /// Optional stable slot `m_Id`. When set (NPC inventory path only), the
+    /// target slot is selected by this id, disambiguating two slots that share
+    /// the same item-definition path. When `None`, selection falls back to the
+    /// path/id selector.
+    slot_id: Option<i32>,
+    /// Optional container type (NPC inventory path only) — the short or qualified
+    /// `EInventoryTypes` label of the container holding the target slot (e.g.
+    /// `MeleeSlot`, `Pouch`). `None` resolves to the MainContainer for
+    /// back-compatibility with the player path and older frontends. A slot `m_Id`
+    /// is only unique WITHIN one container, so an NPC count edit must carry this
+    /// to address a non-MainContainer slot unambiguously.
+    container_type: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 struct PrivateInventoryAddItemEdit {
     path: String,
     count: i32,
+    /// Optional NPC GlobalId. `None` targets the player inventory; `Some(id)`
+    /// targets that NPC's inventory (structurally identical, see Task 14).
+    actor_id: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 struct PrivateInventoryRemoveItemEdit {
     path: String,
+    /// Optional NPC GlobalId. `None` targets the player inventory; `Some(id)`
+    /// targets that NPC's inventory (structurally identical, see Task 14).
+    actor_id: Option<String>,
+    /// Optional container type (NPC inventory path only). See
+    /// [`PrivateInventoryItemCountEdit::container_type`]. `None` = MainContainer
+    /// (player path / back-compat). The removeItem scope (which container's
+    /// `m_Slots` is scanned and validated) follows this label.
+    container_type: Option<String>,
+    /// Optional stable slot `m_Id` (NPC inventory path only). When set, removal
+    /// targets the slot with this id within the chosen container, disambiguating
+    /// duplicate-path slots; when `None`, the first path match is removed (legacy
+    /// player behaviour).
+    slot_id: Option<i32>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -4788,7 +5127,17 @@ enum PrivateEdit {
     InventoryRemoveItem(PrivateInventoryRemoveItemEdit),
     TypedSetValue(PrivateTypedSetValueEdit),
     TypedContainer(PrivateTypedContainerEdit),
+    NpcRevive(PrivateNpcReviveEdit),
     KnowledgeAddCharacter(String),
+    FactionsForgive(PrivateFactionsForgiveEdit),
+}
+
+/// `private.factions.forgive` edit: `value = { guild: String }`. Forgives every
+/// unforgiven player crime implicating the (camp-level) guild — a fixed-size
+/// batch of `bIsForgiven`/`bIsSuppressed` bool-byte flips.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PrivateFactionsForgiveEdit {
+    guild: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -4801,6 +5150,11 @@ struct PrivateTypedSetValueEdit {
 struct PrivateTypedContainerEdit {
     path: Vec<properties::PathSeg>,
     edit: properties::ContainerEdit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PrivateNpcReviveEdit {
+    id: String,
 }
 
 fn parse_typed_edit_path(
@@ -4895,6 +5249,47 @@ fn parse_private_typed_container_edit(
         path,
         edit: container_edit,
     })
+}
+
+/// Parse a `private.npc.revive` edit: `value = { id: String }`. Revive strips the
+/// authoritative State.Dead loose tags (the native death gate), clears the NPC's
+/// defeat/kill memory events, removes its corpse, and restores HP to MaxHealth.
+fn parse_private_npc_revive_edit(edit: &Edit) -> Result<PrivateNpcReviveEdit, CoreError> {
+    let value = edit.value.as_object().ok_or_else(|| {
+        CoreError::InvalidRequest("private.npc.revive value must be an object".to_string())
+    })?;
+    let id = value
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.trim().is_empty())
+        .ok_or_else(|| {
+            CoreError::InvalidRequest(
+                "private.npc.revive requires a non-empty string value.id".to_string(),
+            )
+        })?
+        .to_string();
+    Ok(PrivateNpcReviveEdit { id })
+}
+
+/// Parse a `private.factions.forgive` edit: `value = { guild: String }`. The
+/// guild is a camp-level tag (e.g. `Guild.Human.OldCamp`) or the `Other` bucket.
+fn parse_private_factions_forgive_edit(
+    edit: &Edit,
+) -> Result<PrivateFactionsForgiveEdit, CoreError> {
+    let value = edit.value.as_object().ok_or_else(|| {
+        CoreError::InvalidRequest("private.factions.forgive value must be an object".to_string())
+    })?;
+    let guild = value
+        .get("guild")
+        .and_then(Value::as_str)
+        .filter(|g| !g.trim().is_empty())
+        .ok_or_else(|| {
+            CoreError::InvalidRequest(
+                "private.factions.forgive requires a non-empty string value.guild".to_string(),
+            )
+        })?
+        .to_string();
+    Ok(PrivateFactionsForgiveEdit { guild })
 }
 
 /// Replacement value for `private.typed.setValue`: fixed-size scalars patch
@@ -5254,10 +5649,27 @@ fn parse_private_inventory_item_count_edit(
             "private.inventory.setItemCount value.count must fit a non-negative i32".to_string(),
         ));
     }
+    let actor_id = value
+        .get("actorId")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(ToOwned::to_owned);
+    let slot_id = value
+        .get("slotId")
+        .and_then(Value::as_i64)
+        .and_then(|id| i32::try_from(id).ok());
+    let container_type = value
+        .get("containerType")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(ToOwned::to_owned);
     Ok(PrivateInventoryItemCountEdit {
         id,
         path,
         count: count as i32,
+        actor_id,
+        slot_id,
+        container_type,
     })
 }
 
@@ -5298,9 +5710,15 @@ fn parse_private_inventory_add_item_edit(
             "private.inventory.addItem value.count must be a positive i32 (>= 1)".to_string(),
         ));
     }
+    let actor_id = value
+        .get("actorId")
+        .and_then(Value::as_str)
+        .filter(|v| !v.trim().is_empty())
+        .map(ToOwned::to_owned);
     Ok(PrivateInventoryAddItemEdit {
         path: path.to_owned(),
         count: count as i32,
+        actor_id,
     })
 }
 
@@ -5326,8 +5744,25 @@ fn parse_private_inventory_remove_item_edit(
             "private.inventory.removeItem value.path does not look like an item definition path: {path:?}"
         )));
     }
+    let actor_id = value
+        .get("actorId")
+        .and_then(Value::as_str)
+        .filter(|v| !v.trim().is_empty())
+        .map(ToOwned::to_owned);
+    let container_type = value
+        .get("containerType")
+        .and_then(Value::as_str)
+        .filter(|v| !v.trim().is_empty())
+        .map(ToOwned::to_owned);
+    let slot_id = value
+        .get("slotId")
+        .and_then(Value::as_i64)
+        .and_then(|id| i32::try_from(id).ok());
     Ok(PrivateInventoryRemoveItemEdit {
         path: path.to_owned(),
+        actor_id,
+        container_type,
+        slot_id,
     })
 }
 
@@ -5448,9 +5883,11 @@ fn apply_private_edit_to_payload(
         PrivateEdit::TypedContainer(edit) => {
             apply_private_typed_container_edit_to_payload(payload, edit)
         }
+        PrivateEdit::NpcRevive(edit) => npc::apply_revive(payload, &edit.id),
         PrivateEdit::KnowledgeAddCharacter(name) => {
             apply_private_knowledge_add_character_to_payload(payload, name)
         }
+        PrivateEdit::FactionsForgive(edit) => factions::apply_forgive(payload, &edit.guild),
     }
 }
 
@@ -5557,6 +5994,23 @@ const MAIN_CONTAINER_ENUM_LABEL: &str = "EInventoryTypes::MainContainer";
 /// Enum label of the player's worn-armor container in the inventory map.
 const ARMOR_SLOT_ENUM_LABEL: &str = "EInventoryTypes::ArmorSlot";
 
+/// Enum prefix for every inventory container key (`EInventoryTypes::MainContainer`,
+/// `::MeleeSlot`, `::Pouch`, …).
+const INVENTORY_TYPE_ENUM_PREFIX: &str = "EInventoryTypes::";
+
+/// Normalize a container type from an edit into the full `m_Keys` enum label that
+/// [`container_slots_suffix`] scans for. Accepts either the short form the NPC
+/// inventory summary emits (`MeleeSlot`) or an already-qualified label
+/// (`EInventoryTypes::MeleeSlot`). `None` (back-compat: player / older frontends)
+/// resolves to the MainContainer.
+fn container_enum_label(container_type: Option<&str>) -> String {
+    match container_type {
+        None => MAIN_CONTAINER_ENUM_LABEL.to_string(),
+        Some(label) if label.contains("::") => label.to_string(),
+        Some(short) => format!("{INVENTORY_TYPE_ENUM_PREFIX}{short}"),
+    }
+}
+
 /// `m_PlayerID` of the controlled player among `m_SavedPlayers`. A save may hold
 /// several saved players (party members); inventory edits target this one — the
 /// same anchor the transform/attribute editors use.
@@ -5594,12 +6048,88 @@ fn player_inventory_path(root: &properties::RootObject) -> Option<Vec<String>> {
     None
 }
 
-/// The controlled player's `m_Inventory` path, falling back to the first
-/// `m_Inventory` anywhere in the tree (synthetic fixtures without a
-/// `m_SavedPlayers`/`Party ID 0` structure).
-fn resolve_inventory_path(root: &properties::RootObject) -> Option<Vec<String>> {
-    player_inventory_path(root)
-        .or_else(|| properties::find_property_by_name(root, "m_Inventory").map(|(path, _)| path))
+/// The typed path to the inventory container to edit, dispatched by `actor_id`:
+///
+/// - `None` → the controlled player's `m_Inventory` (the
+///   [`player_inventory_path`] anchor), falling back to the first `m_Inventory`
+///   anywhere in the tree (synthetic fixtures without a `m_SavedPlayers`/`Party
+///   ID 0` structure).
+/// - `Some(global_id)` → the named NPC's inventory container
+///   ([`npc::npc_inventory_path`]), which holds the SAME
+///   `m_Keys`/`m_Values`/`Items`/`m_Slots` structure the player traversal below
+///   navigates, so the addItem/removeItem apply code is reused unchanged.
+fn resolve_inventory_path(
+    root: &properties::RootObject,
+    actor_id: Option<&str>,
+) -> Option<Vec<String>> {
+    match actor_id {
+        None => player_inventory_path(root)
+            .or_else(|| properties::find_property_by_name(root, "m_Inventory").map(|(p, _)| p)),
+        Some(id) => npc::npc_inventory_path(root, id),
+    }
+}
+
+/// The suffix (relative to an inventory container path) that addresses one
+/// container's `m_Slots` array: `[m_Values, Items, [index], m_Slots]`.
+///
+/// Locates the container by scanning the inventory's `m_Keys` enum array for
+/// `enum_label` (a full `EInventoryTypes::*` label). The MainContainer lookup
+/// addItem/removeItem perform is the special case where
+/// `enum_label == MAIN_CONTAINER_ENUM_LABEL`. `inventory_path` is the typed path
+/// to the inventory container ([`resolve_inventory_path`]).
+fn container_slots_suffix(
+    root: &properties::RootObject,
+    inventory_path: &[String],
+    enum_label: &str,
+) -> Result<Vec<String>, CoreError> {
+    let mut keys_segs = inventory_path.to_vec();
+    keys_segs.push("m_Keys".to_string());
+    let keys_segs = properties::parse_path(&keys_segs)?;
+    let keys = properties::resolve(&root.properties, &keys_segs)?;
+    let properties::PropertyValue::Array {
+        elements: key_elements,
+    } = &keys.value
+    else {
+        return Err(CoreError::Parse(
+            "m_Inventory.m_Keys is not a plain enum array".to_string(),
+        ));
+    };
+    let index = key_elements
+        .iter()
+        .position(|element| {
+            matches!(element, properties::PropertyValue::Enum(label)
+                if label == enum_label)
+        })
+        .ok_or_else(|| {
+            CoreError::Parse(format!("m_Inventory.m_Keys has no {enum_label} entry"))
+        })?;
+    Ok(vec![
+        "m_Values".to_string(),
+        "Items".to_string(),
+        format!("[{index}]"),
+        "m_Slots".to_string(),
+    ])
+}
+
+/// Thin MainContainer wrapper over [`container_slots_suffix`]. Shared by addItem,
+/// removeItem (player path), and the player/addItem MainContainer resolution so
+/// the canonical lookup lives in one place.
+fn main_container_slots_suffix(
+    root: &properties::RootObject,
+    inventory_path: &[String],
+) -> Result<Vec<String>, CoreError> {
+    container_slots_suffix(root, inventory_path, MAIN_CONTAINER_ENUM_LABEL)
+}
+
+/// Recover the MainContainer index from a suffix built by
+/// [`main_container_slots_suffix`] (its third segment is `[main_index]`).
+fn main_container_index_from_suffix(slots_suffix: &[String]) -> usize {
+    slots_suffix
+        .get(2)
+        .and_then(|seg| seg.strip_prefix('['))
+        .and_then(|seg| seg.strip_suffix(']'))
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(0)
 }
 
 /// Inner property list of a slot/container element parsed from a plain
@@ -5744,7 +6274,7 @@ struct ArmorSlotSummary {
 /// Resolve the player's `ArmorSlot` container and collect the item-definition
 /// paths it holds. Mirrors `main_container_summary`'s container resolution.
 fn armor_slot_summary(root: &properties::RootObject) -> Option<ArmorSlotSummary> {
-    let inventory_path = resolve_inventory_path(root)?;
+    let inventory_path = resolve_inventory_path(root, None)?;
     let resolve_child = |suffix: &[&str]| -> Option<properties::PropertyValue> {
         let mut segs = inventory_path.clone();
         segs.extend(suffix.iter().map(|s| s.to_string()));
@@ -5816,13 +6346,35 @@ fn armor_slot_summary(root: &properties::RootObject) -> Option<ArmorSlotSummary>
     })
 }
 
-/// Summarize the player's MainContainer. addItem and removeItem only operate on
-/// this container. Returns `None` when the typed tree has no resolvable
-/// MainContainer (structural ops are then not offered); `Some` when it resolves
-/// — `all_paths` is empty for an empty MainContainer, which addItem can still
-/// seed from another container.
-fn main_container_summary(root: &properties::RootObject) -> Option<MainContainerSummary> {
-    let inventory_path = resolve_inventory_path(root)?;
+/// MainContainer membership plus the ordered MainContainer item rows. The rows
+/// drive the displayable inventory list (id / path / count) while the embedded
+/// [`MainContainerSummary`] drives the structural-edit gating. Produced by
+/// [`inventory_main_container_view`] for either the player or a single NPC.
+struct InventoryMainContainerView {
+    summary: MainContainerSummary,
+    /// Inventory slots in storage order:
+    /// `(item-definition path, count, stable slot m_Id, container short label)`.
+    /// The slot id disambiguates two rows that share an item-definition path so a
+    /// count edit can target one specific stack. The container short label (e.g.
+    /// `MainContainer`/`MeleeSlot`/`Pouch`, the `EInventoryTypes::` prefix
+    /// stripped) tells the frontend which container the row lives in so a
+    /// per-container edit can address it; it is `MainContainer` for every player
+    /// row (player view is MainContainer-only) and the row's real container for
+    /// NPC rows (which span all containers).
+    rows: Vec<(String, Option<i32>, Option<i32>, String)>,
+}
+
+/// Walk the typed inventory tree for `actor_id` (`None` = controlled player,
+/// `Some(id)` = the NPC resolved by [`npc::npc_inventory_path`]) and produce the
+/// MainContainer view: the structural-edit gating summary plus the ordered
+/// MainContainer item rows. NPC inventories are structurally identical to the
+/// player's (Task 14), so the same slot traversal serves both. Returns `None`
+/// when the tree has no resolvable MainContainer for that actor.
+fn inventory_main_container_view(
+    root: &properties::RootObject,
+    actor_id: Option<&str>,
+) -> Option<InventoryMainContainerView> {
+    let inventory_path = resolve_inventory_path(root, actor_id)?;
     let resolve_child = |suffix: &[&str]| -> Option<properties::PropertyValue> {
         let mut segs = inventory_path.clone();
         segs.extend(suffix.iter().map(|s| s.to_string()));
@@ -5880,6 +6432,10 @@ fn main_container_summary(root: &properties::RootObject) -> Option<MainContainer
     // no stable per-slot id), so a path shared by another container OR repeated
     // within the MainContainer is ambiguous — deleting one row could drop a
     // different stack than the one shown. Unique paths map 1:1 to their row.
+    //
+    // `all_paths`/`removable_paths`/`has_clean_template` (the structural-edit
+    // gating) are derived from the MainContainer / whole-inventory exactly as
+    // before for BOTH actors; only the displayed `rows` differ by actor.
     let mut all_paths = std::collections::HashSet::new();
     let mut removable_paths = std::collections::HashSet::new();
     for slot in &main_slots {
@@ -5893,11 +6449,88 @@ fn main_container_summary(root: &properties::RootObject) -> Option<MainContainer
             }
         }
     }
-    Some(MainContainerSummary {
-        all_paths,
-        removable_paths,
-        has_clean_template,
+    // Row emission diverges by actor:
+    //   - Player (`actor_id == None`): MainContainer-only, byte-for-byte the
+    //     historical behaviour (the player edit paths can only address
+    //     MainContainer). Every row is tagged `MainContainer`.
+    //   - NPC (`actor_id.is_some()`): ALL containers, so an equipped weapon
+    //     (MeleeSlot) or ore (Pouch) is visible. Each row is tagged with its own
+    //     container's short label and non-lootable equipment markers (fists,
+    //     watch-fight weapon) are hidden.
+    let short_container_label = |index: usize| -> String {
+        keys.get(index)
+            .and_then(|element| match element {
+                properties::PropertyValue::Enum(label) => Some(short_enum_label(label).to_string()),
+                _ => None,
+            })
+            .unwrap_or_else(|| short_enum_label(MAIN_CONTAINER_ENUM_LABEL).to_string())
+    };
+    let mut rows = Vec::new();
+    let push_slot_rows = |rows: &mut Vec<(String, Option<i32>, Option<i32>, String)>,
+                          slots: &[properties::PropertyValue],
+                          label: &str,
+                          hide_markers: bool| {
+        for slot in slots {
+            let Some(path) = slot_item_definition(slot) else {
+                continue;
+            };
+            if path.is_empty() {
+                continue;
+            }
+            if hide_markers && is_non_lootable_marker(&item_id_from_path(path)) {
+                continue;
+            }
+            rows.push((
+                path.to_string(),
+                slot_item_count(slot),
+                slot_id(slot),
+                label.to_string(),
+            ));
+        }
+    };
+    match actor_id {
+        None => {
+            let main_label = short_enum_label(MAIN_CONTAINER_ENUM_LABEL);
+            push_slot_rows(&mut rows, &main_slots, main_label, false);
+        }
+        Some(_) => {
+            if let Some(properties::PropertyValue::Array {
+                elements: containers,
+            }) = resolve_child(&["m_Values", "Items"])
+            {
+                for index in 0..containers.len() {
+                    let segment = format!("[{index}]");
+                    if let Some(properties::PropertyValue::Array { elements: slots }) =
+                        resolve_child(&["m_Values", "Items", &segment, "m_Slots"])
+                    {
+                        let label = short_container_label(index);
+                        push_slot_rows(&mut rows, &slots, &label, true);
+                    }
+                }
+            }
+        }
+    }
+    Some(InventoryMainContainerView {
+        summary: MainContainerSummary {
+            all_paths,
+            removable_paths,
+            has_clean_template,
+        },
+        rows,
     })
+}
+
+/// Summarize the player's MainContainer. addItem and removeItem only operate on
+/// this container. Returns `None` when the typed tree has no resolvable
+/// MainContainer (structural ops are then not offered); `Some` when it resolves
+/// — `all_paths` is empty for an empty MainContainer, which addItem can still
+/// seed from another container.
+///
+/// Thin wrapper over [`inventory_main_container_view`] for the controlled player
+/// (`actor_id = None`); the inspect-save inventory summary depends on the exact
+/// gating it returns, so the player path must stay byte-for-byte unchanged.
+fn main_container_summary(root: &properties::RootObject) -> Option<MainContainerSummary> {
+    inventory_main_container_view(root, None).map(|view| view.summary)
 }
 
 /// Scalar `m_Payload` fields that are part of the known default ItemPayload
@@ -5988,7 +6621,7 @@ fn apply_private_inventory_add_item_to_payload(
             "private.inventory.addItem requires a typed-parsable private payload: {err}"
         ))
     })?;
-    let inventory_path = resolve_inventory_path(&root).ok_or_else(|| {
+    let inventory_path = resolve_inventory_path(&root, edit.actor_id.as_deref()).ok_or_else(|| {
         CoreError::Parse(
             "private payload has no m_Inventory property; cannot add an item".to_string(),
         )
@@ -5998,33 +6631,8 @@ fn apply_private_inventory_add_item_to_payload(
         segments.extend_from_slice(suffix);
         properties::parse_path(&segments)
     };
-    let keys_segs = child_segments(&["m_Keys".to_string()])?;
-    let keys = properties::resolve(&root.properties, &keys_segs)?;
-    let properties::PropertyValue::Array {
-        elements: key_elements,
-    } = &keys.value
-    else {
-        return Err(CoreError::Parse(
-            "m_Inventory.m_Keys is not a plain enum array".to_string(),
-        ));
-    };
-    let main_index = key_elements
-        .iter()
-        .position(|element| {
-            matches!(element, properties::PropertyValue::Enum(label)
-                if label == MAIN_CONTAINER_ENUM_LABEL)
-        })
-        .ok_or_else(|| {
-            CoreError::Parse(format!(
-                "m_Inventory.m_Keys has no {MAIN_CONTAINER_ENUM_LABEL} entry"
-            ))
-        })?;
-    let slots_suffix = vec![
-        "m_Values".to_string(),
-        "Items".to_string(),
-        format!("[{main_index}]"),
-        "m_Slots".to_string(),
-    ];
+    let slots_suffix = main_container_slots_suffix(&root, &inventory_path)?;
+    let main_index = main_container_index_from_suffix(&slots_suffix);
     let slots_segs = child_segments(&slots_suffix)?;
     let chain = properties::resolve_chain(&root.properties, &slots_segs)?;
     let properties::PropertyValue::Array { elements: slots } = &chain.target.value else {
@@ -6288,7 +6896,7 @@ fn apply_private_inventory_remove_item_to_payload(
             "private.inventory.removeItem requires a typed-parsable private payload: {err}"
         ))
     })?;
-    let inventory_path = resolve_inventory_path(&root).ok_or_else(|| {
+    let inventory_path = resolve_inventory_path(&root, edit.actor_id.as_deref()).ok_or_else(|| {
         CoreError::Parse(
             "private payload has no m_Inventory property; cannot remove an item".to_string(),
         )
@@ -6298,56 +6906,49 @@ fn apply_private_inventory_remove_item_to_payload(
         segments.extend_from_slice(suffix);
         properties::parse_path(&segments)
     };
-    let keys_segs = child_segments(&["m_Keys".to_string()])?;
-    let keys = properties::resolve(&root.properties, &keys_segs)?;
-    let properties::PropertyValue::Array {
-        elements: key_elements,
-    } = &keys.value
-    else {
-        return Err(CoreError::Parse(
-            "m_Inventory.m_Keys is not a plain enum array".to_string(),
-        ));
-    };
-    let main_index = key_elements
-        .iter()
-        .position(|element| {
-            matches!(element, properties::PropertyValue::Enum(label)
-                if label == MAIN_CONTAINER_ENUM_LABEL)
-        })
-        .ok_or_else(|| {
-            CoreError::Parse(format!(
-                "m_Inventory.m_Keys has no {MAIN_CONTAINER_ENUM_LABEL} entry"
-            ))
-        })?;
-    let slots_suffix = vec![
-        "m_Values".to_string(),
-        "Items".to_string(),
-        format!("[{main_index}]"),
-        "m_Slots".to_string(),
-    ];
+    // Resolve the container the edit targets. `container_type` is None for the
+    // player path and back-compat (→ MainContainer); an NPC edit may name another
+    // container (e.g. MeleeSlot, Pouch) whose m_Slots is scanned/validated below.
+    let enum_label = container_enum_label(edit.container_type.as_deref());
+    let slots_suffix = container_slots_suffix(&root, &inventory_path, &enum_label)?;
     let slots_segs = child_segments(&slots_suffix)?;
     let chain = properties::resolve_chain(&root.properties, &slots_segs)?;
     let properties::PropertyValue::Array { elements: slots } = &chain.target.value else {
-        return Err(CoreError::Parse(
-            "MainContainer m_Slots is not a plain slot array".to_string(),
-        ));
+        return Err(CoreError::Parse(format!(
+            "{enum_label} m_Slots is not a plain slot array"
+        )));
     };
 
-    // 2. Find the slot whose m_SlotData.m_ItemDefinition matches the path.
-    //    Real saves do contain a few same-path slots (e.g. two of a
-    //    non-stacking item), which the summary surfaces as indistinguishable
-    //    rows (same id/path). We remove the first match: refusing would leave
-    //    those items permanently undeletable, and the rows are interchangeable
-    //    from the UI's perspective.
-    let index = slots
-        .iter()
-        .position(|slot| slot_item_definition(slot) == Some(edit.path.as_str()))
-        .ok_or_else(|| {
-            CoreError::InvalidRequest(format!(
-                "the player inventory does not contain {}",
-                edit.path
-            ))
-        })?;
+    // 2. Find the slot to remove. When the edit carries a stable slot m_Id (NPC
+    //    path), pin that exact slot — but still require the item-definition path
+    //    to match so a stale id can't silently drop a different item. Otherwise
+    //    (legacy player path) remove the first path match: real saves contain a
+    //    few same-path slots (e.g. two of a non-stacking item), surfaced as
+    //    indistinguishable rows; refusing would leave them permanently
+    //    undeletable, and the rows are interchangeable from the UI's perspective.
+    let index = match edit.slot_id {
+        Some(target_id) => slots
+            .iter()
+            .position(|slot| {
+                slot_id(slot) == Some(target_id)
+                    && slot_item_definition(slot) == Some(edit.path.as_str())
+            })
+            .ok_or_else(|| {
+                CoreError::InvalidRequest(format!(
+                    "the inventory has no {} slot with id {target_id}",
+                    edit.path
+                ))
+            })?,
+        None => slots
+            .iter()
+            .position(|slot| slot_item_definition(slot) == Some(edit.path.as_str()))
+            .ok_or_else(|| {
+                CoreError::InvalidRequest(format!(
+                    "the inventory does not contain {}",
+                    edit.path
+                ))
+            })?,
+    };
 
     // 3. Remove the slot on a scratch copy (size chains fixed up by
     //    patch_container; a failed patch leaves the original untouched).
@@ -6375,9 +6976,9 @@ fn apply_private_inventory_remove_item_to_payload(
         elements: patched_slot_elems,
     } = &patched_slots.value
     else {
-        return Err(CoreError::Parse(
-            "MainContainer m_Slots is not a plain slot array after removal".to_string(),
-        ));
+        return Err(CoreError::Parse(format!(
+            "{enum_label} m_Slots is not a plain slot array after removal"
+        )));
     };
     // Exactly one matching slot must be gone. (Some saves hold duplicate-path
     // slots, so the path may still be present afterwards — only require the
@@ -6392,7 +6993,7 @@ fn apply_private_inventory_remove_item_to_payload(
     let after = match_count(patched_slot_elems);
     if after != before - 1 {
         return Err(CoreError::Validation(format!(
-            "removeItem for {} changed the MainContainer match count from {before} to {after}; \
+            "removeItem for {} changed the {enum_label} match count from {before} to {after}; \
              expected exactly one fewer — aborting the write",
             edit.path
         )));
@@ -6917,10 +7518,130 @@ fn write_str_property_value(
     Ok(())
 }
 
+/// Why a slot could not be resolved for an NPC count edit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SlotSelectError {
+    /// No slot matched the edit's selector.
+    NotFound,
+    /// More than one slot matched and no stable slot id narrowed it to one.
+    Ambiguous,
+}
+
+/// Resolve the single MainContainer slot index a count edit targets.
+///
+/// When `edit.slot_id` is set, the slot whose `m_Id` equals it is selected
+/// directly — this pins one specific stack even when two slots share an
+/// item-definition path. Without a slot id the legacy selector applies: match by
+/// `m_ItemDefinition` path/id and reject when more than one slot matches.
+fn select_npc_count_slot(
+    slots: &[properties::PropertyValue],
+    edit: &PrivateInventoryItemCountEdit,
+) -> Result<usize, SlotSelectError> {
+    if let Some(target_id) = edit.slot_id {
+        // A stable slot id addresses exactly one slot. Still require the
+        // item-definition selector to match (a stale id from a since-reordered
+        // inventory must not silently retarget a different item).
+        return slots
+            .iter()
+            .position(|slot| {
+                slot_id(slot) == Some(target_id)
+                    && slot_item_definition(slot)
+                        .is_some_and(|definition| inventory_edit_matches_item(edit, definition))
+            })
+            .ok_or(SlotSelectError::NotFound);
+    }
+    let mut matched = slots.iter().enumerate().filter(|(_, slot)| {
+        slot_item_definition(slot)
+            .is_some_and(|definition| inventory_edit_matches_item(edit, definition))
+    });
+    let (slot_index, _) = matched.next().ok_or(SlotSelectError::NotFound)?;
+    if matched.next().is_some() {
+        return Err(SlotSelectError::Ambiguous);
+    }
+    Ok(slot_index)
+}
+
+/// Patch an NPC slot's `m_ItemCount` via the typed path. Locates the NPC's
+/// MainContainer m_Slots (the same traversal addItem/removeItem use), finds the
+/// slot whose `m_SlotData.m_ItemDefinition` matches the edit's selector, then
+/// resolves
+/// `[<npc inventory path...>, m_Values, Items, [main_index], m_Slots, [slot_index], m_SlotData, m_ItemCount]`
+/// and `patch_scalar`s the i32 count. The IntProperty is fixed-size, so the
+/// write is in place — no splice, no size cascade, payload length unchanged.
+fn apply_npc_inventory_item_count_edit_to_payload(
+    payload: &mut [u8],
+    edit: &PrivateInventoryItemCountEdit,
+) -> Result<(), CoreError> {
+    let actor_id = edit
+        .actor_id
+        .as_deref()
+        .expect("caller guarantees an NPC actor_id");
+    let root = properties::parse_private_root(payload).map_err(|err| {
+        CoreError::Parse(format!(
+            "private.inventory.setItemCount requires a typed-parsable private payload: {err}"
+        ))
+    })?;
+    let inventory_path = resolve_inventory_path(&root, Some(actor_id)).ok_or_else(|| {
+        CoreError::Parse(format!(
+            "NPC {actor_id} has no inventory container; cannot set item count"
+        ))
+    })?;
+    // Resolve the specific container the edit targets (MainContainer when the
+    // edit carries no container_type). A slot m_Id is only unique within one
+    // container, so the suffix must point at the right container before
+    // select_npc_count_slot pins the slot by id.
+    let enum_label = container_enum_label(edit.container_type.as_deref());
+    let slots_suffix = container_slots_suffix(&root, &inventory_path, &enum_label)?;
+    let mut slots_segs = inventory_path.clone();
+    slots_segs.extend_from_slice(&slots_suffix);
+    let slots = properties::resolve(&root.properties, &properties::parse_path(&slots_segs)?)?;
+    let properties::PropertyValue::Array { elements: slots } = &slots.value else {
+        return Err(CoreError::Parse(
+            "MainContainer m_Slots is not a plain slot array".to_string(),
+        ));
+    };
+
+    // Select the target slot. When the edit carries a stable slot id it pins one
+    // specific stack (disambiguating duplicate-path slots); otherwise selection
+    // falls back to the item-definition selector and rejects ambiguity.
+    let slot_index = select_npc_count_slot(slots, edit).map_err(|err| match err {
+        SlotSelectError::NotFound => CoreError::Validation(format!(
+            "NPC {actor_id} inventory does not contain the requested item"
+        )),
+        SlotSelectError::Ambiguous => CoreError::Validation(
+            "NPC inventory item count edit matched multiple slots; \
+             reload the inventory so the edit can target a specific stack"
+                .to_string(),
+        ),
+    })?;
+
+    // Build the full typed path to that slot's m_SlotData.m_ItemCount and patch
+    // the i32 in place.
+    let mut count_segs = inventory_path;
+    count_segs.extend_from_slice(&slots_suffix);
+    count_segs.extend([
+        format!("[{slot_index}]"),
+        "m_SlotData".to_string(),
+        "m_ItemCount".to_string(),
+    ]);
+    let chain = properties::resolve_chain(&root.properties, &properties::parse_path(&count_segs)?)?;
+    let target = chain.target.clone();
+    properties::patch_scalar(payload, &target, properties::ScalarValue::Int(edit.count))
+}
+
 fn apply_private_inventory_item_count_edit_to_payload(
     payload: &mut [u8],
     edit: &PrivateInventoryItemCountEdit,
 ) -> Result<(), CoreError> {
+    // NPC count edits go through the TYPED path: navigate to the target slot's
+    // m_SlotData.m_ItemCount IntProperty and patch it in place. IntProperty is a
+    // fixed-size 4-byte scalar, so patch_scalar never changes the payload length
+    // (no splice, no size cascade) — exactly like the player path's in-place
+    // write. The player path (actor_id == None) keeps its untyped FString-region
+    // scan unchanged below.
+    if edit.actor_id.is_some() {
+        return apply_npc_inventory_item_count_edit_to_payload(payload, edit);
+    }
     let refs = scan_fstrings(payload, 0);
     let (start_idx, end_idx, scope) = inventory_item_region(&refs);
     if scope != "player_inventory_region" {
@@ -10907,7 +11628,11 @@ mod tests {
         // An armor NOT already in this save's MainContainer.
         let armor_path = "/Script/Angelscript.Vlk_Armor_L";
         assert!(is_item_definition_class(armor_path), "armor must be in the catalog allow-list");
-        let edit = PrivateInventoryAddItemEdit { path: armor_path.to_string(), count: 1 };
+        let edit = PrivateInventoryAddItemEdit {
+            path: armor_path.to_string(),
+            count: 1,
+            actor_id: None,
+        };
         apply_private_inventory_add_item_to_payload(&mut payload, &edit).unwrap();
         let root = properties::parse_private_root(&payload).unwrap();
         assert_eq!(root.consumed, payload.len(), "byte-faithful: no trailing/lost bytes");
@@ -11317,6 +12042,443 @@ mod tests {
         )
         .unwrap();
         assert_eq!(response["editsApplied"], 1);
+    }
+
+    // ── Task 4 (private.npc.list) helpers ───────────────────────────────────
+
+    /// A `GameplayAttributeData`-style struct value (BaseValue + CurrentValue),
+    /// terminated by the "None" property sentinel, ready to be a map value body.
+    fn gameplay_attribute_value(base: f32, current: f32) -> Vec<u8> {
+        let mut v = float_property("BaseValue", base);
+        v.extend_from_slice(&float_property("CurrentValue", current));
+        v.extend_from_slice(&fstring("None"));
+        v
+    }
+
+    /// One NPC `_Attributes` entry value: a struct proplist holding an inner
+    /// `Attributes` MapProperty<StrProperty, StructProperty(GameplayAttributeData)>
+    /// with `Health`/`MaxHealth` keys, terminated by "None".
+    fn npc_attributes_entry_value(health: f32, max_health: f32) -> Vec<u8> {
+        let mut map_body = 0u32.to_le_bytes().to_vec(); // num_to_remove
+        map_body.extend_from_slice(&2u32.to_le_bytes()); // count
+        map_body.extend_from_slice(&fstring("Health"));
+        map_body.extend_from_slice(&gameplay_attribute_value(health, health));
+        map_body.extend_from_slice(&fstring("MaxHealth"));
+        map_body.extend_from_slice(&gameplay_attribute_value(max_health, max_health));
+
+        let mut attr_map = fstring("Attributes");
+        attr_map.extend_from_slice(&fstring("MapProperty"));
+        attr_map.extend_from_slice(&2u32.to_le_bytes());
+        attr_map.extend_from_slice(&fstring("StrProperty")); // key type
+        attr_map.extend_from_slice(&0u32.to_le_bytes());
+        attr_map.extend_from_slice(&fstring("StructProperty")); // value type
+        attr_map.extend_from_slice(&1u32.to_le_bytes());
+        attr_map.extend_from_slice(&fstring("GameplayAttributeData"));
+        attr_map.extend_from_slice(&1u32.to_le_bytes());
+        attr_map.extend_from_slice(&fstring("/Script/G1R"));
+        attr_map.extend_from_slice(&0u32.to_le_bytes()); // array_index
+        attr_map.extend_from_slice(&(map_body.len() as u32).to_le_bytes());
+        attr_map.push(0); // tag_flags
+        attr_map.extend_from_slice(&map_body);
+
+        attr_map.extend_from_slice(&fstring("None")); // end of entry proplist
+        attr_map
+    }
+
+    /// A private-root payload with a single `CharacterStateSaveGameData_Attributes`
+    /// map keyed by NPC id. Each `(id, health, max_health)` triple becomes one NPC.
+    fn npc_attributes_map_payload(npcs: &[(&str, f32, f32)]) -> Vec<u8> {
+        let mut map_body = 0u32.to_le_bytes().to_vec(); // num_to_remove
+        map_body.extend_from_slice(&(npcs.len() as u32).to_le_bytes()); // count
+        for (id, health, max_health) in npcs {
+            map_body.extend_from_slice(&fstring(id));
+            map_body.extend_from_slice(&npc_attributes_entry_value(*health, *max_health));
+        }
+
+        let mut prop = fstring("CharacterStateMap");
+        prop.extend_from_slice(&fstring("MapProperty"));
+        prop.extend_from_slice(&2u32.to_le_bytes());
+        prop.extend_from_slice(&fstring("StrProperty")); // key type
+        prop.extend_from_slice(&0u32.to_le_bytes());
+        prop.extend_from_slice(&fstring("StructProperty")); // value type
+        prop.extend_from_slice(&1u32.to_le_bytes());
+        prop.extend_from_slice(&fstring("CharacterStateSaveGameData_Attributes"));
+        prop.extend_from_slice(&1u32.to_le_bytes());
+        prop.extend_from_slice(&fstring("/Script/G1R"));
+        prop.extend_from_slice(&0u32.to_le_bytes()); // array_index
+        prop.extend_from_slice(&(map_body.len() as u32).to_le_bytes());
+        prop.push(0); // tag_flags
+        prop.extend_from_slice(&map_body);
+
+        let mut payload = fstring("/Script/Test.Save");
+        payload.push(0);
+        payload.extend_from_slice(&prop);
+        payload.extend_from_slice(&fstring("None"));
+        payload.extend_from_slice(&0u32.to_le_bytes());
+        payload
+    }
+
+    #[test]
+    fn private_npc_list_filters_sorts_and_paginates() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-npcs.sav");
+        // Intentionally unsorted; one dead (HP 0), one "Herek" for the filter.
+        let private_payload = npc_attributes_map_payload(&[
+            ("OC_VLK_Herek_511", 100.0, 120.0),
+            ("OC_STT_Diego", 80.0, 80.0),
+            ("OC_NONE_Corpse", 0.0, 90.0),
+        ]);
+        let seed_compressed = b"seed-npcs".to_vec();
+        let stream = compressed_stream_with_one_chunk(&seed_compressed, private_payload.len());
+        fs::write(
+            &path,
+            build_gsav(2, &public_payload("Slot"), &stream, &[0, 0, 0, 0]),
+        )
+        .unwrap();
+        let backend = PrefixCodecBackend {
+            seed_compressed,
+            seed_uncompressed: private_payload,
+        };
+
+        // No filter: all three, sorted by id ascending, defaults applied.
+        let all = list_npcs_command(&path, &json!({}), Some(&backend)).unwrap();
+        assert_eq!(all["total"], 3);
+        assert_eq!(all["offset"], 0);
+        assert_eq!(all["limit"], 100);
+        let ids: Vec<&str> = all["npcs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|n| n["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            ids,
+            vec!["OC_NONE_Corpse", "OC_STT_Diego", "OC_VLK_Herek_511"]
+        );
+        // HP flows through from the synthetic Health attributes. With no long-term
+        // memory map in this payload, no NPC is dead — death is a KILL memory signal,
+        // not HP 0 (the HP-0 corpse here has no kill memory event => alive).
+        let corpse = &all["npcs"][0];
+        assert_eq!(corpse["id"], "OC_NONE_Corpse");
+        assert_eq!(corpse["isDead"], false);
+        assert_eq!(corpse["hp"], 0.0);
+        let herek = &all["npcs"][2];
+        assert_eq!(herek["isDead"], false);
+        assert_eq!(herek["hp"], 100.0);
+        assert_eq!(herek["maxHp"], 120.0);
+
+        // Case-insensitive substring filter on id.
+        let filtered = list_npcs_command(
+            &path,
+            &json!({ "query": "herek" }),
+            Some(&backend),
+        )
+        .unwrap();
+        assert_eq!(filtered["total"], 1);
+        assert_eq!(filtered["npcs"].as_array().unwrap().len(), 1);
+        assert!(filtered["npcs"][0]["id"]
+            .as_str()
+            .unwrap()
+            .contains("Herek"));
+
+        // Pagination: limit caps the page; total stays the filtered count.
+        let page = list_npcs_command(
+            &path,
+            &json!({ "offset": 1, "limit": 1 }),
+            Some(&backend),
+        )
+        .unwrap();
+        assert_eq!(page["total"], 3);
+        assert_eq!(page["offset"], 1);
+        assert_eq!(page["limit"], 1);
+        let page_ids = page["npcs"].as_array().unwrap();
+        assert_eq!(page_ids.len(), 1);
+        assert_eq!(page_ids[0]["id"], "OC_STT_Diego");
+
+        // Offset past the end clamps to an empty page (no panic).
+        let empty = list_npcs_command(
+            &path,
+            &json!({ "offset": 99 }),
+            Some(&backend),
+        )
+        .unwrap();
+        assert_eq!(empty["total"], 3);
+        assert_eq!(empty["npcs"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn inspect_save_advertises_npc_edits() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-npc-caps.sav");
+        let private_payload =
+            npc_attributes_map_payload(&[("OC_VLK_Herek_511", 100.0, 120.0)]);
+        let seed_compressed = b"seed-npc-caps".to_vec();
+        let stream = compressed_stream_with_one_chunk(&seed_compressed, private_payload.len());
+        fs::write(
+            &path,
+            build_gsav(2, &public_payload("Slot"), &stream, &[0, 0, 0, 0]),
+        )
+        .unwrap();
+        let backend = PrefixCodecBackend {
+            seed_compressed,
+            seed_uncompressed: private_payload,
+        };
+
+        let value = inspect_save_with_codec_backend(&path, true, Some(&backend), None).unwrap();
+        let npc = &value["private"]["npc"];
+        assert_eq!(npc["hasNpcs"], true);
+        let writable = npc["writable"].as_array().unwrap();
+        assert!(writable.contains(&json!("private.npc.revive")));
+    }
+
+    #[test]
+    fn private_npc_attributes_paths_round_trip_through_set_value() {
+        use properties::PropertyValue;
+
+        // One NPC with a dashed GlobalId (the lynchpin case for `{key}` paths).
+        let npc_id = "OC_VLK_Herek_511-WorldPointActor_Herek";
+        let private_payload = npc_attributes_map_payload(&[(npc_id, 100.0, 120.0)]);
+        let root = properties::parse_private_root(&private_payload).unwrap();
+
+        let rows = npc::npc_attributes(&root, npc_id).unwrap();
+        // Health + MaxHealth from the synthetic entry.
+        let keys: Vec<&str> = rows.iter().map(|r| r.key.as_str()).collect();
+        assert!(keys.contains(&"Health"), "rows: {keys:?}");
+        assert!(keys.contains(&"MaxHealth"), "rows: {keys:?}");
+
+        let health = rows.iter().find(|r| r.key == "Health").unwrap();
+        assert_eq!(health.base, Some(100.0));
+        assert_eq!(health.current, Some(100.0));
+
+        // The dashed map key is rendered as a single `{...}` segment verbatim.
+        assert_eq!(
+            health.base_path,
+            vec![
+                "CharacterStateMap".to_string(),
+                format!("{{{npc_id}}}"),
+                "Attributes".to_string(),
+                "{Health}".to_string(),
+                "BaseValue".to_string(),
+            ]
+        );
+
+        // THE round-trip: the produced base_path resolves to a FloatProperty
+        // whose value equals health.base.
+        let base_segs = properties::parse_path(&health.base_path).unwrap();
+        let base_target = properties::resolve(&root.properties, &base_segs).unwrap();
+        assert!(
+            matches!(base_target.value, PropertyValue::Float(_)),
+            "base_path must resolve to a FloatProperty, got {:?}",
+            base_target.value
+        );
+        if let PropertyValue::Float(f) = base_target.value {
+            assert_eq!(Some(f), health.base);
+        }
+
+        // ...and current_path likewise.
+        let cur_segs = properties::parse_path(&health.current_path).unwrap();
+        let cur_target = properties::resolve(&root.properties, &cur_segs).unwrap();
+        assert!(matches!(cur_target.value, PropertyValue::Float(_)));
+        if let PropertyValue::Float(f) = cur_target.value {
+            assert_eq!(Some(f), health.current);
+        }
+    }
+
+    #[test]
+    fn private_npc_attributes_command_serializes_camel_case_paths() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-attrs.sav");
+        let npc_id = "OC_VLK_Herek_511-WorldPointActor_Herek";
+        let private_payload = npc_attributes_map_payload(&[(npc_id, 100.0, 120.0)]);
+        let seed_compressed = b"seed-attrs".to_vec();
+        let stream = compressed_stream_with_one_chunk(&seed_compressed, private_payload.len());
+        fs::write(
+            &path,
+            build_gsav(2, &public_payload("Slot"), &stream, &[0, 0, 0, 0]),
+        )
+        .unwrap();
+        let backend = PrefixCodecBackend {
+            seed_compressed,
+            seed_uncompressed: private_payload,
+        };
+
+        let value =
+            npc_attributes_command(&path, &json!({ "id": npc_id }), Some(&backend)).unwrap();
+        let attrs = value["attributes"].as_array().unwrap();
+        let health = attrs.iter().find(|a| a["key"] == "Health").unwrap();
+        assert_eq!(health["base"], 100.0);
+        assert_eq!(health["current"], 100.0);
+        // camelCase: basePath / currentPath, and the dashed key segment is intact.
+        assert_eq!(
+            health["basePath"],
+            json!([
+                "CharacterStateMap",
+                format!("{{{npc_id}}}"),
+                "Attributes",
+                "{Health}",
+                "BaseValue",
+            ])
+        );
+        assert!(health["currentPath"].is_array());
+        assert!(health.get("base_path").is_none(), "must be camelCase only");
+    }
+
+    // ── Task 17 (private.npc.inventory) ──────────────────────────────────────
+
+    /// The shared typed-tree builder, pointed at the controlled player
+    /// (`actor_id = None`), emits the displayable summary shape over the
+    /// synthetic MainContainer: one removable item row plus the structural-edit
+    /// `writable` list. This is the same builder the NPC command uses, so a
+    /// default-run assertion of the player path proves the shape end to end.
+    #[test]
+    fn actor_inventory_summary_player_lists_main_container_rows() {
+        let main_slots = vec![inv_item_slot(
+            7,
+            INV_MAIN_LABEL,
+            "/Script/Angelscript.ItMi_Orenugget",
+            5,
+            &inv_empty_payload_map(),
+        )];
+        let payload = typed_inventory_private_payload(&[], &main_slots);
+        let root = properties::parse_private_root(&payload).unwrap();
+
+        let summary = actor_inventory_summary(&root, None);
+        assert_eq!(
+            summary["items"],
+            json!([{
+                "id": "ItMi_Orenugget",
+                "path": "/Script/Angelscript.ItMi_Orenugget",
+                "count": 5,
+                "removable": true,
+                "slotId": 7,
+                "containerType": "MainContainer",
+            }])
+        );
+        assert_eq!(
+            summary["mainContainerPaths"],
+            json!(["/Script/Angelscript.ItMi_Orenugget"])
+        );
+        // Clean template present + globally-unique path ⇒ all three edits offered.
+        assert_eq!(
+            summary["writable"],
+            json!([
+                "private.inventory.setItemCount",
+                "private.inventory.addItem",
+                "private.inventory.removeItem",
+            ])
+        );
+    }
+
+    /// An empty MainContainer yields empty items/paths and offers no edits.
+    #[test]
+    fn actor_inventory_summary_empty_main_container_has_no_writable() {
+        // Only a non-clean (state-carrying) Quickslots slot exists, so there is
+        // no clean template and the MainContainer is empty.
+        let other_slots = vec![inv_item_slot(
+            1,
+            INV_OTHER_LABEL,
+            "/Script/Angelscript.ItFo_Apple",
+            1,
+            &inv_nonempty_payload_map(),
+        )];
+        let payload = typed_inventory_private_payload(&other_slots, &[]);
+        let root = properties::parse_private_root(&payload).unwrap();
+
+        let summary = actor_inventory_summary(&root, None);
+        assert_eq!(summary["items"], json!([]));
+        assert_eq!(summary["mainContainerPaths"], json!([]));
+        assert_eq!(summary["writable"], json!([]));
+    }
+
+    /// An unresolvable actor (no inventory for that id) yields the empty shape
+    /// rather than an error, so the frontend can render an empty inventory.
+    #[test]
+    fn actor_inventory_summary_unknown_actor_is_empty() {
+        let main_slots = vec![inv_item_slot(
+            0,
+            INV_MAIN_LABEL,
+            "/Script/Angelscript.ItMi_Orenugget",
+            1,
+            &inv_empty_payload_map(),
+        )];
+        let payload = typed_inventory_private_payload(&[], &main_slots);
+        let root = properties::parse_private_root(&payload).unwrap();
+
+        // The synthetic payload has no _Inventory character map, so any NPC id
+        // resolves to no inventory path.
+        let summary = actor_inventory_summary(&root, Some("does-not-exist-1"));
+        assert_eq!(summary["items"], json!([]));
+        assert_eq!(summary["mainContainerPaths"], json!([]));
+        assert_eq!(summary["writable"], json!([]));
+    }
+
+    /// `private.npc.inventory` rejects a non-GSAV save (dispatch + decode-prelude
+    /// error path), mirroring `private.npc.attributes`.
+    #[test]
+    fn npc_inventory_command_rejects_non_gsav() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("not-a-save.sav");
+        fs::write(&path, b"NOTGSAV padding").unwrap();
+        let backend = PrefixCodecBackend {
+            seed_compressed: Vec::new(),
+            seed_uncompressed: Vec::new(),
+        };
+
+        let err = npc_inventory_command(&path, &json!({ "id": "anyone" }), Some(&backend))
+            .expect_err("non-GSAV must error");
+        assert!(
+            matches!(err, CoreError::UnsupportedEdit(_)),
+            "expected UnsupportedEdit, got {err:?}"
+        );
+    }
+
+    /// `private.npc.inventory` requires an `id`.
+    #[test]
+    fn npc_inventory_command_requires_id() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R.sav");
+        fs::write(&path, b"GSAV ...").unwrap();
+        let backend = PrefixCodecBackend {
+            seed_compressed: Vec::new(),
+            seed_uncompressed: Vec::new(),
+        };
+
+        let err = npc_inventory_command(&path, &json!({}), Some(&backend))
+            .expect_err("missing id must error");
+        assert!(
+            matches!(err, CoreError::InvalidRequest(_)),
+            "expected InvalidRequest, got {err:?}"
+        );
+    }
+
+    /// Real-fixture: the known-populated NPC's inventory summary lists items,
+    /// each row carrying a path and a count. Exercises the same builder the
+    /// `private.npc.inventory` command runs (the GSAV/backend decode prelude is
+    /// identical to `private.npc.attributes`, covered by its default test).
+    #[test]
+    #[ignore = "needs GORESAVE_PAYLOAD_BIN=<a decompressed host.bin>"]
+    fn npc_inventory_summary_lists_items() {
+        let path = std::env::var("GORESAVE_PAYLOAD_BIN").expect("set GORESAVE_PAYLOAD_BIN");
+        let payload = std::fs::read(path).unwrap();
+        let id = "Lizard-WP_EF_SCSLOPE_LIZARD_SPAWN_01-1";
+        let root = properties::parse_private_root(&payload).unwrap();
+
+        let summary = actor_inventory_summary(&root, Some(id));
+        let items = summary["items"]
+            .as_array()
+            .expect("items is an array");
+        assert!(
+            !items.is_empty(),
+            "NPC {id} should have a populated MainContainer"
+        );
+        for item in items {
+            assert!(
+                item["path"].as_str().is_some_and(|p| !p.is_empty()),
+                "each item row needs a non-empty path: {item:?}"
+            );
+            assert!(item.get("count").is_some(), "each item row needs a count");
+            assert!(item.get("id").is_some(), "each item row needs an id");
+        }
     }
 
     // ── Task 5 helpers ──────────────────────────────────────────────────────
@@ -11899,6 +13061,213 @@ mod tests {
         out
     }
 
+    /// A minimal `m_GenericData["CrimeMemoryPersistentData"]` private payload with
+    /// two Hero global crimes (one OldCamp via VictimGuilds, one NewCamp) plus one
+    /// relative-crime witness referencing the OldCamp crime id. Just enough to
+    /// exercise `private.factions.list` / `.forgive` through the full pipeline.
+    fn crime_blob_private_payload() -> Vec<u8> {
+        fn name_prop(name: &str, value: &str) -> Vec<u8> {
+            inv_tagged(name, "NameProperty", &[], 0, &fstring(value))
+        }
+        fn gameplay_tag(name: &str, tag_name: &str) -> Vec<u8> {
+            let mut body = name_prop("TagName", tag_name);
+            body.extend_from_slice(&fstring("None"));
+            let mut descriptor = 1u32.to_le_bytes().to_vec();
+            descriptor.extend_from_slice(&fstring("GameplayTag"));
+            descriptor.extend_from_slice(&1u32.to_le_bytes());
+            descriptor.extend_from_slice(&fstring("/Script/GameplayTags"));
+            inv_tagged(name, "StructProperty", &descriptor, 0, &body)
+        }
+        fn tag_container(name: &str, tags: &[&str]) -> Vec<u8> {
+            let mut body = (tags.len() as u32).to_le_bytes().to_vec();
+            for t in tags {
+                body.extend_from_slice(&fstring(t));
+            }
+            let mut descriptor = 1u32.to_le_bytes().to_vec();
+            descriptor.extend_from_slice(&fstring("GameplayTagContainer"));
+            descriptor.extend_from_slice(&1u32.to_le_bytes());
+            descriptor.extend_from_slice(&fstring("/Script/GameplayTags"));
+            inv_tagged(
+                name,
+                "StructProperty",
+                &descriptor,
+                properties::TAG_FLAG_NATIVE_SERIALIZE,
+                &body,
+            )
+        }
+        fn name_array(name: &str, names: &[&str]) -> Vec<u8> {
+            let mut descriptor = 1u32.to_le_bytes().to_vec();
+            descriptor.extend_from_slice(&fstring("NameProperty"));
+            let mut body = (names.len() as u32).to_le_bytes().to_vec();
+            for n in names {
+                body.extend_from_slice(&fstring(n));
+            }
+            inv_tagged(name, "ArrayProperty", &descriptor, 0, &body)
+        }
+        let global_entry = |id: i32, forgiven: bool, criminal: &str, guilds: &[&str]| -> Vec<u8> {
+            let mut out = int_property("ID", id);
+            out.extend_from_slice(&bool_property("bIsForgiven", forgiven));
+            out.extend_from_slice(&name_prop("CriminalGlobalID", criminal));
+            out.extend_from_slice(&gameplay_tag("CriminalGuild", "Guild.None"));
+            out.extend_from_slice(&name_array("VictimGlobalIDs", &[]));
+            out.extend_from_slice(&tag_container("VictimGuilds", guilds));
+            out
+        };
+        let struct_array = |name: &str, struct_type: &str, elements: &[Vec<u8>]| -> Vec<u8> {
+            let mut descriptor = 1u32.to_le_bytes().to_vec();
+            descriptor.extend_from_slice(&fstring("StructProperty"));
+            descriptor.extend_from_slice(&inv_struct_descriptor(struct_type));
+            let mut body = (elements.len() as u32).to_le_bytes().to_vec();
+            for e in elements {
+                body.extend_from_slice(e);
+                body.extend_from_slice(&fstring("None"));
+            }
+            inv_tagged(name, "ArrayProperty", &descriptor, 0, &body)
+        };
+
+        let globals = struct_array(
+            "GlobalCrimeDataEntries",
+            "FGlobalCrimeDataEntry",
+            &[
+                global_entry(11, false, "Hero", &["Guild.Human.OldCamp"]),
+                global_entry(22, false, "Hero", &["Guild.Human.NewCamp"]),
+            ],
+        );
+
+        // RelativeCrimeDataEntries: one witness whose RelativeCrimes references id 11.
+        let mut witness_value = struct_array(
+            "RelativeCrimes",
+            "FRelativeCrimeDataEntry",
+            &[{
+                let mut rel = int_property("ID", 11);
+                rel.extend_from_slice(&bool_property("bIsSuppressed", false));
+                rel
+            }],
+        );
+        witness_value.extend_from_slice(&fstring("None"));
+        let mut rel_body = 0u32.to_le_bytes().to_vec(); // num_to_remove
+        rel_body.extend_from_slice(&1u32.to_le_bytes()); // count
+        rel_body.extend_from_slice(&fstring("OC_STT_Diego"));
+        rel_body.extend_from_slice(&witness_value);
+        let mut rel_descriptor = 2u32.to_le_bytes().to_vec();
+        rel_descriptor.extend_from_slice(&fstring("NameProperty"));
+        rel_descriptor.extend_from_slice(&0u32.to_le_bytes());
+        rel_descriptor.extend_from_slice(&fstring("StructProperty"));
+        rel_descriptor.extend_from_slice(&inv_struct_descriptor("FRelativeCrimesContainer"));
+        let relatives = inv_tagged(
+            "RelativeCrimeDataEntries",
+            "MapProperty",
+            &rel_descriptor,
+            0,
+            &rel_body,
+        );
+
+        let mut struct_body = globals;
+        struct_body.extend_from_slice(&relatives);
+        struct_body.extend_from_slice(&fstring("None"));
+
+        let mut instanced = fstring("/Script/G1R.GothicCrimeMemorySaveGameData");
+        instanced.extend_from_slice(&(struct_body.len() as u32).to_le_bytes());
+        instanced.extend_from_slice(&struct_body);
+
+        let mut map_body = 0u32.to_le_bytes().to_vec();
+        map_body.extend_from_slice(&1u32.to_le_bytes());
+        map_body.extend_from_slice(&fstring("CrimeMemoryPersistentData"));
+        map_body.extend_from_slice(&instanced);
+        // InstancedStruct map-value descriptor; package is /Script/StructUtils.
+        let mut map_descriptor = 2u32.to_le_bytes().to_vec();
+        map_descriptor.extend_from_slice(&fstring("NameProperty"));
+        map_descriptor.extend_from_slice(&0u32.to_le_bytes());
+        map_descriptor.extend_from_slice(&fstring("StructProperty"));
+        map_descriptor.extend_from_slice(&1u32.to_le_bytes());
+        map_descriptor.extend_from_slice(&fstring("InstancedStruct"));
+        map_descriptor.extend_from_slice(&1u32.to_le_bytes());
+        map_descriptor.extend_from_slice(&fstring("/Script/StructUtils"));
+        let generic = inv_tagged("m_GenericData", "MapProperty", &map_descriptor, 0, &map_body);
+
+        let mut p = fstring("/Script/Angelscript.GothicFinalDataGame");
+        p.push(0);
+        p.extend_from_slice(&generic);
+        p.extend_from_slice(&fstring("None"));
+        p.extend_from_slice(&0u32.to_le_bytes()); // footer
+        p
+    }
+
+    #[test]
+    fn factions_list_and_forgive_through_full_pipeline() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-crime.sav");
+        let private_payload = crime_blob_private_payload();
+        // Sanity: the synthetic blob parses byte-clean.
+        let root = properties::parse_private_root(&private_payload).unwrap();
+        assert_eq!(root.consumed, private_payload.len());
+
+        let seed_compressed = b"seed-crime".to_vec();
+        let stream = compressed_stream_with_one_chunk(&seed_compressed, private_payload.len());
+        fs::write(
+            &path,
+            build_gsav(2, &public_payload("Slot"), &stream, &[0, 0, 0, 0]),
+        )
+        .unwrap();
+        let backend = PrefixCodecBackend {
+            seed_compressed,
+            seed_uncompressed: private_payload,
+        };
+
+        // inspect_save surfaces the faction block + advertises forgive.
+        let value = inspect_save_with_codec_backend(&path, true, Some(&backend), None).unwrap();
+        let guilds = value["private"]["factions"]["guilds"].as_array().unwrap();
+        let oc = guilds
+            .iter()
+            .find(|g| g["guild"] == "Guild.Human.OldCamp")
+            .unwrap();
+        assert_eq!(oc["unforgiven"], 1);
+        assert_eq!(oc["total"], 1);
+        assert!(
+            value["private"]["writable"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("private.factions.forgive")),
+            "writable: {:?}",
+            value["private"]["writable"]
+        );
+
+        // private.factions.list command.
+        let listed =
+            list_guild_crimes_command(&path, Some(&backend)).unwrap();
+        let lc = listed["guilds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|g| g["guild"] == "Guild.Human.OldCamp")
+            .unwrap();
+        assert_eq!(lc["unforgiven"], 1);
+
+        // write_save forgive(OldCamp) — fixed-size batch through the normal path.
+        let edits = vec![json!({
+            "path": "private.factions.forgive",
+            "value": { "guild": "Guild.Human.OldCamp" }
+        })];
+        write_save_with_codec_backend(&path, &edits, false, None, Some(&backend)).unwrap();
+
+        // Re-inspect: OldCamp unforgiven -> 0, NewCamp unchanged.
+        let after = list_guild_crimes_command(&path, Some(&backend)).unwrap();
+        let oc2 = after["guilds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|g| g["guild"] == "Guild.Human.OldCamp")
+            .unwrap();
+        assert_eq!(oc2["unforgiven"], 0);
+        let nc2 = after["guilds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|g| g["guild"] == "Guild.Human.NewCamp")
+            .unwrap();
+        assert_eq!(nc2["unforgiven"], 1, "NewCamp untouched");
+    }
+
     fn inv_struct_descriptor(struct_type: &str) -> Vec<u8> {
         let mut out = 1u32.to_le_bytes().to_vec();
         out.extend_from_slice(&fstring(struct_type));
@@ -12139,6 +13508,210 @@ mod tests {
         p
     }
 
+    const INV_MELEE_LABEL: &str = "EInventoryTypes::MeleeSlot";
+    const INV_POUCH_LABEL: &str = "EInventoryTypes::Pouch";
+
+    /// `InventoryItems` StructProperty: the NPC inventory container property whose
+    /// value holds `m_Keys` (enum array) + `m_Values.Items` (containers), the same
+    /// shape `npc::npc_inventory_path` descends into. `containers` is
+    /// `(enum_label, slots)` in m_Keys/Items order.
+    fn inv_inventory_items_struct(containers: &[(&str, &[Vec<u8>])]) -> Vec<u8> {
+        let labels: Vec<&str> = containers.iter().map(|(label, _)| *label).collect();
+        let keys = inv_enum_array_property("m_Keys", &labels);
+        let item_elements: Vec<Vec<u8>> = containers
+            .iter()
+            .map(|(label, slots)| inv_container(label, slots))
+            .collect();
+        let items = inv_struct_array_property("Items", "ContainerVirtualData", &item_elements);
+        let values = inv_struct_property("m_Values", "ContainerVirtualDataArray", &items);
+        let mut body = keys;
+        body.extend_from_slice(&values);
+        inv_struct_property("InventoryItems", "ReplicatedInventoryMap", &body)
+    }
+
+    /// A private payload holding a `CharacterStateSaveGameData_Inventory` map with a
+    /// single NPC `id` whose entry value's first property is the `InventoryItems`
+    /// container built from `containers`. Resolvable by `npc::npc_inventory_path`.
+    fn npc_inventory_private_payload(id: &str, containers: &[(&str, &[Vec<u8>])]) -> Vec<u8> {
+        // Entry value: a struct proplist whose first property is the inventory
+        // container, terminated by "None".
+        let mut entry_value = inv_inventory_items_struct(containers);
+        entry_value.extend_from_slice(&fstring("None"));
+
+        // CharacterStateSaveGameData_Inventory MapProperty<Str, Struct>.
+        let mut map_body = 0u32.to_le_bytes().to_vec(); // num_to_remove
+        map_body.extend_from_slice(&1u32.to_le_bytes()); // count
+        map_body.extend_from_slice(&fstring(id));
+        map_body.extend_from_slice(&entry_value);
+        let mut descriptor = 2u32.to_le_bytes().to_vec();
+        descriptor.extend_from_slice(&fstring("StrProperty")); // key type
+        descriptor.extend_from_slice(&0u32.to_le_bytes()); // key_flags
+        descriptor.extend_from_slice(&fstring("StructProperty")); // value type
+        descriptor.extend_from_slice(&inv_struct_descriptor(
+            "CharacterStateSaveGameData_Inventory",
+        ));
+        let map = inv_tagged(
+            "CharacterStateSaveGameData_Inventory",
+            "MapProperty",
+            &descriptor,
+            0,
+            &map_body,
+        );
+
+        let mut p = fstring("/Script/Angelscript.GothicFinalDataGame");
+        p.push(0);
+        p.extend_from_slice(&map);
+        p.extend_from_slice(&fstring("None"));
+        p.extend_from_slice(&0u32.to_le_bytes()); // footer
+        p
+    }
+
+    /// The NPC inventory view spans ALL containers (weapon + ore visible), hides
+    /// non-lootable equipment markers (HumanFist*), and tags each row with its
+    /// container short label + slotId.
+    #[test]
+    fn npc_inventory_summary_reads_all_containers_hides_markers() {
+        let id = "OM_GRD_Guard11_273-WorldPointActor_Guard11_273";
+        let apple = "/Script/Angelscript.ItFo_Apple";
+        let fist = "/Script/Angelscript.HumanFist_Strong";
+        let sword = "/Script/Angelscript.ItMw_1H_Sword_01";
+        let ore = "/Script/Angelscript.ItMi_Orenugget";
+        let main = [
+            inv_item_slot(1, INV_MAIN_LABEL, apple, 1, &inv_empty_payload_map()),
+            inv_item_slot(2, INV_MAIN_LABEL, fist, 1, &inv_empty_payload_map()),
+        ];
+        let melee = [inv_item_slot(1, INV_MELEE_LABEL, sword, 1, &inv_empty_payload_map())];
+        let pouch = [inv_item_slot(1, INV_POUCH_LABEL, ore, 12, &inv_empty_payload_map())];
+        let payload = npc_inventory_private_payload(
+            id,
+            &[
+                (INV_MAIN_LABEL, &main),
+                (INV_MELEE_LABEL, &melee),
+                (INV_POUCH_LABEL, &pouch),
+            ],
+        );
+        let root = properties::parse_private_root(&payload).unwrap();
+
+        let summary = actor_inventory_summary(&root, Some(id));
+        let items = summary["items"].as_array().unwrap();
+        let find = |id: &str| items.iter().find(|i| i["id"] == id);
+
+        // Apple (MainContainer), sword (MeleeSlot), ore (Pouch) all present.
+        assert_eq!(find("ItFo_Apple").unwrap()["containerType"], "MainContainer");
+        let sword_row = find("ItMw_1H_Sword_01").expect("equipped weapon visible");
+        assert_eq!(sword_row["containerType"], "MeleeSlot");
+        assert_eq!(sword_row["slotId"], 1);
+        let ore_row = find("ItMi_Orenugget").expect("pouch ore visible");
+        assert_eq!(ore_row["containerType"], "Pouch");
+        assert_eq!(ore_row["count"], 12);
+        // The fist marker is hidden.
+        assert!(
+            find("HumanFist_Strong").is_none(),
+            "non-lootable HumanFist marker must be hidden: {items:?}"
+        );
+        assert_eq!(items.len(), 3, "exactly apple + sword + ore: {items:?}");
+    }
+
+    /// A per-container count edit (containerType + slotId) updates ONLY the
+    /// targeted slot and re-parses byte-clean — proven for both a MeleeSlot weapon
+    /// and a Pouch ore.
+    #[test]
+    fn npc_inventory_count_edit_targets_specific_container_slot() {
+        let id = "OM_GRD_Guard11_273-WorldPointActor_Guard11_273";
+        let sword = "/Script/Angelscript.ItMw_1H_Sword_01";
+        let ore = "/Script/Angelscript.ItMi_Orenugget";
+        // Same slotId (1) in both MeleeSlot and Pouch — only containerType
+        // disambiguates which stack the edit touches.
+        let melee = [inv_item_slot(1, INV_MELEE_LABEL, sword, 1, &inv_empty_payload_map())];
+        let pouch = [inv_item_slot(1, INV_POUCH_LABEL, ore, 12, &inv_empty_payload_map())];
+        let mut payload = npc_inventory_private_payload(
+            id,
+            &[
+                (INV_MAIN_LABEL, &[]),
+                (INV_MELEE_LABEL, &melee),
+                (INV_POUCH_LABEL, &pouch),
+            ],
+        );
+        let len_before = payload.len();
+
+        // Bump the Pouch ore stack to 99; the MeleeSlot sword (same slotId) must
+        // be untouched.
+        apply_private_inventory_item_count_edit_to_payload(
+            &mut payload,
+            &PrivateInventoryItemCountEdit {
+                id: None,
+                path: Some(ore.to_string()),
+                count: 99,
+                actor_id: Some(id.to_string()),
+                slot_id: Some(1),
+                container_type: Some("Pouch".to_string()),
+            },
+        )
+        .unwrap();
+        assert_eq!(payload.len(), len_before, "IntProperty patch must not resize");
+        let root = properties::parse_private_root(&payload).unwrap();
+        assert_eq!(root.consumed, payload.len(), "re-parse after pouch edit");
+        let items = actor_inventory_summary(&root, Some(id));
+        let items = items["items"].as_array().unwrap();
+        let row = |id: &str| items.iter().find(|i| i["id"] == id).unwrap();
+        assert_eq!(row("ItMi_Orenugget")["count"], 99, "pouch ore updated");
+        assert_eq!(row("ItMw_1H_Sword_01")["count"], 1, "melee sword untouched");
+
+        // Now edit the MeleeSlot sword (same slotId 1, different container).
+        apply_private_inventory_item_count_edit_to_payload(
+            &mut payload,
+            &PrivateInventoryItemCountEdit {
+                id: None,
+                path: Some(sword.to_string()),
+                count: 7,
+                actor_id: Some(id.to_string()),
+                slot_id: Some(1),
+                container_type: Some("MeleeSlot".to_string()),
+            },
+        )
+        .unwrap();
+        let root = properties::parse_private_root(&payload).unwrap();
+        assert_eq!(root.consumed, payload.len(), "re-parse after melee edit");
+        let items = actor_inventory_summary(&root, Some(id));
+        let items = items["items"].as_array().unwrap();
+        let row = |id: &str| items.iter().find(|i| i["id"] == id).unwrap();
+        assert_eq!(row("ItMw_1H_Sword_01")["count"], 7, "melee sword updated");
+        assert_eq!(row("ItMi_Orenugget")["count"], 99, "pouch ore unchanged");
+    }
+
+    /// Real fixture: the OM_GRD_Guard11 NPC's inventory must surface the equipped
+    /// sword (MeleeSlot) and the pouch ore (Pouch, count 12), and hide every
+    /// fist/watch-fight marker.
+    #[test]
+    #[ignore = "needs work/decompressed/G1R-012.decompressed.bin (or GORESAVE_G1R012_BIN)"]
+    fn npc_inventory_summary_real_fixture_guard11_shows_weapon_and_ore() {
+        // The decompressed fixtures live in the main checkout's (gitignored)
+        // work/ dir, which is absent from git worktrees; allow an explicit
+        // override and otherwise try the conventional relative path.
+        let path = std::env::var("GORESAVE_G1R012_BIN")
+            .unwrap_or_else(|_| "work/decompressed/G1R-012.decompressed.bin".to_string());
+        let payload = std::fs::read(&path)
+            .unwrap_or_else(|e| panic!("read fixture {path}: {e}"));
+        let root = properties::parse_private_root(&payload).unwrap();
+        let id = "OM_GRD_Guard11_273-WorldPointActor_Guard11_273";
+        let summary = actor_inventory_summary(&root, Some(id));
+        let items = summary["items"].as_array().unwrap();
+        let find = |id: &str| items.iter().find(|i| i["id"] == id);
+
+        let sword = find("ItMw_1H_Sword_01").expect("equipped sword visible");
+        assert_eq!(sword["containerType"], "MeleeSlot", "sword in MeleeSlot");
+        let ore = find("ItMi_Orenugget").expect("pouch ore visible");
+        assert_eq!(ore["containerType"], "Pouch", "ore in Pouch");
+        assert_eq!(ore["count"], 12, "ore count 12");
+        assert!(
+            !items.iter().any(|i| {
+                let id = i["id"].as_str().unwrap_or("");
+                id.starts_with("HumanFist") || id == "WatchFightWeapon"
+            }),
+            "non-lootable markers must be hidden: {items:?}"
+        );
+    }
+
     #[test]
     fn main_container_summary_targets_controlled_player_not_first() {
         let party1_item = "/Script/Angelscript.ItMi_Sulfur";
@@ -12153,6 +13726,21 @@ mod tests {
         assert!(
             !summary.all_paths.contains(party1_item),
             "summary must NOT target the first (Party ID 1) player's inventory"
+        );
+    }
+
+    #[test]
+    fn resolve_inventory_path_none_still_returns_player() {
+        // With actor_id = None the dispatch must preserve the existing player
+        // behaviour: it resolves the controlled player's inventory path.
+        let payload = two_saved_players_private_payload(
+            "/Script/Angelscript.ItMi_Sulfur",
+            "/Script/Angelscript.ItMi_Orenugget",
+        );
+        let root = properties::parse_private_root(&payload).unwrap();
+        assert!(
+            resolve_inventory_path(&root, None).is_some(),
+            "resolve_inventory_path(.., None) must resolve the player inventory"
         );
     }
 
@@ -12338,6 +13926,90 @@ mod tests {
         );
     }
 
+    /// Resolve the MainContainer m_Slots array elements from a
+    /// `typed_inventory_private_payload` fixture.
+    fn inv_main_slot_elements(payload: &[u8]) -> Vec<properties::PropertyValue> {
+        let root = properties::parse_private_root(payload).unwrap();
+        let slots = properties::resolve(
+            &root.properties,
+            &properties::parse_path(&inv_slots_prefix(1)).unwrap(),
+        )
+        .unwrap();
+        let properties::PropertyValue::Array { elements } = &slots.value else {
+            panic!("m_Slots is not an array");
+        };
+        elements.clone()
+    }
+
+    #[test]
+    fn select_npc_count_slot_disambiguates_duplicate_path_by_slot_id() {
+        // Two MainContainer slots share the SAME item-definition path but carry
+        // distinct m_Id (7 and 9). Selecting by path alone is ambiguous; a slot
+        // id pins one specific stack.
+        let path = "/Script/Angelscript.ItMi_Orenugget";
+        let payload = typed_inventory_private_payload(
+            &[],
+            &[
+                inv_item_slot(7, INV_MAIN_LABEL, path, 1, &inv_empty_payload_map()),
+                inv_item_slot(9, INV_MAIN_LABEL, path, 1, &inv_empty_payload_map()),
+            ],
+        );
+        let slots = inv_main_slot_elements(&payload);
+
+        // Without a slot id, the duplicate path is ambiguous (the bug).
+        let ambiguous = PrivateInventoryItemCountEdit {
+            id: None,
+            path: Some(path.to_string()),
+            count: 5,
+            actor_id: Some("npc".to_string()),
+            slot_id: None,
+            container_type: None,
+        };
+        assert_eq!(
+            select_npc_count_slot(&slots, &ambiguous),
+            Err(SlotSelectError::Ambiguous),
+        );
+
+        // With a slot id, each duplicate stack is addressed unambiguously.
+        let pick = |sid: i32| PrivateInventoryItemCountEdit {
+            id: None,
+            path: Some(path.to_string()),
+            count: 5,
+            actor_id: Some("npc".to_string()),
+            slot_id: Some(sid),
+            container_type: None,
+        };
+        assert_eq!(select_npc_count_slot(&slots, &pick(7)), Ok(0));
+        assert_eq!(select_npc_count_slot(&slots, &pick(9)), Ok(1));
+
+        // A slot id that does not exist (or whose path no longer matches) is a
+        // miss, not a wrong-stack write.
+        assert_eq!(
+            select_npc_count_slot(&slots, &pick(42)),
+            Err(SlotSelectError::NotFound),
+        );
+    }
+
+    #[test]
+    fn actor_inventory_summary_rows_carry_slot_id() {
+        // The displayable summary surfaces each slot's m_Id so the frontend can
+        // round-trip it back into a count edit.
+        let path = "/Script/Angelscript.ItMi_Orenugget";
+        let payload = typed_inventory_private_payload(
+            &[],
+            &[
+                inv_item_slot(7, INV_MAIN_LABEL, path, 1, &inv_empty_payload_map()),
+                inv_item_slot(9, INV_MAIN_LABEL, path, 3, &inv_empty_payload_map()),
+            ],
+        );
+        let root = properties::parse_private_root(&payload).unwrap();
+        let summary = actor_inventory_summary(&root, None);
+        let items = summary["items"].as_array().unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0]["slotId"], 7);
+        assert_eq!(items[1]["slotId"], 9);
+    }
+
     #[test]
     fn add_item_appends_slot_to_main_container() {
         // Longer path than the template's (length change upward).
@@ -12345,6 +14017,7 @@ mod tests {
         let edit = PrivateInventoryAddItemEdit {
             path: "/Script/Angelscript.ItMi_Sulfur".to_string(),
             count: 7,
+            actor_id: None,
         };
         apply_private_inventory_add_item_to_payload(&mut payload, &edit).unwrap();
 
@@ -12388,6 +14061,7 @@ mod tests {
         let edit = PrivateInventoryAddItemEdit {
             path: "/Script/Angelscript.ItFo_Egg".to_string(),
             count: 2,
+            actor_id: None,
         };
         apply_private_inventory_add_item_to_payload(&mut payload, &edit).unwrap();
 
@@ -12422,6 +14096,7 @@ mod tests {
         let edit = PrivateInventoryAddItemEdit {
             path: "/Script/Angelscript.ItMi_Orenugget".to_string(),
             count: 5,
+            actor_id: None,
         };
         let err = apply_private_inventory_add_item_to_payload(&mut payload, &edit).unwrap_err();
         assert!(
@@ -12439,6 +14114,7 @@ mod tests {
         let edit = PrivateInventoryAddItemEdit {
             path: "/Script/Angelscript.ItMi_Sulfur".to_string(),
             count: 1,
+            actor_id: None,
         };
         let err = apply_private_inventory_add_item_to_payload(&mut payload, &edit).unwrap_err();
         assert!(err.to_string().contains("clean"), "unexpected error: {err}");
@@ -12461,6 +14137,7 @@ mod tests {
         let edit = PrivateInventoryAddItemEdit {
             path: "/Script/Angelscript.ItMi_Orenugget".to_string(),
             count: 9,
+            actor_id: None,
         };
         apply_private_inventory_add_item_to_payload(&mut payload, &edit).unwrap();
 
@@ -12514,6 +14191,7 @@ mod tests {
         let edit = PrivateInventoryAddItemEdit {
             path: "/Script/Angelscript.ItMi_Orenugget".to_string(),
             count: 2,
+            actor_id: None,
         };
         apply_private_inventory_add_item_to_payload(&mut payload, &edit).unwrap();
         assert_eq!(inv_slot_count(&payload, 1), 1);
@@ -12535,6 +14213,7 @@ mod tests {
         let edit = PrivateInventoryAddItemEdit {
             path: "/Script/Angelscript.ItMi_Sulfur".to_string(),
             count: 1,
+            actor_id: None,
         };
         let err = apply_private_inventory_add_item_to_payload(&mut payload, &edit).unwrap_err();
         assert!(
@@ -12569,6 +14248,7 @@ mod tests {
         let edit = PrivateInventoryAddItemEdit {
             path: "/Script/Angelscript.ItMi_Sulfur".to_string(),
             count: 4,
+            actor_id: None,
         };
         apply_private_inventory_add_item_to_payload(&mut payload, &edit).unwrap();
         assert_eq!(inv_slot_count(&payload, 1), 3);
@@ -12601,6 +14281,7 @@ mod tests {
         let edit = PrivateInventoryAddItemEdit {
             path: "/Script/Angelscript.ItMi_Sulfur".to_string(),
             count: 1,
+            actor_id: None,
         };
         let err = apply_private_inventory_add_item_to_payload(&mut payload, &edit).unwrap_err();
         assert!(err.to_string().contains("clean"), "unexpected error: {err}");
@@ -12681,6 +14362,7 @@ mod tests {
         let edit = PrivateInventoryAddItemEdit {
             path: "/Script/Angelscript.ItMi_Sulfur".to_string(),
             count: 4,
+            actor_id: None,
         };
         apply_private_inventory_add_item_to_payload(&mut payload, &edit).unwrap();
         assert_eq!(inv_slot_count(&payload, 1), 3);
@@ -12710,6 +14392,7 @@ mod tests {
         let edit = PrivateInventoryAddItemEdit {
             path: "/Script/Angelscript.ItMi_Sulfur".to_string(),
             count: 1,
+            actor_id: None,
         };
         let err = apply_private_inventory_add_item_to_payload(&mut payload, &edit).unwrap_err();
         assert!(err.to_string().contains("clean"), "unexpected error: {err}");
@@ -12731,6 +14414,7 @@ mod tests {
         let edit = PrivateInventoryAddItemEdit {
             path: "/Script/Angelscript.ItMi_Sulfur".to_string(),
             count: 4,
+            actor_id: None,
         };
         apply_private_inventory_add_item_to_payload(&mut payload, &edit).unwrap();
 
@@ -12973,6 +14657,63 @@ mod tests {
             matches!(err, CoreError::InvalidRequest(_)),
             "expected InvalidRequest for count 0, got: {err}"
         );
+    }
+
+    #[test]
+    fn parse_private_inventory_edits_read_optional_actor_id() {
+        // actorId present → Some(id); absent → None; empty/whitespace → None.
+        // All three inventory edit structs parse the field the same way.
+        let id = "Lizard-WP_EF_SCSLOPE_LIZARD_SPAWN_01-1";
+
+        let add = parse_private_inventory_add_item_edit(&Edit {
+            path: "private.inventory.addItem".to_string(),
+            value: json!({
+                "path": "/Script/Angelscript.ItFo_Cheese",
+                "count": 1,
+                "actorId": id
+            }),
+        })
+        .unwrap();
+        assert_eq!(add.actor_id.as_deref(), Some(id));
+
+        let add_none = parse_private_inventory_add_item_edit(&Edit {
+            path: "private.inventory.addItem".to_string(),
+            value: json!({ "path": "/Script/Angelscript.ItFo_Cheese", "count": 1 }),
+        })
+        .unwrap();
+        assert_eq!(add_none.actor_id, None);
+
+        let remove = parse_private_inventory_remove_item_edit(&Edit {
+            path: "private.inventory.removeItem".to_string(),
+            value: json!({
+                "path": "/Script/Angelscript.ItFo_Cheese",
+                "actorId": id
+            }),
+        })
+        .unwrap();
+        assert_eq!(remove.actor_id.as_deref(), Some(id));
+
+        let remove_none = parse_private_inventory_remove_item_edit(&Edit {
+            path: "private.inventory.removeItem".to_string(),
+            value: json!({ "path": "/Script/Angelscript.ItFo_Cheese" }),
+        })
+        .unwrap();
+        assert_eq!(remove_none.actor_id, None);
+
+        let count = parse_private_inventory_item_count_edit(&Edit {
+            path: "private.inventory.setItemCount".to_string(),
+            value: json!({ "path": "ItFo_Cheese", "count": 2, "actorId": id }),
+        })
+        .unwrap();
+        assert_eq!(count.actor_id.as_deref(), Some(id));
+
+        // Empty / whitespace actorId is treated as absent (→ None).
+        let count_blank = parse_private_inventory_item_count_edit(&Edit {
+            path: "private.inventory.setItemCount".to_string(),
+            value: json!({ "path": "ItFo_Cheese", "count": 2, "actorId": "   " }),
+        })
+        .unwrap();
+        assert_eq!(count_blank.actor_id, None);
     }
 
     #[test]
@@ -13387,6 +15128,9 @@ mod tests {
             parsed,
             PrivateInventoryRemoveItemEdit {
                 path: "/Script/Angelscript.ItMi_Orenugget".to_string(),
+                actor_id: None,
+                container_type: None,
+                slot_id: None,
             }
         );
     }
@@ -13417,6 +15161,48 @@ mod tests {
         );
     }
 
+    // ── private.npc.revive parse tests ──────────────────────────────────────
+
+    #[test]
+    fn parse_private_npc_revive_accepts_id() {
+        let edit = Edit {
+            path: "private.npc.revive".to_string(),
+            value: json!({ "id": "OC_STT_Lizard-1" }),
+        };
+        let parsed = parse_private_npc_revive_edit(&edit).unwrap();
+        assert_eq!(
+            parsed,
+            PrivateNpcReviveEdit {
+                id: "OC_STT_Lizard-1".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn parse_private_npc_revive_rejects_bad_shapes() {
+        // Non-object value.
+        let err = parse_private_npc_revive_edit(&Edit {
+            path: "private.npc.revive".to_string(),
+            value: json!("nope"),
+        })
+        .unwrap_err();
+        assert!(matches!(err, CoreError::InvalidRequest(_)));
+
+        // Missing/empty id.
+        let err = parse_private_npc_revive_edit(&Edit {
+            path: "private.npc.revive".to_string(),
+            value: json!({}),
+        })
+        .unwrap_err();
+        assert!(matches!(err, CoreError::InvalidRequest(_)));
+        let err = parse_private_npc_revive_edit(&Edit {
+            path: "private.npc.revive".to_string(),
+            value: json!({ "id": "  " }),
+        })
+        .unwrap_err();
+        assert!(matches!(err, CoreError::InvalidRequest(_)));
+    }
+
     #[test]
     fn remove_item_deletes_matching_slot_from_main_container() {
         // Two slots; removing Orenugget must leave Apple intact and shrink the
@@ -13425,6 +15211,9 @@ mod tests {
         assert_eq!(inv_slot_count(&payload, 1), 2);
         let edit = PrivateInventoryRemoveItemEdit {
             path: "/Script/Angelscript.ItMi_Orenugget".to_string(),
+            actor_id: None,
+            container_type: None,
+            slot_id: None,
         };
         apply_private_inventory_remove_item_to_payload(&mut payload, &edit).unwrap();
 
@@ -13477,6 +15266,9 @@ mod tests {
         assert_eq!(inv_slot_count(&payload, 1), 2);
         let edit = PrivateInventoryRemoveItemEdit {
             path: "/Script/Angelscript.ItMi_Orenugget".to_string(),
+            actor_id: None,
+            container_type: None,
+            slot_id: None,
         };
         apply_private_inventory_remove_item_to_payload(&mut payload, &edit).unwrap();
 
@@ -13508,6 +15300,9 @@ mod tests {
         let before = payload.clone();
         let edit = PrivateInventoryRemoveItemEdit {
             path: "/Script/Angelscript.ItMi_Sulfur".to_string(),
+            actor_id: None,
+            container_type: None,
+            slot_id: None,
         };
         let err = apply_private_inventory_remove_item_to_payload(&mut payload, &edit).unwrap_err();
         assert!(
@@ -13541,6 +15336,9 @@ mod tests {
         let mut payload = typed_inventory_private_payload(&[], &dup_main);
         let edit = PrivateInventoryRemoveItemEdit {
             path: "/Script/Angelscript.ItMi_Orenugget".to_string(),
+            actor_id: None,
+            container_type: None,
+            slot_id: None,
         };
         apply_private_inventory_remove_item_to_payload(&mut payload, &edit).unwrap();
         // One Orenugget slot remains.
@@ -13561,6 +15359,9 @@ mod tests {
         let before = payload.clone();
         let edit = PrivateInventoryRemoveItemEdit {
             path: "/Script/Angelscript.ItMi_Orenugget".to_string(),
+            actor_id: None,
+            container_type: None,
+            slot_id: None,
         };
         let err = apply_private_inventory_remove_item_to_payload(&mut payload, &edit).unwrap_err();
         assert!(
@@ -13618,6 +15419,168 @@ mod tests {
                 .iter()
                 .any(|item| item["path"] == "/Script/Angelscript.ItFo_Apple"),
             "output save inventory missing survivor: {items:?}"
+        );
+    }
+
+    /// Resolve the given NPC's inventory and report whether any slot in any of
+    /// its containers holds an item whose `m_SlotData.m_ItemDefinition` equals
+    /// `item_path`. Mirrors the player-inventory slot traversal but scoped to
+    /// the NPC inventory resolved by GlobalId (Task 14 path).
+    fn npc_inventory_contains(payload: &[u8], npc_id: &str, item_path: &str) -> bool {
+        let root = properties::parse_private_root(payload).expect("payload re-parses");
+        let inventory_path =
+            npc::npc_inventory_path(&root, npc_id).expect("npc has an inventory path");
+        let resolve_child = |suffix: &[&str]| -> Option<properties::PropertyValue> {
+            let mut segs = inventory_path.clone();
+            segs.extend(suffix.iter().map(|s| s.to_string()));
+            let parsed = properties::parse_path(&segs).ok()?;
+            properties::resolve(&root.properties, &parsed)
+                .ok()
+                .map(|prop| prop.value.clone())
+        };
+        let Some(properties::PropertyValue::Array {
+            elements: containers,
+        }) = resolve_child(&["m_Values", "Items"])
+        else {
+            return false;
+        };
+        for index in 0..containers.len() {
+            let segment = format!("[{index}]");
+            if let Some(properties::PropertyValue::Array { elements: slots }) =
+                resolve_child(&["m_Values", "Items", &segment, "m_Slots"])
+            {
+                if slots
+                    .iter()
+                    .any(|slot| slot_item_definition(slot) == Some(item_path))
+                {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// First item definition path held in the NPC's MainContainer (the container
+    /// the count edit targets), or `None` if it has no items.
+    fn first_npc_main_container_item(payload: &[u8], npc_id: &str) -> Option<String> {
+        let root = properties::parse_private_root(payload).expect("payload re-parses");
+        let inventory_path = npc::npc_inventory_path(&root, npc_id)?;
+        let slots_suffix = main_container_slots_suffix(&root, &inventory_path).ok()?;
+        let mut segs = inventory_path;
+        segs.extend_from_slice(&slots_suffix);
+        let slots = properties::resolve(&root.properties, &properties::parse_path(&segs).ok()?).ok()?;
+        let properties::PropertyValue::Array { elements: slots } = &slots.value else {
+            return None;
+        };
+        slots
+            .iter()
+            .find_map(|slot| slot_item_definition(slot).map(str::to_string))
+    }
+
+    /// The `m_ItemCount` of the NPC MainContainer slot whose
+    /// `m_SlotData.m_ItemDefinition` equals `item_path`.
+    fn npc_item_count(payload: &[u8], npc_id: &str, item_path: &str) -> Option<i32> {
+        let root = properties::parse_private_root(payload).expect("payload re-parses");
+        let inventory_path = npc::npc_inventory_path(&root, npc_id)?;
+        let slots_suffix = main_container_slots_suffix(&root, &inventory_path).ok()?;
+        let mut segs = inventory_path;
+        segs.extend_from_slice(&slots_suffix);
+        let slots = properties::resolve(&root.properties, &properties::parse_path(&segs).ok()?).ok()?;
+        let properties::PropertyValue::Array { elements: slots } = &slots.value else {
+            return None;
+        };
+        slots
+            .iter()
+            .find(|slot| slot_item_definition(slot) == Some(item_path))
+            .and_then(slot_item_count)
+    }
+
+    #[test]
+    #[ignore = "needs GORESAVE_PAYLOAD_BIN=<a decompressed host.bin>"]
+    fn set_item_count_on_npc_updates_typed_slot() {
+        let path = std::env::var("GORESAVE_PAYLOAD_BIN").expect("set GORESAVE_PAYLOAD_BIN");
+        let mut payload = std::fs::read(path).unwrap();
+        let id = "Lizard-WP_EF_SCSLOPE_LIZARD_SPAWN_01-1";
+        let len_before = payload.len();
+
+        // Find an item already in this NPC's MainContainer.
+        let item = first_npc_main_container_item(&payload, id)
+            .expect("NPC MainContainer should hold at least one item");
+
+        apply_private_inventory_item_count_edit_to_payload(
+            &mut payload,
+            &PrivateInventoryItemCountEdit {
+                id: None,
+                path: Some(item.clone()),
+                count: 42,
+                actor_id: Some(id.into()),
+                slot_id: None,
+                container_type: None,
+            },
+        )
+        .unwrap();
+
+        // Fixed-size IntProperty patch: payload length is unchanged and the save
+        // still parses to its full length.
+        assert_eq!(payload.len(), len_before, "in-place patch must not resize");
+        let root = properties::parse_private_root(&payload).unwrap();
+        assert_eq!(root.consumed, payload.len(), "re-parse after count edit");
+
+        assert_eq!(
+            npc_item_count(&payload, id, &item),
+            Some(42),
+            "NPC slot m_ItemCount should be 42 after the edit"
+        );
+    }
+
+    #[test]
+    #[ignore = "needs GORESAVE_PAYLOAD_BIN=<a decompressed host.bin>"]
+    fn add_then_remove_item_on_npc_roundtrips() {
+        let path = std::env::var("GORESAVE_PAYLOAD_BIN").expect("set GORESAVE_PAYLOAD_BIN");
+        let mut payload = std::fs::read(path).unwrap();
+        let id = "Lizard-WP_EF_SCSLOPE_LIZARD_SPAWN_01-1";
+        let item = "ItFo_Cheese";
+
+        // Sanity: the NPC inventory must not already hold the test item.
+        assert!(
+            !npc_inventory_contains(&payload, id, item),
+            "precondition: NPC must not already hold {item}"
+        );
+
+        // Add the item to the NPC's inventory (not the player's).
+        apply_private_inventory_add_item_to_payload(
+            &mut payload,
+            &PrivateInventoryAddItemEdit {
+                path: item.to_string(),
+                count: 3,
+                actor_id: Some(id.to_string()),
+            },
+        )
+        .unwrap();
+        // Whole payload re-parses cleanly after the splice (size cascade intact).
+        let root = properties::parse_private_root(&payload).unwrap();
+        assert_eq!(root.consumed, payload.len(), "re-parse after add");
+        assert!(
+            npc_inventory_contains(&payload, id, item),
+            "NPC inventory should contain {item} after add"
+        );
+
+        // Remove it again from the same NPC inventory.
+        apply_private_inventory_remove_item_to_payload(
+            &mut payload,
+            &PrivateInventoryRemoveItemEdit {
+                path: item.to_string(),
+                actor_id: Some(id.to_string()),
+                container_type: None,
+                slot_id: None,
+            },
+        )
+        .unwrap();
+        let root = properties::parse_private_root(&payload).unwrap();
+        assert_eq!(root.consumed, payload.len(), "re-parse after remove");
+        assert!(
+            !npc_inventory_contains(&payload, id, item),
+            "NPC inventory should no longer contain {item} after remove"
         );
     }
 

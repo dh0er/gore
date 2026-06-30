@@ -688,6 +688,26 @@ class ArmorUpgrade {
   final String value;
 }
 
+/// Result of loading a single NPC's inventory via `private.npc.inventory`.
+/// The payload has the SAME shape as the player inventory summary, so it parses
+/// straight into a [PrivateInventorySummary]; an inline [error] is carried
+/// instead of throwing, mirroring [NpcAttributesResult].
+class NpcInventoryResult {
+  const NpcInventoryResult({
+    this.inventory = const PrivateInventorySummary(),
+    this.error,
+  });
+
+  factory NpcInventoryResult.fromJson(Map<String, Object?> json) {
+    return NpcInventoryResult(
+      inventory: PrivateInventorySummary.fromJson(json),
+    );
+  }
+
+  final PrivateInventorySummary inventory;
+  final String? error;
+}
+
 class PrivateInventoryItem {
   const PrivateInventoryItem({
     required this.id,
@@ -696,6 +716,8 @@ class PrivateInventoryItem {
     this.removable = false,
     this.equipped = false,
     this.upgrades = const [],
+    this.slotId,
+    this.containerType,
   });
 
   factory PrivateInventoryItem.fromJson(Map<Object?, Object?> json) {
@@ -713,6 +735,8 @@ class PrivateInventoryItem {
                   ))
               .toList() ??
           const [],
+      slotId: (json['slotId'] as num?)?.toInt(),
+      containerType: json['containerType'] as String?,
     );
   }
 
@@ -729,6 +753,19 @@ class PrivateInventoryItem {
   /// Armor upgrade slots (part/tier pairs), populated only on the equipped
   /// armor row; empty for all other items.
   final List<ArmorUpgrade> upgrades;
+
+  /// Stable per-slot discriminator (`m_Id`) from the core. Lets a count edit
+  /// pin one specific stack when two slots share an item-definition path
+  /// (NPC inventories with duplicate stacks). Null when the core did not emit
+  /// one (older payloads / no slot id resolvable).
+  final int? slotId;
+
+  /// The container this row lives in (e.g. `MainContainer`, `MeleeSlot`,
+  /// `Pouch`). NPC inventories surface multiple containers; the frontend MUST
+  /// echo this back on count/remove edits so the core addresses the right
+  /// container's slot. Player rows are all `MainContainer`; null on older
+  /// payloads that did not emit it.
+  final String? containerType;
 }
 
 class InventoryItemCountChange {
@@ -736,43 +773,101 @@ class InventoryItemCountChange {
     required this.id,
     required this.path,
     required this.count,
+    this.actorId,
+    this.slotId,
+    this.containerType,
   });
 
   final String id;
   final String path;
   final int count;
 
+  /// GlobalId of the NPC whose inventory this edits, or null for the player's
+  /// inventory. When non-null it is forwarded to the core so the edit targets
+  /// the NPC's container instead of the player's.
+  final String? actorId;
+
+  /// Stable slot `m_Id` of the targeted stack, forwarded so the core can pin a
+  /// specific slot when two share a path. Null for the player path (the core's
+  /// untyped scan does not use it) and when the row carried no slot id.
+  final int? slotId;
+
+  /// The container the targeted slot lives in (e.g. `MeleeSlot`, `Pouch`),
+  /// echoed back so the core addresses the right container. Null for the player
+  /// (all MainContainer) and older payloads. Without it, non-MainContainer NPC
+  /// edits fail to find the slot.
+  final String? containerType;
+
   Map<String, Object?> toEditJson() {
     return {
       'path': 'private.inventory.setItemCount',
-      'value': {'id': id, 'path': path, 'count': count},
+      'value': {
+        'id': id,
+        'path': path,
+        'count': count,
+        if (actorId != null) 'actorId': actorId,
+        if (slotId != null) 'slotId': slotId,
+        if (containerType != null) 'containerType': containerType,
+      },
     };
   }
 }
 
 class InventoryItemAdd {
-  const InventoryItemAdd({required this.path, required this.count});
+  const InventoryItemAdd({
+    required this.path,
+    required this.count,
+    this.actorId,
+  });
 
   final String path;
   final int count;
 
+  /// See [InventoryItemCountChange.actorId].
+  final String? actorId;
+
   Map<String, Object?> toEditJson() {
     return {
       'path': 'private.inventory.addItem',
-      'value': {'path': path, 'count': count},
+      'value': {
+        'path': path,
+        'count': count,
+        if (actorId != null) 'actorId': actorId,
+      },
     };
   }
 }
 
 class InventoryItemRemove {
-  const InventoryItemRemove({required this.path});
+  const InventoryItemRemove({
+    required this.path,
+    this.actorId,
+    this.slotId,
+    this.containerType,
+  });
 
   final String path;
+
+  /// See [InventoryItemCountChange.actorId].
+  final String? actorId;
+
+  /// See [InventoryItemCountChange.slotId]. Forwarded so the core removes the
+  /// exact slot when several stacks share a path in the same container.
+  final int? slotId;
+
+  /// See [InventoryItemCountChange.containerType]. Forwarded so the core removes
+  /// from the right container (e.g. an NPC's Pouch/MeleeSlot, not MainContainer).
+  final String? containerType;
 
   Map<String, Object?> toEditJson() {
     return {
       'path': 'private.inventory.removeItem',
-      'value': {'path': path},
+      'value': {
+        'path': path,
+        if (actorId != null) 'actorId': actorId,
+        if (slotId != null) 'slotId': slotId,
+        if (containerType != null) 'containerType': containerType,
+      },
     };
   }
 }

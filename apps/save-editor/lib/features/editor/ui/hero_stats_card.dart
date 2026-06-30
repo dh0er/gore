@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:goresave/l10n/app_localizations.dart';
 
 import '../domain/hero_attributes.dart';
+import 'grouped_attribute_sidebar.dart';
 
 /// Describes one entry in the player-tab sidebar. Entries appear in enum
 /// declaration order in the sidebar: core, combat, resistances, thieving,
@@ -35,11 +36,19 @@ class HeroStatsCard extends StatefulWidget {
     required this.onPendingChanged,
     required this.editable,
     required this.reloadKey,
+    this.initialPending,
     this.fallback,
     this.transformCard,
   });
 
   final Future<HeroAttributesResult> Function() load;
+
+  /// Drafts already queued for the player (the 'heroStats' pending entry),
+  /// reconstructed by the parent. Seeds the local fields on (re)load so that
+  /// returning to the Player after selecting an NPC resumes from the unsaved
+  /// edits instead of showing on-disk values (which the next edit would
+  /// otherwise overwrite, dropping the earlier ones).
+  final List<TypedValueEdit> Function()? initialPending;
 
   /// Called whenever the set of pending edits changes.
   /// [edits] is the full list of TypedValueEdit objects to write (empty when
@@ -122,6 +131,14 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
       // is selected yet. effectiveSelected guards against entries that
       // disappeared.
       _selected ??= _defaultSelection(result.attributes);
+      // Rehydrate any queued player drafts so a revisit resumes from them. Only
+      // local fields are seeded here; the registry entry already exists, so we
+      // must NOT call onPendingChanged from this build-context reload.
+      for (final draft in widget.initialPending?.call() ?? const <TypedValueEdit>[]) {
+        final v = draft.value;
+        _pending[_pathKey(draft.path)] =
+            v is num ? formatHeroValue(v.toDouble()) : '$v';
+      }
     });
   }
 
@@ -349,60 +366,25 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
       );
     }
 
-    // CrossAxisAlignment.stretch makes both children fill the available height
-    // so the sidebar background extends to the bottom regardless of content
-    // length, and the right side can use SingleChildScrollView.
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        // Left sidebar: ~200px, fixed — never scrolls away with content.
-        SizedBox(
-          width: 200,
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              color: theme.colorScheme.surfaceContainerLow,
-              borderRadius: BorderRadius.circular(12),
-            ),
-            // SingleChildScrollView so the sidebar itself can scroll on very
-            // small viewports while remaining pinned relative to the detail.
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.symmetric(vertical: 6),
-              child: Column(
-                children: [
-                  for (final entry in sidebarEntries)
-                    _SidebarTile(
-                      label: _entryLabel(AppLocalizations.of(context), entry),
-                      icon: _entryIcon(entry),
-                      selected: entry == effectiveSelected,
-                      onTap: () {
-                        if (_selected != entry) {
-                          setState(() => _selected = entry);
-                        }
-                      },
-                    ),
-                ],
-              ),
-            ),
+    // Delegate the master-detail shell to the shared GroupedAttributeSidebar.
+    // Each sidebar entry becomes a pane keyed by the _SidebarEntry enum value;
+    // panes stay mounted (Offstage) inside the shell so the transform editor's
+    // unsaved field drafts — which back a registered pending edit — survive
+    // switching entries.
+    return GroupedAttributeSidebar(
+      selected: effectiveSelected,
+      onSelect: (id) {
+        final entry = id as _SidebarEntry;
+        if (_selected != entry) setState(() => _selected = entry);
+      },
+      panes: [
+        for (final entry in sidebarEntries)
+          SidebarPane(
+            id: entry,
+            label: _entryLabel(AppLocalizations.of(context), entry),
+            icon: _entryIcon(entry),
+            detail: detailFor(entry),
           ),
-        ),
-        const SizedBox(width: 16),
-        // Right detail area: scrolls independently while the sidebar stays
-        // put. Every pane stays mounted (Offstage) so editor state — most
-        // importantly the transform editor's unsaved field drafts, which back
-        // a registered pending edit — survives switching sidebar entries.
-        // Disposing it would re-seed the fields from the inspection while the
-        // global Save still counted the stale registry entry.
-        Expanded(
-          child: Stack(
-            children: [
-              for (final entry in sidebarEntries)
-                Offstage(
-                  offstage: entry != effectiveSelected,
-                  child: SingleChildScrollView(child: detailFor(entry)),
-                ),
-            ],
-          ),
-        ),
       ],
     );
   }
@@ -463,62 +445,6 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
       onBaseChanged: (text) => _onFieldChanged(attribute.basePath, text),
       onCurrentChanged: (text) =>
           _onFieldChanged(attribute.currentPath, text),
-    );
-  }
-}
-
-/// A slim sidebar tile echoing the save-list sidebar idiom (Material + InkWell,
-/// selected highlight via primaryContainer).
-class _SidebarTile extends StatelessWidget {
-  const _SidebarTile({
-    required this.label,
-    required this.icon,
-    required this.selected,
-    required this.onTap,
-  });
-
-  final String label;
-  final IconData icon;
-  final bool selected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-      child: Material(
-        color: selected ? scheme.primaryContainer : Colors.transparent,
-        borderRadius: BorderRadius.circular(8),
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(8),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
-            child: Row(
-              children: [
-                Icon(
-                  icon,
-                  size: 18,
-                  color: selected ? scheme.primary : scheme.onSurfaceVariant,
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    label,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: selected ? scheme.primary : scheme.onSurface,
-                      fontWeight: selected ? FontWeight.w600 : null,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
     );
   }
 }

@@ -367,6 +367,107 @@ class MemoryEventsPage {
   int get pageCount => total == 0 ? 1 : (total + limit - 1) ~/ limit;
 }
 
+/// Un-forgiven crime counts by most-severe type, from `private.factions.list`.
+/// A single crime entry is counted once, in its worst category.
+class CrimeBreakdown {
+  const CrimeBreakdown({
+    this.murder = 0,
+    this.assault = 0,
+    this.theft = 0,
+    this.trespassing = 0,
+    this.threat = 0,
+    this.other = 0,
+  });
+
+  factory CrimeBreakdown.fromJson(Map<String, Object?> json) {
+    return CrimeBreakdown(
+      murder: (json['murder'] as num?)?.toInt() ?? 0,
+      assault: (json['assault'] as num?)?.toInt() ?? 0,
+      theft: (json['theft'] as num?)?.toInt() ?? 0,
+      trespassing: (json['trespassing'] as num?)?.toInt() ?? 0,
+      threat: (json['threat'] as num?)?.toInt() ?? 0,
+      other: (json['other'] as num?)?.toInt() ?? 0,
+    );
+  }
+
+  final int murder;
+  final int assault;
+  final int theft;
+  final int trespassing;
+  final int threat;
+  final int other;
+
+  int get total =>
+      murder + assault + theft + trespassing + threat + other;
+}
+
+/// One guild's crime tally for the player, from `private.factions.list`.
+class FactionGuild {
+  const FactionGuild({
+    required this.guild,
+    required this.label,
+    required this.total,
+    required this.forgiven,
+    required this.unforgiven,
+    required this.isHostile,
+    required this.crimes,
+  });
+
+  factory FactionGuild.fromJson(Map<String, Object?> json) {
+    final crimesJson = json['crimes'];
+    return FactionGuild(
+      guild: json['guild'] as String? ?? '',
+      label: json['label'] as String? ?? '',
+      total: (json['total'] as num?)?.toInt() ?? 0,
+      forgiven: (json['forgiven'] as num?)?.toInt() ?? 0,
+      unforgiven: (json['unforgiven'] as num?)?.toInt() ?? 0,
+      isHostile: json['isHostile'] as bool? ?? false,
+      crimes: crimesJson is Map
+          ? CrimeBreakdown.fromJson(crimesJson.cast<String, Object?>())
+          : const CrimeBreakdown(),
+    );
+  }
+
+  /// The camp-level guild tag (e.g. `Guild.Human.OldCamp`), or `Other` for the
+  /// individual/unmappable bucket.
+  final String guild;
+
+  /// Short human label emitted by the core (camp name, e.g. `OldCamp`). The UI
+  /// prefers a localized label keyed on [guild] and falls back to this/[guild].
+  final String label;
+  final int total;
+  final int forgiven;
+  final int unforgiven;
+
+  /// Computed hostility flag (approximated from un-forgiven serious crimes).
+  /// Drives the prominent Feindselig/Friedlich badge.
+  final bool isHostile;
+
+  /// Un-forgiven crime counts by most-severe type.
+  final CrimeBreakdown crimes;
+}
+
+/// A page of guild crimes from `private.factions.list`. Carries an optional
+/// [error] (set by the notifier instead of throwing) so the pane renders
+/// failures inline, mirroring the other progression pages.
+class FactionsPage {
+  const FactionsPage({this.guilds = const [], this.error});
+
+  factory FactionsPage.fromJson(Map<String, Object?> json) {
+    return FactionsPage(
+      guilds:
+          (json['guilds'] as List?)
+              ?.whereType<Map>()
+              .map((e) => FactionGuild.fromJson(e.cast<String, Object?>()))
+              .toList(growable: false) ??
+          const [],
+    );
+  }
+
+  final List<FactionGuild> guilds;
+  final String? error;
+}
+
 /// Pending quest-state change → `private.typed.setValue`.
 class QuestStateChange {
   const QuestStateChange({required this.statePath, required this.state});

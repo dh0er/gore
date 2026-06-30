@@ -211,7 +211,7 @@ pub fn parse_path(segments: &[String]) -> Result<Vec<PathSeg>, CoreError> {
 /// lockstep: any key type search can label must also be resolvable here, or a
 /// nested scalar would surface as editable with a path `setValue` cannot find.
 /// Returns `None` for key types that cannot be addressed as a path segment.
-fn map_key_to_string(key: &PropertyValue) -> Option<String> {
+pub(crate) fn map_key_to_string(key: &PropertyValue) -> Option<String> {
     match key {
         PropertyValue::Str(s)
         | PropertyValue::Name(s)
@@ -969,6 +969,71 @@ pub fn container_layout(payload: &[u8], property: &Property) -> Result<Container
     })
 }
 
+/// Byte layout of a native `GameplayTagContainer` StructProperty value: the
+/// `u32` count-field offset, the parsed tags, and the absolute byte range of
+/// every tag FString. Mirrors `container_layout`, but the value is serialized
+/// natively (`u32 count` followed by `count` FStrings) rather than as a
+/// generic container body. Used to splice individual tags in/out.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TagContainerLayout {
+    /// Absolute offset of the u32 tag-count field.
+    pub count_offset: usize,
+    pub count: usize,
+    pub tags: Vec<String>,
+    /// Absolute byte range of each tag FString within the payload.
+    pub element_ranges: Vec<core::ops::Range<usize>>,
+}
+
+pub fn tag_container_layout(
+    payload: &[u8],
+    property: &Property,
+) -> Result<TagContainerLayout, CoreError> {
+    if property.type_name != "StructProperty" {
+        return Err(CoreError::InvalidRequest(format!(
+            "tag_container_layout requires a GameplayTagContainer StructProperty target, got {}",
+            property.type_name
+        )));
+    }
+    let struct_type = property
+        .descriptor
+        .struct_type
+        .as_ref()
+        .map(|(name, _)| name.as_str());
+    if struct_type != Some("GameplayTagContainer") {
+        return Err(CoreError::InvalidRequest(format!(
+            "tag_container_layout requires a GameplayTagContainer struct, got {}",
+            struct_type.unwrap_or("<unknown>")
+        )));
+    }
+    let end = property
+        .value_offset
+        .checked_add(property.value_size)
+        .filter(|end| *end <= payload.len())
+        .ok_or_else(|| CoreError::Parse("tag container value out of bounds".to_string()))?;
+    let mut r = Reader::new(&payload[property.value_offset..end], property.value_offset);
+    let count_offset = r.abs_pos();
+    let count = r.u32()? as usize;
+    let mut tags = Vec::with_capacity(count.min(1 << 16));
+    let mut element_ranges = Vec::with_capacity(count.min(1 << 16));
+    for _ in 0..count {
+        let start = r.abs_pos();
+        tags.push(r.fstring()?);
+        element_ranges.push(start..r.abs_pos());
+    }
+    if r.remaining() != 0 {
+        return Err(CoreError::Parse(format!(
+            "tag container body left {} bytes after {count} tags",
+            r.remaining()
+        )));
+    }
+    Ok(TagContainerLayout {
+        count_offset,
+        count,
+        tags,
+        element_ranges,
+    })
+}
+
 /// Byte layout of a MapProperty value: the count-field offset and the absolute
 /// byte range of every (key+value) entry. Mirrors `container_layout` for maps,
 /// which `container_layout` rejects (maps have inline key/value pairs).
@@ -1041,6 +1106,10 @@ pub enum ContainerEdit {
     /// The bytes must be schema-valid for this map's key/value descriptors; the
     /// caller validates via the re-parse it performs afterwards.
     MapInsert { entry_bytes: Vec<u8> },
+    /// Remove the (key+value) entry at `entry_index` from a MapProperty (the
+    /// entry's whole byte range is spliced out, the count decremented). The index
+    /// is into [`map_layout`]'s `entry_ranges` (entry order == on-disk order).
+    MapRemove { entry_index: usize },
 }
 
 fn set_string_elements(target: &Property) -> Option<&[PropertyValue]> {
@@ -1082,7 +1151,7 @@ pub fn patch_container(
     // rejects MapProperty, so resolve the Array/Set layout lazily and skip it
     // for the map path. The shared size-chain fixup below runs for both.
     let layout = match edit {
-        ContainerEdit::MapInsert { .. } => None,
+        ContainerEdit::MapInsert { .. } | ContainerEdit::MapRemove { .. } => None,
         _ => Some(container_layout(payload, target)?),
     };
     let require_kind = |wanted: ContainerKind, op: &str| {
@@ -1176,13 +1245,29 @@ pub fn patch_container(
             let insert_at = target.value_offset + target.value_size; // end of map body
             (None, insert_at, entry_bytes.clone(), 1)
         }
+        ContainerEdit::MapRemove { entry_index } => {
+            if target.type_name != "MapProperty" {
+                return Err(CoreError::InvalidRequest(format!(
+                    "mapRemove requires a MapProperty target, got {}",
+                    target.type_name
+                )));
+            }
+            let map = map_layout(payload, target)?;
+            let range = map.entry_ranges.get(*entry_index).cloned().ok_or_else(|| {
+                CoreError::InvalidRequest(format!(
+                    "map entry index {entry_index} out of bounds ({} entries)",
+                    map.count
+                ))
+            })?;
+            (Some(range.clone()), range.start, Vec::new(), -1)
+        }
     };
     // The entry/element count lives at `count_offset`; its current value comes
     // from the layout for Array/Set, or from `map_layout` for the map path.
     // Both are computed before any mutation (offsets stay valid until the
     // splice), preserving the "failed patch leaves payload untouched" rule.
     let (count, count_offset) = match edit {
-        ContainerEdit::MapInsert { .. } => {
+        ContainerEdit::MapInsert { .. } | ContainerEdit::MapRemove { .. } => {
             let map = map_layout(payload, target)?;
             (map.count, map.count_offset)
         }
@@ -1237,6 +1322,229 @@ pub fn patch_container(
         }
     }
     Ok(())
+}
+
+/// Add or remove one tag in a native `GameplayTagContainer` value, applied by
+/// [`patch_tag_container`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TagEdit {
+    /// Append a tag FString (rejects an already-present tag).
+    Add(String),
+    /// Remove a tag FString by value (errors if not present).
+    Remove(String),
+}
+
+/// Add or remove a single tag in a native `GameplayTagContainer` StructProperty
+/// value. The container's `u32` count, the struct's own tag size, and every
+/// enclosing size field (from [`resolve_chain`]) are adjusted by the byte
+/// delta; all writes are validated before the first mutation, so a failed patch
+/// leaves the payload untouched. Offsets recorded in the parsed tree are stale
+/// after a successful patch — re-parse before further edits.
+pub fn patch_tag_container(
+    payload: &mut Vec<u8>,
+    target: &Property,
+    enclosing_size_fields: &[usize],
+    edit: &TagEdit,
+) -> Result<(), CoreError> {
+    let layout = tag_container_layout(payload, target)?;
+    // Each edit is one splice: either remove a tag's byte range or insert tag
+    // bytes at a position. `count_delta` is +1 or -1.
+    let (remove_range, insert_at, insert_bytes, count_delta): (
+        Option<core::ops::Range<usize>>,
+        usize,
+        Vec<u8>,
+        i64,
+    ) = match edit {
+        TagEdit::Add(tag) => {
+            if layout.tags.iter().any(|t| t == tag) {
+                return Err(CoreError::InvalidRequest(format!(
+                    "tag container already contains {tag:?}"
+                )));
+            }
+            // Append after the last tag, i.e. at the end of the value.
+            let end = target.value_offset + target.value_size;
+            (None, end, encode_fstring_value(tag), 1)
+        }
+        TagEdit::Remove(tag) => {
+            let index = layout
+                .tags
+                .iter()
+                .position(|t| t == tag)
+                .ok_or_else(|| {
+                    CoreError::Parse(format!("tag container does not contain {tag:?}"))
+                })?;
+            let range = layout.element_ranges[index].clone();
+            (Some(range.clone()), range.start, Vec::new(), -1)
+        }
+    };
+    let removed = remove_range.as_ref().map_or(0, |r| r.len());
+    let delta = insert_bytes.len() as i64 - removed as i64;
+    let new_count = u32::try_from(layout.count as i64 + count_delta)
+        .map_err(|_| CoreError::Parse("tag container count underflow".to_string()))?;
+    let new_size = u32::try_from(target.value_size as i64 + delta).map_err(|_| {
+        CoreError::Parse("tag container size would leave the u32 range".to_string())
+    })?;
+
+    // Compute every size-field rewrite up front; mutate only once all are valid
+    // (same discipline as patch_container).
+    let mut writes = Vec::with_capacity(enclosing_size_fields.len() + 2);
+    if target.value_offset < 5 {
+        return Err(CoreError::Parse(
+            "tag container tag offset underflow".to_string(),
+        ));
+    }
+    writes.push((target.size_field_offset(), new_size));
+    for &offset in enclosing_size_fields {
+        if offset + 4 > target.value_offset {
+            return Err(CoreError::Parse(format!(
+                "enclosing size field at 0x{offset:x} does not precede the patch target"
+            )));
+        }
+        let old = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap());
+        let updated = u32::try_from(i64::from(old) + delta).map_err(|_| {
+            CoreError::Parse(format!(
+                "enclosing size field at 0x{offset:x} would leave the u32 range"
+            ))
+        })?;
+        writes.push((offset, updated));
+    }
+    // The count field lives inside the value payload but always precedes the
+    // splice position (tags follow the count), so writing it before the splice
+    // is safe.
+    writes.push((layout.count_offset, new_count));
+    for (offset, value) in writes {
+        payload[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+    }
+    match remove_range {
+        Some(range) => {
+            payload.splice(range, core::iter::empty());
+        }
+        None => {
+            payload.splice(insert_at..insert_at, insert_bytes);
+        }
+    }
+    Ok(())
+}
+
+/// Remove a single tag from a native `GameplayTagContainer` that is the *value*
+/// of an entry in a MapProperty (e.g. `LooseTagsByGlobalId[<GlobalId>]`).
+///
+/// A map-value tag container is serialized inline as `u32 count` + `count`
+/// FStrings — it has NO `u32 size | u8 tag_flags` header of its own (unlike a
+/// tagged StructProperty), so [`patch_tag_container`] cannot be used: that
+/// primitive rewrites the (nonexistent here) per-value size field at
+/// `value_offset - 5`, which for a map value would clobber the preceding key
+/// bytes. This primitive instead splices the tag FString out of the value body
+/// and adjusts the value's own count, the enclosing MapProperty's size field,
+/// and every ancestor size field (from [`resolve_chain`]) by the byte delta.
+///
+/// `map_property` is the resolved `MapProperty`; `entry_index` indexes its
+/// on-disk entries ([`map_layout`] order). No-op success if the tag is absent.
+/// All writes are validated before the first mutation, so a failed patch leaves
+/// the payload untouched. Offsets in the parsed tree are stale afterwards —
+/// re-parse before further edits.
+pub fn patch_map_value_tag_container(
+    payload: &mut Vec<u8>,
+    map_property: &Property,
+    enclosing_size_fields: &[usize],
+    entry_index: usize,
+    tag: &str,
+) -> Result<bool, CoreError> {
+    if map_property.type_name != "MapProperty" {
+        return Err(CoreError::InvalidRequest(format!(
+            "patch_map_value_tag_container requires a MapProperty target, got {}",
+            map_property.type_name
+        )));
+    }
+    let (_key_desc, value_desc) = map_property
+        .descriptor
+        .map
+        .as_deref()
+        .ok_or_else(|| CoreError::Parse("MapProperty missing descriptor".into()))?;
+    let value_is_tag_container = value_desc.type_name == "StructProperty"
+        && value_desc
+            .struct_type
+            .as_ref()
+            .map(|(name, _)| name.as_str())
+            == Some("GameplayTagContainer");
+    if !value_is_tag_container {
+        return Err(CoreError::InvalidRequest(
+            "map value is not a GameplayTagContainer".to_string(),
+        ));
+    }
+
+    // Locate the entry's value sub-range: parse the key, the value starts after.
+    let layout = map_layout(payload, map_property)?;
+    let entry_range = layout.entry_ranges.get(entry_index).cloned().ok_or_else(|| {
+        CoreError::InvalidRequest(format!(
+            "map entry index {entry_index} out of bounds ({} entries)",
+            layout.count
+        ))
+    })?;
+    let (key_desc, _value_desc) = map_property
+        .descriptor
+        .map
+        .as_deref()
+        .expect("map descriptor present");
+    let value_start = {
+        let entry = &payload[entry_range.clone()];
+        let mut r = Reader::new(entry, entry_range.start);
+        read_inline_value(&mut r, key_desc, 0)?;
+        r.abs_pos()
+    };
+    // The value body is the native tag container: u32 count + count FStrings.
+    let count_offset = value_start;
+    let (count, tag_ranges) = {
+        let body = &payload[value_start..entry_range.end];
+        let mut r = Reader::new(body, value_start);
+        let count = r.u32()? as usize;
+        let mut ranges = Vec::with_capacity(count.min(1 << 16));
+        let mut tags = Vec::with_capacity(count.min(1 << 16));
+        for _ in 0..count {
+            let start = r.abs_pos();
+            tags.push(r.fstring()?);
+            ranges.push((tags.last().cloned().unwrap(), start..r.abs_pos()));
+        }
+        (count, ranges)
+    };
+    let Some((_t, range)) = tag_ranges.into_iter().find(|(t, _)| t == tag) else {
+        return Ok(false); // tag not present => nothing to remove
+    };
+
+    let delta = -(range.len() as i64);
+    let new_count = u32::try_from(count as i64 - 1)
+        .map_err(|_| CoreError::Parse("tag container count underflow".to_string()))?;
+
+    // Compute every size-field rewrite up front; mutate only once all are valid.
+    let mut writes = Vec::with_capacity(enclosing_size_fields.len() + 2);
+    // The MapProperty's own size field shrinks too.
+    writes.push((
+        map_property.size_field_offset(),
+        u32::try_from(map_property.value_size as i64 + delta).map_err(|_| {
+            CoreError::Parse("map size would leave the u32 range".to_string())
+        })?,
+    ));
+    for &offset in enclosing_size_fields {
+        if offset + 4 > range.start {
+            return Err(CoreError::Parse(format!(
+                "enclosing size field at 0x{offset:x} does not precede the patch target"
+            )));
+        }
+        let old = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap());
+        let updated = u32::try_from(i64::from(old) + delta).map_err(|_| {
+            CoreError::Parse(format!(
+                "enclosing size field at 0x{offset:x} would leave the u32 range"
+            ))
+        })?;
+        writes.push((offset, updated));
+    }
+    // The count field precedes the spliced range, so writing it first is safe.
+    writes.push((count_offset, new_count));
+    for (offset, value) in writes {
+        payload[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+    }
+    payload.splice(range, core::iter::empty());
+    Ok(true)
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -1937,6 +2245,257 @@ mod tests {
             }
             other => panic!("unexpected value {other:?}"),
         }
+    }
+
+    fn decode_fstring_at(payload: &[u8], offset: usize) -> String {
+        Reader::new(&payload[offset..], offset).fstring().unwrap()
+    }
+
+    #[test]
+    fn tag_container_layout_reports_count_and_ranges() {
+        let mut body = 2u32.to_le_bytes().to_vec();
+        body.extend_from_slice(&fstring("State.Dead"));
+        body.extend_from_slice(&fstring("State.KillBountyGranted"));
+
+        let mut props = tag("CapturedActorTags", "StructProperty");
+        props.extend_from_slice(&1u32.to_le_bytes());
+        props.extend_from_slice(&fstring("GameplayTagContainer"));
+        props.extend_from_slice(&1u32.to_le_bytes());
+        props.extend_from_slice(&fstring("/Script/GameplayTags"));
+        props.extend_from_slice(&header(body.len() as u32, TAG_FLAG_NATIVE_SERIALIZE));
+        props.extend_from_slice(&body);
+        let payload = root("/Script/Test.Save", &props);
+
+        let parsed = parse_private_root(&payload).unwrap();
+        let property = &parsed.properties[0];
+
+        let layout = tag_container_layout(&payload, property).unwrap();
+        assert_eq!(layout.count, 2);
+        assert_eq!(
+            layout.tags,
+            vec![
+                "State.Dead".to_string(),
+                "State.KillBountyGranted".to_string()
+            ]
+        );
+        assert_eq!(layout.element_ranges.len(), 2);
+        let second = &layout.element_ranges[1];
+        assert_eq!(decode_fstring_at(&payload, second.start), "State.KillBountyGranted");
+    }
+
+    /// Build a native `GameplayTagContainer` StructProperty body (`u32 count`
+    /// followed by `count` FString tags), wrapped in the property tag.
+    fn tag_container_property(name: &str, tags: &[&str]) -> Vec<u8> {
+        let mut body = (tags.len() as u32).to_le_bytes().to_vec();
+        for t in tags {
+            body.extend_from_slice(&fstring(t));
+        }
+        let mut out = tag(name, "StructProperty");
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&fstring("GameplayTagContainer"));
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&fstring("/Script/GameplayTags"));
+        out.extend_from_slice(&header(body.len() as u32, TAG_FLAG_NATIVE_SERIALIZE));
+        out.extend_from_slice(&body);
+        out
+    }
+
+    /// Wrap a tag container inside a non-native (property-list) parent
+    /// StructProperty so the patch exercises an enclosing size field. Layout:
+    /// `Parent: StructProperty { CapturedActorTags: GameplayTagContainer }`.
+    fn nested_tag_container_payload(tags: &[&str]) -> Vec<u8> {
+        let mut struct_body = tag_container_property("CapturedActorTags", tags);
+        struct_body.extend_from_slice(&fstring("None")); // close the property list
+
+        let mut props = tag("Parent", "StructProperty");
+        props.extend_from_slice(&1u32.to_le_bytes());
+        props.extend_from_slice(&fstring("NPCData"));
+        props.extend_from_slice(&1u32.to_le_bytes());
+        props.extend_from_slice(&fstring("/Script/Test"));
+        props.extend_from_slice(&header(struct_body.len() as u32, 0));
+        props.extend_from_slice(&struct_body);
+        // A trailing root int: a missed size fixup shifts it and breaks re-parse.
+        props.extend_from_slice(&int_property("m_After", 9));
+        root("/Script/Test.Save", &props)
+    }
+
+    fn nested_tags_path() -> Vec<PathSeg> {
+        parse_path(&["Parent".into(), "CapturedActorTags".into()]).unwrap()
+    }
+
+    /// Re-parse strictly and return the tag container's tags, asserting the
+    /// trailing int survived (proof every enclosing size stayed consistent).
+    fn reparse_nested_tags(payload: &[u8]) -> Vec<String> {
+        let reparsed = parse_private_root(payload).unwrap();
+        assert_eq!(reparsed.consumed, payload.len());
+        let after = resolve(&reparsed.properties, &parse_path(&["m_After".into()]).unwrap()).unwrap();
+        assert_eq!(after.value, PropertyValue::Int(9));
+        let target = resolve(&reparsed.properties, &nested_tags_path()).unwrap();
+        match &target.value {
+            PropertyValue::Struct(StructValue::GameplayTagContainer(tags)) => tags.clone(),
+            other => panic!("unexpected value {other:?}"),
+        }
+    }
+
+    #[test]
+    fn patch_tag_container_removes_tag_and_fixes_size_chain() {
+        let mut payload = nested_tag_container_payload(&["State.Dead", "State.KillBountyGranted"]);
+        let parsed = parse_private_root(&payload).unwrap();
+        let chain = resolve_chain(&parsed.properties, &nested_tags_path()).unwrap();
+        assert_eq!(chain.enclosing_size_fields.len(), 1);
+        let target = chain.target.clone();
+        patch_tag_container(
+            &mut payload,
+            &target,
+            &chain.enclosing_size_fields,
+            &TagEdit::Remove("State.Dead".to_string()),
+        )
+        .unwrap();
+
+        assert_eq!(reparse_nested_tags(&payload), vec!["State.KillBountyGranted"]);
+    }
+
+    #[test]
+    fn patch_tag_container_remove_missing_tag_errors_and_leaves_payload() {
+        let mut payload = nested_tag_container_payload(&["State.Dead"]);
+        let before = payload.clone();
+        let parsed = parse_private_root(&payload).unwrap();
+        let chain = resolve_chain(&parsed.properties, &nested_tags_path()).unwrap();
+        let target = chain.target.clone();
+        let err = patch_tag_container(
+            &mut payload,
+            &target,
+            &chain.enclosing_size_fields,
+            &TagEdit::Remove("State.KillBountyGranted".to_string()),
+        );
+        assert!(err.is_err());
+        assert_eq!(payload, before);
+    }
+
+    #[test]
+    fn patch_tag_container_adds_tag_and_fixes_size_chain() {
+        let mut payload = nested_tag_container_payload(&["State.Dead"]);
+        let parsed = parse_private_root(&payload).unwrap();
+        let chain = resolve_chain(&parsed.properties, &nested_tags_path()).unwrap();
+        let target = chain.target.clone();
+        patch_tag_container(
+            &mut payload,
+            &target,
+            &chain.enclosing_size_fields,
+            &TagEdit::Add("State.KillBountyGranted".to_string()),
+        )
+        .unwrap();
+
+        assert_eq!(
+            reparse_nested_tags(&payload),
+            vec!["State.Dead", "State.KillBountyGranted"]
+        );
+    }
+
+    /// A `LooseTagsByGlobalId`-style MapProperty<Str, Struct(GameplayTagContainer)>:
+    /// `entries` are `(id, &[tag])` and each value is an INLINE native tag container
+    /// (`u32 count` + count FStrings), exactly as a struct-typed map value serializes
+    /// (no per-value size header). Followed by a trailing root int to catch a missed
+    /// size fixup.
+    fn loose_tags_map_payload(entries: &[(&str, &[&str])]) -> Vec<u8> {
+        let mut map_body = 0u32.to_le_bytes().to_vec(); // num_to_remove
+        map_body.extend_from_slice(&(entries.len() as u32).to_le_bytes()); // count
+        for (id, tags) in entries {
+            map_body.extend_from_slice(&fstring(id));
+            map_body.extend_from_slice(&(tags.len() as u32).to_le_bytes());
+            for t in *tags {
+                map_body.extend_from_slice(&fstring(t));
+            }
+        }
+        let mut props = tag("LooseTagsByGlobalId", "MapProperty");
+        props.extend_from_slice(&2u32.to_le_bytes());
+        props.extend_from_slice(&fstring("StrProperty")); // key type
+        props.extend_from_slice(&0u32.to_le_bytes()); // key_flags
+        props.extend_from_slice(&fstring("StructProperty")); // value type
+        props.extend_from_slice(&1u32.to_le_bytes());
+        props.extend_from_slice(&fstring("GameplayTagContainer")); // value struct type
+        props.extend_from_slice(&1u32.to_le_bytes());
+        props.extend_from_slice(&fstring("/Script/GameplayTags"));
+        props.extend_from_slice(&header(map_body.len() as u32, 0));
+        props.extend_from_slice(&map_body);
+        props.extend_from_slice(&int_property("m_After", 9));
+        root("/Script/Test.Save", &props)
+    }
+
+    fn reparse_loose_tags(payload: &[u8], id: &str) -> Vec<String> {
+        let reparsed = parse_private_root(payload).unwrap();
+        assert_eq!(reparsed.consumed, payload.len(), "byte-clean re-parse");
+        let after = resolve(&reparsed.properties, &parse_path(&["m_After".into()]).unwrap()).unwrap();
+        assert_eq!(after.value, PropertyValue::Int(9), "trailing int survives size fixup");
+        let PropertyValue::Map { entries, .. } = &reparsed.properties[0].value else {
+            panic!("LooseTagsByGlobalId not a map");
+        };
+        let (_k, v) = entries
+            .iter()
+            .find(|(k, _)| map_key_to_string(k).as_deref() == Some(id))
+            .expect("entry present");
+        match v {
+            PropertyValue::Struct(StructValue::GameplayTagContainer(tags)) => tags.clone(),
+            other => panic!("unexpected value {other:?}"),
+        }
+    }
+
+    #[test]
+    fn patch_map_value_tag_container_removes_tag_and_fixes_sizes() {
+        // Two entries; remove State.Dead from the second, leaving the first untouched
+        // and the second's other tags intact.
+        let mut payload = loose_tags_map_payload(&[
+            ("Npc-A", &["State.Aggro"]),
+            ("Npc-B", &["State.KillBountyGranted", "State.Dead", "State.ExecutedBountyGranted"]),
+        ]);
+        let parsed = parse_private_root(&payload).unwrap();
+        let chain = resolve_chain(
+            &parsed.properties,
+            &parse_path(&["LooseTagsByGlobalId".into()]).unwrap(),
+        )
+        .unwrap();
+        // Top-level map => no ancestor size fields (its own size field is handled
+        // inside the primitive).
+        assert!(chain.enclosing_size_fields.is_empty());
+        let target = chain.target.clone();
+        let removed = patch_map_value_tag_container(
+            &mut payload,
+            &target,
+            &chain.enclosing_size_fields,
+            1, // Npc-B
+            "State.Dead",
+        )
+        .unwrap();
+        assert!(removed);
+
+        assert_eq!(reparse_loose_tags(&payload, "Npc-A"), vec!["State.Aggro"]);
+        assert_eq!(
+            reparse_loose_tags(&payload, "Npc-B"),
+            vec!["State.KillBountyGranted", "State.ExecutedBountyGranted"]
+        );
+    }
+
+    #[test]
+    fn patch_map_value_tag_container_missing_tag_is_noop_false() {
+        let mut payload = loose_tags_map_payload(&[("Npc-A", &["State.Aggro"])]);
+        let before = payload.clone();
+        let parsed = parse_private_root(&payload).unwrap();
+        let chain = resolve_chain(
+            &parsed.properties,
+            &parse_path(&["LooseTagsByGlobalId".into()]).unwrap(),
+        )
+        .unwrap();
+        let target = chain.target.clone();
+        let removed = patch_map_value_tag_container(
+            &mut payload,
+            &target,
+            &chain.enclosing_size_fields,
+            0,
+            "State.Dead",
+        )
+        .unwrap();
+        assert!(!removed, "tag absent => no removal");
+        assert_eq!(payload, before, "no-op leaves payload byte-identical");
     }
 
     #[test]
@@ -3094,6 +3653,60 @@ mod tests {
         assert_eq!(entries.len(), 2);
         assert!(entries.iter().any(|(k, _)| matches!(k, PropertyValue::Name(s) if s == "ZZ")));
         assert_eq!(root2.consumed, payload.len()); // proves size fields are consistent
+    }
+
+    #[test]
+    fn map_remove_splices_entry_and_fixes_sizes() {
+        // Three entries; remove the middle one — the other two must survive and
+        // the payload must re-parse byte-clean (size cascade consistent).
+        let mut payload = private_root_with_property(&knowledge_map_property(&["A", "BB", "C"]));
+        let root = parse_private_root(&payload).unwrap();
+        let (_, prop) = find_property_by_name(&root, "CharacterKnowledgeByUniqueName").unwrap();
+        let layout = map_layout(&payload, prop).unwrap();
+        // Locate "BB" by stringified key.
+        let PropertyValue::Map { entries, .. } = &prop.value else { panic!("not a map") };
+        let idx = entries
+            .iter()
+            .position(|(k, _)| map_key_to_string(k).as_deref() == Some("BB"))
+            .unwrap();
+        assert_eq!(layout.count, 3);
+        let enclosing: Vec<usize> = Vec::new(); // top-level property
+        let prop_owned = prop.clone();
+        drop(root);
+        patch_container(
+            &mut payload,
+            &prop_owned,
+            &enclosing,
+            &ContainerEdit::MapRemove { entry_index: idx },
+        )
+        .unwrap();
+
+        let root2 = parse_private_root(&payload).unwrap();
+        assert_eq!(root2.consumed, payload.len()); // proves size fields are consistent
+        let (_, prop2) = find_property_by_name(&root2, "CharacterKnowledgeByUniqueName").unwrap();
+        let PropertyValue::Map { entries, .. } = &prop2.value else { panic!("not a map") };
+        assert_eq!(entries.len(), 2);
+        assert!(entries.iter().any(|(k, _)| matches!(k, PropertyValue::Name(s) if s == "A")));
+        assert!(entries.iter().any(|(k, _)| matches!(k, PropertyValue::Name(s) if s == "C")));
+        assert!(!entries.iter().any(|(k, _)| matches!(k, PropertyValue::Name(s) if s == "BB")));
+    }
+
+    #[test]
+    fn map_remove_rejects_out_of_bounds_index() {
+        let mut payload = private_root_with_property(&knowledge_map_property(&["A"]));
+        let root = parse_private_root(&payload).unwrap();
+        let (_, prop) = find_property_by_name(&root, "CharacterKnowledgeByUniqueName").unwrap();
+        let prop_owned = prop.clone();
+        let snapshot = payload.clone();
+        drop(root);
+        let err = patch_container(
+            &mut payload,
+            &prop_owned,
+            &[],
+            &ContainerEdit::MapRemove { entry_index: 5 },
+        );
+        assert!(err.is_err());
+        assert_eq!(payload, snapshot, "a failed map remove must not mutate the payload");
     }
 
     fn int_array_property(name: &str, values: &[i32]) -> Vec<u8> {

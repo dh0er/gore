@@ -1,0 +1,268 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:goresave/features/app/ui/goresave_app.dart';
+import 'package:goresave/features/editor/domain/core_service.dart';
+import 'package:goresave/features/editor/domain/editor_settings_store.dart';
+import 'package:goresave/providers/data_providers.dart';
+
+/// Regression for Codex (P2): an NPC MainContainer with two stacks that share
+/// the SAME item id/path but differ by slotId/count. The count editors must be
+/// keyed by the slot-aware row key so a rebuild never reuses one slot's
+/// controller for the other equal-id row (which would show the wrong count).
+void main() {
+  Future<void> pumpApp(WidgetTester tester, GoresaveCoreService core) async {
+    await tester.binding.setSurfaceSize(const Size(1400, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          coreServiceProvider.overrideWithValue(core),
+          editorSettingsStoreProvider.overrideWithValue(
+            const NoopEditorSettingsStore(),
+          ),
+        ],
+        child: const GoresaveApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+  }
+
+  String fieldText(WidgetTester tester, Finder field) => tester
+      .widget<EditableText>(
+        find.descendant(of: field, matching: find.byType(EditableText)),
+      )
+      .controller
+      .text;
+
+  testWidgets(
+    'duplicate same-path NPC stacks keep independent count fields',
+    (tester) async {
+      final core = _DuplicateStackNpcInventoryCoreService();
+      await pumpApp(tester, core);
+
+      await tester.tap(find.widgetWithText(Tab, 'Inventory'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Lizard-A'));
+      await tester.pumpAndSettle();
+
+      // Two rows for the same item (slot 0 = 3, slot 1 = 7).
+      final fields = find.widgetWithText(TextField, 'Count');
+      expect(fields, findsNWidgets(2));
+      expect(fieldText(tester, fields.at(0)), '3');
+      expect(fieldText(tester, fields.at(1)), '7');
+
+      // Edit slot 0 → slot 1's field must keep its own count (no controller
+      // bleed between the two equal-id rows).
+      await tester.enterText(fields.at(0), '99');
+      await tester.pump();
+      expect(fieldText(tester, fields.at(0)), '99');
+      expect(fieldText(tester, fields.at(1)), '7');
+
+      // Save carries the edit for slot 0 only, with its slotId discriminator.
+      await tester.tap(find.widgetWithText(FilledButton, 'Save (1)'));
+      await tester.pumpAndSettle();
+      final write = core.requests.lastWhere((r) => r.command == 'write_save');
+      final edits =
+          (write.payload['edits'] as List).cast<Map<String, Object?>>();
+      expect(edits, hasLength(1));
+      final value = edits.single['value'] as Map<String, Object?>;
+      expect(value['count'], 99);
+      expect(value['slotId'], 0);
+    },
+  );
+
+  testWidgets(
+    'queuing removal of one duplicate stack hides ONLY that slot',
+    (tester) async {
+      final core = _DuplicateStackNpcInventoryCoreService();
+      await pumpApp(tester, core);
+
+      await tester.tap(find.widgetWithText(Tab, 'Inventory'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Lizard-A'));
+      await tester.pumpAndSettle();
+
+      // Two same-path rows (counts 3 and 7).
+      expect(find.widgetWithText(TextField, 'Count'), findsNWidgets(2));
+
+      // Queue removal of the FIRST stack (slot 0).
+      await tester.tap(find.byIcon(Icons.delete_outline).first);
+      await tester.pumpAndSettle();
+
+      // Slot-aware hide: only slot 0 leaves the list; slot 1 stays — shown as a
+      // static "×7" (a queued removal blocks count editing, so the TextFields
+      // become plain text). A path-based hide would have dropped BOTH equal-path
+      // rows, leaving no "×7" at all.
+      expect(find.text('×7'), findsOneWidget);
+      expect(find.widgetWithText(TextField, 'Count'), findsNothing);
+    },
+  );
+}
+
+class _RecordedRequest {
+  const _RecordedRequest(this.command, this.payload);
+  final String command;
+  final Map<String, Object?> payload;
+}
+
+/// NPC MainContainer with TWO stacks of the same item (id/path) at slots 0/1.
+class _DuplicateStackNpcInventoryCoreService implements GoresaveCoreService {
+  final requests = <_RecordedRequest>[];
+
+  @override
+  String get description => 'duplicate-stack-npc-inventory-fake-core';
+
+  @override
+  bool get isAvailable => true;
+
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    requests.add(_RecordedRequest(command, Map<String, Object?>.from(payload)));
+    switch (command) {
+      case 'scan_save_dir':
+        return {
+          'ok': true,
+          'data': {
+            'saveRoot': r'C:\tmp\saves',
+            'saves': [
+              {
+                'path': r'C:\tmp\saves\G1R-001.sav',
+                'slot': 'G1R-001',
+                'format': 'GSAV',
+                'fileSize': 914367,
+                'sha1': 'abc',
+                'status': 'ok',
+                'persistentProfileId': 0,
+                'playerSaveName': 'Save',
+                'chapterId': 1,
+                'autoSave': true,
+                'slotName': 'G1R-001',
+              },
+            ],
+            'profiles': [
+              {
+                'profileId': 0,
+                'profileName': '0',
+                'quickSaveSlots': <String>[],
+                'autoSaveSlots': <String>[],
+                'savedSlots': ['G1R-001'],
+              },
+            ],
+            'activeProfileId': 0,
+          },
+        };
+      case 'inspect_save':
+        return {
+          'ok': true,
+          'data': {
+            'format': 'GSAV',
+            'path': payload['path'],
+            'slot': 'G1R-001',
+            'size': 914367,
+            'sha1': 'abc',
+            'public': {'slotName': 'G1R-001', 'playerSaveName': 'Save'},
+            'private': {
+              'status': 'decoded',
+              'preview': false,
+              'decompressedSize': 9,
+              'typedParse': {'status': 'ok', 'propertyCount': 1, 'maxDepth': 1},
+              'player': {
+                'saveVersionNumber': 17,
+                'playerName': 'Hero',
+                'attributes': <Object?>[],
+                'writable': <String>[],
+              },
+              'inventory': {
+                'itemStackCount': 0,
+                'items': <Object?>[],
+                'writable': ['private.inventory.setItemCount'],
+              },
+            },
+          },
+        };
+      case 'list_backups':
+        return {
+          'ok': true,
+          'data': {
+            'path': payload['path'],
+            'backups': <Object?>[],
+            'companionBackups': <Object?>[],
+          },
+        };
+      case 'check_codec':
+        return {
+          'ok': true,
+          'data': {
+            'available': true,
+            'canDecompress': true,
+            'canCompress': true,
+            'status': 'ready',
+            'adapter': 'pure_rust_kraken',
+            'message': 'Codec host is ready.',
+          },
+        };
+      case 'private.npc.list':
+        return {
+          'ok': true,
+          'data': {
+            'total': 1,
+            'offset': 0,
+            'limit': payload['limit'] ?? 100,
+            'count': 1,
+            'npcs': [
+              {'id': 'Lizard-A', 'name': 'Lizard A'},
+            ],
+          },
+        };
+      case 'private.npc.inventory':
+        return {
+          'ok': true,
+          'data': {
+            'id': payload['id'],
+            'itemStackCount': 2,
+            'items': [
+              {
+                'id': 'Cheese',
+                'path': '/Script/Angelscript.ItFo_Cheese',
+                'count': 3,
+                'removable': true,
+                'slotId': 0,
+              },
+              {
+                'id': 'Cheese',
+                'path': '/Script/Angelscript.ItFo_Cheese',
+                'count': 7,
+                'removable': true,
+                'slotId': 1,
+              },
+            ],
+            'mainContainerPaths': <String>[],
+            'writable': [
+              'private.inventory.setItemCount',
+              'private.inventory.addItem',
+              'private.inventory.removeItem',
+            ],
+          },
+        };
+      case 'private.npc.attributes':
+        return {
+          'ok': true,
+          'data': {'attributes': <Object?>[]},
+        };
+      case 'write_save':
+        return {
+          'ok': true,
+          'data': {'backupPath': r'C:\tmp\saves\G1R-001.sav.bak.1'},
+        };
+      default:
+        return {
+          'ok': false,
+          'error': {'message': 'Unhandled fake command $command'},
+        };
+    }
+  }
+}
