@@ -614,6 +614,7 @@ class PrivateInventorySummary {
     this.itemScope,
     this.items = const [],
     this.mainContainerPaths = const [],
+    this.equippedArmorPaths = const [],
     this.scriptPaths = const [],
     this.properties = const [],
     this.writable = const [],
@@ -638,6 +639,11 @@ class PrivateInventorySummary {
               ?.whereType<String>()
               .toList() ??
           const [],
+      equippedArmorPaths:
+          (json?['equippedArmorPaths'] as List?)
+              ?.whereType<String>()
+              .toList() ??
+          const [],
       scriptPaths:
           (json?['scriptPaths'] as List?)?.whereType<String>().toList() ??
           const [],
@@ -658,6 +664,11 @@ class PrivateInventorySummary {
   // Complete set of MainContainer item paths (uncapped), used to exclude
   // already-owned items from the add picker even when [items] is truncated.
   final List<String> mainContainerPaths;
+  // Worn-armor item paths (uncapped, from the typed tree). Excluded from the add
+  // picker so the user cannot add a duplicate of the currently-equipped armor —
+  // which would make the equipped badge/upgrades ambiguous. Reliable even when
+  // [items] is truncated and the worn row falls outside it.
+  final List<String> equippedArmorPaths;
   final List<String> scriptPaths;
   final List<String> properties;
   final List<String> writable;
@@ -671,12 +682,20 @@ class PrivateInventorySummary {
       properties.isNotEmpty;
 }
 
+class ArmorUpgrade {
+  const ArmorUpgrade({required this.key, required this.value});
+  final String key;
+  final String value;
+}
+
 class PrivateInventoryItem {
   const PrivateInventoryItem({
     required this.id,
     required this.path,
     this.count,
     this.removable = false,
+    this.equipped = false,
+    this.upgrades = const [],
   });
 
   factory PrivateInventoryItem.fromJson(Map<Object?, Object?> json) {
@@ -685,6 +704,15 @@ class PrivateInventoryItem {
       path: json['path'] as String? ?? '',
       count: (json['count'] as num?)?.toInt(),
       removable: json['removable'] as bool? ?? false,
+      equipped: json['equipped'] as bool? ?? false,
+      upgrades: (json['upgrades'] as List?)
+              ?.whereType<Map<Object?, Object?>>()
+              .map((u) => ArmorUpgrade(
+                    key: u['key'] as String? ?? '',
+                    value: u['value'] as String? ?? '',
+                  ))
+              .toList() ??
+          const [],
     );
   }
 
@@ -694,6 +722,13 @@ class PrivateInventoryItem {
   // True only for rows in the player's MainContainer, which the core's
   // removeItem op can delete. Rows from other containers are not removable.
   final bool removable;
+
+  /// True for the worn armor (the item in the player's ArmorSlot container).
+  final bool equipped;
+
+  /// Armor upgrade slots (part/tier pairs), populated only on the equipped
+  /// armor row; empty for all other items.
+  final List<ArmorUpgrade> upgrades;
 }
 
 class InventoryItemCountChange {

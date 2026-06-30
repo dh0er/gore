@@ -74,6 +74,12 @@ class AppLocalizationsRu extends AppLocalizations {
   String get add => 'Добавить';
 
   @override
+  String get equippedBadge => 'Надето';
+
+  @override
+  String get armorUpgradesLabel => 'Улучшения';
+
+  @override
   String get browse => 'Обзор';
 
   @override
@@ -349,6 +355,9 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get itemCategoryAmmunition => 'Боеприпасы';
+
+  @override
+  String get itemCategoryArmor => 'Броня';
 
   @override
   String get itemCategoryRune => 'Руны';

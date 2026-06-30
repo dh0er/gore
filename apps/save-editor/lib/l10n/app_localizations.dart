@@ -242,6 +242,18 @@ abstract class AppLocalizations {
   /// **'Add'**
   String get add;
 
+  /// No description provided for @equippedBadge.
+  ///
+  /// In en, this message translates to:
+  /// **'Equipped'**
+  String get equippedBadge;
+
+  /// No description provided for @armorUpgradesLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Upgrades'**
+  String get armorUpgradesLabel;
+
   /// No description provided for @browse.
   ///
   /// In en, this message translates to:
@@ -721,6 +733,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Ammunition'**
   String get itemCategoryAmmunition;
+
+  /// No description provided for @itemCategoryArmor.
+  ///
+  /// In en, this message translates to:
+  /// **'Armor'**
+  String get itemCategoryArmor;
 
   /// No description provided for @itemCategoryRune.
   ///

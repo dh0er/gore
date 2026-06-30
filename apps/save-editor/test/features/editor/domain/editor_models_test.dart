@@ -318,6 +318,41 @@ void main() {
     ]);
   });
 
+  test('PrivateInventoryItem parses equipped flag', () {
+    final equipped = PrivateInventoryItem.fromJson({
+      'id': 'Ore_Armor_H',
+      'path': '/Script/Angelscript.Ore_Armor_H',
+      'count': 1,
+      'equipped': true,
+    });
+    expect(equipped.equipped, isTrue);
+
+    final plain = PrivateInventoryItem.fromJson({
+      'id': 'ItMi_Orenugget',
+      'path': '/Script/Angelscript.ItMi_Orenugget',
+      'count': 5,
+    });
+    expect(plain.equipped, isFalse);
+  });
+
+  test('PrivateInventoryItem parses armor upgrades', () {
+    final item = PrivateInventoryItem.fromJson({
+      'id': 'Org_Armor',
+      'path': '/Script/Angelscript.Org_Armor',
+      'count': 1,
+      'equipped': true,
+      'upgrades': [
+        {'key': 'm_CurrentUpperBodyUpgrade', 'value': 'm_UpperBody_Heavy02_ArmorUpgrade'},
+      ],
+    });
+    expect(item.upgrades.length, 1);
+    expect(item.upgrades.first.key, 'm_CurrentUpperBodyUpgrade');
+    expect(item.upgrades.first.value, 'm_UpperBody_Heavy02_ArmorUpgrade');
+
+    final plain = PrivateInventoryItem.fromJson({'id': 'X', 'path': 'p'});
+    expect(plain.upgrades, isEmpty);
+  });
+
   test('SaveInspection reads structured progression overview', () {
     final inspection = SaveInspection.fromJson({
       'format': 'GSAV',

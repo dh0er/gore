@@ -14,6 +14,8 @@ use serde::{Deserialize, Serialize};
 pub enum ItemCategory {
     MeleeWeapon,
     RangedWeapon,
+    /// Wearable armor (`<Fac>_Armor_*`, `Armor_<Camp>_<NPC>_*`).
+    Armor,
     Ammunition,
     Rune,
     Scroll,
@@ -44,6 +46,7 @@ impl ItemCategory {
         match self {
             ItemCategory::MeleeWeapon => "Melee weapons",
             ItemCategory::RangedWeapon => "Ranged weapons",
+            ItemCategory::Armor => "Armor",
             ItemCategory::Ammunition => "Ammunition",
             ItemCategory::Rune => "Runes",
             ItemCategory::Scroll => "Spell scrolls",
@@ -65,13 +68,35 @@ impl ItemCategory {
     }
 }
 
+/// Display-side armor classifier: true for any armor class name (base, per-NPC,
+/// or tier piece). Broader than the catalog generator's `is_armor_item_class`,
+/// which additionally excludes tier pieces from the *addable* set.
+pub fn is_armor_id(id: &str) -> bool {
+    if !id.contains("Armor") {
+        return false;
+    }
+    if id.starts_with("Armor_") {
+        return true;
+    }
+    let mut parts = id.splitn(2, '_');
+    let head = parts.next().unwrap_or("");
+    let tail = parts.next().unwrap_or("");
+    // Tail must be exactly `Armor` or start with `Armor_`; `starts_with("Armor")`
+    // alone would also match an `Armory` segment (e.g. `NC_Armory_Door`).
+    (2..=4).contains(&head.len())
+        && head.chars().all(|c| c.is_ascii_alphabetic())
+        && (tail == "Armor" || tail.starts_with("Armor_"))
+}
+
 /// Classify an item id by its Angelscript class-name prefix. The ordering of
 /// checks is significant (`ItAm_`, `ItAr_Rune_`/`ItAr_Scroll_`, and the
 /// `ItAt_Amulet_`/`ItAt_Ring_` specializations before the generic `ItAt_`).
 ///
 /// This is the original fine-grained classification used by gore-save.
 pub fn item_category_from_id(id: &str) -> ItemCategory {
-    if id.starts_with("ItMw_") {
+    if is_armor_id(id) {
+        ItemCategory::Armor
+    } else if id.starts_with("ItMw_") {
         ItemCategory::MeleeWeapon
     } else if id.starts_with("ItRw_") {
         ItemCategory::RangedWeapon
@@ -112,6 +137,9 @@ pub fn item_category_from_id(id: &str) -> ItemCategory {
 /// Uses combined categories (RuneOrScroll, Jewelry, Potion) suited to the
 /// modding toolchain. Returns `ItemCategory::Unknown` for unrecognized prefixes.
 pub fn category_for_id(id: &str) -> ItemCategory {
+    if is_armor_id(id) {
+        return ItemCategory::Armor;
+    }
     if id.starts_with("ItFo_") {
         return ItemCategory::Food;
     }
@@ -197,9 +225,21 @@ mod tests {
 
     #[test]
     fn unknown_ids_map_to_other() {
-        assert_eq!(item_category_from_id("Armor_OC_Gomez"), ItemCategory::Other);
         assert_eq!(item_category_from_id(""), ItemCategory::Other);
         assert_eq!(item_category_from_id("ItIg_Worldsplitter"), ItemCategory::Other);
+    }
+
+    #[test]
+    fn armor_ids_map_to_armor() {
+        assert_eq!(item_category_from_id("Ore_Armor_H"), ItemCategory::Armor);
+        assert_eq!(item_category_from_id("Org_Armor"), ItemCategory::Armor);
+        assert_eq!(item_category_from_id("Armor_OC_Gomez"), ItemCategory::Armor);
+        assert_eq!(category_for_id("Ore_Armor_H"), ItemCategory::Armor);
+        assert_eq!(category_for_id("Armor_OC_Gomez"), ItemCategory::Armor);
+        // An "Armory" segment is not armor.
+        assert!(!is_armor_id("NC_Armory_Door"));
+        assert_eq!(item_category_from_id("NC_Armory_Door"), ItemCategory::Other);
+        assert_eq!(category_for_id("NC_Armory_Door"), ItemCategory::Unknown);
     }
 
     #[test]

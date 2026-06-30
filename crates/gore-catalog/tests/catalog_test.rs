@@ -43,6 +43,12 @@ fn category_key_and_mission() {
 }
 
 #[test]
+fn category_armor_for_armor_classes() {
+    assert_eq!(category_for_id("Armor_OC_Gomez"), ItemCategory::Armor);
+    assert_eq!(category_for_id("Ore_Armor_H"), ItemCategory::Armor);
+}
+
+#[test]
 fn category_unknown_for_unrecognized() {
-    assert_eq!(category_for_id("Armor_OC_Gomez"), ItemCategory::Unknown);
+    assert_eq!(category_for_id("TotallyUnknownClass"), ItemCategory::Unknown);
 }

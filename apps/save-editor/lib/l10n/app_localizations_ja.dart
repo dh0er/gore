@@ -74,6 +74,12 @@ class AppLocalizationsJa extends AppLocalizations {
   String get add => '追加';
 
   @override
+  String get equippedBadge => '装備中';
+
+  @override
+  String get armorUpgradesLabel => '強化';
+
+  @override
   String get browse => '参照';
 
   @override
@@ -346,6 +352,9 @@ class AppLocalizationsJa extends AppLocalizations {
 
   @override
   String get itemCategoryAmmunition => '弾薬';
+
+  @override
+  String get itemCategoryArmor => '鎧';
 
   @override
   String get itemCategoryRune => 'ルーン';

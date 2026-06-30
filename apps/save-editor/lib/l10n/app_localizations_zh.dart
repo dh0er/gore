@@ -74,6 +74,12 @@ class AppLocalizationsZh extends AppLocalizations {
   String get add => '添加';
 
   @override
+  String get equippedBadge => '已装备';
+
+  @override
+  String get armorUpgradesLabel => '升级';
+
+  @override
   String get browse => '浏览';
 
   @override
@@ -341,6 +347,9 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get itemCategoryAmmunition => '弹药';
+
+  @override
+  String get itemCategoryArmor => '护甲';
 
   @override
   String get itemCategoryRune => '符文';
@@ -1042,6 +1051,12 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   String get add => '添加';
 
   @override
+  String get equippedBadge => '已装备';
+
+  @override
+  String get armorUpgradesLabel => '升级';
+
+  @override
   String get browse => '浏览';
 
   @override
@@ -1285,6 +1300,9 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get itemCategoryAmmunition => '弹药';
+
+  @override
+  String get itemCategoryArmor => '护甲';
 
   @override
   String get itemCategoryRune => '符文';

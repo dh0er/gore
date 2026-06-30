@@ -1,5 +1,80 @@
 [
   {
+    "category": "armor",
+    "id": "Armor_BC_BAN_Arlin_852",
+    "path": "/Script/Angelscript.Armor_BC_BAN_Arlin_852"
+  },
+  {
+    "category": "armor",
+    "id": "Armor_BC_BAN_Arlin_852_02",
+    "path": "/Script/Angelscript.Armor_BC_BAN_Arlin_852_02"
+  },
+  {
+    "category": "armor",
+    "id": "Armor_OCR_GRD_Stone_219",
+    "path": "/Script/Angelscript.Armor_OCR_GRD_Stone_219"
+  },
+  {
+    "category": "armor",
+    "id": "Armor_OCR_GRD_Stone_219_03",
+    "path": "/Script/Angelscript.Armor_OCR_GRD_Stone_219_03"
+  },
+  {
+    "category": "armor",
+    "id": "Armor_OC_EBR_Gomez_100",
+    "path": "/Script/Angelscript.Armor_OC_EBR_Gomez_100"
+  },
+  {
+    "category": "armor",
+    "id": "Armor_SC_VLK_Melvin_582",
+    "path": "/Script/Angelscript.Armor_SC_VLK_Melvin_582"
+  },
+  {
+    "category": "armor",
+    "id": "Armor_SK_OC_WOC_Velaya_108_02",
+    "path": "/Script/Angelscript.Armor_SK_OC_WOC_Velaya_108_02"
+  },
+  {
+    "category": "armor",
+    "id": "Crw_Armor_H",
+    "path": "/Script/Angelscript.Crw_Armor_H"
+  },
+  {
+    "category": "armor",
+    "id": "Dmb_Armor_M",
+    "path": "/Script/Angelscript.Dmb_Armor_M"
+  },
+  {
+    "category": "armor",
+    "id": "Ebr_Armor_H_01",
+    "path": "/Script/Angelscript.Ebr_Armor_H_01"
+  },
+  {
+    "category": "armor",
+    "id": "Ebr_Armor_H_02",
+    "path": "/Script/Angelscript.Ebr_Armor_H_02"
+  },
+  {
+    "category": "armor",
+    "id": "Ebr_Armor_M",
+    "path": "/Script/Angelscript.Ebr_Armor_M"
+  },
+  {
+    "category": "armor",
+    "id": "Grd_Armor",
+    "path": "/Script/Angelscript.Grd_Armor"
+  },
+  {
+    "category": "armor",
+    "id": "Gur_Armor_H",
+    "path": "/Script/Angelscript.Gur_Armor_H"
+  },
+  {
+    "category": "armor",
+    "id": "Gur_Armor_M",
+    "path": "/Script/Angelscript.Gur_Armor_M"
+  },
+  {
     "category": "ammunition",
     "id": "ItAm_Arrow",
     "path": "/Script/Angelscript.ItAm_Arrow"
@@ -3988,5 +4063,95 @@
     "category": "writing",
     "id": "ItWr_Scroll_TransformSwampshark",
     "path": "/Script/Angelscript.ItWr_Scroll_TransformSwampshark"
+  },
+  {
+    "category": "armor",
+    "id": "Kdf_Armor_H",
+    "path": "/Script/Angelscript.Kdf_Armor_H"
+  },
+  {
+    "category": "armor",
+    "id": "Kdf_Armor_L",
+    "path": "/Script/Angelscript.Kdf_Armor_L"
+  },
+  {
+    "category": "armor",
+    "id": "Kdw_Armor_H",
+    "path": "/Script/Angelscript.Kdw_Armor_H"
+  },
+  {
+    "category": "armor",
+    "id": "Kdw_Armor_L",
+    "path": "/Script/Angelscript.Kdw_Armor_L"
+  },
+  {
+    "category": "armor",
+    "id": "Law_Armor",
+    "path": "/Script/Angelscript.Law_Armor"
+  },
+  {
+    "category": "armor",
+    "id": "NH_Armor",
+    "path": "/Script/Angelscript.NH_Armor"
+  },
+  {
+    "category": "armor",
+    "id": "Nov_Armor",
+    "path": "/Script/Angelscript.Nov_Armor"
+  },
+  {
+    "category": "armor",
+    "id": "Ore_Armor_H",
+    "path": "/Script/Angelscript.Ore_Armor_H"
+  },
+  {
+    "category": "armor",
+    "id": "Ore_Armor_M",
+    "path": "/Script/Angelscript.Ore_Armor_M"
+  },
+  {
+    "category": "armor",
+    "id": "Org_Armor",
+    "path": "/Script/Angelscript.Org_Armor"
+  },
+  {
+    "category": "armor",
+    "id": "QA_Armor",
+    "path": "/Script/Angelscript.QA_Armor"
+  },
+  {
+    "category": "armor",
+    "id": "Ryl_Armor",
+    "path": "/Script/Angelscript.Ryl_Armor"
+  },
+  {
+    "category": "armor",
+    "id": "Sfb_Armor_L",
+    "path": "/Script/Angelscript.Sfb_Armor_L"
+  },
+  {
+    "category": "armor",
+    "id": "Sld_Armor",
+    "path": "/Script/Angelscript.Sld_Armor"
+  },
+  {
+    "category": "armor",
+    "id": "Stt_Armor",
+    "path": "/Script/Angelscript.Stt_Armor"
+  },
+  {
+    "category": "armor",
+    "id": "Tpl_Armor",
+    "path": "/Script/Angelscript.Tpl_Armor"
+  },
+  {
+    "category": "armor",
+    "id": "Vlk_Armor_L",
+    "path": "/Script/Angelscript.Vlk_Armor_L"
+  },
+  {
+    "category": "armor",
+    "id": "Vlk_Armor_M",
+    "path": "/Script/Angelscript.Vlk_Armor_M"
   }
 ]

@@ -2821,8 +2821,16 @@ fn inspect_private_payload(
                 .as_ref()
                 .and_then(|r| r.as_ref().ok())
                 .and_then(main_container_summary);
-            let inventory =
-                summarize_private_inventory_payload(&payload, &refs, main_container.as_ref());
+            let armor_slot = typed_result
+                .as_ref()
+                .and_then(|r| r.as_ref().ok())
+                .and_then(armor_slot_summary);
+            let inventory = summarize_private_inventory_payload(
+                &payload,
+                &refs,
+                main_container.as_ref(),
+                armor_slot.as_ref(),
+            );
             let typed_parse = summarize_typed_parse_result(&payload, typed_result.as_ref());
             let typed_ok = typed_parse["status"] == "ok";
             let progression = summarize_private_progression_overview(
@@ -2976,10 +2984,38 @@ fn private_player_writable_edits(payload: &[u8], refs: &[FStringRef]) -> Vec<&'s
     writable
 }
 
+/// Mark the worn-armor row `equipped` and attach the worn armor's upgrade
+/// chips. The player can carry a second copy of the worn armor class in the bag
+/// (e.g. via addItem, whose dialog only excludes MainContainer paths), and the
+/// scanned rows carry no container/slot identity — so a row is flagged only
+/// when its path is in `unambiguous_equipped_paths` (worn AND globally unique
+/// across the uncapped inventory). A worn class with any carried copy is
+/// withheld rather than risk tagging a bag copy.
+fn apply_equipped_and_upgrades(items: &mut [Value], armor_slot: Option<&ArmorSlotSummary>) {
+    for item in items.iter_mut() {
+        let path = item["path"].as_str().unwrap_or("");
+        let is_equipped = !path.is_empty()
+            && armor_slot.is_some_and(|a| a.unambiguous_equipped_paths.contains(path));
+        item["equipped"] = json!(is_equipped);
+        item["upgrades"] = if is_equipped {
+            json!(armor_slot
+                .map(|a| a
+                    .upgrades
+                    .iter()
+                    .map(|(k, v)| json!({ "key": k, "value": v }))
+                    .collect::<Vec<_>>())
+                .unwrap_or_default())
+        } else {
+            json!([])
+        };
+    }
+}
+
 fn summarize_private_inventory_payload(
     payload: &[u8],
     refs: &[FStringRef],
     main_container: Option<&MainContainerSummary>,
+    armor_slot: Option<&ArmorSlotSummary>,
 ) -> Value {
     let script_paths = unique_strings(
         refs.iter().map(|r| r.value.as_str()).filter(|value| {
@@ -3012,6 +3048,7 @@ fn summarize_private_inventory_payload(
             !path.is_empty() && main_container.is_some_and(|mc| mc.removable_paths.contains(path))
         );
     }
+    apply_equipped_and_upgrades(&mut items, armor_slot);
     // setItemCount patches an existing scanned stack in place, so it depends on
     // the FString scan finding at least one stack in the player region.
     // addItem/removeItem are structural edits on the *typed* MainContainer and
@@ -3039,6 +3076,14 @@ fn summarize_private_inventory_payload(
         .map(|mc| mc.all_paths.iter().collect())
         .unwrap_or_default();
     main_paths.sort();
+    // The worn-armor paths (from the typed tree, uncapped) so the add dialog can
+    // also exclude the currently-equipped armor even when the displayed row list
+    // is truncated — adding a worn-armor duplicate would make the equipped
+    // badge/upgrades ambiguous.
+    let mut equipped_armor_paths: Vec<&String> = armor_slot
+        .map(|a| a.equipped_paths.iter().collect())
+        .unwrap_or_default();
+    equipped_armor_paths.sort();
     json!({
         "candidateCount": candidates.len(),
         "candidates": candidates,
@@ -3046,6 +3091,7 @@ fn summarize_private_inventory_payload(
         "itemScope": item_scope,
         "items": items,
         "mainContainerPaths": main_paths,
+        "equippedArmorPaths": equipped_armor_paths,
         "scriptPaths": script_paths,
         "properties": properties,
         "writable": writable,
@@ -5508,6 +5554,9 @@ fn apply_private_knowledge_add_character_to_payload(
 /// always be looked up by value, never hardcoded.
 const MAIN_CONTAINER_ENUM_LABEL: &str = "EInventoryTypes::MainContainer";
 
+/// Enum label of the player's worn-armor container in the inventory map.
+const ARMOR_SLOT_ENUM_LABEL: &str = "EInventoryTypes::ArmorSlot";
+
 /// `m_PlayerID` of the controlled player among `m_SavedPlayers`. A save may hold
 /// several saved players (party members); inventory edits target this one — the
 /// same anchor the transform/attribute editors use.
@@ -5591,6 +5640,50 @@ fn slot_item_definition(slot: &properties::PropertyValue) -> Option<&str> {
         })
 }
 
+/// Read non-empty `(key, value)` upgrade pairs from a slot's
+/// `m_Payload.m_GenericData` ReplicatedStringMap (parallel `m_Keys`/`m_Values`).
+fn slot_upgrade_pairs(slot: &properties::PropertyValue) -> Vec<(String, String)> {
+    use properties::PropertyValue;
+    let Some(payload) = struct_element_property(slot, "m_Payload") else {
+        return Vec::new();
+    };
+    let PropertyValue::Struct(properties::StructValue::Properties(payload_props)) = &payload.value
+    else {
+        return Vec::new();
+    };
+    let Some(generic) = payload_props.iter().find(|p| p.name == "m_GenericData") else {
+        return Vec::new();
+    };
+    let PropertyValue::Struct(properties::StructValue::Properties(map_props)) = &generic.value
+    else {
+        return Vec::new();
+    };
+    let array_strings = |name: &str| -> Vec<String> {
+        map_props
+            .iter()
+            .find(|p| p.name == name)
+            .and_then(|p| match &p.value {
+                PropertyValue::Array { elements } => Some(
+                    elements
+                        .iter()
+                        .map(|e| match e {
+                            PropertyValue::Name(s) | PropertyValue::Str(s) => s.clone(),
+                            _ => String::new(),
+                        })
+                        .collect(),
+                ),
+                _ => None,
+            })
+            .unwrap_or_default()
+    };
+    let keys = array_strings("m_Keys");
+    let values = array_strings("m_Values");
+    keys.into_iter()
+        .zip(values)
+        .filter(|(_, v)| !v.is_empty())
+        .collect()
+}
+
 fn slot_id(slot: &properties::PropertyValue) -> Option<i32> {
     match struct_element_property(slot, "m_Id")?.value {
         properties::PropertyValue::Int(id) => Some(id),
@@ -5629,6 +5722,98 @@ struct MainContainerSummary {
     /// addItem can use as a template. Without one, addItem cannot succeed, so it
     /// must not be advertised.
     has_clean_template: bool,
+}
+
+/// The item-definition paths currently in the player's `ArmorSlot` container —
+/// i.e. the worn armor. At most one in practice, modeled as a set for
+/// robustness. `None` when the inventory or the ArmorSlot container is absent.
+struct ArmorSlotSummary {
+    equipped_paths: std::collections::HashSet<String>,
+    /// Worn-armor paths that occur exactly once across the ENTIRE typed
+    /// inventory (no carried copy in any other container). The display rows are
+    /// keyed only by item-definition path and carry no slot identity, so only a
+    /// globally-unique worn path can be flagged equipped without risk of tagging
+    /// a bag copy. Computed from the uncapped typed tree — not the 200-row
+    /// display cap, which could hide a later duplicate.
+    unambiguous_equipped_paths: std::collections::HashSet<String>,
+    /// `(key, value)` upgrade pairs from the worn armor's `m_GenericData`,
+    /// non-empty values only. Empty when not upgraded or no armor worn.
+    upgrades: Vec<(String, String)>,
+}
+
+/// Resolve the player's `ArmorSlot` container and collect the item-definition
+/// paths it holds. Mirrors `main_container_summary`'s container resolution.
+fn armor_slot_summary(root: &properties::RootObject) -> Option<ArmorSlotSummary> {
+    let inventory_path = resolve_inventory_path(root)?;
+    let resolve_child = |suffix: &[&str]| -> Option<properties::PropertyValue> {
+        let mut segs = inventory_path.clone();
+        segs.extend(suffix.iter().map(|s| s.to_string()));
+        let parsed = properties::parse_path(&segs).ok()?;
+        properties::resolve(&root.properties, &parsed)
+            .ok()
+            .map(|prop| prop.value.clone())
+    };
+    let properties::PropertyValue::Array { elements: keys } = resolve_child(&["m_Keys"])? else {
+        return None;
+    };
+    // Count how many times each item-definition path appears across EVERY
+    // container's slots (the full, uncapped inventory). Used to decide whether a
+    // worn armor path is unambiguous (no carried duplicate anywhere).
+    let mut global_counts: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+    if let Some(properties::PropertyValue::Array { elements: containers }) =
+        resolve_child(&["m_Values", "Items"])
+    {
+        for container_index in 0..containers.len() {
+            let container_segment = format!("[{container_index}]");
+            if let Some(properties::PropertyValue::Array { elements: container_slots }) =
+                resolve_child(&["m_Values", "Items", &container_segment, "m_Slots"])
+            {
+                for slot in &container_slots {
+                    if let Some(path) = slot_item_definition(slot) {
+                        if !path.is_empty() {
+                            *global_counts.entry(path.to_string()).or_default() += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let index = keys.iter().position(|element| {
+        matches!(element, properties::PropertyValue::Enum(label)
+            if label == ARMOR_SLOT_ENUM_LABEL)
+    })?;
+    let segment = format!("[{index}]");
+    let properties::PropertyValue::Array { elements: slots } =
+        resolve_child(&["m_Values", "Items", &segment, "m_Slots"])?
+    else {
+        return None;
+    };
+    let mut equipped_paths = std::collections::HashSet::new();
+    let mut upgrades = Vec::new();
+    for slot in &slots {
+        if let Some(path) = slot_item_definition(slot) {
+            if !path.is_empty() {
+                equipped_paths.insert(path.to_string());
+                // Read upgrades from the slot that actually holds the worn armor
+                // item, not merely the first slot whose generic data yields
+                // pairs — an empty template slot must not supply upgrade data.
+                if upgrades.is_empty() {
+                    upgrades = slot_upgrade_pairs(slot);
+                }
+            }
+        }
+    }
+    let unambiguous_equipped_paths = equipped_paths
+        .iter()
+        .filter(|path| global_counts.get(*path).copied() == Some(1))
+        .cloned()
+        .collect();
+    Some(ArmorSlotSummary {
+        equipped_paths,
+        unambiguous_equipped_paths,
+        upgrades,
+    })
 }
 
 /// Summarize the player's MainContainer. addItem and removeItem only operate on
@@ -7177,6 +7362,47 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
     use tempfile::tempdir;
+
+    #[test]
+    fn equipped_marking_withholds_on_duplicate_path() {
+        // Org_Armor is worn but also carried (so it is NOT unambiguous);
+        // Crw_Armor_H is worn and globally unique.
+        let armor = ArmorSlotSummary {
+            equipped_paths: [
+                "/Script/Angelscript.Org_Armor".to_string(),
+                "/Script/Angelscript.Crw_Armor_H".to_string(),
+            ]
+            .into_iter()
+            .collect(),
+            unambiguous_equipped_paths: ["/Script/Angelscript.Crw_Armor_H".to_string()]
+                .into_iter()
+                .collect(),
+            upgrades: vec![(
+                "m_CurrentUpperBodyUpgrade".to_string(),
+                "m_UpperBody_Heavy02_ArmorUpgrade".to_string(),
+            )],
+        };
+        let mut items = vec![
+            // worn class also carried in the bag -> path duplicated -> ambiguous
+            json!({ "path": "/Script/Angelscript.Org_Armor", "id": "Org_Armor" }),
+            json!({ "path": "/Script/Angelscript.Org_Armor", "id": "Org_Armor" }),
+            // worn class present exactly once -> unambiguous
+            json!({ "path": "/Script/Angelscript.Crw_Armor_H", "id": "Crw_Armor_H" }),
+            json!({ "path": "/Script/Angelscript.ItMi_Orenugget", "id": "ItMi_Orenugget" }),
+        ];
+        apply_equipped_and_upgrades(&mut items, Some(&armor));
+        // duplicated worn path -> neither row flagged, no upgrades attributed
+        assert_eq!(items[0]["equipped"], json!(false));
+        assert_eq!(items[1]["equipped"], json!(false));
+        assert_eq!(items[0]["upgrades"].as_array().unwrap().len(), 0);
+        assert_eq!(items[1]["upgrades"].as_array().unwrap().len(), 0);
+        // unique worn path -> flagged with upgrades
+        assert_eq!(items[2]["equipped"], json!(true));
+        assert_eq!(items[2]["upgrades"].as_array().unwrap().len(), 1);
+        // non-armor row -> never flagged
+        assert_eq!(items[3]["equipped"], json!(false));
+        assert_eq!(items[3]["upgrades"].as_array().unwrap().len(), 0);
+    }
 
     #[test]
     fn summarize_typed_parse_reports_status() {
@@ -9600,12 +9826,16 @@ mod tests {
                     "path": "/Script/Angelscript.ItMi_Orenugget",
                     "count": 99,
                     "removable": false,
+                    "equipped": false,
+                    "upgrades": [],
                 },
                 {
                     "id": "ItFo_Cheese",
                     "path": "/Script/Angelscript.ItFo_Cheese",
                     "count": 1,
                     "removable": false,
+                    "equipped": false,
+                    "upgrades": [],
                 }
             ])
         );
@@ -10315,6 +10545,8 @@ mod tests {
                 "path": "/Script/Angelscript.ItMi_Orenugget",
                 "count": 42,
                 "removable": false,
+                "equipped": false,
+                "upgrades": [],
             })
         );
     }
@@ -10416,6 +10648,8 @@ mod tests {
                 "path": "/Script/Angelscript.ItMi_Orenugget",
                 "count": 23,
                 "removable": false,
+                "equipped": false,
+                "upgrades": [],
             }])
         );
     }
@@ -10663,6 +10897,117 @@ mod tests {
         assert_eq!(root.consumed, payload.len());
         let after = progression_knowledge(&root, "", Some(new_npc), 0, 10).unwrap();
         assert_eq!(after["total"], 0);
+    }
+
+    #[test]
+    #[ignore = "needs GORESAVE_PAYLOAD_BIN=<a decompressed host.bin>"]
+    fn add_armor_item_roundtrips_on_real_payload() {
+        let path = std::env::var("GORESAVE_PAYLOAD_BIN").expect("set GORESAVE_PAYLOAD_BIN");
+        let mut payload = std::fs::read(path).unwrap();
+        // An armor NOT already in this save's MainContainer.
+        let armor_path = "/Script/Angelscript.Vlk_Armor_L";
+        assert!(is_item_definition_class(armor_path), "armor must be in the catalog allow-list");
+        let edit = PrivateInventoryAddItemEdit { path: armor_path.to_string(), count: 1 };
+        apply_private_inventory_add_item_to_payload(&mut payload, &edit).unwrap();
+        let root = properties::parse_private_root(&payload).unwrap();
+        assert_eq!(root.consumed, payload.len(), "byte-faithful: no trailing/lost bytes");
+        let summary = main_container_summary(&root).expect("main container");
+        assert!(summary.all_paths.contains(armor_path), "armor now in MainContainer");
+    }
+
+    #[test]
+    #[ignore = "needs GORESAVE_PAYLOAD_BIN=<a decompressed host.bin>"]
+    fn armor_slot_summary_finds_equipped_armor() {
+        let path = std::env::var("GORESAVE_PAYLOAD_BIN").expect("set GORESAVE_PAYLOAD_BIN");
+        let payload = std::fs::read(path).unwrap();
+        let root = properties::parse_private_root(&payload).unwrap();
+        let summary = armor_slot_summary(&root).expect("armor slot container resolves");
+        assert!(summary.equipped_paths.contains("/Script/Angelscript.Ore_Armor_H"));
+        assert!(!summary.equipped_paths.contains("/Script/Angelscript.Crw_Armor_H"));
+        assert!(!summary.equipped_paths.contains("/Script/Angelscript.Ore_Armor_M"));
+    }
+
+    #[test]
+    #[ignore = "needs GORESAVE_PAYLOAD_BIN=<a decompressed host.bin>"]
+    fn inventory_rows_flag_equipped_armor() {
+        let path = std::env::var("GORESAVE_PAYLOAD_BIN").expect("set GORESAVE_PAYLOAD_BIN");
+        let payload = std::fs::read(path).unwrap();
+        let refs = scan_fstrings(&payload, 0);
+        let root = properties::parse_private_root(&payload).unwrap();
+        let main_container = main_container_summary(&root);
+        let armor_slot = armor_slot_summary(&root);
+        let inv = summarize_private_inventory_payload(
+            &payload,
+            &refs,
+            main_container.as_ref(),
+            armor_slot.as_ref(),
+        );
+        let items = inv["items"].as_array().unwrap();
+        let equipped: Vec<&str> = items
+            .iter()
+            .filter(|i| i["equipped"].as_bool() == Some(true))
+            .map(|i| i["path"].as_str().unwrap_or(""))
+            .collect();
+        assert!(equipped.contains(&"/Script/Angelscript.Ore_Armor_H"));
+        assert!(!equipped.contains(&"/Script/Angelscript.Crw_Armor_H"));
+        assert!(items.iter().all(|i| {
+            let p = i["path"].as_str().unwrap_or("");
+            !p.contains("ItMi_") || i["equipped"].as_bool() == Some(false)
+        }));
+        // The uncapped equipped-armor path set (used by the add picker) lists
+        // the worn armor regardless of the row cap.
+        let equipped_paths: Vec<&str> = inv["equippedArmorPaths"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p.as_str().unwrap_or(""))
+            .collect();
+        assert!(equipped_paths.contains(&"/Script/Angelscript.Ore_Armor_H"));
+    }
+
+    #[test]
+    #[ignore = "needs GORESAVE_PAYLOAD_BIN=<a decompressed host.bin>"]
+    fn armor_upgrades_read_from_worn_armor() {
+        let path = std::env::var("GORESAVE_PAYLOAD_BIN").expect("set GORESAVE_PAYLOAD_BIN");
+        let payload = std::fs::read(path).unwrap();
+        let root = properties::parse_private_root(&payload).unwrap();
+        let summary = armor_slot_summary(&root).expect("armor slot resolves");
+        let ups = &summary.upgrades;
+        let find = |k: &str| ups.iter().find(|(key, _)| key == k).map(|(_, v)| v.as_str());
+        assert_eq!(find("m_CurrentUpperBodyUpgrade"), Some("m_UpperBody_Heavy02_ArmorUpgrade"));
+        assert_eq!(find("m_CurrentMidBodyUpgrade"), Some("m_MidBody_Heavy02_ArmorUpgrade"));
+        assert_eq!(find("m_CurrentLowerBodyUpgrade"), Some("m_LowerBody_Heavy02_ArmorUpgrade"));
+    }
+
+    #[test]
+    #[ignore = "needs GORESAVE_PAYLOAD_BIN=<a decompressed host.bin>"]
+    fn armor_upgrades_empty_when_not_upgraded() {
+        let path = std::env::var("GORESAVE_PAYLOAD_BIN").expect("set GORESAVE_PAYLOAD_BIN");
+        let payload = std::fs::read(path).unwrap();
+        let root = properties::parse_private_root(&payload).unwrap();
+        let summary = armor_slot_summary(&root).expect("armor slot resolves");
+        assert!(summary.upgrades.is_empty(), "expected no upgrades, got {:?}", summary.upgrades);
+    }
+
+    #[test]
+    #[ignore = "needs GORESAVE_PAYLOAD_BIN=<a decompressed host.bin>"]
+    fn equipped_row_carries_upgrades() {
+        let path = std::env::var("GORESAVE_PAYLOAD_BIN").expect("set GORESAVE_PAYLOAD_BIN");
+        let payload = std::fs::read(path).unwrap();
+        let refs = scan_fstrings(&payload, 0);
+        let root = properties::parse_private_root(&payload).unwrap();
+        let main_container = main_container_summary(&root);
+        let armor_slot = armor_slot_summary(&root);
+        let inv = summarize_private_inventory_payload(
+            &payload, &refs, main_container.as_ref(), armor_slot.as_ref(),
+        );
+        let items = inv["items"].as_array().unwrap();
+        let worn = items.iter().find(|i| i["equipped"].as_bool() == Some(true)).expect("an equipped row");
+        let ups = worn["upgrades"].as_array().expect("upgrades array");
+        assert_eq!(ups.len(), 3);
+        assert!(ups.iter().any(|u| u["value"].as_str() == Some("m_UpperBody_Heavy02_ArmorUpgrade")));
+        let other = items.iter().find(|i| i["equipped"].as_bool() != Some(true)).unwrap();
+        assert_eq!(other["upgrades"].as_array().map(|a| a.len()), Some(0));
     }
 
     #[test]

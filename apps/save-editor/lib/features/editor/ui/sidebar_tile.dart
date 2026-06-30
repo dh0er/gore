@@ -65,6 +65,8 @@ IconData iconForItemCategory(ItemCategory category) {
       return Icons.gavel;
     case ItemCategory.rangedWeapon:
       return Icons.gps_fixed;
+    case ItemCategory.armor:
+      return Icons.shield_outlined;
     case ItemCategory.ammunition:
       return Icons.arrow_outward;
     case ItemCategory.rune:

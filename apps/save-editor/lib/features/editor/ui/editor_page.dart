@@ -1951,7 +1951,16 @@ class _PrivateInventorySummaryCardState
     final result = await showDialog<InventoryItemAdd>(
       context: context,
       builder: (_) => AddInventoryItemDialog(
-        excludePaths: widget.inventory.mainContainerPaths.toSet(),
+        // Exclude both MainContainer paths (addItem rejects duplicates there)
+        // and the currently-equipped armor: adding a second copy of the worn
+        // armor would duplicate its definition path and make the equipped
+        // badge/upgrades ambiguous, so it must not be offered. Both lists are
+        // uncapped (from the typed tree), so the exclusion is correct even when
+        // the displayed row list is truncated.
+        excludePaths: {
+          ...widget.inventory.mainContainerPaths,
+          ...widget.inventory.equippedArmorPaths,
+        },
       ),
     );
     if (result == null) return;
@@ -2192,24 +2201,120 @@ class _PrivateInventorySummaryCardState
                                         leading: const Icon(
                                           Icons.category_outlined,
                                         ),
-                                        title: Text(
-                                          localizedGameName(
-                                                locCatalog,
-                                                lang,
-                                                item.id,
-                                              ) ??
-                                              (item.id.isEmpty
-                                                  ? item.path
-                                                  : item.id),
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                        ),
-                                        subtitle: item.path.isEmpty
-                                            ? null
-                                            : Text(
-                                                item.path,
+                                        title: Row(
+                                          children: [
+                                            Flexible(
+                                              child: Text(
+                                                localizedGameName(
+                                                      locCatalog,
+                                                      lang,
+                                                      item.id,
+                                                    ) ??
+                                                    (item.id.isEmpty
+                                                        ? item.path
+                                                        : item.id),
                                                 maxLines: 1,
                                                 overflow: TextOverflow.ellipsis,
+                                              ),
+                                            ),
+                                            if (item.equipped) ...[
+                                              const SizedBox(width: 8),
+                                              Container(
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                      horizontal: 6,
+                                                      vertical: 2,
+                                                    ),
+                                                decoration: BoxDecoration(
+                                                  color: theme
+                                                      .colorScheme
+                                                      .primaryContainer,
+                                                  borderRadius:
+                                                      BorderRadius.circular(4),
+                                                ),
+                                                child: Text(
+                                                  l10n.equippedBadge,
+                                                  style: theme
+                                                      .textTheme
+                                                      .labelSmall
+                                                      ?.copyWith(
+                                                        color: theme
+                                                            .colorScheme
+                                                            .onPrimaryContainer,
+                                                      ),
+                                                ),
+                                              ),
+                                            ],
+                                          ],
+                                        ),
+                                        subtitle:
+                                            item.path.isEmpty &&
+                                                item.upgrades.isEmpty
+                                            ? null
+                                            : Column(
+                                                crossAxisAlignment:
+                                                    CrossAxisAlignment.start,
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: [
+                                                  if (item.path.isNotEmpty)
+                                                    Text(
+                                                      item.path,
+                                                      maxLines: 1,
+                                                      overflow:
+                                                          TextOverflow.ellipsis,
+                                                    ),
+                                                  if (item.upgrades.isNotEmpty)
+                                                    Padding(
+                                                      padding:
+                                                          const EdgeInsets.only(
+                                                            top: 4,
+                                                          ),
+                                                      child: Wrap(
+                                                        spacing: 4,
+                                                        runSpacing: 2,
+                                                        crossAxisAlignment:
+                                                            WrapCrossAlignment
+                                                                .center,
+                                                        children: [
+                                                          Text(
+                                                            l10n.armorUpgradesLabel,
+                                                            style: theme
+                                                                .textTheme
+                                                                .labelSmall,
+                                                          ),
+                                                          for (final u
+                                                              in item.upgrades)
+                                                            Container(
+                                                              padding:
+                                                                  const EdgeInsets.symmetric(
+                                                                    horizontal: 6,
+                                                                    vertical: 1,
+                                                                  ),
+                                                              decoration: BoxDecoration(
+                                                                color: theme
+                                                                    .colorScheme
+                                                                    .surfaceContainerHighest,
+                                                                borderRadius:
+                                                                    BorderRadius.circular(
+                                                                      4,
+                                                                    ),
+                                                              ),
+                                                              child: Text(
+                                                                '${_upgradePart(u.key)}: ${_upgradeTier(u.value)}',
+                                                                style: theme
+                                                                    .textTheme
+                                                                    .labelSmall
+                                                                    ?.copyWith(
+                                                                      color: theme
+                                                                          .colorScheme
+                                                                          .onSurfaceVariant,
+                                                                    ),
+                                                              ),
+                                                            ),
+                                                        ],
+                                                      ),
+                                                    ),
+                                                ],
                                               ),
                                         trailing: _inventoryItemTrailing(
                                           theme,
@@ -2312,6 +2417,24 @@ enum _PendingTone { add, remove }
 /// A human-readable id fragment derived from an item asset path.
 String _itemDisplayFromPath(String path) =>
     path.contains('.') ? path.split('.').last : path.split('/').last;
+
+String _upgradePart(String key) {
+  if (key.contains('Upper')) return 'Upper';
+  if (key.contains('Mid')) return 'Mid';
+  if (key.contains('Lower')) return 'Lower';
+  return key;
+}
+
+String _upgradeTier(String value) {
+  var v = value;
+  for (final p in const ['m_UpperBody_', 'm_MidBody_', 'm_LowerBody_']) {
+    if (v.startsWith(p)) {
+      v = v.substring(p.length);
+      break;
+    }
+  }
+  return v.replaceAll('_ArmorUpgrade', '');
+}
 
 /// A highlighted card shown when there is a pending structural inventory edit
 /// (add or remove) awaiting save. Mirrors how a not-yet-saved item is

@@ -9,6 +9,7 @@ import 'package:goresave/l10n/app_localizations.dart';
 enum ItemCategory {
   meleeWeapon('Melee weapons'),
   rangedWeapon('Ranged weapons'),
+  armor('Armor'),
   ammunition('Ammunition'),
   rune('Runes'),
   scroll('Spell scrolls'),
@@ -36,6 +37,8 @@ String localizedItemCategoryLabel(AppLocalizations l10n, ItemCategory category) 
       return l10n.itemCategoryMeleeWeapon;
     case ItemCategory.rangedWeapon:
       return l10n.itemCategoryRangedWeapon;
+    case ItemCategory.armor:
+      return l10n.itemCategoryArmor;
     case ItemCategory.ammunition:
       return l10n.itemCategoryAmmunition;
     case ItemCategory.rune:
@@ -64,6 +67,7 @@ String localizedItemCategoryLabel(AppLocalizations l10n, ItemCategory category) 
 }
 
 ItemCategory itemCategoryFromId(String id) {
+  if (_isArmorId(id)) return ItemCategory.armor;
   if (id.startsWith('ItMw_')) return ItemCategory.meleeWeapon;
   if (id.startsWith('ItRw_')) return ItemCategory.rangedWeapon;
   // ItAm_ is ammunition (ItAm_Arrow/ItAm_Bolt); amulets live under ItAt_.
@@ -126,4 +130,21 @@ List<InventoryItemGroup> groupInventoryItems(
           items: byCategory[category]!..sort((a, b) => a.id.compareTo(b.id)),
         ),
   ];
+}
+
+/// True for any armor class name (base, per-NPC, or tier piece). Mirrors the
+/// Rust `gore_catalog::is_armor_id` display-side classifier.
+bool _isArmorId(String id) {
+  if (!id.contains('Armor')) return false;
+  if (id.startsWith('Armor_')) return true;
+  final parts = id.split('_');
+  if (parts.length < 2) return false;
+  final head = parts.first;
+  // The segment after the head must be exactly `Armor` (a tier suffix follows in
+  // a later segment) — not merely start with `Armor`, which would also match an
+  // `Armory` segment such as `NC_Armory_Door`. Mirrors the Rust classifiers.
+  return head.length >= 2 &&
+      head.length <= 4 &&
+      RegExp(r'^[A-Za-z]+$').hasMatch(head) &&
+      parts[1] == 'Armor';
 }

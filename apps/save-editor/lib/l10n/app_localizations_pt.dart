@@ -74,6 +74,12 @@ class AppLocalizationsPt extends AppLocalizations {
   String get add => 'Adicionar';
 
   @override
+  String get equippedBadge => 'Equipado';
+
+  @override
+  String get armorUpgradesLabel => 'Melhorias';
+
+  @override
   String get browse => 'Procurar';
 
   @override
@@ -349,6 +355,9 @@ class AppLocalizationsPt extends AppLocalizations {
 
   @override
   String get itemCategoryAmmunition => 'Munição';
+
+  @override
+  String get itemCategoryArmor => 'Armaduras';
 
   @override
   String get itemCategoryRune => 'Runas';
@@ -1075,6 +1084,12 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
   String get add => 'Adicionar';
 
   @override
+  String get equippedBadge => 'Equipado';
+
+  @override
+  String get armorUpgradesLabel => 'Melhorias';
+
+  @override
   String get browse => 'Procurar';
 
   @override
@@ -1326,6 +1341,9 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
 
   @override
   String get itemCategoryAmmunition => 'Munição';
+
+  @override
+  String get itemCategoryArmor => 'Armaduras';
 
   @override
   String get itemCategoryRune => 'Runas';

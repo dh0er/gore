@@ -74,6 +74,12 @@ class AppLocalizationsDe extends AppLocalizations {
   String get add => 'Hinzufügen';
 
   @override
+  String get equippedBadge => 'Angelegt';
+
+  @override
+  String get armorUpgradesLabel => 'Verbesserungen';
+
+  @override
   String get browse => 'Durchsuchen';
 
   @override
@@ -350,6 +356,9 @@ class AppLocalizationsDe extends AppLocalizations {
 
   @override
   String get itemCategoryAmmunition => 'Munition';
+
+  @override
+  String get itemCategoryArmor => 'Rüstungen';
 
   @override
   String get itemCategoryRune => 'Runen';
