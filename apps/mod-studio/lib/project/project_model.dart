@@ -1,5 +1,6 @@
 import '../audio/domain/audio_replacements_notifier.dart';
 import '../editor/domain/override_entry.dart';
+import '../scripts/domain/script_mods_notifier.dart';
 import '../textures/domain/texture_replacements_notifier.dart';
 
 /// A saveable/loadable mod-studio project: the union of all editor domains. Serializes to
@@ -14,6 +15,7 @@ class ModProject {
     this.locEdits = const {},
     this.audio = const [],
     this.textures = const [],
+    this.scripts = const [],
   });
 
   final String name;
@@ -24,10 +26,12 @@ class ModProject {
   final Map<String, Map<String, String>> locEdits;
   final List<AudioReplacement> audio;
   final List<TextureReplacement> textures;
+  final List<ScriptMod> scripts;
 
   ModProject copyWith({
     List<AudioReplacement>? audio,
     List<TextureReplacement>? textures,
+    List<ScriptMod>? scripts,
   }) =>
       ModProject(
         name: name,
@@ -38,6 +42,7 @@ class ModProject {
         locEdits: locEdits,
         audio: audio ?? this.audio,
         textures: textures ?? this.textures,
+        scripts: scripts ?? this.scripts,
       );
 
   Map<String, Object?> toJson() => {
@@ -51,6 +56,7 @@ class ModProject {
         'loc_edits': locEdits,
         'audio': [for (final a in audio) a.toJson()],
         'textures': [for (final t in textures) t.toJson()],
+        'scripts': [for (final s in scripts) s.toJson()],
       };
 
   factory ModProject.fromJson(Map<String, Object?> j) {
@@ -73,6 +79,10 @@ class ModProject {
         for (final t in (j['textures'] as List? ?? const []))
           TextureReplacement.fromJson((t as Map).cast<String, Object?>())
       ],
+      scripts: [
+        for (final s in (j['scripts'] as List? ?? const []))
+          ScriptMod.fromJson((s as Map).cast<String, Object?>())
+      ],
     );
   }
 
@@ -84,6 +94,10 @@ class ModProject {
         'loc_edits': locEdits,
         'audio': [for (final a in audio) a.toJson()],
         'texture': [for (final t in textures) t.toJson()],
+        'scripts': [
+          for (final s in scripts)
+            {'op': scriptOpToString(s.op), 'module_name': s.moduleName, 'mini_cache': s.miniPath}
+        ],
       };
 }
 
