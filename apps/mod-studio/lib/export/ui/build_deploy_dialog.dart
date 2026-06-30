@@ -12,6 +12,7 @@ import '../../core/providers.dart';
 import '../../editor/domain/overrides_notifier.dart';
 import '../../loc/domain/loc_edits_notifier.dart';
 import '../../project/project_controller.dart';
+import '../../scripts/domain/script_mods_notifier.dart';
 import '../../textures/domain/texture_replacements_notifier.dart';
 
 /// Build the unified mod bundle (overrides + loc + audio) and optionally deploy it to the
@@ -95,9 +96,10 @@ class _BuildDeployDialogState extends ConsumerState<BuildDeployDialog> {
     final locEdits = ref.watch(locEditsProvider).entryCount;
     final audio = ref.watch(audioReplacementsProvider).count;
     final textures = ref.watch(textureReplacementsProvider).count;
+    final scripts = ref.watch(scriptModsProvider).count;
     final gameRoot = gameRootFromExe(ref.watch(gameExePathProvider));
     // Building/deploying an empty bundle would only retire the active mod, so require content.
-    final hasContent = overrides + locEdits + audio + textures > 0;
+    final hasContent = overrides + locEdits + audio + textures + scripts > 0;
 
     return AlertDialog(
       title: const Text('Build & Deploy Mod'),
@@ -132,6 +134,12 @@ class _BuildDeployDialogState extends ConsumerState<BuildDeployDialog> {
             Text('• $locEdits localized text edit(s)'),
             Text('• $audio audio replacement(s)'),
             Text('• $textures texture replacement(s)'),
+            Text('• $scripts script mod(s)'),
+            if (ref.watch(scriptModsProvider).entries.any((s) => !s.compiled))
+              Text(
+                'Some script mods are not compiled — compile them in the AngelScript tab first.',
+                style: TextStyle(color: theme.colorScheme.error),
+              ),
             const SizedBox(height: 12),
             if (gameRoot == null)
               Text(
