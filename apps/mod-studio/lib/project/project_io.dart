@@ -5,6 +5,7 @@ import 'package:archive/archive_io.dart';
 import 'package:path/path.dart' as p;
 
 import '../audio/domain/audio_replacements_notifier.dart';
+import '../scripts/domain/script_mods_notifier.dart';
 import '../textures/domain/texture_replacements_notifier.dart';
 import 'project_model.dart';
 
@@ -35,8 +36,26 @@ Future<void> saveProject(ModProject project, String path) async {
     embeddedTextures.add(t.withImagePath(rel));
   }
 
+  final embeddedScripts = <ScriptMod>[];
+  var sidx = 0;
+  for (final s in project.scripts) {
+    final asBytes = await File(s.asPath).readAsBytes();
+    final asRel = 'assets/scripts/${sidx}_${p.basename(s.asPath)}';
+    archive.addFile(ArchiveFile(asRel, asBytes.length, asBytes));
+    var rebuilt = s.withAsPath(asRel);
+    // Embed the compiled mini-cache too, if this mod has been compiled.
+    if (s.miniPath.isNotEmpty) {
+      final miniBytes = await File(s.miniPath).readAsBytes();
+      final miniRel = 'assets/scripts_cache/${sidx}_${p.basename(s.miniPath)}';
+      archive.addFile(ArchiveFile(miniRel, miniBytes.length, miniBytes));
+      rebuilt = rebuilt.withMiniPath(miniRel);
+    }
+    sidx++;
+    embeddedScripts.add(rebuilt);
+  }
+
   final embedded =
-      project.copyWith(audio: embeddedAudio, textures: embeddedTextures);
+      project.copyWith(audio: embeddedAudio, textures: embeddedTextures, scripts: embeddedScripts);
   final json = utf8.encode(const JsonEncoder.withIndent('  ').convert(embedded.toJson()));
   archive.addFile(ArchiveFile('project.json', json.length, json));
 
@@ -116,5 +135,33 @@ Future<ModProject> loadProject(String path) async {
     // Unsafe or missing archive entry: DROP it (same rationale as audio above).
   }
 
-  return project.copyWith(audio: extractedAudio, textures: extractedTextures);
+  final extractedScripts = <ScriptMod>[];
+  for (final s in project.scripts) {
+    // Untrusted embedded paths: only extract entries under assets/ with no '..' / absolute path,
+    // resolving strictly inside the temp dir. Same guard as audio/textures.
+    String? extract(String rel) {
+      final segs = rel.split('/');
+      final safe = rel.startsWith('assets/') && !p.isAbsolute(rel) && !segs.contains('..');
+      if (!safe) return null;
+      final f = archive.findFile(rel);
+      final out = p.joinAll([tmp.path, ...segs]);
+      if (f == null || !p.isWithin(tmp.path, out)) return null;
+      Directory(p.dirname(out)).createSync(recursive: true);
+      File(out).writeAsBytesSync(f.content as List<int>);
+      return out;
+    }
+
+    final asOut = extract(s.asPath);
+    if (asOut == null) continue; // unsafe/missing source: drop the mod
+    var rebuilt = s.withAsPath(asOut);
+    if (s.miniPath.isNotEmpty) {
+      final miniOut = extract(s.miniPath);
+      // A missing/unsafe mini just means "not compiled" — keep the source, clear the mini.
+      rebuilt = rebuilt.withMiniPath(miniOut ?? '');
+    }
+    extractedScripts.add(rebuilt);
+  }
+
+  return project.copyWith(
+      audio: extractedAudio, textures: extractedTextures, scripts: extractedScripts);
 }
