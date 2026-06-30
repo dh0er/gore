@@ -106,6 +106,20 @@
     }
   },
   "publicSaveName": "Public save name",
+  "gameTimeTitle": "Game time",
+  "gameTimeDay": "Day",
+  "gameTimeHours": "Hours",
+  "gameTimeMinutes": "Minutes",
+  "gameTimeSeconds": "Seconds",
+  "gameTimeTotal": "= {seconds} s total",
+  "@gameTimeTotal": {
+    "placeholders": {
+      "seconds": {
+        "type": "int"
+      }
+    }
+  },
+  "gameTimeInvalid": "Enter whole numbers — day ≥ 0, hours 0–23, minutes and seconds 0–59.",
   "required": "Required",
   "playerLockedBody": "Private player edits need a compress-ready codec.",
   "heroTransform": "Hero transform",

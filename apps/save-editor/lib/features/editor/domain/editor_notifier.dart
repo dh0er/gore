@@ -4,6 +4,7 @@ import 'package:file_selector/file_selector.dart';
 import 'package:goresave/features/editor/domain/core_service.dart';
 import 'package:goresave/features/editor/domain/editor_models.dart';
 import 'package:goresave/features/editor/domain/editor_settings_store.dart';
+import 'package:goresave/features/editor/domain/game_time.dart';
 import 'package:goresave/features/editor/domain/hero_attributes.dart';
 import 'package:goresave/features/editor/domain/pending_edits.dart';
 import 'package:goresave/features/editor/domain/progression_models.dart';
@@ -1028,6 +1029,32 @@ class EditorNotifier extends StateNotifier<EditorState> {
       if (offset >= result.total || result.results.isEmpty) break;
     }
     return HeroAttributesResult(attributes: parseHeroAttributes(hits));
+  }
+
+  /// Search query that surfaces the single world-clock leaf. Its map key is
+  /// `{GameTime}`, so a plain "GameTime" query matches only this property tree.
+  static const gameTimeQuery = 'GameTime';
+
+  /// Load the world game clock — the lone `DoubleProperty` at
+  /// `m_GenericData{GameTime} › CurrentTime › TotalSeconds`. Returns null when
+  /// the save has no such leaf (non-GSAV, not decoded, or absent), so the
+  /// Overview card can simply hide itself. Mirrors [loadHeroAttributes]' fixed
+  /// query; the decode cache is already seeded by inspect.
+  Future<GameTime?> loadGameTime() async {
+    final result = await searchTypedProperties(gameTimeQuery, limit: 50);
+    if (result.error != null) return null;
+    for (final hit in result.results) {
+      final path = hit.path;
+      if (hit.type == 'DoubleProperty' &&
+          path.length >= 3 &&
+          path.last == 'TotalSeconds' &&
+          path[path.length - 2] == 'CurrentTime' &&
+          path.contains('{GameTime}')) {
+        final value = double.tryParse(hit.value);
+        if (value != null) return GameTime(totalSeconds: value, path: path);
+      }
+    }
+    return null;
   }
 
   /// Run one progression section query. Returns the raw data map, or null
