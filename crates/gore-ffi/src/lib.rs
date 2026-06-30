@@ -459,6 +459,10 @@ fn script_compile(payload: Value) -> Value {
     else {
         return err("BAD_REQUEST", "missing one of game_dir/op/module_name/rel_path/as_path/work_dir");
     };
+    // Use gore-mod's drift-aware pristine resolver for the emit/remap base, so the compile base is
+    // exactly the bytes deploy will splice against (honoring a `*.gore-bak` gone stale after a game
+    // update). `None` on failure → compile falls back to its own on-disk read.
+    let base_override = gore_mod::pristine_script_cache(std::path::Path::new(&game_dir)).ok();
     let opts = gore_as::compile::CompileOpts {
         game_dir: PathBuf::from(game_dir),
         op,
@@ -466,6 +470,7 @@ fn script_compile(payload: Value) -> Value {
         rel_path,
         as_path: PathBuf::from(as_path),
         work_dir: PathBuf::from(work_dir),
+        base_override,
     };
     match gore_as::compile::compile_module(&opts, gore_as::compile::game_run_regen) {
         Ok(out) => json!({"ok": true, "mini_path": out.mini_path.display().to_string(), "module": out.module_name}),

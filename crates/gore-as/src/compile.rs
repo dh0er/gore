@@ -24,6 +24,12 @@ pub struct CompileOpts {
     pub rel_path: String,
     pub as_path: PathBuf,
     pub work_dir: PathBuf,
+    /// Pristine base cache to emit/remap against. When `Some`, these bytes are the base (skip the
+    /// disk read) — the FFI passes gore-mod's drift-aware `pristine_script_cache` so the compile
+    /// base matches the bytes deploy will splice against. When `None`, fall back to the on-disk
+    /// `*.gore-bak`-or-live read (standalone/CLI/offline). NOTE: `game_run_regen` still uses the
+    /// LIVE cache for its own backup/restore — only this emit/remap base is overridden.
+    pub base_override: Option<Vec<u8>>,
 }
 
 #[derive(Debug)]
@@ -99,13 +105,20 @@ where
     if !is_safe_rel_path(&opts.rel_path) {
         return Err(CompileError::Other(format!("unsafe script rel_path: {:?}", opts.rel_path)));
     }
-    // Read the PRISTINE base cache. If a mod is already deployed, the live cache is the spliced
-    // (modded) one and gore-mod's deploy backup `…Cache.gore-bak` holds the true pristine bytes —
-    // emitting/remapping against a modded base would be wrong, so prefer the backup when present.
+    // The PRISTINE base cache to emit/remap against. Prefer the caller-supplied `base_override`
+    // (the FFI passes gore-mod's drift-aware `pristine_script_cache`, so the base matches exactly
+    // what deploy will splice against, even after a game update made the `*.gore-bak` stale).
+    // Without an override, fall back to the on-disk read: if a mod is already deployed, the live
+    // cache is the spliced (modded) one and gore-mod's deploy backup `…Cache.gore-bak` holds the
+    // true pristine bytes, so prefer the backup when present. `base_path` is the on-disk cache
+    // location used only to locate `Binds.Cache` next to it — independent of which bytes `base` holds.
     let live_cache = vanilla_cache(&opts.game_dir);
     let bak = deploy_bak_path(&live_cache);
     let base_path = if bak.exists() { bak } else { live_cache };
-    let base = std::fs::read(&base_path).map_err(io("reading vanilla cache"))?;
+    let base = match &opts.base_override {
+        Some(bytes) => bytes.clone(),
+        None => std::fs::read(&base_path).map_err(io("reading vanilla cache"))?,
+    };
 
     // 1. Emit the vanilla source tree (cache it per cache size under work_dir/tree).
     let tree = opts.work_dir.join("tree");
@@ -158,17 +171,19 @@ where
         opts.module_name.clone()
     };
 
-    // 4. Extract (add) / extract+remap (edit) the target module → mini-cache.
-    let mini = match opts.op.as_str() {
-        "edit" => {
-            let out = splice::extract_module(&regen, &target)
-                .map_err(|e| CompileError::Other(format!("extract: {e}")))?;
-            let (remapped, _counts) = remap::remap_module_to_base(&out, &base)
-                .map_err(|e| CompileError::Other(format!("remap: {e}")))?;
-            remapped
-        }
-        _ => splice::extract_module(&regen, &target)
-            .map_err(|e| CompileError::Other(format!("extract: {e}")))?,
+    // 4. Extract + remap the target module → an empty-tail mini-cache, for BOTH ops. Remapping to
+    //    the vanilla base drops the regen cache's full global tail tables (whose pointer/id keys
+    //    differ from the base), so deploy's `splice_auto` (add) takes the case-b append path with
+    //    no duplicate/stale global rows, and the module's refs resolve against the base. (A
+    //    primitive-only add is already empty-tail, so this is a no-op for that path; it only fixes
+    //    case-a / native-ref adds.) Deploy still differs by op — gore-mod uses `splice_auto` for
+    //    add and `replace_module` for edit — but the mini is now the same minimal shape for both.
+    let mini = {
+        let out = splice::extract_module(&regen, &target)
+            .map_err(|e| CompileError::Other(format!("extract: {e}")))?;
+        remap::remap_module_to_base(&out, &base)
+            .map_err(|e| CompileError::Other(format!("remap: {e}")))?
+            .0
     };
 
     let mini_path = opts.work_dir.join("module.cache");

@@ -1248,6 +1248,17 @@ fn bak_path(live: &Path) -> PathBuf {
     PathBuf::from(s)
 }
 
+/// The PRISTINE precompiled-script cache bytes deploy would use for `game_root`, honoring drift:
+/// if a `*.gore-bak` backup exists but the live cache has DRIFTED from what we last deployed there
+/// (game update/verify), the backup is stale and the (updated) live cache is the new pristine.
+/// Reuses the same [`read_pristine`]/[`read_record`] logic as deploy so the compile base matches
+/// the bytes the splice will later be applied against. Never writes.
+pub fn pristine_script_cache(game_root: &Path) -> Result<Vec<u8>> {
+    let script_cache = resolve_game_paths(game_root).script_cache;
+    let record = read_record(game_root);
+    read_pristine(&script_cache, record.as_ref()).map(|(bytes, _drifted)| bytes)
+}
+
 /// Undeploy: restore every live file from its backup and remove the UE4SS mod. Each entry is
 /// finalized INDEPENDENTLY — restore (or skip-if-drifted) AND delete its backup as a unit, then
 /// drop it from `record` — so a later locked backup can't leave earlier, already-deleted backups

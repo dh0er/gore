@@ -106,8 +106,10 @@ class ScriptModsState {
   const ScriptModsState({this.items = const {}});
   final Map<String, ScriptMod> items;
   int get count => items.length;
-  List<ScriptMod> get entries => items.values.toList()
-    ..sort((a, b) => a.moduleName.compareTo(b.moduleName));
+  // Insertion order (Dart Map is insertion-ordered) — this is the STAGING order, which must flow
+  // through gather/build/deploy so deploy applies splices in the order the user staged them (not
+  // alphabetically by moduleName). loadAll rebuilds the map in list order, so this round-trips.
+  List<ScriptMod> get entries => items.values.toList();
   ScriptModsState copyWith({Map<String, ScriptMod>? items}) =>
       ScriptModsState(items: items ?? this.items);
 }
