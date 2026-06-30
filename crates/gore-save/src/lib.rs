@@ -5610,6 +5610,50 @@ fn slot_item_definition(slot: &properties::PropertyValue) -> Option<&str> {
         })
 }
 
+/// Read non-empty `(key, value)` upgrade pairs from a slot's
+/// `m_Payload.m_GenericData` ReplicatedStringMap (parallel `m_Keys`/`m_Values`).
+fn slot_upgrade_pairs(slot: &properties::PropertyValue) -> Vec<(String, String)> {
+    use properties::PropertyValue;
+    let Some(payload) = struct_element_property(slot, "m_Payload") else {
+        return Vec::new();
+    };
+    let PropertyValue::Struct(properties::StructValue::Properties(payload_props)) = &payload.value
+    else {
+        return Vec::new();
+    };
+    let Some(generic) = payload_props.iter().find(|p| p.name == "m_GenericData") else {
+        return Vec::new();
+    };
+    let PropertyValue::Struct(properties::StructValue::Properties(map_props)) = &generic.value
+    else {
+        return Vec::new();
+    };
+    let array_strings = |name: &str| -> Vec<String> {
+        map_props
+            .iter()
+            .find(|p| p.name == name)
+            .and_then(|p| match &p.value {
+                PropertyValue::Array { elements } => Some(
+                    elements
+                        .iter()
+                        .map(|e| match e {
+                            PropertyValue::Name(s) | PropertyValue::Str(s) => s.clone(),
+                            _ => String::new(),
+                        })
+                        .collect(),
+                ),
+                _ => None,
+            })
+            .unwrap_or_default()
+    };
+    let keys = array_strings("m_Keys");
+    let values = array_strings("m_Values");
+    keys.into_iter()
+        .zip(values)
+        .filter(|(_, v)| !v.is_empty())
+        .collect()
+}
+
 fn slot_id(slot: &properties::PropertyValue) -> Option<i32> {
     match struct_element_property(slot, "m_Id")?.value {
         properties::PropertyValue::Int(id) => Some(id),
@@ -5655,6 +5699,9 @@ struct MainContainerSummary {
 /// robustness. `None` when the inventory or the ArmorSlot container is absent.
 struct ArmorSlotSummary {
     equipped_paths: std::collections::HashSet<String>,
+    /// `(key, value)` upgrade pairs from the worn armor's `m_GenericData`,
+    /// non-empty values only. Empty when not upgraded or no armor worn.
+    upgrades: Vec<(String, String)>,
 }
 
 /// Resolve the player's `ArmorSlot` container and collect the item-definition
@@ -5683,14 +5730,18 @@ fn armor_slot_summary(root: &properties::RootObject) -> Option<ArmorSlotSummary>
         return None;
     };
     let mut equipped_paths = std::collections::HashSet::new();
+    let mut upgrades = Vec::new();
     for slot in &slots {
         if let Some(path) = slot_item_definition(slot) {
             if !path.is_empty() {
                 equipped_paths.insert(path.to_string());
             }
         }
+        if upgrades.is_empty() {
+            upgrades = slot_upgrade_pairs(slot);
+        }
     }
-    Some(ArmorSlotSummary { equipped_paths })
+    Some(ArmorSlotSummary { equipped_paths, upgrades })
 }
 
 /// Summarize the player's MainContainer. addItem and removeItem only operate on
@@ -10786,6 +10837,30 @@ mod tests {
             let p = i["path"].as_str().unwrap_or("");
             !p.contains("ItMi_") || i["equipped"].as_bool() == Some(false)
         }));
+    }
+
+    #[test]
+    #[ignore = "needs GORESAVE_PAYLOAD_BIN=<a decompressed host.bin>"]
+    fn armor_upgrades_read_from_worn_armor() {
+        let path = std::env::var("GORESAVE_PAYLOAD_BIN").expect("set GORESAVE_PAYLOAD_BIN");
+        let payload = std::fs::read(path).unwrap();
+        let root = properties::parse_private_root(&payload).unwrap();
+        let summary = armor_slot_summary(&root).expect("armor slot resolves");
+        let ups = &summary.upgrades;
+        let find = |k: &str| ups.iter().find(|(key, _)| key == k).map(|(_, v)| v.as_str());
+        assert_eq!(find("m_CurrentUpperBodyUpgrade"), Some("m_UpperBody_Heavy02_ArmorUpgrade"));
+        assert_eq!(find("m_CurrentMidBodyUpgrade"), Some("m_MidBody_Heavy02_ArmorUpgrade"));
+        assert_eq!(find("m_CurrentLowerBodyUpgrade"), Some("m_LowerBody_Heavy02_ArmorUpgrade"));
+    }
+
+    #[test]
+    #[ignore = "needs GORESAVE_PAYLOAD_BIN=<a decompressed host.bin>"]
+    fn armor_upgrades_empty_when_not_upgraded() {
+        let path = std::env::var("GORESAVE_PAYLOAD_BIN").expect("set GORESAVE_PAYLOAD_BIN");
+        let payload = std::fs::read(path).unwrap();
+        let root = properties::parse_private_root(&payload).unwrap();
+        let summary = armor_slot_summary(&root).expect("armor slot resolves");
+        assert!(summary.upgrades.is_empty(), "expected no upgrades, got {:?}", summary.upgrades);
     }
 
     #[test]
