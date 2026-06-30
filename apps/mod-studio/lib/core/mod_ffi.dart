@@ -71,6 +71,40 @@ class ModFfi {
     if (r['found'] != true) return null;
     return r['exe'] as String?;
   }
+
+  /// List modules in a precompiled script cache: [{name, file}].
+  Future<List<ScriptModuleInfo>> scriptListModules(String cache) async {
+    final r = await _call('script_list_modules', {'cache': cache});
+    final list = (r['modules'] as List?) ?? const [];
+    return list
+        .whereType<Map>()
+        .map((m) => ScriptModuleInfo.fromJson(m.cast<String, Object?>()))
+        .toList();
+  }
+
+  /// Emit recompilable .as source for one module.
+  Future<String> scriptEmitModule(String cache, String module) async {
+    final r = await _call('script_emit_module', {'cache': cache, 'module': module});
+    return r['source'] as String;
+  }
+
+  /// Compile a staged .as into a 1-module mini-cache via the game; returns {mini_path, module}.
+  Future<Map<String, Object?>> scriptCompile({
+    required String gameDir,
+    required String op,
+    required String moduleName,
+    required String relPath,
+    required String asPath,
+    required String workDir,
+  }) =>
+      _call('script_compile', {
+        'game_dir': gameDir,
+        'op': op,
+        'module_name': moduleName,
+        'rel_path': relPath,
+        'as_path': asPath,
+        'work_dir': workDir,
+      });
 }
 
 class ModFfiException implements Exception {
@@ -101,4 +135,12 @@ class AudioSampleInfo {
         channels: (j['channels'] as num).toInt(),
         seconds: (j['seconds'] as num).toDouble(),
       );
+}
+
+class ScriptModuleInfo {
+  ScriptModuleInfo({required this.name, required this.file});
+  final String name;
+  final String file;
+  factory ScriptModuleInfo.fromJson(Map<String, Object?> j) =>
+      ScriptModuleInfo(name: j['name'] as String, file: (j['file'] as String?) ?? '');
 }
