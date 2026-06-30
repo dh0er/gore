@@ -933,6 +933,7 @@ dependencies = [
 name = "gore-mod"
 version = "0.0.0"
 dependencies = [
+ "gore-as",
  "gore-fmod",
  "gore-loc",
  "gore-modgen",

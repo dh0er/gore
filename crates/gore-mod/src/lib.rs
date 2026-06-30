@@ -60,6 +60,23 @@ pub struct TextureReplacement {
     pub image_path: String, // a PNG on disk
 }
 
+/// One AngelScript module mod: splice (`op = "add"`) or replace (`op = "edit"`) the compiled
+/// 1-module mini-cache at `mini_cache` into the precompiled-script cache at deploy.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScriptModule {
+    pub op: String,          // "add" | "edit"
+    pub module_name: String, // the Modules TMap key (used for "edit"/replace)
+    pub mini_cache: String,  // path to the compiled 1-module mini-cache on disk
+}
+
+/// One entry in a bundle's `scripts/manifest.json`: `mini` is a bundle-relative path.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScriptEntry {
+    pub op: String,
+    pub module: String,
+    pub mini: String,
+}
+
 /// Declarative build input — the union of the editor domains.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BuildSpec {
@@ -75,6 +92,8 @@ pub struct BuildSpec {
     pub audio: Vec<AudioReplacement>,
     #[serde(default)]
     pub texture: Vec<TextureReplacement>,
+    #[serde(default)]
+    pub scripts: Vec<ScriptModule>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,6 +108,9 @@ pub enum Component {
     /// Texture patch dir at `path` (manifest.json + pngs); deploy cooks + packs a Zen triplet
     /// into `~mods` for `assets`. Additive — no in-place game-file patch, no `*.gore-bak`.
     TexturePatch { path: String, assets: Vec<String> },
+    /// AngelScript mini-caches at `path` (manifest.json + `*.cache`); deploy splices/replaces
+    /// them into `PrecompiledScript_Shipping.Cache` in place, with a `*.gore-bak` backup.
+    AngelScriptPatch { path: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -166,6 +188,26 @@ pub fn build_bundle(spec: &BuildSpec) -> Result<Bundle> {
         components.push(Component::TexturePatch { path: "texture".into(), assets });
     }
 
+    // scripts → manifest + compiled mini-caches (spliced/replaced at deploy)
+    if !spec.scripts.is_empty() {
+        let mut entries: Vec<ScriptEntry> = Vec::new();
+        for (i, s) in spec.scripts.iter().enumerate() {
+            if s.op != "add" && s.op != "edit" {
+                return Err(ModError::Other(format!(
+                    "invalid script op {:?} for module {:?} (want \"add\" or \"edit\")",
+                    s.op, s.module_name
+                )));
+            }
+            let mini = std::fs::read(&s.mini_cache)
+                .map_err(io(&format!("reading mini-cache {}", s.mini_cache)))?;
+            let mini_rel = format!("scripts/{i}_{}.cache", sanitize(&s.module_name));
+            files.insert(mini_rel.clone(), mini);
+            entries.push(ScriptEntry { op: s.op.clone(), module: s.module_name.clone(), mini: mini_rel });
+        }
+        files.insert("scripts/manifest.json".into(), serde_json::to_vec_pretty(&entries)?);
+        components.push(Component::AngelScriptPatch { path: "scripts".into() });
+    }
+
     let manifest = ModManifest { format: 1, mod_meta: spec.meta.clone(), components };
     files.insert("gore-mod.json".into(), serde_json::to_vec_pretty(&manifest)?);
     Ok(Bundle { files, manifest })
@@ -235,6 +277,7 @@ pub struct GamePaths {
     pub ue4ss_mods: PathBuf,
     pub fmod_desktop: PathBuf,
     pub lcache: Option<PathBuf>,
+    pub script_cache: PathBuf,
 }
 
 pub fn resolve_game_paths(root: &Path) -> GamePaths {
@@ -268,6 +311,7 @@ pub fn resolve_game_paths(root: &Path) -> GamePaths {
         ue4ss_mods: g1r.join("Binaries").join("Win64").join("ue4ss").join("Mods"),
         fmod_desktop: g1r.join("Content").join("FMOD").join("Desktop"),
         lcache,
+        script_cache: g1r.join("Script").join("PrecompiledScript_Shipping.Cache"),
     }
 }
 
@@ -847,6 +891,13 @@ fn prepare(
                     plan.texture_triplets.push((src, dst));
                 }
             }
+            // NOTE: real splice/replace logic is added in Task 2. This placeholder only keeps the
+            // match exhaustive so the crate compiles after Task 1's `Component` variant is added.
+            Component::AngelScriptPatch { .. } => {
+                return Err(ModError::Other(
+                    "AngelScript deploy not yet implemented (see Task 2)".into(),
+                ));
+            }
         }
     }
     Ok(plan)
@@ -1375,6 +1426,7 @@ mod tests {
                 wav_path: wav.display().to_string(),
             }],
             texture: vec![],
+            scripts: vec![],
         };
 
         let bundle = build_bundle(&spec).unwrap();
@@ -1401,6 +1453,7 @@ mod tests {
             loc_edits: BTreeMap::new(),
             audio: vec![],
             texture: vec![],
+            scripts: vec![],
         };
         assert!(build_bundle(&spec).is_err());
     }
@@ -1415,12 +1468,48 @@ mod tests {
             meta: ModMeta { name: "TestMod".into(), version: String::new(), author: String::new() },
             delay_ms: 0, overrides: vec![], loc_edits: Default::default(), audio: vec![],
             texture: vec![TextureReplacement { asset: "/Game/UI/T_X".into(), image_path: png.display().to_string() }],
+            scripts: vec![],
         };
         let bundle = build_bundle(&spec).unwrap();
         assert!(bundle.files.contains_key("texture/manifest.json"));
         assert!(bundle.files.keys().any(|k| k.starts_with("texture/") && k.ends_with(".png")));
         assert!(matches!(bundle.manifest.components.last(),
             Some(Component::TexturePatch { assets, .. }) if assets == &vec!["/Game/UI/T_X".to_string()]));
+    }
+
+    #[test]
+    fn build_emits_angelscript_patch() {
+        let dir = std::env::temp_dir().join("gore-mod-as-build");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mini = dir.join("mod.cache");
+        std::fs::write(&mini, b"MINI-CACHE-BYTES").unwrap();
+        let spec = BuildSpec {
+            meta: ModMeta { name: "AsMod".into(), version: String::new(), author: String::new() },
+            delay_ms: 0,
+            overrides: vec![],
+            loc_edits: Default::default(),
+            audio: vec![],
+            texture: vec![],
+            scripts: vec![ScriptModule {
+                op: "add".into(),
+                module_name: "MyMod".into(),
+                mini_cache: mini.display().to_string(),
+            }],
+        };
+        let bundle = build_bundle(&spec).unwrap();
+        assert!(bundle.files.contains_key("scripts/manifest.json"));
+        assert!(bundle.files.contains_key("scripts/0_MyMod.cache"));
+        assert_eq!(bundle.files["scripts/0_MyMod.cache"], b"MINI-CACHE-BYTES");
+        assert!(matches!(bundle.manifest.components.last(),
+            Some(Component::AngelScriptPatch { path }) if path == "scripts"));
+        // manifest round-trips to the typed entry
+        let m: Vec<ScriptEntry> =
+            serde_json::from_slice(&bundle.files["scripts/manifest.json"]).unwrap();
+        assert_eq!(m.len(), 1);
+        assert_eq!(m[0].op, "add");
+        assert_eq!(m[0].module, "MyMod");
+        assert_eq!(m[0].mini, "scripts/0_MyMod.cache");
     }
 
     #[test]
