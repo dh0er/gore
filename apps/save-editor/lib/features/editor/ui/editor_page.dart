@@ -1719,11 +1719,12 @@ class _PrivateInventorySummaryCardState
         // Exclude both MainContainer paths (addItem rejects duplicates there)
         // and the currently-equipped armor: adding a second copy of the worn
         // armor would duplicate its definition path and make the equipped
-        // badge/upgrades ambiguous, so it must not be offered.
+        // badge/upgrades ambiguous, so it must not be offered. Both lists are
+        // uncapped (from the typed tree), so the exclusion is correct even when
+        // the displayed row list is truncated.
         excludePaths: {
           ...widget.inventory.mainContainerPaths,
-          for (final item in widget.inventory.items)
-            if (item.equipped) item.path,
+          ...widget.inventory.equippedArmorPaths,
         },
       ),
     );

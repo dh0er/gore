@@ -3076,6 +3076,14 @@ fn summarize_private_inventory_payload(
         .map(|mc| mc.all_paths.iter().collect())
         .unwrap_or_default();
     main_paths.sort();
+    // The worn-armor paths (from the typed tree, uncapped) so the add dialog can
+    // also exclude the currently-equipped armor even when the displayed row list
+    // is truncated — adding a worn-armor duplicate would make the equipped
+    // badge/upgrades ambiguous.
+    let mut equipped_armor_paths: Vec<&String> = armor_slot
+        .map(|a| a.equipped_paths.iter().collect())
+        .unwrap_or_default();
+    equipped_armor_paths.sort();
     json!({
         "candidateCount": candidates.len(),
         "candidates": candidates,
@@ -3083,6 +3091,7 @@ fn summarize_private_inventory_payload(
         "itemScope": item_scope,
         "items": items,
         "mainContainerPaths": main_paths,
+        "equippedArmorPaths": equipped_armor_paths,
         "scriptPaths": script_paths,
         "properties": properties,
         "writable": writable,
@@ -10945,6 +10954,15 @@ mod tests {
             let p = i["path"].as_str().unwrap_or("");
             !p.contains("ItMi_") || i["equipped"].as_bool() == Some(false)
         }));
+        // The uncapped equipped-armor path set (used by the add picker) lists
+        // the worn armor regardless of the row cap.
+        let equipped_paths: Vec<&str> = inv["equippedArmorPaths"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p.as_str().unwrap_or(""))
+            .collect();
+        assert!(equipped_paths.contains(&"/Script/Angelscript.Ore_Armor_H"));
     }
 
     #[test]

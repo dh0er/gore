@@ -614,6 +614,7 @@ class PrivateInventorySummary {
     this.itemScope,
     this.items = const [],
     this.mainContainerPaths = const [],
+    this.equippedArmorPaths = const [],
     this.scriptPaths = const [],
     this.properties = const [],
     this.writable = const [],
@@ -638,6 +639,11 @@ class PrivateInventorySummary {
               ?.whereType<String>()
               .toList() ??
           const [],
+      equippedArmorPaths:
+          (json?['equippedArmorPaths'] as List?)
+              ?.whereType<String>()
+              .toList() ??
+          const [],
       scriptPaths:
           (json?['scriptPaths'] as List?)?.whereType<String>().toList() ??
           const [],
@@ -658,6 +664,11 @@ class PrivateInventorySummary {
   // Complete set of MainContainer item paths (uncapped), used to exclude
   // already-owned items from the add picker even when [items] is truncated.
   final List<String> mainContainerPaths;
+  // Worn-armor item paths (uncapped, from the typed tree). Excluded from the add
+  // picker so the user cannot add a duplicate of the currently-equipped armor —
+  // which would make the equipped badge/upgrades ambiguous. Reliable even when
+  // [items] is truncated and the worn row falls outside it.
+  final List<String> equippedArmorPaths;
   final List<String> scriptPaths;
   final List<String> properties;
   final List<String> writable;
