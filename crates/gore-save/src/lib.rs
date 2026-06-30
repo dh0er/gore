@@ -2985,18 +2985,27 @@ fn private_player_writable_edits(payload: &[u8], refs: &[FStringRef]) -> Vec<&'s
 }
 
 /// Mark the worn-armor row `equipped` and attach the worn armor's upgrade
-/// chips. Membership is by item-definition path, but the player can carry a
-/// second copy of the worn armor class in the bag (e.g. via addItem, whose
-/// dialog only excludes MainContainer paths), so only the FIRST row of each
-/// equipped path is flagged — later duplicates are a bag copy, not the worn
-/// item, and must show neither the badge nor the upgrades.
+/// chips. Membership is by item-definition path. The player can carry a second
+/// copy of the worn armor class in the bag (e.g. via addItem, whose dialog only
+/// excludes MainContainer paths), and the scanned rows carry no container/slot
+/// identity — so when the worn path occurs more than once we cannot tell the
+/// worn slot from a carried copy. In that ambiguous case we withhold the badge
+/// and upgrades entirely rather than risk attributing them to a bag copy; the
+/// flag is set only when the worn path occurs exactly once across the scan.
 fn apply_equipped_and_upgrades(items: &mut [Value], armor_slot: Option<&ArmorSlotSummary>) {
-    let mut equipped_seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut path_counts: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+    for item in items.iter() {
+        let path = item["path"].as_str().unwrap_or("");
+        if !path.is_empty() {
+            *path_counts.entry(path.to_string()).or_default() += 1;
+        }
+    }
     for item in items.iter_mut() {
         let path = item["path"].as_str().unwrap_or("").to_string();
         let is_equipped = !path.is_empty()
             && armor_slot.is_some_and(|a| a.equipped_paths.contains(&path))
-            && equipped_seen.insert(path);
+            && path_counts.get(&path) == Some(&1);
         item["equipped"] = json!(is_equipped);
         item["upgrades"] = if is_equipped {
             json!(armor_slot
@@ -7317,31 +7326,39 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn equipped_marking_skips_duplicate_bag_copy() {
+    fn equipped_marking_withholds_on_duplicate_path() {
         let armor = ArmorSlotSummary {
-            equipped_paths: ["/Script/Angelscript.Org_Armor".to_string()]
-                .into_iter()
-                .collect(),
+            equipped_paths: [
+                "/Script/Angelscript.Org_Armor".to_string(),
+                "/Script/Angelscript.Crw_Armor_H".to_string(),
+            ]
+            .into_iter()
+            .collect(),
             upgrades: vec![(
                 "m_CurrentUpperBodyUpgrade".to_string(),
                 "m_UpperBody_Heavy02_ArmorUpgrade".to_string(),
             )],
         };
         let mut items = vec![
-            // worn copy (first occurrence — e.g. the ArmorSlot container row)
+            // worn class also carried in the bag -> path duplicated -> ambiguous
             json!({ "path": "/Script/Angelscript.Org_Armor", "id": "Org_Armor" }),
-            // a second copy in the bag with the same path
             json!({ "path": "/Script/Angelscript.Org_Armor", "id": "Org_Armor" }),
+            // worn class present exactly once -> unambiguous
+            json!({ "path": "/Script/Angelscript.Crw_Armor_H", "id": "Crw_Armor_H" }),
             json!({ "path": "/Script/Angelscript.ItMi_Orenugget", "id": "ItMi_Orenugget" }),
         ];
         apply_equipped_and_upgrades(&mut items, Some(&armor));
-        assert_eq!(items[0]["equipped"], json!(true));
-        assert_eq!(items[0]["upgrades"].as_array().unwrap().len(), 1);
-        // the duplicate bag copy must NOT be flagged equipped or carry upgrades
+        // duplicated worn path -> neither row flagged, no upgrades attributed
+        assert_eq!(items[0]["equipped"], json!(false));
         assert_eq!(items[1]["equipped"], json!(false));
+        assert_eq!(items[0]["upgrades"].as_array().unwrap().len(), 0);
         assert_eq!(items[1]["upgrades"].as_array().unwrap().len(), 0);
-        assert_eq!(items[2]["equipped"], json!(false));
-        assert_eq!(items[2]["upgrades"].as_array().unwrap().len(), 0);
+        // unique worn path -> flagged with upgrades
+        assert_eq!(items[2]["equipped"], json!(true));
+        assert_eq!(items[2]["upgrades"].as_array().unwrap().len(), 1);
+        // non-armor row -> never flagged
+        assert_eq!(items[3]["equipped"], json!(false));
+        assert_eq!(items[3]["upgrades"].as_array().unwrap().len(), 0);
     }
 
     #[test]
