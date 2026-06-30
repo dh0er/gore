@@ -34,6 +34,13 @@ final scriptModulesProvider =
   final root = gameRootFromExe(ref.watch(gameExePathProvider));
   if (root == null) return const [];
   final cache = _pristineScriptCachePath(root);
+  // A configured game whose script cache is absent/unreadable must not throw an uncaught async
+  // error into the "Edit existing" flow — return the documented empty list instead.
+  if (!File(cache).existsSync()) return const [];
   final ffi = ModFfi(ref.read(coreServiceProvider));
-  return ffi.scriptListModules(cache);
+  try {
+    return await ffi.scriptListModules(cache);
+  } catch (_) {
+    return const [];
+  }
 });
