@@ -13,6 +13,10 @@ import 'package:goresave/features/editor/domain/editor_notifier.dart';
 import 'package:goresave/features/editor/domain/editor_models.dart';
 import 'package:goresave/features/editor/domain/game_time.dart';
 import 'package:goresave/features/editor/domain/item_categories.dart';
+import 'package:goresave/features/editor/domain/npc_attributes.dart';
+import 'package:goresave/features/editor/ui/actor_detail_header.dart';
+import 'package:goresave/features/editor/ui/actor_selector.dart';
+import 'package:goresave/features/editor/ui/npc_attributes_panel.dart';
 import 'package:goresave/features/editor/ui/sidebar_tile.dart';
 import 'package:goresave/features/editor/domain/pending_edits.dart';
 import 'package:goresave/features/localization/domain/localization_controller.dart';
@@ -24,6 +28,7 @@ import 'package:goresave/providers/data_providers.dart';
 import 'package:intl/intl.dart';
 import 'add_inventory_item_dialog.dart';
 import 'difficulty_dialog.dart';
+import '../domain/hero_attributes.dart' show TypedValueEdit;
 import 'hero_stats_card.dart';
 import 'progression_panel.dart';
 
@@ -680,7 +685,7 @@ class _EditorWorkspace extends StatelessWidget {
                         ),
                         Tab(
                           icon: const Icon(Icons.person_outline),
-                          text: l10n.tabPlayer,
+                          text: l10n.tabAttribute,
                         ),
                         Tab(
                           icon: const Icon(Icons.inventory_2_outlined),
@@ -721,7 +726,10 @@ class _EditorWorkspace extends StatelessWidget {
                             ? l10n.save
                             : l10n.saveWithCount(pendingCount),
                       ),
-                      onPressed: pendingCount > 0 && !state.isLoading
+                      onPressed:
+                          pendingCount > 0 &&
+                              !state.isLoading &&
+                              !state.hasInvalidNpcEdit
                           ? notifier.saveAllPending
                           : null,
                     ),
@@ -763,10 +771,7 @@ class _EditorWorkspace extends StatelessWidget {
                     ),
                   ),
                   _KeepAliveTab(
-                    child: _PrivatePanel(
-                      icon: Icons.person_outline,
-                      title: l10n.tabPlayer,
-                      isPlayer: true,
+                    child: _AttributePanel(
                       inspection: inspection,
                       notifier: notifier,
                       // Private writes recompress the payload, so also require the
@@ -774,7 +779,6 @@ class _EditorWorkspace extends StatelessWidget {
                       editable:
                           inspection.privateEditable &&
                           state.codecCompressReady,
-                      lockedBody: l10n.playerLockedBody,
                     ),
                   ),
                   _KeepAliveTab(
@@ -1633,6 +1637,223 @@ class _MetricGrid extends StatelessWidget {
   }
 }
 
+/// Reverse a stored per-NPC attribute registry entry back into the panel's
+/// [NpcTypedEdit] drafts so [NpcAttributesPanel] can resume from them on a
+/// revisit. Inverse of the `private.typed.setValue` JSON the onPendingChanged
+/// handler writes. Tolerant of unexpected shapes (skips what it can't parse).
+List<NpcTypedEdit> _npcAttributeDraftsFromPending(PendingSaveEdit? pending) {
+  if (pending == null) return const [];
+  final drafts = <NpcTypedEdit>[];
+  for (final edit in pending.edits) {
+    if (edit['path'] != 'private.typed.setValue') continue;
+    final value = edit['value'];
+    if (value is! Map) continue;
+    final path = value['path'];
+    final raw = value['value'];
+    if (path is! List) continue;
+    final segments = path.whereType<String>().toList();
+    if (segments.length != path.length) continue;
+    final number = raw is num ? raw.toDouble() : null;
+    if (number == null) continue;
+    drafts.add(NpcTypedEdit(path: segments, value: number));
+  }
+  return drafts;
+}
+
+/// Reconstruct the player's queued attribute drafts from the 'heroStats' pending
+/// entry so [HeroStatsCard] can resume from them when the user returns to the
+/// Player after selecting an NPC. Mirror of [_npcAttributeDraftsFromPending]
+/// for the player's [TypedValueEdit] type (same `private.typed.setValue` JSON).
+List<TypedValueEdit> _heroDraftsFromPending(PendingSaveEdit? pending) {
+  if (pending == null) return const [];
+  final drafts = <TypedValueEdit>[];
+  for (final edit in pending.edits) {
+    if (edit['path'] != 'private.typed.setValue') continue;
+    final value = edit['value'];
+    if (value is! Map) continue;
+    final path = value['path'];
+    final raw = value['value'];
+    if (path is! List) continue;
+    final segments = path.whereType<String>().toList();
+    if (segments.length != path.length) continue;
+    final number = raw is num ? raw.toDouble() : null;
+    if (number == null) continue;
+    drafts.add(TypedValueEdit(path: segments, value: number));
+  }
+  return drafts;
+}
+
+/// The "Attribute" tab body: a shared [ActorSelector] sidebar on the left and a
+/// detail editor on the right. When the Player is selected the existing player
+/// attribute view ([_PrivatePanel]) is shown unchanged; when an NPC is selected
+/// its attributes are loaded and rendered in a flat [NpcAttributesPanel]. The
+/// selection is the SHARED actor state (read via `state.selectedActor`, written
+/// via `notifier.selectActor`) so it stays in sync with the Inventory tab.
+class _AttributePanel extends ConsumerWidget {
+  const _AttributePanel({
+    required this.inspection,
+    required this.notifier,
+    required this.editable,
+  });
+
+  final SaveInspection inspection;
+  final EditorNotifier notifier;
+  final bool editable;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final l10n = AppLocalizations.of(context);
+    final state = ref.watch(editorProvider);
+    final selected = state.selectedActor;
+    final lang = ref.watch(currentGameLangProvider);
+    final locCatalog =
+        ref.watch(locCatalogProvider).asData?.value ?? const {};
+
+    final Widget detail;
+    if (selected.isPlayer) {
+      // Player → a shared header ("Player", no GlobalId) above the EXISTING
+      // player attribute view, unchanged below.
+      detail = Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          ActorDetailHeader(
+            actor: selected,
+            locCatalog: locCatalog,
+            lang: lang,
+          ),
+          Expanded(
+            child: _PrivatePanel(
+              icon: Icons.person_outline,
+              title: l10n.tabPlayer,
+              isPlayer: true,
+              inspection: inspection,
+              notifier: notifier,
+              editable: editable,
+              lockedBody: l10n.playerLockedBody,
+            ),
+          ),
+        ],
+      );
+    } else {
+      // NPC → flat attribute editor wired to a PER-NPC pending-edit key so it
+      // never collides with the player's 'heroStats' contribution AND each NPC's
+      // edits accumulate independently. A shared 'npc.attributes' key would let
+      // a switch from NPC-A to NPC-B leave A's edit lingering under the same key
+      // (the panel reload only clears its local field state, not the registry),
+      // so A's edit would silently apply on the next Save while the UI shows B.
+      // Keying by the NPC's GlobalId means A stays under 'npc.attributes:A' and
+      // B under 'npc.attributes:B'; the save flow batches every key and the
+      // distinct per-NPC GlobalId typed paths never conflict.
+      final npcId = selected.id!;
+      final pendingKey = 'npc.attributes:$npcId';
+      // Status row: `Status: <lebend|tot>` + a Revive action, rendered as the
+      // FIRST entry of the core ("Hauptwerte") group detail (NPC-only). Revive
+      // drives a STANDALONE structural edit the core won't batch with peers, so
+      // it REGISTERS a per-NPC pending edit (`npc.revive:$id`) — the global Save
+      // button applies it (saveAllPending splits each splicing edit into its own
+      // write_save). No file write happens on tap. The pending flag is read from
+      // the registry so a queued revive reflects optimistically before Save; the
+      // reloadKey matches the panel's so a Save's trailing refresh re-seeds the
+      // status line/HP from disk.
+      final revivePending = state.pendingEdits.containsKey('npc.revive:$npcId');
+      final statusConfig = NpcStatusConfig(
+        npcId: npcId,
+        editable: editable,
+        // Carry the dead state known from the sidebar selection as a fallback
+        // for when the async summary reload fails / the id is missing.
+        knownDead: selected.isDead,
+        reloadKey: (inspection, npcId),
+        // Use the cached FULL NPC list (shared with the selector, one decompress)
+        // and let the row pick the exact-id match. A substring query with the
+        // default 100-row page could miss this NPC when many ids match, leaving
+        // the action disabled and isDead wrongly defaulting.
+        load: () => notifier.loadAllNpcActors(),
+        onRevive: () => notifier.setPendingNpcRevive(npcId),
+        revivePending: revivePending,
+      );
+      detail = Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          ActorDetailHeader(
+            actor: selected,
+            locCatalog: locCatalog,
+            lang: lang,
+          ),
+          Expanded(
+            child: NpcAttributesPanel(
+              // Reload when the inspected save OR the selected NPC changes, so
+              // the list re-seeds from this NPC's saved values.
+              reloadKey: (inspection, npcId),
+              load: () => notifier.loadNpcAttributes(npcId),
+              editable: editable,
+              // Status row lives at the top of the core ("Hauptwerte") group.
+              status: statusConfig,
+              // Resume from this NPC's queued attribute drafts on revisit:
+              // reverse the stored typed.setValue edits back into the panel's
+              // NpcTypedEdit drafts. Without this, returning to a previously
+              // edited NPC and editing another attribute would replace the
+              // stored entry with only the newly-dirty field, dropping the rest.
+              initialPending: () => _npcAttributeDraftsFromPending(
+                notifier.pendingEditFor(pendingKey),
+              ),
+              onPendingChanged: (edits, validationError) {
+                if (validationError != null) {
+                  // Transient invalid/empty input in one field must NOT discard
+                  // the NPC's already-stored valid drafts (switching actors
+                  // disposes this panel and loses its local _pending). Keep the
+                  // stored drafts but BLOCK global Save while invalid, so the
+                  // now-stale stored value is never written behind the bad field.
+                  notifier.setNpcEditInvalid(pendingKey);
+                  return;
+                }
+                notifier.setNpcEditInvalid(null);
+                if (edits.isEmpty) {
+                  notifier.clearPendingEdit(pendingKey);
+                } else {
+                  notifier.setPendingEdit(
+                    pendingKey,
+                    PendingSaveEdit(
+                      edits: [
+                        for (final edit in edits)
+                          {
+                            'path': 'private.typed.setValue',
+                            'value': {'path': edit.path, 'value': edit.value},
+                          },
+                      ],
+                    ),
+                  );
+                }
+              },
+            ),
+          ),
+        ],
+      );
+    }
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SizedBox(
+          width: 280,
+          child: ActorSelector(
+            selected: selected,
+            onSelect: notifier.selectActor,
+            loadNpcs: notifier.loadAllNpcActors,
+            // Reload the NPC list when the inspected save changes (new
+            // inspection identity from a save/refresh), so the selector never
+            // shows the previous file's NPCs/badges against the new save.
+            reloadKey: inspection,
+            locCatalog: locCatalog,
+            lang: lang,
+          ),
+        ),
+        const VerticalDivider(width: 1),
+        Expanded(child: detail),
+      ],
+    );
+  }
+}
+
 class _PrivatePanel extends StatelessWidget {
   const _PrivatePanel({
     required this.icon,
@@ -1699,6 +1920,9 @@ class _PrivatePanel extends StatelessWidget {
             // changing identity drops pending edits and reloads.
             reloadKey: inspection,
             load: notifier.loadHeroAttributes,
+            // Resume from any unsaved player drafts after returning from an NPC.
+            initialPending: () =>
+                _heroDraftsFromPending(notifier.pendingEditFor('heroStats')),
             onPendingChanged: (edits, validationError) {
               if (edits.isEmpty || validationError != null) {
                 notifier.clearPendingEdit('heroStats');
@@ -1797,7 +2021,46 @@ class _CollapsibleCardHeader extends StatelessWidget {
   }
 }
 
-class _InventoryPanel extends StatelessWidget {
+/// Resolves an inventory [PrivateInventorySummary] into the editable /
+/// addable / removable gates the card consumes. [typedVerified] and
+/// [canCompress] are save-wide; [writable] is the inventory's advertised op
+/// list (the player's from the inspection, an NPC's from its loaded summary).
+({bool editable, bool canAddItem, bool canRemoveItem}) _inventoryGates({
+  required List<String> writable,
+  required bool privateEditable,
+  required bool typedVerified,
+  required bool canCompress,
+}) {
+  final editable =
+      privateEditable &&
+      canCompress &&
+      writable.contains('private.inventory.setItemCount');
+  final canAddItem =
+      privateEditable &&
+      canCompress &&
+      typedVerified &&
+      writable.contains('private.inventory.addItem');
+  final canRemoveItem =
+      privateEditable &&
+      canCompress &&
+      typedVerified &&
+      writable.contains('private.inventory.removeItem');
+  return (
+    editable: editable,
+    canAddItem: canAddItem,
+    canRemoveItem: canRemoveItem,
+  );
+}
+
+/// The "Inventory" tab body: the SAME shared [ActorSelector] sidebar as the
+/// Attribute tab on the left and the inventory detail on the right. When the
+/// Player is selected the existing inventory card path is shown UNCHANGED
+/// (loaded from the inspection, edits with no actorId). When an NPC is selected
+/// its inventory is loaded via `private.npc.inventory` and fed to the SAME card
+/// widget, with edits keyed PER-NPC and carrying the NPC's actorId. Selection
+/// is the SHARED actor state (read `state.selectedActor`, written
+/// `notifier.selectActor`) so it stays in sync with the Attribute tab.
+class _InventoryPanel extends ConsumerWidget {
   const _InventoryPanel({
     required this.inspection,
     required this.notifier,
@@ -1809,7 +2072,7 @@ class _InventoryPanel extends StatelessWidget {
   final bool canCompress;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final l10n = AppLocalizations.of(context);
     if (!inspection.privateDecoded) {
       return _MessagePane(
@@ -1818,36 +2081,82 @@ class _InventoryPanel extends StatelessWidget {
         body: l10n.inventoryNeedsDecoded,
       );
     }
-    // Inventory writes recompress the payload too, so require a
-    // compress-capable codec host in addition to a full decode.
-    // The core only allows count edits in a detected player
-    // inventory region, advertised via writable; gate on it so other
-    // scopes don't show editors whose saves fail in the core.
-    final writable = inspection.privateInventory.writable;
-    final editable =
-        inspection.privateEditable &&
-        canCompress &&
-        writable.contains('private.inventory.setItemCount');
-    // addItem/removeItem edit the typed property tree, so both require a
-    // verified typed parse plus their own advertised op. They are gated
-    // independently: the core can expose one without the other (e.g.
-    // removeItem with no clean template for adds), and addItem can be valid even
-    // when the FString scan found no stacks (empty/unscanned MainContainer).
-    final canAddItem =
-        inspection.privateEditable &&
-        canCompress &&
-        inspection.privateTypedVerified &&
-        writable.contains('private.inventory.addItem');
-    final canRemoveItem =
-        inspection.privateEditable &&
-        canCompress &&
-        inspection.privateTypedVerified &&
-        writable.contains('private.inventory.removeItem');
 
+    final state = ref.watch(editorProvider);
+    final selected = state.selectedActor;
+    final lang = ref.watch(currentGameLangProvider);
+    final locCatalog =
+        ref.watch(locCatalogProvider).asData?.value ?? const {};
+
+    final Widget body;
+    if (selected.isPlayer) {
+      body = _playerInventoryDetail(context);
+    } else {
+      // NPC → load its inventory and feed the SAME card, keyed per-NPC so
+      // switching NPCs never clobbers either one's queued edits.
+      final npcId = selected.id!;
+      body = _NpcInventoryDetail(
+        // Reload when the inspected save OR the selected NPC changes.
+        key: ValueKey(('npc-inventory', npcId)),
+        reloadKey: (inspection, npcId),
+        npcId: npcId,
+        notifier: notifier,
+        privateEditable: inspection.privateEditable,
+        typedVerified: inspection.privateTypedVerified,
+        canCompress: canCompress,
+      );
+    }
+
+    // Shared header above the inventory body, identifying the selected actor
+    // (NPC name + full GlobalId, or "Player") — same widget the Attribute tab
+    // uses, so both tabs make the selection obvious.
+    final detail = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        ActorDetailHeader(
+          actor: selected,
+          locCatalog: locCatalog,
+          lang: lang,
+        ),
+        Expanded(child: body),
+      ],
+    );
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SizedBox(
+          width: 280,
+          child: ActorSelector(
+            selected: selected,
+            onSelect: notifier.selectActor,
+            loadNpcs: notifier.loadAllNpcActors,
+            // Reload the NPC list when the inspected save changes, mirroring the
+            // Attribute tab — keeps the selector in sync after a save/refresh.
+            reloadKey: inspection,
+            locCatalog: locCatalog,
+            lang: lang,
+          ),
+        ),
+        const VerticalDivider(width: 1),
+        Expanded(child: detail),
+      ],
+    );
+  }
+
+  /// The existing player inventory detail — load from the inspection, edits
+  /// under the literal `'inventory'` key with no actorId. Behaviour is
+  /// byte-for-byte unchanged from before the shared-selector refactor.
+  Widget _playerInventoryDetail(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    final gates = _inventoryGates(
+      writable: inspection.privateInventory.writable,
+      privateEditable: inspection.privateEditable,
+      typedVerified: inspection.privateTypedVerified,
+      canCompress: canCompress,
+    );
     final hasItems = inspection.privateInventory.hasData;
-    if (!hasItems && !canAddItem && !canRemoveItem) {
-      // Decoded fine, nothing recognised and nothing addable — say so instead
-      // of leaving the tab blank.
+    if (!hasItems && !gates.canAddItem && !gates.canRemoveItem) {
       return _MessagePane(
         icon: Icons.inventory_2_outlined,
         title: l10n.inventoryTitle,
@@ -1859,9 +2168,118 @@ class _InventoryPanel extends StatelessWidget {
       child: _PrivateInventorySummaryCard(
         inventory: inspection.privateInventory,
         notifier: notifier,
-        editable: editable,
-        canAddItem: canAddItem,
-        canRemoveItem: canRemoveItem,
+        editable: gates.editable,
+        canAddItem: gates.canAddItem,
+        canRemoveItem: gates.canRemoveItem,
+      ),
+    );
+  }
+}
+
+/// Loads the selected NPC's inventory via `private.npc.inventory` and renders
+/// it with the SAME [_PrivateInventorySummaryCard] the player uses. Edits are
+/// keyed PER-NPC (`'inventory:$npcId'`) and stamped with the NPC's actorId.
+class _NpcInventoryDetail extends StatefulWidget {
+  const _NpcInventoryDetail({
+    super.key,
+    required this.reloadKey,
+    required this.npcId,
+    required this.notifier,
+    required this.privateEditable,
+    required this.typedVerified,
+    required this.canCompress,
+  });
+
+  final Object reloadKey;
+  final String npcId;
+  final EditorNotifier notifier;
+  final bool privateEditable;
+  final bool typedVerified;
+  final bool canCompress;
+
+  @override
+  State<_NpcInventoryDetail> createState() => _NpcInventoryDetailState();
+}
+
+class _NpcInventoryDetailState extends State<_NpcInventoryDetail> {
+  NpcInventoryResult? _result;
+  bool _loading = false;
+  int _reloadEpoch = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _reload();
+  }
+
+  @override
+  void didUpdateWidget(covariant _NpcInventoryDetail oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.reloadKey != oldWidget.reloadKey) _reload();
+  }
+
+  Future<void> _reload() async {
+    final epoch = ++_reloadEpoch;
+    setState(() => _loading = true);
+    final result = await widget.notifier.loadNpcInventory(widget.npcId);
+    if (!mounted || epoch != _reloadEpoch) return;
+    setState(() {
+      _loading = false;
+      _result = result;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final l10n = AppLocalizations.of(context);
+
+    if (_loading || _result == null) {
+      return const Padding(
+        padding: EdgeInsets.all(24),
+        child: Center(child: CircularProgressIndicator()),
+      );
+    }
+    final result = _result!;
+    if (result.error != null) {
+      return Padding(
+        padding: const EdgeInsets.all(20),
+        child: Text(
+          result.error!,
+          style: TextStyle(color: theme.colorScheme.error),
+        ),
+      );
+    }
+
+    final inventory = result.inventory;
+    final gates = _inventoryGates(
+      writable: inventory.writable,
+      privateEditable: widget.privateEditable,
+      typedVerified: widget.typedVerified,
+      canCompress: widget.canCompress,
+    );
+    final hasItems = inventory.hasData;
+    if (!hasItems && !gates.canAddItem && !gates.canRemoveItem) {
+      return _MessagePane(
+        icon: Icons.inventory_2_outlined,
+        title: l10n.inventoryTitle,
+        body: l10n.inventoryNoStacks,
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.all(20),
+      child: _PrivateInventorySummaryCard(
+        // Key on the NPC so switching NPCs builds a fresh card state (its
+        // local draft/pending fields reset) while the previous NPC's registry
+        // entry survives under its own per-NPC key.
+        key: ValueKey(('npc-inventory-card', widget.npcId)),
+        inventory: inventory,
+        notifier: widget.notifier,
+        editable: gates.editable,
+        canAddItem: gates.canAddItem,
+        canRemoveItem: gates.canRemoveItem,
+        pendingKey: 'inventory:${widget.npcId}',
+        actorId: widget.npcId,
       ),
     );
   }
@@ -1869,11 +2287,14 @@ class _InventoryPanel extends StatelessWidget {
 
 class _PrivateInventorySummaryCard extends ConsumerStatefulWidget {
   const _PrivateInventorySummaryCard({
+    super.key,
     required this.inventory,
     required this.notifier,
     this.editable = true,
     this.canAddItem = false,
     this.canRemoveItem = false,
+    this.pendingKey = 'inventory',
+    this.actorId,
   });
 
   final PrivateInventorySummary inventory;
@@ -1881,6 +2302,16 @@ class _PrivateInventorySummaryCard extends ConsumerStatefulWidget {
   final bool editable;
   final bool canAddItem;
   final bool canRemoveItem;
+
+  /// Pending-edit registry key this card writes to. The player inventory uses
+  /// the literal `'inventory'`; each NPC uses a PER-NPC key (`'inventory:$id'`)
+  /// so editing NPC-A then NPC-B never clobbers either one's queued edits.
+  final String pendingKey;
+
+  /// GlobalId of the NPC whose inventory this edits, or null for the player.
+  /// Forwarded onto every queued edit as `actorId` so the core targets the
+  /// right container.
+  final String? actorId;
 
   @override
   ConsumerState<_PrivateInventorySummaryCard> createState() =>
@@ -1894,10 +2325,80 @@ class _PrivateInventorySummaryCardState
   final Map<String, InventoryItemCountChange> _pendingCountChanges = {};
   ItemCategory? _selectedCategory;
   InventoryItemAdd? _pendingAdd;
-  // Path of the item queued for removal. addItem and removeItem are both
-  // structural edits, so at most one of _pendingAdd / _pendingRemovePath is
+  // The item queued for removal (carries path + slotId + containerType so the
+  // core can target the right container's exact slot). addItem and removeItem
+  // are both structural edits, so at most one of _pendingAdd / _pendingRemove is
   // ever set (the core allows one structural inventory edit per write).
-  String? _pendingRemovePath;
+  PrivateInventoryItem? _pendingRemove;
+
+  /// Asset path of the item queued for removal, or null when none is queued.
+  /// Kept as a thin accessor so the existing path-based list filtering / display
+  /// is unchanged while [_pendingRemove] carries the full slot addressing.
+  String? get _pendingRemovePath => _pendingRemove?.path;
+
+  @override
+  void initState() {
+    super.initState();
+    // Rehydrate any draft already queued for THIS actor under the per-NPC
+    // pending key. Switching away from an edited NPC disposes this card's local
+    // state but leaves the registry entry (`inventory:<npcId>`) intact;
+    // revisiting builds a fresh card (keyed on the NPC) with empty local state.
+    // Without this, the next edit would call setPendingEdit with ONLY the new
+    // local edit and silently drop the earlier queued ones. Reading the stored
+    // edits back into local state makes a revisit resume from the queued draft.
+    _rehydrateFromPending();
+  }
+
+  /// Reconstruct local pending state from the registry entry for [pendingKey],
+  /// reversing the JSON edits [_pushInventoryPending] writes. Inverse of
+  /// [InventoryItemCountChange.toEditJson] et al. Tolerant of unexpected shapes
+  /// (skips anything it can't parse) so a malformed entry never throws here.
+  void _rehydrateFromPending() {
+    final entry = widget.notifier.pendingEditFor(widget.pendingKey);
+    if (entry == null) return;
+    for (final edit in entry.edits) {
+      final path = edit['path'];
+      final value = edit['value'];
+      if (value is! Map) continue;
+      switch (path) {
+        case 'private.inventory.setItemCount':
+          final itemPath = value['path'] as String? ?? '';
+          final count = (value['count'] as num?)?.toInt();
+          if (itemPath.isEmpty || count == null) continue;
+          final id = value['id'] as String? ?? '';
+          final slotId = (value['slotId'] as num?)?.toInt();
+          final containerType = value['containerType'] as String?;
+          final item = PrivateInventoryItem(
+            id: id,
+            path: itemPath,
+            slotId: slotId,
+            containerType: containerType,
+          );
+          _pendingCountChanges[_inventoryItemKey(item)] =
+              InventoryItemCountChange(
+            id: id,
+            path: itemPath,
+            count: count,
+            slotId: slotId,
+            containerType: containerType,
+          );
+        case 'private.inventory.addItem':
+          final itemPath = value['path'] as String? ?? '';
+          final count = (value['count'] as num?)?.toInt();
+          if (itemPath.isEmpty || count == null) continue;
+          _pendingAdd = InventoryItemAdd(path: itemPath, count: count);
+        case 'private.inventory.removeItem':
+          final itemPath = value['path'] as String? ?? '';
+          if (itemPath.isEmpty) continue;
+          _pendingRemove = PrivateInventoryItem(
+            id: value['id'] as String? ?? '',
+            path: itemPath,
+            slotId: (value['slotId'] as num?)?.toInt(),
+            containerType: value['containerType'] as String?,
+          );
+      }
+    }
+  }
 
   @override
   void dispose() {
@@ -1909,21 +2410,52 @@ class _PrivateInventorySummaryCardState
   void didUpdateWidget(covariant _PrivateInventorySummaryCard oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.inventory != widget.inventory) {
-      // Inventory was refreshed — clear local widget state. The notifier
-      // centrally clears 'inventory' in refresh() (event-handler context),
-      // so mutating the provider here would throw during build.
+      // Inventory was refreshed — rebuild local widget state from the registry.
+      // A FULL save clears 'inventory:<id>' centrally, so rehydrate finds nothing
+      // and the drafts stay cleared. A PARTIALLY-committed save re-applies the
+      // still-uncommitted pending edits to the registry, so rehydrate restores
+      // them here — otherwise the Save badge would count queued edits while the
+      // count fields showed on-disk values, and the next edit would overwrite the
+      // registry with only that field. Rehydrate only mutates LOCAL state (never
+      // the provider), so it is safe in this build-context callback.
       _pendingCountChanges.clear();
       _pendingAdd = null;
-      _pendingRemovePath = null;
+      _pendingRemove = null;
+      _rehydrateFromPending();
     }
   }
 
   void _pushInventoryPending() {
-    final countEdits =
-        _pendingCountChanges.values.map((c) => c.toEditJson()).toList();
-    final addEdit = _pendingAdd?.toEditJson();
-    final removeEdit = _pendingRemovePath != null
-        ? InventoryItemRemove(path: _pendingRemovePath!).toEditJson()
+    final actorId = widget.actorId;
+    // Stamp the selected actor onto every queued edit. actorId is null for the
+    // player (key omitted from the JSON, behaviour byte-for-byte unchanged) and
+    // the NPC's GlobalId otherwise (core targets the NPC's container).
+    final countEdits = _pendingCountChanges.values
+        .map(
+          (c) => InventoryItemCountChange(
+            id: c.id,
+            path: c.path,
+            count: c.count,
+            actorId: actorId,
+            slotId: c.slotId,
+            containerType: c.containerType,
+          ).toEditJson(),
+        )
+        .toList();
+    final addEdit = _pendingAdd != null
+        ? InventoryItemAdd(
+            path: _pendingAdd!.path,
+            count: _pendingAdd!.count,
+            actorId: actorId,
+          ).toEditJson()
+        : null;
+    final removeEdit = _pendingRemove != null
+        ? InventoryItemRemove(
+            path: _pendingRemove!.path,
+            actorId: actorId,
+            slotId: _pendingRemove!.slotId,
+            containerType: _pendingRemove!.containerType,
+          ).toEditJson()
         : null;
     final allEdits = [
       ...countEdits,
@@ -1931,10 +2463,10 @@ class _PrivateInventorySummaryCardState
       ?removeEdit,
     ];
     if (allEdits.isEmpty) {
-      widget.notifier.clearPendingEdit('inventory');
+      widget.notifier.clearPendingEdit(widget.pendingKey);
     } else {
       widget.notifier.setPendingEdit(
-        'inventory',
+        widget.pendingKey,
         PendingSaveEdit(edits: allEdits),
       );
     }
@@ -1968,7 +2500,7 @@ class _PrivateInventorySummaryCardState
     setState(() {
       _pendingAdd = result;
       // Keep the one-structural-edit-per-save invariant unconditionally.
-      _pendingRemovePath = null;
+      _pendingRemove = null;
     });
     _pushInventoryPending();
   }
@@ -1979,13 +2511,15 @@ class _PrivateInventorySummaryCardState
       // mutually exclusive with a pending add (one structural edit per save).
       _pendingCountChanges.remove(_inventoryItemKey(item));
       _pendingAdd = null;
-      _pendingRemovePath = item.path;
+      // Carry the full item so the remove edit echoes slotId + containerType,
+      // letting the core target the exact slot in the right container.
+      _pendingRemove = item;
     });
     _pushInventoryPending();
   }
 
   void _undoRemove() {
-    setState(() => _pendingRemovePath = null);
+    setState(() => _pendingRemove = null);
     _pushInventoryPending();
   }
 
@@ -1999,12 +2533,12 @@ class _PrivateInventorySummaryCardState
     final inventory = widget.inventory;
     final query = _query.trim().toLowerCase();
     final items = inventory.items.where((item) {
-      // A pending removal hides the item from the list (it is represented by
-      // the pending card above), mirroring how a pending add is not yet in the
-      // list either.
-      if (_pendingRemovePath != null &&
-          item.path.isNotEmpty &&
-          item.path == _pendingRemovePath) {
+      // A pending removal hides ONLY the specific slot queued for removal (it is
+      // represented by the pending card above), matched by the same slot-aware
+      // key as count edits — so duplicate-path stacks, or the same item in
+      // another container, are not all hidden when only one slot will be removed.
+      if (_pendingRemove != null &&
+          _inventoryItemKey(item) == _inventoryItemKey(_pendingRemove!)) {
         return false;
       }
       if (query.isEmpty) return true;
@@ -2071,9 +2605,9 @@ class _PrivateInventorySummaryCardState
                         setState(() {
                           _pendingCountChanges.clear();
                           _pendingAdd = null;
-                          _pendingRemovePath = null;
+                          _pendingRemove = null;
                         });
-                        widget.notifier.clearPendingEdit('inventory');
+                        widget.notifier.clearPendingEdit(widget.pendingKey);
                       },
                     ),
                   ),
@@ -2331,6 +2865,16 @@ class _PrivateInventorySummaryCardState
                         ],
                       ),
               ),
+            ] else if (!hasPendingAdd) ...[
+              // Completely empty inventory (and nothing queued to add): say so
+              // explicitly instead of showing a blank card.
+              const SizedBox(height: 12),
+              Text(
+                l10n.inventoryEmpty,
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
             ],
           ],
         ),
@@ -2374,6 +2918,10 @@ class _PrivateInventorySummaryCardState
       children: [
         if (countEditable)
           _InventoryItemCountEditor(
+            // Key by the slot-aware row key so duplicate-path/id stacks that
+            // differ only by slotId never share a controller (which could leave
+            // one row showing the other slot's count).
+            key: ValueKey(_inventoryItemKey(item)),
             item: item,
             pendingCount: _pendingCountChanges[_inventoryItemKey(item)]?.count,
             onPendingCountChanged: (change) =>
@@ -2495,6 +3043,7 @@ class _PendingStructuralRow extends StatelessWidget {
 
 class _InventoryItemCountEditor extends StatefulWidget {
   const _InventoryItemCountEditor({
+    super.key,
     required this.item,
     required this.onPendingCountChanged,
     this.pendingCount,
@@ -2513,6 +3062,8 @@ class _InventoryItemCountEditorState extends State<_InventoryItemCountEditor> {
   late final TextEditingController _controller;
   String? _path;
   String? _id;
+  int? _slotId;
+  int? _count;
   int? _pendingCount;
   String? _error;
 
@@ -2536,16 +3087,24 @@ class _InventoryItemCountEditorState extends State<_InventoryItemCountEditor> {
   }
 
   void _sync() {
-    // Rows are identified by path-or-id, so include the id: two stacks with an
-    // empty path but different ids must not be treated as the same row.
+    // Rows are identified by path-or-id PLUS slotId — two duplicate stacks share
+    // a path/id and differ only by slotId, and the on-disk count can change under
+    // a fixed slot after a refresh — so include slotId and the canonical count;
+    // otherwise the early-return could leave the field showing a stale count.
     if (_path == widget.item.path &&
         _id == widget.item.id &&
+        _slotId == widget.item.slotId &&
+        _count == widget.item.count &&
         _pendingCount == widget.pendingCount) {
       return;
     }
-    final isSameItem = _path == widget.item.path && _id == widget.item.id;
+    final isSameItem = _path == widget.item.path &&
+        _id == widget.item.id &&
+        _slotId == widget.item.slotId;
     _path = widget.item.path;
     _id = widget.item.id;
+    _slotId = widget.item.slotId;
+    _count = widget.item.count;
     _pendingCount = widget.pendingCount;
     final text = (widget.pendingCount ?? widget.item.count)?.toString() ?? '';
     if (_controller.text != text) {
@@ -2608,16 +3167,21 @@ class _InventoryItemCountEditorState extends State<_InventoryItemCountEditor> {
         id: widget.item.id,
         path: widget.item.path,
         count: parsed,
+        slotId: widget.item.slotId,
+        containerType: widget.item.containerType,
       ),
     );
   }
 }
 
 String _inventoryItemKey(PrivateInventoryItem item) {
-  // Combine id and path so rows that share a definition path
-  // but differ by id — repeated item types — get distinct pending-change
-  // entries instead of collapsing onto one key.
-  return '${item.id}\u0000${item.path}';
+  // Combine container type, slot id, id, and path so rows that share a
+  // definition path get distinct pending-change entries instead of collapsing
+  // onto one key. The container type keeps identical paths in different
+  // containers (e.g. a MeleeSlot sword and a Pouch stack sharing a slotId)
+  // distinct; the stable slot id keeps two duplicate same-path/same-id stacks in
+  // ONE container independent; id+path remains the fallback for rows without one.
+  return '${item.containerType ?? ''}\u0000${item.slotId ?? ''}\u0000${item.id}\u0000${item.path}';
 }
 
 class _PrivatePlayerTransformEditor extends StatefulWidget {

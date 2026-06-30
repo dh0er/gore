@@ -8,6 +8,7 @@
   "about": "About",
   "tabOverview": "Overview",
   "tabPlayer": "Player",
+  "tabAttribute": "Attributes",
   "tabInventory": "Inventory",
   "tabProgression": "Progression",
   "tabAllData": "All data",
@@ -150,6 +151,7 @@
     }
   },
   "inventoryTitle": "Inventory",
+  "inventoryEmpty": "This inventory is empty.",
   "inventoryNeedsDecoded": "Inventory editing needs decoded private payload data from the codec.",
   "inventoryNoStacks": "No item stacks found in the decoded private payload.",
   "resetInventoryChanges": "Reset inventory changes",
@@ -288,6 +290,22 @@
   "resetKnowledgeChanges": "Reset knowledge changes",
   "addNpc": "Add NPC",
   "searchNpcs": "Search NPCs",
+  "npcStatusRowLabel": "Status",
+  "npcStatusAlive": "alive",
+  "npcStatusDead": "dead",
+  "npcStateHp": "HP {hp} / {maxHp}",
+  "@npcStateHp": {
+    "placeholders": {
+      "hp": {
+        "type": "String"
+      },
+      "maxHp": {
+        "type": "String"
+      }
+    }
+  },
+  "npcReviveButton": "Revive",
+  "npcReviveQueued": "Will be revived on save",
   "entriesForCharacter": "Entries — {name}",
   "@entriesForCharacter": {
     "placeholders": {
@@ -362,6 +380,64 @@
   "duplicateMemoryEventTitle": "Duplicate memory event?",
   "duplicateMemoryEventBody": "Duplicate this memory event? A backup is written first.",
   "selectCharacterFromList": "Select a character from the list",
+  "factionsSidebar": "Factions",
+  "factionsForgiveButton": "Forgive",
+  "factionHostile": "Hostile",
+  "factionFriendly": "Friendly",
+  "crimeMurder": "{count, plural, =1{{count} murder} other{{count} murders}}",
+  "@crimeMurder": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "crimeAssault": "{count, plural, =1{{count} assault} other{{count} assaults}}",
+  "@crimeAssault": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "crimeTheft": "{count, plural, =1{{count} theft} other{{count} thefts}}",
+  "@crimeTheft": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "crimeTrespassing": "{count, plural, =1{{count} trespass} other{{count} trespasses}}",
+  "@crimeTrespassing": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "crimeThreat": "{count, plural, =1{{count} threat} other{{count} threats}}",
+  "@crimeThreat": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "crimeOther": "{count, plural, =1{{count} other crime} other{{count} other crimes}}",
+  "@crimeOther": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "factionsForgiveQueued": "being forgiven…",
+  "factionsEmpty": "No open crimes against factions.",
+  "factionGuildOldCamp": "Old Camp",
+  "factionGuildNewCamp": "New Camp",
+  "factionGuildSwampCamp": "Swamp Camp",
+  "factionGuildOther": "Others / individuals",
   "allDataLockedBody": "The full property browser needs decoded private payload data from the codec.",
   "allDataDescription": "Search every typed property by name or path. Scalars, strings, enums and object paths are editable; structs are shown read-only for now.",
   "searchPropertiesLabel": "Search properties (empty = list everything) — e.g. Health, GameTime",

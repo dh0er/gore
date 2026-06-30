@@ -109,7 +109,7 @@ void main() {
       isNull,
     );
 
-    await tester.tap(find.widgetWithText(Tab, 'Player'));
+    await tester.tap(find.widgetWithText(Tab, 'Attributes'));
     await tester.pumpAndSettle();
 
     // Player summary card and name editor fields are deleted.
@@ -394,7 +394,7 @@ void main() {
     expect(find.widgetWithText(FilledButton, 'Save (1)'), findsOneWidget);
 
     // Switch to Player tab.
-    await tester.tap(find.widgetWithText(Tab, 'Player'));
+    await tester.tap(find.widgetWithText(Tab, 'Attributes'));
     await tester.pumpAndSettle();
 
     // Save count must still be 1 (tab switch must not drop pending edits).

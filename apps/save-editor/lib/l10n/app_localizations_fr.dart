@@ -33,6 +33,9 @@ class AppLocalizationsFr extends AppLocalizations {
   String get tabPlayer => 'Joueur';
 
   @override
+  String get tabAttribute => 'Attributs';
+
+  @override
   String get tabInventory => 'Inventaire';
 
   @override
@@ -290,6 +293,9 @@ class AppLocalizationsFr extends AppLocalizations {
   String get inventoryTitle => 'Inventaire';
 
   @override
+  String get inventoryEmpty => 'Cet inventaire est vide.';
+
+  @override
   String get inventoryNeedsDecoded =>
       'La modification de l\'inventaire nécessite des données privées décodées par le codec.';
 
@@ -511,6 +517,26 @@ class AppLocalizationsFr extends AppLocalizations {
   String get searchNpcs => 'Rechercher des PNJ';
 
   @override
+  String get npcStatusRowLabel => 'État';
+
+  @override
+  String get npcStatusAlive => 'vivant';
+
+  @override
+  String get npcStatusDead => 'mort';
+
+  @override
+  String npcStateHp(String hp, String maxHp) {
+    return 'PV $hp / $maxHp';
+  }
+
+  @override
+  String get npcReviveButton => 'Ressusciter';
+
+  @override
+  String get npcReviveQueued => 'Sera ressuscité à la sauvegarde';
+
+  @override
   String entriesForCharacter(String name) {
     return 'Entrées — $name';
   }
@@ -605,6 +631,102 @@ class AppLocalizationsFr extends AppLocalizations {
   @override
   String get selectCharacterFromList =>
       'Sélectionnez un personnage dans la liste';
+
+  @override
+  String get factionsSidebar => 'Factions';
+
+  @override
+  String get factionsForgiveButton => 'Pardonner';
+
+  @override
+  String get factionHostile => 'Hostile';
+
+  @override
+  String get factionFriendly => 'Amical';
+
+  @override
+  String crimeMurder(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count meurtres',
+      one: '$count meurtre',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String crimeAssault(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count agressions',
+      one: '$count agression',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String crimeTheft(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count vols',
+      one: '$count vol',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String crimeTrespassing(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count intrusions',
+      one: '$count intrusion',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String crimeThreat(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count menaces',
+      one: '$count menace',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String crimeOther(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count autres crimes',
+      one: '$count autre crime',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get factionsForgiveQueued => 'pardon en cours…';
+
+  @override
+  String get factionsEmpty => 'Aucun crime non réglé contre les factions.';
+
+  @override
+  String get factionGuildOldCamp => 'Vieux Camp';
+
+  @override
+  String get factionGuildNewCamp => 'Nouveau Camp';
+
+  @override
+  String get factionGuildSwampCamp => 'Camp du Marais';
+
+  @override
+  String get factionGuildOther => 'Autres/individus';
 
   @override
   String get allDataLockedBody =>

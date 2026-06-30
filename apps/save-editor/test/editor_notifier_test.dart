@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:goresave/features/editor/domain/actor.dart';
 import 'package:goresave/features/editor/domain/core_service.dart';
 import 'package:goresave/features/editor/domain/editor_notifier.dart';
 import 'package:goresave/features/editor/domain/editor_settings_store.dart';
@@ -186,6 +187,43 @@ void main() {
     expect(notifier.pendingEditCount, 0);
   });
 
+  test('invalid NPC edit blocks Save while keeping the stored draft', () {
+    final core = _RecordingCoreService();
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+
+    // A valid pending NPC attribute edit is registered.
+    notifier.setPendingEdit(
+      'npc.attributes:Lizard-1',
+      const PendingSaveEdit(
+        edits: [
+          {
+            'path': 'private.typed.setValue',
+            'value': {'path': 'Strength', 'value': 50},
+          },
+        ],
+      ),
+    );
+    expect(notifier.state.hasInvalidNpcEdit, isFalse);
+
+    // The field goes invalid: Save is blocked, but the stored draft survives so
+    // switching actors does not silently lose it.
+    notifier.setNpcEditInvalid('npc.attributes:Lizard-1');
+    expect(notifier.state.hasInvalidNpcEdit, isTrue);
+    expect(
+      notifier.state.pendingEdits.containsKey('npc.attributes:Lizard-1'),
+      isTrue,
+    );
+
+    // Valid again → unblocked.
+    notifier.setNpcEditInvalid(null);
+    expect(notifier.state.hasInvalidNpcEdit, isFalse);
+
+    // Switching actor also abandons the invalid in-progress field → unblocked.
+    notifier.setNpcEditInvalid('npc.attributes:Lizard-1');
+    notifier.selectActor(const Actor.npc(id: 'Lizard-2', name: 'L2'));
+    expect(notifier.state.hasInvalidNpcEdit, isFalse);
+  });
+
   test(
     'saveAllPending issues ONE write_save with mixed edits in stable key order',
     () async {
@@ -324,6 +362,129 @@ void main() {
     expect(notifier.state.pendingEdits.containsKey('publicName'), isTrue);
   });
 
+  test(
+    'saveAllPending on partial commit clears only the committed snapshot keys',
+    () async {
+      // The save still exists in the post-save scan, so refresh keeps it
+      // selected and the uncommitted edit stays pending for retry.
+      final core = _FailSecondWriteCoreService(
+        scanData: {
+          'saves': [
+            {
+              'path': r'C:\tmp\saves\G1R-001.sav',
+              'slot': 'G1R-001',
+              'format': 'GSAV',
+              'fileSize': 914367,
+              'sha1': 'abc',
+              'status': 'ok',
+              'playerSaveName': 'Auto',
+            },
+          ],
+        },
+      );
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+      // Two splicing edits → two sequential writes. Keys sort so 'npc.revive:A'
+      // (first write, commits) precedes 'npc.revive:B' (second write, fails).
+      notifier.setPendingEdit(
+        'npc.revive:A',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.npc.revive',
+              'value': {'id': 'A'},
+            },
+          ],
+        ),
+      );
+      notifier.setPendingEdit(
+        'npc.revive:B',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.npc.revive',
+              'value': {'id': 'B'},
+            },
+          ],
+        ),
+      );
+
+      final scansBefore = core.refreshScans;
+      final ok = await notifier.saveAllPending();
+
+      expect(ok, isFalse);
+      expect(notifier.state.error, isNotNull);
+      // First write committed → its key is cleared; the failed second's key stays.
+      expect(notifier.state.pendingEdits.containsKey('npc.revive:A'), isFalse);
+      expect(notifier.state.pendingEdits.containsKey('npc.revive:B'), isTrue);
+      // The committed edit changed the file, so the panes must be refreshed from
+      // disk even though a later sub-write failed. refresh() begins with a
+      // scan_save_dir, so exactly one ADDITIONAL scan proves the partial-commit
+      // refresh ran (vs. the old early-return that left the UI stale).
+      expect(core.refreshScans, scansBefore + 1);
+    },
+  );
+
+  test(
+    'partial commit drops uncommitted edits when the slot changes on refresh',
+    () async {
+      // After the partial commit the original save VANISHES from the scan
+      // (only G1R-002 remains), so refresh auto-selects another slot. The
+      // uncommitted edit targeted G1R-001 and must NOT be re-registered — else
+      // the next Save would apply it to the wrong file.
+      final core = _FailSecondWriteCoreService(
+        scanData: {
+          'saves': [
+            {
+              'path': r'C:\tmp\saves\G1R-002.sav',
+              'slot': 'G1R-002',
+              'format': 'GSAV',
+              'fileSize': 914367,
+              'sha1': 'abc',
+              'status': 'ok',
+              'playerSaveName': 'Auto',
+            },
+          ],
+        },
+      );
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+      notifier.setPendingEdit(
+        'npc.revive:A',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.npc.revive',
+              'value': {'id': 'A'},
+            },
+          ],
+        ),
+      );
+      notifier.setPendingEdit(
+        'npc.revive:B',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.npc.revive',
+              'value': {'id': 'B'},
+            },
+          ],
+        ),
+      );
+
+      final ok = await notifier.saveAllPending();
+
+      expect(ok, isFalse);
+      // Slot switched to the only remaining save…
+      expect(notifier.state.selectedPath, r'C:\tmp\saves\G1R-002.sav');
+      // …so the uncommitted edit was dropped, NOT re-targeted at G1R-002.
+      expect(notifier.state.pendingEdits.containsKey('npc.revive:B'), isFalse);
+      expect(notifier.state.pendingEdits.containsKey('npc.revive:A'), isFalse);
+    },
+  );
+
   test('selection change clears pending edits', () async {
     final core = _RecordingCoreService();
     final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
@@ -409,7 +570,7 @@ void main() {
   );
 
   test(
-    'saveAllPending refuses a structural inventory edit batched with typed edits',
+    'saveAllPending splits a splicing edit and a typed edit into separate writes',
     () async {
       final core = _RecordingCoreService();
       final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
@@ -443,13 +604,423 @@ void main() {
 
       final ok = await notifier.saveAllPending();
 
-      expect(ok, isFalse);
-      expect(notifier.state.error, contains('saved on its own'));
-      expect(core.requests.where((r) => r.command == 'write_save'), isEmpty);
-      // Both pending entries survive so the user can save them separately.
-      expect(notifier.state.pendingEdits.length, 2);
+      expect(ok, isTrue);
+      // No "must be saved on its own" guard fires anymore — the split replaces it.
+      expect(notifier.state.error, isNull);
+      final writes = core.requests
+          .where((r) => r.command == 'write_save')
+          .toList();
+      // Two writes: the splicing removeItem on its own + the typed setValue batch.
+      expect(writes, hasLength(2));
+      // Each splicing edit is its own single-edit write.
+      final splicing = writes.firstWhere(
+        (w) => (w.payload['edits'] as List).any(
+          (e) => (e as Map)['path'] == 'private.inventory.removeItem',
+        ),
+      );
+      expect(splicing.payload['edits'], hasLength(1));
+      // The typed edit lands in its own (fixed) batch with no splicing peer.
+      final fixed = writes.firstWhere(
+        (w) => (w.payload['edits'] as List).any(
+          (e) => (e as Map)['path'] == 'private.typed.setValue',
+        ),
+      );
+      expect(
+        (fixed.payload['edits'] as List).every(
+          (e) => (e as Map)['path'] == 'private.typed.setValue',
+        ),
+        isTrue,
+      );
+      // All pending cleared after success.
+      expect(notifier.state.pendingEdits, isEmpty);
     },
   );
+
+  test(
+    'saveAllPending splits a mixed batch: revive alone, addItem alone, '
+    'setValue batched — with backup only on the first write',
+    () async {
+      final core = _RecordingCoreService();
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+      notifier.setPendingEdit(
+        'npc.revive:Lizard-1',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.npc.revive',
+              'value': {'id': 'Lizard-1'},
+            },
+          ],
+        ),
+      );
+      notifier.setPendingEdit(
+        'inventory',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.inventory.addItem',
+              'value': {
+                'path': '/Script/Angelscript.ItMi_Orenugget',
+                'count': 1,
+              },
+            },
+          ],
+        ),
+      );
+      notifier.setPendingEdit(
+        'attr:Health',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.player.setAttribute',
+              'value': {
+                'id': 'Health',
+                'baseValue': 77.0,
+                'currentValue': 66.0,
+              },
+            },
+          ],
+        ),
+      );
+
+      final ok = await notifier.saveAllPending();
+
+      expect(ok, isTrue);
+      expect(notifier.state.error, isNull);
+      final writes = core.requests
+          .where((r) => r.command == 'write_save')
+          .toList();
+      // revive alone + addItem alone + the fixed setValue batch = three writes.
+      expect(writes, hasLength(3));
+
+      bool writeHas(_RecordedRequest w, String path) =>
+          (w.payload['edits'] as List).any(
+            (e) => (e as Map)['path'] == path,
+          );
+
+      final reviveWrite = writes.firstWhere(
+        (w) => writeHas(w, 'private.npc.revive'),
+      );
+      expect(reviveWrite.payload['edits'], hasLength(1));
+      final addItemWrite = writes.firstWhere(
+        (w) => writeHas(w, 'private.inventory.addItem'),
+      );
+      expect(addItemWrite.payload['edits'], hasLength(1));
+      final fixedWrite = writes.firstWhere(
+        (w) => writeHas(w, 'private.player.setAttribute'),
+      );
+      expect(fixedWrite.payload['edits'], hasLength(1));
+
+      // Backup-once: exactly one write carries backup:true (the first), the
+      // rest backup:false — one pristine snapshot per Save.
+      final backupTrue = writes.where((w) => w.payload['backup'] == true);
+      expect(backupTrue, hasLength(1));
+      expect(writes.first.payload['backup'], isTrue);
+      for (final w in writes.skip(1)) {
+        expect(w.payload['backup'], isFalse);
+      }
+      expect(notifier.state.pendingEdits, isEmpty);
+    },
+  );
+
+  test(
+    'saveAllPending issues two writes for two distinct splicing edits',
+    () async {
+      final core = _RecordingCoreService();
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+      notifier.setPendingEdit(
+        'npc.revive:Lizard-1',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.npc.revive',
+              'value': {'id': 'Lizard-1'},
+            },
+          ],
+        ),
+      );
+      notifier.setPendingEdit(
+        'knowledge',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.knowledge.addCharacter',
+              'value': {'value': 'Diego'},
+            },
+          ],
+        ),
+      );
+
+      final ok = await notifier.saveAllPending();
+
+      expect(ok, isTrue);
+      final writes = core.requests
+          .where((r) => r.command == 'write_save')
+          .toList();
+      // Two separate single-edit writes — never batched together.
+      expect(writes, hasLength(2));
+      for (final w in writes) {
+        expect(w.payload['edits'], hasLength(1));
+      }
+      // Backup on the first write only.
+      expect(writes.first.payload['backup'], isTrue);
+      expect(writes.last.payload['backup'], isFalse);
+    },
+  );
+
+  test(
+    'saveAllPending puts syncPersistentDataList on the fixed-batch write only',
+    () async {
+      final core = _RecordingCoreService();
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+      notifier.setPendingEdit(
+        'publicName',
+        const PendingSaveEdit(
+          edits: [
+            {'path': 'public.m_PlayerSaveName', 'value': 'New Name'},
+          ],
+          syncPersistentDataList: true,
+        ),
+      );
+      notifier.setPendingEdit(
+        'npc.revive:Lizard-1',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.npc.revive',
+              'value': {'id': 'Lizard-1'},
+            },
+          ],
+        ),
+      );
+
+      await notifier.saveAllPending();
+
+      final writes = core.requests
+          .where((r) => r.command == 'write_save')
+          .toList();
+      expect(writes, hasLength(2));
+      // The fixed batch (public name) carries the sync flag; the splicing
+      // revive write must not.
+      final fixed = writes.firstWhere(
+        (w) => (w.payload['edits'] as List).any(
+          (e) => (e as Map)['path'] == 'public.m_PlayerSaveName',
+        ),
+      );
+      expect(fixed.payload['syncPersistentDataList'], isTrue);
+      final splicing = writes.firstWhere(
+        (w) => (w.payload['edits'] as List).any(
+          (e) => (e as Map)['path'] == 'private.npc.revive',
+        ),
+      );
+      expect(splicing.payload.containsKey('syncPersistentDataList'), isFalse);
+    },
+  );
+
+  // ---------------------------------------------------------------------------
+  // Bug #1: a fresh inspection must reset the selected actor to the player so a
+  // stale NPC GlobalId from the previous save can't drive the actor-aware tabs.
+  // ---------------------------------------------------------------------------
+  test('inspecting a new save resets the selected actor to the player', () async {
+    final core = _RecordingCoreService();
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+    // Select an NPC against the first save.
+    notifier.selectActor(const Actor.npc(id: 'Lizard-1', name: 'Lizard'));
+    expect(notifier.state.selectedActor.isPlayer, isFalse);
+
+    // Switch to a DIFFERENT save: the NPC id belongs to the old file, so the
+    // selection must fall back to the always-valid player.
+    await notifier.inspect(r'C:\tmp\saves\G1R-002.sav');
+
+    expect(notifier.state.selectedActor.isPlayer, isTrue);
+  });
+
+  // Codex follow-up: a SAME-save refresh (after a save/reset) must NOT reset the
+  // selection — the NPC id is still valid, so NPC editing shouldn't jump to Player.
+  test('same-save refresh preserves the selected NPC', () async {
+    final core = _RecordingCoreService();
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+    notifier.selectActor(const Actor.npc(id: 'Lizard-1', name: 'Lizard'));
+    expect(notifier.state.selectedActor.isPlayer, isFalse);
+
+    // Re-inspect the SAME save (what saveAllPending()/refresh() do).
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+    expect(notifier.state.selectedActor.isPlayer, isFalse);
+    expect(notifier.state.selectedActor.id, 'Lizard-1');
+  });
+
+  // ---------------------------------------------------------------------------
+  // Bug #2: a mixed [npc.revive + npc Health setValue for the SAME id] must run
+  // the fixed (Health) batch BEFORE the revive splice, so revive's HP wins.
+  // ---------------------------------------------------------------------------
+  test(
+    'saveAllPending runs the fixed batch before a conflicting revive splice',
+    () async {
+      final core = _RecordingCoreService();
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+      notifier.setPendingEdit(
+        'npc.revive:Lizard-1',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.npc.revive',
+              'value': {'id': 'Lizard-1'},
+            },
+          ],
+        ),
+      );
+      notifier.setPendingEdit(
+        'npc.attributes:Lizard-1',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.typed.setValue',
+              'value': {
+                'path': ['…', 'Lizard-1', 'Health', 'CurrentValue'],
+                'value': 42.0,
+              },
+            },
+          ],
+        ),
+      );
+
+      final ok = await notifier.saveAllPending();
+      expect(ok, isTrue);
+
+      final writes = core.requests
+          .where((r) => r.command == 'write_save')
+          .toList();
+      expect(writes, hasLength(2));
+      bool writeHas(_RecordedRequest w, String path) =>
+          (w.payload['edits'] as List).any((e) => (e as Map)['path'] == path);
+      final fixedIndex = writes.indexWhere(
+        (w) => writeHas(w, 'private.typed.setValue'),
+      );
+      final reviveIndex = writes.indexWhere(
+        (w) => writeHas(w, 'private.npc.revive'),
+      );
+      // The fixed Health batch is issued BEFORE the revive write, so revive's
+      // HP (the last write to the NPC's HP) is final on disk.
+      expect(fixedIndex, lessThan(reviveIndex));
+    },
+  );
+
+  // ---------------------------------------------------------------------------
+  // Bug #3: when a synced public edit and a splicing edit are both pending, the
+  // synced (syncPersistentDataList) write must be the backup-taking write, so
+  // the PersistentDataList.sav companion is updated WITH a restorable backup.
+  // ---------------------------------------------------------------------------
+  test(
+    'saveAllPending makes the syncPersistentDataList write the backup write',
+    () async {
+      final core = _RecordingCoreService();
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+      notifier.setPendingEdit(
+        'publicName',
+        const PendingSaveEdit(
+          edits: [
+            {'path': 'public.m_PlayerSaveName', 'value': 'New Name'},
+          ],
+          syncPersistentDataList: true,
+        ),
+      );
+      notifier.setPendingEdit(
+        'inventory',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.inventory.addItem',
+              'value': {
+                'path': '/Script/Angelscript.ItMi_Orenugget',
+                'count': 1,
+              },
+            },
+          ],
+        ),
+      );
+
+      await notifier.saveAllPending();
+
+      final writes = core.requests
+          .where((r) => r.command == 'write_save')
+          .toList();
+      expect(writes, hasLength(2));
+      final synced = writes.singleWhere(
+        (w) => w.payload['syncPersistentDataList'] == true,
+      );
+      // The synced write also carries backup:true (companion is backed up).
+      expect(synced.payload['backup'], isTrue);
+      // Backup-once still holds: exactly one write takes a backup.
+      expect(writes.where((w) => w.payload['backup'] == true), hasLength(1));
+    },
+  );
+
+  // ---------------------------------------------------------------------------
+  // Bug #4: loadAllNpcActors must PAGE through private.npc.list (core clamps the
+  // limit to 1000) so every NPC reaches the client cache, not just the first
+  // 1000.
+  // ---------------------------------------------------------------------------
+  test('loadAllNpcActors pages through the clamped NPC list', () async {
+    const total = 1484;
+    final core = _PagedNpcCoreService(total: total, pageSize: 1000);
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+    final page = await notifier.loadAllNpcActors();
+
+    expect(page.error, isNull);
+    expect(page.npcs, hasLength(total));
+    expect(page.total, total);
+    // Two list calls: first 1000, then the remaining 484.
+    final listCalls = core.requests
+        .where((r) => r.command == 'private.npc.list')
+        .toList();
+    expect(listCalls, hasLength(2));
+    expect(listCalls[0].payload['offset'], 0);
+    expect(listCalls[1].payload['offset'], 1000);
+  });
+
+  // Cursor (High): loadAllNpcActors must PIN the save path for the whole
+  // multi-page fetch so a mid-fetch save switch can't merge pages from two files.
+  test('loadAllNpcActors pins the save path across a mid-fetch save switch', () async {
+    final core = _MidFetchSwitchNpcCoreService(total: 1484, pageSize: 1000);
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+    // After the first page returns, switch to a different save mid-fetch.
+    // Fire-and-forget: the switch is queued behind the in-flight fetch; pinning
+    // must keep page 2 on the save the fetch started against regardless.
+    core.onFirstListPage = () {
+      // ignore: unawaited_futures
+      notifier.inspect(r'C:\tmp\saves\G1R-002.sav');
+    };
+
+    final page = await notifier.loadAllNpcActors();
+
+    expect(page.error, isNull);
+    expect(page.npcs, hasLength(1484));
+    final listCalls = core.requests
+        .where((r) => r.command == 'private.npc.list')
+        .toList();
+    expect(listCalls, hasLength(2));
+    // BOTH pages target the save the fetch STARTED against — never the new one.
+    expect(listCalls[0].payload['path'], r'C:\tmp\saves\G1R-001.sav');
+    expect(listCalls[1].payload['path'], r'C:\tmp\saves\G1R-001.sav');
+  });
 
   test('failed same-save re-inspect keeps pending edits retryable', () async {
     final core = _FailingSecondInspectCoreService();
@@ -1262,6 +1833,191 @@ void main() {
       expect(notifier.state.selectedProfileId, 1);
     },
   );
+
+  test('loadNpcAttributes sends id+path and parses typed rows', () async {
+    final core = _NpcAttributesCoreService(
+      scanData: {
+        'saves': [
+          {
+            'path': r'C:\tmp\saves\G1R-001.sav',
+            'slot': 'G1R-001',
+            'format': 'GSAV',
+            'fileSize': 100,
+            'sha1': 'a',
+            'status': 'ok',
+            'playerSaveName': 'Save A',
+          },
+        ],
+      },
+    );
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await pumpEventQueue();
+
+    final result = await notifier.loadNpcAttributes('Lizard-1');
+
+    expect(result.error, isNull);
+    expect(result.attributes, hasLength(1));
+    final row = result.attributes.single;
+    expect(row.key, 'Health');
+    expect(row.base, 25.6);
+    expect(row.current, 25.6);
+    expect(row.basePath.last, 'BaseValue');
+    expect(row.currentPath.last, 'CurrentValue');
+
+    final request = core.requests.lastWhere(
+      (r) => r.command == 'private.npc.attributes',
+    );
+    expect(request.payload['id'], 'Lizard-1');
+    expect(request.payload['path'], r'C:\tmp\saves\G1R-001.sav');
+  });
+
+  test('loadNpcAttributes surfaces a core error inline', () async {
+    final core = _RecordingCoreService(
+      scanData: {
+        'saves': [
+          {
+            'path': r'C:\tmp\saves\G1R-001.sav',
+            'slot': 'G1R-001',
+            'format': 'GSAV',
+            'fileSize': 100,
+            'sha1': 'a',
+            'status': 'ok',
+            'playerSaveName': 'Save A',
+          },
+        ],
+      },
+    );
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await pumpEventQueue();
+
+    // The base recording core has no handler for private.npc.attributes, so it
+    // returns the unhandled-command error — which must arrive as an inline
+    // error field, not a throw.
+    final result = await notifier.loadNpcAttributes('Lizard-1');
+
+    expect(result.attributes, isEmpty);
+    expect(result.error, isNotNull);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Factions (private.factions.list / .forgive)
+  // ---------------------------------------------------------------------------
+
+  test('loadFactions sends path and parses the guild list', () async {
+    final core = _RecordingCoreService(
+      factionsData: {
+        'guilds': [
+          {
+            'guild': 'Guild.Human.OldCamp',
+            'label': 'OldCamp',
+            'total': 3,
+            'forgiven': 1,
+            'unforgiven': 2,
+          },
+          {
+            'guild': 'Other',
+            'label': 'Other',
+            'total': 1,
+            'forgiven': 0,
+            'unforgiven': 1,
+          },
+        ],
+      },
+    );
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+    final page = await notifier.loadFactions();
+
+    expect(page.error, isNull);
+    expect(page.guilds, hasLength(2));
+    final oc = page.guilds.first;
+    expect(oc.guild, 'Guild.Human.OldCamp');
+    expect(oc.label, 'OldCamp');
+    expect(oc.total, 3);
+    expect(oc.forgiven, 1);
+    expect(oc.unforgiven, 2);
+
+    final call = core.requests.lastWhere(
+      (r) => r.command == 'private.factions.list',
+    );
+    expect(call.payload['path'], r'C:\tmp\saves\G1R-001.sav');
+  });
+
+  test('loadFactions surfaces a core error inline', () async {
+    // No factionsData → the recording core returns the unhandled-command error,
+    // which must arrive as an inline error field, not a throw.
+    final core = _RecordingCoreService();
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+    final page = await notifier.loadFactions();
+
+    expect(page.guilds, isEmpty);
+    expect(page.error, isNotNull);
+  });
+
+  test(
+    'setPendingFactionForgive registers a pending edit without an immediate write',
+    () async {
+      final core = _RecordingCoreService();
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+      final writesBefore = core.requests
+          .where((r) => r.command == 'write_save')
+          .length;
+
+      notifier.setPendingFactionForgive('Guild.Human.OldCamp');
+
+      // A draft was registered under the per-guild key — no write fired.
+      expect(
+        notifier.state.pendingEdits.containsKey(
+          'factions.forgive:Guild.Human.OldCamp',
+        ),
+        isTrue,
+      );
+      final edit = notifier
+          .state
+          .pendingEdits['factions.forgive:Guild.Human.OldCamp']!
+          .edits
+          .single;
+      expect(edit['path'], 'private.factions.forgive');
+      expect(edit['value'], {'guild': 'Guild.Human.OldCamp'});
+      final writesAfter = core.requests
+          .where((r) => r.command == 'write_save')
+          .length;
+      expect(writesAfter, writesBefore);
+    },
+  );
+
+  test(
+    'forgive rides the fixed-size batch (NOT a splicing write) on global save',
+    () async {
+      final core = _RecordingCoreService();
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+      notifier.setPendingFactionForgive('Guild.Human.OldCamp');
+      notifier.setPendingFactionForgive('Guild.Human.NewCamp');
+
+      final ok = await notifier.saveAllPending();
+
+      expect(ok, isTrue);
+      final writes = core.requests
+          .where((r) => r.command == 'write_save')
+          .toList();
+      // Both forgives are fixed-size → batched into ONE write_save.
+      expect(writes, hasLength(1));
+      final edits = writes.single.payload['edits'] as List;
+      expect(edits, hasLength(2));
+      expect(
+        edits.every((e) => (e as Map)['path'] == 'private.factions.forgive'),
+        isTrue,
+      );
+      expect(notifier.state.pendingEdits, isEmpty);
+    },
+  );
 }
 
 class _MemoryEditorSettingsStore implements EditorSettingsStore {
@@ -1293,6 +2049,7 @@ class _RecordingCoreService implements GoresaveCoreService {
     this.typedSearchData,
     this.typedSearchPages,
     this.progressionData,
+    this.factionsData,
   }) : scanData = scanData ?? {'saves': <Object?>[]};
 
   final Map<String, Object?> scanData;
@@ -1308,6 +2065,10 @@ class _RecordingCoreService implements GoresaveCoreService {
   /// Canned response data for query_progression. When null the command falls
   /// through to the default unhandled-command error response.
   final Map<String, Object?>? progressionData;
+
+  /// Canned response data for private.factions.list. When null the command
+  /// falls through to the default unhandled-command error response.
+  final Map<String, Object?>? factionsData;
 
   final requests = <_RecordedRequest>[];
 
@@ -1484,6 +2245,14 @@ class _RecordingCoreService implements GoresaveCoreService {
           'ok': false,
           'error': {'message': 'Unhandled command $command'},
         };
+      case 'private.factions.list':
+        if (factionsData != null) {
+          return {'ok': true, 'data': factionsData!};
+        }
+        return {
+          'ok': false,
+          'error': {'message': 'Unhandled command $command'},
+        };
       default:
         return {
           'ok': false,
@@ -1508,6 +2277,38 @@ class _FailingWriteCoreService extends _RecordingCoreService {
         'ok': false,
         'error': {'message': 'write failed'},
       };
+    }
+    return super.execute(command, payload: payload);
+  }
+}
+
+/// Succeeds the first write_save, fails the second. Used to prove that
+/// saveAllPending clears only the snapshot keys whose sub-write committed.
+class _FailSecondWriteCoreService extends _RecordingCoreService {
+  _FailSecondWriteCoreService({super.scanData});
+
+  var _writes = 0;
+  var refreshScans = 0;
+
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    if (command == 'scan_save_dir') {
+      refreshScans++;
+    }
+    if (command == 'write_save') {
+      _writes++;
+      if (_writes >= 2) {
+        requests.add(
+          _RecordedRequest(command, Map<String, Object?>.from(payload)),
+        );
+        return {
+          'ok': false,
+          'error': {'message': 'second write failed'},
+        };
+      }
     }
     return super.execute(command, payload: payload);
   }
@@ -1575,6 +2376,116 @@ class _FailingVerifyCoreService extends _RecordingCoreService {
           'message': 'codec roundtrip output did not match decoded chunk',
         },
       };
+    }
+    return super.execute(command, payload: payload);
+  }
+}
+
+/// Returns a canned `private.npc.attributes` response (one Health row with full
+/// typed Base/Current paths), mirroring the core contract.
+class _NpcAttributesCoreService extends _RecordingCoreService {
+  _NpcAttributesCoreService({super.scanData});
+
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    if (command == 'private.npc.attributes') {
+      requests.add(
+        _RecordedRequest(command, Map<String, Object?>.from(payload)),
+      );
+      const base = [
+        'm_GenericData',
+        '{CharacterStates}',
+        'AnyCharacterType',
+        'AttributeSetsByClass',
+        '{/Script/G1R.AttributeSet_Health}',
+        'Attributes',
+        '{Health}',
+      ];
+      return {
+        'ok': true,
+        'data': {
+          'attributes': [
+            {
+              'key': 'Health',
+              'base': 25.6,
+              'current': 25.6,
+              'basePath': [...base, 'BaseValue'],
+              'currentPath': [...base, 'CurrentValue'],
+            },
+          ],
+        },
+      };
+    }
+    return super.execute(command, payload: payload);
+  }
+}
+
+/// Serves `private.npc.list` as a PAGED endpoint that clamps `limit` to
+/// [pageSize] (mirroring the core's 1000-cap), so `loadAllNpcActors` must page
+/// to collect all [total] NPCs.
+class _PagedNpcCoreService extends _RecordingCoreService {
+  _PagedNpcCoreService({required this.total, required this.pageSize});
+
+  final int total;
+  final int pageSize;
+
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    if (command == 'private.npc.list') {
+      requests.add(
+        _RecordedRequest(command, Map<String, Object?>.from(payload)),
+      );
+      final offset = (payload['offset'] as num?)?.toInt() ?? 0;
+      final requested = (payload['limit'] as num?)?.toInt() ?? 100;
+      // Mimic the core's clamp(1, 1000) on the page size.
+      final limit = requested.clamp(1, pageSize);
+      final start = offset.clamp(0, total);
+      final end = (start + limit).clamp(0, total);
+      final npcs = [
+        for (var i = start; i < end; i++)
+          {'id': 'Npc-$i', 'isDead': false},
+      ];
+      return {
+        'ok': true,
+        'data': {
+          'npcs': npcs,
+          'total': total,
+          'offset': offset,
+          'limit': limit,
+        },
+      };
+    }
+    return super.execute(command, payload: payload);
+  }
+}
+
+/// Like [_PagedNpcCoreService] but runs [onFirstListPage] right after the FIRST
+/// `private.npc.list` page is built (and recorded), letting a test switch saves
+/// mid-fetch to prove the paging loop pins its starting path.
+class _MidFetchSwitchNpcCoreService extends _PagedNpcCoreService {
+  _MidFetchSwitchNpcCoreService({required super.total, required super.pageSize});
+
+  void Function()? onFirstListPage;
+  bool _fired = false;
+
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    if (command == 'private.npc.list' && !_fired) {
+      _fired = true;
+      final result = await super.execute(command, payload: payload);
+      // Fire (do NOT await — awaiting a re-entrant core call here would
+      // deadlock on the notifier's serialized core queue).
+      onFirstListPage?.call();
+      return result;
     }
     return super.execute(command, payload: payload);
   }

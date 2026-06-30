@@ -76,6 +76,7 @@ Widget _wrap(Widget child) => MaterialApp(
 HeroStatsCard _card({
   required Future<HeroAttributesResult> Function() load,
   void Function(List<TypedValueEdit>, String?)? onPendingChanged,
+  List<TypedValueEdit> Function()? initialPending,
   bool editable = true,
   Object reloadKey = 'save-1',
   Widget? fallback,
@@ -84,6 +85,7 @@ HeroStatsCard _card({
   return HeroStatsCard(
     load: load,
     onPendingChanged: onPendingChanged ?? (_, _) {},
+    initialPending: initialPending,
     editable: editable,
     reloadKey: reloadKey,
     fallback: fallback,
@@ -124,6 +126,29 @@ void main() {
     expect(find.text('Hero stats'), findsNothing);
     // No per-card save button.
     expect(find.byTooltip('Save hero stats'), findsNothing);
+  });
+
+  testWidgets('rehydrates queued player drafts from initialPending',
+      (tester) async {
+    // Codex: returning to the Player after editing an NPC must resume from the
+    // queued 'heroStats' drafts, not show the on-disk value.
+    final attr = _attribute('MaxHealth', '/Script/G1R.AttributeSet_Health', 64);
+    await tester.pumpWidget(
+      _wrap(
+        _card(
+          load: () async => HeroAttributesResult(attributes: [attr]),
+          initialPending: () => [TypedValueEdit(path: attr.basePath!, value: 99)],
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final field = find.widgetWithText(TextField, 'MaxHealth base');
+    final editable = tester.widget<EditableText>(
+      find.descendant(of: field, matching: find.byType(EditableText)),
+    );
+    // Shows the queued draft (99), not the on-disk base (64).
+    expect(editable.controller.text, '99');
   });
 
   testWidgets('selecting a group shows its rows and hides others',

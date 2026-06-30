@@ -164,6 +164,12 @@ abstract class AppLocalizations {
   /// **'Player'**
   String get tabPlayer;
 
+  /// No description provided for @tabAttribute.
+  ///
+  /// In en, this message translates to:
+  /// **'Attributes'**
+  String get tabAttribute;
+
   /// No description provided for @tabInventory.
   ///
   /// In en, this message translates to:
@@ -620,6 +626,12 @@ abstract class AppLocalizations {
   /// **'Inventory'**
   String get inventoryTitle;
 
+  /// No description provided for @inventoryEmpty.
+  ///
+  /// In en, this message translates to:
+  /// **'This inventory is empty.'**
+  String get inventoryEmpty;
+
   /// No description provided for @inventoryNeedsDecoded.
   ///
   /// In en, this message translates to:
@@ -1004,6 +1016,42 @@ abstract class AppLocalizations {
   /// **'Search NPCs'**
   String get searchNpcs;
 
+  /// No description provided for @npcStatusRowLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Status'**
+  String get npcStatusRowLabel;
+
+  /// No description provided for @npcStatusAlive.
+  ///
+  /// In en, this message translates to:
+  /// **'alive'**
+  String get npcStatusAlive;
+
+  /// No description provided for @npcStatusDead.
+  ///
+  /// In en, this message translates to:
+  /// **'dead'**
+  String get npcStatusDead;
+
+  /// No description provided for @npcStateHp.
+  ///
+  /// In en, this message translates to:
+  /// **'HP {hp} / {maxHp}'**
+  String npcStateHp(String hp, String maxHp);
+
+  /// No description provided for @npcReviveButton.
+  ///
+  /// In en, this message translates to:
+  /// **'Revive'**
+  String get npcReviveButton;
+
+  /// No description provided for @npcReviveQueued.
+  ///
+  /// In en, this message translates to:
+  /// **'Will be revived on save'**
+  String get npcReviveQueued;
+
   /// No description provided for @entriesForCharacter.
   ///
   /// In en, this message translates to:
@@ -1159,6 +1207,102 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Select a character from the list'**
   String get selectCharacterFromList;
+
+  /// No description provided for @factionsSidebar.
+  ///
+  /// In en, this message translates to:
+  /// **'Factions'**
+  String get factionsSidebar;
+
+  /// No description provided for @factionsForgiveButton.
+  ///
+  /// In en, this message translates to:
+  /// **'Forgive'**
+  String get factionsForgiveButton;
+
+  /// No description provided for @factionHostile.
+  ///
+  /// In en, this message translates to:
+  /// **'Hostile'**
+  String get factionHostile;
+
+  /// No description provided for @factionFriendly.
+  ///
+  /// In en, this message translates to:
+  /// **'Friendly'**
+  String get factionFriendly;
+
+  /// No description provided for @crimeMurder.
+  ///
+  /// In en, this message translates to:
+  /// **'{count, plural, =1{{count} murder} other{{count} murders}}'**
+  String crimeMurder(int count);
+
+  /// No description provided for @crimeAssault.
+  ///
+  /// In en, this message translates to:
+  /// **'{count, plural, =1{{count} assault} other{{count} assaults}}'**
+  String crimeAssault(int count);
+
+  /// No description provided for @crimeTheft.
+  ///
+  /// In en, this message translates to:
+  /// **'{count, plural, =1{{count} theft} other{{count} thefts}}'**
+  String crimeTheft(int count);
+
+  /// No description provided for @crimeTrespassing.
+  ///
+  /// In en, this message translates to:
+  /// **'{count, plural, =1{{count} trespass} other{{count} trespasses}}'**
+  String crimeTrespassing(int count);
+
+  /// No description provided for @crimeThreat.
+  ///
+  /// In en, this message translates to:
+  /// **'{count, plural, =1{{count} threat} other{{count} threats}}'**
+  String crimeThreat(int count);
+
+  /// No description provided for @crimeOther.
+  ///
+  /// In en, this message translates to:
+  /// **'{count, plural, =1{{count} other crime} other{{count} other crimes}}'**
+  String crimeOther(int count);
+
+  /// No description provided for @factionsForgiveQueued.
+  ///
+  /// In en, this message translates to:
+  /// **'being forgiven…'**
+  String get factionsForgiveQueued;
+
+  /// No description provided for @factionsEmpty.
+  ///
+  /// In en, this message translates to:
+  /// **'No open crimes against factions.'**
+  String get factionsEmpty;
+
+  /// No description provided for @factionGuildOldCamp.
+  ///
+  /// In en, this message translates to:
+  /// **'Old Camp'**
+  String get factionGuildOldCamp;
+
+  /// No description provided for @factionGuildNewCamp.
+  ///
+  /// In en, this message translates to:
+  /// **'New Camp'**
+  String get factionGuildNewCamp;
+
+  /// No description provided for @factionGuildSwampCamp.
+  ///
+  /// In en, this message translates to:
+  /// **'Swamp Camp'**
+  String get factionGuildSwampCamp;
+
+  /// No description provided for @factionGuildOther.
+  ///
+  /// In en, this message translates to:
+  /// **'Others / individuals'**
+  String get factionGuildOther;
 
   /// No description provided for @allDataLockedBody.
   ///

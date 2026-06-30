@@ -33,6 +33,9 @@ class AppLocalizationsZh extends AppLocalizations {
   String get tabPlayer => '玩家';
 
   @override
+  String get tabAttribute => '属性';
+
+  @override
   String get tabInventory => '物品栏';
 
   @override
@@ -286,6 +289,9 @@ class AppLocalizationsZh extends AppLocalizations {
   String get inventoryTitle => '物品栏';
 
   @override
+  String get inventoryEmpty => '此物品栏为空。';
+
+  @override
   String get inventoryNeedsDecoded => '编辑物品栏需要来自编解码器的已解码私有负载数据。';
 
   @override
@@ -494,6 +500,26 @@ class AppLocalizationsZh extends AppLocalizations {
   String get searchNpcs => '搜索 NPC';
 
   @override
+  String get npcStatusRowLabel => '状态';
+
+  @override
+  String get npcStatusAlive => '存活';
+
+  @override
+  String get npcStatusDead => '已死亡';
+
+  @override
+  String npcStateHp(String hp, String maxHp) {
+    return 'HP $hp / $maxHp';
+  }
+
+  @override
+  String get npcReviveButton => '复活';
+
+  @override
+  String get npcReviveQueued => '将在保存时复活';
+
+  @override
   String entriesForCharacter(String name) {
     return '条目 — $name';
   }
@@ -582,6 +608,96 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get selectCharacterFromList => '从列表中选择一个角色';
+
+  @override
+  String get factionsSidebar => '阵营';
+
+  @override
+  String get factionsForgiveButton => '宽恕';
+
+  @override
+  String get factionHostile => '敌对';
+
+  @override
+  String get factionFriendly => '友好';
+
+  @override
+  String crimeMurder(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count 起谋杀',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String crimeAssault(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count 起袭击',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String crimeTheft(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count 起盗窃',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String crimeTrespassing(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count 起擅闯',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String crimeThreat(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count 起威胁',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String crimeOther(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count 起其他罪行',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get factionsForgiveQueued => '宽恕中…';
+
+  @override
+  String get factionsEmpty => '没有针对阵营的未了罪行。';
+
+  @override
+  String get factionGuildOldCamp => '旧营';
+
+  @override
+  String get factionGuildNewCamp => '新营';
+
+  @override
+  String get factionGuildSwampCamp => '沼泽营';
+
+  @override
+  String get factionGuildOther => '其他/个人';
 
   @override
   String get allDataLockedBody => '完整的属性浏览器需要来自编解码器的已解码私有负载数据。';
@@ -1010,6 +1126,9 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   String get tabPlayer => '玩家';
 
   @override
+  String get tabAttribute => '属性';
+
+  @override
   String get tabInventory => '物品栏';
 
   @override
@@ -1239,6 +1358,9 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   String get inventoryTitle => '物品栏';
 
   @override
+  String get inventoryEmpty => '此物品栏为空。';
+
+  @override
   String get inventoryNeedsDecoded => '编辑物品栏需要来自编解码器的已解码私有负载数据。';
 
   @override
@@ -1447,6 +1569,26 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   String get searchNpcs => '搜索 NPC';
 
   @override
+  String get npcStatusRowLabel => '状态';
+
+  @override
+  String get npcStatusAlive => '存活';
+
+  @override
+  String get npcStatusDead => '已死亡';
+
+  @override
+  String npcStateHp(String hp, String maxHp) {
+    return 'HP $hp / $maxHp';
+  }
+
+  @override
+  String get npcReviveButton => '复活';
+
+  @override
+  String get npcReviveQueued => '将在保存时复活';
+
+  @override
   String entriesForCharacter(String name) {
     return '条目 — $name';
   }
@@ -1535,6 +1677,96 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get selectCharacterFromList => '从列表中选择一个角色';
+
+  @override
+  String get factionsSidebar => '阵营';
+
+  @override
+  String get factionsForgiveButton => '宽恕';
+
+  @override
+  String get factionHostile => '敌对';
+
+  @override
+  String get factionFriendly => '友好';
+
+  @override
+  String crimeMurder(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count 起谋杀',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String crimeAssault(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count 起袭击',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String crimeTheft(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count 起盗窃',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String crimeTrespassing(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count 起擅闯',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String crimeThreat(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count 起威胁',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String crimeOther(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count 起其他罪行',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get factionsForgiveQueued => '宽恕中…';
+
+  @override
+  String get factionsEmpty => '没有针对阵营的未了罪行。';
+
+  @override
+  String get factionGuildOldCamp => '旧营';
+
+  @override
+  String get factionGuildNewCamp => '新营';
+
+  @override
+  String get factionGuildSwampCamp => '沼泽营';
+
+  @override
+  String get factionGuildOther => '其他/个人';
 
   @override
   String get allDataLockedBody => '完整的属性浏览器需要来自编解码器的已解码私有负载数据。';

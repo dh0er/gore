@@ -93,6 +93,12 @@ String heroAttributeLabel(String id) {
   return id;
 }
 
+/// Stable ordering rank for an attribute id within its group, then across
+/// groups. Shared by the player's [parseHeroAttributes] sort and the NPC
+/// attribute panel so NPC rows order identically to the player's within a
+/// group (and unlisted/advanced ids fall to the end). Exposes [_groupRank].
+int heroAttributeRank(String id) => _groupRank(id);
+
 int _groupRank(String id) {
   final group = heroAttributeGroup(id);
   final order = switch (group) {
