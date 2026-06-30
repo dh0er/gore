@@ -9,10 +9,10 @@ import '../../textures/domain/texture_replacements_notifier.dart';
 import '../domain/override_entry.dart';
 import '../domain/overrides_notifier.dart';
 
-/// Unified "Changes" panel: lists every staged mod change across the four
+/// Unified "Changes" panel: lists every staged mod change across all
 /// domains (item value overrides, localized text edits, audio replacements,
-/// texture replacements), each row individually removable, with a single
-/// clear-all action.
+/// texture replacements, AngelScript modules), each row individually removable,
+/// with a single clear-all action.
 class OverridesPanel extends ConsumerWidget {
   const OverridesPanel({super.key});
 

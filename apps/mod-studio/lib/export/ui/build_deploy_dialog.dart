@@ -15,9 +15,10 @@ import '../../project/project_controller.dart';
 import '../../scripts/domain/script_mods_notifier.dart';
 import '../../textures/domain/texture_replacements_notifier.dart';
 
-/// Build the unified mod bundle (overrides + loc + audio) and optionally deploy it to the
-/// game install. Mirrors the loc/audio delivery model: loc + audio are applied to the user's
-/// own pristine game files at deploy with `*.gore-bak` backups.
+/// Build the unified mod bundle (overrides + loc + audio + textures + AngelScript) and
+/// optionally deploy it to the game install. Mirrors the loc/audio delivery model: loc, audio,
+/// and the AngelScript cache are applied to the user's own pristine game files at deploy with
+/// `*.gore-bak` backups; textures deploy as an additive `~mods` Zen triplet.
 class BuildDeployDialog extends ConsumerStatefulWidget {
   const BuildDeployDialog({super.key});
 
