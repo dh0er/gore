@@ -430,6 +430,7 @@ fn record_path(root: &Path) -> PathBuf {
 
 /// A fully-prepared deployment: everything to write, computed in memory so the failure-prone
 /// work happens BEFORE the game is touched.
+#[derive(Debug)]
 struct DeployPlan {
     ue4ss: Option<(PathBuf, PathBuf)>, // (source dir in bundle, dest under ue4ss/Mods)
     writes: Vec<(PathBuf, Vec<u8>)>,   // (live game file, new contents)
@@ -891,12 +892,43 @@ fn prepare(
                     plan.texture_triplets.push((src, dst));
                 }
             }
-            // NOTE: real splice/replace logic is added in Task 2. This placeholder only keeps the
-            // match exhaustive so the crate compiles after Task 1's `Component` variant is added.
-            Component::AngelScriptPatch { .. } => {
-                return Err(ModError::Other(
-                    "AngelScript deploy not yet implemented (see Task 2)".into(),
-                ));
+            Component::AngelScriptPatch { path } => {
+                if !is_safe_rel_path(path) {
+                    return Err(ModError::Other(format!("unsafe script patch path: {path:?}")));
+                }
+                let entries: Vec<ScriptEntry> = serde_json::from_slice(
+                    &std::fs::read(bundle_dir.join(path).join("manifest.json"))
+                        .map_err(io("reading script manifest"))?,
+                )?;
+                let cache_path = gp.script_cache.clone();
+                if !cache_path.exists() {
+                    return Err(ModError::Other(format!(
+                        "script cache not found: {} — is the game path correct?",
+                        cache_path.display()
+                    )));
+                }
+                let (pristine, drifted) = read_pristine(&cache_path, prev)?;
+                if drifted {
+                    plan.refresh_baks.push(cache_path.clone());
+                }
+                let mut running = pristine;
+                for e in &entries {
+                    if !is_safe_rel_path(&e.mini) {
+                        return Err(ModError::Other(format!("unsafe mini path: {:?}", e.mini)));
+                    }
+                    let mini = std::fs::read(bundle_dir.join(&e.mini))
+                        .map_err(io("reading mini-cache"))?;
+                    running = match e.op.as_str() {
+                        "add" => gore_as::cache::splice::splice_auto(&running, &mini)
+                            .map_err(|err| ModError::Other(format!("splice {}: {err}", e.module)))?,
+                        "edit" => gore_as::cache::splice::replace_module(&running, &mini, &e.module)
+                            .map_err(|err| ModError::Other(format!("replace {}: {err}", e.module)))?,
+                        other => return Err(ModError::Other(format!(
+                            "invalid script op {other:?} for module {:?}", e.module
+                        ))),
+                    };
+                }
+                plan.writes.push((cache_path, running));
             }
         }
     }
@@ -1510,6 +1542,81 @@ mod tests {
         assert_eq!(m[0].op, "add");
         assert_eq!(m[0].module, "MyMod");
         assert_eq!(m[0].mini, "scripts/0_MyMod.cache");
+    }
+
+    /// prepare() must reject a manifest whose op is neither add nor edit, naming the module.
+    #[test]
+    fn prepare_rejects_bad_script_op() {
+        let dir = std::env::temp_dir().join("gore-mod-as-prep-badop");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("scripts")).unwrap();
+        std::fs::write(dir.join("scripts/0_M.cache"), b"x").unwrap();
+        let entries = vec![ScriptEntry { op: "nope".into(), module: "M".into(), mini: "scripts/0_M.cache".into() }];
+        std::fs::write(dir.join("scripts/manifest.json"), serde_json::to_vec(&entries).unwrap()).unwrap();
+        let manifest = ModManifest {
+            format: 1,
+            mod_meta: ModMeta { name: "M".into(), version: String::new(), author: String::new() },
+            components: vec![Component::AngelScriptPatch { path: "scripts".into() }],
+        };
+        // A game dir whose script cache file exists (content irrelevant — op is rejected first).
+        let game = dir.join("game");
+        let script_dir = game.join("G1R/Script");
+        std::fs::create_dir_all(&script_dir).unwrap();
+        std::fs::write(script_dir.join("PrecompiledScript_Shipping.Cache"), b"base").unwrap();
+        let gp = resolve_game_paths(&game);
+        let err = prepare(&dir, &manifest, &gp, None).unwrap_err();
+        assert!(err.to_string().contains("invalid script op"), "got: {err}");
+    }
+
+    /// prepare() must error clearly when the game has no script cache.
+    #[test]
+    fn prepare_errors_when_no_script_cache() {
+        let dir = std::env::temp_dir().join("gore-mod-as-prep-nocache");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("scripts")).unwrap();
+        std::fs::write(dir.join("scripts/0_M.cache"), b"x").unwrap();
+        let entries = vec![ScriptEntry { op: "add".into(), module: "M".into(), mini: "scripts/0_M.cache".into() }];
+        std::fs::write(dir.join("scripts/manifest.json"), serde_json::to_vec(&entries).unwrap()).unwrap();
+        let manifest = ModManifest {
+            format: 1,
+            mod_meta: ModMeta { name: "M".into(), version: String::new(), author: String::new() },
+            components: vec![Component::AngelScriptPatch { path: "scripts".into() }],
+        };
+        let gp = resolve_game_paths(&dir.join("empty-game"));
+        let err = prepare(&dir, &manifest, &gp, None).unwrap_err();
+        assert!(err.to_string().contains("script cache not found"), "got: {err}");
+    }
+
+    /// Full splice against a real game install. Run with:
+    ///   GORE_TEST_GAME="C:/.../Gothic 1 Remake"  cargo test -p gore-mod -- --ignored real_script_deploy
+    #[test]
+    #[ignore]
+    fn real_script_deploy_add_roundtrips() {
+        use gore_as::cache::walk_modules::module_count;
+        let Ok(game) = std::env::var("GORE_TEST_GAME") else { return; };
+        let game = std::path::PathBuf::from(game);
+        let gp = resolve_game_paths(&game);
+        assert!(gp.script_cache.exists(), "no script cache at {}", gp.script_cache.display());
+        // A mini-cache produced by `gore as extract`/`script_compile` (Task 11). Provide its path:
+        let Ok(mini) = std::env::var("GORE_TEST_MINI") else {
+            eprintln!("set GORE_TEST_MINI to a 1-module mini-cache to run the splice");
+            return;
+        };
+        let dir = std::env::temp_dir().join("gore-mod-as-real");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let spec = BuildSpec {
+            meta: ModMeta { name: "RealAsMod".into(), version: String::new(), author: String::new() },
+            delay_ms: 0, overrides: vec![], loc_edits: Default::default(), audio: vec![], texture: vec![],
+            scripts: vec![ScriptModule { op: "add".into(), module_name: "ignored_for_add".into(), mini_cache: mini }],
+        };
+        let bundle = build_bundle(&spec).unwrap();
+        write_bundle(&dir, &bundle).unwrap();
+        let manifest = bundle.manifest;
+        let before = module_count(&std::fs::read(&gp.script_cache).unwrap());
+        let plan = prepare(&dir, &manifest, &gp, None).unwrap();
+        let (_, spliced) = plan.writes.last().unwrap();
+        assert_eq!(module_count(spliced), before + 1, "splice should add exactly one module");
     }
 
     #[test]
