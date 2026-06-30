@@ -110,13 +110,48 @@ class _StagedList extends ConsumerWidget {
       XTypeGroup(label: 'AngelScript', extensions: ['as']),
     ]);
     if (file == null) return;
-    // Derive module name + rel path from the filename; the game confirms the real module name
-    // when the mod is compiled (Task 11 result updates moduleName if needed).
     final base = p.basename(file.path);
-    final name = p.basenameWithoutExtension(file.path);
-    final mod = ScriptMod(op: ScriptOp.add, moduleName: name, relPath: base, asPath: file.path);
+    if (!context.mounted) return;
+    // A module may need to live in a subdirectory (e.g. AI/Foo.as). Ask for the game-relative
+    // path so it isn't flattened to the tree root; default to the picked file's basename.
+    final entered = await _promptRelPath(context, base);
+    if (entered == null) return; // cancelled: abort the add
+    // Normalize backslashes and strip a leading slash; fall back to the basename if empty.
+    var relPath = entered.replaceAll('\\', '/').replaceAll(RegExp(r'^/+'), '').trim();
+    if (relPath.isEmpty) relPath = base;
+    // The module name is the final segment's basename-without-extension.
+    final name = p.basenameWithoutExtension(p.basename(relPath));
+    // The game confirms the real module name when the mod is compiled (it may resolve a different
+    // name and re-key the staged mod).
+    final mod = ScriptMod(op: ScriptOp.add, moduleName: name, relPath: relPath, asPath: file.path);
     ref.read(scriptModsProvider.notifier).setMod(mod);
     ref.read(_selectedModuleProvider.notifier).state = mod.key;
+  }
+
+  Future<String?> _promptRelPath(BuildContext context, String base) {
+    final controller = TextEditingController(text: base);
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Module path'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(
+            hintText: 'Game-relative path, e.g. AI/Foo.as',
+            isDense: true,
+          ),
+          onSubmitted: (v) => Navigator.pop(ctx, v),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, controller.text),
+            child: const Text('Add'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _editExisting(BuildContext context, WidgetRef ref) async {
@@ -295,11 +330,17 @@ class _ModDetailState extends ConsumerState<_ModDetail> {
       );
       final mini = r['mini_path'] as String;
       final resolvedName = (r['module'] as String?) ?? widget.mod.moduleName;
+      // The user may have removed this mod (or cleared the list) while the game was compiling.
+      // Don't resurrect a deleted mod with the late result — discard it instead.
+      final notifier = ref.read(scriptModsProvider.notifier);
+      if (!ref.read(scriptModsProvider).items.containsKey(widget.mod.key)) {
+        if (mounted) setState(() { _status = 'Compiled, but the mod was removed — discarded.'; });
+        return;
+      }
       // The compile may resolve the real module name (esp. for "add"); update + re-key.
       final updated = ScriptMod(
         op: widget.mod.op, moduleName: resolvedName, relPath: widget.mod.relPath,
         asPath: widget.mod.asPath, miniPath: mini);
-      final notifier = ref.read(scriptModsProvider.notifier);
       if (resolvedName != widget.mod.moduleName) notifier.remove(widget.mod.key);
       notifier.setMod(updated);
       ref.read(_selectedModuleProvider.notifier).state = updated.key;

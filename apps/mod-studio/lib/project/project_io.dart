@@ -151,6 +151,14 @@ Future<ModProject> loadProject(String path) async {
       return out;
     }
 
+    // The relPath becomes the in-game ScriptRelativeFilename at deploy, so treat it as untrusted
+    // too (defense-in-depth, matching the asPath stance and the gore-as compile-side guard): drop
+    // the mod if it's empty, absolute, or escapes via a '..' segment.
+    final relSegs = s.relPath.split(RegExp(r'[\\/]'));
+    if (s.relPath.isEmpty || p.isAbsolute(s.relPath) || relSegs.contains('..')) {
+      continue; // unsafe relPath: drop the mod
+    }
+
     final asOut = extract(s.asPath);
     if (asOut == null) continue; // unsafe/missing source: drop the mod
     var rebuilt = s.withAsPath(asOut);
