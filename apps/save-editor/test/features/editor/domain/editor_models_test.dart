@@ -335,6 +335,24 @@ void main() {
     expect(plain.equipped, isFalse);
   });
 
+  test('PrivateInventoryItem parses armor upgrades', () {
+    final item = PrivateInventoryItem.fromJson({
+      'id': 'Org_Armor',
+      'path': '/Script/Angelscript.Org_Armor',
+      'count': 1,
+      'equipped': true,
+      'upgrades': [
+        {'key': 'm_CurrentUpperBodyUpgrade', 'value': 'm_UpperBody_Heavy02_ArmorUpgrade'},
+      ],
+    });
+    expect(item.upgrades.length, 1);
+    expect(item.upgrades.first.key, 'm_CurrentUpperBodyUpgrade');
+    expect(item.upgrades.first.value, 'm_UpperBody_Heavy02_ArmorUpgrade');
+
+    final plain = PrivateInventoryItem.fromJson({'id': 'X', 'path': 'p'});
+    expect(plain.upgrades, isEmpty);
+  });
+
   test('SaveInspection reads structured progression overview', () {
     final inspection = SaveInspection.fromJson({
       'format': 'GSAV',

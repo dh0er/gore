@@ -671,6 +671,12 @@ class PrivateInventorySummary {
       properties.isNotEmpty;
 }
 
+class ArmorUpgrade {
+  const ArmorUpgrade({required this.key, required this.value});
+  final String key;
+  final String value;
+}
+
 class PrivateInventoryItem {
   const PrivateInventoryItem({
     required this.id,
@@ -678,6 +684,7 @@ class PrivateInventoryItem {
     this.count,
     this.removable = false,
     this.equipped = false,
+    this.upgrades = const [],
   });
 
   factory PrivateInventoryItem.fromJson(Map<Object?, Object?> json) {
@@ -687,6 +694,14 @@ class PrivateInventoryItem {
       count: (json['count'] as num?)?.toInt(),
       removable: json['removable'] as bool? ?? false,
       equipped: json['equipped'] as bool? ?? false,
+      upgrades: (json['upgrades'] as List?)
+              ?.whereType<Map<Object?, Object?>>()
+              .map((u) => ArmorUpgrade(
+                    key: u['key'] as String? ?? '',
+                    value: u['value'] as String? ?? '',
+                  ))
+              .toList() ??
+          const [],
     );
   }
 
@@ -699,6 +714,10 @@ class PrivateInventoryItem {
 
   /// True for the worn armor (the item in the player's ArmorSlot container).
   final bool equipped;
+
+  /// Armor upgrade slots (part/tier pairs), populated only on the equipped
+  /// armor row; empty for all other items.
+  final List<ArmorUpgrade> upgrades;
 }
 
 class InventoryItemCountChange {
