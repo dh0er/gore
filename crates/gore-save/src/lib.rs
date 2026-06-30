@@ -5745,10 +5745,13 @@ fn armor_slot_summary(root: &properties::RootObject) -> Option<ArmorSlotSummary>
         if let Some(path) = slot_item_definition(slot) {
             if !path.is_empty() {
                 equipped_paths.insert(path.to_string());
+                // Read upgrades from the slot that actually holds the worn armor
+                // item, not merely the first slot whose generic data yields
+                // pairs — an empty template slot must not supply upgrade data.
+                if upgrades.is_empty() {
+                    upgrades = slot_upgrade_pairs(slot);
+                }
             }
-        }
-        if upgrades.is_empty() {
-            upgrades = slot_upgrade_pairs(slot);
         }
     }
     Some(ArmorSlotSummary { equipped_paths, upgrades })
