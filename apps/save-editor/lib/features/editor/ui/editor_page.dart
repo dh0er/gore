@@ -1716,7 +1716,15 @@ class _PrivateInventorySummaryCardState
     final result = await showDialog<InventoryItemAdd>(
       context: context,
       builder: (_) => AddInventoryItemDialog(
-        excludePaths: widget.inventory.mainContainerPaths.toSet(),
+        // Exclude both MainContainer paths (addItem rejects duplicates there)
+        // and the currently-equipped armor: adding a second copy of the worn
+        // armor would duplicate its definition path and make the equipped
+        // badge/upgrades ambiguous, so it must not be offered.
+        excludePaths: {
+          ...widget.inventory.mainContainerPaths,
+          for (final item in widget.inventory.items)
+            if (item.equipped) item.path,
+        },
       ),
     );
     if (result == null) return;
