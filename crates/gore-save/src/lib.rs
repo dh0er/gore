@@ -3023,10 +3023,20 @@ fn summarize_private_inventory_payload(
     }
     for item in &mut items {
         let path = item["path"].as_str().unwrap_or("");
-        item["equipped"] = json!(
-            !path.is_empty()
-                && armor_slot.is_some_and(|a| a.equipped_paths.contains(path))
-        );
+        let is_equipped = !path.is_empty()
+            && armor_slot.is_some_and(|a| a.equipped_paths.contains(path));
+        item["equipped"] = json!(is_equipped);
+        item["upgrades"] = if is_equipped {
+            json!(armor_slot
+                .map(|a| a
+                    .upgrades
+                    .iter()
+                    .map(|(k, v)| json!({ "key": k, "value": v }))
+                    .collect::<Vec<_>>())
+                .unwrap_or_default())
+        } else {
+            json!([])
+        };
     }
     // setItemCount patches an existing scanned stack in place, so it depends on
     // the FString scan finding at least one stack in the player region.
@@ -9714,6 +9724,7 @@ mod tests {
                     "count": 99,
                     "removable": false,
                     "equipped": false,
+                    "upgrades": [],
                 },
                 {
                     "id": "ItFo_Cheese",
@@ -9721,6 +9732,7 @@ mod tests {
                     "count": 1,
                     "removable": false,
                     "equipped": false,
+                    "upgrades": [],
                 }
             ])
         );
@@ -10431,6 +10443,7 @@ mod tests {
                 "count": 42,
                 "removable": false,
                 "equipped": false,
+                "upgrades": [],
             })
         );
     }
@@ -10533,6 +10546,7 @@ mod tests {
                 "count": 23,
                 "removable": false,
                 "equipped": false,
+                "upgrades": [],
             }])
         );
     }
@@ -10861,6 +10875,27 @@ mod tests {
         let root = properties::parse_private_root(&payload).unwrap();
         let summary = armor_slot_summary(&root).expect("armor slot resolves");
         assert!(summary.upgrades.is_empty(), "expected no upgrades, got {:?}", summary.upgrades);
+    }
+
+    #[test]
+    #[ignore = "needs GORESAVE_PAYLOAD_BIN=<a decompressed host.bin>"]
+    fn equipped_row_carries_upgrades() {
+        let path = std::env::var("GORESAVE_PAYLOAD_BIN").expect("set GORESAVE_PAYLOAD_BIN");
+        let payload = std::fs::read(path).unwrap();
+        let refs = scan_fstrings(&payload, 0);
+        let root = properties::parse_private_root(&payload).unwrap();
+        let main_container = main_container_summary(&root);
+        let armor_slot = armor_slot_summary(&root);
+        let inv = summarize_private_inventory_payload(
+            &payload, &refs, main_container.as_ref(), armor_slot.as_ref(),
+        );
+        let items = inv["items"].as_array().unwrap();
+        let worn = items.iter().find(|i| i["equipped"].as_bool() == Some(true)).expect("an equipped row");
+        let ups = worn["upgrades"].as_array().expect("upgrades array");
+        assert_eq!(ups.len(), 3);
+        assert!(ups.iter().any(|u| u["value"].as_str() == Some("m_UpperBody_Heavy02_ArmorUpgrade")));
+        let other = items.iter().find(|i| i["equipped"].as_bool() != Some(true)).unwrap();
+        assert_eq!(other["upgrades"].as_array().map(|a| a.len()), Some(0));
     }
 
     #[test]
