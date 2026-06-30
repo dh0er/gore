@@ -94,6 +94,7 @@ fn dispatch(input: &str) -> Value {
         "texture_extract" => texture_extract(payload),
         "script_list_modules" => script_list_modules(payload),
         "script_emit_module" => script_emit_module(payload),
+        "script_compile" => script_compile(payload),
         other => err("UNKNOWN_COMMAND", format!("unknown command: {other}")),
     }
 }
@@ -443,6 +444,28 @@ fn script_emit_module(payload: Value) -> Value {
     };
     let source = gore_as::cache::emit::emit_module(m, &refs);
     json!({"ok": true, "source": source})
+}
+
+/// `{game_dir, op, module_name, rel_path, as_path, work_dir}` → `{ok, mini_path, module}`.
+fn script_compile(payload: Value) -> Value {
+    let g = |k: &str| payload.get(k).and_then(Value::as_str).map(str::to_string);
+    let (Some(game_dir), Some(op), Some(module_name), Some(rel_path), Some(as_path), Some(work_dir)) =
+        (g("game_dir"), g("op"), g("module_name"), g("rel_path"), g("as_path"), g("work_dir"))
+    else {
+        return err("BAD_REQUEST", "missing one of game_dir/op/module_name/rel_path/as_path/work_dir");
+    };
+    let opts = gore_as::compile::CompileOpts {
+        game_dir: PathBuf::from(game_dir),
+        op,
+        module_name,
+        rel_path,
+        as_path: PathBuf::from(as_path),
+        work_dir: PathBuf::from(work_dir),
+    };
+    match gore_as::compile::compile_module(&opts, gore_as::compile::game_run_regen) {
+        Ok(out) => json!({"ok": true, "mini_path": out.mini_path.display().to_string(), "module": out.module_name}),
+        Err(e) => err("COMPILE_FAILED", e.to_string()),
+    }
 }
 
 /// `{out_dir, spec:BuildSpec}` → build the unified bundle into `out_dir`.
