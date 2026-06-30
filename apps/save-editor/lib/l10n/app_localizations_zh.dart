@@ -77,6 +77,9 @@ class AppLocalizationsZh extends AppLocalizations {
   String get equippedBadge => '已装备';
 
   @override
+  String get armorUpgradesLabel => '升级';
+
+  @override
   String get browse => '浏览';
 
   @override
@@ -1025,6 +1028,9 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get equippedBadge => '已装备';
+
+  @override
+  String get armorUpgradesLabel => '升级';
 
   @override
   String get browse => '浏览';

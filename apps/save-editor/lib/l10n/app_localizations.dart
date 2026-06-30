@@ -248,6 +248,12 @@ abstract class AppLocalizations {
   /// **'Equipped'**
   String get equippedBadge;
 
+  /// No description provided for @armorUpgradesLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Upgrades'**
+  String get armorUpgradesLabel;
+
   /// No description provided for @browse.
   ///
   /// In en, this message translates to:

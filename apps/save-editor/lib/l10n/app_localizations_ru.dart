@@ -77,6 +77,9 @@ class AppLocalizationsRu extends AppLocalizations {
   String get equippedBadge => 'Надето';
 
   @override
+  String get armorUpgradesLabel => 'Улучшения';
+
+  @override
   String get browse => 'Обзор';
 
   @override

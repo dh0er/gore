@@ -22,6 +22,7 @@
   "close": "关闭",
   "add": "添加",
   "equippedBadge": "已装备",
+  "armorUpgradesLabel": "升级",
   "browse": "浏览",
   "noSavFilesFound": "未找到 .sav 文件",
   "profile": "存档配置",

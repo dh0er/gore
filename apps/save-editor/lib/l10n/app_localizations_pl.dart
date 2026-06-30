@@ -77,6 +77,9 @@ class AppLocalizationsPl extends AppLocalizations {
   String get equippedBadge => 'Założone';
 
   @override
+  String get armorUpgradesLabel => 'Ulepszenia';
+
+  @override
   String get browse => 'Przeglądaj';
 
   @override

@@ -77,6 +77,9 @@ class AppLocalizationsPt extends AppLocalizations {
   String get equippedBadge => 'Equipado';
 
   @override
+  String get armorUpgradesLabel => 'Melhorias';
+
+  @override
   String get browse => 'Procurar';
 
   @override
@@ -1058,6 +1061,9 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
 
   @override
   String get equippedBadge => 'Equipado';
+
+  @override
+  String get armorUpgradesLabel => 'Melhorias';
 
   @override
   String get browse => 'Procurar';

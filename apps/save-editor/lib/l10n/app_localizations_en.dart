@@ -77,6 +77,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get equippedBadge => 'Equipped';
 
   @override
+  String get armorUpgradesLabel => 'Upgrades';
+
+  @override
   String get browse => 'Browse';
 
   @override
