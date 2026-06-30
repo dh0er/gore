@@ -1430,6 +1430,17 @@ class _GameTimeCardState extends State<_GameTimeCard> {
 
   Future<void> _load() async {
     final epoch = ++_epoch;
+    // Drop the cached clock and hide the card synchronously, BEFORE awaiting.
+    // A same-save Reset/refresh/save keeps this card mounted and swaps in a new
+    // SaveInspection (pending cleared centrally); leaving the previous value
+    // shown as editable during the search would let a keystroke re-register a
+    // stale clock against the refreshed save. _load runs only from initState /
+    // didUpdateWidget, each immediately followed by build(), so resetting the
+    // fields directly here is reflected without setState. The global save/
+    // refresh loading overlay masks the brief hide, so there is no flicker.
+    _loaded = false;
+    _gameTime = null;
+    _error = null;
     final loaded =
         widget.inspection.privateDecoded ? await widget.notifier.loadGameTime() : null;
     // Drop stale results; a newer _load already advanced the epoch.
