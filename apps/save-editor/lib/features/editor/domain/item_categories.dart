@@ -140,8 +140,11 @@ bool _isArmorId(String id) {
   final parts = id.split('_');
   if (parts.length < 2) return false;
   final head = parts.first;
+  // The segment after the head must be exactly `Armor` (a tier suffix follows in
+  // a later segment) — not merely start with `Armor`, which would also match an
+  // `Armory` segment such as `NC_Armory_Door`. Mirrors the Rust classifiers.
   return head.length >= 2 &&
       head.length <= 4 &&
       RegExp(r'^[A-Za-z]+$').hasMatch(head) &&
-      parts[1].startsWith('Armor');
+      parts[1] == 'Armor';
 }

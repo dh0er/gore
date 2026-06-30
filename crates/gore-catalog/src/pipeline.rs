@@ -62,14 +62,17 @@ fn is_armor_item_class(name: &str) -> bool {
     if NON_ITEM_PREFIXES.iter().any(|p| name.starts_with(p)) {
         return false;
     }
-    // Item families: `<2-4 alpha>_Armor...` or `Armor_<CAMP>_...`.
+    // Item families: `<2-4 alpha>_Armor...` or `Armor_<CAMP>_...`. The tail must
+    // be exactly `Armor` or start with `Armor_` — `starts_with("Armor")` alone
+    // would also accept non-item names like `NC_Armory_Door` (an "Armory"
+    // segment), which must not enter the catalog/allow-list.
     let faction_armor = {
         let mut parts = name.splitn(2, '_');
         let head = parts.next().unwrap_or("");
         let tail = parts.next().unwrap_or("");
         (2..=4).contains(&head.len())
             && head.chars().all(|c| c.is_ascii_alphabetic())
-            && tail.starts_with("Armor")
+            && (tail == "Armor" || tail.starts_with("Armor_"))
     };
     faction_armor || name.starts_with("Armor_")
 }
@@ -484,6 +487,10 @@ mod tests {
         assert!(!is_armor_item_class("GE_Crw_Armor_H"));
         assert!(!is_armor_item_class("GothicAchievement_Armor_01"));
         assert!(!is_armor_item_class("OC_Armory_Door"));
+    // An "Armory" segment (room/building) is not an armor item, even with a
+    // short prefix not covered by NON_ITEM_PREFIXES.
+    assert!(!is_armor_item_class("NC_Armory_Door"));
+    assert!(!is_armor_item_class("Vlk_Armory"));
         assert!(!is_armor_item_class("Spawner_OC_Castle_Armory_Misc_01"));
         assert!(!is_armor_item_class("Hit_SuperArmor_Player"));
         assert!(!is_armor_item_class("CharacterVisualsDefinition_OreArmor"));

@@ -81,9 +81,11 @@ pub fn is_armor_id(id: &str) -> bool {
     let mut parts = id.splitn(2, '_');
     let head = parts.next().unwrap_or("");
     let tail = parts.next().unwrap_or("");
+    // Tail must be exactly `Armor` or start with `Armor_`; `starts_with("Armor")`
+    // alone would also match an `Armory` segment (e.g. `NC_Armory_Door`).
     (2..=4).contains(&head.len())
         && head.chars().all(|c| c.is_ascii_alphabetic())
-        && tail.starts_with("Armor")
+        && (tail == "Armor" || tail.starts_with("Armor_"))
 }
 
 /// Classify an item id by its Angelscript class-name prefix. The ordering of
@@ -234,6 +236,10 @@ mod tests {
         assert_eq!(item_category_from_id("Armor_OC_Gomez"), ItemCategory::Armor);
         assert_eq!(category_for_id("Ore_Armor_H"), ItemCategory::Armor);
         assert_eq!(category_for_id("Armor_OC_Gomez"), ItemCategory::Armor);
+        // An "Armory" segment is not armor.
+        assert!(!is_armor_id("NC_Armory_Door"));
+        assert_eq!(item_category_from_id("NC_Armory_Door"), ItemCategory::Other);
+        assert_eq!(category_for_id("NC_Armory_Door"), ItemCategory::Unknown);
     }
 
     #[test]

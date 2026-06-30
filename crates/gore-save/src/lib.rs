@@ -2985,27 +2985,17 @@ fn private_player_writable_edits(payload: &[u8], refs: &[FStringRef]) -> Vec<&'s
 }
 
 /// Mark the worn-armor row `equipped` and attach the worn armor's upgrade
-/// chips. Membership is by item-definition path. The player can carry a second
-/// copy of the worn armor class in the bag (e.g. via addItem, whose dialog only
-/// excludes MainContainer paths), and the scanned rows carry no container/slot
-/// identity — so when the worn path occurs more than once we cannot tell the
-/// worn slot from a carried copy. In that ambiguous case we withhold the badge
-/// and upgrades entirely rather than risk attributing them to a bag copy; the
-/// flag is set only when the worn path occurs exactly once across the scan.
+/// chips. The player can carry a second copy of the worn armor class in the bag
+/// (e.g. via addItem, whose dialog only excludes MainContainer paths), and the
+/// scanned rows carry no container/slot identity — so a row is flagged only
+/// when its path is in `unambiguous_equipped_paths` (worn AND globally unique
+/// across the uncapped inventory). A worn class with any carried copy is
+/// withheld rather than risk tagging a bag copy.
 fn apply_equipped_and_upgrades(items: &mut [Value], armor_slot: Option<&ArmorSlotSummary>) {
-    let mut path_counts: std::collections::HashMap<String, usize> =
-        std::collections::HashMap::new();
-    for item in items.iter() {
-        let path = item["path"].as_str().unwrap_or("");
-        if !path.is_empty() {
-            *path_counts.entry(path.to_string()).or_default() += 1;
-        }
-    }
     for item in items.iter_mut() {
-        let path = item["path"].as_str().unwrap_or("").to_string();
+        let path = item["path"].as_str().unwrap_or("");
         let is_equipped = !path.is_empty()
-            && armor_slot.is_some_and(|a| a.equipped_paths.contains(&path))
-            && path_counts.get(&path) == Some(&1);
+            && armor_slot.is_some_and(|a| a.unambiguous_equipped_paths.contains(path));
         item["equipped"] = json!(is_equipped);
         item["upgrades"] = if is_equipped {
             json!(armor_slot
@@ -5730,6 +5720,13 @@ struct MainContainerSummary {
 /// robustness. `None` when the inventory or the ArmorSlot container is absent.
 struct ArmorSlotSummary {
     equipped_paths: std::collections::HashSet<String>,
+    /// Worn-armor paths that occur exactly once across the ENTIRE typed
+    /// inventory (no carried copy in any other container). The display rows are
+    /// keyed only by item-definition path and carry no slot identity, so only a
+    /// globally-unique worn path can be flagged equipped without risk of tagging
+    /// a bag copy. Computed from the uncapped typed tree — not the 200-row
+    /// display cap, which could hide a later duplicate.
+    unambiguous_equipped_paths: std::collections::HashSet<String>,
     /// `(key, value)` upgrade pairs from the worn armor's `m_GenericData`,
     /// non-empty values only. Empty when not upgraded or no armor worn.
     upgrades: Vec<(String, String)>,
@@ -5750,6 +5747,29 @@ fn armor_slot_summary(root: &properties::RootObject) -> Option<ArmorSlotSummary>
     let properties::PropertyValue::Array { elements: keys } = resolve_child(&["m_Keys"])? else {
         return None;
     };
+    // Count how many times each item-definition path appears across EVERY
+    // container's slots (the full, uncapped inventory). Used to decide whether a
+    // worn armor path is unambiguous (no carried duplicate anywhere).
+    let mut global_counts: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+    if let Some(properties::PropertyValue::Array { elements: containers }) =
+        resolve_child(&["m_Values", "Items"])
+    {
+        for container_index in 0..containers.len() {
+            let container_segment = format!("[{container_index}]");
+            if let Some(properties::PropertyValue::Array { elements: container_slots }) =
+                resolve_child(&["m_Values", "Items", &container_segment, "m_Slots"])
+            {
+                for slot in &container_slots {
+                    if let Some(path) = slot_item_definition(slot) {
+                        if !path.is_empty() {
+                            *global_counts.entry(path.to_string()).or_default() += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
     let index = keys.iter().position(|element| {
         matches!(element, properties::PropertyValue::Enum(label)
             if label == ARMOR_SLOT_ENUM_LABEL)
@@ -5775,7 +5795,16 @@ fn armor_slot_summary(root: &properties::RootObject) -> Option<ArmorSlotSummary>
             }
         }
     }
-    Some(ArmorSlotSummary { equipped_paths, upgrades })
+    let unambiguous_equipped_paths = equipped_paths
+        .iter()
+        .filter(|path| global_counts.get(*path).copied() == Some(1))
+        .cloned()
+        .collect();
+    Some(ArmorSlotSummary {
+        equipped_paths,
+        unambiguous_equipped_paths,
+        upgrades,
+    })
 }
 
 /// Summarize the player's MainContainer. addItem and removeItem only operate on
@@ -7327,6 +7356,8 @@ mod tests {
 
     #[test]
     fn equipped_marking_withholds_on_duplicate_path() {
+        // Org_Armor is worn but also carried (so it is NOT unambiguous);
+        // Crw_Armor_H is worn and globally unique.
         let armor = ArmorSlotSummary {
             equipped_paths: [
                 "/Script/Angelscript.Org_Armor".to_string(),
@@ -7334,6 +7365,9 @@ mod tests {
             ]
             .into_iter()
             .collect(),
+            unambiguous_equipped_paths: ["/Script/Angelscript.Crw_Armor_H".to_string()]
+                .into_iter()
+                .collect(),
             upgrades: vec![(
                 "m_CurrentUpperBodyUpgrade".to_string(),
                 "m_UpperBody_Heavy02_ArmorUpgrade".to_string(),

@@ -31,6 +31,8 @@ void main() {
     // non-armor unaffected
     expect(itemCategoryFromId('ItMi_Orenugget'), ItemCategory.misc);
     expect(itemCategoryFromId('SomethingElse'), ItemCategory.other);
+    // an "Armory" segment (room/building) is not armor
+    expect(itemCategoryFromId('NC_Armory_Door'), ItemCategory.other);
   });
 
   test('unknown ids map to other', () {
