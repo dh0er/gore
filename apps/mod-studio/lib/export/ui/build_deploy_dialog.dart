@@ -98,6 +98,9 @@ class _BuildDeployDialogState extends ConsumerState<BuildDeployDialog> {
     final audio = ref.watch(audioReplacementsProvider).count;
     final textures = ref.watch(textureReplacementsProvider).count;
     final scripts = ref.watch(scriptModsProvider).count;
+    // Block Build/Deploy while any staged script is still uncompiled — building would read an empty
+    // mini-cache and fail. The warning text below uses the same flag.
+    final scriptsNotReady = ref.watch(scriptModsProvider).entries.any((s) => !s.compiled);
     final gameRoot = gameRootFromExe(ref.watch(gameExePathProvider));
     // Building/deploying an empty bundle would only retire the active mod, so require content.
     final hasContent = overrides + locEdits + audio + textures + scripts > 0;
@@ -136,7 +139,7 @@ class _BuildDeployDialogState extends ConsumerState<BuildDeployDialog> {
             Text('• $audio audio replacement(s)'),
             Text('• $textures texture replacement(s)'),
             Text('• $scripts script mod(s)'),
-            if (ref.watch(scriptModsProvider).entries.any((s) => !s.compiled))
+            if (scriptsNotReady)
               Text(
                 'Some script mods are not compiled — compile them in the AngelScript tab first.',
                 style: TextStyle(color: theme.colorScheme.error),
@@ -175,12 +178,14 @@ class _BuildDeployDialogState extends ConsumerState<BuildDeployDialog> {
             child: const Text('Undeploy'),
           ),
         OutlinedButton.icon(
-          onPressed: (_busy || !hasContent) ? null : _buildToFolder,
+          onPressed: (_busy || !hasContent || scriptsNotReady) ? null : _buildToFolder,
           icon: const Icon(Icons.folder_zip_outlined, size: 18),
           label: const Text('Build to folder…'),
         ),
         FilledButton.icon(
-          onPressed: (_busy || gameRoot == null || !hasContent) ? null : () => _deploy(gameRoot),
+          onPressed: (_busy || gameRoot == null || !hasContent || scriptsNotReady)
+              ? null
+              : () => _deploy(gameRoot),
           icon: const Icon(Icons.rocket_launch_outlined, size: 18),
           label: const Text('Deploy to game'),
         ),
