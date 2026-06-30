@@ -2984,6 +2984,34 @@ fn private_player_writable_edits(payload: &[u8], refs: &[FStringRef]) -> Vec<&'s
     writable
 }
 
+/// Mark the worn-armor row `equipped` and attach the worn armor's upgrade
+/// chips. Membership is by item-definition path, but the player can carry a
+/// second copy of the worn armor class in the bag (e.g. via addItem, whose
+/// dialog only excludes MainContainer paths), so only the FIRST row of each
+/// equipped path is flagged — later duplicates are a bag copy, not the worn
+/// item, and must show neither the badge nor the upgrades.
+fn apply_equipped_and_upgrades(items: &mut [Value], armor_slot: Option<&ArmorSlotSummary>) {
+    let mut equipped_seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for item in items.iter_mut() {
+        let path = item["path"].as_str().unwrap_or("").to_string();
+        let is_equipped = !path.is_empty()
+            && armor_slot.is_some_and(|a| a.equipped_paths.contains(&path))
+            && equipped_seen.insert(path);
+        item["equipped"] = json!(is_equipped);
+        item["upgrades"] = if is_equipped {
+            json!(armor_slot
+                .map(|a| a
+                    .upgrades
+                    .iter()
+                    .map(|(k, v)| json!({ "key": k, "value": v }))
+                    .collect::<Vec<_>>())
+                .unwrap_or_default())
+        } else {
+            json!([])
+        };
+    }
+}
+
 fn summarize_private_inventory_payload(
     payload: &[u8],
     refs: &[FStringRef],
@@ -3021,23 +3049,7 @@ fn summarize_private_inventory_payload(
             !path.is_empty() && main_container.is_some_and(|mc| mc.removable_paths.contains(path))
         );
     }
-    for item in &mut items {
-        let path = item["path"].as_str().unwrap_or("");
-        let is_equipped = !path.is_empty()
-            && armor_slot.is_some_and(|a| a.equipped_paths.contains(path));
-        item["equipped"] = json!(is_equipped);
-        item["upgrades"] = if is_equipped {
-            json!(armor_slot
-                .map(|a| a
-                    .upgrades
-                    .iter()
-                    .map(|(k, v)| json!({ "key": k, "value": v }))
-                    .collect::<Vec<_>>())
-                .unwrap_or_default())
-        } else {
-            json!([])
-        };
-    }
+    apply_equipped_and_upgrades(&mut items, armor_slot);
     // setItemCount patches an existing scanned stack in place, so it depends on
     // the FString scan finding at least one stack in the player region.
     // addItem/removeItem are structural edits on the *typed* MainContainer and
@@ -7303,6 +7315,34 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
     use tempfile::tempdir;
+
+    #[test]
+    fn equipped_marking_skips_duplicate_bag_copy() {
+        let armor = ArmorSlotSummary {
+            equipped_paths: ["/Script/Angelscript.Org_Armor".to_string()]
+                .into_iter()
+                .collect(),
+            upgrades: vec![(
+                "m_CurrentUpperBodyUpgrade".to_string(),
+                "m_UpperBody_Heavy02_ArmorUpgrade".to_string(),
+            )],
+        };
+        let mut items = vec![
+            // worn copy (first occurrence — e.g. the ArmorSlot container row)
+            json!({ "path": "/Script/Angelscript.Org_Armor", "id": "Org_Armor" }),
+            // a second copy in the bag with the same path
+            json!({ "path": "/Script/Angelscript.Org_Armor", "id": "Org_Armor" }),
+            json!({ "path": "/Script/Angelscript.ItMi_Orenugget", "id": "ItMi_Orenugget" }),
+        ];
+        apply_equipped_and_upgrades(&mut items, Some(&armor));
+        assert_eq!(items[0]["equipped"], json!(true));
+        assert_eq!(items[0]["upgrades"].as_array().unwrap().len(), 1);
+        // the duplicate bag copy must NOT be flagged equipped or carry upgrades
+        assert_eq!(items[1]["equipped"], json!(false));
+        assert_eq!(items[1]["upgrades"].as_array().unwrap().len(), 0);
+        assert_eq!(items[2]["equipped"], json!(false));
+        assert_eq!(items[2]["upgrades"].as_array().unwrap().len(), 0);
+    }
 
     #[test]
     fn summarize_typed_parse_reports_status() {
