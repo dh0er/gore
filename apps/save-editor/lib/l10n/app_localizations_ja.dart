@@ -210,6 +210,30 @@ class AppLocalizationsJa extends AppLocalizations {
   String get publicSaveName => '公開セーブ名';
 
   @override
+  String get gameTimeTitle => 'Game time';
+
+  @override
+  String get gameTimeDay => 'Day';
+
+  @override
+  String get gameTimeHours => 'Hours';
+
+  @override
+  String get gameTimeMinutes => 'Minutes';
+
+  @override
+  String get gameTimeSeconds => 'Seconds';
+
+  @override
+  String gameTimeTotal(int seconds) {
+    return '= $seconds s total';
+  }
+
+  @override
+  String get gameTimeInvalid =>
+      'Enter whole numbers — day ≥ 0, hours 0–23, minutes and seconds 0–59.';
+
+  @override
   String get required => '必須';
 
   @override

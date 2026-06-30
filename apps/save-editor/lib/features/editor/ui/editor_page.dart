@@ -11,6 +11,7 @@ import 'package:goresave/features/app/ui/update_settings.dart';
 import 'package:goresave/features/app/ui/window_chrome.dart';
 import 'package:goresave/features/editor/domain/editor_notifier.dart';
 import 'package:goresave/features/editor/domain/editor_models.dart';
+import 'package:goresave/features/editor/domain/game_time.dart';
 import 'package:goresave/features/editor/domain/item_categories.dart';
 import 'package:goresave/features/editor/ui/sidebar_tile.dart';
 import 'package:goresave/features/editor/domain/pending_edits.dart';
@@ -890,6 +891,13 @@ class _OverviewPanel extends StatelessWidget {
         const SizedBox(height: 16),
         _MetadataEditor(inspection: inspection, notifier: notifier),
         const SizedBox(height: 16),
+        _GameTimeCard(
+          inspection: inspection,
+          notifier: notifier,
+          editable: inspection.privateEditable &&
+              inspection.privateTypedVerified &&
+              state.codecCompressReady,
+        ),
         _OverviewDiagnostics(inspection: inspection),
         const SizedBox(height: 16),
         _OverviewInspectionJson(inspection: inspection),
@@ -1355,6 +1363,233 @@ class _MetadataEditorState extends State<_MetadataEditor> {
           onChanged: _updatePending,
         ),
       ),
+    );
+  }
+}
+
+/// Overview-tab editor for the world game clock (the single typed
+/// `DoubleProperty` at `m_GenericData{GameTime} › CurrentTime › TotalSeconds`).
+/// Splits the cumulative TotalSeconds into Day/Hours/Minutes/Seconds fields
+/// (the game counts days from 0). Loads its value lazily via
+/// [EditorNotifier.loadGameTime]; renders nothing when the save has no such
+/// leaf (non-GSAV, undecoded, or absent), so the Overview layout is unaffected.
+///
+/// Edits flow through the same pending-edit registry as every other typed
+/// editor (`private.typed.setValue`, key `gameTime`), so the shared Save button
+/// writes them. [editable] mirrors the Player/All-data gating (decoded, typed-
+/// verified, compress-ready codec); when false the fields show read-only.
+class _GameTimeCard extends StatefulWidget {
+  const _GameTimeCard({
+    required this.inspection,
+    required this.notifier,
+    required this.editable,
+  });
+
+  final SaveInspection inspection;
+  final EditorNotifier notifier;
+  final bool editable;
+
+  @override
+  State<_GameTimeCard> createState() => _GameTimeCardState();
+}
+
+class _GameTimeCardState extends State<_GameTimeCard> {
+  static const _pendingKey = 'gameTime';
+
+  final _day = TextEditingController();
+  final _hour = TextEditingController();
+  final _minute = TextEditingController();
+  final _second = TextEditingController();
+
+  GameTime? _gameTime;
+  bool _loaded = false;
+  // Discards results from superseded reloads (rapid inspection swaps).
+  int _epoch = 0;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void didUpdateWidget(covariant _GameTimeCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(widget.inspection, oldWidget.inspection)) _load();
+  }
+
+  @override
+  void dispose() {
+    _day.dispose();
+    _hour.dispose();
+    _minute.dispose();
+    _second.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    final epoch = ++_epoch;
+    // Drop the cached clock and hide the card synchronously, BEFORE awaiting.
+    // A same-save Reset/refresh/save keeps this card mounted and swaps in a new
+    // SaveInspection (pending cleared centrally); leaving the previous value
+    // shown as editable during the search would let a keystroke re-register a
+    // stale clock against the refreshed save. _load runs only from initState /
+    // didUpdateWidget, each immediately followed by build(), so resetting the
+    // fields directly here is reflected without setState. The global save/
+    // refresh loading overlay masks the brief hide, so there is no flicker.
+    _loaded = false;
+    _gameTime = null;
+    _error = null;
+    final loaded =
+        widget.inspection.privateDecoded ? await widget.notifier.loadGameTime() : null;
+    // Drop stale results; a newer _load already advanced the epoch.
+    if (!mounted || epoch != _epoch) return;
+    setState(() {
+      _gameTime = loaded;
+      _loaded = true;
+      _error = null;
+      if (loaded != null) {
+        final parts = GameTimeParts.fromTotalSeconds(loaded.totalSeconds);
+        _day.text = parts.day.toString();
+        _hour.text = parts.hour.toString();
+        _minute.text = parts.minute.toString();
+        _second.text = parts.second.toString();
+      }
+    });
+    // Do NOT touch the pending registry here: refresh() clears it centrally in
+    // event-handler context. Mutating it from this build-adjacent callback would
+    // throw with flutter_riverpod, exactly as the hero-stats card documents.
+  }
+
+  /// Parse a field as a non-negative int within [0, max]; null when invalid.
+  int? _field(TextEditingController c, int max) {
+    final value = int.tryParse(c.text.trim());
+    if (value == null || value < 0 || value > max) return null;
+    return value;
+  }
+
+  void _onChanged() {
+    if (!widget.editable) return;
+    final gameTime = _gameTime;
+    if (gameTime == null) return;
+    final day = _field(_day, 1 << 30);
+    final hour = _field(_hour, 23);
+    final minute = _field(_minute, 59);
+    final second = _field(_second, 59);
+    if (day == null || hour == null || minute == null || second == null) {
+      setState(() => _error = AppLocalizations.of(context).gameTimeInvalid);
+      widget.notifier.clearPendingEdit(_pendingKey);
+      return;
+    }
+    setState(() => _error = null);
+    final total =
+        GameTimeParts(day: day, hour: hour, minute: minute, second: second)
+            .toTotalSeconds();
+    // Compare against the truncated original: re-typing the same clock must not
+    // leave a no-op edit that still bumps the Save counter (and would rewrite
+    // away the harmless sub-second fraction for nothing).
+    if (total == gameTime.totalSeconds.floor()) {
+      widget.notifier.clearPendingEdit(_pendingKey);
+      return;
+    }
+    widget.notifier.setPendingEdit(
+      _pendingKey,
+      PendingSaveEdit(
+        edits: [
+          {
+            'path': 'private.typed.setValue',
+            // DoubleProperty: send a float (matches the hero-stats write path).
+            'value': {'path': gameTime.path, 'value': total.toDouble()},
+          },
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Hidden until we know there's a clock to show — keeps the Overview layout
+    // identical for saves without one (and avoids a load flash).
+    if (!_loaded || _gameTime == null) return const SizedBox.shrink();
+
+    final theme = Theme.of(context);
+    final l10n = AppLocalizations.of(context);
+
+    // Caption reflects the live fields when valid, else the canonical value.
+    final day = _field(_day, 1 << 30);
+    final hour = _field(_hour, 23);
+    final minute = _field(_minute, 59);
+    final second = _field(_second, 59);
+    final liveTotal =
+        (day != null && hour != null && minute != null && second != null)
+            ? GameTimeParts(day: day, hour: hour, minute: minute, second: second)
+                .toTotalSeconds()
+            : _gameTime!.totalSeconds.floor();
+
+    Widget unit(String label, TextEditingController controller) {
+      return SizedBox(
+        width: 96,
+        child: TextField(
+          controller: controller,
+          enabled: widget.editable,
+          onChanged: (_) => _onChanged(),
+          keyboardType: TextInputType.number,
+          decoration: InputDecoration(labelText: label),
+        ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Icon(Icons.schedule_outlined),
+                    const SizedBox(width: 8),
+                    Text(l10n.gameTimeTitle, style: theme.textTheme.titleSmall),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    unit(l10n.gameTimeDay, _day),
+                    const SizedBox(width: 8),
+                    unit(l10n.gameTimeHours, _hour),
+                    const SizedBox(width: 8),
+                    unit(l10n.gameTimeMinutes, _minute),
+                    const SizedBox(width: 8),
+                    unit(l10n.gameTimeSeconds, _second),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  l10n.gameTimeTotal(liveTotal),
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                if (_error != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text(
+                      _error!,
+                      style: TextStyle(color: theme.colorScheme.error),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 16),
+      ],
     );
   }
 }

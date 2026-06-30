@@ -482,6 +482,48 @@ abstract class AppLocalizations {
   /// **'Public save name'**
   String get publicSaveName;
 
+  /// No description provided for @gameTimeTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Game time'**
+  String get gameTimeTitle;
+
+  /// No description provided for @gameTimeDay.
+  ///
+  /// In en, this message translates to:
+  /// **'Day'**
+  String get gameTimeDay;
+
+  /// No description provided for @gameTimeHours.
+  ///
+  /// In en, this message translates to:
+  /// **'Hours'**
+  String get gameTimeHours;
+
+  /// No description provided for @gameTimeMinutes.
+  ///
+  /// In en, this message translates to:
+  /// **'Minutes'**
+  String get gameTimeMinutes;
+
+  /// No description provided for @gameTimeSeconds.
+  ///
+  /// In en, this message translates to:
+  /// **'Seconds'**
+  String get gameTimeSeconds;
+
+  /// No description provided for @gameTimeTotal.
+  ///
+  /// In en, this message translates to:
+  /// **'= {seconds} s total'**
+  String gameTimeTotal(int seconds);
+
+  /// No description provided for @gameTimeInvalid.
+  ///
+  /// In en, this message translates to:
+  /// **'Enter whole numbers — day ≥ 0, hours 0–23, minutes and seconds 0–59.'**
+  String get gameTimeInvalid;
+
   /// No description provided for @required.
   ///
   /// In en, this message translates to:

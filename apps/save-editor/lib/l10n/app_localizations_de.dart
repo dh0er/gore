@@ -211,6 +211,30 @@ class AppLocalizationsDe extends AppLocalizations {
   String get publicSaveName => 'Öffentlicher Speichername';
 
   @override
+  String get gameTimeTitle => 'Spielzeit';
+
+  @override
+  String get gameTimeDay => 'Tag';
+
+  @override
+  String get gameTimeHours => 'Stunden';
+
+  @override
+  String get gameTimeMinutes => 'Minuten';
+
+  @override
+  String get gameTimeSeconds => 'Sekunden';
+
+  @override
+  String gameTimeTotal(int seconds) {
+    return '= $seconds s gesamt';
+  }
+
+  @override
+  String get gameTimeInvalid =>
+      'Ganze Zahlen eingeben — Tag ≥ 0, Stunden 0–23, Minuten und Sekunden 0–59.';
+
+  @override
   String get required => 'Erforderlich';
 
   @override
