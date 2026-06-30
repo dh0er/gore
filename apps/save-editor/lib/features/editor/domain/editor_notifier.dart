@@ -1038,21 +1038,39 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// Load the world game clock — the lone `DoubleProperty` at
   /// `m_GenericData{GameTime} › CurrentTime › TotalSeconds`. Returns null when
   /// the save has no such leaf (non-GSAV, not decoded, or absent), so the
-  /// Overview card can simply hide itself. Mirrors [loadHeroAttributes]' fixed
-  /// query; the decode cache is already seeded by inspect.
+  /// Overview card can simply hide itself. The decode cache is already seeded by
+  /// inspect.
+  ///
+  /// Pages to the leaf rather than trusting the first result page: the core
+  /// caps each page at 1000 hits, and while `GameTime` matches only this tree in
+  /// practice, a save whose data happens to push the leaf past one page must
+  /// still surface it. Mirrors [loadHeroAttributes]' paginated fixed-query scan,
+  /// including the save-pin guard against a mid-pagination selection change.
   Future<GameTime?> loadGameTime() async {
-    final result = await searchTypedProperties(gameTimeQuery, limit: 50);
-    if (result.error != null) return null;
-    for (final hit in result.results) {
-      final path = hit.path;
-      if (hit.type == 'DoubleProperty' &&
-          path.length >= 3 &&
-          path.last == 'TotalSeconds' &&
-          path[path.length - 2] == 'CurrentTime' &&
-          path.contains('{GameTime}')) {
-        final value = double.tryParse(hit.value);
-        if (value != null) return GameTime(totalSeconds: value, path: path);
+    final loadPath = state.selectedPath;
+    var offset = 0;
+    while (true) {
+      final result = await searchTypedProperties(
+        gameTimeQuery,
+        offset: offset,
+        limit: 1000,
+      );
+      // A save switch mid-pagination would merge pages from two different files.
+      if (state.selectedPath != loadPath) return null;
+      if (result.error != null) return null;
+      for (final hit in result.results) {
+        final path = hit.path;
+        if (hit.type == 'DoubleProperty' &&
+            path.length >= 3 &&
+            path.last == 'TotalSeconds' &&
+            path[path.length - 2] == 'CurrentTime' &&
+            path.contains('{GameTime}')) {
+          final value = double.tryParse(hit.value);
+          if (value != null) return GameTime(totalSeconds: value, path: path);
+        }
       }
+      offset += result.results.length;
+      if (offset >= result.total || result.results.isEmpty) break;
     }
     return null;
   }
