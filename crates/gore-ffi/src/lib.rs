@@ -389,9 +389,14 @@ fn as_class_hierarchy(mods: &[gore_as::cache::model::Module]) -> std::collection
     h
 }
 
-/// Load native arities from a `Binds.Cache` sitting next to `cache_file`, if present.
+/// Load native arities from the `GORE_AS_BINDS` env path if set, else a `Binds.Cache` sitting next
+/// to `cache_file`, if present. Mirrors the CLI's `load_native_api` (quietly — no logging) so the
+/// CLI and mod-studio resolve the same arities when `GORE_AS_BINDS` is set.
 fn as_native_api(cache_file: &std::path::Path) -> Option<gore_as::cache::binds::NativeApi> {
-    let path = cache_file.parent()?.join("Binds.Cache");
+    let path = match std::env::var_os("GORE_AS_BINDS") {
+        Some(p) => std::path::PathBuf::from(p),
+        None => cache_file.parent()?.join("Binds.Cache"),
+    };
     if !path.exists() { return None; }
     gore_as::cache::binds::NativeApi::load(&path)
 }

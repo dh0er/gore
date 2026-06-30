@@ -378,7 +378,13 @@ class _ModDetailState extends ConsumerState<_ModDetail> {
       // Only move the selection if this state is still mounted (i.e. still the active mod);
       // otherwise the user has navigated away and we mustn't yank their selection.
       if (mounted) selNotifier.state = updated.key;
-      if (mounted) setState(() => _status = 'Compiled ✓');
+      // Be honest when fingerprinting the .as failed (hash == ''): compiledHash is empty, so
+      // scriptCompileFresh is false and Build/Deploy stays disabled — don't claim "Compiled ✓".
+      if (mounted) {
+        setState(() => _status = hash.isEmpty
+            ? 'Compiled, but could not fingerprint the source — re-pick or edit the .as to enable deploy.'
+            : 'Compiled ✓');
+      }
     } catch (e) {
       if (mounted) setState(() { _error = true; _status = '$e'; });
     } finally {

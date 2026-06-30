@@ -362,14 +362,21 @@ class _ScriptRow extends StatelessWidget {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
-                Text(
-                  entry.compiled ? 'compiled' : 'not compiled',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: entry.compiled ? scheme.primary : scheme.error,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
+                Builder(builder: (_) {
+                  // Mirror the tab badge / Build-Deploy gate: a mod is only "compiled" when its
+                  // on-disk .as still matches the compiled hash (scriptCompileFresh), not merely
+                  // when a mini exists (entry.compiled). Otherwise this panel shows green
+                  // "compiled" while deploy stays blocked after a source edit.
+                  final fresh = scriptCompileFresh(entry);
+                  return Text(
+                    fresh ? 'compiled' : 'not compiled / edited',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: fresh ? scheme.primary : scheme.error,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  );
+                }),
               ],
             ),
           ),

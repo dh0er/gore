@@ -187,10 +187,15 @@ fn class_hierarchy(mods: &[model::Module]) -> std::collections::HashMap<String, 
     h
 }
 
-/// Load native arities from a `Binds.Cache` sitting next to `cache_file`, if present. Mirrors
-/// `as_cache.rs::load_native_api` / gore-ffi's `as_native_api`. Absent/unparsable => None.
+/// Load native arities from the `GORE_AS_BINDS` env path if set, else a `Binds.Cache` sitting next
+/// to `cache_file`, if present. Mirrors `as_cache.rs::load_native_api` / gore-ffi's `as_native_api`
+/// so a dev who sets `GORE_AS_BINDS` for the CLI gets the same arities here (no emit/recompile
+/// divergence). Quiet by design (library helper — no logging). Absent/unparsable => None.
 fn native_api(cache_file: &Path) -> Option<crate::cache::binds::NativeApi> {
-    let path = cache_file.parent()?.join("Binds.Cache");
+    let path = match std::env::var_os("GORE_AS_BINDS") {
+        Some(p) => std::path::PathBuf::from(p),
+        None => cache_file.parent()?.join("Binds.Cache"),
+    };
     if !path.exists() {
         return None;
     }
