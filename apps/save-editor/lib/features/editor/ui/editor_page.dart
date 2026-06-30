@@ -2049,15 +2049,31 @@ class _PrivateInventorySummaryCardState
                                                           ),
                                                           for (final u
                                                               in item.upgrades)
-                                                            Chip(
-                                                              visualDensity:
-                                                                  VisualDensity
-                                                                      .compact,
-                                                              materialTapTargetSize:
-                                                                  MaterialTapTargetSize
-                                                                      .shrinkWrap,
-                                                              label: Text(
+                                                            Container(
+                                                              padding:
+                                                                  const EdgeInsets.symmetric(
+                                                                    horizontal: 6,
+                                                                    vertical: 1,
+                                                                  ),
+                                                              decoration: BoxDecoration(
+                                                                color: theme
+                                                                    .colorScheme
+                                                                    .surfaceContainerHighest,
+                                                                borderRadius:
+                                                                    BorderRadius.circular(
+                                                                      4,
+                                                                    ),
+                                                              ),
+                                                              child: Text(
                                                                 '${_upgradePart(u.key)}: ${_upgradeTier(u.value)}',
+                                                                style: theme
+                                                                    .textTheme
+                                                                    .labelSmall
+                                                                    ?.copyWith(
+                                                                      color: theme
+                                                                          .colorScheme
+                                                                          .onSurfaceVariant,
+                                                                    ),
                                                               ),
                                                             ),
                                                         ],
