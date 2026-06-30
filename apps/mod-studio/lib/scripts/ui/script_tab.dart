@@ -90,11 +90,14 @@ class _StagedList extends ConsumerWidget {
                         selected: m.key == selectedKey,
                         leading: Icon(m.op == ScriptOp.add ? Icons.add_box_outlined : Icons.edit_note_outlined),
                         title: Text(m.moduleName, maxLines: 1, overflow: TextOverflow.ellipsis),
-                        subtitle: Text(
-                          m.compiled ? 'compiled' : 'not compiled — press Compile',
-                          style: TextStyle(
-                            color: m.compiled ? scheme.primary : scheme.error, fontSize: 12),
-                        ),
+                        subtitle: Builder(builder: (_) {
+                          final fresh = scriptCompileFresh(m);
+                          return Text(
+                            fresh ? 'compiled' : 'not compiled / edited — recompile',
+                            style: TextStyle(
+                              color: fresh ? scheme.primary : scheme.error, fontSize: 12),
+                          );
+                        }),
                         trailing: IconButton(
                           icon: const Icon(Icons.remove_circle_outline, size: 18),
                           onPressed: () => ref.read(scriptModsProvider.notifier).remove(m.key),
@@ -266,7 +269,9 @@ class _ModDetailState extends ConsumerState<_ModDetail> {
           _kv('Module', mod.moduleName),
           _kv('Path', mod.relPath),
           _kv('Source', mod.asPath.isEmpty ? '(none — pick a .as)' : p.basename(mod.asPath)),
-          _kv('Compiled', mod.compiled ? p.basename(mod.miniPath) : 'no'),
+          _kv('Compiled', scriptCompileFresh(mod)
+              ? p.basename(mod.miniPath)
+              : (mod.compiled ? 'not compiled / edited — recompile' : 'no')),
           const SizedBox(height: 12),
           Wrap(
             spacing: 8,
@@ -314,8 +319,9 @@ class _ModDetailState extends ConsumerState<_ModDetail> {
       XTypeGroup(label: 'AngelScript', extensions: ['as']),
     ]);
     if (file == null) return;
-    // Changing the source invalidates any prior compile. Operate on the captured mod.
-    notifier.setMod(mod.withAsPath(file.path).withMiniPath(''));
+    // Changing the source invalidates any prior compile (clears mini + hash). Operate on the
+    // captured mod.
+    notifier.setMod(mod.withSource(file.path));
   }
 
   Future<void> _compile() async {
@@ -344,6 +350,16 @@ class _ModDetailState extends ConsumerState<_ModDetail> {
       );
       final mini = r['mini_path'] as String;
       final resolvedName = (r['module'] as String?) ?? mod.moduleName;
+      // Fingerprint the .as that was just compiled (using the CAPTURED mod) so a later edit to the
+      // source reads as not-fresh. IO failure => empty hash, which scriptCompileFresh treats as
+      // not-fresh (safe: blocks deploy until a clean recompile).
+      final hash = () {
+        try {
+          return fnv1aHex(File(mod.asPath).readAsBytesSync());
+        } catch (_) {
+          return '';
+        }
+      }();
       // The user may have removed this mod (or cleared the list) while the game was compiling.
       // Don't resurrect a deleted mod with the late result — discard it instead. Check via the
       // captured notifier (using ref here could throw if this state was disposed). Reading the
@@ -356,7 +372,7 @@ class _ModDetailState extends ConsumerState<_ModDetail> {
       // The compile may resolve the real module name (esp. for "add"); update + re-key.
       final updated = ScriptMod(
         op: mod.op, moduleName: resolvedName, relPath: mod.relPath,
-        asPath: mod.asPath, miniPath: mini);
+        asPath: mod.asPath, miniPath: mini, compiledHash: hash);
       if (resolvedName != mod.key) notifier.remove(mod.key);
       notifier.setMod(updated);
       // Only move the selection if this state is still mounted (i.e. still the active mod);

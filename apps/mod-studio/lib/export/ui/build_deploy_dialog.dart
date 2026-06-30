@@ -98,9 +98,11 @@ class _BuildDeployDialogState extends ConsumerState<BuildDeployDialog> {
     final audio = ref.watch(audioReplacementsProvider).count;
     final textures = ref.watch(textureReplacementsProvider).count;
     final scripts = ref.watch(scriptModsProvider).count;
-    // Block Build/Deploy while any staged script is still uncompiled — building would read an empty
-    // mini-cache and fail. The warning text below uses the same flag.
-    final scriptsNotReady = ref.watch(scriptModsProvider).entries.any((s) => !s.compiled);
+    // Block Build/Deploy while any staged script is uncompiled OR was edited after compiling —
+    // building would otherwise read an empty/stale mini-cache. The warning text below uses the
+    // same flag.
+    final scriptsNotReady =
+        ref.watch(scriptModsProvider).entries.any((s) => !scriptCompileFresh(s));
     final gameRoot = gameRootFromExe(ref.watch(gameExePathProvider));
     // Building/deploying an empty bundle would only retire the active mod, so require content.
     final hasContent = overrides + locEdits + audio + textures + scripts > 0;
@@ -141,7 +143,8 @@ class _BuildDeployDialogState extends ConsumerState<BuildDeployDialog> {
             Text('• $scripts script mod(s)'),
             if (scriptsNotReady)
               Text(
-                'Some script mods are not compiled — compile them in the AngelScript tab first.',
+                'Some script mods are not compiled or were edited after compiling — (re)compile '
+                'them in the AngelScript tab first.',
                 style: TextStyle(color: theme.colorScheme.error),
               ),
             const SizedBox(height: 12),
