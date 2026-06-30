@@ -231,6 +231,9 @@ pub fn game_run_regen(game_dir: &Path, src_dir: &Path) -> Result<PathBuf, String
     // user's own loose script that collides with the emitted tree is never destroyed.
     let mut written: Vec<(PathBuf, Option<Vec<u8>>)> = Vec::new();
     let regen_out = src_dir.join("regen.cache");
+    // Drop any stale regen from a prior/failed/timed-out run in this work dir, so a later
+    // `regen_out.exists()` check means THIS run actually produced a fresh cache (no false success).
+    let _ = std::fs::remove_file(&regen_out);
     let result = (|| -> Result<PathBuf, String> {
         // Copy the emitted tree into <G1R>/Script so the game compiles it.
         copy_tree(src_dir, &script_dir, &mut written).map_err(|e| format!("staging .as tree: {e}"))?;
