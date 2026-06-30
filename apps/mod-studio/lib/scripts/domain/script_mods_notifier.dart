@@ -89,11 +89,13 @@ class ScriptMod {
       miniPath: '', compiledHash: '');
 }
 
-/// True only if the mod has a compiled mini AND the on-disk .as still matches the content
-/// that was compiled (so an edited source reads as not-fresh). IO errors => not fresh.
+/// True only if the mod has a compiled mini that STILL EXISTS on disk AND the on-disk .as
+/// matches the content that was compiled (so an edited source, or a mini whose temp dir was
+/// cleaned, reads as not-fresh — Build/Deploy stays gated until recompiled). IO errors => not fresh.
 bool scriptCompileFresh(ScriptMod m) {
   if (m.miniPath.isEmpty || m.compiledHash.isEmpty) return false;
   try {
+    if (!File(m.miniPath).existsSync()) return false;
     return fnv1aHex(File(m.asPath).readAsBytesSync()) == m.compiledHash;
   } catch (_) {
     return false;
