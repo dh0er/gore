@@ -3528,7 +3528,10 @@ fn characters_list_command(
                 .as_deref()
                 .map(|g| g.to_ascii_lowercase().contains(&query))
                 .unwrap_or(false);
-            id_hit || c.unique_name.contains(&query)
+            // `unique_name` is now emitted in ORIGINAL case (so the case-sensitive
+            // knowledge query resolves), but `query` is lower-cased — compare
+            // case-insensitively so the substring search still matches.
+            id_hit || c.unique_name.to_ascii_lowercase().contains(&query)
         })
         .collect();
     let total = rows.len();
