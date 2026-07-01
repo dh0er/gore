@@ -1446,12 +1446,123 @@ mod tests {
         attr_map
     }
 
+    /// A `SetProperty<NameProperty>` named `name` carrying `values` (inline
+    /// FName elements). Mirrors `properties::name_set_property`.
+    fn name_set_property(name: &str, values: &[&str]) -> Vec<u8> {
+        let mut body = 0u32.to_le_bytes().to_vec(); // num_to_remove
+        body.extend_from_slice(&(values.len() as u32).to_le_bytes());
+        for v in values {
+            body.extend_from_slice(&fstring(v));
+        }
+        let mut out = fstring(name);
+        out.extend_from_slice(&fstring("SetProperty"));
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&fstring("NameProperty")); // element type
+        out.extend_from_slice(&0u32.to_le_bytes()); // array_index
+        out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        out.push(0); // tag_flags
+        out.extend_from_slice(&body);
+        out
+    }
+
+    /// The `CharacterKnowledgeByUniqueName` MapProperty<NameProperty,
+    /// StructProperty(KnowledgeSet)> keyed by UniqueName. Each value is an inline
+    /// struct proplist holding one (empty) `Knowledge` name set, terminated by
+    /// "None" — exactly the real-save shape (`list_characters` only reads the map
+    /// KEYS via `map_key_to_string`, but a faithful value keeps the parse honest).
+    /// Mirrors `properties::knowledge_map_property` in `npc.rs` inline style.
+    fn knowledge_map(unique_names: &[&str]) -> Vec<u8> {
+        let empty_value = || {
+            let mut v = name_set_property("Knowledge", &[]);
+            v.extend_from_slice(&fstring("None"));
+            v
+        };
+        let mut body = 0u32.to_le_bytes().to_vec(); // num_to_remove
+        body.extend_from_slice(&(unique_names.len() as u32).to_le_bytes()); // count
+        for name in unique_names {
+            body.extend_from_slice(&fstring(name)); // inline Name key
+            body.extend_from_slice(&empty_value()); // inline struct value
+        }
+
+        let mut out = fstring("CharacterKnowledgeByUniqueName");
+        out.extend_from_slice(&fstring("MapProperty"));
+        out.extend_from_slice(&2u32.to_le_bytes()); // descriptor count
+        out.extend_from_slice(&fstring("NameProperty")); // key type
+        out.extend_from_slice(&0u32.to_le_bytes()); // key_flags
+        out.extend_from_slice(&fstring("StructProperty")); // value type
+        out.extend_from_slice(&1u32.to_le_bytes()); // struct descriptor count
+        out.extend_from_slice(&fstring("KnowledgeSet")); // value struct type
+        out.extend_from_slice(&1u32.to_le_bytes()); // package count
+        out.extend_from_slice(&fstring("/Script/G1R")); // package
+        out.extend_from_slice(&0u32.to_le_bytes()); // array_index
+        out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        out.push(0); // tag_flags
+        out.extend_from_slice(&body);
+        out
+    }
+
+    /// A private root holding BOTH a `CharacterStateSaveGameData_Attributes` map
+    /// (one enumerable actor per GlobalId, so `list_npcs` returns them) AND a
+    /// `CharacterKnowledgeByUniqueName` map keyed by the given UniqueNames — the
+    /// two inputs `list_characters` joins on the `char_key` prefix rule.
+    fn build_root_with_actor_and_knowledge(
+        actor_global_ids: &[&str],
+        knowledge_unique_names: &[&str],
+    ) -> RootObject {
+        let actors: Vec<(&str, Vec<u8>)> = actor_global_ids
+            .iter()
+            .map(|id| (*id, attributes_entry_value(100.0, 100.0)))
+            .collect();
+        let payload = private_root(&[
+            character_state_map("AttributesMap", ATTRIBUTES_TYPE, &actors),
+            knowledge_map(knowledge_unique_names),
+        ]);
+        parse_private_root(&payload).unwrap()
+    }
 
     #[test]
     fn char_key_strips_after_first_dash_and_lowercases() {
         assert_eq!(char_key("NC_ORG_Lares_801-WP_OC_SPAWN"), "nc_org_lares_801");
         assert_eq!(char_key("Hero"), "hero");
         assert_eq!(char_key("A-B-C"), "a");
+    }
+
+    #[test]
+    fn list_characters_flags_and_orphans() {
+        // One enumerable actor whose knowledge entry matches by the char_key prefix
+        // rule, plus a knowledge UniqueName with NO actor (an orphan row).
+        let root = build_root_with_actor_and_knowledge(
+            &["NC_ORG_Lares_801-WP_X"], // actor GlobalIds (dashed -> prefix is the key)
+            &["NC_ORG_Lares_801", "ST_VLK_Mud_Sleeper"], // knowledge UniqueNames
+        );
+        let chars = list_characters(&root).unwrap();
+
+        // The actor row: global_id preserved verbatim, unique_name = lowercased
+        // prefix, knowledge flag set because the map has its charKey.
+        let lares = chars
+            .iter()
+            .find(|c| c.unique_name == "nc_org_lares_801")
+            .expect("actor row present");
+        assert_eq!(lares.global_id.as_deref(), Some("NC_ORG_Lares_801-WP_X"));
+        assert!(lares.has_knowledge, "actor's knowledge charKey matched");
+        // No long-term-memory / inventory maps in this fixture => both false.
+        assert!(!lares.has_events);
+        assert!(!lares.has_inventory);
+
+        // The orphan row: a knowledge UniqueName with no matching actor charKey is
+        // appended with global_id: None, only has_knowledge true.
+        let orphan = chars
+            .iter()
+            .find(|c| c.unique_name == "st_vlk_mud_sleeper")
+            .expect("orphan row present");
+        assert!(orphan.global_id.is_none(), "orphan has no spawned actor");
+        assert!(orphan.has_knowledge);
+        assert!(!orphan.has_events && !orphan.has_inventory);
+        assert!(!orphan.is_dead);
+
+        // Exactly the two rows (one actor + one orphan); the actor's own charKey is
+        // NOT double-counted as an orphan.
+        assert_eq!(chars.len(), 2, "one actor row + one orphan row");
     }
 
     #[test]
