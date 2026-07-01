@@ -423,6 +423,12 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
             let codec_backend = Some(&ooz_backend as &dyn codec_backend::CodecBackend);
             list_npcs_command(&path, &payload, codec_backend)
         }
+        "private.characters.list" => {
+            let path = required_path(&payload)?;
+            let ooz_backend = codec_backend::OozKrakenBackend::default();
+            let codec_backend = Some(&ooz_backend as &dyn codec_backend::CodecBackend);
+            characters_list_command(&path, &payload, codec_backend)
+        }
         "private.npc.attributes" => {
             let path = required_path(&payload)?;
             let ooz_backend = codec_backend::OozKrakenBackend::default();
@@ -3482,6 +3488,53 @@ fn list_npcs_command(
         "total": page.total,
         "offset": page.offset,
         "limit": page.limit,
+    }))
+}
+
+/// `private.characters.list`: the unified character index (actors + knowledge
+/// orphans) with per-aspect availability flags. Decodes once via the shared
+/// prelude, then joins in the core (see `npc::list_characters`).
+///
+/// Unlike the paged `private.npc.list`, this emits the whole authoritative
+/// character set in one call — the frontend builds its master list from a single
+/// response (Player pinned + every NPC + the small tail of knowledge-only
+/// orphans), and a late-game roster (~1600 actors) already exceeds the paged
+/// 1000-row window. Optional `query` filters by GlobalId or UniqueName
+/// substring (case-insensitive); `total` is the returned row count.
+fn characters_list_command(
+    path: &Path,
+    payload: &Value,
+    backend: Option<&dyn codec_backend::CodecBackend>,
+) -> Result<Value, CoreError> {
+    let backend = backend.ok_or_else(|| {
+        CoreError::Codec("listing characters requires a working codec backend".to_string())
+    })?;
+    let query = payload
+        .get("query")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_ascii_lowercase();
+
+    let root = decode_private_root(path, backend)?;
+    let all = npc::list_characters(&root)?;
+    let rows: Vec<&npc::CharacterSummary> = all
+        .iter()
+        .filter(|c| {
+            if query.is_empty() {
+                return true;
+            }
+            let id_hit = c
+                .global_id
+                .as_deref()
+                .map(|g| g.to_ascii_lowercase().contains(&query))
+                .unwrap_or(false);
+            id_hit || c.unique_name.contains(&query)
+        })
+        .collect();
+    let total = rows.len();
+    Ok(json!({
+        "characters": rows,
+        "total": total,
     }))
 }
 
