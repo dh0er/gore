@@ -21,7 +21,11 @@ void main() {
           body: SizedBox(
             width: 600,
             child: ActorDetailHeader(
-              actor: const Actor.npc(id: longId, name: 'Herek'),
+              actor: const Actor.npc(
+                id: longId,
+                name: 'Herek',
+                uniqueName: 'Herek',
+              ),
               locCatalog: catalog,
               lang: kGameLangs.first,
             ),
@@ -53,7 +57,11 @@ void main() {
           body: SizedBox(
             width: 600,
             child: ActorDetailHeader(
-              actor: const Actor.npc(id: id, name: 'ignored'),
+              actor: const Actor.npc(
+                id: id,
+                name: 'ignored',
+                uniqueName: 'Creature_Meatbug',
+              ),
               locCatalog: const {},
               lang: kGameLangs.first,
             ),

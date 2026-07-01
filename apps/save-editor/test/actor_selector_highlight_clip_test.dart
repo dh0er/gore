@@ -69,7 +69,11 @@ void main() {
       ];
       await tester.pumpWidget(
         pump(
-          selected: Actor.npc(id: 'Guard_0-WP_A', name: 'Guard 0'),
+          selected: Actor.npc(
+            id: 'Guard_0-WP_A',
+            name: 'Guard 0',
+            uniqueName: 'Guard_0',
+          ),
           npcs: npcs,
         ),
       );
@@ -114,7 +118,11 @@ void main() {
       ];
       await tester.pumpWidget(
         pump(
-          selected: Actor.npc(id: 'Guard_0-WP_A', name: 'Guard 0'),
+          selected: Actor.npc(
+            id: 'Guard_0-WP_A',
+            name: 'Guard 0',
+            uniqueName: 'Guard_0',
+          ),
           npcs: npcs,
         ),
       );

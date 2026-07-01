@@ -396,7 +396,12 @@ class _ActorSelectorState extends State<ActorSelector> {
                           selectedTileColor: scheme.primaryContainer,
                           selectedColor: scheme.primary,
                           onTap: () => widget.onSelect(
-                            Actor.npc(id: npc.id, name: name, isDead: npc.isDead),
+                            Actor.npc(
+                              id: npc.id,
+                              name: name,
+                              uniqueName: npc.id.split('-').first,
+                              isDead: npc.isDead,
+                            ),
                           ),
                         );
                       },

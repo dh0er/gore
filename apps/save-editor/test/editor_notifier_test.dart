@@ -220,7 +220,9 @@ void main() {
 
     // Switching actor also abandons the invalid in-progress field → unblocked.
     notifier.setNpcEditInvalid('npc.attributes:Lizard-1');
-    notifier.selectActor(const Actor.npc(id: 'Lizard-2', name: 'L2'));
+    notifier.selectActor(
+      const Actor.npc(id: 'Lizard-2', name: 'L2', uniqueName: 'Lizard'),
+    );
     expect(notifier.state.hasInvalidNpcEdit, isFalse);
   });
 
@@ -833,7 +835,9 @@ void main() {
     await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
 
     // Select an NPC against the first save.
-    notifier.selectActor(const Actor.npc(id: 'Lizard-1', name: 'Lizard'));
+    notifier.selectActor(
+      const Actor.npc(id: 'Lizard-1', name: 'Lizard', uniqueName: 'Lizard'),
+    );
     expect(notifier.state.selectedActor.isPlayer, isFalse);
 
     // Switch to a DIFFERENT save: the NPC id belongs to the old file, so the
@@ -850,7 +854,9 @@ void main() {
     final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
     await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
 
-    notifier.selectActor(const Actor.npc(id: 'Lizard-1', name: 'Lizard'));
+    notifier.selectActor(
+      const Actor.npc(id: 'Lizard-1', name: 'Lizard', uniqueName: 'Lizard'),
+    );
     expect(notifier.state.selectedActor.isPlayer, isFalse);
 
     // Re-inspect the SAME save (what saveAllPending()/refresh() do).
