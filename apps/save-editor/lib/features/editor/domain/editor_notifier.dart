@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:file_selector/file_selector.dart';
 import 'package:goresave/features/editor/domain/actor.dart';
+import 'package:goresave/features/editor/domain/character_index.dart';
 import 'package:goresave/features/editor/domain/core_service.dart';
 import 'package:goresave/features/editor/domain/editor_models.dart';
 import 'package:goresave/features/editor/domain/editor_settings_store.dart';
@@ -1381,6 +1382,34 @@ class EditorNotifier extends StateNotifier<EditorState> {
       );
     } catch (error) {
       return NpcActorsPage(error: 'NPC list failed: $error');
+    }
+  }
+
+  /// Fetch the full unified character index for the selected save in ONE call
+  /// (`private.characters.list` is unpaginated — it returns every actor plus
+  /// knowledge-only orphans in a single response, so there is no paging loop
+  /// unlike [loadAllNpcActors]). Backs the Charaktere master list. Mirrors
+  /// [loadNpcActors]: reads [state.selectedPath], goes through [_execute], and
+  /// returns a typed page carrying an inline [CharacterIndexPage.error] instead
+  /// of throwing so the caller can render it.
+  Future<CharacterIndexPage> loadAllCharacters() async {
+    final path = state.selectedPath;
+    if (path == null) {
+      return const CharacterIndexPage(error: 'No save selected.');
+    }
+    try {
+      final response = await _execute(
+        'private.characters.list',
+        payload: {'path': path},
+      );
+      if (response['ok'] != true) {
+        return CharacterIndexPage(error: _errorMessage(response));
+      }
+      return CharacterIndexPage.fromJson(
+        (response['data'] as Map).cast<String, Object?>(),
+      );
+    } catch (error) {
+      return CharacterIndexPage(error: 'Character list failed: $error');
     }
   }
 
