@@ -4,8 +4,7 @@ import 'package:goresave/l10n/app_localizations.dart';
 /// Item categories for Gothic 1 Remake inventory items, derived from the
 /// Angelscript class-name prefix (e.g. `ItMi_Orenugget` -> misc).
 ///
-/// Prefix set verified against the UE4SS object dump of 2026-06-12; see
-/// docs/superpowers/specs/2026-06-12-inventory-add-item-design.md.
+/// Prefix set verified against the UE4SS object dump of 2026-06-12.
 enum ItemCategory {
   meleeWeapon('Melee weapons'),
   rangedWeapon('Ranged weapons'),

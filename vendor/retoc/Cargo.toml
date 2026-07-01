@@ -8,8 +8,8 @@ homepage = "https://github.com/trumank/retoc"
 license = "MIT"
 
 # Vendored fork of https://github.com/trumank/retoc @ d7b635039c3db60942efabcd29d49679f42ab089
-# Modifications (see docs/superpowers/notes/2026-06-26-retoc-oodle-swap.md):
-#   * Oodle DECODE routed to the in-repo `gore-oodle` crate (ooz Kraken) instead
+# Modifications:
+#   * Oodle DECODE routed to the in-repo `gore-oodle` crate (Kraken) instead
 #     of Epic's proprietary oo2core_9_win64.dll loaded via `oodle_loader`.
 #   * `oodle_loader` dependency removed; `repak`'s `oodle` feature removed so no
 #     part of the build fetches/links oo2core.

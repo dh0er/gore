@@ -341,7 +341,7 @@ gore/
 │  ├─ gore-tex/            UE5 IoStore texture extract/replace (Zen .utoc/.ucas/.pak)
 │  ├─ gore-ffi/            cdylib dart:ffi bridge for mod-studio (gore_ffi.dll)
 │  ├─ gore-save/           GSAV savegame parse/edit core + its cdylib (gore_save.dll)
-│  ├─ gore-oodle/          Oodle/Kraken codec (vendored ooz, no oo2core DLL)
+│  ├─ gore-oodle/          Oodle/Kraken codec (pure Rust, no oo2core DLL)
 │  └─ gore-as/             AngelScript precompiled-cache decoder/emitter/splicer (surfaced via `gore as`)
 ├─ apps/
 │  ├─ save-editor/         Flutter (Windows) savegame editor — WinSparkle auto-update
@@ -368,7 +368,7 @@ gore/
 | [`gore-tex`](crates/gore-tex) | Rust lib | IoStore texture extract/replace; cooks + packs a Zen triplet. Built on vendored [`retoc`](vendor/retoc) + `gore-oodle`. |
 | [`gore-ffi`](crates/gore-ffi) | Rust cdylib | `dart:ffi` bridge for mod-studio (`gore_ffi.dll`) over the full mod engine. |
 | [`gore-save`](crates/gore-save) | Rust lib + cdylib | GSAV savegame parse/edit core (`gore_save.dll`). |
-| [`gore-oodle`](crates/gore-oodle) | Rust lib | Oodle/Kraken codec (vendored ooz; no proprietary `oo2core` DLL). |
+| [`gore-oodle`](crates/gore-oodle) | Rust lib | Oodle/Kraken codec (pure Rust; no proprietary `oo2core` DLL). |
 | [`gore-as`](crates/gore-as) | Rust lib | AngelScript precompiled-cache decoder/emitter/decompiler/splicer. |
 
 # Build

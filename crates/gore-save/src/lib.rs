@@ -375,8 +375,8 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
                 .and_then(Value::as_str)
                 .map(PathBuf::from)
                 .unwrap_or_else(default_save_root);
-            let ooz_backend = codec_backend::OozKrakenBackend::default();
-            let codec_backend = Some(&ooz_backend as &dyn codec_backend::CodecBackend);
+            let kraken_backend = codec_backend::KrakenBackend::default();
+            let codec_backend = Some(&kraken_backend as &dyn codec_backend::CodecBackend);
             let summary = scan_save_dir_summary_with_codec_backend(&path, codec_backend)?;
             Ok(json!({
                 "saveRoot": path,
@@ -395,8 +395,8 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
                 .get("privateChunkLimit")
                 .and_then(Value::as_u64)
                 .map(|value| value as usize);
-            let ooz_backend = codec_backend::OozKrakenBackend::default();
-            let codec_backend = Some(&ooz_backend as &dyn codec_backend::CodecBackend);
+            let kraken_backend = codec_backend::KrakenBackend::default();
+            let codec_backend = Some(&kraken_backend as &dyn codec_backend::CodecBackend);
             Ok(inspect_save_with_codec_backend(
                 &path,
                 include_private,
@@ -407,38 +407,38 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
         "check_codec" => check_codec(&payload),
         "search_typed_properties" => {
             let path = required_path(&payload)?;
-            let ooz_backend = codec_backend::OozKrakenBackend::default();
-            let codec_backend = Some(&ooz_backend as &dyn codec_backend::CodecBackend);
+            let kraken_backend = codec_backend::KrakenBackend::default();
+            let codec_backend = Some(&kraken_backend as &dyn codec_backend::CodecBackend);
             search_typed_properties(&path, &payload, codec_backend)
         }
         "query_progression" => {
             let path = required_path(&payload)?;
-            let ooz_backend = codec_backend::OozKrakenBackend::default();
-            let codec_backend = Some(&ooz_backend as &dyn codec_backend::CodecBackend);
+            let kraken_backend = codec_backend::KrakenBackend::default();
+            let codec_backend = Some(&kraken_backend as &dyn codec_backend::CodecBackend);
             query_progression(&path, &payload, codec_backend)
         }
         "private.npc.list" => {
             let path = required_path(&payload)?;
-            let ooz_backend = codec_backend::OozKrakenBackend::default();
-            let codec_backend = Some(&ooz_backend as &dyn codec_backend::CodecBackend);
+            let kraken_backend = codec_backend::KrakenBackend::default();
+            let codec_backend = Some(&kraken_backend as &dyn codec_backend::CodecBackend);
             list_npcs_command(&path, &payload, codec_backend)
         }
         "private.npc.attributes" => {
             let path = required_path(&payload)?;
-            let ooz_backend = codec_backend::OozKrakenBackend::default();
-            let codec_backend = Some(&ooz_backend as &dyn codec_backend::CodecBackend);
+            let kraken_backend = codec_backend::KrakenBackend::default();
+            let codec_backend = Some(&kraken_backend as &dyn codec_backend::CodecBackend);
             npc_attributes_command(&path, &payload, codec_backend)
         }
         "private.npc.inventory" => {
             let path = required_path(&payload)?;
-            let ooz_backend = codec_backend::OozKrakenBackend::default();
-            let codec_backend = Some(&ooz_backend as &dyn codec_backend::CodecBackend);
+            let kraken_backend = codec_backend::KrakenBackend::default();
+            let codec_backend = Some(&kraken_backend as &dyn codec_backend::CodecBackend);
             npc_inventory_command(&path, &payload, codec_backend)
         }
         "private.factions.list" => {
             let path = required_path(&payload)?;
-            let ooz_backend = codec_backend::OozKrakenBackend::default();
-            let codec_backend = Some(&ooz_backend as &dyn codec_backend::CodecBackend);
+            let kraken_backend = codec_backend::KrakenBackend::default();
+            let codec_backend = Some(&kraken_backend as &dyn codec_backend::CodecBackend);
             list_guild_crimes_command(&path, codec_backend)
         }
         "validate_roundtrip" => {
@@ -466,7 +466,7 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
         }
         "validate_codec_roundtrip" => {
             let path = required_path(&payload)?;
-            let backend = codec_backend::OozKrakenBackend::default();
+            let backend = codec_backend::KrakenBackend::default();
             Ok(validate_codec_roundtrip_with_backend(&path, &backend)?)
         }
         "write_save" => {
@@ -488,8 +488,8 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
                 .get("syncPersistentDataList")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
-            let ooz_backend = codec_backend::OozKrakenBackend::default();
-            let codec_backend = Some(&ooz_backend as &dyn codec_backend::CodecBackend);
+            let kraken_backend = codec_backend::KrakenBackend::default();
+            let codec_backend = Some(&kraken_backend as &dyn codec_backend::CodecBackend);
             Ok(write_save_internal(
                 &path,
                 &edits,
@@ -582,7 +582,7 @@ pub fn scan_save_dir_summary(path: &Path) -> Result<SaveDirSummary, CoreError> {
     // The codec is in-process and always available, so the public Rust scan API
     // decodes private payloads (e.g. screenshot metadata) just like the FFI
     // scan command, rather than silently skipping decode.
-    let backend = codec_backend::OozKrakenBackend::default();
+    let backend = codec_backend::KrakenBackend::default();
     scan_save_dir_summary_with_codec_backend(path, Some(&backend))
 }
 
@@ -4443,7 +4443,7 @@ fn check_codec(_payload: &Value) -> Result<Value, CoreError> {
 }
 
 fn codec_status() -> Result<Value, CoreError> {
-    let probe = codec_backend::CodecBackend::probe(&codec_backend::OozKrakenBackend::default())?;
+    let probe = codec_backend::CodecBackend::probe(&codec_backend::KrakenBackend::default())?;
     Ok(json!({
         "backend": probe.backend,
         "available": probe.available,
@@ -11436,15 +11436,15 @@ mod tests {
         let response = execute_json(r#"{"command":"check_codec","payload":{}}"#);
         let value: Value = serde_json::from_str(&response).unwrap();
         assert_eq!(value["ok"], true);
-        assert_eq!(value["data"]["backend"], "ooz_kraken");
+        assert_eq!(value["data"]["backend"], "kraken");
         assert_eq!(value["data"]["available"], true);
         assert!(!value["data"].to_string().contains("oo2core"));
     }
 
     #[test]
-    fn codec_status_reports_ooz_backend_ready() {
+    fn codec_status_reports_kraken_backend_ready() {
         let value = codec_status().unwrap();
-        assert_eq!(value["backend"], "ooz_kraken");
+        assert_eq!(value["backend"], "kraken");
         assert_eq!(value["available"], true);
         assert_eq!(value["canDecompress"], true);
         assert_eq!(value["canCompress"], true);

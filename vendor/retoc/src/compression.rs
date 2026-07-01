@@ -2,11 +2,10 @@ use anyhow::Result;
 use std::io::{Read as _, Write};
 use strum::{AsRefStr, EnumString, VariantArray};
 
-/// Oodle/Kraken encode level used by the gore-oodle-backed encode arm. Clamped to
-/// [`gore_oodle::MAX_SAFE_COMPRESS_LEVEL`] (= 5) at the call site because the ooz
-/// encoder crashes above it. The default level (which is <= the cap) is the level
-/// at which gore-oodle is byte-identical to Epic's Oodle.
-const OODLE_ENCODE_LEVEL: u8 = gore_oodle::MAX_SAFE_COMPRESS_LEVEL;
+/// Oodle/Kraken encode effort used by the gore-oodle-backed encode arm. The pure-Rust
+/// Kraken encoder produces valid Oodle-decodable blocks; UE only needs validity at the
+/// advertised uncompressed sizes, not byte-identity with Epic's encoder.
+const OODLE_ENCODE_LEVEL: gore_oodle::Level = gore_oodle::Level::Default;
 
 #[derive(Debug, Clone, Copy, PartialEq, EnumString, AsRefStr, VariantArray)]
 pub enum CompressionMethod {
@@ -37,19 +36,15 @@ pub fn compress<S: Write>(compression: CompressionMethod, input: &[u8], mut outp
             output.write_all(&buf)?;
         }
         CompressionMethod::Oodle => {
-            // ENCODE routed to the in-repo gore-oodle (ooz Kraken) codec so the
-            // `to-zen` write path needs NO Epic Oodle DLL. Upstream retoc passed
-            // (Compressor::Mermaid, CompressionLevel::Normal) to Epic's encoder;
-            // here we emit Kraken at a SAFE level. gore-oodle's ooz encoder crashes
-            // above MAX_SAFE_COMPRESS_LEVEL (= 5) and is only byte-identical to
-            // Epic's output at the default level, so we clamp. UE does not require
-            // byte-identical re-compression to load a container -- it only needs
-            // valid Oodle-decodable blocks at the advertised uncompressed sizes,
-            // which Kraken provides. The .utoc still records this block as Oodle
-            // (CompressionMethod::Oodle) so the game decompresses it via Oodle.
-            // See docs/superpowers/notes/2026-06-26-tozen-encode.md.
-            let level = OODLE_ENCODE_LEVEL.min(gore_oodle::MAX_SAFE_COMPRESS_LEVEL);
-            let compressed = gore_oodle::kraken_compress(input, level)
+            // ENCODE routed to the in-repo pure-Rust gore-oodle (Kraken) codec so the
+            // `to-zen` write path needs NO Epic Oodle DLL and no C/C++ toolchain.
+            // Upstream retoc passed (Compressor::Mermaid, CompressionLevel::Normal) to
+            // Epic's encoder; here we emit Kraken. UE does not require byte-identical
+            // re-compression to load a container -- it only needs valid Oodle-decodable
+            // blocks at the advertised uncompressed sizes, which Kraken provides. The
+            // .utoc still records this block as Oodle (CompressionMethod::Oodle) so the
+            // game decompresses it via Oodle.
+            let compressed = gore_oodle::compress(input, OODLE_ENCODE_LEVEL)
                 .map_err(|e| anyhow::anyhow!("Oodle (gore-oodle) compression failed: {e}"))?;
             output.write_all(&compressed)?;
         }
@@ -69,10 +64,10 @@ pub fn decompress(compression: CompressionMethod, input: &[u8], output: &mut [u8
             lz4_flex::block::decompress_into(input, output)?;
         }
         CompressionMethod::Oodle => {
-            // DECODE routed to the in-repo gore-oodle (ooz Kraken) codec, which is
+            // DECODE routed to the in-repo gore-oodle (Kraken) codec, which is
             // byte-validated as identical to Epic's Oodle decoder. `output.len()` is
             // the exact uncompressed block size retoc already computed from the TOC.
-            let decoded = gore_oodle::kraken_decompress(input, output.len()).map_err(|e| anyhow::anyhow!("Oodle (gore-oodle) decompression failed: {e}"))?;
+            let decoded = gore_oodle::decompress(input, output.len()).map_err(|e| anyhow::anyhow!("Oodle (gore-oodle) decompression failed: {e}"))?;
             output.copy_from_slice(&decoded);
         }
     }

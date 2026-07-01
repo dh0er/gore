@@ -1584,13 +1584,13 @@ mod tests {
     }
 
     /// Decompress a raw GSAV `.sav` into its private payload (GSAV header →
-    /// compressed stream → ooz decode), mirroring `inspect_bytes`.
+    /// compressed stream → Oodle decode), mirroring `inspect_bytes`.
     fn load_sav_payload(path: &str) -> Vec<u8> {
         let data = std::fs::read(path).unwrap_or_else(|e| panic!("{path}: {e}"));
         assert!(data.starts_with(b"GSAV"), "{path}: not GSAV");
         let public_size = u32::from_le_bytes(data[9..13].try_into().unwrap()) as usize;
         let stream = crate::parse_compressed_stream(&data, 13 + public_size).unwrap();
-        let backend = crate::codec_backend::OozKrakenBackend::default();
+        let backend = crate::codec_backend::KrakenBackend::default();
         crate::decompress_private_payload(&data, &stream, &backend).unwrap()
     }
 

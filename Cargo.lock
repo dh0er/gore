@@ -960,7 +960,6 @@ name = "gore-oodle"
 version = "0.0.0"
 dependencies = [
  "base64",
- "cc",
  "hex",
  "sha1",
 ]

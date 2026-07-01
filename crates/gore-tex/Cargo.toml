@@ -8,8 +8,7 @@ license.workspace = true
 gore-oodle = { path = "../gore-oodle" }
 gore-loc = { path = "../gore-loc" }
 # Vendored fork of retoc (IoStore reader) with its Oodle DECODE backend redirected
-# to gore-oodle so no oo2core_9_win64.dll is fetched/linked. See vendor/retoc and
-# docs/superpowers/notes/2026-06-26-retoc-oodle-swap.md.
+# to gore-oodle so no oo2core_9_win64.dll is fetched/linked. See vendor/retoc.
 retoc = { path = "../../vendor/retoc" }
 # Same git source/version retoc itself uses (already in the workspace lockfile);
 # only needed to emit the empty `.pak` stub the game requires to detect and mount

@@ -46,12 +46,24 @@ pub struct CodecBackendProbe {
     pub details: Value,
 }
 
-/// In-process Oodle Kraken codec backed by the vendored ooz sources. Always
-/// available; needs no game executable.
+/// In-process Oodle Kraken codec, pure Rust. Always available; needs no game
+/// executable and no C/C++ toolchain.
 #[derive(Debug, Clone, Copy, Default)]
-pub struct OozKrakenBackend;
+pub struct KrakenBackend;
 
-impl OozKrakenBackend {
+/// Map the backend's numeric level to the pure-Rust codec's effort `Level`. The v1
+/// Kraken encoder's levels are close in ratio; the old 0..=5 "safe" range maps onto
+/// the effort enum, with anything higher treated as `Max`.
+fn level_to_oodle(level: u8) -> gore_oodle::Level {
+    match level {
+        0..=1 => gore_oodle::Level::Fastest,
+        2..=3 => gore_oodle::Level::Fast,
+        4..=6 => gore_oodle::Level::Default,
+        _ => gore_oodle::Level::Max,
+    }
+}
+
+impl KrakenBackend {
     fn self_test(&self) -> (bool, bool, String) {
         let can_decompress = codec_calibration::decode_self_test();
         let can_compress = can_decompress && codec_calibration::compress_roundtrip_self_test();
@@ -64,28 +76,27 @@ impl OozKrakenBackend {
     }
 }
 
-impl CodecBackend for OozKrakenBackend {
+impl CodecBackend for KrakenBackend {
     fn probe(&self) -> Result<CodecBackendProbe, CoreError> {
         let (can_decompress, can_compress, status) = self.self_test();
         Ok(CodecBackendProbe {
-            backend: "ooz_kraken".to_string(),
+            backend: "kraken".to_string(),
             available: can_decompress,
             can_decompress,
             can_compress,
             status,
             profile: None,
             resolution_mode: None,
-            details: json!({ "adapter": "ooz_kraken" }),
+            details: json!({ "adapter": "kraken" }),
         })
     }
 
     fn decompress(&self, input: &[u8], expected_size: usize) -> Result<Vec<u8>, CoreError> {
-        gore_oodle::kraken_decompress(input, expected_size)
-            .map_err(|e| CoreError::Codec(e.to_string()))
+        gore_oodle::decompress(input, expected_size).map_err(|e| CoreError::Codec(e.to_string()))
     }
 
     fn compress(&self, input: &[u8], level: u8) -> Result<Vec<u8>, CoreError> {
-        gore_oodle::kraken_compress(input, level).map_err(|e| CoreError::Codec(e.to_string()))
+        gore_oodle::compress(input, level_to_oodle(level)).map_err(|e| CoreError::Codec(e.to_string()))
     }
 }
 
@@ -94,16 +105,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ooz_backend_roundtrips_and_reports_available() {
-        let backend = OozKrakenBackend::default();
+    fn kraken_backend_roundtrips_and_reports_available() {
+        let backend = KrakenBackend::default();
 
         let input: Vec<u8> = (0..4096u32).map(|i| (i * 5) as u8).collect();
-        let comp = backend.compress(&input, 6).unwrap(); // level clamped internally
+        let comp = backend.compress(&input, 6).unwrap(); // level mapped to effort enum
         let back = backend.decompress(&comp, input.len()).unwrap();
         assert_eq!(back, input);
 
         let probe = backend.probe().unwrap();
-        assert_eq!(probe.backend, "ooz_kraken");
+        assert_eq!(probe.backend, "kraken");
         assert!(probe.available);
         assert!(probe.can_decompress);
         assert!(probe.can_compress);

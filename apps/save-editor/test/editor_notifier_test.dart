@@ -2229,12 +2229,12 @@ class _RecordingCoreService implements GoresaveCoreService {
         return {
           'ok': true,
           'data': {
-            'backend': 'ooz_kraken',
+            'backend': 'kraken',
             'available': true,
             'canDecompress': true,
             'canCompress': codecCanCompress,
             'status': codecCanCompress ? 'ready' : 'decode_only',
-            'details': {'adapter': 'ooz_kraken'},
+            'details': {'adapter': 'kraken'},
           },
         };
       case 'query_progression':

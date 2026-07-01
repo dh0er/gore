@@ -294,7 +294,7 @@ class _StructuralCoreService implements GoresaveCoreService {
         return {
           'ok': true,
           'data': {
-            'backend': 'ooz_kraken',
+            'backend': 'kraken',
             'available': true,
             'canDecompress': true,
             'canCompress': true,

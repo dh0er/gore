@@ -9,12 +9,12 @@ void main() {
   testWidgets('ready status shows the ready indicator and no setup prompt',
       (tester) async {
     const codec = CodecStatus(
-      backend: 'ooz_kraken',
+      backend: 'kraken',
       available: true,
       status: 'ready',
       canDecompress: true,
       canCompress: true,
-      adapter: 'ooz_kraken',
+      adapter: 'kraken',
     );
     await tester.pumpWidget(wrapWithL10n(const Scaffold(
       body: SingleChildScrollView(
@@ -28,17 +28,17 @@ void main() {
     expect(find.textContaining('codec host'), findsNothing);
 
     // Techy backend detail stays hidden until Details is expanded.
-    expect(find.textContaining('ooz_kraken'), findsNothing);
+    expect(find.textContaining('kraken'), findsNothing);
     await tester.tap(find.text('Details'));
     await tester.pumpAndSettle();
-    expect(find.text('Backend: ooz_kraken'), findsOneWidget);
+    expect(find.text('Backend: kraken'), findsOneWidget);
     expect(find.textContaining('Compress: yes'), findsOneWidget);
   });
 
   testWidgets('decode_only status uses a warning icon, not the success check',
       (tester) async {
     const codec = CodecStatus(
-      backend: 'ooz_kraken',
+      backend: 'kraken',
       available: true,
       status: 'decode_only',
       canDecompress: true,
@@ -55,7 +55,7 @@ void main() {
 
   testWidgets('unavailable status uses the error icon', (tester) async {
     const codec = CodecStatus(
-      backend: 'ooz_kraken',
+      backend: 'kraken',
       available: false,
       status: 'unavailable',
     );
@@ -82,7 +82,7 @@ void main() {
   testWidgets('shows codecError alongside an existing codec status',
       (tester) async {
     const codec = CodecStatus(
-      backend: 'ooz_kraken',
+      backend: 'kraken',
       available: true,
       status: 'ready',
       canCompress: true,

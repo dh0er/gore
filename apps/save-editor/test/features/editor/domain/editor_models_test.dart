@@ -427,18 +427,18 @@ void main() {
 
   test('CodecStatus exposes the in-process adapter from details', () {
     final codec = CodecStatus.fromJson({
-      'backend': 'ooz_kraken',
+      'backend': 'kraken',
       'available': true,
       'canDecompress': true,
       'canCompress': true,
       'status': 'ready',
-      'details': {'adapter': 'ooz_kraken'},
+      'details': {'adapter': 'kraken'},
     });
 
-    expect(codec.backend, 'ooz_kraken');
+    expect(codec.backend, 'kraken');
     expect(codec.available, isTrue);
     expect(codec.status, 'ready');
-    expect(codec.adapter, 'ooz_kraken');
+    expect(codec.adapter, 'kraken');
     expect(codec.canDecompress, isTrue);
     expect(codec.canCompress, isTrue);
   });
