@@ -49,6 +49,9 @@ class AppLocalizationsPl extends AppLocalizations {
       'Ta postać nie ma aktora w świecie, więc nie ma atrybutów, ekwipunku ani zdarzeń.';
 
   @override
+  String get characterNoEventsBody => 'Brak zdarzeń dla tej postaci.';
+
+  @override
   String get characterOrphanGroup => 'Inne';
 
   @override

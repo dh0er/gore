@@ -261,6 +261,16 @@ class _CharacterMasterListState extends State<CharacterMasterList> {
     return _actors.where((e) => e.search.contains(q)).toList(growable: false);
   }
 
+  /// The current filtered ORPHAN list — the SAME id|name predicate as
+  /// [_filtered], applied to the trailing orphan group so a search query
+  /// narrows the whole list, not just the spawned actors. Empty query → the
+  /// full orphan list. (Orphans stay unpaginated; only the filter applies.)
+  List<_SearchableRow> get _filteredOrphans {
+    final q = _query;
+    if (q.isEmpty) return _orphans;
+    return _orphans.where((e) => e.search.contains(q)).toList(growable: false);
+  }
+
   void _onSearchChanged(String _) {
     _debounce?.cancel();
     _debounce = Timer(const Duration(milliseconds: 200), _applyQuery);
@@ -279,8 +289,11 @@ class _CharacterMasterListState extends State<CharacterMasterList> {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
 
-    // Filter (id|name) then paginate the ACTOR list, both client-side.
+    // Filter (id|name) then paginate the ACTOR list, both client-side. The
+    // orphan group gets the same filter (no pagination — it renders in full
+    // after the paginated actors).
     final filtered = _filtered;
+    final orphans = _filteredOrphans;
     final total = filtered.length;
     // Clamp the cursor: a shrinking filtered set may leave it past the end.
     final offset = total == 0
@@ -372,13 +385,15 @@ class _CharacterMasterListState extends State<CharacterMasterList> {
                           _npcTile(entry, scheme, l10n),
                           const Divider(height: 1),
                         ],
-                        // Orphan group: rendered ONLY when non-empty.
-                        if (_orphans.isNotEmpty) ...[
+                        // Orphan group: rendered ONLY when non-empty after the
+                        // query filter — when a search matches no orphan the
+                        // header disappears with the rows.
+                        if (orphans.isNotEmpty) ...[
                           Padding(
                             padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
                             child: Text(l10n.characterOrphanGroup),
                           ),
-                          for (final entry in _orphans) ...[
+                          for (final entry in orphans) ...[
                             _orphanTile(entry, scheme, l10n),
                             const Divider(height: 1),
                           ],

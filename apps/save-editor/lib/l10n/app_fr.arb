@@ -13,6 +13,7 @@
   "tabWorld": "Monde",
   "tabCharacters": "Personnages",
   "characterNoActorBody": "Ce personnage n'a pas d'acteur dans le monde ; il n'a donc ni attributs, ni inventaire, ni événements.",
+  "characterNoEventsBody": "Aucun événement pour ce personnage.",
   "characterOrphanGroup": "Autres",
   "tabAllData": "Toutes les données",
   "tabBackups": "Sauvegardes",

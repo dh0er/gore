@@ -49,6 +49,9 @@ class AppLocalizationsDe extends AppLocalizations {
       'Dieser Charakter hat keinen Akteur in der Welt und daher keine Attribute, kein Inventar und keine Ereignisse.';
 
   @override
+  String get characterNoEventsBody => 'Keine Ereignisse für diesen Charakter.';
+
+  @override
   String get characterOrphanGroup => 'Weitere';
 
   @override

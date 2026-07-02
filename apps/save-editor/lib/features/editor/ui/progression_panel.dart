@@ -1299,6 +1299,19 @@ class _EventsDetailState extends ConsumerState<EventsDetail> {
   // Epoch guards the events loader so a stale load never clobbers a newer one.
   int _eventsEpoch = 0;
   int _eventPageSize = _defaultPageSize;
+  // True when the selected character has no LongTermMemoryByGlobalId entry yet
+  // (the common case for an NPC the hero never interacted with). The core
+  // reports this via a benign "has no memory entry" error; we treat it as
+  // "no events yet" and render a neutral empty state instead of a red error.
+  // Distinct from a real load failure. Mirrors KnowledgeDetail's
+  // [_noKnowledgeYet] handling of the equivalent knowledge error.
+  bool _noEventsYet = false;
+
+  /// Substring the core uses in its error when a character exists in the save
+  /// but has no LongTermMemoryByGlobalId entry yet (see gore-save
+  /// `query_progression` events branch). Used to tell that benign "no events
+  /// yet" state apart from a genuine core/parse failure.
+  static const _noEntryMarker = 'has no memory entry';
 
   @override
   void initState() {
@@ -1325,6 +1338,7 @@ class _EventsDetailState extends ConsumerState<EventsDetail> {
       _selectedCharacter = id;
       _loadingEvents = id != null;
       _events = const MemoryEventsPage(); // clear stale page immediately
+      _noEventsYet = false;
     });
     if (id == null) return;
     final page = await widget.notifier.loadMemoryEvents(
@@ -1333,9 +1347,14 @@ class _EventsDetailState extends ConsumerState<EventsDetail> {
       limit: _eventPageSize,
     );
     if (!mounted || epoch != _eventsEpoch) return;
+    // A "has no memory entry" error is the expected shape for a character the
+    // hero never interacted with: fold it into the no-events-yet state (a
+    // neutral empty list) instead of surfacing a red error.
+    final noEntry = page.error != null && page.error!.contains(_noEntryMarker);
     setState(() {
       _loadingEvents = false;
-      _events = page;
+      _noEventsYet = noEntry;
+      _events = noEntry ? const MemoryEventsPage() : page;
     });
   }
 
@@ -1438,9 +1457,21 @@ class _EventsDetailState extends ConsumerState<EventsDetail> {
                       onPageSize: _setEventPageSize,
                     ),
                     const SizedBox(height: 4),
-                    // Events list — only scrollable in this pane
+                    // Events list — only scrollable in this pane. In the
+                    // benign no-memory-entry state the list is replaced by a
+                    // neutral "no events" hint (there is no add flow for
+                    // events, so unlike KnowledgeDetail no affordance remains).
                     Expanded(
-                      child: _loadingEvents && _events.events.isEmpty
+                      child: _noEventsYet
+                          ? Center(
+                              child: Text(
+                                l10n.characterNoEventsBody,
+                                style: TextStyle(
+                                  color: scheme.onSurfaceVariant,
+                                ),
+                              ),
+                            )
+                          : _loadingEvents && _events.events.isEmpty
                           ? const Center(child: CircularProgressIndicator())
                           : ListView.separated(
                               itemCount: _events.events.length,

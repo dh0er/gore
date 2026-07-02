@@ -13,6 +13,7 @@
   "tabWorld": "Świat",
   "tabCharacters": "Postacie",
   "characterNoActorBody": "Ta postać nie ma aktora w świecie, więc nie ma atrybutów, ekwipunku ani zdarzeń.",
+  "characterNoEventsBody": "Brak zdarzeń dla tej postaci.",
   "characterOrphanGroup": "Inne",
   "tabAllData": "Wszystkie dane",
   "tabBackups": "Kopie zapasowe",

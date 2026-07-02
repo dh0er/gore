@@ -49,6 +49,9 @@ class AppLocalizationsPt extends AppLocalizations {
       'Este personagem não tem um ator no mundo, portanto não tem atributos, inventário ou eventos.';
 
   @override
+  String get characterNoEventsBody => 'Sem eventos para este personagem.';
+
+  @override
   String get characterOrphanGroup => 'Outros';
 
   @override
@@ -1189,6 +1192,9 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
   @override
   String get characterNoActorBody =>
       'Este personagem não tem um ator no mundo, portanto não tem atributos, inventário ou eventos.';
+
+  @override
+  String get characterNoEventsBody => 'Sem eventos para este personagem.';
 
   @override
   String get characterOrphanGroup => 'Outros';

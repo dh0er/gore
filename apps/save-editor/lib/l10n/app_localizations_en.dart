@@ -49,6 +49,9 @@ class AppLocalizationsEn extends AppLocalizations {
       'This character has no in-world actor, so it has no attributes, inventory, or events.';
 
   @override
+  String get characterNoEventsBody => 'No events for this character.';
+
+  @override
   String get characterOrphanGroup => 'Other';
 
   @override

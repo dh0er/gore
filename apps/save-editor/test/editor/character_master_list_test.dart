@@ -410,6 +410,78 @@ void main() {
     expect(calls, 1);
   });
 
+  // ---------------------------------------------------------------------------
+  // The search query filters the ORPHAN group too (same id|name predicate as
+  // the actor rows). When no orphan matches, the whole "Other" section —
+  // header included — is hidden, mirroring the non-empty-only rule.
+  // ---------------------------------------------------------------------------
+
+  /// Hero actor + one NPC + one knowledge-only orphan — the standard fixture.
+  CharacterIndexPage heroNpcOrphanPage() => CharacterIndexPage(
+    characters: [
+      _actor('Hero', uniqueName: 'Hero', hasKnowledge: true, hasEvents: true),
+      _actor('Lizard-WP_A'),
+      const CharacterRow(
+        globalId: null,
+        uniqueName: 'ST_VLK_Mud_Sleeper',
+        isDead: false,
+        hasInventory: false,
+        hasKnowledge: true,
+        hasEvents: false,
+      ),
+    ],
+    total: 3,
+  );
+
+  testWidgets('a query matching only an NPC hides the orphan group entirely', (
+    tester,
+  ) async {
+    await tester.pumpWidget(_pump(load: () async => heroNpcOrphanPage()));
+    await tester.pumpAndSettle();
+
+    // Row titles live inside ListTile — scope the match so the search field's
+    // own text can never match.
+    Finder tileText(String s) =>
+        find.descendant(of: find.byType(ListTile), matching: find.text(s));
+
+    // Unfiltered: the NPC, the orphan row, and the 'Other' header all render.
+    expect(tileText('Lizard'), findsOneWidget);
+    expect(tileText('St Vlk Mud Sleeper'), findsOneWidget);
+    expect(find.text('Other'), findsOneWidget);
+
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Search NPCs'),
+      'Lizard',
+    );
+    await tester.pumpAndSettle();
+
+    // Only the matching NPC remains; the orphan row AND the group header are
+    // gone (not an always-rendered trailing section).
+    expect(tileText('Lizard'), findsOneWidget);
+    expect(tileText('St Vlk Mud Sleeper'), findsNothing);
+    expect(find.text('Other'), findsNothing);
+  });
+
+  testWidgets('a query matching an orphan keeps it and filters the actors', (
+    tester,
+  ) async {
+    await tester.pumpWidget(_pump(load: () async => heroNpcOrphanPage()));
+    await tester.pumpAndSettle();
+
+    // 'sleeper' matches only the orphan (id 'ST_VLK_Mud_Sleeper' and its
+    // prettified name 'St Vlk Mud Sleeper' — same predicate as actors).
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Search NPCs'),
+      'sleeper',
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('St Vlk Mud Sleeper'), findsOneWidget);
+    expect(find.text('Other'), findsOneWidget);
+    // The non-matching actor is filtered out.
+    expect(find.text('Lizard'), findsNothing);
+  });
+
   testWidgets('searching an id substring still filters', (tester) async {
     await tester.pumpWidget(
       _pump(
