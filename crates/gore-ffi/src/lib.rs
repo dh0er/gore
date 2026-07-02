@@ -92,6 +92,9 @@ fn dispatch(input: &str) -> Value {
         "mod_undeploy" => mod_undeploy(payload),
         "texture_index" => texture_index(payload),
         "texture_extract" => texture_extract(payload),
+        "script_list_modules" => script_list_modules(payload),
+        "script_emit_module" => script_emit_module(payload),
+        "script_compile" => script_compile(payload),
         other => err("UNKNOWN_COMMAND", format!("unknown command: {other}")),
     }
 }
@@ -374,6 +377,107 @@ fn texture_extract(payload: Value) -> Value {
         "is_virtual": info.is_virtual, "vt_layers": info.vt_layers, "mipmapped": info.mipmapped })
 }
 
+/// Build the class name -> super name map so emitted source gets subclass casts right.
+fn as_class_hierarchy(mods: &[gore_as::cache::model::Module]) -> std::collections::HashMap<String, String> {
+    let mut h = std::collections::HashMap::new();
+    for m in mods {
+        for c in &m.classes {
+            let sup = c.super_class.clone().filter(|s| !s.is_empty()).unwrap_or_default();
+            h.insert(c.name.clone(), sup);
+        }
+    }
+    h
+}
+
+/// Load native arities from the `GORE_AS_BINDS` env path if set, else a `Binds.Cache` sitting next
+/// to `cache_file`, if present. Mirrors the CLI's `load_native_api` (quietly — no logging) so the
+/// CLI and mod-studio resolve the same arities when `GORE_AS_BINDS` is set.
+fn as_native_api(cache_file: &std::path::Path) -> Option<gore_as::cache::binds::NativeApi> {
+    let path = match std::env::var_os("GORE_AS_BINDS") {
+        Some(p) => std::path::PathBuf::from(p),
+        None => cache_file.parent()?.join("Binds.Cache"),
+    };
+    if !path.exists() { return None; }
+    gore_as::cache::binds::NativeApi::load(&path)
+}
+
+/// `{cache}` → `{ok, modules:[{name, file}]}` — list modules in a precompiled cache.
+fn script_list_modules(payload: Value) -> Value {
+    let Some(cache) = payload.get("cache").and_then(Value::as_str) else {
+        return err("BAD_REQUEST", "missing 'cache'");
+    };
+    let bytes = match std::fs::read(cache) {
+        Ok(b) => b,
+        Err(e) => return err("IO", format!("reading cache: {e}")),
+    };
+    let mods = match gore_as::cache::model::parse_modules(&bytes) {
+        Ok(m) => m,
+        Err(e) => return err("PARSE", format!("parsing cache: {e}")),
+    };
+    let modules: Vec<Value> = mods.iter()
+        .map(|m| json!({"name": m.name, "file": m.file}))
+        .collect();
+    json!({"ok": true, "modules": modules})
+}
+
+/// `{cache, module}` → `{ok, source}` — emit recompilable .as for one module.
+fn script_emit_module(payload: Value) -> Value {
+    let (Some(cache), Some(module)) = (
+        payload.get("cache").and_then(Value::as_str),
+        payload.get("module").and_then(Value::as_str),
+    ) else {
+        return err("BAD_REQUEST", "missing 'cache' or 'module'");
+    };
+    let bytes = match std::fs::read(cache) {
+        Ok(b) => b,
+        Err(e) => return err("IO", format!("reading cache: {e}")),
+    };
+    let mut refs = match gore_as::cache::refs::RefResolver::build(&bytes) {
+        Ok(r) => r,
+        Err(e) => return err("RESOLVER", format!("{e}")),
+    };
+    let mods = match gore_as::cache::model::parse_modules(&bytes) {
+        Ok(m) => m,
+        Err(e) => return err("PARSE", format!("{e}")),
+    };
+    refs.set_class_hierarchy(as_class_hierarchy(&mods));
+    if let Some(api) = as_native_api(std::path::Path::new(cache)) {
+        refs.set_native_api(api);
+    }
+    let Some(m) = mods.iter().find(|m| m.name == module) else {
+        return err("NOT_FOUND", format!("module not found: {module}"));
+    };
+    let source = gore_as::cache::emit::emit_module(m, &refs);
+    json!({"ok": true, "source": source})
+}
+
+/// `{game_dir, op, module_name, rel_path, as_path, work_dir}` → `{ok, mini_path, module}`.
+fn script_compile(payload: Value) -> Value {
+    let g = |k: &str| payload.get(k).and_then(Value::as_str).map(str::to_string);
+    let (Some(game_dir), Some(op), Some(module_name), Some(rel_path), Some(as_path), Some(work_dir)) =
+        (g("game_dir"), g("op"), g("module_name"), g("rel_path"), g("as_path"), g("work_dir"))
+    else {
+        return err("BAD_REQUEST", "missing one of game_dir/op/module_name/rel_path/as_path/work_dir");
+    };
+    // Use gore-mod's drift-aware pristine resolver for the emit/remap base, so the compile base is
+    // exactly the bytes deploy will splice against (honoring a `*.gore-bak` gone stale after a game
+    // update). `None` on failure → compile falls back to its own on-disk read.
+    let base_override = gore_mod::pristine_script_cache(std::path::Path::new(&game_dir)).ok();
+    let opts = gore_as::compile::CompileOpts {
+        game_dir: PathBuf::from(game_dir),
+        op,
+        module_name,
+        rel_path,
+        as_path: PathBuf::from(as_path),
+        work_dir: PathBuf::from(work_dir),
+        base_override,
+    };
+    match gore_as::compile::compile_module(&opts, gore_as::compile::game_run_regen) {
+        Ok(out) => json!({"ok": true, "mini_path": out.mini_path.display().to_string(), "module": out.module_name}),
+        Err(e) => err("COMPILE_FAILED", e.to_string()),
+    }
+}
+
 /// `{out_dir, spec:BuildSpec}` → build the unified bundle into `out_dir`.
 fn mod_build(payload: Value) -> Value {
     let Some(out_dir) = payload.get("out_dir").and_then(Value::as_str) else {
@@ -489,5 +593,23 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(v["ok"], false);
+    }
+
+    #[test]
+    fn script_list_modules_requires_cache() {
+        let v: Value = serde_json::from_str(&execute_json(
+            r#"{"command":"script_list_modules","payload":{}}"#,
+        )).unwrap();
+        assert_eq!(v["ok"], false);
+        assert_eq!(v["error"]["code"], "BAD_REQUEST");
+    }
+
+    #[test]
+    fn script_emit_module_requires_args() {
+        let v: Value = serde_json::from_str(&execute_json(
+            r#"{"command":"script_emit_module","payload":{"cache":"x"}}"#,
+        )).unwrap();
+        assert_eq!(v["ok"], false);
+        assert_eq!(v["error"]["code"], "BAD_REQUEST");
     }
 }

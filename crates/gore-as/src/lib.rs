@@ -1,6 +1,7 @@
 //! AngelScript precompiled-cache decoder for Gothic 1 Remake.
 
 pub mod cache;
+pub mod compile;
 
 #[cfg(test)]
 mod tests {
