@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
 import 'app/domain/ui_settings.dart';
 import 'app/game_paths.dart';
+import 'app/ui/game_path_scope.dart';
 import 'app/ui/keep_alive_tab.dart';
 import 'app/ui/tab_reentry_listener.dart';
 import 'app/ui/window_chrome.dart';
@@ -401,11 +402,18 @@ class _HomePageState extends ConsumerState<HomePage>
                     // Dialoge: localized dialog/bark line editor.
                     const KeepAliveTab(child: DialogeTab()),
                     // Audio: FMOD bank sample browser + replacement.
-                    const KeepAliveTab(child: AudioTab()),
+                    // (GamePathScope: these three tabs' kept UI state is
+                    // bound to the configured install and resets when the
+                    // game path changes.)
+                    const KeepAliveTab(child: GamePathScope(child: AudioTab())),
                     // Textures: texture asset browser + replacement.
-                    const KeepAliveTab(child: TextureTab()),
+                    const KeepAliveTab(
+                      child: GamePathScope(child: TextureTab()),
+                    ),
                     // AngelScript: stage .as mods, compile, splice.
-                    const KeepAliveTab(child: ScriptTab()),
+                    const KeepAliveTab(
+                      child: GamePathScope(child: ScriptTab()),
+                    ),
                     // Changes: all staged item/loc/audio changes, centred.
                     KeepAliveTab(
                       child: Align(
