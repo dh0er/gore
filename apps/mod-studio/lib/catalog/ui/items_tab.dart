@@ -84,6 +84,9 @@ class ItemsTab extends ConsumerWidget {
                     constraints: const BoxConstraints(maxWidth: 720),
                     child: FieldEditor(
                       item: visible,
+                      // Filtered embeds (Changes tab) show only the fields
+                      // that actually carry a pending override.
+                      onlyEdited: onlyIds != null,
                       displayName: displayNameForItem(
                         visible,
                         ref.watch(locCatalogProvider).value ?? const {},
@@ -98,6 +101,9 @@ class ItemsTab extends ConsumerWidget {
                       onOverrideChanged: (entry) => ref
                           .read(overridesProvider.notifier)
                           .setOverride(entry),
+                      onOverrideRemoved: (entry) => ref
+                          .read(overridesProvider.notifier)
+                          .removeOverride(entry.key),
                     ),
                   ),
                 ),

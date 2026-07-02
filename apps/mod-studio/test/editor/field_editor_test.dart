@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gore_mod/catalog/domain/field_schema.dart';
 import 'package:gore_mod/catalog/domain/item_entry.dart';
 import 'package:gore_mod/editor/domain/override_entry.dart';
+import 'package:gore_mod/editor/domain/overrides_notifier.dart';
 import 'package:gore_mod/editor/ui/field_editor.dart';
 import 'package:gore_mod/l10n/app_localizations.dart';
+import 'package:gore_mod/loc/domain/loc_edits_notifier.dart';
 
 /// Wraps [child] in a localized MaterialApp so AppLocalizations.of works.
 Widget _localizedApp(Widget child) => MaterialApp(
@@ -37,10 +40,55 @@ void main() {
     );
   }
 
+  /// FieldEditor wired to the real providers, mirroring the items_tab wiring:
+  /// pendingOverrides watched from [overridesProvider], delete taps remove the
+  /// entry from the notifier. Needs a ProviderScope (onlyEdited also watches
+  /// [locEditsProvider] for the name section).
+  Widget providerApp({bool onlyEdited = false}) {
+    return ProviderScope(
+      child: MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: Scaffold(
+          body: Consumer(
+            builder: (context, ref, _) {
+              final state = ref.watch(overridesProvider);
+              return FieldEditor(
+                item: apple,
+                onlyEdited: onlyEdited,
+                pendingOverrides: {
+                  for (final e
+                      in state.entries.where((e) => e.classId == apple.id))
+                    e.field: e,
+                },
+                onOverrideChanged: (e) =>
+                    ref.read(overridesProvider.notifier).setOverride(e),
+                onOverrideRemoved: (e) =>
+                    ref.read(overridesProvider.notifier).removeOverride(e.key),
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+
+  ProviderContainer containerOf(WidgetTester tester) =>
+      ProviderScope.containerOf(
+        tester.element(find.byType(FieldEditor)),
+        listen: false,
+      );
+
+  const valueOverride = OverrideEntry(
+    classId: 'ItFo_Apple', field: 'm_Value', oldValue: 0, newValue: 500,
+  );
+
   testWidgets('renders a row for each field', (tester) async {
     await tester.pumpWidget(buildEditor());
     // Three fields → three TextFields (int/int/float all render TextField)
     expect(find.byType(TextField), findsNWidgets(3));
+    // The localized-name section is always present in normal mode.
+    expect(find.text('Name (all languages)'), findsOneWidget);
   });
 
   testWidgets('valid integer input calls onOverrideChanged', (tester) async {
@@ -69,14 +117,83 @@ void main() {
     expect(find.text('Apple'), findsOneWidget);
   });
 
-  testWidgets('pending field shows edit icon in suffix', (tester) async {
-    final pending = {
-      'm_Value': const OverrideEntry(
-        classId: 'ItFo_Apple', field: 'm_Value', oldValue: 0, newValue: 500,
-      ),
-    };
+  testWidgets('pending field shows a delete button instead of the pencil',
+      (tester) async {
+    final pending = {'m_Value': valueOverride};
     await tester.pumpWidget(buildEditor(pending: pending));
-    expect(find.byIcon(Icons.edit), findsOneWidget);
+    expect(find.byIcon(Icons.delete_outline), findsOneWidget);
+    expect(find.byTooltip('Remove change'), findsOneWidget);
+    expect(find.byIcon(Icons.edit), findsNothing);
+  });
+
+  testWidgets('delete tap removes the override; field resyncs to catalog value',
+      (tester) async {
+    await tester.pumpWidget(providerApp());
+    containerOf(tester).read(overridesProvider.notifier)
+        .setOverride(valueOverride);
+    await tester.pump();
+    // Normal mode: all fields stay visible; the overridden one shows the
+    // pending value and a delete button.
+    expect(find.byType(TextField), findsNWidgets(3));
+    final field = find.byType(TextField).first;
+    expect(tester.widget<TextField>(field).controller!.text, '500');
+
+    await tester.tap(find.byTooltip('Remove change'));
+    await tester.pump();
+    expect(containerOf(tester).read(overridesProvider).count, 0);
+    // Field remains, back at the catalog (placeholder) value, no delete button.
+    expect(find.byType(TextField), findsNWidgets(3));
+    expect(tester.widget<TextField>(field).controller!.text, '0');
+    expect(find.byIcon(Icons.delete_outline), findsNothing);
+  });
+
+  testWidgets('onlyEdited renders only fields with a pending override',
+      (tester) async {
+    await tester.pumpWidget(providerApp(onlyEdited: true));
+    // No overrides yet → no field rows at all.
+    expect(find.byType(TextField), findsNothing);
+    expect(find.text('m_Value'), findsNothing);
+
+    containerOf(tester).read(overridesProvider.notifier)
+        .setOverride(valueOverride);
+    await tester.pump();
+    expect(find.byType(TextField), findsOneWidget);
+    expect(find.text('m_Value'), findsOneWidget);
+    expect(find.text('m_Weight'), findsNothing);
+    expect(find.text('m_MaxStack'), findsNothing);
+  });
+
+  testWidgets('onlyEdited: deleting the last override leaves no field rows',
+      (tester) async {
+    await tester.pumpWidget(providerApp(onlyEdited: true));
+    containerOf(tester).read(overridesProvider.notifier)
+        .setOverride(valueOverride);
+    await tester.pump();
+    expect(find.byType(TextField), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Remove change'));
+    await tester.pump();
+    expect(containerOf(tester).read(overridesProvider).count, 0);
+    expect(find.byType(TextField), findsNothing);
+    expect(find.byIcon(Icons.delete_outline), findsNothing);
+  });
+
+  testWidgets('onlyEdited shows the name section only with a staged name edit',
+      (tester) async {
+    await tester.pumpWidget(providerApp(onlyEdited: true));
+    expect(find.text('Name (all languages)'), findsNothing);
+
+    // Stage a name edit for this item's loc id → section appears.
+    containerOf(tester).read(locEditsProvider.notifier)
+        .setEdit('itfo_apple', 'english', 'Golden Apple');
+    await tester.pump();
+    expect(find.text('Name (all languages)'), findsOneWidget);
+
+    // Reverting the last name edit hides it again.
+    containerOf(tester).read(locEditsProvider.notifier)
+        .removeEdit('itfo_apple', 'english');
+    await tester.pump();
+    expect(find.text('Name (all languages)'), findsNothing);
   });
 
   testWidgets('entering 0 emits an override (not treated as a clear)', (tester) async {

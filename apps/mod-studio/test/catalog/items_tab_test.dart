@@ -56,6 +56,27 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byType(FieldEditor), findsOneWidget);
     expect(find.text('Select an item to edit its fields.'), findsNothing);
+    // The unfiltered main tab shows the full field set.
+    expect(
+      tester.widget<FieldEditor>(find.byType(FieldEditor)).onlyEdited,
+      isFalse,
+    );
+  });
+
+  testWidgets('filtered view puts the field editor in edited-only mode',
+      (tester) async {
+    useDesktopSurface(tester);
+    await tester.pumpWidget(buildTab(
+      catalog: [apple, sword],
+      onlyIds: {'ItFo_Apple'},
+    ));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Apple'));
+    await tester.pumpAndSettle();
+    expect(
+      tester.widget<FieldEditor>(find.byType(FieldEditor)).onlyEdited,
+      isTrue,
+    );
   });
 
   testWidgets('onlyIds is forwarded to the catalog browser', (tester) async {
