@@ -199,9 +199,26 @@ class _DialogBrowserState extends ConsumerState<_DialogBrowser> {
                                   label: l10n.categoryWithCount(
                                       _speakerLabel(g.speaker), g.lineCount),
                                   selected: g.groupKey == selectedKey,
-                                  onTap: () => setState(() {
-                                    _selectedGroupKey = g.groupKey;
-                                  }),
+                                  onTap: () {
+                                    // Don't leave a line from ANOTHER group
+                                    // open in the editor pane: clear the
+                                    // selection unless it belongs to the
+                                    // tapped group.
+                                    final selLine = selectedId == null
+                                        ? null
+                                        : lines.firstWhereOrNull(
+                                            (l) => l.id == selectedId);
+                                    if (selectedId != null &&
+                                        selLine?.groupKey != g.groupKey) {
+                                      ref
+                                          .read(_selectedDialogIdProvider
+                                              .notifier)
+                                          .state = null;
+                                    }
+                                    setState(() {
+                                      _selectedGroupKey = g.groupKey;
+                                    });
+                                  },
                                 ),
                             ],
                           ),
