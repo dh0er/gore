@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/legacy.dart';
 import 'app/domain/ui_settings.dart';
 import 'app/game_paths.dart';
 import 'app/ui/keep_alive_tab.dart';
+import 'app/ui/tab_reentry_listener.dart';
 import 'app/ui/window_chrome.dart';
 import 'catalog/domain/catalog_provider.dart';
 import 'catalog/domain/item_entry.dart';
@@ -26,12 +27,18 @@ import 'loc/game_lang.dart';
 import 'loc/ui/loc_extract_flow.dart';
 import 'project/project_controller.dart';
 import 'scripts/domain/script_mods_notifier.dart';
+import 'scripts/domain/script_modules_provider.dart';
 import 'scripts/ui/script_tab.dart';
 import 'settings/ui/settings_tab.dart';
+import 'textures/domain/texture_index_provider.dart';
 import 'textures/domain/texture_replacements_notifier.dart';
 import 'textures/ui/texture_tab.dart';
 
 final _selectedItemProvider = StateProvider<CatalogItem?>((ref) => null);
+
+/// Main tab indices, matching the [TabBar] tab order in [HomePage].
+const _texturesTabIndex = 3;
+const _scriptsTabIndex = 4;
 
 class HomePage extends ConsumerStatefulWidget {
   const HomePage({super.key});
@@ -262,143 +269,160 @@ class _HomePageState extends ConsumerState<HomePage>
       ),
       body: DefaultTabController(
         length: 7,
-        child: Column(
-          children: [
-            Container(
-              color: scheme.surfaceContainerLowest,
-              child: Row(
-                children: [
-                  Expanded(
-                    child: TabBar(
-                      isScrollable: true,
-                      // Material 3 defaults scrollable tab bars to a 52px
-                      // leading inset (TabAlignment.startOffset); start flush
-                      // with just a small gap instead.
-                      tabAlignment: TabAlignment.start,
-                      padding: const EdgeInsetsDirectional.only(start: 4),
-                      tabs: [
-                        Tab(
-                          icon: const Icon(Icons.inventory_2_outlined),
-                          text: l10n.tabItems,
-                        ),
-                        Tab(
-                          icon: const Icon(Icons.forum_outlined),
-                          text: l10n.tabDialogs,
-                        ),
-                        Tab(
-                          icon: const Icon(Icons.audiotrack_outlined),
-                          text: l10n.tabAudio,
-                        ),
-                        Tab(
-                          icon: const Icon(Icons.texture),
-                          text: l10n.tabTextures,
-                        ),
-                        Tab(
-                          icon: const Icon(Icons.code),
-                          text: l10n.tabScripts,
-                        ),
-                        Tab(
-                          icon: const Icon(Icons.edit_note_outlined),
-                          text: l10n.tabOverrides,
-                        ),
-                        Tab(
-                          icon: const Icon(Icons.settings_outlined),
-                          text: l10n.tabSettings,
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            Expanded(
-              child: TabBarView(
-                children: [
-                  // Items: catalog browser + field editor.
-                  KeepAliveTab(
-                    child: Row(
-                      children: [
-                        // Left: catalog browser
-                        SizedBox(
-                          width: 560,
-                          child: CatalogBrowser(
-                            selected: selected,
-                            onItemSelected: (item) =>
-                                ref.read(_selectedItemProvider.notifier).state =
-                                    item,
+        // KeepAliveTab keeps every tab (and its autoDispose providers)
+        // mounted across switches, so the texture index / script module list
+        // would go stale after a deploy, undeploy, or game patch. Re-entering
+        // those tabs refetches — the pre-keep-alive freshness semantics —
+        // while the tabs' UI state survives.
+        child: TabReentryListener(
+          onTabReentered: (index) {
+            switch (index) {
+              case _texturesTabIndex:
+                ref.invalidate(textureIndexProvider);
+              case _scriptsTabIndex:
+                ref.invalidate(scriptModulesProvider);
+            }
+          },
+          child: Column(
+            children: [
+              Container(
+                color: scheme.surfaceContainerLowest,
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: TabBar(
+                        isScrollable: true,
+                        // Material 3 defaults scrollable tab bars to a 52px
+                        // leading inset (TabAlignment.startOffset); start flush
+                        // with just a small gap instead.
+                        tabAlignment: TabAlignment.start,
+                        padding: const EdgeInsetsDirectional.only(start: 4),
+                        tabs: [
+                          Tab(
+                            icon: const Icon(Icons.inventory_2_outlined),
+                            text: l10n.tabItems,
                           ),
-                        ),
-                        const VerticalDivider(width: 1),
-                        // Centre: field editor. Cap the editing column width and
-                        // centre it so the inputs don't stretch across the whole
-                        // window on wide displays.
-                        Expanded(
-                          child: selected == null
-                              ? Center(
-                                  child: Text(
-                                    l10n.selectAnItemToEdit,
-                                    style: TextStyle(
-                                      color: scheme.onSurfaceVariant,
-                                    ),
-                                  ),
-                                )
-                              : Align(
-                                  alignment: Alignment.topCenter,
-                                  child: ConstrainedBox(
-                                    constraints: const BoxConstraints(
-                                      maxWidth: 720,
-                                    ),
-                                    child: FieldEditor(
-                                      item: selected,
-                                      displayName: displayNameForItem(
-                                        selected,
-                                        ref.watch(locCatalogProvider).value ??
-                                            const {},
-                                        gameLangByCode(
-                                          ref.watch(localeProvider),
-                                        ),
-                                      ),
-                                      pendingOverrides: {
-                                        for (final e
-                                            in overridesState.entries.where(
-                                              (e) => e.classId == selected.id,
-                                            ))
-                                          e.field: e,
-                                      },
-                                      onOverrideChanged: (entry) => ref
-                                          .read(overridesProvider.notifier)
-                                          .setOverride(entry),
-                                    ),
-                                  ),
-                                ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  // Dialoge: localized dialog/bark line editor.
-                  const KeepAliveTab(child: DialogeTab()),
-                  // Audio: FMOD bank sample browser + replacement.
-                  const KeepAliveTab(child: AudioTab()),
-                  // Textures: texture asset browser + replacement.
-                  const KeepAliveTab(child: TextureTab()),
-                  // AngelScript: stage .as mods, compile, splice.
-                  const KeepAliveTab(child: ScriptTab()),
-                  // Changes: all staged item/loc/audio changes, centred.
-                  KeepAliveTab(
-                    child: Align(
-                      alignment: Alignment.topCenter,
-                      child: ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 600),
-                        child: const OverridesPanel(),
+                          Tab(
+                            icon: const Icon(Icons.forum_outlined),
+                            text: l10n.tabDialogs,
+                          ),
+                          Tab(
+                            icon: const Icon(Icons.audiotrack_outlined),
+                            text: l10n.tabAudio,
+                          ),
+                          Tab(
+                            icon: const Icon(Icons.texture),
+                            text: l10n.tabTextures,
+                          ),
+                          Tab(
+                            icon: const Icon(Icons.code),
+                            text: l10n.tabScripts,
+                          ),
+                          Tab(
+                            icon: const Icon(Icons.edit_note_outlined),
+                            text: l10n.tabOverrides,
+                          ),
+                          Tab(
+                            icon: const Icon(Icons.settings_outlined),
+                            text: l10n.tabSettings,
+                          ),
+                        ],
                       ),
                     ),
-                  ),
-                  // Settings.
-                  const KeepAliveTab(child: SettingsTab()),
-                ],
+                  ],
+                ),
               ),
-            ),
-          ],
+              Expanded(
+                child: TabBarView(
+                  children: [
+                    // Items: catalog browser + field editor.
+                    KeepAliveTab(
+                      child: Row(
+                        children: [
+                          // Left: catalog browser
+                          SizedBox(
+                            width: 560,
+                            child: CatalogBrowser(
+                              selected: selected,
+                              onItemSelected: (item) =>
+                                  ref
+                                          .read(_selectedItemProvider.notifier)
+                                          .state =
+                                      item,
+                            ),
+                          ),
+                          const VerticalDivider(width: 1),
+                          // Centre: field editor. Cap the editing column width and
+                          // centre it so the inputs don't stretch across the whole
+                          // window on wide displays.
+                          Expanded(
+                            child: selected == null
+                                ? Center(
+                                    child: Text(
+                                      l10n.selectAnItemToEdit,
+                                      style: TextStyle(
+                                        color: scheme.onSurfaceVariant,
+                                      ),
+                                    ),
+                                  )
+                                : Align(
+                                    alignment: Alignment.topCenter,
+                                    child: ConstrainedBox(
+                                      constraints: const BoxConstraints(
+                                        maxWidth: 720,
+                                      ),
+                                      child: FieldEditor(
+                                        item: selected,
+                                        displayName: displayNameForItem(
+                                          selected,
+                                          ref.watch(locCatalogProvider).value ??
+                                              const {},
+                                          gameLangByCode(
+                                            ref.watch(localeProvider),
+                                          ),
+                                        ),
+                                        pendingOverrides: {
+                                          for (final e
+                                              in overridesState.entries.where(
+                                                (e) => e.classId == selected.id,
+                                              ))
+                                            e.field: e,
+                                        },
+                                        onOverrideChanged: (entry) => ref
+                                            .read(overridesProvider.notifier)
+                                            .setOverride(entry),
+                                      ),
+                                    ),
+                                  ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    // Dialoge: localized dialog/bark line editor.
+                    const KeepAliveTab(child: DialogeTab()),
+                    // Audio: FMOD bank sample browser + replacement.
+                    const KeepAliveTab(child: AudioTab()),
+                    // Textures: texture asset browser + replacement.
+                    const KeepAliveTab(child: TextureTab()),
+                    // AngelScript: stage .as mods, compile, splice.
+                    const KeepAliveTab(child: ScriptTab()),
+                    // Changes: all staged item/loc/audio changes, centred.
+                    KeepAliveTab(
+                      child: Align(
+                        alignment: Alignment.topCenter,
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 600),
+                          child: const OverridesPanel(),
+                        ),
+                      ),
+                    ),
+                    // Settings.
+                    const KeepAliveTab(child: SettingsTab()),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
