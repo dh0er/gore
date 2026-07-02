@@ -14,6 +14,11 @@ sealed class DialogRow {
   const DialogRow();
 }
 
+/// The single group-key encoding shared by [DialogGroupRow.groupKey] and
+/// [DialogLineRow.groupKey]: `'${isBark ? 1 : 0}:$speaker'`.
+String _encodeGroupKey(bool isBark, String speaker) =>
+    '${isBark ? 1 : 0}:$speaker';
+
 /// A speaker group header row (e.g. "aaron", "g1hero").
 class DialogGroupRow extends DialogRow {
   const DialogGroupRow({
@@ -30,6 +35,10 @@ class DialogGroupRow extends DialogRow {
 
   /// Number of line rows in this group (before filtering).
   final int lineCount;
+
+  /// Stable key identifying this group; its line rows carry the same
+  /// [DialogLineRow.groupKey].
+  String get groupKey => _encodeGroupKey(isBark, speaker);
 }
 
 /// A single dialog line row.
@@ -48,6 +57,9 @@ class DialogLineRow extends DialogRow {
 
   /// Whether the owning group is a bark group (`gvl_`/`svm_`).
   final bool isBark;
+
+  /// Key of the owning group; equals that group's [DialogGroupRow.groupKey].
+  String get groupKey => _encodeGroupKey(isBark, speaker);
 }
 
 /// A speaker group with its lines, used to build the flattened view.
@@ -89,7 +101,7 @@ List<DialogRow> buildDialogRows(Map<String, Map<String, String>> catalog) {
     final isBark = _kBarkPrefixes.contains(token);
     if (!isConv && !isBark) continue;
     final speaker = _speakerToken(id);
-    final key = '${isBark ? 1 : 0}:$speaker';
+    final key = _encodeGroupKey(isBark, speaker);
     (groups[key] ??= _DialogGroup(speaker: speaker, isBark: isBark)).ids.add(id);
   }
 

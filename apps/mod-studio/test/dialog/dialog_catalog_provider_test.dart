@@ -35,5 +35,54 @@ void main() {
           .toList();
       expect(aliceIds, ['dia_alice_001', 'dia_alice_002']);
     });
+
+    test('group rows and their line rows share groupKey', () {
+      final rows = buildDialogRows({
+        'info_aaron_001': {'de_A': 'Hallo'},
+        'info_aaron_002': {'de_A': 'Tschau'},
+        'gvl_aaron_001': {'de_A': 'Weg da'},
+      });
+      DialogGroupRow? current;
+      for (final row in rows) {
+        switch (row) {
+          case DialogGroupRow():
+            current = row;
+          case DialogLineRow():
+            expect(row.groupKey, current!.groupKey);
+        }
+      }
+    });
+
+    test('same speaker in info_ and gvl_ ids forms two separate groups', () {
+      final rows = buildDialogRows({
+        'info_aaron_001': {'de_A': 'Hallo'},
+        'gvl_aaron_001': {'de_A': 'Weg da'},
+      });
+      final groups = rows.whereType<DialogGroupRow>().toList();
+      expect(groups, hasLength(2));
+      expect(groups.map((g) => g.groupKey).toSet(), hasLength(2));
+      expect(groups.every((g) => g.speaker == 'aaron'), true);
+    });
+
+    test('svm_ prefix is grouped as bark', () {
+      final rows = buildDialogRows({
+        'svm_guard_001': {'de_A': 'Halt!'},
+      });
+      final group = rows.whereType<DialogGroupRow>().single;
+      expect(group.isBark, true);
+      expect(group.speaker, 'guard');
+      expect(rows.whereType<DialogLineRow>().single.isBark, true);
+    });
+
+    test('id without a second underscore uses the remainder as speaker', () {
+      final rows = buildDialogRows({
+        'gvl_guard': {'de_A': 'Halt!'},
+      });
+      final group = rows.whereType<DialogGroupRow>().single;
+      expect(group.speaker, 'guard');
+      final line = rows.whereType<DialogLineRow>().single;
+      expect(line.speaker, 'guard');
+      expect(line.groupKey, group.groupKey);
+    });
   });
 }

@@ -1,3 +1,4 @@
+import 'package:collection/collection.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
@@ -79,9 +80,6 @@ class _DialogBrowser extends ConsumerStatefulWidget {
   ConsumerState<_DialogBrowser> createState() => _DialogBrowserState();
 }
 
-/// Stable key for a speaker group: `'${isBark}:${speaker}'`.
-String _groupKey(bool isBark, String speaker) => '$isBark:$speaker';
-
 /// Sidebar display label for a raw speaker token (`aaron` -> `Aaron`).
 String _speakerLabel(String speaker) {
   if (speaker.isEmpty) return '(unknown)';
@@ -93,7 +91,8 @@ class _DialogBrowserState extends ConsumerState<_DialogBrowser> {
   String _query = '';
 
   /// Key of the speaker group shown in the line list while not searching
-  /// (see [_groupKey]). Null / vanished keys fall back to the first group.
+  /// (see [DialogGroupRow.groupKey]). Null / vanished keys fall back to the
+  /// selected line's group, then to the first group.
   String? _selectedGroupKey;
 
   @override
@@ -132,26 +131,25 @@ class _DialogBrowserState extends ConsumerState<_DialogBrowser> {
     final editedIds = ref.watch(locEditsProvider).edits;
 
     final groups = allRows.whereType<DialogGroupRow>().toList();
+    final lines = allRows.whereType<DialogLineRow>();
+    final selectedId = ref.watch(_selectedDialogIdProvider);
 
-    // Resolve selected group; fall back to the first group when the stored
-    // selection vanished (or nothing was selected yet).
+    // Resolve selected group. When the stored selection is null or vanished,
+    // restore from the still-selected editor line's group (this widget's state
+    // dies on tab switches, the id provider doesn't; also covers clearing a
+    // search after picking a hit), then fall back to the first group.
     var selectedKey = _selectedGroupKey;
-    if (!groups.any((g) => _groupKey(g.isBark, g.speaker) == selectedKey)) {
-      selectedKey = groups.isEmpty
-          ? null
-          : _groupKey(groups.first.isBark, groups.first.speaker);
+    if (!groups.any((g) => g.groupKey == selectedKey)) {
+      selectedKey = lines.firstWhereOrNull((l) => l.id == selectedId)?.groupKey ??
+          (groups.isEmpty ? null : groups.first.groupKey);
     }
 
     // Searching: flat cross-group hit list. Otherwise: the selected group's lines.
-    final lines = allRows.whereType<DialogLineRow>();
     final shownLines = searching
         ? lines.where((l) => _matches(l.id, query, catalog, editedIds)).toList()
-        : lines
-            .where((l) => _groupKey(l.isBark, l.speaker) == selectedKey)
-            .toList();
+        : lines.where((l) => l.groupKey == selectedKey).toList();
 
     final lang = gameLangByCode(ref.watch(localeProvider));
-    final selectedId = ref.watch(_selectedDialogIdProvider);
 
     return Column(
       children: [
@@ -190,12 +188,9 @@ class _DialogBrowserState extends ConsumerState<_DialogBrowser> {
                                       : Icons.forum_outlined,
                                   label: l10n.categoryWithCount(
                                       _speakerLabel(g.speaker), g.lineCount),
-                                  selected:
-                                      _groupKey(g.isBark, g.speaker) ==
-                                          selectedKey,
+                                  selected: g.groupKey == selectedKey,
                                   onTap: () => setState(() {
-                                    _selectedGroupKey =
-                                        _groupKey(g.isBark, g.speaker);
+                                    _selectedGroupKey = g.groupKey;
                                   }),
                                 ),
                             ],
@@ -207,6 +202,11 @@ class _DialogBrowserState extends ConsumerState<_DialogBrowser> {
                       child: shownLines.isEmpty
                           ? const Center(child: Text('No dialog lines match'))
                           : ListView.builder(
+                              // Reset scroll to top when the shown collection
+                              // changes identity (group switch, search toggle).
+                              key: searching
+                                  ? const ValueKey('search')
+                                  : ValueKey(selectedKey),
                               itemCount: shownLines.length,
                               itemBuilder: (context, index) {
                                 final line = shownLines[index];
@@ -243,9 +243,17 @@ class _DialogBrowserState extends ConsumerState<_DialogBrowser> {
                                       : Text(preview,
                                           maxLines: 1,
                                           overflow: TextOverflow.ellipsis),
-                                  onTap: () => ref
-                                      .read(_selectedDialogIdProvider.notifier)
-                                      .state = line.id,
+                                  onTap: () {
+                                    ref
+                                        .read(
+                                            _selectedDialogIdProvider.notifier)
+                                        .state = line.id;
+                                    // Keep the sidebar in sync with the picked
+                                    // line, so clearing a search lands on its
+                                    // group (no-op in group view).
+                                    setState(() =>
+                                        _selectedGroupKey = line.groupKey);
+                                  },
                                 );
                               },
                             ),
