@@ -1065,6 +1065,42 @@ void main() {
     },
   );
 
+  // Cursor (Medium): the hero GlobalId belongs to ONE save. A slot switch must
+  // drop it so the player's Ereignisse sub-tab never queries the previous
+  // save's id against the new file.
+  test('slot switch clears the stashed heroGlobalId', () async {
+    final core = _CharactersListCoreService();
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+    await notifier.loadAllCharacters();
+    expect(notifier.state.heroGlobalId, 'Hero');
+
+    await notifier.inspect(r'C:\tmp\saves\G1R-002.sav');
+
+    expect(notifier.state.heroGlobalId, isNull);
+  });
+
+  // Cursor (Medium): a slow characters.list response must not stash the
+  // PREVIOUS save's hero id after the user already switched slots — the stash
+  // is pinned to the path the request was issued against.
+  test('mid-fetch slot switch discards the stale hero stash', () async {
+    final core = _CharactersListCoreService();
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+    // Switch slots while the characters.list call is in flight: _inspect sets
+    // selectedPath synchronously, so by the time the list response is parsed
+    // the request's path no longer matches the selection.
+    core.onListCall = () {
+      // ignore: unawaited_futures
+      notifier.inspect(r'C:\tmp\saves\G1R-002.sav');
+    };
+    final page = await notifier.loadAllCharacters();
+
+    expect(page.error, isNull);
+    expect(notifier.state.heroGlobalId, isNull);
+  });
+
   test('failed same-save re-inspect keeps pending edits retryable', () async {
     final core = _FailingSecondInspectCoreService();
     final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
@@ -2518,6 +2554,11 @@ class _PagedNpcCoreService extends _RecordingCoreService {
 class _CharactersListCoreService extends _RecordingCoreService {
   var failList = false;
 
+  /// Runs right after a `private.characters.list` call is recorded and before
+  /// its response is returned — lets a test switch saves mid-fetch to prove
+  /// the hero stash is pinned to the path the request was issued against.
+  void Function()? onListCall;
+
   @override
   Future<Map<String, Object?>> execute(
     String command, {
@@ -2527,6 +2568,7 @@ class _CharactersListCoreService extends _RecordingCoreService {
       requests.add(
         _RecordedRequest(command, Map<String, Object?>.from(payload)),
       );
+      onListCall?.call();
       if (failList) {
         return {
           'ok': false,

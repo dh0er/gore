@@ -924,6 +924,10 @@ class EditorNotifier extends StateNotifier<EditorState> {
       // fields still show the drafts and the registry must keep matching
       // them so the user can retry the save.
       clearPendingEdits: switchingSlot,
+      // Slot switch: the hero GlobalId belongs to the PREVIOUS save. Drop it
+      // so the player's Ereignisse sub-tab never queries the old id against
+      // the new file; the master list's index load re-stashes it.
+      heroGlobalId: switchingSlot ? null : _unchanged,
     );
     try {
       final payload = <String, Object?>{
@@ -1394,10 +1398,15 @@ class EditorNotifier extends StateNotifier<EditorState> {
       final page = CharacterIndexPage.fromJson(
         (response['data'] as Map).cast<String, Object?>(),
       );
-      for (final row in page.characters) {
-        if (row.globalId != null && row.uniqueName.toLowerCase() == 'hero') {
-          state = state.copyWith(heroGlobalId: row.globalId);
-          break;
+      // Only stash for the save this request was issued against: a slot
+      // switch during the (serialized, possibly slow) core call must not let
+      // the PREVIOUS save's hero id land on the newly selected file.
+      if (state.selectedPath == path) {
+        for (final row in page.characters) {
+          if (row.globalId != null && row.uniqueName.toLowerCase() == 'hero') {
+            state = state.copyWith(heroGlobalId: row.globalId);
+            break;
+          }
         }
       }
       return page;
