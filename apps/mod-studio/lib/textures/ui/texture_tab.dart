@@ -170,12 +170,18 @@ class _TextureTabState extends ConsumerState<TextureTab> {
                       children: [
                         Offstage(
                           offstage: _query.isNotEmpty,
-                          child: PathTreeBrowser(
-                            paths: _treePathsFor(entries),
-                            selectedPath: _selected,
-                            onSelect: (p) => _select(gameDir, p, entries[p]),
-                            leafIcon: Icons.image_outlined,
-                            markedPaths: staged.items.keys.toSet(),
+                          // Offstage skips paint/hit-test/semantics but NOT
+                          // focus traversal — without this, Tab could reach
+                          // the hidden tree's tiles during a search.
+                          child: ExcludeFocus(
+                            excluding: _query.isNotEmpty,
+                            child: PathTreeBrowser(
+                              paths: _treePathsFor(entries),
+                              selectedPath: _selected,
+                              onSelect: (p) => _select(gameDir, p, entries[p]),
+                              leafIcon: Icons.image_outlined,
+                              markedPaths: staged.items.keys.toSet(),
+                            ),
                           ),
                         ),
                         if (_query.isNotEmpty)

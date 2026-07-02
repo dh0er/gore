@@ -92,12 +92,14 @@ void main() {
     final first = ['A/leaf1.uasset'];
     await t.pumpWidget(host(first));
     expect(find.text('A'), findsOneWidget);
-    // Same identity: tree unchanged.
+    // Mutate the SAME list instance: identity unchanged → the cached tree is
+    // reused and the new entry must NOT appear.
+    first.add('X/y.uasset');
     await t.pumpWidget(host(first));
+    expect(find.text('X'), findsNothing);
+    // Same content in a NEW list: identity changed → tree rebuilt, 'X' shows.
+    await t.pumpWidget(host(['A/leaf1.uasset', 'X/y.uasset']));
     expect(find.text('A'), findsOneWidget);
-    // New list identity: tree rebuilt with the new contents.
-    await t.pumpWidget(host(['D/leaf9.uasset']));
-    expect(find.text('A'), findsNothing);
-    expect(find.text('D'), findsOneWidget);
+    expect(find.text('X'), findsOneWidget);
   });
 }

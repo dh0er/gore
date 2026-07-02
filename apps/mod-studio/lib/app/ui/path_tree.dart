@@ -22,6 +22,16 @@ class PathTreeBrowser extends StatefulWidget {
   });
 
   /// Slash-separated leaf paths to display as a tree.
+  ///
+  /// Contract: paths must be leaf-only — no path may also be a directory
+  /// prefix of another path's segments (e.g. `['A', 'A/b']` violates this:
+  /// `A` is both a leaf and the folder containing `A/b`). On a violation the
+  /// prefix path is rendered as a leaf and the subtree beneath it is silently
+  /// dropped.
+  ///
+  /// The list should also be identity-stable across builds: the tree is
+  /// rebuilt only when the list *identity* changes, so in-place mutations are
+  /// not picked up — pass a new list to change the contents.
   final List<String> paths;
 
   /// The highlighted leaf, if any.
