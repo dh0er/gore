@@ -109,6 +109,11 @@ void main() {
       isNull,
     );
 
+    // Attributes is now a sub-tab inside the Charaktere (Characters) tab; open
+    // that first, then its Attribute sub-tab. The Player row is pinned + selected
+    // by default in the shared master list, so the player attribute view shows.
+    await tester.tap(find.widgetWithText(Tab, 'Characters'));
+    await tester.pumpAndSettle();
     await tester.tap(find.widgetWithText(Tab, 'Attributes'));
     await tester.pumpAndSettle();
 
@@ -196,6 +201,9 @@ void main() {
       'rotation': {'pitch': 1.0, 'yaw': 2.0, 'roll': 3.0},
     });
 
+    // Still inside the Charaktere tab from the Attributes navigation above, so
+    // switching to the Inventar sub-tab needs no Characters prefix. The shared
+    // Player selection carries over, so the player inventory shows.
     await tester.tap(find.widgetWithText(Tab, 'Inventory'));
     await tester.pumpAndSettle();
 
@@ -313,7 +321,10 @@ void main() {
 
     expect(find.text('SLEEPER'), findsOneWidget);
 
-    await tester.drag(find.byType(TabBar), const Offset(-500, 0));
+    // Two TabBars now exist in the tree: the scrollable top-level bar and the
+    // Charaktere tab's inner sub-tab bar (kept alive off-screen). Drag the
+    // top-level one (built first) to reveal the 'Backups' tab.
+    await tester.drag(find.byType(TabBar).first, const Offset(-500, 0));
     await tester.pumpAndSettle();
     await tester.tap(find.widgetWithText(Tab, 'Backups'), warnIfMissed: false);
     await tester.pumpAndSettle();
@@ -393,8 +404,8 @@ void main() {
     // Save button now shows 1 pending edit.
     expect(find.widgetWithText(FilledButton, 'Save (1)'), findsOneWidget);
 
-    // Switch to Player tab.
-    await tester.tap(find.widgetWithText(Tab, 'Attributes'));
+    // Switch to another top-level tab (Charaktere).
+    await tester.tap(find.widgetWithText(Tab, 'Characters'));
     await tester.pumpAndSettle();
 
     // Save count must still be 1 (tab switch must not drop pending edits).
@@ -514,6 +525,9 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    // Inventory is now a sub-tab inside the Charaktere (Characters) tab.
+    await tester.tap(find.widgetWithText(Tab, 'Characters'));
+    await tester.pumpAndSettle();
     await tester.tap(find.widgetWithText(Tab, 'Inventory'));
     await tester.pumpAndSettle();
 
@@ -788,6 +802,13 @@ class _FakeCoreService implements GoresaveCoreService {
             'adapter': 'pure_rust_kraken',
             'message': 'Codec host is ready.',
           },
+        };
+      case 'private.characters.list':
+        // Backs the Charaktere master list. This test drives the pinned Player
+        // row (selected by default), so no spawned actors are needed here.
+        return {
+          'ok': true,
+          'data': {'total': 0, 'characters': <Object?>[]},
         };
       case 'write_save':
         final syncPersistent = payload['syncPersistentDataList'] == true;

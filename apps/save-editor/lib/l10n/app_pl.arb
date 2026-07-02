@@ -11,6 +11,8 @@
   "tabAttribute": "Atrybuty",
   "tabInventory": "Ekwipunek",
   "tabProgression": "Postępy",
+  "tabCharacters": "Postacie",
+  "characterNoActorBody": "Ta postać nie ma aktora w świecie, więc nie ma atrybutów, ekwipunku ani zdarzeń.",
   "tabAllData": "Wszystkie dane",
   "tabBackups": "Kopie zapasowe",
   "tabSettings": "Ustawienia",

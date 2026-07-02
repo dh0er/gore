@@ -42,6 +42,13 @@ class AppLocalizationsEn extends AppLocalizations {
   String get tabProgression => 'Progression';
 
   @override
+  String get tabCharacters => 'Characters';
+
+  @override
+  String get characterNoActorBody =>
+      'This character has no in-world actor, so it has no attributes, inventory, or events.';
+
+  @override
   String get tabAllData => 'All data';
 
   @override

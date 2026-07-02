@@ -11,6 +11,8 @@
   "tabAttribute": "Attribute",
   "tabInventory": "Inventar",
   "tabProgression": "Fortschritt",
+  "tabCharacters": "Charaktere",
+  "characterNoActorBody": "Dieser Charakter hat keinen Akteur in der Welt und daher keine Attribute, kein Inventar und keine Ereignisse.",
   "tabAllData": "Alle Daten",
   "tabBackups": "Sicherungen",
   "tabSettings": "Einstellungen",

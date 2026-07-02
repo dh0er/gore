@@ -42,6 +42,13 @@ class AppLocalizationsPt extends AppLocalizations {
   String get tabProgression => 'Progresso';
 
   @override
+  String get tabCharacters => 'Personagens';
+
+  @override
+  String get characterNoActorBody =>
+      'Este personagem não tem um ator no mundo, portanto não tem atributos, inventário ou eventos.';
+
+  @override
   String get tabAllData => 'Todos os dados';
 
   @override
@@ -1172,6 +1179,13 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
 
   @override
   String get tabProgression => 'Progresso';
+
+  @override
+  String get tabCharacters => 'Personagens';
+
+  @override
+  String get characterNoActorBody =>
+      'Este personagem não tem um ator no mundo, portanto não tem atributos, inventário ou eventos.';
 
   @override
   String get tabAllData => 'Todos os dados';

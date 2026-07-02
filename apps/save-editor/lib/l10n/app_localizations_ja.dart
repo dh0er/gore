@@ -42,6 +42,13 @@ class AppLocalizationsJa extends AppLocalizations {
   String get tabProgression => '進行状況';
 
   @override
+  String get tabCharacters => 'キャラクター';
+
+  @override
+  String get characterNoActorBody =>
+      'このキャラクターはワールド内のアクターを持たないため、属性、インベントリ、イベントはありません。';
+
+  @override
   String get tabAllData => '全データ';
 
   @override

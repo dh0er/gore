@@ -42,6 +42,13 @@ class AppLocalizationsRu extends AppLocalizations {
   String get tabProgression => 'Прогресс';
 
   @override
+  String get tabCharacters => 'Персонажи';
+
+  @override
+  String get characterNoActorBody =>
+      'У этого персонажа нет актёра в мире, поэтому нет атрибутов, инвентаря или событий.';
+
+  @override
   String get tabAllData => 'Все данные';
 
   @override

@@ -11,6 +11,8 @@
   "tabAttribute": "属性",
   "tabInventory": "インベントリ",
   "tabProgression": "進行状況",
+  "tabCharacters": "キャラクター",
+  "characterNoActorBody": "このキャラクターはワールド内のアクターを持たないため、属性、インベントリ、イベントはありません。",
   "tabAllData": "全データ",
   "tabBackups": "バックアップ",
   "tabSettings": "設定",

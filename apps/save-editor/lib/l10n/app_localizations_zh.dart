@@ -42,6 +42,12 @@ class AppLocalizationsZh extends AppLocalizations {
   String get tabProgression => '进度';
 
   @override
+  String get tabCharacters => '角色';
+
+  @override
+  String get characterNoActorBody => '该角色在世界中没有对应的实体，因此没有属性、物品栏或事件。';
+
+  @override
   String get tabAllData => '全部数据';
 
   @override
@@ -1133,6 +1139,12 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get tabProgression => '进度';
+
+  @override
+  String get tabCharacters => '角色';
+
+  @override
+  String get characterNoActorBody => '该角色在世界中没有对应的实体，因此没有属性、物品栏或事件。';
 
   @override
   String get tabAllData => '全部数据';

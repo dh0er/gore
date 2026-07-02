@@ -42,6 +42,13 @@ class AppLocalizationsPl extends AppLocalizations {
   String get tabProgression => 'Postępy';
 
   @override
+  String get tabCharacters => 'Postacie';
+
+  @override
+  String get characterNoActorBody =>
+      'Ta postać nie ma aktora w świecie, więc nie ma atrybutów, ekwipunku ani zdarzeń.';
+
+  @override
   String get tabAllData => 'Wszystkie dane';
 
   @override

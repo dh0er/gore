@@ -37,6 +37,8 @@ void main() {
       final core = _TwoAttributeNpcCoreService();
       await pumpApp(tester, core);
 
+      await tester.tap(find.widgetWithText(Tab, 'Characters'));
+      await tester.pumpAndSettle();
       await tester.tap(find.widgetWithText(Tab, 'Attributes'));
       await tester.pumpAndSettle();
 
@@ -224,6 +226,34 @@ class _TwoAttributeNpcCoreService implements GoresaveCoreService {
             'status': 'ready',
             'adapter': 'pure_rust_kraken',
             'message': 'Codec host is ready.',
+          },
+        };
+      case 'private.characters.list':
+        // Backs the Charaktere master list (one unpaginated response). The
+        // globalId is rendered as the row subtitle, so tests select a row by
+        // tapping its GlobalId text (e.g. 'Lizard-A').
+        return {
+          'ok': true,
+          'data': {
+            'total': 2,
+            'characters': [
+              {
+                'globalId': 'Lizard-A',
+                'uniqueName': 'Lizard',
+                'isDead': false,
+                'hasInventory': false,
+                'hasKnowledge': false,
+                'hasEvents': false,
+              },
+              {
+                'globalId': 'Lizard-B',
+                'uniqueName': 'Lizard',
+                'isDead': false,
+                'hasInventory': false,
+                'hasKnowledge': false,
+                'hasEvents': false,
+              },
+            ],
           },
         };
       case 'private.npc.list':
