@@ -44,17 +44,6 @@ String shortStateLabel(String state) {
   return idx < 0 ? state : state.substring(idx + 2);
 }
 
-/// Localized game name for a progression class/character id, or [fallback] when
-/// the extracted loc catalog has no entry for it.
-String _localizedProgressionName(
-  Map<String, Map<String, String>> catalog,
-  GameLang lang,
-  String id,
-  String fallback,
-) {
-  return localizedGameName(catalog, lang, id) ?? fallback;
-}
-
 /// Maps an English short state label to its localized form, defaulting to the
 /// input itself for unknown values.
 String _localizedShortLabel(AppLocalizations l10n, String label) {
@@ -440,18 +429,29 @@ class _QuestsDetailState extends ConsumerState<QuestsDetail> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // Header row
+                  // No card title ("Quests" icon+text row): the Welt sidebar
+                  // tile already names the section. The reset-pending-edits
+                  // action that lived in that row now trails the search field.
                   Row(
                     children: [
-                      Icon(Icons.flag_outlined, color: scheme.primary),
-                      const SizedBox(width: 8),
                       Expanded(
-                        child: Text(
-                          l10n.sectionQuests,
-                          style: widget.theme.textTheme.titleMedium,
+                        // Search field — client-side, filters live as you type.
+                        child: TextField(
+                          controller: _search,
+                          decoration: InputDecoration(
+                            labelText: l10n.searchQuests,
+                            prefixIcon: const Icon(Icons.search),
+                            suffixIcon: IconButton(
+                              icon: const Icon(Icons.arrow_forward),
+                              onPressed: _applySearch,
+                            ),
+                          ),
+                          onChanged: (_) => _applySearch(),
+                          onSubmitted: (_) => _applySearch(),
                         ),
                       ),
-                      if (widget.editable && _pending.isNotEmpty)
+                      if (widget.editable && _pending.isNotEmpty) ...[
+                        const SizedBox(width: 8),
                         Tooltip(
                           message: l10n.resetQuestChanges,
                           child: IconButton(
@@ -464,22 +464,8 @@ class _QuestsDetailState extends ConsumerState<QuestsDetail> {
                             },
                           ),
                         ),
+                      ],
                     ],
-                  ),
-                  const SizedBox(height: 8),
-                  // Search field — client-side, filters live as you type.
-                  TextField(
-                    controller: _search,
-                    decoration: InputDecoration(
-                      labelText: l10n.searchQuests,
-                      prefixIcon: const Icon(Icons.search),
-                      suffixIcon: IconButton(
-                        icon: const Icon(Icons.arrow_forward),
-                        onPressed: _applySearch,
-                      ),
-                    ),
-                    onChanged: (_) => _applySearch(),
-                    onSubmitted: (_) => _applySearch(),
                   ),
                   if (_fetchError != null) ...[
                     const SizedBox(height: 8),
@@ -1018,21 +1004,15 @@ class _KnowledgeDetailState extends ConsumerState<KnowledgeDetail> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Text(
-                    character != null
-                        ? l10n.entriesForCharacter(
-                            _localizedProgressionName(
-                              locCatalog,
-                              lang,
-                              character,
-                              character,
-                            ),
-                          )
-                        : l10n.selectNpcToSeeEntries,
-                    style: widget.theme.textTheme.labelLarge,
-                  ),
+                  // No per-character info label: the ActorDetailHeader above
+                  // the card already identifies the selection. Only the
+                  // null-selection hint remains.
+                  if (character == null)
+                    Text(
+                      l10n.selectNpcToSeeEntries,
+                      style: widget.theme.textTheme.labelLarge,
+                    ),
                   if (character != null) ...[
-                    const SizedBox(height: 6),
                     if (widget.editable) ...[
                       // Issue C: disabled while entries are loading or a
                       // duplicate check is in flight. An empty setPath
@@ -1415,8 +1395,6 @@ class _EventsDetailState extends ConsumerState<EventsDetail> {
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
-    final lang = ref.watch(currentGameLangProvider);
-    final locCatalog = ref.watch(locCatalogProvider).asData?.value ?? const {};
     final scheme = widget.theme.colorScheme;
     final character = _selectedCharacter;
 
@@ -1426,8 +1404,8 @@ class _EventsDetailState extends ConsumerState<EventsDetail> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // No card title: the sub-tab label already says "Ereignisse". The
-            // "Events — <name>" info label below identifies the selection.
+            // No card title: the sub-tab label already says "Ereignisse", and
+            // the ActorDetailHeader above the card identifies the selection.
             // Events for the externally-selected character. The character list
             // lives in a shared master pane elsewhere; this panel is detail-only
             // and keyed off widget.globalId.
@@ -1435,19 +1413,12 @@ class _EventsDetailState extends ConsumerState<EventsDetail> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Text(
-                    character != null
-                        ? l10n.eventsForCharacter(
-                            _localizedProgressionName(
-                              locCatalog,
-                              lang,
-                              character,
-                              character,
-                            ),
-                          )
-                        : l10n.selectCharacterToSeeEvents,
-                    style: widget.theme.textTheme.labelLarge,
-                  ),
+                  // Only the null-selection hint remains (see card-title note).
+                  if (character == null)
+                    Text(
+                      l10n.selectCharacterToSeeEvents,
+                      style: widget.theme.textTheme.labelLarge,
+                    ),
                   if (character != null) ...[
                     if (_events.error != null)
                       Padding(
@@ -1457,7 +1428,6 @@ class _EventsDetailState extends ConsumerState<EventsDetail> {
                           style: TextStyle(color: scheme.error),
                         ),
                       ),
-                    const SizedBox(height: 4),
                     _PaginationBar(
                       offset: _events.offset,
                       count: _events.events.length,
@@ -1707,20 +1677,8 @@ class _FactionsDetailState extends ConsumerState<FactionsDetail> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // Header
-            Row(
-              children: [
-                Icon(Icons.gavel_outlined, color: scheme.primary),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    l10n.factionsSidebar,
-                    style: widget.theme.textTheme.titleMedium,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
+            // No card title ("Fraktionen" icon+text row): the Welt sidebar
+            // tile already names the section.
             if (_page.error != null)
               Padding(
                 padding: const EdgeInsets.only(bottom: 8),

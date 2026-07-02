@@ -302,7 +302,7 @@ void main() {
     expect(find.text('Knowledge NPCs'), findsNothing);
 
     // Sidebar: Quests is default selection; quest list loads immediately.
-    // 'Quests' appears in both the sidebar tile and the detail header.
+    // 'Quests' appears in the sidebar tile (the detail card has no title row).
     expect(find.text('Quests'), findsAtLeastNWidgets(1));
     // Knowledge and Events are no longer sidebar sections here: they moved to
     // detail-only panels (KnowledgeDetail / EventsDetail) keyed by a shared

@@ -133,8 +133,10 @@ class InventoryDetail extends ConsumerWidget {
         body: l10n.inventoryNoStacks,
       );
     }
+    // Shared sub-tab layout (see CharactersTab): outer 20/top 8 around the
+    // detail's Card.
     return Padding(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
       child: _PrivateInventorySummaryCard(
         inventory: inspection.privateInventory,
         notifier: notifier,
@@ -236,8 +238,10 @@ class _NpcInventoryDetailState extends State<_NpcInventoryDetail> {
         body: l10n.inventoryNoStacks,
       );
     }
+    // Shared sub-tab layout (see CharactersTab): outer 20/top 8 around the
+    // detail's Card.
     return Padding(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
       child: _PrivateInventorySummaryCard(
         // Key on the NPC so switching NPCs builds a fresh card state (its
         // local draft/pending fields reset) while the previous NPC's registry
@@ -555,28 +559,29 @@ class _PrivateInventorySummaryCardState
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Right-aligned actions row. The decorative "Inventar" icon+title
-            // header was removed (the sub-tab label already names the view);
-            // the functional undo/add actions keep their old top-right spot.
-            if ((widget.editable && hasPendingChanges) || widget.canAddItem)
+            // Filter field with the add/undo actions trailing in the SAME row
+            // (they used to sit in a separate right-aligned header row above
+            // it). With no items there is nothing to filter, so only the
+            // buttons render, right-aligned — keeping the add affordance for
+            // an empty-but-addable inventory.
+            if (hasItems ||
+                (widget.editable && hasPendingChanges) ||
+                widget.canAddItem)
               Row(
                 children: [
-                  const Spacer(),
-                  if (widget.editable && hasPendingChanges)
-                    Tooltip(
-                      message: l10n.resetInventoryChanges,
-                      child: IconButton(
-                        icon: const Icon(Icons.undo_outlined),
-                        onPressed: () {
-                          setState(() {
-                            _pendingCountChanges.clear();
-                            _pendingAdd = null;
-                            _pendingRemove = null;
-                          });
-                          widget.notifier.clearPendingEdit(widget.pendingKey);
-                        },
+                  if (hasItems)
+                    Expanded(
+                      child: TextField(
+                        controller: _searchController,
+                        decoration: InputDecoration(
+                          labelText: l10n.filterItems,
+                          prefixIcon: const Icon(Icons.search),
+                        ),
+                        onChanged: (value) => setState(() => _query = value),
                       ),
-                    ),
+                    )
+                  else
+                    const Spacer(),
                   if (widget.canAddItem) ...[
                     const SizedBox(width: 8),
                     Tooltip(
@@ -591,6 +596,23 @@ class _PrivateInventorySummaryCardState
                         icon: const Icon(Icons.add, size: 18),
                         label: Text(l10n.addItemButton),
                         onPressed: structuralBlocked ? null : _openAddDialog,
+                      ),
+                    ),
+                  ],
+                  if (widget.editable && hasPendingChanges) ...[
+                    const SizedBox(width: 8),
+                    Tooltip(
+                      message: l10n.resetInventoryChanges,
+                      child: IconButton(
+                        icon: const Icon(Icons.undo_outlined),
+                        onPressed: () {
+                          setState(() {
+                            _pendingCountChanges.clear();
+                            _pendingAdd = null;
+                            _pendingRemove = null;
+                          });
+                          widget.notifier.clearPendingEdit(widget.pendingKey);
+                        },
                       ),
                     ),
                   ],
@@ -622,15 +644,6 @@ class _PrivateInventorySummaryCardState
               ),
             ],
             if (hasItems) ...[
-              const SizedBox(height: 12),
-              TextField(
-                controller: _searchController,
-                decoration: InputDecoration(
-                  labelText: l10n.filterItems,
-                  prefixIcon: const Icon(Icons.search),
-                ),
-                onChanged: (value) => setState(() => _query = value),
-              ),
               const SizedBox(height: 12),
               Expanded(
                 child: groups.isEmpty

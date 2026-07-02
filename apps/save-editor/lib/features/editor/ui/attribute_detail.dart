@@ -157,10 +157,10 @@ class AttributeDetail extends ConsumerWidget {
       children: [
         ActorDetailHeader(actor: selected, locCatalog: locCatalog, lang: lang),
         Expanded(
-          // Shared sub-tab layout (see CharactersTab): outer 20 → one Card →
-          // inner 16 around the whole attribute editor.
+          // Shared sub-tab layout (see CharactersTab): outer 20/top 8 →
+          // one Card → inner 16 around the whole attribute editor.
           child: Padding(
-            padding: const EdgeInsets.all(20),
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
             child: Card(
               child: Padding(
                 padding: const EdgeInsets.all(16),
@@ -267,11 +267,11 @@ class _PrivatePanel extends StatelessWidget {
     );
   }
 
-  /// Shared sub-tab layout (see CharactersTab): outer 20 → one Card →
+  /// Shared sub-tab layout (see CharactersTab): outer 20/top 8 → one Card →
   /// inner 16 around the whole attribute editor.
   Widget _mainCard(Widget content) {
     return Padding(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
       child: Card(
         child: Padding(padding: const EdgeInsets.all(16), child: content),
       ),

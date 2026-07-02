@@ -25,13 +25,15 @@ import '../domain/editor_notifier.dart';
 /// sub-tabs show a clean empty state and only Wissen is wired up.
 ///
 /// Shared sub-tab layout: every sub-tab body is
-/// `ActorDetailHeader` above `Padding(EdgeInsets.all(20))` → one `Card` →
-/// `Padding(EdgeInsets.all(16))` → content. The 20 outer padding is the card's
-/// distance to the pane edges AND the gap below the header; the 16 inner
+/// `ActorDetailHeader` above `Padding(EdgeInsets.fromLTRB(20, 8, 20, 20))` →
+/// one `Card` → `Padding(EdgeInsets.all(16))` → content. The 20 outer padding
+/// is the card's distance to the pane edges; the top is only 8 because the
+/// header's own line-height whitespace already contributes, making the
+/// header→card gap visually equal to the 20 side/bottom gaps. The 16 inner
 /// padding is the card's content inset. Attribute/Inventar apply this inside
-/// their detail widgets; Wissen/Ereignisse get the outer 20 here (their detail
-/// widgets provide the Card + inner 16). Card titles are intentionally absent —
-/// the sub-tab labels already name the views.
+/// their detail widgets; Wissen/Ereignisse get the outer padding here (their
+/// detail widgets provide the Card + inner 16). Card titles are intentionally
+/// absent — the sub-tab labels already name the views.
 class CharactersTab extends ConsumerWidget {
   const CharactersTab({
     super.key,
@@ -111,10 +113,10 @@ class CharactersTab extends ConsumerWidget {
       children: [
         ActorDetailHeader(actor: selected, locCatalog: locCatalog, lang: lang),
         Expanded(
-          // Shared sub-tab layout (see class comment): outer 20 around the
-          // detail's Card, matching Attribute/Inventar.
+          // Shared sub-tab layout (see class comment): outer padding around
+          // the detail's Card, matching Attribute/Inventar.
           child: Padding(
-            padding: const EdgeInsets.all(20),
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
             child: KnowledgeDetail(
               uniqueName: selected.uniqueName,
               notifier: notifier,
@@ -139,10 +141,10 @@ class CharactersTab extends ConsumerWidget {
       children: [
         ActorDetailHeader(actor: selected, locCatalog: locCatalog, lang: lang),
         Expanded(
-          // Shared sub-tab layout (see class comment): outer 20 around the
-          // detail's Card, matching Attribute/Inventar.
+          // Shared sub-tab layout (see class comment): outer padding around
+          // the detail's Card, matching Attribute/Inventar.
           child: Padding(
-            padding: const EdgeInsets.all(20),
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
             child: EventsDetail(
               globalId: selected.isPlayer
                   ? state.heroGlobalId
