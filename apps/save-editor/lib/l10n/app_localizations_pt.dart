@@ -39,7 +39,20 @@ class AppLocalizationsPt extends AppLocalizations {
   String get tabInventory => 'Inventário';
 
   @override
-  String get tabProgression => 'Progresso';
+  String get tabWorld => 'Mundo';
+
+  @override
+  String get tabCharacters => 'Personagens';
+
+  @override
+  String get characterNoActorBody =>
+      'Este personagem não tem um ator no mundo, portanto não tem atributos, inventário ou eventos.';
+
+  @override
+  String get characterNoEventsBody => 'Sem eventos para este personagem.';
+
+  @override
+  String get characterOrphanGroup => 'Outros';
 
   @override
   String get tabAllData => 'Todos os dados';
@@ -1171,7 +1184,20 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
   String get tabInventory => 'Inventário';
 
   @override
-  String get tabProgression => 'Progresso';
+  String get tabWorld => 'Mundo';
+
+  @override
+  String get tabCharacters => 'Personagens';
+
+  @override
+  String get characterNoActorBody =>
+      'Este personagem não tem um ator no mundo, portanto não tem atributos, inventário ou eventos.';
+
+  @override
+  String get characterNoEventsBody => 'Sem eventos para este personagem.';
+
+  @override
+  String get characterOrphanGroup => 'Outros';
 
   @override
   String get tabAllData => 'Todos os dados';

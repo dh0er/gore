@@ -129,6 +129,11 @@ class ProfileDifficultyChip extends StatelessWidget {
           width: 1,
         ),
       ),
+      // Flame icon + label — no trailing edit icon: the tinted pill + tooltip
+      // already carry the tap affordance, and the label needs the room (it
+      // must never truncate while row space is free). The chip sizes to its
+      // intrinsic width (labels come from a small fixed set), so the parent
+      // row must not wrap it in a flex widget.
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -138,26 +143,20 @@ class ProfileDifficultyChip extends StatelessWidget {
             color: enabled ? color : theme.colorScheme.onSurfaceVariant,
           ),
           const SizedBox(width: 6),
-          Flexible(
-            child: Text(
-              label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              softWrap: false,
-              style: theme.textTheme.labelLarge?.copyWith(
-                fontWeight: FontWeight.w600,
-                color: enabled
-                    ? (known
-                          ? color.withValues(alpha: 0.95)
-                          : theme.colorScheme.onSurface)
-                    : theme.colorScheme.onSurfaceVariant,
-              ),
+          Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            softWrap: false,
+            style: theme.textTheme.labelLarge?.copyWith(
+              fontWeight: FontWeight.w600,
+              color: enabled
+                  ? (known
+                        ? color.withValues(alpha: 0.95)
+                        : theme.colorScheme.onSurface)
+                  : theme.colorScheme.onSurfaceVariant,
             ),
           ),
-          if (enabled) ...[
-            const SizedBox(width: 4),
-            Icon(Icons.edit, size: 14, color: color.withValues(alpha: 0.8)),
-          ],
         ],
       ),
     );
@@ -354,7 +353,20 @@ class _DifficultyDialogState extends State<DifficultyDialog> {
                   for (final preset in _presets)
                     ButtonSegment<String>(
                       value: preset,
-                      label: Text(_presetLabel(l10n, preset)),
+                      // SegmentedButton gives every segment the SAME width; in
+                      // the 420-wide dialog a long localized label (German
+                      // "Benutzerdefiniert") would wrap onto two lines. The
+                      // FittedBox keeps each label on ONE line, scaling only
+                      // the overlong one down slightly instead of wrapping or
+                      // truncating it.
+                      label: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: Text(
+                          _presetLabel(l10n, preset),
+                          maxLines: 1,
+                          softWrap: false,
+                        ),
+                      ),
                     ),
                 ],
                 emptySelectionAllowed: !known,
@@ -541,8 +553,9 @@ class _LevelPicker extends StatelessWidget {
             emptySelectionAllowed: value == null,
             selected: value == null ? const <String>{} : {value!},
             showSelectedIcon: false,
-            onSelectionChanged:
-                enabled ? (selection) => onChanged(selection.first) : null,
+            onSelectionChanged: enabled
+                ? (selection) => onChanged(selection.first)
+                : null,
           ),
         ),
       ],

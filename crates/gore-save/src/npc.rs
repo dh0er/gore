@@ -11,6 +11,8 @@
 //! This module walks the parsed tree to find those maps by descriptor type and
 //! exposes lookups by GlobalId. It is read-only — no payload mutation.
 
+use std::collections::{HashMap, HashSet};
+
 use serde::Serialize;
 
 use crate::CoreError;
@@ -87,6 +89,33 @@ pub struct NpcSummary {
     pub is_dead: bool,
     pub hp: Option<f32>,
     pub max_hp: Option<f32>,
+}
+
+/// A character row for the unified `private.characters.list`. Extends the NPC
+/// summary with the knowledge UniqueName and per-aspect availability flags, so
+/// the frontend needs one call to build the master list. `global_id` is `None`
+/// for knowledge-only "orphan" rows that have no spawned actor.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CharacterSummary {
+    pub global_id: Option<String>,
+    /// The character's UniqueName knowledge-map key. When the actor has knowledge
+    /// this is the actual stored `CharacterKnowledgeByUniqueName` key (exact case,
+    /// so the case-sensitive knowledge query resolves); otherwise the original-case
+    /// GlobalId prefix (before the first `-`).
+    pub unique_name: String,
+    pub is_dead: bool,
+    pub has_inventory: bool,
+    pub has_knowledge: bool,
+    pub has_events: bool,
+}
+
+/// The character's UniqueName key: the GlobalId prefix before the first `-`, in
+/// ORIGINAL case. It must match the case-sensitive `CharacterKnowledgeByUniqueName`
+/// map key so the frontend's knowledge read/edit query resolves. Case-insensitive
+/// membership tests lowercase both sides separately.
+pub(crate) fn char_key(global_id: &str) -> String {
+    global_id.split('-').next().unwrap_or(global_id).to_string()
 }
 
 /// The struct type of a Map property's entry *values*, which lives on the map
@@ -393,6 +422,108 @@ pub fn list_npcs(root: &RootObject) -> Result<Vec<NpcSummary>, CoreError> {
             is_dead,
             hp: hp.health_current.or(hp.health_base),
             max_hp: hp.max_health_base,
+        });
+    }
+    Ok(out)
+}
+
+/// Collect the stringified keys of a named MapProperty found anywhere in the
+/// tree, in ORIGINAL case (used for the knowledge map, whose key case must be
+/// preserved for the case-sensitive knowledge query).
+fn map_keys(root: &RootObject, name: &str) -> Vec<String> {
+    match find_property_by_name(root, name) {
+        Some((_, prop)) => match &prop.value {
+            PropertyValue::Map { entries, .. } => entries
+                .iter()
+                .filter_map(|(k, _)| map_key_to_string(k))
+                .collect(),
+            _ => Vec::new(),
+        },
+        None => Vec::new(),
+    }
+}
+
+/// Collect the stringified keys of a named MapProperty found anywhere in the
+/// tree (used for the knowledge + long-term-memory maps), lower-cased.
+fn map_keys_lower(root: &RootObject, name: &str) -> HashSet<String> {
+    match find_property_by_name(root, name) {
+        Some((_, prop)) => match &prop.value {
+            PropertyValue::Map { entries, .. } => entries
+                .iter()
+                .filter_map(|(k, _)| map_key_to_string(k))
+                .map(|s| s.to_ascii_lowercase())
+                .collect(),
+            _ => HashSet::new(),
+        },
+        None => HashSet::new(),
+    }
+}
+
+/// Collect the stringified GlobalId keys of a character-state map (by value
+/// struct type), lower-cased.
+fn character_map_keys_lower(root: &RootObject, struct_type: &str) -> HashSet<String> {
+    match find_character_map(root, struct_type) {
+        Some(entries) => entries
+            .iter()
+            .filter_map(|(k, _)| map_key_to_string(k))
+            .map(|s| s.to_ascii_lowercase())
+            .collect(),
+        None => HashSet::new(),
+    }
+}
+
+/// Build the unified character list: every spawned actor (from [`list_npcs`])
+/// annotated with availability flags, followed by knowledge-only orphan rows
+/// (a knowledge UniqueName with no matching actor charKey). The join is the
+/// proven prefix rule ([`char_key`]).
+pub fn list_characters(root: &RootObject) -> Result<Vec<CharacterSummary>, CoreError> {
+    // Knowledge keys in ORIGINAL case, indexed by lowercased form for the join.
+    let knowledge_orig = map_keys(root, "CharacterKnowledgeByUniqueName");
+    let knowledge_by_lower: HashMap<String, String> = knowledge_orig
+        .iter()
+        .map(|k| (k.to_ascii_lowercase(), k.clone()))
+        .collect();
+    let events = map_keys_lower(root, LONG_TERM_MEMORY_MAP);
+    let inventory = character_map_keys_lower(root, INVENTORY_TYPE);
+
+    let npcs = list_npcs(root)?;
+    let mut actor_keys_lower: HashSet<String> = HashSet::new();
+    let mut out: Vec<CharacterSummary> = Vec::with_capacity(npcs.len());
+    for npc in &npcs {
+        let prefix = char_key(&npc.id); // original case
+        let lk = prefix.to_ascii_lowercase();
+        actor_keys_lower.insert(lk.clone());
+        let id_lower = npc.id.to_ascii_lowercase();
+        // Prefer the actual stored knowledge key (exact case) so the frontend's
+        // knowledge read/edit query resolves; fall back to the GlobalId prefix
+        // (the key used when ADDING knowledge to an NPC that has none).
+        let (unique_name, has_knowledge) = match knowledge_by_lower.get(&lk) {
+            Some(stored) => (stored.clone(), true),
+            None => (prefix, false),
+        };
+        out.push(CharacterSummary {
+            global_id: Some(npc.id.clone()),
+            unique_name,
+            is_dead: npc.is_dead,
+            has_inventory: inventory.contains(&id_lower),
+            has_knowledge,
+            has_events: events.contains(&id_lower),
+        });
+    }
+    // Knowledge-only orphans (original case), no matching actor charKey.
+    let mut orphans: Vec<String> = knowledge_orig
+        .into_iter()
+        .filter(|k| !actor_keys_lower.contains(&k.to_ascii_lowercase()))
+        .collect();
+    orphans.sort();
+    for key in orphans {
+        out.push(CharacterSummary {
+            global_id: None,
+            unique_name: key,
+            is_dead: false,
+            has_inventory: false,
+            has_knowledge: true,
+            has_events: false,
         });
     }
     Ok(out)
@@ -1343,6 +1474,124 @@ mod tests {
         attr_map
     }
 
+    /// A `SetProperty<NameProperty>` named `name` carrying `values` (inline
+    /// FName elements). Mirrors `properties::name_set_property`.
+    fn name_set_property(name: &str, values: &[&str]) -> Vec<u8> {
+        let mut body = 0u32.to_le_bytes().to_vec(); // num_to_remove
+        body.extend_from_slice(&(values.len() as u32).to_le_bytes());
+        for v in values {
+            body.extend_from_slice(&fstring(v));
+        }
+        let mut out = fstring(name);
+        out.extend_from_slice(&fstring("SetProperty"));
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&fstring("NameProperty")); // element type
+        out.extend_from_slice(&0u32.to_le_bytes()); // array_index
+        out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        out.push(0); // tag_flags
+        out.extend_from_slice(&body);
+        out
+    }
+
+    /// The `CharacterKnowledgeByUniqueName` MapProperty<NameProperty,
+    /// StructProperty(KnowledgeSet)> keyed by UniqueName. Each value is an inline
+    /// struct proplist holding one (empty) `Knowledge` name set, terminated by
+    /// "None" — exactly the real-save shape (`list_characters` only reads the map
+    /// KEYS via `map_key_to_string`, but a faithful value keeps the parse honest).
+    /// Mirrors `properties::knowledge_map_property` in `npc.rs` inline style.
+    fn knowledge_map(unique_names: &[&str]) -> Vec<u8> {
+        let empty_value = || {
+            let mut v = name_set_property("Knowledge", &[]);
+            v.extend_from_slice(&fstring("None"));
+            v
+        };
+        let mut body = 0u32.to_le_bytes().to_vec(); // num_to_remove
+        body.extend_from_slice(&(unique_names.len() as u32).to_le_bytes()); // count
+        for name in unique_names {
+            body.extend_from_slice(&fstring(name)); // inline Name key
+            body.extend_from_slice(&empty_value()); // inline struct value
+        }
+
+        let mut out = fstring("CharacterKnowledgeByUniqueName");
+        out.extend_from_slice(&fstring("MapProperty"));
+        out.extend_from_slice(&2u32.to_le_bytes()); // descriptor count
+        out.extend_from_slice(&fstring("NameProperty")); // key type
+        out.extend_from_slice(&0u32.to_le_bytes()); // key_flags
+        out.extend_from_slice(&fstring("StructProperty")); // value type
+        out.extend_from_slice(&1u32.to_le_bytes()); // struct descriptor count
+        out.extend_from_slice(&fstring("KnowledgeSet")); // value struct type
+        out.extend_from_slice(&1u32.to_le_bytes()); // package count
+        out.extend_from_slice(&fstring("/Script/G1R")); // package
+        out.extend_from_slice(&0u32.to_le_bytes()); // array_index
+        out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        out.push(0); // tag_flags
+        out.extend_from_slice(&body);
+        out
+    }
+
+    /// A private root holding BOTH a `CharacterStateSaveGameData_Attributes` map
+    /// (one enumerable actor per GlobalId, so `list_npcs` returns them) AND a
+    /// `CharacterKnowledgeByUniqueName` map keyed by the given UniqueNames — the
+    /// two inputs `list_characters` joins on the `char_key` prefix rule.
+    fn build_root_with_actor_and_knowledge(
+        actor_global_ids: &[&str],
+        knowledge_unique_names: &[&str],
+    ) -> RootObject {
+        let actors: Vec<(&str, Vec<u8>)> = actor_global_ids
+            .iter()
+            .map(|id| (*id, attributes_entry_value(100.0, 100.0)))
+            .collect();
+        let payload = private_root(&[
+            character_state_map("AttributesMap", ATTRIBUTES_TYPE, &actors),
+            knowledge_map(knowledge_unique_names),
+        ]);
+        parse_private_root(&payload).unwrap()
+    }
+
+    #[test]
+    fn char_key_strips_after_first_dash() {
+        assert_eq!(char_key("NC_ORG_Lares_801-WP_OC_SPAWN"), "NC_ORG_Lares_801");
+        assert_eq!(char_key("Hero"), "Hero");
+        assert_eq!(char_key("A-B-C"), "A");
+    }
+
+    #[test]
+    fn list_characters_flags_and_orphans() {
+        // One enumerable actor whose knowledge entry matches by the char_key prefix
+        // rule, plus a knowledge UniqueName with NO actor (an orphan row).
+        let root = build_root_with_actor_and_knowledge(
+            &["NC_ORG_Lares_801-WP_X"], // actor GlobalIds (dashed -> prefix is the key)
+            &["NC_ORG_Lares_801", "ST_VLK_Mud_Sleeper"], // knowledge UniqueNames
+        );
+        let chars = list_characters(&root).unwrap();
+
+        // The actor row: global_id preserved verbatim, unique_name = the actual
+        // stored knowledge key in ORIGINAL case, knowledge flag set because the map
+        // has its charKey.
+        let lares = chars
+            .iter()
+            .find(|c| c.global_id.as_deref() == Some("NC_ORG_Lares_801-WP_X"))
+            .unwrap();
+        assert_eq!(lares.unique_name, "NC_ORG_Lares_801");
+        assert!(lares.has_knowledge);
+        // No long-term-memory / inventory maps in this fixture => both false.
+        assert!(!lares.has_events);
+        assert!(!lares.has_inventory);
+
+        // The orphan row: a knowledge UniqueName with no matching actor charKey is
+        // appended with global_id: None (original case), only has_knowledge true.
+        let orphan = chars
+            .iter()
+            .find(|c| c.unique_name == "ST_VLK_Mud_Sleeper")
+            .unwrap();
+        assert!(orphan.global_id.is_none());
+        assert!(orphan.has_knowledge && !orphan.has_events && !orphan.has_inventory);
+        assert!(!orphan.is_dead);
+
+        // Exactly the two rows (one actor + one orphan); the actor's own charKey is
+        // NOT double-counted as an orphan.
+        assert_eq!(chars.len(), 2, "one actor row + one orphan row");
+    }
 
     #[test]
     fn list_npcs_reports_current_health_for_wounded_npc() {

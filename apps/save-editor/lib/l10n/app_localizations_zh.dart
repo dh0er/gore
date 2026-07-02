@@ -39,7 +39,19 @@ class AppLocalizationsZh extends AppLocalizations {
   String get tabInventory => '物品栏';
 
   @override
-  String get tabProgression => '进度';
+  String get tabWorld => '世界';
+
+  @override
+  String get tabCharacters => '角色';
+
+  @override
+  String get characterNoActorBody => '该角色在世界中没有对应的实体，因此没有属性、物品栏或事件。';
+
+  @override
+  String get characterNoEventsBody => '该角色没有事件。';
+
+  @override
+  String get characterOrphanGroup => '其他';
 
   @override
   String get tabAllData => '全部数据';
@@ -1132,7 +1144,19 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   String get tabInventory => '物品栏';
 
   @override
-  String get tabProgression => '进度';
+  String get tabWorld => '世界';
+
+  @override
+  String get tabCharacters => '角色';
+
+  @override
+  String get characterNoActorBody => '该角色在世界中没有对应的实体，因此没有属性、物品栏或事件。';
+
+  @override
+  String get characterNoEventsBody => '该角色没有事件。';
+
+  @override
+  String get characterOrphanGroup => '其他';
 
   @override
   String get tabAllData => '全部数据';

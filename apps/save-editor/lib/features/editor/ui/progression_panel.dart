@@ -1,3 +1,12 @@
+/// Progression detail widgets, shared by two tabs: [QuestsDetail] and
+/// [FactionsDetail] are mounted by the Welt (World) tab's sidebar sections,
+/// while [KnowledgeDetail] and [EventsDetail] are detail-only panels keyed by
+/// the shared character selection and mounted by the Charaktere (Characters)
+/// tab's sub-tabs. The dissolved Progression tab shell used to live here; only
+/// its detail widgets and their shared helpers (pagination bar, state/name
+/// localization) remain.
+library;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:goresave/l10n/app_localizations.dart';
@@ -8,11 +17,9 @@ import 'package:goresave/loc/progression_loc.dart';
 import '../domain/editor_models.dart';
 import '../domain/editor_notifier.dart';
 import '../domain/knowledge_catalog.dart';
-import '../domain/npc_catalog.dart';
 import '../domain/pending_edits.dart';
 import '../domain/progression_models.dart';
 import 'add_knowledge_entry_dialog.dart';
-import 'add_npc_dialog.dart';
 
 /// All five EQuestState values, in dropdown order.
 const questStates = <String>[
@@ -35,33 +42,6 @@ const _filterStateLabels = <String>[
 String shortStateLabel(String state) {
   final idx = state.lastIndexOf('::');
   return idx < 0 ? state : state.substring(idx + 2);
-}
-
-/// Localized game name for a progression class/character id, or [fallback] when
-/// the extracted loc catalog has no entry for it.
-String _localizedProgressionName(
-  Map<String, Map<String, String>> catalog,
-  GameLang lang,
-  String id,
-  String fallback,
-) {
-  return localizedGameName(catalog, lang, id) ?? fallback;
-}
-
-/// Client-side match for a character row: true when [query] (already trimmed
-/// and lower-cased) is empty, or the raw [id] OR its localized display name
-/// contains it. Lets the NPC/character search hit localized names, not just
-/// the raw save id (which is all the core can filter on).
-bool _characterMatches(
-  Map<String, Map<String, String>> catalog,
-  GameLang lang,
-  String id,
-  String query,
-) {
-  if (query.isEmpty) return true;
-  if (id.toLowerCase().contains(query)) return true;
-  final name = localizedGameName(catalog, lang, id);
-  return name != null && name.toLowerCase().contains(query);
 }
 
 /// Maps an English short state label to its localized form, defaulting to the
@@ -90,224 +70,6 @@ String _localizedState(AppLocalizations l10n, String? rawState) {
   final label = shortStateLabel(raw);
   if (label == 'unknown') return l10n.questStateUnknown;
   return _localizedShortLabel(l10n, label);
-}
-
-/// Sidebar section entries for the Progression tab.
-enum _ProgSection { quests, knowledge, events, factions }
-
-/// Progression tab: structured quests / dialog knowledge / memory events.
-/// Full-height sidebar layout (no outer scroll). [reloadKey] is the
-/// [SaveInspection] instance itself; identity comparison means every fresh
-/// inspection clears local pending state and reloads.
-class ProgressionPanel extends StatefulWidget {
-  const ProgressionPanel({
-    super.key,
-    required this.inspection,
-    required this.notifier,
-    required this.editable,
-  });
-
-  final SaveInspection inspection;
-  final EditorNotifier notifier;
-  final bool editable;
-
-  @override
-  State<ProgressionPanel> createState() => _ProgressionPanelState();
-}
-
-class _ProgressionPanelState extends State<ProgressionPanel> {
-  // Keep selected section across save-triggered reloads (identity comparison
-  // on reloadKey, not path comparison, so same pattern as hero_stats_card).
-  _ProgSection _selected = _ProgSection.quests;
-
-  @override
-  Widget build(BuildContext context) {
-    final l10n = AppLocalizations.of(context);
-    if (!widget.inspection.privateDecoded) {
-      return _MessagePane(
-        icon: Icons.flag_outlined,
-        title: l10n.tabProgression,
-        body: l10n.progressionLockedBody,
-      );
-    }
-    if (!widget.inspection.privateProgression.available) {
-      return _MessagePane(
-        icon: Icons.flag_outlined,
-        title: l10n.tabProgression,
-        body: l10n.progressionNeedsTyped,
-      );
-    }
-
-    final reloadKey = widget.inspection;
-    final theme = Theme.of(context);
-
-    return Padding(
-      padding: const EdgeInsets.all(20),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // Left sidebar: same style as the Player tab (hero_stats_card).
-          SizedBox(
-            width: 200,
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color: theme.colorScheme.surfaceContainerLow,
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.symmetric(vertical: 6),
-                child: Column(
-                  children: [
-                    _SidebarTile(
-                      icon: Icons.flag_outlined,
-                      label: l10n.sectionQuests,
-                      selected: _selected == _ProgSection.quests,
-                      onTap: () =>
-                          setState(() => _selected = _ProgSection.quests),
-                    ),
-                    _SidebarTile(
-                      icon: Icons.school_outlined,
-                      label: l10n.sectionKnowledge,
-                      selected: _selected == _ProgSection.knowledge,
-                      onTap: () =>
-                          setState(() => _selected = _ProgSection.knowledge),
-                    ),
-                    _SidebarTile(
-                      icon: Icons.history_outlined,
-                      label: l10n.sectionEvents,
-                      selected: _selected == _ProgSection.events,
-                      onTap: () =>
-                          setState(() => _selected = _ProgSection.events),
-                    ),
-                    _SidebarTile(
-                      icon: Icons.gavel_outlined,
-                      label: l10n.factionsSidebar,
-                      selected: _selected == _ProgSection.factions,
-                      onTap: () =>
-                          setState(() => _selected = _ProgSection.factions),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(width: 16),
-          // Detail area — fills remaining width and full height.
-          // Every section stays mounted (Offstage, same pattern as
-          // hero_stats_card): a detail's local `_pending` map backs entries in
-          // the global pending-edit registry, so disposing it on a section
-          // switch would hide queued edits that Save still writes. Keys are
-          // stable on purpose: a key derived from reloadKey would remount the
-          // detail on every fresh inspection, disposing state and bypassing
-          // the didUpdateWidget logic that preserves the selected character.
-          Expanded(
-            child: Stack(
-              children: [
-                Offstage(
-                  offstage: _selected != _ProgSection.quests,
-                  child: _QuestsDetail(
-                    key: const ValueKey('quests'),
-                    notifier: widget.notifier,
-                    editable: widget.editable,
-                    reloadKey: reloadKey,
-                    theme: theme,
-                  ),
-                ),
-                Offstage(
-                  offstage: _selected != _ProgSection.knowledge,
-                  child: _KnowledgeDetail(
-                    key: const ValueKey('knowledge'),
-                    notifier: widget.notifier,
-                    editable: widget.editable,
-                    reloadKey: reloadKey,
-                    theme: theme,
-                  ),
-                ),
-                Offstage(
-                  offstage: _selected != _ProgSection.events,
-                  child: _EventsDetail(
-                    key: const ValueKey('events'),
-                    notifier: widget.notifier,
-                    editable: widget.editable,
-                    reloadKey: reloadKey,
-                    theme: theme,
-                  ),
-                ),
-                Offstage(
-                  offstage: _selected != _ProgSection.factions,
-                  child: _FactionsDetail(
-                    key: const ValueKey('factions'),
-                    notifier: widget.notifier,
-                    editable: widget.editable,
-                    reloadKey: reloadKey,
-                    theme: theme,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Sidebar tile
-// ---------------------------------------------------------------------------
-
-class _SidebarTile extends StatelessWidget {
-  const _SidebarTile({
-    required this.icon,
-    required this.label,
-    required this.selected,
-    required this.onTap,
-  });
-
-  final IconData icon;
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-      child: Material(
-        color: selected ? scheme.primaryContainer : Colors.transparent,
-        borderRadius: BorderRadius.circular(8),
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(8),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
-            child: Row(
-              children: [
-                Icon(
-                  icon,
-                  size: 18,
-                  color: selected ? scheme.primary : scheme.onSurfaceVariant,
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    label,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: selected ? scheme.primary : scheme.onSurface,
-                      fontWeight: selected ? FontWeight.w600 : null,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -445,8 +207,8 @@ class _PaginationBar extends StatelessWidget {
 // Quests detail (stateful, pending-edit pattern)
 // ---------------------------------------------------------------------------
 
-class _QuestsDetail extends ConsumerStatefulWidget {
-  const _QuestsDetail({
+class QuestsDetail extends ConsumerStatefulWidget {
+  const QuestsDetail({
     super.key,
     required this.notifier,
     required this.editable,
@@ -460,10 +222,10 @@ class _QuestsDetail extends ConsumerStatefulWidget {
   final ThemeData theme;
 
   @override
-  ConsumerState<_QuestsDetail> createState() => _QuestsDetailState();
+  ConsumerState<QuestsDetail> createState() => _QuestsDetailState();
 }
 
-class _QuestsDetailState extends ConsumerState<_QuestsDetail> {
+class _QuestsDetailState extends ConsumerState<QuestsDetail> {
   static const _defaultPageSize = 50;
 
   final TextEditingController _search = TextEditingController();
@@ -492,7 +254,7 @@ class _QuestsDetailState extends ConsumerState<_QuestsDetail> {
   }
 
   @override
-  void didUpdateWidget(covariant _QuestsDetail oldWidget) {
+  void didUpdateWidget(covariant QuestsDetail oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.reloadKey != oldWidget.reloadKey) {
       _pending.clear();
@@ -627,9 +389,7 @@ class _QuestsDetailState extends ConsumerState<_QuestsDetail> {
 
     final filtered =
         _allQuests
-            .where(
-              (e) => matchesQuery(e) && matchesState(e) && matchesGroup(e),
-            )
+            .where((e) => matchesQuery(e) && matchesState(e) && matchesGroup(e))
             .toList()
           ..sort((a, b) => a.questClass.compareTo(b.questClass));
     final total = filtered.length;
@@ -649,8 +409,7 @@ class _QuestsDetailState extends ConsumerState<_QuestsDetail> {
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
     final lang = ref.watch(currentGameLangProvider);
-    final locCatalog =
-        ref.watch(locCatalogProvider).asData?.value ?? const {};
+    final locCatalog = ref.watch(locCatalogProvider).asData?.value ?? const {};
     final scheme = widget.theme.colorScheme;
     final page = _computeView(locCatalog, lang);
     return Card(
@@ -670,18 +429,29 @@ class _QuestsDetailState extends ConsumerState<_QuestsDetail> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // Header row
+                  // No card title ("Quests" icon+text row): the Welt sidebar
+                  // tile already names the section. The reset-pending-edits
+                  // action that lived in that row now trails the search field.
                   Row(
                     children: [
-                      Icon(Icons.flag_outlined, color: scheme.primary),
-                      const SizedBox(width: 8),
                       Expanded(
-                        child: Text(
-                          l10n.sectionQuests,
-                          style: widget.theme.textTheme.titleMedium,
+                        // Search field — client-side, filters live as you type.
+                        child: TextField(
+                          controller: _search,
+                          decoration: InputDecoration(
+                            labelText: l10n.searchQuests,
+                            prefixIcon: const Icon(Icons.search),
+                            suffixIcon: IconButton(
+                              icon: const Icon(Icons.arrow_forward),
+                              onPressed: _applySearch,
+                            ),
+                          ),
+                          onChanged: (_) => _applySearch(),
+                          onSubmitted: (_) => _applySearch(),
                         ),
                       ),
-                      if (widget.editable && _pending.isNotEmpty)
+                      if (widget.editable && _pending.isNotEmpty) ...[
+                        const SizedBox(width: 8),
                         Tooltip(
                           message: l10n.resetQuestChanges,
                           child: IconButton(
@@ -694,22 +464,8 @@ class _QuestsDetailState extends ConsumerState<_QuestsDetail> {
                             },
                           ),
                         ),
+                      ],
                     ],
-                  ),
-                  const SizedBox(height: 8),
-                  // Search field — client-side, filters live as you type.
-                  TextField(
-                    controller: _search,
-                    decoration: InputDecoration(
-                      labelText: l10n.searchQuests,
-                      prefixIcon: const Icon(Icons.search),
-                      suffixIcon: IconButton(
-                        icon: const Icon(Icons.arrow_forward),
-                        onPressed: _applySearch,
-                      ),
-                    ),
-                    onChanged: (_) => _applySearch(),
-                    onSubmitted: (_) => _applySearch(),
                   ),
                   if (_fetchError != null) ...[
                     const SizedBox(height: 8),
@@ -860,99 +616,92 @@ class _QuestsDetailState extends ConsumerState<_QuestsDetail> {
 }
 
 // ---------------------------------------------------------------------------
-// Knowledge detail — two-pane: NPC list left, entries right
+// Knowledge detail — entries for a single, externally-selected character
 // ---------------------------------------------------------------------------
 
-class _KnowledgeDetail extends ConsumerStatefulWidget {
-  const _KnowledgeDetail({
+/// Dialog-knowledge detail for one character. The selected character is passed
+/// in via [uniqueName] (its knowledge key, e.g. `NC_ORG_Lares_801` or `Hero`);
+/// null means nothing is selected and the panel shows an empty state. There is
+/// no character pane here — selection is owned by a shared master list — so
+/// this is a detail-only panel that reacts to [uniqueName] changes.
+///
+/// [reloadKey] is the current [SaveInspection]; identity comparison means a
+/// fresh inspection clears pending state and reloads the selected character's
+/// entries.
+class KnowledgeDetail extends ConsumerStatefulWidget {
+  const KnowledgeDetail({
     super.key,
+    required this.uniqueName,
     required this.notifier,
     required this.editable,
     required this.reloadKey,
     required this.theme,
   });
 
+  /// Knowledge key of the selected character, or null when nothing is selected.
+  final String? uniqueName;
   final EditorNotifier notifier;
   final bool editable;
   final SaveInspection reloadKey;
   final ThemeData theme;
 
   @override
-  ConsumerState<_KnowledgeDetail> createState() => _KnowledgeDetailState();
+  ConsumerState<KnowledgeDetail> createState() => _KnowledgeDetailState();
 }
 
-class _KnowledgeDetailState extends ConsumerState<_KnowledgeDetail> {
+class _KnowledgeDetailState extends ConsumerState<KnowledgeDetail> {
   static const _defaultPageSize = 50;
 
-  final TextEditingController _characterSearch = TextEditingController();
-  // Holds the FULL character list (fetched with a large limit, no server
-  // query): search and pagination are done client-side so the query can also
-  // match localized display names, which only exist on the Dart side.
-  KnowledgeCharactersPage _characters = const KnowledgeCharactersPage();
   String? _selectedCharacter;
   KnowledgeEntriesPage _entries = const KnowledgeEntriesPage();
   final Map<String, KnowledgeEntryEdit> _pending = {};
   final TextEditingController _addController = TextEditingController();
-  bool _loadingCharacters = false;
   bool _loadingEntries = false;
-  // Per-loader epochs so a stale characters load never races an entries load.
-  int _charsEpoch = 0;
+  // Epoch guards the entries loader so a stale load never clobbers a newer one.
   int _entriesEpoch = 0;
-  int _charPageSize = _defaultPageSize;
+  // Armed by _ensureCharacterEntry right before its applyAddKnowledgeCharacter
+  // write refreshes the inspection. That refresh is SELF-INFLICTED: the
+  // in-flight first-add flow reloads entries itself and queues its pending
+  // edit against the fresh inspection AFTER didUpdateWidget fires for it —
+  // so didUpdateWidget must treat exactly that one reloadKey change as "ours"
+  // (no _pending.clear(), no re-select) instead of as staleness, or the
+  // user's typed entry is silently dropped next to a freshly created EMPTY
+  // knowledge set. Consumed by the first reloadKey change after arming.
+  bool _expectSelfRefresh = false;
   int _entryPageSize = _defaultPageSize;
-  // Client-side search/pagination state for the NPC list (trimmed+lower-cased
-  // query, current page offset into the filtered list).
-  String _charQuery = '';
-  int _charOffset = 0;
-  // The core clamps a query's `limit` to 1000, so the full NPC list must be
-  // pulled page-by-page rather than in one oversized request.
-  static const _fetchPageLimit = 1000;
   // Used during the cross-page duplicate check in _addEntry.
   bool _checkingDuplicate = false;
   // Error text shown beneath the add field (duplicate-check failure, etc.).
   String? _addError;
-  // Bundled catalogs for the NPC + knowledge-entry picker dialogs. Null until
-  // loaded asynchronously in initState.
-  NpcCatalog? _npcCatalog;
+  // True when the selected character has no CharacterKnowledgeByUniqueName
+  // entry yet (the common case for an NPC the hero never interacted with). The
+  // core reports this via a benign "has no knowledge entry" error; we treat it
+  // as "no knowledge yet" and still offer the add affordance, creating the
+  // character entry on the first add. Distinct from a real load failure.
+  bool _noKnowledgeYet = false;
+  // Bundled catalog for the knowledge-entry picker dialog. Null until loaded
+  // asynchronously in initState.
   KnowledgeCatalog? _knowledgeCatalog;
+
+  /// Substring the core uses in its error when a character exists in the save
+  /// but has no CharacterKnowledgeByUniqueName entry yet (see gore-save
+  /// `query_progression` knowledge branch). Used to tell that benign
+  /// "no knowledge yet" state apart from a genuine core/parse failure.
+  static const _noEntryMarker = 'has no knowledge entry';
 
   @override
   void initState() {
     super.initState();
-    _loadCharacters();
-    _loadCatalogs();
+    _loadCatalog();
+    _selectCharacter(widget.uniqueName);
   }
 
-  Future<void> _loadCatalogs() async {
-    final npc = await NpcCatalog.loadBundled();
+  Future<void> _loadCatalog() async {
     final knowledge = await KnowledgeCatalog.loadBundled();
     if (!mounted) return;
     setState(() {
-      _npcCatalog = npc;
       _knowledgeCatalog = knowledge;
     });
-  }
-
-  Future<void> _addNpc() async {
-    final catalog = _npcCatalog;
-    if (catalog == null) return;
-    // Best-effort exclude: only NPCs on the currently loaded page are known
-    // here (the list is paginated/searchable). The core rejects true
-    // duplicates regardless.
-    final existing = _characters.characters
-        .map((c) => c.name.toLowerCase())
-        .toSet();
-    final picked = await showAddNpcDialog(
-      context,
-      catalog: catalog,
-      exclude: existing,
-    );
-    if (picked == null || !mounted) return;
-    final ok = await widget.notifier.applyAddKnowledgeCharacter(picked);
-    if (!mounted || !ok) return; // on failure the notifier set state.error.
-    await _loadCharacters();
-    if (!mounted) return;
-    await _selectCharacter(picked);
   }
 
   Future<void> _browseAddEntry() async {
@@ -969,104 +718,64 @@ class _KnowledgeDetailState extends ConsumerState<_KnowledgeDetail> {
   }
 
   @override
-  void didUpdateWidget(covariant _KnowledgeDetail oldWidget) {
+  void didUpdateWidget(covariant KnowledgeDetail oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.reloadKey != oldWidget.reloadKey) {
-      // Pending edits belong to the old inspection — always clear them.
-      _pending.clear();
-      // Invalidate both loaders so any in-flight call for the old reloadKey
-      // is treated as stale and exits without touching flags.
-      _charsEpoch++;
-      _entriesEpoch++;
-      _characterSearch.clear();
-      _charQuery = '';
-      _charOffset = 0;
-      // A different save file means a different character set: drop the
-      // selection. A same-file refresh (post-save reload) preserves it.
-      if (widget.reloadKey.path != oldWidget.reloadKey.path) {
-        _selectedCharacter = null;
+    final reloaded = widget.reloadKey != oldWidget.reloadKey;
+    final selectionChanged = widget.uniqueName != oldWidget.uniqueName;
+    // A reload caused by _ensureCharacterEntry's own write (the first-add
+    // flow) is NOT staleness: that flow reloads entries itself and queues the
+    // pending add afterwards. Clearing _pending or re-selecting (which bumps
+    // _entriesEpoch and resets _entries) here would drop the in-flight add.
+    final selfRefresh = reloaded && _expectSelfRefresh;
+    if (reloaded) {
+      _expectSelfRefresh = false;
+      if (!selfRefresh) {
+        // Pending edits belong to the old inspection — clear them.
+        _pending.clear();
       }
-      _loadCharacters();
-      if (_selectedCharacter != null) {
-        _selectCharacter(_selectedCharacter!);
-      } else {
-        _entries = const KnowledgeEntriesPage();
-      }
+    }
+    // Reload the selected character's entries when either the shared selection
+    // changed or a fresh EXTERNAL inspection arrived (post-save reload / new
+    // file). The self-refresh reload happens inside _ensureCharacterEntry.
+    if ((reloaded && !selfRefresh) || selectionChanged) {
+      _selectCharacter(widget.uniqueName);
     }
   }
 
   @override
   void dispose() {
-    _characterSearch.dispose();
     _addController.dispose();
     super.dispose();
   }
 
-  /// Fetches the full knowledge-character list. Searching and pagination then
-  /// happen client-side in [build] so the query can match localized names too.
-  Future<void> _loadCharacters() async {
-    final epoch = ++_charsEpoch;
-    setState(() => _loadingCharacters = true);
-    final all = <KnowledgeCharacter>[];
-    KnowledgeCharactersPage? last;
-    var offset = 0;
-    while (true) {
-      final page = await widget.notifier.loadKnowledgeCharacters(
-        offset: offset,
-        limit: _fetchPageLimit,
-      );
-      if (!mounted || epoch != _charsEpoch) return;
-      last = page;
-      if (page.error != null) break;
-      all.addAll(page.characters);
-      offset += page.characters.length;
-      // Stop on an empty page (defensive) or once the whole set is collected.
-      if (page.characters.isEmpty || offset >= page.total) break;
-    }
-    if (!mounted || epoch != _charsEpoch) return;
-    // The loop always runs at least once, so `last` is non-null here. Read its
-    // fields before setState so the closure doesn't depend on flow promotion.
-    final error = last.error;
-    final total = last.total;
-    final limit = last.limit;
-    setState(() {
-      _loadingCharacters = false;
-      // Drop any partially-fetched pages on error so search/filter/edit never
-      // operate on a silently-incomplete list; surface the error instead.
-      _characters = KnowledgeCharactersPage(
-        characters: error == null ? all : const [],
-        total: error == null ? total : 0,
-        offset: 0,
-        limit: limit,
-        error: error,
-      );
-    });
-  }
-
-  void _applyCharSearch() {
-    setState(() {
-      _charQuery = _characterSearch.text.trim().toLowerCase();
-      _charOffset = 0;
-    });
-  }
-
-  Future<void> _selectCharacter(String name) async {
+  /// Loads the entries for [name] (the selected character's knowledge key).
+  /// [name] == null clears to the empty state. Distinguishes the benign
+  /// "no knowledge entry yet" core result (→ [_noKnowledgeYet], add affordance
+  /// still shown) from a real load error (surfaced via [_entries.error]).
+  Future<void> _selectCharacter(String? name) async {
     final epoch = ++_entriesEpoch;
     setState(() {
       _selectedCharacter = name;
-      _loadingEntries = true;
+      _loadingEntries = name != null;
       _entries = const KnowledgeEntriesPage();
       _addError = null;
+      _noKnowledgeYet = false;
     });
+    if (name == null) return;
     final page = await widget.notifier.loadKnowledgeEntries(
       name,
       offset: 0,
       limit: _entryPageSize,
     );
     if (!mounted || epoch != _entriesEpoch) return;
+    // A "has no knowledge entry" error is the expected shape for a character
+    // the hero never interacted with: fold it into the no-knowledge-yet state
+    // (empty entries + add affordance) instead of surfacing a red error.
+    final noEntry = page.error != null && page.error!.contains(_noEntryMarker);
     setState(() {
       _loadingEntries = false;
-      _entries = page;
+      _noKnowledgeYet = noEntry;
+      _entries = noEntry ? const KnowledgeEntriesPage() : page;
     });
   }
 
@@ -1130,12 +839,75 @@ class _KnowledgeDetailState extends ConsumerState<_KnowledgeDetail> {
     _pushPending();
   }
 
+  /// Creates the character's CharacterKnowledgeByUniqueName entry when it does
+  /// not exist yet, then reloads entries so [_entries.setPath] is populated.
+  /// This is the "no knowledge yet" first-add path that replaces the old
+  /// "Add NPC" dialog: instead of adding an NPC to a list, the already-selected
+  /// character gets its (empty) knowledge set created on demand.
+  ///
+  /// Returns true when [_entries.setPath] is ready to receive an add (either it
+  /// was already populated, or the create+reload succeeded). Returns false and
+  /// leaves [_addError] / notifier error set on any failure so the caller must
+  /// not fall through to a pending add.
+  Future<bool> _ensureCharacterEntry(String character) async {
+    // Already has a knowledge set → nothing to create.
+    if (_entries.setPath.isNotEmpty) return true;
+    // Only the benign "no knowledge yet" state may auto-create. An empty
+    // setPath from any other cause (still loading, real error) must not write.
+    if (!_noKnowledgeYet) return false;
+    // The write below refreshes the inspection (reloadKey changes). Arm the
+    // self-refresh marker BEFORE the write so didUpdateWidget — which can fire
+    // on any frame between here and the end of _addEntry — treats that one
+    // refresh as ours instead of clearing _pending / re-selecting the same
+    // character mid-flight.
+    _expectSelfRefresh = true;
+    final ok = await widget.notifier.applyAddKnowledgeCharacter(character);
+    // A failed write never refreshed anything — disarm the marker so the NEXT
+    // (genuinely external) reload is not mistaken for a self-refresh.
+    if (!ok) _expectSelfRefresh = false;
+    // The notifier sets state.error on failure; also guard unmount/reselect.
+    if (!mounted || _selectedCharacter != character) return false;
+    if (!ok) return false;
+    // applyAddKnowledgeCharacter refreshed the inspection; reload here so the
+    // populated setPath is available synchronously for the add below rather
+    // than depending on the parent rebuild's timing. Bump the epoch so any
+    // OLDER in-flight load can't clobber this fresh page — but do NOT compare
+    // against it below: a same-character refresh-driven reload bumping the
+    // epoch is not staleness for this flow. Only a real character switch or
+    // unmount (both covered by the guard) may abort the add.
+    ++_entriesEpoch;
+    final page = await widget.notifier.loadKnowledgeEntries(
+      character,
+      offset: 0,
+      limit: _entryPageSize,
+    );
+    if (!mounted || _selectedCharacter != character) {
+      return false;
+    }
+    setState(() {
+      _loadingEntries = false;
+      _noKnowledgeYet = false;
+      _entries = page;
+    });
+    // If the entry still has no setPath the create did not take — do not queue.
+    return _entries.setPath.isNotEmpty;
+  }
+
   Future<void> _addEntry(String entry) async {
     final l10n = AppLocalizations.of(context);
-    // Issue C: defense-in-depth guard — setPath not yet loaded → reject.
-    if (_entries.setPath.isEmpty) return;
+    final character = _selectedCharacter;
+    if (character == null) return;
     final trimmed = entry.trim();
     if (trimmed.isEmpty) return;
+    // No-knowledge-yet path: create the character's (empty) knowledge set first
+    // so setPath becomes known, then fall through to the normal add. When the
+    // set already exists this is a no-op.
+    if (_entries.setPath.isEmpty) {
+      final ready = await _ensureCharacterEntry(character);
+      if (!ready) return;
+    }
+    // Issue C: defense-in-depth guard — setPath not loaded → reject.
+    if (_entries.setPath.isEmpty) return;
     // Fast path: already on the current page.
     // UE Names compare case-insensitively, so case-variants are duplicates.
     final trimmedLower = trimmed.toLowerCase();
@@ -1143,7 +915,6 @@ class _KnowledgeDetailState extends ConsumerState<_KnowledgeDetail> {
       setState(() => _addError = l10n.alreadyExistsForCharacter);
       return;
     }
-    final character = _selectedCharacter!;
     // _pendingKey folds the entry to lower case, so this single lookup is
     // already case-insensitive.
     final key = _pendingKey(character, trimmed);
@@ -1152,9 +923,12 @@ class _KnowledgeDetailState extends ConsumerState<_KnowledgeDetail> {
       return;
     }
 
-    // Issue B: cross-page duplicate check via a server query.
+    // Issue B: cross-page duplicate check via a server query. The stale
+    // guards below check unmount and character switch ONLY — deliberately
+    // not the entries epoch: the first-add flow's own inspection refresh may
+    // reload the same character's entries mid-check, and that must not drop
+    // the add (see _expectSelfRefresh).
     final checkCharacter = character;
-    final checkEpoch = _entriesEpoch;
     setState(() {
       _checkingDuplicate = true;
       _addError = null;
@@ -1172,9 +946,7 @@ class _KnowledgeDetailState extends ConsumerState<_KnowledgeDetail> {
           limit: 200,
           offset: offset,
         );
-        if (!mounted ||
-            _selectedCharacter != checkCharacter ||
-            _entriesEpoch != checkEpoch) {
+        if (!mounted || _selectedCharacter != checkCharacter) {
           return;
         }
         if (checkPage.error != null) {
@@ -1192,9 +964,7 @@ class _KnowledgeDetailState extends ConsumerState<_KnowledgeDetail> {
       // Clear the lock on every exit path (unmount, stale, error).
       if (mounted) setState(() => _checkingDuplicate = false);
     }
-    if (!mounted ||
-        _selectedCharacter != checkCharacter ||
-        _entriesEpoch != checkEpoch) {
+    if (!mounted || _selectedCharacter != checkCharacter) {
       return;
     }
     // A failed query must NOT fall through to a pending add.
@@ -1209,11 +979,15 @@ class _KnowledgeDetailState extends ConsumerState<_KnowledgeDetail> {
       return;
     }
 
+    // Re-read the setPath AFTER all awaits above: on the first-add path
+    // _entries was replaced with the post-refresh page, so the queued edit
+    // addresses the FRESH inspection. If an interleaved reload left it empty
+    // (transient reset), do not queue a pathless edit — mirrors the Issue C
+    // guard above.
+    final setPath = _entries.setPath;
+    if (setPath.isEmpty) return;
     setState(() {
-      _pending[key] = KnowledgeEntryEdit.add(
-        setPath: _entries.setPath,
-        entry: trimmed,
-      );
+      _pending[key] = KnowledgeEntryEdit.add(setPath: setPath, entry: trimmed);
       _addController.clear();
       _addError = null;
     });
@@ -1230,8 +1004,7 @@ class _KnowledgeDetailState extends ConsumerState<_KnowledgeDetail> {
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
     final lang = ref.watch(currentGameLangProvider);
-    final locCatalog =
-        ref.watch(locCatalogProvider).asData?.value ?? const {};
+    final locCatalog = ref.watch(locCatalogProvider).asData?.value ?? const {};
     final scheme = widget.theme.colorScheme;
     final character = _selectedCharacter;
 
@@ -1249,411 +1022,267 @@ class _KnowledgeDetailState extends ConsumerState<_KnowledgeDetail> {
       }
     }
 
-    // Client-side search (id OR localized name) + pagination over the full
-    // fetched character list.
-    final filteredChars = _characters.characters
-        .where((c) => _characterMatches(locCatalog, lang, c.name, _charQuery))
-        .toList();
-    final charTotal = filteredChars.length;
-    final charOffset = _charOffset < charTotal ? _charOffset : 0;
-    final pageChars = filteredChars
-        .skip(charOffset)
-        .take(_charPageSize)
-        .toList();
-
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // Header
-            Row(
-              children: [
-                Icon(Icons.school_outlined, color: scheme.primary),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    l10n.dialogKnowledge,
-                    style: widget.theme.textTheme.titleMedium,
-                  ),
-                ),
-                if (widget.editable && _pending.isNotEmpty)
-                  Tooltip(
-                    message: l10n.resetKnowledgeChanges,
-                    child: IconButton(
-                      icon: const Icon(Icons.undo_outlined),
-                      onPressed: () {
-                        setState(_pending.clear);
-                        widget.notifier.clearPendingEdit(
-                          'progression.knowledge',
-                        );
-                      },
-                    ),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            // Two-pane row: characters left, entries right
+            // No card title: the sub-tab label already says "Dialogwissen".
+            // The reset-pending-edits action moved into the add-entry row.
+            // Entries for the externally-selected character. The character list
+            // lives in a shared master pane elsewhere; this panel is detail-only
+            // and keyed off widget.uniqueName.
             Expanded(
-              child: Row(
+              child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // Left pane: NPC search + pagination + list
-                  SizedBox(
-                    width: 280,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        if (widget.editable) ...[
-                          Align(
-                            alignment: Alignment.centerLeft,
-                            child: OutlinedButton.icon(
-                              icon: const Icon(Icons.person_add_alt_1, size: 18),
-                              label: Text(l10n.addNpc),
-                              onPressed: _npcCatalog == null ? null : _addNpc,
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                        ],
-                        TextField(
-                          controller: _characterSearch,
-                          decoration: InputDecoration(
-                            labelText: l10n.searchNpcs,
-                            isDense: true,
-                            prefixIcon: const Icon(Icons.search, size: 18),
-                            suffixIcon: IconButton(
-                              icon: const Icon(Icons.arrow_forward, size: 18),
-                              onPressed: _applyCharSearch,
-                            ),
-                          ),
-                          // Client-side filter: apply live as the user types.
-                          onChanged: (_) => _applyCharSearch(),
-                          onSubmitted: (_) => _applyCharSearch(),
-                        ),
-                        if (_characters.error != null) ...[
-                          const SizedBox(height: 4),
-                          Text(
-                            _characters.error!,
-                            style: TextStyle(color: scheme.error, fontSize: 12),
-                          ),
-                        ],
-                        const SizedBox(height: 4),
-                        _PaginationBar(
-                          offset: charOffset,
-                          count: pageChars.length,
-                          total: charTotal,
-                          pageSize: _charPageSize,
-                          busy: _loadingCharacters,
-                          onPage: (o) => setState(() => _charOffset = o),
-                          onPageSize: (s) => setState(() {
-                            _charPageSize = s;
-                            _charOffset = 0;
-                          }),
-                        ),
-                        const SizedBox(height: 4),
-                        Expanded(
-                          child:
-                              _loadingCharacters &&
-                                  _characters.characters.isEmpty
-                              ? const Center(child: CircularProgressIndicator())
-                              : ListView.separated(
-                                  itemCount: pageChars.length,
-                                  separatorBuilder: (_, _) =>
-                                      const Divider(height: 1),
-                                  itemBuilder: (context, index) {
-                                    final c = pageChars[index];
-                                    final isSelected = c.name == character;
-                                    final displayName =
-                                        _localizedProgressionName(
-                                          locCatalog,
-                                          lang,
-                                          c.name,
-                                          c.name,
-                                        );
-                                    return ListTile(
-                                      dense: true,
-                                      selected: isSelected,
-                                      title: Text(
-                                        l10n.characterWithCount(
-                                          displayName,
-                                          c.entryCount,
-                                        ),
-                                      ),
-                                      // Show the raw save id beneath the name
-                                      // when it differs from the localized
-                                      // display name.
-                                      subtitle: displayName == c.name
-                                          ? null
-                                          : Text(
-                                              c.name,
-                                              maxLines: 1,
-                                              overflow: TextOverflow.ellipsis,
-                                              style: TextStyle(
-                                                color: scheme.onSurfaceVariant,
-                                                fontSize: 11,
-                                              ),
-                                            ),
-                                      onTap: () => _selectCharacter(c.name),
-                                    );
-                                  },
-                                ),
-                        ),
-                      ],
+                  // No per-character info label: the ActorDetailHeader above
+                  // the card already identifies the selection. Only the
+                  // null-selection hint remains.
+                  if (character == null)
+                    Text(
+                      l10n.selectNpcToSeeEntries,
+                      style: widget.theme.textTheme.labelLarge,
                     ),
-                  ),
-                  const SizedBox(width: 12),
-                  const VerticalDivider(width: 1),
-                  const SizedBox(width: 12),
-                  // Right pane: header + add field + pagination + entries list
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Text(
-                          character != null
-                              ? l10n.entriesForCharacter(
-                                  _localizedProgressionName(
-                                    locCatalog,
-                                    lang,
-                                    character,
-                                    character,
+                  if (character != null) ...[
+                    if (widget.editable) ...[
+                      // Issue C: disabled while entries are loading or a
+                      // duplicate check is in flight. An empty setPath
+                      // normally disables the field, EXCEPT in the
+                      // no-knowledge-yet state: there the first add is
+                      // allowed and creates the character's knowledge set
+                      // on demand (see _ensureCharacterEntry).
+                      Builder(
+                        builder: (context) {
+                          final addDisabled =
+                              _loadingEntries ||
+                              (_entries.setPath.isEmpty && !_noKnowledgeYet) ||
+                              _checkingDuplicate;
+                          return Row(
+                            children: [
+                              Expanded(
+                                child: TextField(
+                                  controller: _addController,
+                                  enabled: !addDisabled,
+                                  decoration: InputDecoration(
+                                    labelText: l10n.addKnowledgeEntry,
+                                    isDense: true,
                                   ),
-                                )
-                              : l10n.selectNpcToSeeEntries,
-                          style: widget.theme.textTheme.labelLarge,
-                        ),
-                        if (character != null) ...[
-                          const SizedBox(height: 6),
-                          if (widget.editable) ...[
-                            // Issue C: disabled while entries are loading or
-                            // the set path is not yet known.
-                            Builder(
-                              builder: (context) {
-                                final addDisabled =
-                                    _loadingEntries ||
-                                    _entries.setPath.isEmpty ||
-                                    _checkingDuplicate;
-                                return Row(
-                                  children: [
-                                    Expanded(
-                                      child: TextField(
-                                        controller: _addController,
-                                        enabled: !addDisabled,
-                                        decoration: InputDecoration(
-                                          labelText: l10n.addKnowledgeEntry,
-                                          isDense: true,
+                                  onSubmitted: addDisabled
+                                      ? null
+                                      : (v) => _addEntry(v),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              // Issue B: spinner during cross-page check.
+                              _checkingDuplicate
+                                  ? const Padding(
+                                      padding: EdgeInsets.all(12),
+                                      child: SizedBox(
+                                        width: 16,
+                                        height: 16,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
                                         ),
-                                        onSubmitted: addDisabled
-                                            ? null
-                                            : (v) => _addEntry(v),
                                       ),
-                                    ),
-                                    const SizedBox(width: 8),
-                                    // Issue B: spinner during cross-page check.
-                                    _checkingDuplicate
-                                        ? const Padding(
-                                            padding: EdgeInsets.all(12),
-                                            child: SizedBox(
-                                              width: 16,
-                                              height: 16,
-                                              child: CircularProgressIndicator(
-                                                strokeWidth: 2,
-                                              ),
-                                            ),
-                                          )
-                                        : IconButton(
-                                            icon: const Icon(Icons.add),
-                                            tooltip: l10n.add,
-                                            onPressed: addDisabled
-                                                ? null
-                                                : () => _addEntry(
-                                                    _addController.text,
-                                                  ),
-                                          ),
-                                    // Browse the full knowledge-entry catalog.
-                                    // The free-text field above stays as a
-                                    // fallback for non-catalog tokens.
-                                    IconButton(
-                                      icon: const Icon(Icons.menu_book_outlined),
-                                      tooltip: l10n.browseCatalog,
-                                      onPressed:
-                                          addDisabled || _knowledgeCatalog == null
+                                    )
+                                  : IconButton(
+                                      icon: const Icon(Icons.add),
+                                      tooltip: l10n.add,
+                                      onPressed: addDisabled
                                           ? null
-                                          : _browseAddEntry,
+                                          : () =>
+                                                _addEntry(_addController.text),
                                     ),
-                                  ],
-                                );
-                              },
-                            ),
-                          ],
-                          if (_entries.error != null)
-                            Padding(
-                              padding: const EdgeInsets.only(top: 4),
-                              child: Text(
-                                _entries.error!,
-                                style: TextStyle(color: scheme.error),
+                              // Browse the full knowledge-entry catalog.
+                              // The free-text field above stays as a
+                              // fallback for non-catalog tokens.
+                              IconButton(
+                                icon: const Icon(Icons.menu_book_outlined),
+                                tooltip: l10n.browseCatalog,
+                                onPressed:
+                                    addDisabled || _knowledgeCatalog == null
+                                    ? null
+                                    : _browseAddEntry,
                               ),
-                            ),
-                          if (_addError != null)
-                            Padding(
-                              padding: const EdgeInsets.only(top: 4),
-                              child: Text(
-                                _addError!,
-                                style: TextStyle(color: scheme.error),
-                              ),
-                            ),
-                          const SizedBox(height: 4),
-                          _PaginationBar(
-                            offset: _entries.offset,
-                            count: _entries.entries.length,
-                            total: _entries.total,
-                            pageSize: _entryPageSize,
-                            busy: _loadingEntries,
-                            onPage: (o) => _loadEntries(offset: o),
-                            onPageSize: _setEntryPageSize,
-                          ),
-                          const SizedBox(height: 4),
-                          // Issue E: pending adds in a separate labeled block
-                          // so the pagination bar unambiguously refers to the
-                          // saved entries below.
-                          if (addedEntries.isNotEmpty) ...[
-                            Padding(
-                              padding: const EdgeInsets.symmetric(vertical: 4),
-                              child: Text(
-                                l10n.pendingAddsCount(addedEntries.length),
-                                style: widget.theme.textTheme.labelSmall
-                                    ?.copyWith(color: scheme.onSurfaceVariant),
-                              ),
-                            ),
-                            for (final entry in addedEntries)
-                              Builder(
-                                builder: (context) {
-                                  final text = localizedKnowledgeEntry(
-                                    locCatalog,
-                                    lang,
-                                    entry,
-                                  );
-                                  return ListTile(
-                                    dense: true,
-                                    tileColor: scheme.tertiaryContainer
-                                        .withValues(alpha: 0.4),
-                                    title: Text(
-                                      text ?? entry,
-                                      style: TextStyle(
-                                        color: scheme.onTertiaryContainer,
-                                      ),
-                                    ),
-                                    subtitle: text == null
-                                        ? null
-                                        : Text(
-                                            entry,
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                            style: TextStyle(
-                                              color: scheme.onSurfaceVariant,
-                                              fontSize: 11,
-                                            ),
-                                          ),
-                                    trailing: widget.editable
-                                        ? IconButton(
-                                            icon: const Icon(
-                                              Icons.undo,
-                                              size: 18,
-                                            ),
-                                            tooltip: l10n.undoAdd,
-                                            onPressed: () => _undoAdd(entry),
-                                          )
-                                        : null,
-                                  );
-                                },
-                              ),
-                            const Divider(height: 8),
-                          ],
-                          // Saved entries list — the only scrollable in this
-                          // pane; pagination bar above refers only to this.
-                          Expanded(
-                            child: _loadingEntries && _entries.entries.isEmpty
-                                ? const Center(
-                                    child: CircularProgressIndicator(),
-                                  )
-                                : ListView.separated(
-                                    itemCount: _entries.entries.length,
-                                    separatorBuilder: (_, _) =>
-                                        const Divider(height: 1),
-                                    itemBuilder: (context, index) {
-                                      final entry = _entries.entries[index];
-                                      final isRemoved = removedEntries.contains(
-                                        entry.toLowerCase(),
-                                      );
-                                      final text = localizedKnowledgeEntry(
-                                        locCatalog,
-                                        lang,
-                                        entry,
-                                      );
-                                      return ListTile(
-                                        dense: true,
-                                        title: Text(
-                                          text ?? entry,
-                                          style: isRemoved
-                                              ? const TextStyle(
-                                                  decoration: TextDecoration
-                                                      .lineThrough,
-                                                )
-                                              : null,
-                                        ),
-                                        // Raw entry id beneath the resolved
-                                        // dialog line, when one was found.
-                                        subtitle: text == null
-                                            ? null
-                                            : Text(
-                                                entry,
-                                                maxLines: 1,
-                                                overflow: TextOverflow.ellipsis,
-                                                style: TextStyle(
-                                                  color:
-                                                      scheme.onSurfaceVariant,
-                                                  fontSize: 11,
-                                                  decoration: isRemoved
-                                                      ? TextDecoration
-                                                            .lineThrough
-                                                      : null,
-                                                ),
-                                              ),
-                                        trailing: widget.editable
-                                            ? IconButton(
-                                                icon: Icon(
-                                                  isRemoved
-                                                      ? Icons.undo
-                                                      : Icons.delete_outline,
-                                                  size: 18,
-                                                ),
-                                                tooltip: isRemoved
-                                                    ? l10n.undoRemove
-                                                    : l10n.removeEntry,
-                                                onPressed: () =>
-                                                    _removeEntry(entry),
-                                              )
-                                            : null,
+                              // Reset-pending-edits: lived in the removed
+                              // card-title row; now rides at the end of the
+                              // add-entry row (same icon + tooltip).
+                              if (_pending.isNotEmpty)
+                                Tooltip(
+                                  message: l10n.resetKnowledgeChanges,
+                                  child: IconButton(
+                                    icon: const Icon(Icons.undo_outlined),
+                                    onPressed: () {
+                                      setState(_pending.clear);
+                                      widget.notifier.clearPendingEdit(
+                                        'progression.knowledge',
                                       );
                                     },
                                   ),
+                                ),
+                            ],
+                          );
+                        },
+                      ),
+                    ],
+                    if (_entries.error != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Text(
+                          _entries.error!,
+                          style: TextStyle(color: scheme.error),
+                        ),
+                      ),
+                    if (_addError != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Text(
+                          _addError!,
+                          style: TextStyle(color: scheme.error),
+                        ),
+                      ),
+                    const SizedBox(height: 4),
+                    _PaginationBar(
+                      offset: _entries.offset,
+                      count: _entries.entries.length,
+                      total: _entries.total,
+                      pageSize: _entryPageSize,
+                      busy: _loadingEntries,
+                      onPage: (o) => _loadEntries(offset: o),
+                      onPageSize: _setEntryPageSize,
+                    ),
+                    const SizedBox(height: 4),
+                    // Issue E: pending adds in a separate labeled block
+                    // so the pagination bar unambiguously refers to the
+                    // saved entries below.
+                    if (addedEntries.isNotEmpty) ...[
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 4),
+                        child: Text(
+                          l10n.pendingAddsCount(addedEntries.length),
+                          style: widget.theme.textTheme.labelSmall?.copyWith(
+                            color: scheme.onSurfaceVariant,
                           ),
-                        ],
-                        if (character == null)
-                          Expanded(
-                            child: Center(
-                              child: Text(
-                                l10n.selectNpcFromList,
+                        ),
+                      ),
+                      for (final entry in addedEntries)
+                        Builder(
+                          builder: (context) {
+                            final text = localizedKnowledgeEntry(
+                              locCatalog,
+                              lang,
+                              entry,
+                            );
+                            return ListTile(
+                              dense: true,
+                              tileColor: scheme.tertiaryContainer.withValues(
+                                alpha: 0.4,
+                              ),
+                              title: Text(
+                                text ?? entry,
                                 style: TextStyle(
-                                  color: scheme.onSurfaceVariant,
+                                  color: scheme.onTertiaryContainer,
                                 ),
                               ),
+                              subtitle: text == null
+                                  ? null
+                                  : Text(
+                                      entry,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        color: scheme.onSurfaceVariant,
+                                        fontSize: 11,
+                                      ),
+                                    ),
+                              trailing: widget.editable
+                                  ? IconButton(
+                                      icon: const Icon(Icons.undo, size: 18),
+                                      tooltip: l10n.undoAdd,
+                                      onPressed: () => _undoAdd(entry),
+                                    )
+                                  : null,
+                            );
+                          },
+                        ),
+                      const Divider(height: 8),
+                    ],
+                    // Saved entries list — the only scrollable in this
+                    // pane; pagination bar above refers only to this.
+                    Expanded(
+                      child: _loadingEntries && _entries.entries.isEmpty
+                          ? const Center(child: CircularProgressIndicator())
+                          : ListView.separated(
+                              itemCount: _entries.entries.length,
+                              separatorBuilder: (_, _) =>
+                                  const Divider(height: 1),
+                              itemBuilder: (context, index) {
+                                final entry = _entries.entries[index];
+                                final isRemoved = removedEntries.contains(
+                                  entry.toLowerCase(),
+                                );
+                                final text = localizedKnowledgeEntry(
+                                  locCatalog,
+                                  lang,
+                                  entry,
+                                );
+                                return ListTile(
+                                  dense: true,
+                                  title: Text(
+                                    text ?? entry,
+                                    style: isRemoved
+                                        ? const TextStyle(
+                                            decoration:
+                                                TextDecoration.lineThrough,
+                                          )
+                                        : null,
+                                  ),
+                                  // Raw entry id beneath the resolved
+                                  // dialog line, when one was found.
+                                  subtitle: text == null
+                                      ? null
+                                      : Text(
+                                          entry,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: TextStyle(
+                                            color: scheme.onSurfaceVariant,
+                                            fontSize: 11,
+                                            decoration: isRemoved
+                                                ? TextDecoration.lineThrough
+                                                : null,
+                                          ),
+                                        ),
+                                  trailing: widget.editable
+                                      ? IconButton(
+                                          icon: Icon(
+                                            isRemoved
+                                                ? Icons.undo
+                                                : Icons.delete_outline,
+                                            size: 18,
+                                          ),
+                                          tooltip: isRemoved
+                                              ? l10n.undoRemove
+                                              : l10n.removeEntry,
+                                          onPressed: () => _removeEntry(entry),
+                                        )
+                                      : null,
+                                );
+                              },
                             ),
-                          ),
-                      ],
                     ),
-                  ),
+                  ],
+                  if (character == null)
+                    Expanded(
+                      child: Center(
+                        child: Text(
+                          l10n.selectNpcFromList,
+                          style: TextStyle(color: scheme.onSurfaceVariant),
+                        ),
+                      ),
+                    ),
                 ],
               ),
             ),
@@ -1665,17 +1294,25 @@ class _KnowledgeDetailState extends ConsumerState<_KnowledgeDetail> {
 }
 
 // ---------------------------------------------------------------------------
-// Events detail — two-pane: character list left, events right
+// Events detail — events for a single, externally-selected character
 // ---------------------------------------------------------------------------
 
-class _EventsDetail extends ConsumerStatefulWidget {
-  const _EventsDetail({
+/// Memory-event detail for one character. The selected character is passed in
+/// via [globalId] (its GlobalId); null means nothing is selected (or a player
+/// with no resolved id) and the panel shows an empty state. Detail-only: the
+/// character list is owned by a shared master pane elsewhere.
+class EventsDetail extends ConsumerStatefulWidget {
+  const EventsDetail({
     super.key,
+    required this.globalId,
     required this.notifier,
     required this.editable,
     required this.reloadKey,
     required this.theme,
   });
+
+  /// GlobalId of the selected character, or null when nothing is selected.
+  final String? globalId;
 
   final EditorNotifier notifier;
   final bool editable;
@@ -1683,108 +1320,74 @@ class _EventsDetail extends ConsumerStatefulWidget {
   final ThemeData theme;
 
   @override
-  ConsumerState<_EventsDetail> createState() => _EventsDetailState();
+  ConsumerState<EventsDetail> createState() => _EventsDetailState();
 }
 
-class _EventsDetailState extends ConsumerState<_EventsDetail> {
+class _EventsDetailState extends ConsumerState<EventsDetail> {
   static const _defaultPageSize = 50;
 
-  final TextEditingController _characterSearch = TextEditingController();
-  // Memory-event characters use ids that have no loc entries (spawn-point /
-  // internal names), so their search stays server-side: the set can exceed
-  // the core's per-page cap, and there is no localized name to match anyway.
-  MemoryCharactersPage _characters = const MemoryCharactersPage();
   String? _selectedCharacter;
   MemoryEventsPage _events = const MemoryEventsPage();
-  bool _loadingCharacters = false;
-  bool _searchingCharacters = false;
   bool _loadingEvents = false;
-  // Per-loader epochs so a stale characters load never races an events load.
-  int _charsEpoch = 0;
+  // Epoch guards the events loader so a stale load never clobbers a newer one.
   int _eventsEpoch = 0;
-  int _charPageSize = _defaultPageSize;
   int _eventPageSize = _defaultPageSize;
-  String _activeCharQuery = '';
+  // True when the selected character has no LongTermMemoryByGlobalId entry yet
+  // (the common case for an NPC the hero never interacted with). The core
+  // reports this via a benign "has no memory entry" error; we treat it as
+  // "no events yet" and render a neutral empty state instead of a red error.
+  // Distinct from a real load failure. Mirrors KnowledgeDetail's
+  // [_noKnowledgeYet] handling of the equivalent knowledge error.
+  bool _noEventsYet = false;
+
+  /// Substring the core uses in its error when a character exists in the save
+  /// but has no LongTermMemoryByGlobalId entry yet (see gore-save
+  /// `query_progression` events branch). Used to tell that benign "no events
+  /// yet" state apart from a genuine core/parse failure.
+  static const _noEntryMarker = 'has no memory entry';
 
   @override
   void initState() {
     super.initState();
-    _loadCharacters(offset: 0);
+    _selectCharacter(widget.globalId);
   }
 
   @override
-  void didUpdateWidget(covariant _EventsDetail oldWidget) {
+  void didUpdateWidget(covariant EventsDetail oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.reloadKey != oldWidget.reloadKey) {
-      // Invalidate both loaders so any in-flight call for the old reloadKey
-      // is treated as stale and exits without touching flags.
-      _charsEpoch++;
-      _eventsEpoch++;
-      _characterSearch.clear();
-      _activeCharQuery = '';
-      // A different save file means a different character set: drop the
-      // selection. A same-file refresh (post-event-edit reload) preserves it
-      // so the right pane does not fall back to "Select a character".
-      if (widget.reloadKey.path != oldWidget.reloadKey.path) {
-        _selectedCharacter = null;
-      }
-      _loadCharacters(offset: 0);
-      // Re-trigger the preserved character's events load (page reset to 0 is
-      // fine). If it has since been deleted the existing error rendering
-      // will handle it.
-      if (_selectedCharacter != null) {
-        _selectCharacter(_selectedCharacter!);
-      } else {
-        _events = const MemoryEventsPage();
-      }
+    final reloaded = widget.reloadKey != oldWidget.reloadKey;
+    final selectionChanged = widget.globalId != oldWidget.globalId;
+    // Reload the selected character's events when either the shared selection
+    // changed or a fresh inspection arrived (post-edit reload / new file). If
+    // the character was since deleted the existing error rendering handles it.
+    if (reloaded || selectionChanged) {
+      _selectCharacter(widget.globalId);
     }
   }
 
-  @override
-  void dispose() {
-    _characterSearch.dispose();
-    super.dispose();
-  }
-
-  Future<void> _loadCharacters({
-    required int offset,
-    bool newQuery = false,
-  }) async {
-    if (newQuery) _activeCharQuery = _characterSearch.text.trim();
-    final epoch = ++_charsEpoch;
-    setState(() {
-      _loadingCharacters = true;
-      if (newQuery) _searchingCharacters = true;
-    });
-    final page = await widget.notifier.loadMemoryCharacters(
-      query: _activeCharQuery,
-      offset: offset,
-      limit: _charPageSize,
-    );
-    if (!mounted || epoch != _charsEpoch) return;
-    setState(() {
-      _loadingCharacters = false;
-      _searchingCharacters = false;
-      _characters = page;
-    });
-  }
-
-  Future<void> _selectCharacter(String id) async {
+  Future<void> _selectCharacter(String? id) async {
     final epoch = ++_eventsEpoch;
     setState(() {
       _selectedCharacter = id;
-      _loadingEvents = true;
+      _loadingEvents = id != null;
       _events = const MemoryEventsPage(); // clear stale page immediately
+      _noEventsYet = false;
     });
+    if (id == null) return;
     final page = await widget.notifier.loadMemoryEvents(
       id,
       offset: 0,
       limit: _eventPageSize,
     );
     if (!mounted || epoch != _eventsEpoch) return;
+    // A "has no memory entry" error is the expected shape for a character the
+    // hero never interacted with: fold it into the no-events-yet state (a
+    // neutral empty list) instead of surfacing a red error.
+    final noEntry = page.error != null && page.error!.contains(_noEntryMarker);
     setState(() {
       _loadingEvents = false;
-      _events = page;
+      _noEventsYet = noEntry;
+      _events = noEntry ? const MemoryEventsPage() : page;
     });
   }
 
@@ -1844,9 +1447,6 @@ class _EventsDetailState extends ConsumerState<_EventsDetail> {
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
-    final lang = ref.watch(currentGameLangProvider);
-    final locCatalog =
-        ref.watch(locCatalogProvider).asData?.value ?? const {};
     final scheme = widget.theme.colorScheme;
     final character = _selectedCharacter;
 
@@ -1856,255 +1456,135 @@ class _EventsDetailState extends ConsumerState<_EventsDetail> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // Header
-            Row(
-              children: [
-                Icon(Icons.history_outlined, color: scheme.primary),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    l10n.memoryEvents,
-                    style: widget.theme.textTheme.titleMedium,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            // Two-pane row: characters left, events right
+            // No card title: the sub-tab label already says "Ereignisse", and
+            // the ActorDetailHeader above the card identifies the selection.
+            // Events for the externally-selected character. The character list
+            // lives in a shared master pane elsewhere; this panel is detail-only
+            // and keyed off widget.globalId.
             Expanded(
-              child: Row(
+              child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // Left pane: character search + pagination + list
-                  SizedBox(
-                    width: 280,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        TextField(
-                          controller: _characterSearch,
-                          decoration: InputDecoration(
-                            labelText: l10n.searchCharacters,
-                            isDense: true,
-                            prefixIcon: const Icon(Icons.search, size: 18),
-                            suffixIcon: _searchingCharacters
-                                ? const Padding(
-                                    padding: EdgeInsets.all(10),
-                                    child: SizedBox(
-                                      width: 16,
-                                      height: 16,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 2,
-                                      ),
-                                    ),
-                                  )
-                                : IconButton(
-                                    icon: const Icon(
-                                      Icons.arrow_forward,
-                                      size: 18,
-                                    ),
-                                    onPressed: () => _loadCharacters(
-                                      offset: 0,
-                                      newQuery: true,
-                                    ),
-                                  ),
-                          ),
-                          onSubmitted: (_) =>
-                              _loadCharacters(offset: 0, newQuery: true),
-                        ),
-                        if (_characters.error != null) ...[
-                          const SizedBox(height: 4),
-                          Text(
-                            _characters.error!,
-                            style: TextStyle(color: scheme.error, fontSize: 12),
-                          ),
-                        ],
-                        const SizedBox(height: 4),
-                        _PaginationBar(
-                          offset: _characters.offset,
-                          count: _characters.characters.length,
-                          total: _characters.total,
-                          pageSize: _charPageSize,
-                          busy: _loadingCharacters,
-                          onPage: (o) => _loadCharacters(offset: o),
-                          onPageSize: (s) {
-                            setState(() => _charPageSize = s);
-                            _loadCharacters(offset: 0);
-                          },
-                        ),
-                        const SizedBox(height: 4),
-                        Expanded(
-                          child:
-                              _loadingCharacters &&
-                                  _characters.characters.isEmpty
-                              ? const Center(child: CircularProgressIndicator())
-                              : ListView.separated(
-                                  itemCount: _characters.characters.length,
-                                  separatorBuilder: (_, _) =>
-                                      const Divider(height: 1),
-                                  itemBuilder: (context, index) {
-                                    final c = _characters.characters[index];
-                                    final isSelected = c.id == character;
-                                    return ListTile(
-                                      dense: true,
-                                      selected: isSelected,
-                                      title: Text(
-                                        l10n.characterWithCount(
-                                          _localizedProgressionName(
-                                            locCatalog,
-                                            lang,
-                                            c.id,
-                                            c.id,
-                                          ),
-                                          c.eventCount,
-                                        ),
-                                      ),
-                                      onTap: () => _selectCharacter(c.id),
-                                    );
-                                  },
-                                ),
-                        ),
-                      ],
+                  // Only the null-selection hint remains (see card-title note).
+                  if (character == null)
+                    Text(
+                      l10n.selectCharacterToSeeEvents,
+                      style: widget.theme.textTheme.labelLarge,
                     ),
-                  ),
-                  const SizedBox(width: 12),
-                  const VerticalDivider(width: 1),
-                  const SizedBox(width: 12),
-                  // Right pane: header + pagination + events list
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Text(
-                          character != null
-                              ? l10n.eventsForCharacter(
-                                  _localizedProgressionName(
-                                    locCatalog,
-                                    lang,
-                                    character,
-                                    character,
-                                  ),
-                                )
-                              : l10n.selectCharacterToSeeEvents,
-                          style: widget.theme.textTheme.labelLarge,
+                  if (character != null) ...[
+                    if (_events.error != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Text(
+                          _events.error!,
+                          style: TextStyle(color: scheme.error),
                         ),
-                        if (character != null) ...[
-                          if (_events.error != null)
-                            Padding(
-                              padding: const EdgeInsets.only(top: 4),
+                      ),
+                    _PaginationBar(
+                      offset: _events.offset,
+                      count: _events.events.length,
+                      total: _events.total,
+                      pageSize: _eventPageSize,
+                      busy: _loadingEvents,
+                      onPage: (o) => _loadEvents(offset: o),
+                      onPageSize: _setEventPageSize,
+                    ),
+                    const SizedBox(height: 4),
+                    // Events list — only scrollable in this pane. In the
+                    // benign no-memory-entry state the list is replaced by a
+                    // neutral "no events" hint (there is no add flow for
+                    // events, so unlike KnowledgeDetail no affordance remains).
+                    Expanded(
+                      child: _noEventsYet
+                          ? Center(
                               child: Text(
-                                _events.error!,
-                                style: TextStyle(color: scheme.error),
-                              ),
-                            ),
-                          const SizedBox(height: 4),
-                          _PaginationBar(
-                            offset: _events.offset,
-                            count: _events.events.length,
-                            total: _events.total,
-                            pageSize: _eventPageSize,
-                            busy: _loadingEvents,
-                            onPage: (o) => _loadEvents(offset: o),
-                            onPageSize: _setEventPageSize,
-                          ),
-                          const SizedBox(height: 4),
-                          // Events list — only scrollable in this pane
-                          Expanded(
-                            child: _loadingEvents && _events.events.isEmpty
-                                ? const Center(
-                                    child: CircularProgressIndicator(),
-                                  )
-                                : ListView.separated(
-                                    itemCount: _events.events.length,
-                                    separatorBuilder: (_, _) =>
-                                        const Divider(height: 1),
-                                    itemBuilder: (context, index) {
-                                      final event = _events.events[index];
-                                      final tagLabel = event.tags.isEmpty
-                                          ? l10n.noTags
-                                          : event.tags.join(', ');
-                                      final timeStr = event.timeSeconds != null
-                                          ? event.timeSeconds!.toStringAsFixed(
-                                              0,
-                                            )
-                                          : '?';
-                                      final affected = event.affected ?? '';
-                                      return ListTile(
-                                        dense: true,
-                                        title: SelectableText(
-                                          tagLabel,
-                                          maxLines: 1,
-                                        ),
-                                        subtitle: SelectableText(
-                                          l10n.eventSubtitle(timeStr, affected),
-                                          maxLines: 1,
-                                        ),
-                                        trailing: widget.editable
-                                            ? Row(
-                                                mainAxisSize: MainAxisSize.min,
-                                                children: [
-                                                  IconButton(
-                                                    icon: const Icon(
-                                                      Icons.delete_outline,
-                                                      size: 20,
-                                                    ),
-                                                    tooltip: l10n.removeEvent,
-                                                    onPressed: _loadingEvents
-                                                        ? null
-                                                        : () => _confirmAndApply(
-                                                            context,
-                                                            MemoryEventEdit.remove(
-                                                              arrayPath: _events
-                                                                  .arrayPath,
-                                                              index:
-                                                                  event.index,
-                                                            ),
-                                                            l10n.removeMemoryEventTitle,
-                                                            l10n.removeMemoryEventBody,
-                                                          ),
-                                                  ),
-                                                  IconButton(
-                                                    icon: const Icon(
-                                                      Icons.copy_outlined,
-                                                      size: 20,
-                                                    ),
-                                                    tooltip: l10n.duplicateEvent,
-                                                    onPressed: _loadingEvents
-                                                        ? null
-                                                        : () => _confirmAndApply(
-                                                            context,
-                                                            MemoryEventEdit.duplicate(
-                                                              arrayPath: _events
-                                                                  .arrayPath,
-                                                              index:
-                                                                  event.index,
-                                                            ),
-                                                            l10n.duplicateMemoryEventTitle,
-                                                            l10n.duplicateMemoryEventBody,
-                                                          ),
-                                                  ),
-                                                ],
-                                              )
-                                            : null,
-                                      );
-                                    },
-                                  ),
-                          ),
-                        ],
-                        if (character == null)
-                          Expanded(
-                            child: Center(
-                              child: Text(
-                                l10n.selectCharacterFromList,
+                                l10n.characterNoEventsBody,
                                 style: TextStyle(
                                   color: scheme.onSurfaceVariant,
                                 ),
                               ),
+                            )
+                          : _loadingEvents && _events.events.isEmpty
+                          ? const Center(child: CircularProgressIndicator())
+                          : ListView.separated(
+                              itemCount: _events.events.length,
+                              separatorBuilder: (_, _) =>
+                                  const Divider(height: 1),
+                              itemBuilder: (context, index) {
+                                final event = _events.events[index];
+                                final tagLabel = event.tags.isEmpty
+                                    ? l10n.noTags
+                                    : event.tags.join(', ');
+                                final timeStr = event.timeSeconds != null
+                                    ? event.timeSeconds!.toStringAsFixed(0)
+                                    : '?';
+                                final affected = event.affected ?? '';
+                                return ListTile(
+                                  dense: true,
+                                  title: SelectableText(tagLabel, maxLines: 1),
+                                  subtitle: SelectableText(
+                                    l10n.eventSubtitle(timeStr, affected),
+                                    maxLines: 1,
+                                  ),
+                                  trailing: widget.editable
+                                      ? Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            IconButton(
+                                              icon: const Icon(
+                                                Icons.delete_outline,
+                                                size: 20,
+                                              ),
+                                              tooltip: l10n.removeEvent,
+                                              onPressed: _loadingEvents
+                                                  ? null
+                                                  : () => _confirmAndApply(
+                                                      context,
+                                                      MemoryEventEdit.remove(
+                                                        arrayPath:
+                                                            _events.arrayPath,
+                                                        index: event.index,
+                                                      ),
+                                                      l10n.removeMemoryEventTitle,
+                                                      l10n.removeMemoryEventBody,
+                                                    ),
+                                            ),
+                                            IconButton(
+                                              icon: const Icon(
+                                                Icons.copy_outlined,
+                                                size: 20,
+                                              ),
+                                              tooltip: l10n.duplicateEvent,
+                                              onPressed: _loadingEvents
+                                                  ? null
+                                                  : () => _confirmAndApply(
+                                                      context,
+                                                      MemoryEventEdit.duplicate(
+                                                        arrayPath:
+                                                            _events.arrayPath,
+                                                        index: event.index,
+                                                      ),
+                                                      l10n.duplicateMemoryEventTitle,
+                                                      l10n.duplicateMemoryEventBody,
+                                                    ),
+                                            ),
+                                          ],
+                                        )
+                                      : null,
+                                );
+                              },
                             ),
-                          ),
-                      ],
                     ),
-                  ),
+                  ],
+                  if (character == null)
+                    Expanded(
+                      child: Center(
+                        child: Text(
+                          l10n.selectCharacterFromList,
+                          style: TextStyle(color: scheme.onSurfaceVariant),
+                        ),
+                      ),
+                    ),
                 ],
               ),
             ),
@@ -2121,11 +1601,7 @@ class _EventsDetailState extends ConsumerState<_EventsDetail> {
 
 /// Localized friendly name for a camp-level guild tag (or the `Other` bucket),
 /// falling back to the core-supplied [label], then the raw [guild] tag.
-String _localizedGuildLabel(
-  AppLocalizations l10n,
-  String guild,
-  String label,
-) {
+String _localizedGuildLabel(AppLocalizations l10n, String guild, String label) {
   switch (guild) {
     case 'Guild.Human.OldCamp':
       return l10n.factionGuildOldCamp;
@@ -2183,8 +1659,8 @@ class _StatusBadge extends StatelessWidget {
   }
 }
 
-class _FactionsDetail extends ConsumerStatefulWidget {
-  const _FactionsDetail({
+class FactionsDetail extends ConsumerStatefulWidget {
+  const FactionsDetail({
     super.key,
     required this.notifier,
     required this.editable,
@@ -2198,10 +1674,10 @@ class _FactionsDetail extends ConsumerStatefulWidget {
   final ThemeData theme;
 
   @override
-  ConsumerState<_FactionsDetail> createState() => _FactionsDetailState();
+  ConsumerState<FactionsDetail> createState() => _FactionsDetailState();
 }
 
-class _FactionsDetailState extends ConsumerState<_FactionsDetail> {
+class _FactionsDetailState extends ConsumerState<FactionsDetail> {
   FactionsPage _page = const FactionsPage();
   bool _loading = false;
   int _reloadEpoch = 0;
@@ -2221,7 +1697,7 @@ class _FactionsDetailState extends ConsumerState<_FactionsDetail> {
   }
 
   @override
-  void didUpdateWidget(covariant _FactionsDetail oldWidget) {
+  void didUpdateWidget(covariant FactionsDetail oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.reloadKey != oldWidget.reloadKey) {
       // Reload the fresh tallies. The pending-forgive reflect is derived from
@@ -2265,20 +1741,8 @@ class _FactionsDetailState extends ConsumerState<_FactionsDetail> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // Header
-            Row(
-              children: [
-                Icon(Icons.gavel_outlined, color: scheme.primary),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    l10n.factionsSidebar,
-                    style: widget.theme.textTheme.titleMedium,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
+            // No card title ("Fraktionen" icon+text row): the Welt sidebar
+            // tile already names the section.
             if (_page.error != null)
               Padding(
                 padding: const EdgeInsets.only(bottom: 8),
@@ -2353,8 +1817,9 @@ class _FactionsDetailState extends ConsumerState<_FactionsDetail> {
                           isThreeLine: true,
                           trailing: widget.editable
                               ? FilledButton.tonal(
-                                  onPressed:
-                                      canForgive ? () => _forgive(g) : null,
+                                  onPressed: canForgive
+                                      ? () => _forgive(g)
+                                      : null,
                                   child: Text(l10n.factionsForgiveButton),
                                 )
                               : null,
@@ -2414,50 +1879,6 @@ class _QuestFilterRow extends StatelessWidget {
       runSpacing: 4,
       crossAxisAlignment: WrapCrossAlignment.center,
       children: [...chips],
-    );
-  }
-}
-
-// ---------------------------------------------------------------------------
-// _MessagePane (local helper, duplicated from editor_page.dart pattern)
-// ---------------------------------------------------------------------------
-
-class _MessagePane extends StatelessWidget {
-  const _MessagePane({
-    required this.icon,
-    required this.title,
-    required this.body,
-  });
-
-  final IconData icon;
-  final String title;
-  final String body;
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 520),
-        child: Card(
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  icon,
-                  size: 48,
-                  color: Theme.of(context).colorScheme.primary,
-                ),
-                const SizedBox(height: 12),
-                Text(title, style: Theme.of(context).textTheme.titleLarge),
-                const SizedBox(height: 8),
-                Text(body, textAlign: TextAlign.center),
-              ],
-            ),
-          ),
-        ),
-      ),
     );
   }
 }

@@ -109,6 +109,11 @@ void main() {
       isNull,
     );
 
+    // Attributes is now a sub-tab inside the Charaktere (Characters) tab; open
+    // that first, then its Attribute sub-tab. The Player row is pinned + selected
+    // by default in the shared master list, so the player attribute view shows.
+    await tester.tap(find.widgetWithText(Tab, 'Characters'));
+    await tester.pumpAndSettle();
     await tester.tap(find.widgetWithText(Tab, 'Attributes'));
     await tester.pumpAndSettle();
 
@@ -196,6 +201,9 @@ void main() {
       'rotation': {'pitch': 1.0, 'yaw': 2.0, 'roll': 3.0},
     });
 
+    // Still inside the Charaktere tab from the Attributes navigation above, so
+    // switching to the Inventar sub-tab needs no Characters prefix. The shared
+    // Player selection carries over, so the player inventory shows.
     await tester.tap(find.widgetWithText(Tab, 'Inventory'));
     await tester.pumpAndSettle();
 
@@ -221,10 +229,7 @@ void main() {
     expect(find.text('ItMi_Orenugget'), findsOneWidget);
     expect(find.text('ItFo_Cheese'), findsNothing);
     // Clear the filter to resume category browsing.
-    await tester.enterText(
-      find.widgetWithText(TextField, 'Filter items'),
-      '',
-    );
+    await tester.enterText(find.widgetWithText(TextField, 'Filter items'), '');
     await tester.pump();
 
     // Edit the visible Cheese stack.
@@ -288,7 +293,7 @@ void main() {
     expect(find.text('ItFo_Cheese'), findsOneWidget);
     expect(find.text('ItMi_Orenugget'), findsNothing);
 
-    await tester.tap(find.widgetWithText(Tab, 'Progression'));
+    await tester.tap(find.widgetWithText(Tab, 'World'));
     await tester.pumpAndSettle();
 
     // Overview/summary card is gone; sidebar entries are visible instead.
@@ -297,10 +302,13 @@ void main() {
     expect(find.text('Knowledge NPCs'), findsNothing);
 
     // Sidebar: Quests is default selection; quest list loads immediately.
-    // 'Quests' appears in both the sidebar tile and the detail header.
+    // 'Quests' appears in the sidebar tile (the detail card has no title row).
     expect(find.text('Quests'), findsAtLeastNWidgets(1));
-    expect(find.text('Knowledge'), findsOneWidget);
-    expect(find.text('Events'), findsOneWidget);
+    // Knowledge and Events are no longer sidebar sections here: they moved to
+    // detail-only panels (KnowledgeDetail / EventsDetail) keyed by a shared
+    // character selection and are mounted from the Characters tab instead.
+    // Factions remains alongside Quests in this sidebar.
+    expect(find.text('Factions'), findsOneWidget);
     // Quests detail loads and shows the fake quest name.
     expect(find.text('SLEEPER'), findsOneWidget);
 
@@ -313,7 +321,10 @@ void main() {
 
     expect(find.text('SLEEPER'), findsOneWidget);
 
-    await tester.drag(find.byType(TabBar), const Offset(-500, 0));
+    // Two TabBars now exist in the tree: the scrollable top-level bar and the
+    // Charaktere tab's inner sub-tab bar (kept alive off-screen). Drag the
+    // top-level one (built first) to reveal the 'Backups' tab.
+    await tester.drag(find.byType(TabBar).first, const Offset(-500, 0));
     await tester.pumpAndSettle();
     await tester.tap(find.widgetWithText(Tab, 'Backups'), warnIfMissed: false);
     await tester.pumpAndSettle();
@@ -393,8 +404,8 @@ void main() {
     // Save button now shows 1 pending edit.
     expect(find.widgetWithText(FilledButton, 'Save (1)'), findsOneWidget);
 
-    // Switch to Player tab.
-    await tester.tap(find.widgetWithText(Tab, 'Attributes'));
+    // Switch to another top-level tab (Charaktere).
+    await tester.tap(find.widgetWithText(Tab, 'Characters'));
     await tester.pumpAndSettle();
 
     // Save count must still be 1 (tab switch must not drop pending edits).
@@ -496,8 +507,7 @@ void main() {
     expect(find.bySemanticsLabel('Loading editor data'), findsNothing);
   });
 
-  testWidgets(
-      'non-removable inventory item shows a disabled trash button with an '
+  testWidgets('non-removable inventory item shows a disabled trash button with an '
       'explanatory tooltip', (tester) async {
     await tester.binding.setSurfaceSize(const Size(1400, 1000));
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -515,6 +525,9 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    // Inventory is now a sub-tab inside the Charaktere (Characters) tab.
+    await tester.tap(find.widgetWithText(Tab, 'Characters'));
+    await tester.pumpAndSettle();
     await tester.tap(find.widgetWithText(Tab, 'Inventory'));
     await tester.pumpAndSettle();
 
@@ -535,7 +548,10 @@ void main() {
     );
     expect(cheeseDeleteTooltip, findsOneWidget);
     final cheeseDelete = tester.widget<IconButton>(
-      find.descendant(of: cheeseDeleteTooltip, matching: find.byType(IconButton)),
+      find.descendant(
+        of: cheeseDeleteTooltip,
+        matching: find.byType(IconButton),
+      ),
     );
     expect(cheeseDelete.onPressed, isNull);
 
@@ -786,6 +802,13 @@ class _FakeCoreService implements GoresaveCoreService {
             'adapter': 'pure_rust_kraken',
             'message': 'Codec host is ready.',
           },
+        };
+      case 'private.characters.list':
+        // Backs the Charaktere master list. This test drives the pinned Player
+        // row (selected by default), so no spawned actors are needed here.
+        return {
+          'ok': true,
+          'data': {'total': 0, 'characters': <Object?>[]},
         };
       case 'write_save':
         final syncPersistent = payload['syncPersistentDataList'] == true;

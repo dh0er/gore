@@ -39,7 +39,20 @@ class AppLocalizationsFr extends AppLocalizations {
   String get tabInventory => 'Inventaire';
 
   @override
-  String get tabProgression => 'Progression';
+  String get tabWorld => 'Monde';
+
+  @override
+  String get tabCharacters => 'Personnages';
+
+  @override
+  String get characterNoActorBody =>
+      'Ce personnage n\'a pas d\'acteur dans le monde ; il n\'a donc ni attributs, ni inventaire, ni événements.';
+
+  @override
+  String get characterNoEventsBody => 'Aucun événement pour ce personnage.';
+
+  @override
+  String get characterOrphanGroup => 'Autres';
 
   @override
   String get tabAllData => 'Toutes les données';

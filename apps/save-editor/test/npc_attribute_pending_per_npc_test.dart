@@ -35,12 +35,15 @@ void main() {
       final core = _NpcCoreService();
       await pumpApp(tester, core);
 
-      // Open the Attribute tab (hosts the ActorSelector + NPC editor).
+      // Open the Charaktere tab (shared master list) then its Attribute
+      // sub-tab (which hosts the NPC editor).
+      await tester.tap(find.widgetWithText(Tab, 'Characters'));
+      await tester.pumpAndSettle();
       await tester.tap(find.widgetWithText(Tab, 'Attributes'));
       await tester.pumpAndSettle();
 
-      // Select NPC-A from the actor sidebar and edit its Health base. With an
-      // empty loc catalog the row label falls back to the raw NPC id.
+      // Select NPC-A from the shared master list and edit its Health base. With
+      // an empty loc catalog the row subtitle shows the raw GlobalId.
       await tester.tap(find.text('Lizard-A'));
       await tester.pumpAndSettle();
       expect(find.widgetWithText(TextField, 'Health base'), findsOneWidget);
@@ -118,6 +121,8 @@ void main() {
       final core = _NpcCoreService();
       await pumpApp(tester, core);
 
+      await tester.tap(find.widgetWithText(Tab, 'Characters'));
+      await tester.pumpAndSettle();
       await tester.tap(find.widgetWithText(Tab, 'Attributes'));
       await tester.pumpAndSettle();
 
@@ -297,6 +302,34 @@ class _NpcCoreService implements GoresaveCoreService {
             'npcs': [
               {'id': 'Lizard-A', 'name': 'Lizard A'},
               {'id': 'Lizard-B', 'name': 'Lizard B'},
+            ],
+          },
+        };
+      case 'private.characters.list':
+        // Backs the Charaktere master list (one unpaginated response). The
+        // globalId is rendered as the row subtitle, so tests select a row by
+        // tapping its GlobalId text (e.g. 'Lizard-A').
+        return {
+          'ok': true,
+          'data': {
+            'total': 2,
+            'characters': [
+              {
+                'globalId': 'Lizard-A',
+                'uniqueName': 'Lizard',
+                'isDead': false,
+                'hasInventory': false,
+                'hasKnowledge': false,
+                'hasEvents': false,
+              },
+              {
+                'globalId': 'Lizard-B',
+                'uniqueName': 'Lizard',
+                'isDead': false,
+                'hasInventory': false,
+                'hasKnowledge': false,
+                'hasEvents': false,
+              },
             ],
           },
         };

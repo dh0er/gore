@@ -7,14 +7,7 @@ import 'grouped_attribute_sidebar.dart';
 /// Describes one entry in the player-tab sidebar. Entries appear in enum
 /// declaration order in the sidebar: core, combat, resistances, thieving,
 /// transform (when present), advanced.
-enum _SidebarEntry {
-  core,
-  combat,
-  resistances,
-  thieving,
-  transform,
-  advanced,
-}
+enum _SidebarEntry { core, combat, resistances, thieving, transform, advanced }
 
 /// Grouped editors for every hero gameplay attribute. Data arrives through
 /// [load] (typed property search) and leaves through [onPendingChanged]
@@ -87,14 +80,6 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
   // Epoch counter used to discard results from superseded reload calls.
   int _reloadEpoch = 0;
 
-  String _groupTitle(AppLocalizations l10n, HeroAttributeGroup g) => switch (g) {
-    HeroAttributeGroup.core => l10n.heroGroupMainStats,
-    HeroAttributeGroup.combat => l10n.heroGroupCombatSkills,
-    HeroAttributeGroup.resistances => l10n.heroGroupResistances,
-    HeroAttributeGroup.thieving => l10n.heroGroupThieving,
-    HeroAttributeGroup.advanced => l10n.heroGroupAdvanced,
-  };
-
   @override
   void initState() {
     super.initState();
@@ -134,10 +119,12 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
       // Rehydrate any queued player drafts so a revisit resumes from them. Only
       // local fields are seeded here; the registry entry already exists, so we
       // must NOT call onPendingChanged from this build-context reload.
-      for (final draft in widget.initialPending?.call() ?? const <TypedValueEdit>[]) {
+      for (final draft
+          in widget.initialPending?.call() ?? const <TypedValueEdit>[]) {
         final v = draft.value;
-        _pending[_pathKey(draft.path)] =
-            v is num ? formatHeroValue(v.toDouble()) : '$v';
+        _pending[_pathKey(draft.path)] = v is num
+            ? formatHeroValue(v.toDouble())
+            : '$v';
       }
     });
   }
@@ -225,11 +212,10 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
     final theme = Theme.of(context);
 
     if (_loading) {
-      return Card(
-        child: const Padding(
-          padding: EdgeInsets.all(24),
-          child: Center(child: CircularProgressIndicator()),
-        ),
+      // The caller supplies the surrounding card (single-card tab layout).
+      return const Padding(
+        padding: EdgeInsets.all(24),
+        child: Center(child: CircularProgressIndicator()),
       );
     }
 
@@ -309,8 +295,8 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
     // a reload), pick the default.
     final effectiveSelected =
         (_selected != null && sidebarEntries.contains(_selected!))
-            ? _selected!
-            : sidebarEntries.first;
+        ? _selected!
+        : sidebarEntries.first;
 
     // Optional inline validation-error row shown above the detail content.
     final errorRow = _error != null
@@ -328,41 +314,17 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
       if (entry == _SidebarEntry.transform) {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            ?errorRow,
-            widget.transformCard!,
-          ],
+          children: [?errorRow, widget.transformCard!],
         );
       }
+      // The rows render bare — the tab body already provides the single main
+      // card, and the selected sidebar tile already names the group (no inner
+      // card, no duplicate group title).
       final group = _entryToGroup(entry)!;
       final attributes = byGroup[group] ?? const [];
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          ?errorRow,
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Icon(_entryIcon(entry)),
-                      const SizedBox(width: 8),
-                      Text(
-                        _groupTitle(AppLocalizations.of(context), group),
-                        style: theme.textTheme.titleSmall,
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 4),
-                  for (final a in attributes) _row(a),
-                ],
-              ),
-            ),
-          ),
-        ],
+        children: [?errorRow, for (final a in attributes) _row(a)],
       );
     }
 
@@ -423,8 +385,7 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
   }
 
   Widget _row(HeroAttribute attribute) {
-    final duplicate =
-        _attributes.where((a) => a.id == attribute.id).length > 1;
+    final duplicate = _attributes.where((a) => a.id == attribute.id).length > 1;
     return _HeroAttributeRow(
       // Record key compares reloadKey by its own equality (identity for
       // SaveInspection, which has no == override), not by toString(), so a
@@ -443,8 +404,7 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
           ? _pending[_pathKey(attribute.currentPath!)]
           : null,
       onBaseChanged: (text) => _onFieldChanged(attribute.basePath, text),
-      onCurrentChanged: (text) =>
-          _onFieldChanged(attribute.currentPath, text),
+      onCurrentChanged: (text) => _onFieldChanged(attribute.currentPath, text),
     );
   }
 }
@@ -485,10 +445,12 @@ class _HeroAttributeRowState extends State<_HeroAttributeRow> {
     _baseController = TextEditingController(
       // Prefer the pending text (surviving a sidebar switch) over the
       // formatted attribute value, so a dirty field stays dirty on return.
-      text: widget.initialBaseText ?? formatHeroValue(widget.attribute.baseValue),
+      text:
+          widget.initialBaseText ?? formatHeroValue(widget.attribute.baseValue),
     );
     _currentController = TextEditingController(
-      text: widget.initialCurrentText ??
+      text:
+          widget.initialCurrentText ??
           formatHeroValue(widget.attribute.currentValue),
     );
   }
@@ -528,8 +490,7 @@ class _HeroAttributeRowState extends State<_HeroAttributeRow> {
           );
           final currentField = TextField(
             controller: _currentController,
-            enabled:
-                widget.editable && widget.attribute.currentPath != null,
+            enabled: widget.editable && widget.attribute.currentPath != null,
             onChanged: widget.onCurrentChanged,
             keyboardType: const TextInputType.numberWithOptions(
               decimal: true,
@@ -578,8 +539,7 @@ class _HeroAttributeRowState extends State<_HeroAttributeRow> {
 String formatHeroValue(double? value) {
   if (value == null) return '';
   if (value == value.roundToDouble()) return value.toInt().toString();
-  final rounded =
-      value.toStringAsFixed(2).replaceFirst(RegExp(r'\.?0+$'), '');
+  final rounded = value.toStringAsFixed(2).replaceFirst(RegExp(r'\.?0+$'), '');
   // An editable field's text becomes the saved value, so never seed it with
   // a lossy rounding (0.125 must not display — and then save — as 0.13).
   return double.tryParse(rounded) == value ? rounded : value.toString();

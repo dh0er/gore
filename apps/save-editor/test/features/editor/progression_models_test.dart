@@ -126,16 +126,6 @@ void main() {
   });
 
   test('knowledge and event pages parse', () {
-    final chars = KnowledgeCharactersPage.fromJson({
-      'total': 1,
-      'offset': 0,
-      'limit': 100,
-      'characters': [
-        {'name': 'OC_STT_Diego', 'entryCount': 2},
-      ],
-    });
-    expect(chars.characters.single.name, 'OC_STT_Diego');
-
     final entries = KnowledgeEntriesPage.fromJson({
       'character': 'OC_STT_Diego',
       'total': 2,

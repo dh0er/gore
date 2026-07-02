@@ -1,6 +1,6 @@
 /// A single NPC actor row from the core `private.npc.list` command. Carries the
 /// id (a GlobalId used to build an [Actor.npc]) plus a small status snapshot
-/// (dead / hp) shown as a badge in the ActorSelector list.
+/// (dead / hp), e.g. driving the NPC status row's revive action.
 class NpcActor {
   const NpcActor({
     required this.id,
@@ -22,7 +22,8 @@ class NpcActor {
   final String id;
 
   /// True ONLY when the NPC was KILLED. A merely defeated / knocked-out NPC is
-  /// still ALIVE (`isDead == false`). Drives the selector skull badge and the
+  /// still ALIVE (`isDead == false`). Same killed-only semantics as the
+  /// master list's skull avatar; here it drives the NPC status row and the
   /// Revive action's enablement.
   final bool isDead;
   final double? hp;
@@ -30,7 +31,7 @@ class NpcActor {
 }
 
 /// A paginated page of NPC actors, mirroring the shape of the other progression
-/// page models (e.g. `MemoryCharactersPage`): the typed rows plus the
+/// page models (e.g. `MemoryEventsPage`): the typed rows plus the
 /// server-side pagination cursor and an optional inline [error]. The core caps
 /// `total` at the full NPC count (~1484) so the list must be paginated.
 class NpcActorsPage {

@@ -2,19 +2,27 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:goresave/features/editor/domain/actor.dart';
-import 'package:goresave/features/editor/domain/npc_actors_page.dart';
-import 'package:goresave/features/editor/ui/actor_selector.dart';
+import 'package:goresave/features/editor/domain/character_index.dart';
+import 'package:goresave/features/editor/ui/character_master_list.dart';
 import 'package:goresave/l10n/app_localizations.dart';
 import 'package:goresave/loc/game_lang.dart';
 import 'package:goresave/ui/design/app_theme.dart';
 
 import 'support/l10n_test_app.dart';
 
-NpcActor _npc(String id) =>
-    NpcActor(id: id, isDead: false, hp: 80, maxHp: 80);
+CharacterRow _row(String id) => CharacterRow(
+      globalId: id,
+      uniqueName: id.split('-').first,
+      isDead: false,
+      hasInventory: false,
+      hasKnowledge: false,
+      hasEvents: false,
+    );
 
-/// Regression guard for the selected-NPC-tile teal highlight bleeding ABOVE the
-/// scrollable list's top edge into the pagination/header region.
+/// Regression guard for the selected-tile teal highlight bleeding ABOVE the
+/// scrollable list's top edge into the pagination/header region. Retargeted at
+/// [CharacterMasterList] from the retired ActorSelector, which it structurally
+/// clones.
 ///
 /// Root cause: `ListTile.selectedTileColor` is painted by the NEAREST enclosing
 /// [Material]. With only a [ClipRect] (no Material) around the [ListView], the
@@ -26,13 +34,9 @@ NpcActor _npc(String id) =>
 /// This is a STRUCTURAL test rather than a golden image: the repo uses no
 /// `matchesGoldenFile`, and golden font rendering is machine/CI dependent.
 void main() {
-  Widget pump({required Actor selected, required List<NpcActor> npcs}) {
-    Future<NpcActorsPage> fakeLoad({
-      String query = '',
-      int offset = 0,
-      int limit = 100,
-    }) async =>
-        NpcActorsPage(npcs: npcs, total: npcs.length, offset: 0, limit: limit);
+  Widget pump({required Actor selected, required List<CharacterRow> rows}) {
+    Future<CharacterIndexPage> fakeLoad() async =>
+        CharacterIndexPage(characters: rows, total: rows.length);
 
     return ProviderScope(
       child: MaterialApp(
@@ -45,10 +49,10 @@ void main() {
             child: SizedBox(
               width: 380,
               height: 480,
-              child: ActorSelector(
+              child: CharacterMasterList(
                 selected: selected,
                 onSelect: (_) {},
-                loadNpcs: fakeLoad,
+                load: fakeLoad,
                 reloadKey: 'k',
                 locCatalog: const {},
                 lang: kGameLangs.first,
@@ -61,23 +65,28 @@ void main() {
   }
 
   testWidgets(
-    'a Material wraps the NPC ListView INSIDE the ClipRect so the selected '
-    'tile highlight is clipped to the list (no bleed above the top edge)',
+    'a Material wraps the character ListView INSIDE the ClipRect so the '
+    'selected tile highlight is clipped to the list (no bleed above the top)',
     (tester) async {
-      final npcs = <NpcActor>[
-        for (var i = 0; i < 17; i++) _npc('Guard_$i-WP_A'),
+      final rows = <CharacterRow>[
+        for (var i = 0; i < 17; i++) _row('Guard_$i-WP_A'),
       ];
       await tester.pumpWidget(
         pump(
-          selected: Actor.npc(id: 'Guard_0-WP_A', name: 'Guard 0'),
-          npcs: npcs,
+          selected: Actor.npc(
+            id: 'Guard_0-WP_A',
+            name: 'Guard 0',
+            uniqueName: 'Guard_0',
+          ),
+          rows: rows,
         ),
       );
       await tester.pumpAndSettle();
 
-      // The list is wrapped in a ClipRect that contains a Material which in turn
-      // contains the ListView. This Material is what paints the selected-tile
-      // fill, and being inside the ClipRect it is clipped to the list bounds.
+      // The list is wrapped in a ClipRect that contains a Material which in
+      // turn contains the ListView. This Material is what paints the
+      // selected-tile fill, and being inside the ClipRect it is clipped to the
+      // list bounds.
       final clipRect = find.ancestor(
         of: find.byType(ListView),
         matching: find.byType(ClipRect),
@@ -109,13 +118,17 @@ void main() {
   testWidgets(
     'a scrolled-up selected tile never paints its highlight above the list top',
     (tester) async {
-      final npcs = <NpcActor>[
-        for (var i = 0; i < 17; i++) _npc('Guard_$i-WP_A'),
+      final rows = <CharacterRow>[
+        for (var i = 0; i < 17; i++) _row('Guard_$i-WP_A'),
       ];
       await tester.pumpWidget(
         pump(
-          selected: Actor.npc(id: 'Guard_0-WP_A', name: 'Guard 0'),
-          npcs: npcs,
+          selected: Actor.npc(
+            id: 'Guard_0-WP_A',
+            name: 'Guard 0',
+            uniqueName: 'Guard_0',
+          ),
+          rows: rows,
         ),
       );
       await tester.pumpAndSettle();

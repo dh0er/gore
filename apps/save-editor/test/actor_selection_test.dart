@@ -20,7 +20,9 @@ void main() {
     // addListener fires once synchronously with the current state; clear that.
     notified = false;
 
-    notifier.selectActor(const Actor.npc(id: 'Lizard-1', name: 'Lizard'));
+    notifier.selectActor(
+      const Actor.npc(id: 'Lizard-1', name: 'Lizard', uniqueName: 'Lizard'),
+    );
 
     expect(notifier.state.selectedActor.kind, ActorKind.npc);
     expect(notifier.state.selectedActor.id, 'Lizard-1');

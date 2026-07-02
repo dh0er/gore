@@ -4,7 +4,8 @@ import 'package:goresave/features/editor/domain/hero_attributes.dart'
 import 'package:goresave/features/editor/domain/npc_actors_page.dart';
 import 'package:goresave/features/editor/domain/npc_attributes.dart';
 import 'package:goresave/features/editor/ui/grouped_attribute_sidebar.dart';
-import 'package:goresave/features/editor/ui/hero_stats_card.dart' show formatHeroValue;
+import 'package:goresave/features/editor/ui/hero_stats_card.dart'
+    show formatHeroValue;
 import 'package:goresave/l10n/app_localizations.dart';
 
 /// Optional NPC status wiring for [NpcAttributesPanel]. When supplied, a Status
@@ -130,13 +131,14 @@ class _NpcAttributesPanelState extends State<NpcAttributesPanel> {
   bool _statusLoading = false;
   int _statusEpoch = 0;
 
-  String _groupTitle(AppLocalizations l10n, HeroAttributeGroup g) => switch (g) {
-    HeroAttributeGroup.core => l10n.heroGroupMainStats,
-    HeroAttributeGroup.combat => l10n.heroGroupCombatSkills,
-    HeroAttributeGroup.resistances => l10n.heroGroupResistances,
-    HeroAttributeGroup.thieving => l10n.heroGroupThieving,
-    HeroAttributeGroup.advanced => l10n.heroGroupAdvanced,
-  };
+  String _groupTitle(AppLocalizations l10n, HeroAttributeGroup g) =>
+      switch (g) {
+        HeroAttributeGroup.core => l10n.heroGroupMainStats,
+        HeroAttributeGroup.combat => l10n.heroGroupCombatSkills,
+        HeroAttributeGroup.resistances => l10n.heroGroupResistances,
+        HeroAttributeGroup.thieving => l10n.heroGroupThieving,
+        HeroAttributeGroup.advanced => l10n.heroGroupAdvanced,
+      };
 
   IconData _groupIcon(HeroAttributeGroup g) => switch (g) {
     HeroAttributeGroup.core => Icons.favorite_border,
@@ -151,12 +153,15 @@ class _NpcAttributesPanelState extends State<NpcAttributesPanel> {
   Map<HeroAttributeGroup, List<NpcAttributeRow>> _byGroup() {
     final byGroup = <HeroAttributeGroup, List<NpcAttributeRow>>{};
     for (final attribute in _attributes) {
-      byGroup.putIfAbsent(heroAttributeGroup(attribute.key), () => [])
-        .add(attribute);
+      byGroup
+          .putIfAbsent(heroAttributeGroup(attribute.key), () => [])
+          .add(attribute);
     }
     for (final rows in byGroup.values) {
       rows.sort((a, b) {
-        final rank = heroAttributeRank(a.key).compareTo(heroAttributeRank(b.key));
+        final rank = heroAttributeRank(
+          a.key,
+        ).compareTo(heroAttributeRank(b.key));
         return rank != 0 ? rank : a.key.compareTo(b.key);
       });
     }
@@ -306,10 +311,7 @@ class _NpcAttributesPanelState extends State<NpcAttributesPanel> {
     if (_loadFailed) {
       return Padding(
         padding: const EdgeInsets.all(20),
-        child: Text(
-          _error!,
-          style: TextStyle(color: theme.colorScheme.error),
-        ),
+        child: Text(_error!, style: TextStyle(color: theme.colorScheme.error)),
       );
     }
 
@@ -365,54 +367,27 @@ class _NpcAttributesPanelState extends State<NpcAttributesPanel> {
       final statusRow = (hasStatus && group == HeroAttributeGroup.core)
           ? _buildStatusRow(context)
           : null;
-      return Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            ?errorRow,
-            Card(
-              child: Padding(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Icon(_groupIcon(group)),
-                        const SizedBox(width: 8),
-                        Text(
-                          _groupTitle(AppLocalizations.of(context), group),
-                          style: theme.textTheme.titleSmall,
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 4),
-                    if (statusRow != null) ...[
-                      statusRow,
-                      const Divider(height: 16),
-                    ],
-                    for (final a in attributes)
-                      _NpcAttributeRow(
-                        // A fresh reloadKey rebuilds every row so stale field
-                        // drafts from a previous NPC never carry over.
-                        key: ValueKey((widget.reloadKey, a.key, a.basePath)),
-                        attribute: a,
-                        editable: widget.editable,
-                        initialBaseText: _pending[_pathKey(a.basePath)],
-                        initialCurrentText: _pending[_pathKey(a.currentPath)],
-                        onBaseChanged: (text) =>
-                            _onFieldChanged(a.basePath, text),
-                        onCurrentChanged: (text) =>
-                            _onFieldChanged(a.currentPath, text),
-                      ),
-                  ],
-                ),
-              ),
+      // The rows render bare — the tab body already provides the single main
+      // card, and the selected sidebar tile already names the group (no inner
+      // card, no duplicate group title).
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          ?errorRow,
+          if (statusRow != null) ...[statusRow, const Divider(height: 16)],
+          for (final a in attributes)
+            _NpcAttributeRow(
+              // A fresh reloadKey rebuilds every row so stale field
+              // drafts from a previous NPC never carry over.
+              key: ValueKey((widget.reloadKey, a.key, a.basePath)),
+              attribute: a,
+              editable: widget.editable,
+              initialBaseText: _pending[_pathKey(a.basePath)],
+              initialCurrentText: _pending[_pathKey(a.currentPath)],
+              onBaseChanged: (text) => _onFieldChanged(a.basePath, text),
+              onCurrentChanged: (text) => _onFieldChanged(a.currentPath, text),
             ),
-          ],
-        ),
+        ],
       );
     }
 
@@ -421,7 +396,9 @@ class _NpcAttributesPanelState extends State<NpcAttributesPanel> {
     return GroupedAttributeSidebar(
       selected: effective,
       onSelect: (id) {
-        if (_selected != id) setState(() => _selected = id as HeroAttributeGroup);
+        if (_selected != id) {
+          setState(() => _selected = id as HeroAttributeGroup);
+        }
       },
       panes: [
         for (final group in groups)
@@ -503,8 +480,9 @@ class _NpcAttributesPanelState extends State<NpcAttributesPanel> {
                     padding: const EdgeInsets.only(left: 12),
                     child: Text(
                       stateText,
-                      style: theme.textTheme.bodyMedium
-                          ?.copyWith(color: stateColor),
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: stateColor,
+                      ),
                     ),
                   ),
           ),
@@ -561,7 +539,8 @@ class _NpcAttributeRowState extends State<_NpcAttributeRow> {
       text: widget.initialBaseText ?? formatHeroValue(widget.attribute.base),
     );
     _currentController = TextEditingController(
-      text: widget.initialCurrentText ??
+      text:
+          widget.initialCurrentText ??
           formatHeroValue(widget.attribute.current),
     );
   }

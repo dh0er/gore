@@ -220,7 +220,9 @@ void main() {
 
     // Switching actor also abandons the invalid in-progress field → unblocked.
     notifier.setNpcEditInvalid('npc.attributes:Lizard-1');
-    notifier.selectActor(const Actor.npc(id: 'Lizard-2', name: 'L2'));
+    notifier.selectActor(
+      const Actor.npc(id: 'Lizard-2', name: 'L2', uniqueName: 'Lizard'),
+    );
     expect(notifier.state.hasInvalidNpcEdit, isFalse);
   });
 
@@ -833,7 +835,9 @@ void main() {
     await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
 
     // Select an NPC against the first save.
-    notifier.selectActor(const Actor.npc(id: 'Lizard-1', name: 'Lizard'));
+    notifier.selectActor(
+      const Actor.npc(id: 'Lizard-1', name: 'Lizard', uniqueName: 'Lizard'),
+    );
     expect(notifier.state.selectedActor.isPlayer, isFalse);
 
     // Switch to a DIFFERENT save: the NPC id belongs to the old file, so the
@@ -850,7 +854,9 @@ void main() {
     final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
     await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
 
-    notifier.selectActor(const Actor.npc(id: 'Lizard-1', name: 'Lizard'));
+    notifier.selectActor(
+      const Actor.npc(id: 'Lizard-1', name: 'Lizard', uniqueName: 'Lizard'),
+    );
     expect(notifier.state.selectedActor.isPlayer, isFalse);
 
     // Re-inspect the SAME save (what saveAllPending()/refresh() do).
@@ -1020,6 +1026,113 @@ void main() {
     // BOTH pages target the save the fetch STARTED against — never the new one.
     expect(listCalls[0].payload['path'], r'C:\tmp\saves\G1R-001.sav');
     expect(listCalls[1].payload['path'], r'C:\tmp\saves\G1R-001.sav');
+  });
+
+  // ---------------------------------------------------------------------------
+  // Charaktere master list index (Task 10: Player/Hero de-duplication). The
+  // save's own "Hero" ACTOR row keys the player's memory events; the pinned
+  // Player row represents it, so its GlobalId is stashed for the events wiring.
+  // ---------------------------------------------------------------------------
+
+  test('loadAllCharacters stashes the hero actor GlobalId', () async {
+    final core = _CharactersListCoreService();
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+    expect(notifier.state.heroGlobalId, isNull);
+    expect(notifier.state.heroGlobalIdSettled, isFalse);
+
+    final page = await notifier.loadAllCharacters();
+
+    expect(page.error, isNull);
+    expect(page.characters, hasLength(3));
+    expect(notifier.state.heroGlobalId, 'Hero');
+    // The load completed — the hero id is settled for this save.
+    expect(notifier.state.heroGlobalIdSettled, isTrue);
+  });
+
+  test(
+    'loadAllCharacters leaves the stashed heroGlobalId untouched on an error page',
+    () async {
+      final core = _CharactersListCoreService();
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+      await notifier.loadAllCharacters();
+      expect(notifier.state.heroGlobalId, 'Hero');
+
+      core.failList = true;
+      final page = await notifier.loadAllCharacters();
+
+      expect(page.error, isNotNull);
+      // A stale value from the same save is still correct — keep it.
+      expect(notifier.state.heroGlobalId, 'Hero');
+      // The failed attempt still COMPLETED, so the id stays settled.
+      expect(notifier.state.heroGlobalIdSettled, isTrue);
+    },
+  );
+
+  // Cursor (Medium): with the Player selected, the Ereignisse pane spun
+  // forever when the index load failed before ever stashing a hero id. A
+  // completed attempt — even a failed one — must mark the id settled so the
+  // pane can leave the spinner for the empty state.
+  test(
+    'loadAllCharacters settles the hero id even when the very first load fails',
+    () async {
+      final core = _CharactersListCoreService();
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+      expect(notifier.state.heroGlobalIdSettled, isFalse);
+
+      core.failList = true;
+      final page = await notifier.loadAllCharacters();
+
+      expect(page.error, isNotNull);
+      // No id was ever stashed, but the load completed: settled, id null.
+      expect(notifier.state.heroGlobalId, isNull);
+      expect(notifier.state.heroGlobalIdSettled, isTrue);
+    },
+  );
+
+  // Cursor (Medium): the hero GlobalId belongs to ONE save. A slot switch must
+  // drop it so the player's Ereignisse sub-tab never queries the previous
+  // save's id against the new file.
+  test('slot switch clears the stashed heroGlobalId', () async {
+    final core = _CharactersListCoreService();
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+    await notifier.loadAllCharacters();
+    expect(notifier.state.heroGlobalId, 'Hero');
+    expect(notifier.state.heroGlobalIdSettled, isTrue);
+
+    await notifier.inspect(r'C:\tmp\saves\G1R-002.sav');
+
+    expect(notifier.state.heroGlobalId, isNull);
+    // The new save's index has not completed yet — the settled flag resets
+    // with the id, so the events pane shows the spinner, not the empty state.
+    expect(notifier.state.heroGlobalIdSettled, isFalse);
+  });
+
+  // Cursor (Medium): a slow characters.list response must not stash the
+  // PREVIOUS save's hero id after the user already switched slots — the stash
+  // is pinned to the path the request was issued against.
+  test('mid-fetch slot switch discards the stale hero stash', () async {
+    final core = _CharactersListCoreService();
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+    // Switch slots while the characters.list call is in flight: _inspect sets
+    // selectedPath synchronously, so by the time the list response is parsed
+    // the request's path no longer matches the selection.
+    core.onListCall = () {
+      // ignore: unawaited_futures
+      notifier.inspect(r'C:\tmp\saves\G1R-002.sav');
+    };
+    final page = await notifier.loadAllCharacters();
+
+    expect(page.error, isNull);
+    expect(notifier.state.heroGlobalId, isNull);
+    // The settled flag is pinned to the same path: the stale completion must
+    // not mark the NEW save's index as settled either.
+    expect(notifier.state.heroGlobalIdSettled, isFalse);
   });
 
   test('failed same-save re-inspect keeps pending edits retryable', () async {
@@ -1458,6 +1571,8 @@ void main() {
   test('progression loaders surface core errors inline', () async {
     // The default _RecordingCoreService returns ok:false for query_progression
     // (no progressionData set), so the loader should surface the error inline.
+    // All progression loaders share _queryProgression; loadKnowledgeEntries is
+    // the exercised representative.
     final core = _RecordingCoreService();
     final notifier = EditorNotifier(
       core,
@@ -1465,7 +1580,7 @@ void main() {
     );
     await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
 
-    final page = await notifier.loadKnowledgeCharacters();
+    final page = await notifier.loadKnowledgeEntries('OC_STT_Diego');
 
     expect(page.error, isNotNull);
   });
@@ -2458,6 +2573,72 @@ class _PagedNpcCoreService extends _RecordingCoreService {
           'total': total,
           'offset': offset,
           'limit': limit,
+        },
+      };
+    }
+    return super.execute(command, payload: payload);
+  }
+}
+
+/// Serves `private.characters.list` with the save's own "Hero" ACTOR row (as
+/// real saves carry — see the gore-save `characters_list` integration test)
+/// plus a normal NPC and a knowledge-only orphan. [failList] flips the command
+/// to an error response, proving an error page leaves the stashed hero
+/// GlobalId untouched.
+class _CharactersListCoreService extends _RecordingCoreService {
+  var failList = false;
+
+  /// Runs right after a `private.characters.list` call is recorded and before
+  /// its response is returned — lets a test switch saves mid-fetch to prove
+  /// the hero stash is pinned to the path the request was issued against.
+  void Function()? onListCall;
+
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    if (command == 'private.characters.list') {
+      requests.add(
+        _RecordedRequest(command, Map<String, Object?>.from(payload)),
+      );
+      onListCall?.call();
+      if (failList) {
+        return {
+          'ok': false,
+          'error': {'message': 'characters list failed'},
+        };
+      }
+      return {
+        'ok': true,
+        'data': {
+          'total': 3,
+          'characters': [
+            {
+              'globalId': 'Hero',
+              'uniqueName': 'Hero',
+              'isDead': false,
+              'hasInventory': false,
+              'hasKnowledge': true,
+              'hasEvents': true,
+            },
+            {
+              'globalId': 'Lizard-WP_A',
+              'uniqueName': 'Lizard',
+              'isDead': false,
+              'hasInventory': true,
+              'hasKnowledge': false,
+              'hasEvents': false,
+            },
+            {
+              'globalId': null,
+              'uniqueName': 'ST_VLK_Mud_Sleeper',
+              'isDead': false,
+              'hasInventory': false,
+              'hasKnowledge': true,
+              'hasEvents': false,
+            },
+          ],
         },
       };
     }

@@ -176,11 +176,35 @@ abstract class AppLocalizations {
   /// **'Inventory'**
   String get tabInventory;
 
-  /// No description provided for @tabProgression.
+  /// No description provided for @tabWorld.
   ///
   /// In en, this message translates to:
-  /// **'Progression'**
-  String get tabProgression;
+  /// **'World'**
+  String get tabWorld;
+
+  /// No description provided for @tabCharacters.
+  ///
+  /// In en, this message translates to:
+  /// **'Characters'**
+  String get tabCharacters;
+
+  /// No description provided for @characterNoActorBody.
+  ///
+  /// In en, this message translates to:
+  /// **'This character has no in-world actor, so it has no attributes, inventory, or events.'**
+  String get characterNoActorBody;
+
+  /// No description provided for @characterNoEventsBody.
+  ///
+  /// In en, this message translates to:
+  /// **'No events for this character.'**
+  String get characterNoEventsBody;
+
+  /// No description provided for @characterOrphanGroup.
+  ///
+  /// In en, this message translates to:
+  /// **'Other'**
+  String get characterOrphanGroup;
 
   /// No description provided for @tabAllData.
   ///
