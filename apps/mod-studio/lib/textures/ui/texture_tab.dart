@@ -17,7 +17,13 @@ import '../domain/texture_replacements_notifier.dart';
 /// Browse the game's cooked textures, preview the original PNG, and stage PNG
 /// replacements into [textureReplacementsProvider].
 class TextureTab extends ConsumerStatefulWidget {
-  const TextureTab({super.key});
+  const TextureTab({super.key, this.onlyStaged = false});
+
+  /// When true (the Changes tab), the browser — folder tree, flat search list,
+  /// and count caption — covers only asset paths with a staged replacement
+  /// ([textureReplacementsProvider] keys), updating live as replacements are
+  /// (un)staged. The detail pane is unchanged. Default false: the full index.
+  final bool onlyStaged;
 
   @override
   ConsumerState<TextureTab> createState() => _TextureTabState();
@@ -63,6 +69,13 @@ class _TextureTabState extends ConsumerState<TextureTab> {
   // holds (matching the old once-per-index tree build).
   Map<String, String>? _treeEntries;
   List<String>? _treePaths;
+  // onlyStaged mode: copy of the staged key set [_treePaths] was filtered by.
+  // Compared by CONTENT, not state identity — the replacements notifier emits a
+  // new state object on every change (including re-staging the same asset with
+  // a different PNG, which leaves the key set untouched), and the filtered list
+  // must keep its identity unless the key set really changed, or the tree
+  // browser's identity-keyed cache would rebuild needlessly.
+  Set<String>? _stagedKeys;
 
   /// Delete a cached preview's temp PNG and drop it from the image cache.
   void _evictPreview(_Preview pv) {
@@ -72,6 +85,17 @@ class _TextureTabState extends ConsumerState<TextureTab> {
       if (file.existsSync()) file.deleteSync();
     } catch (_) {
       // Best-effort cleanup: a locked/already-gone temp file is harmless.
+    }
+  }
+
+  @override
+  void didUpdateWidget(TextureTab oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // The filter flipped: the cached paths list was built for the other mode.
+    if (oldWidget.onlyStaged != widget.onlyStaged) {
+      _treeEntries = null;
+      _treePaths = null;
+      _stagedKeys = null;
     }
   }
 
@@ -121,11 +145,19 @@ class _TextureTabState extends ConsumerState<TextureTab> {
           _sourceEntries = entries;
           _sourceGame = game;
         }
-        // No cap: filter the full index then sort. The ListView below is lazy
+        // The browsable path set: the full index, or (onlyStaged) just the
+        // assets with a staged replacement. Identity-stable per (index
+        // identity, staged key-set content) — see [_treePathsFor].
+        final treePaths = _treePathsFor(entries, staged);
+        if (widget.onlyStaged && treePaths.isEmpty) {
+          // Nothing staged (the tree/list would render as a blank pane).
+          return const Center(child: Text('No staged texture replacements.'));
+        }
+        // No cap: filter the browsable set then sort. The ListView below is lazy
         // (builder), so even the unfiltered ~13k entries render fine and every
         // matching asset stays selectable (a fixed .take() silently hid the rest).
         final matches =
-            entries.keys
+            treePaths
                 .where(
                   (p) =>
                       _query.isEmpty ||
@@ -176,7 +208,7 @@ class _TextureTabState extends ConsumerState<TextureTab> {
                           child: ExcludeFocus(
                             excluding: _query.isNotEmpty,
                             child: PathTreeBrowser(
-                              paths: _treePathsFor(entries),
+                              paths: treePaths,
                               selectedPath: _selected,
                               onSelect: (p) => _select(gameDir, p, entries[p]),
                               leafIcon: Icons.image_outlined,
@@ -191,8 +223,8 @@ class _TextureTabState extends ConsumerState<TextureTab> {
                   ),
                   Text(
                     _query.isEmpty
-                        ? '${entries.length} textures'
-                        : '${matches.length} match / ${entries.length} total',
+                        ? '${treePaths.length} textures'
+                        : '${matches.length} match / ${treePaths.length} total',
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
                 ],
@@ -236,13 +268,37 @@ class _TextureTabState extends ConsumerState<TextureTab> {
     );
   }
 
-  /// The identity-stable leaf-path list for [entries], recomputed only when the
-  /// entries map identity changes (i.e. the index reloaded) so the tree
-  /// browser's identity-keyed cache doesn't rebuild per frame.
-  List<String> _treePathsFor(Map<String, String> entries) {
-    if (!identical(_treeEntries, entries) || _treePaths == null) {
+  /// The identity-stable leaf-path list for [entries]: all index paths, or —
+  /// when [TextureTab.onlyStaged] — only those with a staged replacement.
+  /// Recomputed only when the entries map identity changes (i.e. the index
+  /// reloaded) or, in onlyStaged mode, when the staged key SET content changes
+  /// (not on every replacements-state emission — re-staging the same asset
+  /// keeps the set), so the tree browser's identity-keyed cache doesn't
+  /// rebuild per frame.
+  List<String> _treePathsFor(
+    Map<String, String> entries,
+    TextureReplacementsState staged,
+  ) {
+    if (!widget.onlyStaged) {
+      if (!identical(_treeEntries, entries) || _treePaths == null) {
+        _treeEntries = entries;
+        _treePaths = entries.keys.toList(growable: false);
+      }
+      return _treePaths!;
+    }
+    final cachedKeys = _stagedKeys;
+    final sameKeys =
+        cachedKeys != null &&
+        cachedKeys.length == staged.items.length &&
+        staged.items.keys.every(cachedKeys.contains);
+    if (!identical(_treeEntries, entries) || !sameKeys || _treePaths == null) {
       _treeEntries = entries;
-      _treePaths = entries.keys.toList(growable: false);
+      _stagedKeys = staged.items.keys.toSet();
+      // Iterate the index (not the staged map) so tree order matches the full
+      // browser and stale staged keys absent from the index are dropped.
+      _treePaths = entries.keys
+          .where(staged.items.containsKey)
+          .toList(growable: false);
     }
     return _treePaths!;
   }
