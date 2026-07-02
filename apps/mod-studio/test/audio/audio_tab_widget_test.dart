@@ -46,8 +46,9 @@ AudioSampleInfo _sample(String name) => AudioSampleInfo(
 /// test never touches the real settings file or FFI.
 Future<void> _pumpAudioTab(
   WidgetTester tester,
-  Map<String, List<AudioSampleInfo>> samplesByBank,
-) async {
+  Map<String, List<AudioSampleInfo>> samplesByBank, {
+  bool onlyStaged = false,
+}) async {
   await tester.pumpWidget(
     ProviderScope(
       overrides: [
@@ -65,7 +66,7 @@ Future<void> _pumpAudioTab(
       child: MaterialApp(
         localizationsDelegates: AppLocalizations.localizationsDelegates,
         supportedLocales: AppLocalizations.supportedLocales,
-        home: const Scaffold(body: AudioTab()),
+        home: Scaffold(body: AudioTab(onlyStaged: onlyStaged)),
       ),
     ),
   );
@@ -183,6 +184,68 @@ void main() {
       renderedOrder(['MUS_Zen_01', 'mus_battle_01', 'MUS_Ambient_01']),
       ['MUS_Ambient_01', 'mus_battle_01', 'MUS_Zen_01'],
     );
+  });
+
+  testWidgets('onlyStaged restricts lists to staged samples and updates live',
+      (tester) async {
+    await _pumpAudioTab(
+      tester,
+      {
+        'SFX.bank': [
+          _sample('SFX_CREA_Wolf_Growl_01'),
+          _sample('SFX_CREA_Bloodfly_Idle_01'),
+          _sample('SFX_MAGIC_Impact_01'),
+        ],
+        'Music.bank': [_sample('MUS_Theme_01')],
+        'CINEMATICS.bank': [],
+        'VO.bank': [],
+      },
+      onlyStaged: true,
+    );
+
+    // Nothing staged yet: SFX shows the empty state, no category sidebar.
+    expect(find.text('No samples match'), findsOneWidget);
+    expect(find.text('Creatures (2)'), findsNothing);
+
+    // Stage one SFX replacement through the container (as the Changes tab's
+    // providers would see it).
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(AudioTab)),
+      listen: false,
+    );
+    container.read(audioReplacementsProvider.notifier).setReplacement(
+          AudioReplacement(
+            bank: 'SFX.bank',
+            sample: 'SFX_CREA_Wolf_Growl_01',
+            wavPath: p.join('wavs', 'wolf.wav'),
+          ),
+        );
+    await tester.pumpAndSettle();
+
+    // Sidebar shows only the staged sample's category, counting staged only;
+    // the list shows only the staged sample.
+    expect(find.text('Creatures (1)'), findsOneWidget);
+    expect(find.text('Magic (1)'), findsNothing);
+    expect(find.text('SFX_CREA_Wolf_Growl_01'), findsOneWidget);
+    expect(find.text('SFX_CREA_Bloodfly_Idle_01'), findsNothing);
+
+    // Banks without staged entries stay selectable but show the empty state.
+    await tester.tap(find.widgetWithText(Tab, 'Music'));
+    await tester.pumpAndSettle();
+    expect(find.text('MUS_Theme_01'), findsNothing);
+    expect(find.text('No samples match'), findsOneWidget);
+
+    // Back on SFX, un-staging via the notifier empties the view live.
+    await tester.tap(find.widgetWithText(Tab, 'SFX'));
+    await tester.pumpAndSettle();
+    expect(find.text('SFX_CREA_Wolf_Growl_01'), findsOneWidget);
+    container
+        .read(audioReplacementsProvider.notifier)
+        .remove('SFX.bank/SFX_CREA_Wolf_Growl_01');
+    await tester.pumpAndSettle();
+    expect(find.text('SFX_CREA_Wolf_Growl_01'), findsNothing);
+    expect(find.text('Creatures (1)'), findsNothing);
+    expect(find.text('No samples match'), findsOneWidget);
   });
 
   testWidgets('staged replacements panel scrolls instead of overflowing',

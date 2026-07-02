@@ -18,7 +18,12 @@ import '../domain/sfx_categories.dart';
 /// Browse the game's FMOD bank samples, preview originals, and stage WAV
 /// replacements into [audioReplacementsProvider].
 class AudioTab extends ConsumerWidget {
-  const AudioTab({super.key});
+  const AudioTab({super.key, this.onlyStaged = false});
+
+  /// When true, sample lists show only samples that have a staged replacement
+  /// in the current bank (the Changes tab view). All banks stay selectable;
+  /// a bank with nothing staged shows the usual empty state.
+  final bool onlyStaged;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -26,15 +31,16 @@ class AudioTab extends ConsumerWidget {
     if (fmodDir == null) {
       return const Center(child: Text('Set the game path in Settings'));
     }
-    return _AudioBrowser(fmodDir: fmodDir);
+    return _AudioBrowser(fmodDir: fmodDir, onlyStaged: onlyStaged);
   }
 }
 
 /// Holds the per-tab selection state (selected bank, selected sample, search).
 class _AudioBrowser extends ConsumerStatefulWidget {
-  const _AudioBrowser({required this.fmodDir});
+  const _AudioBrowser({required this.fmodDir, required this.onlyStaged});
 
   final String fmodDir;
+  final bool onlyStaged;
 
   @override
   ConsumerState<_AudioBrowser> createState() => _AudioBrowserState();
@@ -185,26 +191,50 @@ class _AudioBrowserState extends ConsumerState<_AudioBrowser>
     );
   }
 
+  /// Sample names of the current bank with a staged replacement, or null when
+  /// this browser shows all samples (default). Watches
+  /// [audioReplacementsProvider] so un-staging updates the filtered lists live.
+  Set<String>? _stagedNamesOrNull() {
+    if (!widget.onlyStaged) return null;
+    final items = ref.watch(audioReplacementsProvider).items;
+    // Replacement keys are '$bank/$sample' (bank names contain no '/').
+    final prefix = '$_bankFileName/';
+    return {
+      for (final key in items.keys)
+        if (key.startsWith(prefix)) key.substring(prefix.length),
+    };
+  }
+
   Widget _buildSampleList(BuildContext context, List<AudioSampleInfo> samples) {
     final query = _query.trim().toLowerCase();
     final searching = query.isNotEmpty;
+    // The staged-only filter applies AFTER the identity-memoized sort/group
+    // caches below: the staged set is tiny and changes independently of the
+    // bank's sample list, so filtering the cached results per build is cheap,
+    // while keying the big caches on it would defeat their memoization.
+    final stagedNames = _stagedNamesOrNull();
 
     // The SFX bank is huge (7k+ samples), so browse it through a category
     // sidebar (buckets sorted at grouping time). An active search hides the
     // sidebar and scans the whole bank.
     if (_bankFileName == _sfxBank && !searching) {
-      return _buildSfxSplitView(context, samples);
+      return _buildSfxSplitView(context, samples, stagedNames);
     }
 
     // Flat list (non-SFX banks, or any bank during a search): display in
     // alphabetical order rather than FSB bank order. Filter over the cached
     // pre-sorted copy so a keystroke never re-sorts the whole bank.
-    final sorted = _sortedByName(samples);
-    final filtered = searching
-        ? sorted
-            .where((s) => s.name.toLowerCase().contains(query))
-            .toList()
-        : sorted;
+    var filtered = _sortedByName(samples);
+    if (stagedNames != null) {
+      filtered = [
+        for (final s in filtered)
+          if (stagedNames.contains(s.name)) s,
+      ];
+    }
+    if (searching) {
+      filtered =
+          filtered.where((s) => s.name.toLowerCase().contains(query)).toList();
+    }
     return _sampleListView(context, filtered);
   }
 
@@ -238,15 +268,28 @@ class _AudioBrowserState extends ConsumerState<_AudioBrowser>
     return grouped;
   }
 
-  Widget _buildSfxSplitView(
-      BuildContext context, List<AudioSampleInfo> samples) {
+  Widget _buildSfxSplitView(BuildContext context,
+      List<AudioSampleInfo> samples, Set<String>? stagedNames) {
     final theme = Theme.of(context);
     final l10n = AppLocalizations.of(context);
 
     final grouped = _groupedSfx(samples);
+    // Staged-only view: filter the cached buckets per build (cheap, see
+    // _buildSampleList) so sidebar counts reflect staged samples only and
+    // categories left empty by the filter disappear.
+    final visible = <SfxCategory, List<AudioSampleInfo>>{};
+    for (final entry in grouped.entries) {
+      final bucket = stagedNames == null
+          ? entry.value
+          : [
+              for (final s in entry.value)
+                if (stagedNames.contains(s.name)) s,
+            ];
+      if (bucket.isNotEmpty) visible[entry.key] = bucket;
+    }
     final categories = [
       for (final c in SfxCategory.values)
-        if (grouped.containsKey(c)) c,
+        if (visible.containsKey(c)) c,
     ];
     if (categories.isEmpty) {
       return const Center(child: Text('No samples match'));
@@ -254,7 +297,7 @@ class _AudioBrowserState extends ConsumerState<_AudioBrowser>
 
     // Resolve selected category, falling back to the first available.
     var selectedCat = _selectedCategory;
-    if (selectedCat == null || !grouped.containsKey(selectedCat)) {
+    if (selectedCat == null || !visible.containsKey(selectedCat)) {
       selectedCat = categories.first;
     }
 
@@ -275,7 +318,7 @@ class _AudioBrowserState extends ConsumerState<_AudioBrowser>
                     icon: Icons.graphic_eq,
                     label: l10n.categoryWithCount(
                       c.localizedLabel(l10n),
-                      grouped[c]!.length,
+                      visible[c]!.length,
                     ),
                     selected: c == selectedCat,
                     onTap: () => setState(() => _selectedCategory = c),
@@ -285,7 +328,7 @@ class _AudioBrowserState extends ConsumerState<_AudioBrowser>
           ),
         ),
         const VerticalDivider(width: 1),
-        Expanded(child: _sampleListView(context, grouped[selectedCat]!)),
+        Expanded(child: _sampleListView(context, visible[selectedCat]!)),
       ],
     );
   }
