@@ -55,6 +55,33 @@ const STEP_LEN: usize = 0x20000;
 
 /// Decode a full Kraken stream to exactly `decompressed_len` bytes.
 pub(crate) fn decompress(src: &[u8], decompressed_len: usize) -> Result<Vec<u8>> {
+    decompress_observed(src, decompressed_len, &mut |_| ())
+}
+
+/// One event reported by the instrumented decode walk ([`decompress_observed`]).
+///
+/// Match positions are relative to the enclosing inner chunk's output window
+/// (`0..chunk_len`) — the frame real Oodle's end-of-chunk match guard zone is stated in
+/// (see `encode`'s `segment_tokens`).
+pub(crate) enum LzEvent {
+    /// An LZ-coded inner chunk begins; it decodes to `chunk_len` output bytes. Entropy-only
+    /// and stored chunks are not reported (they carry no match commands).
+    LzChunk { chunk_len: usize },
+    /// The current LZ chunk's copy loop materialized a match covering the chunk-relative
+    /// output range `[match_start, match_end)`.
+    Match { match_start: usize, match_end: usize },
+}
+
+/// [`decompress`], instrumented: identical decoding (the plain wrapper passes a no-op
+/// observer that compiles away), with every LZ chunk and match command reported to
+/// `observe`. Tests use this to validate the *encoder's* output structurally — e.g. the
+/// end-of-chunk match guard zone, which real Oodle enforces but this decoder deliberately
+/// tolerates, so a compress→decompress roundtrip alone cannot catch a violation.
+pub(crate) fn decompress_observed<F: FnMut(LzEvent)>(
+    src: &[u8],
+    decompressed_len: usize,
+    observe: &mut F,
+) -> Result<Vec<u8>> {
     // Size the output with a fallible allocation: `decompressed_len` is untrusted.
     let mut out: Vec<u8> = Vec::new();
     out.try_reserve_exact(decompressed_len)
@@ -98,7 +125,7 @@ pub(crate) fn decompress(src: &[u8], decompressed_len: usize) -> Result<Vec<u8>>
                 let base = out.len();
                 // Materialize the quantum's output region, then decode in place.
                 out.resize(base + out_len, 0);
-                decode_quantum(&mut out[..], base, payload, &mut scratch)?;
+                decode_quantum(&mut out[..], base, payload, &mut scratch, observe)?;
                 let _ = r.take(payload.len())?;
                 produced += out_len;
             }
@@ -114,7 +141,13 @@ pub(crate) fn decompress(src: &[u8], decompressed_len: usize) -> Result<Vec<u8>>
 /// `out` is the *whole* output so far (back-references reach into earlier quanta);
 /// `base` is the start of this quantum and `out.len() - base` is `out_len`. This splits the
 /// 256 KiB quantum into ≤128 KiB chunks.
-fn decode_quantum(out: &mut [u8], base: usize, payload: &[u8], scratch: &mut Scratch) -> Result<()> {
+fn decode_quantum<F: FnMut(LzEvent)>(
+    out: &mut [u8],
+    base: usize,
+    payload: &[u8],
+    scratch: &mut Scratch,
+    observe: &mut F,
+) -> Result<()> {
     let out_len = out.len() - base;
     let mut src_pos = 0usize; // offset into payload
     let mut dpos = base; // absolute write cursor into out
@@ -153,8 +186,9 @@ fn decode_quantum(out: &mut [u8], base: usize, payload: &[u8], scratch: &mut Scr
                 // `dst_start` is the global origin, so matches and the keyframe seed are
                 // relative to the entire stream, not the quantum.
                 let offset = dpos;
+                observe(LzEvent::LzChunk { chunk_len: dst_count });
                 read_lz_table(mode, lz, out, dpos, dst_count, offset, scratch)?;
-                process_lz_runs(mode, out, dpos, dst_count, 0, scratch)?;
+                process_lz_runs(mode, out, dpos, dst_count, 0, scratch, observe)?;
                 src_pos += 3 + inner_size;
                 dpos += dst_count;
             } else if inner_size > dst_count || mode != 0 {
@@ -444,13 +478,14 @@ fn unpack_offsets(
 /// `mode 0` (Type0) reconstructs literals as `lit + out[dpos+last_offset]` (a delta from the
 /// most-recent-offset byte); `mode 1` (Type1) copies literals verbatim. Matches use a 7-entry
 /// recent-offset cache.
-fn process_lz_runs(
+fn process_lz_runs<F: FnMut(LzEvent)>(
     mode: u8,
     out: &mut [u8],
     dpos: usize,
     dst_count: usize,
     base: usize,
     scratch: &Scratch,
+    observe: &mut F,
 ) -> Result<()> {
     // The 8-byte literal seed at quantum start is already in `out`; the run loop begins after it.
     let start = if dpos == base { dpos + 8 } else { dpos };
@@ -519,6 +554,7 @@ fn process_lz_runs(
         if m > dst_end - d {
             return Err(Error::Corrupt("kraken: match length out of bounds"));
         }
+        observe(LzEvent::Match { match_start: d - dpos, match_end: d + m - dpos });
         copy_match(out, d, copyfrom, m);
         d += m;
     }

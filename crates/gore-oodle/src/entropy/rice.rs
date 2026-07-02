@@ -25,7 +25,7 @@ static RICE_VALUE: [u32; 256] = [
     0x00000005, 0x30000004, 0x00000204, 0x10000104, 0x00000104, 0x20000004, 0x00010004,
     0x10000004, 0x00000004, 0x40000003, 0x00000303, 0x10000203, 0x00000203, 0x20000103,
     0x00010103, 0x10000103, 0x00000103, 0x30000003, 0x00020003, 0x10010003, 0x00010003,
-    0x20000003, 0x01000003, 0x10000003, 0x00000003, 0x40000002, 0x00000402, 0x10000302,
+    0x20000003, 0x01000003, 0x10000003, 0x00000003, 0x50000002, 0x00000402, 0x10000302,
     0x00000302, 0x20000202, 0x00010202, 0x10000202, 0x00000202, 0x30000102, 0x00020102,
     0x10010102, 0x00010102, 0x20000102, 0x01000102, 0x10000102, 0x00000102, 0x40000002,
     0x00030002, 0x10020002, 0x00020002, 0x20010002, 0x01010002, 0x10010002, 0x00010002,
@@ -209,5 +209,27 @@ mod tests {
         assert_eq!(RICE_LEN[255], 8);
         assert_eq!(RICE_VALUE[255], 0x00000000);
         assert_eq!(RICE_VALUE[0], 0x80000000);
+    }
+
+    #[test]
+    fn rice_tables_match_structural_invariants() {
+        // These invariants pin the whole 256-entry tables against transcription errors — one
+        // wrong carry nibble (RICE_VALUE[0x20] had 4 instead of 5) silently decodes the *next*
+        // Golomb-Rice value one too small, corrupting huffman code lengths ("lut not full").
+        for v in 0..256usize {
+            // RICE_LEN[v] = number of terminated values in the byte = its popcount.
+            assert_eq!(
+                RICE_LEN[v] as u32,
+                (v as u8).count_ones(),
+                "RICE_LEN[{v:#04x}]"
+            );
+            // The carry nibble (RICE_VALUE[v] >> 28) is the run of 0-bits after the last set
+            // bit (MSB-first) carried into the next value = the byte's trailing-zero count.
+            assert_eq!(
+                RICE_VALUE[v] >> 28,
+                (v as u8).trailing_zeros(),
+                "RICE_VALUE[{v:#04x}] carry nibble"
+            );
+        }
     }
 }

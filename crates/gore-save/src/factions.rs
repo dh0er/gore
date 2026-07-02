@@ -1594,6 +1594,131 @@ mod tests {
         crate::decompress_private_payload(&data, &stream, &backend).unwrap()
     }
 
+    /// Decode a good backup + a corrupt re-save (explicit paths via GORESAVE_BAK / GORESAVE_COR)
+    /// and report decode + parse status for each, to localize save corruption on write.
+    #[test]
+    #[ignore = "needs GORESAVE_BAK + GORESAVE_COR"]
+    fn diagnose_corrupt_save() {
+        let backend = crate::codec_backend::KrakenBackend::default();
+        let load = |var: &str| -> Vec<u8> {
+            let path = std::env::var(var).unwrap();
+            let data = std::fs::read(&path).unwrap();
+            let ps = u32::from_le_bytes(data[9..13].try_into().unwrap()) as usize;
+            let stream = crate::parse_compressed_stream(&data, 13 + ps).unwrap();
+            crate::decompress_private_payload(&data, &stream, &backend).unwrap()
+        };
+        // Dump the backup's public region + decoded private payload for external hash analysis.
+        {
+            let path = std::env::var("GORESAVE_BAK").unwrap();
+            let data = std::fs::read(&path).unwrap();
+            let ps = u32::from_le_bytes(data[9..13].try_into().unwrap()) as usize;
+            let public = &data[13..13 + ps];
+            let stream = crate::parse_compressed_stream(&data, 13 + ps).unwrap();
+            let payload = crate::decompress_private_payload(&data, &stream, &backend).unwrap();
+            let tmp = std::env::temp_dir();
+            std::fs::write(tmp.join("g_public.bin"), public).unwrap();
+            std::fs::write(tmp.join("g_payload.bin"), &payload).unwrap();
+            eprintln!("dumped public({}) + payload({}) to {:?}", public.len(), payload.len(), tmp);
+        }
+        let pb = load("GORESAVE_BAK");
+        let pc = load("GORESAVE_COR");
+        let fnv = |v: &[u8]| v.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &b| (h ^ b as u64).wrapping_mul(0x0100_0000_01b3));
+        eprintln!("BAK decode fnv={:016x} len={}", fnv(&pb), pb.len());
+        eprintln!("COR decode fnv={:016x} len={}", fnv(&pc), pc.len());
+        eprintln!("payload sizes: bak={} cor={} (delta {})", pb.len(), pc.len(), pc.len() as i64 - pb.len() as i64);
+        eprintln!("parse bak={} cor={}", parse_private_root(&pb).is_ok(), parse_private_root(&pc).is_ok());
+
+        // Where do they diverge? Count differing regions up to the size delta.
+        let n = pb.len().min(pc.len());
+        let mut first = None;
+        let mut last = 0usize;
+        let mut diffs = 0u64;
+        for i in 0..n {
+            if pb[i] != pc[i] {
+                if first.is_none() {
+                    first = Some(i);
+                }
+                last = i;
+                diffs += 1;
+            }
+        }
+        eprintln!("common-prefix diff: first={first:?} last={last} differing_bytes={diffs} common_len={n}");
+        if let Some(f) = first {
+            let lo = f.saturating_sub(8);
+            eprintln!("bak[{lo}..+48]={:02x?}", &pb[lo..(lo + 48).min(pb.len())]);
+            eprintln!("cor[{lo}..+48]={:02x?}", &pc[lo..(lo + 48).min(pc.len())]);
+
+            // Is cor == bak with a single contiguous deletion (faithful edit)? Count bytes
+            // matching under the size-delta shift. ~100% => clean deletion; ~0% => rewrite.
+            if pb.len() >= pc.len() {
+                let shift = pb.len() - pc.len();
+                let mut sm = 0u64;
+                for i in f..pc.len() {
+                    if pc[i] == pb[i + shift] {
+                        sm += 1;
+                    }
+                }
+                let range = (pc.len() - f) as f64;
+                eprintln!(
+                    "shift(+{shift}) match over [{f}..end]: {sm}/{} = {:.1}%",
+                    pc.len() - f,
+                    100.0 * sm as f64 / range
+                );
+                // Find the deletion point: largest k where pb[..k]==pc[..k] (prefix) and
+                // pb[k+shift..]==pc[k..] (suffix under shift).
+                let mut suf = 0usize;
+                while suf < pc.len() - f && pc[pc.len() - 1 - suf] == pb[pb.len() - 1 - suf] {
+                    suf += 1;
+                }
+                eprintln!("clean common suffix under shift: {suf} bytes (delete region ~[{f}..{}])", pb.len() - suf);
+            }
+        }
+    }
+
+    /// Decode EVERY real `.sav` in `GORESAVE_SAVE_DIR` and confirm each private payload both
+    /// decodes (no codec error) and re-parses as a valid save root. Regression guard for the
+    /// `RICE_VALUE[0x20]` huffman bug that made real saves fail with "huff: lut not full".
+    #[test]
+    #[ignore = "needs GORESAVE_SAVE_DIR pointing at a real SaveGames folder"]
+    fn decode_all_real_saves() {
+        let dir = std::env::var("GORESAVE_SAVE_DIR").expect("set GORESAVE_SAVE_DIR");
+        let backend = crate::codec_backend::KrakenBackend::default();
+        let (mut ok, mut fail) = (0u32, 0u32);
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().and_then(|e| e.to_str()) != Some("sav") {
+                continue;
+            }
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            let data = std::fs::read(&path).unwrap();
+            if !data.starts_with(b"GSAV") {
+                eprintln!("skip {name} (not GSAV)");
+                continue;
+            }
+            let public_size = u32::from_le_bytes(data[9..13].try_into().unwrap()) as usize;
+            let res = (|| -> Result<usize, String> {
+                let stream = crate::parse_compressed_stream(&data, 13 + public_size)
+                    .map_err(|e| format!("stream: {e}"))?;
+                let payload = crate::decompress_private_payload(&data, &stream, &backend)
+                    .map_err(|e| format!("decode: {e}"))?;
+                parse_private_root(&payload).map_err(|e| format!("parse: {e}"))?;
+                Ok(payload.len())
+            })();
+            match res {
+                Ok(n) => {
+                    ok += 1;
+                    eprintln!("OK   {name}: {n} bytes decoded + parsed");
+                }
+                Err(e) => {
+                    fail += 1;
+                    eprintln!("FAIL {name}: {e}");
+                }
+            }
+        }
+        eprintln!("=== decoded {ok} real saves, {fail} failed ===");
+        assert_eq!(fail, 0, "{fail} real saves failed to decode/parse");
+    }
+
     /// END-TO-END hostility validation against two REAL saves from the same
     /// playthrough minutes apart: in the HOSTILE save the Old-Mine guards attack
     /// (OldCamp hostile, no other camp); in the FRIENDLY save the player has

@@ -24,3 +24,6 @@ v!(text);
 v!(counter);
 v!(multiblock);
 v!(random);
+// Huffman "new" Golomb-Rice code-length path with a byte 0x20 in the length stream — the
+// real-save decode that regressed as "huff: lut not full" before the RICE_VALUE[0x20] fix.
+v!(rice_new);

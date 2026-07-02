@@ -162,6 +162,8 @@ fn double_to_uint_round_pow2(v: f64) -> u32 {
 }
 
 fn log_factor_up(value: u32) -> f32 {
+    // Calibrated table: output-affecting heap priorities; 0.693147_f32 != f32::consts::LN_2 (3 ulps).
+    #[allow(clippy::approx_constant)]
     const T: [f32; 32] = [
         0.000000, 0.693147, 0.405465, 0.287682, 0.223144, 0.182322, 0.154151, 0.133531, 0.117783,
         0.105361, 0.095310, 0.087011, 0.080043, 0.074108, 0.068993, 0.064539, 0.060625, 0.057158,
@@ -176,6 +178,8 @@ fn log_factor_up(value: u32) -> f32 {
 }
 
 fn log_factor_down(value: u32) -> f32 {
+    // Calibrated table: output-affecting heap priorities; 0.693147_f32 != f32::consts::LN_2 (3 ulps).
+    #[allow(clippy::approx_constant)]
     const T: [f32; 32] = [
         0.000000, 0.000000, -0.693147, -0.405465, -0.287682, -0.223144, -0.182322, -0.154151,
         -0.133531, -0.117783, -0.105361, -0.095310, -0.087011, -0.080043, -0.074108, -0.068993,

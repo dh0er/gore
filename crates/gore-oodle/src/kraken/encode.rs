@@ -187,9 +187,18 @@ fn try_compress_quantum(
 
     let mut candidates: Vec<Vec<u8>> = Vec::new();
 
-    // All-LZ payload (also covers the single-chunk LZ case).
-    if let Some(p) = build_lz_payload(whole, index, quantum_origin, out_len, level) {
-        candidates.push(p);
+    // Kill-switch for the LZ-chunk form. Real Oodle's decoder enforces a guard zone at the
+    // end of every chunk — no match may start in its last 16 bytes or extend into its last 8
+    // (see `lz::segment_tokens`) — and rejects the whole quantum otherwise. With that zone
+    // honoured, LZ chunks decode under the real decoder. Flip to false to fall back to
+    // entropy-only chunks + stored framing (always valid, at a large ratio cost on
+    // match-rich data).
+    const EMIT_LZ_CHUNKS: bool = true;
+    if EMIT_LZ_CHUNKS {
+        // All-LZ payload (also covers the single-chunk LZ case).
+        if let Some(p) = build_lz_payload(whole, index, quantum_origin, out_len, level) {
+            candidates.push(p);
+        }
     }
 
     // The full entropy array (huffman/tANS/RLE/raw) is only oracle-safe as the *sole* chunk of
@@ -432,6 +441,15 @@ mod lz {
     /// `k - d`); a clamp shorter than the 2-byte minimum match becomes literals instead. The
     /// result is a list of [`ChunkTok`] whose cover is exactly the window, ending in a literal
     /// run. Returns `None` only if a clamped match would be decoder-illegal.
+    ///
+    /// ## End-of-chunk match guard zone
+    ///
+    /// Real Oodle's decoder copies matches with wide (16-byte) writes bounded per chunk and
+    /// rejects a chunk whose matches intrude on the guard zone at its end: a match may not
+    /// **start** within the last 16 bytes of the chunk, nor **extend** into the last 8 (the
+    /// tail must arrive as literals, which are unconstrained). Matches are truncated to end
+    /// at or before `chunk_len - 8` and dropped when they would start past `chunk_len - 16`;
+    /// the displaced bytes are folded into the literal run, which decodes identically.
     fn segment_tokens(
         index: &TokenIndex,
         chunk_origin: usize,
@@ -483,17 +501,20 @@ mod lz {
             if hi <= lo {
                 continue;
             }
-            let clamped_len = hi - lo;
 
             // Decoder-legality: copyfrom = lo - distance must be >= 0 (>= base 0).
             if distance > lo {
                 return None;
             }
 
-            if clamped_len < 2 {
-                // Too short to encode as a match; fold into the literal run (the match bytes
-                // equal the source bytes at this position, so they decode the same as literals).
-                pending_lits += clamped_len;
+            // End-of-chunk guard zone (see the doc comment): matches may not extend into the
+            // window's last 8 bytes, nor start within its last 16.
+            let match_hi = hi.min(win_end - 8);
+            if lo + 16 > win_end || match_hi < lo + 2 {
+                // Starts in the guard zone, or too short once clamped/capped, to encode as a
+                // match; fold into the literal run (the match bytes equal the source bytes at
+                // this position, so they decode the same as literals).
+                pending_lits += hi - lo;
                 cursor = hi;
                 continue;
             }
@@ -501,9 +522,11 @@ mod lz {
             out.push(ChunkTok {
                 lit_len: pending_lits,
                 distance,
-                match_len: clamped_len,
+                match_len: match_hi - lo,
             });
-            pending_lits = 0;
+            // Bytes truncated off the match's tail by the guard-zone cap are carried as
+            // literals into the next token / the final run.
+            pending_lits = hi - match_hi;
             cursor = hi;
         }
 
@@ -931,5 +954,143 @@ mod tests {
         let mut v = vec![0xABu8; QUANTUM_LEN];
         v.push(0x01);
         both_levels(&v);
+    }
+
+    /// Deterministic xorshift32 noise. The guard-zone corpus must be reproducible, so a
+    /// fixed seed replaces any time/environment dependence.
+    fn xorshift_bytes(mut state: u32, len: usize) -> Vec<u8> {
+        let mut v = Vec::with_capacity(len);
+        for _ in 0..len {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            v.push((state >> 16) as u8);
+        }
+        v
+    }
+
+    /// `motif` repeated (and truncated) to exactly `len` bytes.
+    fn motif_repeat(motif: &[u8], len: usize) -> Vec<u8> {
+        let mut v = Vec::with_capacity(len + motif.len());
+        while v.len() < len {
+            v.extend_from_slice(motif);
+        }
+        v.truncate(len);
+        v
+    }
+
+    /// Compress `data` at every public level and walk each stream with the instrumented
+    /// decoder ([`super::super::decode::decompress_observed`]), asserting the end-of-chunk
+    /// guard zone for every match command (and the roundtrip). Returns the total
+    /// `(lz_chunks, match_commands)` seen across all levels so the caller can prove the
+    /// battery is non-vacuous.
+    fn check_guard_zone(name: &str, data: &[u8]) -> (usize, usize) {
+        use super::super::decode::{decompress_observed, LzEvent};
+
+        let len = data.len();
+        let mut lz_chunks = 0usize;
+        let mut matches = 0usize;
+        for level in [Level::Fastest, Level::Fast, Level::Default, Level::Max] {
+            let comp = compress(data, level).expect("compress");
+            let mut chunk_idx = 0usize; // 1-based index of the current LZ chunk in the stream
+            let mut chunk_len = 0usize;
+            let back = decompress_observed(&comp, len, &mut |ev| match ev {
+                LzEvent::LzChunk { chunk_len: n } => {
+                    chunk_idx += 1;
+                    chunk_len = n;
+                    lz_chunks += 1;
+                }
+                LzEvent::Match { match_start, match_end } => {
+                    matches += 1;
+                    assert!(
+                        match_start + 16 <= chunk_len,
+                        "{name} len={len:#x} {level:?}: match starts in guard zone \
+                         (LZ chunk {chunk_idx}: match [{match_start}, {match_end}), \
+                         chunk_len {chunk_len:#x})",
+                    );
+                    assert!(
+                        match_end + 8 <= chunk_len,
+                        "{name} len={len:#x} {level:?}: match ends in guard zone \
+                         (LZ chunk {chunk_idx}: match [{match_start}, {match_end}), \
+                         chunk_len {chunk_len:#x})",
+                    );
+                }
+            })
+            .unwrap_or_else(|e| panic!("{name} len={len:#x} {level:?}: decode failed: {e:?}"));
+            assert_eq!(back, data, "{name} len={len:#x} {level:?}: roundtrip mismatch");
+        }
+        (lz_chunks, matches)
+    }
+
+    /// Structural regression test for the end-of-chunk match guard zone enforced by
+    /// [`lz::segment_tokens`]: within every inner chunk, no match may start past
+    /// `chunk_len - 16` nor end past `chunk_len - 8`. Real Oodle rejects violating streams
+    /// as corrupt, but the in-tree decoder deliberately tolerates them — a roundtrip stays
+    /// green through a regression — so this test walks the encoder's own output with the
+    /// instrumented decoder and checks every materialized match command directly.
+    #[test]
+    fn lz_matches_respect_end_of_chunk_guard_zone() {
+        const CHUNK: usize = STEP_LEN;
+        let mut cases: Vec<(&str, Vec<u8>)> = Vec::new();
+
+        // An 8-byte-period motif: the period divides CHUNK, so without the guard, matches
+        // would naturally run to the exact chunk (and input) end. Sizes straddle the
+        // inner-chunk boundary and the guard-zone edges themselves.
+        for &n in &[
+            CHUNK - 32,
+            CHUNK - 16,
+            CHUNK - 9,
+            CHUNK - 8,
+            CHUNK - 1,
+            CHUNK,
+            CHUNK + 1,
+            CHUNK + 8,
+            CHUNK + 64,
+            2 * CHUNK,
+            2 * CHUNK + 37,
+        ] {
+            cases.push(("motif8", motif_repeat(b"KrakenGd", n)));
+        }
+
+        // One long motif repeated across several chunks: a single giant match per chunk
+        // whose tail must be clamped at every chunk boundary.
+        let big = xorshift_bytes(0x1234_5678, 4096);
+        cases.push(("long_single_match", motif_repeat(&big, 3 * CHUNK)));
+
+        // Alternating incompressible noise and compressible motif segments crossing chunk
+        // and quantum boundaries, so the LZ/entropy choice flips mid-stream.
+        let noise = xorshift_bytes(0x0BAD_5EED, 0x2000);
+        let motif = motif_repeat(b"mixed segment payload... ", 0x2000);
+        let mut mixed = Vec::new();
+        while mixed.len() < 2 * CHUNK + 0x2345 {
+            mixed.extend_from_slice(&noise);
+            mixed.extend_from_slice(&motif);
+        }
+        mixed.truncate(2 * CHUNK + 0x2345);
+        cases.push(("mixed_segments", mixed));
+
+        // Deterministic skewed corpus (long zero runs, sparse literals) hugging the
+        // boundary: dense short matches pressing on the chunk tail from many alignments.
+        for (i, &n) in [CHUNK - 24, CHUNK + 17, 2 * CHUNK - 5].iter().enumerate() {
+            let mut data = xorshift_bytes(0xC0FF_EE00 + i as u32, n);
+            for b in data.iter_mut() {
+                if *b < 208 {
+                    *b = 0;
+                }
+            }
+            cases.push(("skewed_zero_runs", data));
+        }
+
+        let (mut lz_chunks, mut lz_matches) = (0usize, 0usize);
+        for (name, data) in &cases {
+            let (c, m) = check_guard_zone(name, data);
+            lz_chunks += c;
+            lz_matches += m;
+        }
+        // Non-vacuity: the battery must actually exercise the LZ-chunk path. If LZ chunks
+        // were ever disabled (`EMIT_LZ_CHUNKS`) or stopped firing, this test would
+        // otherwise pass while guarding nothing.
+        assert!(lz_chunks > 0, "guard-zone battery produced no LZ chunks");
+        assert!(lz_matches > 0, "guard-zone battery produced no LZ match commands");
     }
 }
