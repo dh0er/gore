@@ -139,10 +139,20 @@ class _AudioBrowserState extends ConsumerState<_AudioBrowser>
           padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
           child: TextField(
             controller: _searchController,
-            decoration: const InputDecoration(
+            decoration: InputDecoration(
               labelText: 'Search samples',
-              prefixIcon: Icon(Icons.search),
+              prefixIcon: const Icon(Icons.search),
               isDense: true,
+              suffixIcon: _query.isEmpty
+                  ? null
+                  : IconButton(
+                      icon: const Icon(Icons.clear),
+                      tooltip: 'Clear',
+                      onPressed: () {
+                        _searchController.clear();
+                        setState(() => _query = '');
+                      },
+                    ),
             ),
             onChanged: (v) => setState(() => _query = v),
           ),

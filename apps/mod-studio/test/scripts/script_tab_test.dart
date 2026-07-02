@@ -177,6 +177,27 @@ void main() {
       isTrue,
     );
 
+    // Detail semantics: BOTH leaves share the staged real relPath, so tapping
+    // EITHER shows the staged detail — the disambiguated leaf must not claim
+    // "vanilla" (its Edit would silently overwrite the staged mod with a fresh
+    // vanilla emit). With no vanilla card, no second Edit overwrite is possible.
+    for (final leaf in ['Foo (2).as', 'Foo.as']) {
+      // Tap the TREE leaf specifically — the staged detail's Path row echoes
+      // 'Foo.as' as plain text too, which would make a bare text tap ambiguous.
+      await tester.tap(find.descendant(
+          of: find.byType(ListTile), matching: find.text(leaf)));
+      await tester.pump();
+      expect(find.text('Edit existing module'), findsOneWidget,
+          reason: 'leaf $leaf should show the staged detail');
+      expect(find.text('Vanilla module — not staged'), findsNothing,
+          reason: 'leaf $leaf must not claim vanilla');
+      expect(find.text('Edit'), findsNothing,
+          reason: 'leaf $leaf must not offer a vanilla Edit');
+    }
+    // The staged mod survived untouched (an overwrite would re-stage 'Foo').
+    expect(container.read(scriptModsProvider).items.values.single.moduleName,
+        'Bar');
+
     // The flat search list uses the same real-relPath marker semantics: both
     // hits (matched via their tree paths) carry the staged check.
     await tester.enterText(find.byType(TextField), 'foo');

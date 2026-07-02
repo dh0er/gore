@@ -157,10 +157,20 @@ class _DialogBrowserState extends ConsumerState<_DialogBrowser> {
           padding: const EdgeInsets.all(12),
           child: TextField(
             controller: _searchController,
-            decoration: const InputDecoration(
+            decoration: InputDecoration(
               labelText: 'Search dialog (id or text)',
-              prefixIcon: Icon(Icons.search),
+              prefixIcon: const Icon(Icons.search),
               isDense: true,
+              suffixIcon: _query.isEmpty
+                  ? null
+                  : IconButton(
+                      icon: const Icon(Icons.clear),
+                      tooltip: 'Clear',
+                      onPressed: () {
+                        _searchController.clear();
+                        setState(() => _query = '');
+                      },
+                    ),
             ),
             onChanged: (v) => setState(() => _query = v),
           ),
@@ -197,7 +207,9 @@ class _DialogBrowserState extends ConsumerState<_DialogBrowser> {
                           ),
                         ),
                       ),
-                    const VerticalDivider(width: 1),
+                    // The divider belongs to the sidebar — hide both during a
+                    // search (matching the audio SFX split view).
+                    if (!searching) const VerticalDivider(width: 1),
                     Expanded(
                       child: shownLines.isEmpty
                           ? const Center(child: Text('No dialog lines match'))

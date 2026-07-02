@@ -251,12 +251,18 @@ class _ScriptTabState extends ConsumerState<ScriptTab> {
             children: [
               Offstage(
                 offstage: _query.isNotEmpty,
-                child: PathTreeBrowser(
-                  paths: _treePaths!,
-                  selectedPath: selectedTreePath,
-                  onSelect: _select,
-                  leafIcon: Icons.description_outlined,
-                  markedPaths: marked,
+                // Offstage skips paint/hit-test/semantics but NOT focus
+                // traversal — without this, Tab could reach the hidden tree's
+                // tiles during a search.
+                child: ExcludeFocus(
+                  excluding: _query.isNotEmpty,
+                  child: PathTreeBrowser(
+                    paths: _treePaths!,
+                    selectedPath: selectedTreePath,
+                    onSelect: _select,
+                    leafIcon: Icons.description_outlined,
+                    markedPaths: marked,
+                  ),
                 ),
               ),
               if (_query.isNotEmpty)
@@ -307,7 +313,18 @@ class _ScriptTabState extends ConsumerState<ScriptTab> {
           style: TextStyle(color: scheme.onSurfaceVariant)),
     );
     if (selectedKey == null) return placeholder;
-    final staged = state.items[selectedKey];
+    // Resolve the selection to its tree leaf's module (null for staged 'add'
+    // keys with no vanilla leaf, and for dangling selections).
+    final treePath = _selectedTreePath(selectedKey);
+    final module = treePath == null ? null : _byTreePath?[treePath];
+    // Staged lookup: the selection may be a staged key itself (a REAL relPath —
+    // staged-panel taps, staging) or a TREE path, so also resolve through the
+    // leaf module's real relPath (the staging key). Without that indirection a
+    // collision-disambiguated leaf ('Foo (2).as') would miss the shared staged
+    // mod, claim "vanilla", and its Edit would silently overwrite the staged
+    // mod with a fresh vanilla emit.
+    final staged = state.items[selectedKey] ??
+        (module == null ? null : state.items[_moduleRelPath(module)]);
     if (staged != null) {
       // Key the detail pane to the selected mod so switching selection builds a
       // FRESH _ModDetailState — otherwise the old state (and its _busy/_status/
@@ -316,11 +333,7 @@ class _ScriptTabState extends ConsumerState<ScriptTab> {
     }
     // Not staged: either a vanilla module (show info + Edit) or a dangling
     // selection (e.g. a staged 'add' that was removed — its path isn't in the
-    // vanilla tree, so fall back to the placeholder). Resolve through the same
-    // tree-path mapping as the browser so a real-relPath selection (from the
-    // staged panel / post-unstage) lands on the leaf's module.
-    final treePath = _selectedTreePath(selectedKey);
-    final module = treePath == null ? null : _byTreePath?[treePath];
+    // vanilla tree, so fall back to the placeholder).
     if (module == null) return placeholder;
     // Keyed by the TREE path so the emit-busy state resets when the selection
     // changes; the detail itself works on the module's REAL relPath (identical
