@@ -320,15 +320,16 @@ class _CharacterMasterListState extends State<CharacterMasterList> {
         // the "search NPCs" field rather than under it).
         ListTile(
           dense: true,
+          // The player has no id/subtitle, so it would render shorter than the
+          // two-line NPC rows. Extra vertical content padding matches their
+          // height while keeping the (centered) label aligned at the same left
+          // edge — no placeholder subtitle that would shove the label upward.
+          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
           leading: const Icon(Icons.person_outline),
           title: Text(
             l10n.tabPlayer,
             style: const TextStyle(fontWeight: FontWeight.bold),
           ),
-          // The player has no id, but an empty subtitle line (same style as the
-          // NPC rows' GlobalId subtitle) keeps the tile the SAME height as the
-          // NPC tiles instead of collapsing to a shorter single-line row.
-          subtitle: const Text(' ', style: TextStyle(fontSize: 11)),
           selected: widget.selected.isPlayer,
           selectedTileColor: scheme.primaryContainer,
           selectedColor: scheme.primary,
