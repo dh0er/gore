@@ -9,6 +9,16 @@ import '../domain/item_categories.dart';
 import '../domain/item_entry.dart';
 import 'sidebar_tile.dart';
 
+/// Returns a copy of [items] sorted by the localized display name
+/// (case-insensitive), falling back to the class id as tiebreaker.
+List<CatalogItem> sortByDisplayName(
+    List<CatalogItem> items, String Function(CatalogItem) nameOf) {
+  return [...items]..sort((a, b) {
+    final c = nameOf(a).toLowerCase().compareTo(nameOf(b).toLowerCase());
+    return c != 0 ? c : a.id.compareTo(b.id);
+  });
+}
+
 /// Category-grouped, searchable item browser.
 /// Calls [onItemSelected] when the user taps an item.
 class CatalogBrowser extends ConsumerStatefulWidget {
@@ -68,9 +78,12 @@ class _CatalogBrowserState extends ConsumerState<CatalogBrowser> {
       selectedCat = groups.isEmpty ? null : groups.first.category;
     }
 
-    final shownItems = searching
-        ? filtered
-        : (groups.where((g) => g.category == selectedCat).firstOrNull?.items ?? []);
+    final shownItems = sortByDisplayName(
+        searching
+            ? filtered
+            : (groups.where((g) => g.category == selectedCat).firstOrNull?.items ??
+                const []),
+        nameOf);
 
     return Column(
       children: [
