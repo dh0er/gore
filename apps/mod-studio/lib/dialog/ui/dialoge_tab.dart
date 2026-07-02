@@ -13,8 +13,12 @@ import '../../loc/primary_set.dart';
 import '../../loc/ui/lang_fields.dart';
 import '../domain/dialog_catalog_provider.dart';
 
-/// Currently selected dialog line (loc id), local to the Dialoge tab.
-final _selectedDialogIdProvider = StateProvider<String?>((ref) => null);
+/// Currently selected dialog line (loc id), shared by all [DialogeTab]
+/// instances (the main tab and filtered embeddings such as the Changes tab)
+/// so the selection survives tab switches. The main tab owns clearing it;
+/// filtered views must never write null here just because the id fell out of
+/// their filter — they guard at view level instead (see [_DialogEditor]).
+final selectedDialogIdProvider = StateProvider<String?>((ref) => null);
 
 /// Browse & edit the game's dialog / bark lines across languages. Edits are
 /// staged into the shared [locEditsProvider].
@@ -41,7 +45,7 @@ class DialogeTab extends ConsumerWidget {
           children: [
             SizedBox(width: 560, child: _DialogBrowser(onlyIds: onlyIds)),
             const VerticalDivider(width: 1),
-            const Expanded(child: _DialogEditor()),
+            Expanded(child: _DialogEditor(onlyIds: onlyIds)),
           ],
         );
       },
@@ -152,7 +156,7 @@ class _DialogBrowserState extends ConsumerState<_DialogBrowser> {
 
     final groups = allRows.whereType<DialogGroupRow>().toList();
     final lines = allRows.whereType<DialogLineRow>();
-    final selectedId = ref.watch(_selectedDialogIdProvider);
+    final selectedId = ref.watch(selectedDialogIdProvider);
 
     // Resolve selected group. When the stored selection is null or vanished,
     // restore from the still-selected editor line's group (this widget's state
@@ -231,7 +235,7 @@ class _DialogBrowserState extends ConsumerState<_DialogBrowser> {
                                     if (selectedId != null &&
                                         selLine?.groupKey != g.groupKey) {
                                       ref
-                                          .read(_selectedDialogIdProvider
+                                          .read(selectedDialogIdProvider
                                               .notifier)
                                           .state = null;
                                     }
@@ -295,7 +299,7 @@ class _DialogBrowserState extends ConsumerState<_DialogBrowser> {
                                   onTap: () {
                                     ref
                                         .read(
-                                            _selectedDialogIdProvider.notifier)
+                                            selectedDialogIdProvider.notifier)
                                         .state = line.id;
                                     // Keep the sidebar in sync with the picked
                                     // line, so clearing a search lands on its
@@ -316,12 +320,25 @@ class _DialogBrowserState extends ConsumerState<_DialogBrowser> {
 }
 
 class _DialogEditor extends ConsumerWidget {
-  const _DialogEditor();
+  const _DialogEditor({this.onlyIds});
+
+  /// See [DialogeTab.onlyIds].
+  final Set<String>? onlyIds;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
-    final id = ref.watch(_selectedDialogIdProvider);
+    final selectedId = ref.watch(selectedDialogIdProvider);
+    // View-level guard for filtered embeddings (the Changes tab): the shared
+    // selection may point at a line OUTSIDE the filter — picked on the main
+    // Dialoge tab, or its last staged edit was just removed. Show the
+    // placeholder instead of an out-of-filter editor, but do NOT clear the
+    // shared provider: the main tab owns that selection and keeps it.
+    final filter = onlyIds;
+    final id =
+        (filter != null && selectedId != null && !filter.contains(selectedId))
+            ? null
+            : selectedId;
     if (id == null) {
       return Center(
         child: Text(
