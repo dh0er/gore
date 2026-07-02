@@ -44,6 +44,10 @@ class Actor {
 
   bool get isPlayer => kind == ActorKind.player;
 
+  /// True for a knowledge-only "orphan" character (no spawned actor / GlobalId).
+  /// Built by CharacterMasterList via an `orphan:<uniqueName>` id sentinel.
+  bool get isOrphan => id != null && id!.startsWith('orphan:');
+
   // Value equality by kind + id, so selection comparisons and provider rebuild
   // checks treat two Actors for the same target as equal. Name is intentionally
   // excluded — the id (or player-ness) is the identity; the name is a label.
