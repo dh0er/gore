@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:goresave/features/editor/domain/editor_models.dart';
+import 'package:goresave/features/editor/ui/actor_detail_header.dart';
 import 'package:goresave/features/editor/ui/attribute_detail.dart';
 import 'package:goresave/features/editor/ui/character_master_list.dart';
 import 'package:goresave/features/editor/ui/inventory_detail.dart';
@@ -92,28 +93,58 @@ class CharactersTab extends ConsumerWidget {
 
     // Wissen (knowledge) always works: the player's key is 'Hero' (which IS
     // selected.uniqueName for the player), an NPC's / orphan's key is its
-    // uniqueName. Passing selected.uniqueName covers all three.
-    final Widget knowledgeBody = KnowledgeDetail(
-      uniqueName: selected.uniqueName,
-      notifier: notifier,
-      editable: progressionEditable,
-      reloadKey: inspection,
-      theme: theme,
+    // uniqueName. Passing selected.uniqueName covers all three. The same
+    // ActorDetailHeader the Attribute/Inventar bodies render sits above the
+    // card (same Column + Expanded structure as AttributeDetail) so all four
+    // sub-tabs identify the selection identically; it handles player (no id),
+    // NPC (full GlobalId), and orphan (uniqueName-resolved, no id line).
+    final Widget knowledgeBody = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        ActorDetailHeader(
+          actor: selected,
+          locCatalog: locCatalog,
+          lang: lang,
+        ),
+        Expanded(
+          child: KnowledgeDetail(
+            uniqueName: selected.uniqueName,
+            notifier: notifier,
+            editable: progressionEditable,
+            reloadKey: inspection,
+            theme: theme,
+          ),
+        ),
+      ],
     );
 
     // Ereignisse (events) are keyed by GlobalId. The player's events live
     // under the save's own Hero ACTOR GlobalId, stashed in
     // `state.heroGlobalId` when the character index loads (null until then →
     // the detail's own empty state; EventsDetail re-selects when the id
-    // arrives). Orphans have no GlobalId → null → empty state.
-    final Widget eventsBody = EventsDetail(
-      globalId: selected.isPlayer
-          ? state.heroGlobalId
-          : (selected.isOrphan ? null : selected.id),
-      notifier: notifier,
-      editable: progressionEditable,
-      reloadKey: inspection,
-      theme: theme,
+    // arrives). Orphans have no GlobalId → null → empty state. The header
+    // always renders (the detail below shows its own empty state when the
+    // globalId is null), matching the other sub-tabs.
+    final Widget eventsBody = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        ActorDetailHeader(
+          actor: selected,
+          locCatalog: locCatalog,
+          lang: lang,
+        ),
+        Expanded(
+          child: EventsDetail(
+            globalId: selected.isPlayer
+                ? state.heroGlobalId
+                : (selected.isOrphan ? null : selected.id),
+            notifier: notifier,
+            editable: progressionEditable,
+            reloadKey: inspection,
+            theme: theme,
+          ),
+        ),
+      ],
     );
 
     return Row(
@@ -141,10 +172,22 @@ class CharactersTab extends ConsumerWidget {
               children: [
                 TabBar(
                   tabs: [
-                    Tab(text: l10n.tabAttribute),
-                    Tab(text: l10n.tabInventory),
-                    Tab(text: l10n.sectionKnowledge),
-                    Tab(text: l10n.sectionEvents),
+                    Tab(
+                      icon: const Icon(Icons.person_outline),
+                      text: l10n.tabAttribute,
+                    ),
+                    Tab(
+                      icon: const Icon(Icons.inventory_2_outlined),
+                      text: l10n.tabInventory,
+                    ),
+                    Tab(
+                      icon: const Icon(Icons.school_outlined),
+                      text: l10n.sectionKnowledge,
+                    ),
+                    Tab(
+                      icon: const Icon(Icons.history_outlined),
+                      text: l10n.sectionEvents,
+                    ),
                   ],
                 ),
                 Expanded(

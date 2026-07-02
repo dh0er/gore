@@ -14,6 +14,10 @@ import 'package:goresave/loc/game_lang.dart';
 ///   the user can copy/read the whole id — never ellipsized.
 /// - Player selected → the localized "Player" label, no GlobalId (the player
 ///   has none).
+/// - Orphan selected (knowledge-only, `orphan:<uniqueName>` id sentinel) → the
+///   name resolved from its uniqueName (same loc-catalog key the list's orphan
+///   tiles use) and NO id line — the sentinel is not a GlobalId and must never
+///   be shown as one.
 ///
 /// The NPC name is resolved with the SAME [localizedNpcName] (loc catalog +
 /// prettify fallback) the actor list tiles use, so the header and the list
@@ -43,10 +47,17 @@ class ActorDetailHeader extends StatelessWidget {
     final scheme = theme.colorScheme;
 
     final isPlayer = actor.isPlayer;
+    final isOrphan = actor.isOrphan;
     final id = actor.id;
+    // Orphans resolve by uniqueName (their loc-catalog key — the `orphan:` id
+    // sentinel would prettify into nonsense); NPCs resolve by GlobalId.
     final name = isPlayer
         ? l10n.tabPlayer
-        : localizedNpcName(locCatalog, lang, id ?? '');
+        : localizedNpcName(
+            locCatalog,
+            lang,
+            isOrphan ? actor.uniqueName : (id ?? ''),
+          );
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
@@ -54,7 +65,9 @@ class ActorDetailHeader extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Icon(
-            isPlayer ? Icons.person_outline : Icons.face_outlined,
+            isPlayer
+                ? Icons.person_outline
+                : (isOrphan ? Icons.help_outline : Icons.face_outlined),
             color: scheme.primary,
           ),
           const SizedBox(width: 10),
@@ -70,8 +83,10 @@ class ActorDetailHeader extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                 ),
                 // NPCs carry a long GlobalId; show it IN FULL (wrapping,
-                // selectable) so it is always readable. The player has none.
-                if (!isPlayer && id != null && id.isNotEmpty)
+                // selectable) so it is always readable. The player has none,
+                // and an orphan's `orphan:` sentinel is not a GlobalId —
+                // suppress the id line for both.
+                if (!isPlayer && !isOrphan && id != null && id.isNotEmpty)
                   Padding(
                     padding: const EdgeInsets.only(top: 2),
                     child: SelectableText(
