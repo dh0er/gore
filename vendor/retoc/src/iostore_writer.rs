@@ -1,5 +1,5 @@
 use crate::{
-    EIoChunkType, FPackageId, UEPath, UEPathBuf, align_usize,
+    EIoChunkType, FPackageId, UEPath, UEPathBuf, align_u64, align_usize,
     chunk_id::FIoChunkIdRaw,
     container_header::{EIoContainerHeaderVersion, FIoContainerHeader, StoreEntry},
 };
@@ -58,10 +58,11 @@ impl IoStoreWriter {
             cas_stream,
             toc,
             container_header,
-            // Default OFF: write raw/uncompressed blocks. The compression path is
-            // opt-in via `set_compress(true)` because the game silently ignores
-            // our compressed containers (unresolved Oodle framing/encoder issue),
-            // while uncompressed containers are proven to load in-game.
+            // Default OFF: write raw/uncompressed blocks, the path proven to
+            // load in-game. The compression path is opt-in via
+            // `set_compress(true)`; it now mirrors the base game's writer
+            // conventions (raw ContainerHeader/shader/script chunks, 1 KiB
+            // admission threshold, 16-aligned blocks) -- see `write_chunk`.
             compress: false,
         })
     }
@@ -88,6 +89,31 @@ impl IoStoreWriter {
 
         // Method index 1 == Oodle (registered in `new`). Index 0 stays "None" (raw).
         const OODLE_METHOD_INDEX: u8 = 1;
+        // Epic's writer never compresses a block whose uncompressed size is at
+        // or below 1 KiB: across the base container's 948,727 compressed blocks
+        // the minimum uncompressed size is exactly 1025. Stay inside that
+        // envelope -- the runtime has never been exercised on a tiny compressed
+        // block.
+        const MIN_COMPRESSIBLE_BLOCK: usize = 1025;
+
+        // Chunk types the engine reads assuming raw storage. The shipped base
+        // container stores EVERY block of these chunk types with method 0 even
+        // though the container itself is flagged Compressed (and the 7 MB
+        // ContainerHeader would compress heavily). The fatal case is the
+        // ContainerHeader: at mount time the runtime fetches
+        // align(uncompressed_length, 16) bytes of it in ONE read starting at the
+        // chunk's first block offset. The header is the LAST chunk in the .ucas
+        // (written by `finalize`), so a compressed -- smaller on disk -- header
+        // makes that read run past end-of-file; the read fails and the game
+        // silently ignores the entire container. Forcing these chunk types raw
+        // reproduces the base game's layout and keeps that mount read in-bounds.
+        let force_raw = matches!(
+            chunk_id.get_chunk_type(),
+            EIoChunkType::ContainerHeader
+                | EIoChunkType::ScriptObjects
+                | EIoChunkType::ShaderCodeLibrary
+                | EIoChunkType::ShaderCode
+        );
 
         let mut hasher = blake3::Hasher::new();
         let mut any_block_compressed = false;
@@ -101,10 +127,16 @@ impl IoStoreWriter {
                 // OPT-IN compression path. Try Oodle/Kraken (via gore-oodle) for
                 // this block, keeping the compressed bytes only when they shrink
                 // it (standard IoStore per-block raw fallback to method 0).
+                // Blocks of force-raw chunk types and blocks below the 1 KiB
+                // admission threshold skip the attempt and are stored raw (but
+                // still 16-aligned), matching the base game's writer.
+                let try_compress = !force_raw && block.len() >= MIN_COMPRESSIBLE_BLOCK;
                 let mut compressed: Vec<u8> = Vec::new();
-                compress(CompressionMethod::Oodle, block, &mut compressed)?;
+                if try_compress {
+                    compress(CompressionMethod::Oodle, block, &mut compressed)?;
+                }
 
-                let (payload, compression_method_index): (&[u8], u8) = if compressed.len() < block.len() {
+                let (payload, compression_method_index): (&[u8], u8) = if try_compress && compressed.len() < block.len() {
                     any_block_compressed = true;
                     (&compressed, OODLE_METHOD_INDEX)
                 } else {
@@ -213,10 +245,111 @@ pub fn dump_compressed_layout<P: AsRef<Path>>(toc_path: P) -> Result<(u8, Vec<u6
     Ok((flags, compressed_offsets))
 }
 
+/// Assert the mount-time read invariants the GAME enforces on a written
+/// container. retoc's own [`Toc::read`] is deliberately lenient -- it fetches
+/// each block by its COMPRESSED size -- so a round-trip through our reader
+/// cannot catch layout the runtime rejects. The shipping runtime instead:
+///
+/// 1. reads the ContainerHeader chunk with ONE read of
+///    `align(uncompressed_length, 16)` bytes at the chunk's first block file
+///    offset; if that span runs past the end of the `.ucas` the read fails and
+///    the container is silently ignored (no packages registered, no crash);
+/// 2. advances through compressed blocks by `align(compressed_size, 16)`, so a
+///    compressed block must sit at a 16-aligned offset and its padded span must
+///    be in-bounds;
+/// 3. has only ever seen special chunks (ContainerHeader / ScriptObjects /
+///    ShaderCodeLibrary / ShaderCode) stored raw, and never a compressed block
+///    with uncompressed size <= 1024 (base-container census over 992,548
+///    blocks) -- stay inside that envelope.
+///
+/// The per-block/per-chunk accessors are `pub(crate)`, so this lives in retoc
+/// (next to [`dump_compressed_layout`]) where tests and callers can reach it.
+pub fn verify_game_mount_invariants<P: AsRef<Path>>(toc_path: P) -> Result<()> {
+    use crate::ser::ReadExt;
+    use anyhow::ensure;
+    let toc_path = toc_path.as_ref();
+    let toc: Toc = Cursor::new(fs::read(toc_path)?).de()?;
+    let ucas_len = fs::metadata(toc_path.with_extension("ucas"))?.len();
+    let block_size = toc.compression_block_size as u64;
+
+    for (ci, chunk) in toc.chunks.iter().enumerate() {
+        let ol = &toc.chunk_offset_lengths[ci];
+        let chunk_type = chunk.get_chunk_type();
+        let force_raw = matches!(
+            chunk_type,
+            EIoChunkType::ContainerHeader
+                | EIoChunkType::ScriptObjects
+                | EIoChunkType::ShaderCodeLibrary
+                | EIoChunkType::ShaderCode
+        );
+        let first_block = (ol.get_offset() / block_size) as usize;
+        let block_count = (ol.get_length().div_ceil(block_size)) as usize;
+
+        for (bi, block) in toc.compression_blocks[first_block..first_block + block_count].iter().enumerate() {
+            let (off, csz, usz) = (block.get_offset(), block.get_compressed_size() as u64, block.get_uncompressed_size() as u64);
+            if block.get_compression_method_index() != 0 {
+                ensure!(!force_raw, "chunk {ci} ({chunk_type:?}) block {bi}: special chunk type must store every block raw");
+                ensure!(usz > 1024, "chunk {ci} block {bi}: compressed block with uncompressed size {usz} <= 1024");
+                ensure!(off % 16 == 0, "chunk {ci} block {bi}: compressed block offset {off} not 16-aligned");
+                ensure!(csz < usz, "chunk {ci} block {bi}: compressed block did not shrink ({csz} >= {usz})");
+                ensure!(off + align_u64(csz, 16) <= ucas_len, "chunk {ci} block {bi}: padded compressed span [{off}, {}) exceeds .ucas size {ucas_len}", off + align_u64(csz, 16));
+            } else {
+                ensure!(csz == usz, "chunk {ci} block {bi}: raw block sizes differ ({csz} != {usz})");
+                ensure!(off + csz <= ucas_len, "chunk {ci} block {bi}: raw span [{off}, {}) exceeds .ucas size {ucas_len}", off + csz);
+            }
+        }
+
+        // The single-shot mount read of the container header (invariant 1).
+        if chunk_type == EIoChunkType::ContainerHeader && block_count > 0 {
+            let first_offset = toc.compression_blocks[first_block].get_offset();
+            let read_end = first_offset + align_u64(ol.get_length(), 16);
+            ensure!(
+                read_end <= ucas_len,
+                "ContainerHeader chunk {ci}: mount-time read of align({}, 16) bytes at {first_offset} ends at {read_end}, past .ucas size {ucas_len}",
+                ol.get_length()
+            );
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
     use fs_err as fs;
+
+    /// The compressed write path must keep the game's mount-time reads
+    /// in-bounds: ContainerHeader stored raw, no sub-1-KiB compressed blocks,
+    /// 16-aligned compressed offsets. Guards against the regression where a
+    /// compressed ContainerHeader (the LAST chunk in the .ucas) made the
+    /// runtime's single-shot header read run past end-of-file, so the game
+    /// silently ignored the whole container.
+    #[test]
+    fn test_compressed_container_mount_invariants() -> Result<()> {
+        let dir = std::env::temp_dir().join(format!("retoc-writer-inv-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir)?;
+        let utoc = dir.join("inv.utoc");
+        let writer = IoStoreWriter::new(&utoc, EIoStoreTocVersion::PerfectHashWithOverflow, Some(EIoContainerHeaderVersion::OptionalSegmentPackages), "../../..".into())?;
+        let mut writer = writer.set_compress(true);
+
+        // Highly compressible block above the 1 KiB admission threshold: compressed.
+        writer.write_chunk(FIoChunkId::create(1, 0, EIoChunkType::ExportBundleData), None, &vec![0x42u8; 8192])?;
+        // Just as compressible, but at/below the threshold: must stay raw.
+        writer.write_chunk(FIoChunkId::create(2, 0, EIoChunkType::ExportBundleData), None, &vec![0x42u8; 512])?;
+        writer.finalize()?;
+
+        // Exactly one compressed block (the 8 KiB one; the tiny block and the
+        // ContainerHeader stay raw), container flagged Indexed|Compressed.
+        let (flags, comp_offsets) = dump_compressed_layout(&utoc)?;
+        assert_eq!(flags, 9, "container_flags must be Indexed|Compressed");
+        assert_eq!(comp_offsets.len(), 1, "only the 8 KiB block may be compressed");
+
+        verify_game_mount_invariants(&utoc)?;
+
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    }
 
     #[test]
     fn test_write_container() -> Result<()> {

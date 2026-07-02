@@ -56,8 +56,9 @@ pub enum TextureAction {
         #[arg(short = 'o', long)]
         out: PathBuf,
         /// Oodle-compress the .ucas blocks (opt-in). Default OFF: uncompressed
-        /// containers are proven to load in-game; compressed ones are currently
-        /// ignored by the game (unresolved Oodle framing issue).
+        /// containers are proven to load in-game. The compressed path follows
+        /// the base game's writer conventions (raw ContainerHeader, 1 KiB
+        /// admission threshold, 16-aligned blocks).
         #[arg(long)]
         compress: bool,
     },
