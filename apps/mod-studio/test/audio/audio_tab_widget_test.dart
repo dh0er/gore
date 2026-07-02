@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gore_mod/app/domain/ui_settings.dart';
+import 'package:gore_mod/audio/domain/audio_replacements_notifier.dart';
 import 'package:gore_mod/audio/domain/audio_samples_provider.dart';
 import 'package:gore_mod/audio/ui/audio_tab.dart';
 import 'package:gore_mod/core/mod_ffi.dart';
@@ -182,5 +183,42 @@ void main() {
       renderedOrder(['MUS_Zen_01', 'mus_battle_01', 'MUS_Ambient_01']),
       ['MUS_Ambient_01', 'mus_battle_01', 'MUS_Zen_01'],
     );
+  });
+
+  testWidgets('staged replacements panel scrolls instead of overflowing',
+      (tester) async {
+    await _pumpAudioTab(tester, {
+      'SFX.bank': [_sample('SFX_CREA_Wolf_Growl_01')],
+      'Music.bank': [],
+      'CINEMATICS.bank': [],
+      'VO.bank': [],
+    });
+
+    // Stage far more replacements than fit below the browser.
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(AudioTab)),
+      listen: false,
+    );
+    container.read(audioReplacementsProvider.notifier).loadAll([
+      for (var i = 0; i < 30; i++)
+        AudioReplacement(
+          bank: 'SFX.bank',
+          sample: 'SFX_Sample_$i',
+          wavPath: p.join('wavs', 'sample_$i.wav'),
+        ),
+    ]);
+    await tester.pumpAndSettle();
+
+    // Expanding must not overflow the tab (a RenderFlex overflow would fail
+    // the test); the entries render in a bounded scrollable list instead.
+    await tester.tap(find.text('Staged replacements (30)'));
+    await tester.pumpAndSettle();
+
+    final panelList = find.descendant(
+      of: find.byType(ExpansionTile),
+      matching: find.byType(ListView),
+    );
+    expect(panelList, findsOneWidget);
+    expect(tester.getSize(panelList).height, lessThanOrEqualTo(240));
   });
 }

@@ -517,28 +517,40 @@ class _StagedReplacementsPanel extends ConsumerWidget {
               ),
             )
           else
-            for (final r in entries)
-              ListTile(
-                dense: true,
-                leading: const Icon(Icons.audiotrack, size: 18),
-                title: Text(
-                  '${r.bank} • ${r.sample}',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                subtitle: Text(
-                  p.basename(r.wavPath),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                trailing: IconButton(
-                  icon: const Icon(Icons.delete_outline),
-                  tooltip: 'Remove',
-                  onPressed: () => ref
-                      .read(audioReplacementsProvider.notifier)
-                      .remove(r.key),
-                ),
+            // Cap the expanded area so many staged replacements scroll inside
+            // the panel instead of overflowing the tab (shrinkWrap keeps a
+            // short list at its natural height).
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 240),
+              child: ListView.builder(
+                shrinkWrap: true,
+                itemCount: entries.length,
+                itemBuilder: (context, index) {
+                  final r = entries[index];
+                  return ListTile(
+                    dense: true,
+                    leading: const Icon(Icons.audiotrack, size: 18),
+                    title: Text(
+                      '${r.bank} • ${r.sample}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    subtitle: Text(
+                      p.basename(r.wavPath),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    trailing: IconButton(
+                      icon: const Icon(Icons.delete_outline),
+                      tooltip: 'Remove',
+                      onPressed: () => ref
+                          .read(audioReplacementsProvider.notifier)
+                          .remove(r.key),
+                    ),
+                  );
+                },
               ),
+            ),
         ],
       ),
     );
