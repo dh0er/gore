@@ -240,6 +240,47 @@ void main() {
     expect(find.text('Vanilla module — not staged'), findsOneWidget);
   });
 
+  testWidgets('staged panel scrolls long lists instead of overflowing the tab',
+      (tester) async {
+    final notifier = ScriptModsNotifier();
+    for (var i = 0; i < 30; i++) {
+      notifier.setMod(ScriptMod(
+          op: ScriptOp.add,
+          moduleName: 'Mod$i',
+          relPath: 'Mods/Mod$i.as',
+          asPath: ''));
+    }
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          scriptModulesProvider.overrideWith((ref) async => const []),
+          scriptModsProvider.overrideWith((ref) => notifier),
+        ],
+        child: const MaterialApp(home: Scaffold(body: ScriptTab())),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    // Expanding must not overflow the page column (the framework turns a
+    // RenderFlex overflow into a test failure automatically).
+    await tester.tap(find.text('Staged script mods (30)'));
+    await tester.pumpAndSettle();
+
+    // The entries area is height-capped and lazily built: the first row is
+    // there, the last is beyond the cap and not built yet.
+    expect(find.text('Mod0'), findsOneWidget);
+    expect(find.text('Mod29'), findsNothing);
+
+    // The list scrolls INSIDE the panel to reach the last row. (Don't anchor
+    // the scrollable finder on a row widget — rows unbuild as they scroll out,
+    // which would empty the finder mid-scroll. With the browser showing the
+    // no-modules hint, the panel's ListView is the only Scrollable here.)
+    await tester.scrollUntilVisible(find.text('Mod29'), 80,
+        scrollable: find.byType(Scrollable).first);
+    expect(find.text('Mod29'), findsOneWidget);
+  });
+
   // Fix 3: loadProject treats the script relPath as untrusted (defense-in-depth, matching the
   // asPath guard + gore-as compile-side check) and drops mods whose relPath is empty/absolute/'..'.
   test('loadProject drops script mods with an unsafe relPath', () async {

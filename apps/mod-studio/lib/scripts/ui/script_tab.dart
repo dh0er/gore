@@ -487,47 +487,56 @@ class _StagedScriptsPanel extends ConsumerWidget {
               ),
             )
           else
-            for (final m in entries)
-              ListTile(
-                dense: true,
-                selected: m.key == selectedKey,
-                leading: Icon(m.op == ScriptOp.add
-                    ? Icons.add_box_outlined
-                    : Icons.edit_note_outlined),
-                title: Text(m.moduleName,
-                    maxLines: 1, overflow: TextOverflow.ellipsis),
-                subtitle: Builder(builder: (_) {
-                  final fresh = scriptCompileFresh(m);
-                  return Text.rich(
-                    TextSpan(children: [
-                      TextSpan(
-                          text: m.relPath,
-                          style: TextStyle(color: scheme.onSurfaceVariant)),
-                      const TextSpan(text: '  ·  '),
-                      TextSpan(
-                        text: fresh
-                            ? 'compiled'
-                            : 'not compiled / edited — recompile',
-                        style: TextStyle(
-                            color: fresh ? scheme.primary : scheme.error),
-                      ),
-                    ]),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 12),
-                  );
-                }),
-                trailing: IconButton(
-                  icon: const Icon(Icons.delete_outline, size: 18),
-                  tooltip: 'Remove',
-                  onPressed: () =>
-                      ref.read(scriptModsProvider.notifier).remove(m.key),
-                ),
-                onTap: () =>
-                    ref.read(_selectedModuleProvider.notifier).state = m.key,
+            // Cap the entries area so a long staged list scrolls inside the
+            // panel instead of growing unbounded under the page Column and
+            // overflowing the tab (the old fixed-width _StagedList scrolled).
+            // shrinkWrap keeps short lists at their natural height; the cap
+            // only bites once the rows exceed it.
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 240),
+              child: ListView.builder(
+                shrinkWrap: true,
+                itemCount: entries.length,
+                itemBuilder: (context, i) =>
+                    _stagedTile(ref, entries[i], selectedKey, scheme),
               ),
+            ),
         ],
       ),
+    );
+  }
+
+  Widget _stagedTile(
+      WidgetRef ref, ScriptMod m, String? selectedKey, ColorScheme scheme) {
+    final fresh = scriptCompileFresh(m);
+    return ListTile(
+      dense: true,
+      selected: m.key == selectedKey,
+      leading: Icon(m.op == ScriptOp.add
+          ? Icons.add_box_outlined
+          : Icons.edit_note_outlined),
+      title: Text(m.moduleName, maxLines: 1, overflow: TextOverflow.ellipsis),
+      subtitle: Text.rich(
+        TextSpan(children: [
+          TextSpan(
+              text: m.relPath,
+              style: TextStyle(color: scheme.onSurfaceVariant)),
+          const TextSpan(text: '  ·  '),
+          TextSpan(
+            text: fresh ? 'compiled' : 'not compiled / edited — recompile',
+            style: TextStyle(color: fresh ? scheme.primary : scheme.error),
+          ),
+        ]),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: const TextStyle(fontSize: 12),
+      ),
+      trailing: IconButton(
+        icon: const Icon(Icons.delete_outline, size: 18),
+        tooltip: 'Remove',
+        onPressed: () => ref.read(scriptModsProvider.notifier).remove(m.key),
+      ),
+      onTap: () => ref.read(_selectedModuleProvider.notifier).state = m.key,
     );
   }
 
