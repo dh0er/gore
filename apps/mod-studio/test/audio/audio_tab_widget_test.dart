@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -6,6 +8,18 @@ import 'package:gore_mod/audio/domain/audio_samples_provider.dart';
 import 'package:gore_mod/audio/ui/audio_tab.dart';
 import 'package:gore_mod/core/mod_ffi.dart';
 import 'package:gore_mod/l10n/app_localizations.dart';
+import 'package:path/path.dart' as p;
+
+/// Fake exe path built with host-native separators: gameRootFromExe resolves
+/// the root via p.dirname walking up to the `G1R` path segment (no existsSync
+/// hit is needed), and a `C:\...` literal never splits on POSIX runners.
+final String _fakeGameExePath = p.join(
+  Platform.isWindows ? r'C:\game' : '/game',
+  'G1R',
+  'Binaries',
+  'Win64',
+  'G1R-Win64-Shipping.exe',
+);
 
 /// In-memory settings store so the test never touches the real settings file.
 class _MemUiSettingsStore implements UiSettingsStore {
@@ -38,10 +52,7 @@ Future<void> _pumpAudioTab(
       overrides: [
         uiSettingsStoreProvider.overrideWith(
           (ref) => _MemUiSettingsStore(
-            const UiSettings(
-              gameExePath:
-                  r'C:\game\G1R\Binaries\Win64\G1R-Win64-Shipping.exe',
-            ),
+            UiSettings(gameExePath: _fakeGameExePath),
           ),
         ),
         audioSamplesProvider.overrideWith(
