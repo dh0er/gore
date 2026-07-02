@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
 import 'app/domain/ui_settings.dart';
 import 'app/game_paths.dart';
+import 'app/ui/keep_alive_tab.dart';
 import 'app/ui/window_chrome.dart';
 import 'catalog/domain/catalog_provider.dart';
 import 'catalog/domain/item_entry.dart';
@@ -39,7 +40,8 @@ class HomePage extends ConsumerStatefulWidget {
   ConsumerState<HomePage> createState() => _HomePageState();
 }
 
-class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver {
+class _HomePageState extends ConsumerState<HomePage>
+    with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
@@ -48,7 +50,9 @@ class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver
     // been extracted yet and the user hasn't been prompted before, offer to
     // extract it.
     WidgetsBinding.instance.addPostFrameCallback((_) => _maybeFirstRunPrompt());
-    WidgetsBinding.instance.addPostFrameCallback((_) => _maybeAutoDetectGamePath());
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => _maybeAutoDetectGamePath(),
+    );
   }
 
   /// On first run, if no game path is set, auto-detect the Steam install and save it.
@@ -99,7 +103,9 @@ class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver
 
   void _snack(String message) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   Future<void> _saveProject() async {
@@ -123,10 +129,17 @@ class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver
       builder: (ctx) => AlertDialog(
         title: const Text('Discard unsaved changes?'),
         content: const Text(
-            'You have staged edits that are not saved to a project. Continue and discard them?'),
+          'You have staged edits that are not saved to a project. Continue and discard them?',
+        ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Discard')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Discard'),
+          ),
         ],
       ),
     );
@@ -160,28 +173,32 @@ class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver
       }
     });
 
-    final selectedRaw    = ref.watch(_selectedItemProvider);
+    final selectedRaw = ref.watch(_selectedItemProvider);
     // Re-resolve the selection against the current catalog so that loading or
     // resetting a dump re-renders the editor with the refreshed item (same id,
     // new fields/defaults) instead of the stale CatalogItem object.
     final selected = selectedRaw == null
         ? null
-        : (ref.watch(catalogProvider).value
-                ?.firstWhereOrNull((i) => i.id == selectedRaw.id) ??
-            selectedRaw);
+        : (ref
+                  .watch(catalogProvider)
+                  .value
+                  ?.firstWhereOrNull((i) => i.id == selectedRaw.id) ??
+              selectedRaw);
     final overridesState = ref.watch(overridesProvider);
-    final dirty = overridesState.count > 0 ||
+    final dirty =
+        overridesState.count > 0 ||
         ref.watch(locEditsProvider).isDirty ||
         ref.watch(audioReplacementsProvider).count > 0 ||
         ref.watch(textureReplacementsProvider).count > 0 ||
         ref.watch(scriptModsProvider).count > 0;
     // Keep Build/Deploy reachable when a game is configured even with no staged edits, so the
     // dialog's Undeploy (restore *.gore-bak) stays available to GUI users.
-    final gameConfigured = gameRootFromExe(ref.watch(gameExePathProvider)) != null;
+    final gameConfigured =
+        gameRootFromExe(ref.watch(gameExePathProvider)) != null;
     final themeModeNotifier = ref.read(themeModeProvider.notifier);
-    final scheme         = Theme.of(context).colorScheme;
-    final isDark         = Theme.of(context).brightness == Brightness.dark;
-    final l10n           = AppLocalizations.of(context);
+    final scheme = Theme.of(context).colorScheme;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final l10n = AppLocalizations.of(context);
 
     return Scaffold(
       appBar: AppBar(
@@ -233,9 +250,9 @@ class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver
               label: const Text('Build / Deploy'),
               onPressed: (dirty || gameConfigured)
                   ? () => showDialog(
-                        context: context,
-                        builder: (_) => const BuildDeployDialog(),
-                      )
+                      context: context,
+                      builder: (_) => const BuildDeployDialog(),
+                    )
                   : null,
             ),
           ),
@@ -254,6 +271,11 @@ class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver
                   Expanded(
                     child: TabBar(
                       isScrollable: true,
+                      // Material 3 defaults scrollable tab bars to a 52px
+                      // leading inset (TabAlignment.startOffset); start flush
+                      // with just a small gap instead.
+                      tabAlignment: TabAlignment.start,
+                      padding: const EdgeInsetsDirectional.only(start: 4),
                       tabs: [
                         Tab(
                           icon: const Icon(Icons.inventory_2_outlined),
@@ -293,78 +315,86 @@ class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver
               child: TabBarView(
                 children: [
                   // Items: catalog browser + field editor.
-                  Row(
-                    children: [
-                      // Left: catalog browser
-                      SizedBox(
-                        width: 560,
-                        child: CatalogBrowser(
-                          selected: selected,
-                          onItemSelected: (item) => ref
-                              .read(_selectedItemProvider.notifier)
-                              .state = item,
+                  KeepAliveTab(
+                    child: Row(
+                      children: [
+                        // Left: catalog browser
+                        SizedBox(
+                          width: 560,
+                          child: CatalogBrowser(
+                            selected: selected,
+                            onItemSelected: (item) =>
+                                ref.read(_selectedItemProvider.notifier).state =
+                                    item,
+                          ),
                         ),
-                      ),
-                      const VerticalDivider(width: 1),
-                      // Centre: field editor. Cap the editing column width and
-                      // centre it so the inputs don't stretch across the whole
-                      // window on wide displays.
-                      Expanded(
-                        child: selected == null
-                            ? Center(
-                                child: Text(
-                                  l10n.selectAnItemToEdit,
-                                  style: TextStyle(
-                                      color: scheme.onSurfaceVariant),
-                                ),
-                              )
-                            : Align(
-                                alignment: Alignment.topCenter,
-                                child: ConstrainedBox(
-                                  constraints:
-                                      const BoxConstraints(maxWidth: 720),
-                                  child: FieldEditor(
-                                    item: selected,
-                                    displayName: displayNameForItem(
-                                      selected,
-                                      ref.watch(locCatalogProvider).value ??
-                                          const {},
-                                      gameLangByCode(
-                                          ref.watch(localeProvider)),
+                        const VerticalDivider(width: 1),
+                        // Centre: field editor. Cap the editing column width and
+                        // centre it so the inputs don't stretch across the whole
+                        // window on wide displays.
+                        Expanded(
+                          child: selected == null
+                              ? Center(
+                                  child: Text(
+                                    l10n.selectAnItemToEdit,
+                                    style: TextStyle(
+                                      color: scheme.onSurfaceVariant,
                                     ),
-                                    pendingOverrides: {
-                                      for (final e in overridesState.entries
-                                          .where((e) =>
-                                              e.classId == selected.id))
-                                        e.field: e,
-                                    },
-                                    onOverrideChanged: (entry) => ref
-                                        .read(overridesProvider.notifier)
-                                        .setOverride(entry),
+                                  ),
+                                )
+                              : Align(
+                                  alignment: Alignment.topCenter,
+                                  child: ConstrainedBox(
+                                    constraints: const BoxConstraints(
+                                      maxWidth: 720,
+                                    ),
+                                    child: FieldEditor(
+                                      item: selected,
+                                      displayName: displayNameForItem(
+                                        selected,
+                                        ref.watch(locCatalogProvider).value ??
+                                            const {},
+                                        gameLangByCode(
+                                          ref.watch(localeProvider),
+                                        ),
+                                      ),
+                                      pendingOverrides: {
+                                        for (final e
+                                            in overridesState.entries.where(
+                                              (e) => e.classId == selected.id,
+                                            ))
+                                          e.field: e,
+                                      },
+                                      onOverrideChanged: (entry) => ref
+                                          .read(overridesProvider.notifier)
+                                          .setOverride(entry),
+                                    ),
                                   ),
                                 ),
-                              ),
-                      ),
-                    ],
+                        ),
+                      ],
+                    ),
                   ),
                   // Dialoge: localized dialog/bark line editor.
-                  const DialogeTab(),
+                  const KeepAliveTab(child: DialogeTab()),
                   // Audio: FMOD bank sample browser + replacement.
-                  const AudioTab(),
+                  const KeepAliveTab(child: AudioTab()),
                   // Textures: texture asset browser + replacement.
-                  const TextureTab(),
+                  const KeepAliveTab(child: TextureTab()),
                   // AngelScript: stage .as mods, compile, splice.
-                  const ScriptTab(),
+                  const KeepAliveTab(child: ScriptTab()),
                   // Changes: all staged item/loc/audio changes, centred.
-                  Align(
-                    alignment: Alignment.topCenter,
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 600),
-                      child: const OverridesPanel(),
+                  KeepAliveTab(
+                    child: Align(
+                      alignment: Alignment.topCenter,
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 600),
+                        child: const OverridesPanel(),
+                      ),
                     ),
                   ),
                   // Settings.
-                  const SettingsTab(),
+                  const KeepAliveTab(child: SettingsTab()),
                 ],
               ),
             ),
@@ -374,4 +404,3 @@ class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver
     );
   }
 }
-
