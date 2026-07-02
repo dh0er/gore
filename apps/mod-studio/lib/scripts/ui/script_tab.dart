@@ -15,9 +15,10 @@ import '../../core/providers.dart';
 import '../domain/script_mods_notifier.dart';
 import '../domain/script_modules_provider.dart';
 
-/// Selected script path: a vanilla module's game-relative path (tree leaf) or a
-/// staged mod's key (= relPath). One store for both — they share the key space,
-/// so selecting a staged edit highlights the same leaf in the vanilla tree.
+/// Selected script path: a browse TREE path (tree/flat-list taps) or a staged
+/// mod's key = REAL relPath (staged-panel taps, staging). The two spaces are
+/// identical except for collision-disambiguated leaves; `_selectedTreePath`
+/// maps a real relPath back onto its first owning leaf for highlighting.
 final _selectedModuleProvider = StateProvider<String?>((ref) => null);
 
 /// Game-relative path for a vanilla module. Some cache entries have no recorded
@@ -56,10 +57,16 @@ class _ScriptTabState extends ConsumerState<ScriptTab> {
   List<ScriptModuleInfo>? _cacheSource;
   List<String>? _treePaths;
   Map<String, ScriptModuleInfo>? _byTreePath;
+  // Real relPath → its FIRST owning leaf's tree path (colliding modules share
+  // one real path; the first occurrence keeps it pristine).
+  Map<String, String>? _treePathByRelPath;
   List<_ModuleEntry>? _searchEntries;
   // Search-match memo, valid per (query, modules identity); cleared on reload.
   String? _matchQuery;
   List<_ModuleEntry>? _matchResult;
+  // Marked-leaf memo, valid per (staged items identity, modules identity).
+  Object? _markedSource;
+  Set<String>? _markedTreePaths;
 
   @override
   void dispose() {
@@ -78,22 +85,54 @@ class _ScriptTabState extends ConsumerState<ScriptTab> {
     // always uses the module's REAL relPath; only the browse path differs.
     final treePaths = <String>[];
     final byTreePath = <String, ScriptModuleInfo>{};
+    final treePathByRelPath = <String, String>{};
     final entries = <_ModuleEntry>[];
     for (final m in modules) {
-      var path = _moduleRelPath(m);
+      final real = _moduleRelPath(m);
+      var path = real;
       for (var n = 2; byTreePath.containsKey(path); n++) {
-        path = _suffixedPath(_moduleRelPath(m), n);
+        path = _suffixedPath(real, n);
       }
       treePaths.add(path);
       byTreePath[path] = m;
+      treePathByRelPath.putIfAbsent(real, () => path);
       entries.add(
           _ModuleEntry(m, path, m.name.toLowerCase(), path.toLowerCase()));
     }
     _treePaths = treePaths;
     _byTreePath = byTreePath;
+    _treePathByRelPath = treePathByRelPath;
     _searchEntries = entries;
     _matchQuery = null;
     _matchResult = null;
+    _markedSource = null;
+    _markedTreePaths = null;
+  }
+
+  /// The tree leaf for the current selection. The selection store mixes key
+  /// spaces — browser taps store TREE paths, while the staged panel and
+  /// staging itself store REAL relPaths: known tree paths pass through, real
+  /// relPaths map to their first owning leaf (all colliding leaves share one
+  /// staging key anyway, so "the first" is the only sensible highlight).
+  String? _selectedTreePath(String? selectedKey) {
+    if (selectedKey == null) return null;
+    if (_byTreePath!.containsKey(selectedKey)) return selectedKey;
+    return _treePathByRelPath![selectedKey];
+  }
+
+  /// Tree paths whose module's REAL relPath is staged. Staged keys are real
+  /// relPaths, so disambiguated leaves (and every leaf sharing a staged real
+  /// path) need this indirection to show their marker. Memoized per (staged
+  /// items identity, modules identity — the latter reset by [_refreshCaches]).
+  Set<String> _markedFor(ScriptModsState staged) {
+    if (!identical(_markedSource, staged.items) || _markedTreePaths == null) {
+      _markedSource = staged.items;
+      _markedTreePaths = {
+        for (final e in _searchEntries!)
+          if (staged.items.containsKey(_moduleRelPath(e.module))) e.treePath,
+      };
+    }
+    return _markedTreePaths!;
   }
 
   /// 'Dir/Foo.as' + n → 'Dir/Foo (n).as' (suffix before the extension).
@@ -176,6 +215,10 @@ class _ScriptTabState extends ConsumerState<ScriptTab> {
     }
     final matches =
         _query.isEmpty ? const <_ModuleEntry>[] : _matchesFor(_query);
+    // Staged keys are REAL relPaths — map both the marker set and the selected
+    // highlight into tree-path space so disambiguated leaves behave.
+    final marked = _markedFor(staged);
+    final selectedTreePath = _selectedTreePath(selectedKey);
     return Column(
       children: [
         Padding(
@@ -210,13 +253,14 @@ class _ScriptTabState extends ConsumerState<ScriptTab> {
                 offstage: _query.isNotEmpty,
                 child: PathTreeBrowser(
                   paths: _treePaths!,
-                  selectedPath: selectedKey,
+                  selectedPath: selectedTreePath,
                   onSelect: _select,
                   leafIcon: Icons.description_outlined,
-                  markedPaths: staged.items.keys.toSet(),
+                  markedPaths: marked,
                 ),
               ),
-              if (_query.isNotEmpty) _flatList(matches, staged, selectedKey),
+              if (_query.isNotEmpty)
+                _flatList(matches, marked, selectedTreePath),
             ],
           ),
         ),
@@ -231,20 +275,22 @@ class _ScriptTabState extends ConsumerState<ScriptTab> {
     );
   }
 
-  Widget _flatList(
-      List<_ModuleEntry> matches, ScriptModsState staged, String? selectedKey) {
+  Widget _flatList(List<_ModuleEntry> matches, Set<String> marked,
+      String? selectedTreePath) {
     return ListView.builder(
       itemCount: matches.length,
       itemBuilder: (c, i) {
         final e = matches[i];
         return ListTile(
           dense: true,
-          selected: e.treePath == selectedKey,
+          selected: e.treePath == selectedTreePath,
           title: Text(e.module.name,
               maxLines: 1, overflow: TextOverflow.ellipsis),
           subtitle:
               Text(e.treePath, maxLines: 1, overflow: TextOverflow.ellipsis),
-          trailing: staged.items.containsKey(e.treePath)
+          // [marked] is keyed by tree path but derived from the module's REAL
+          // relPath (the staging key), so disambiguated hits mark correctly.
+          trailing: marked.contains(e.treePath)
               ? const Icon(Icons.check, size: 16)
               : null,
           onTap: () => _select(e.treePath),
@@ -270,14 +316,17 @@ class _ScriptTabState extends ConsumerState<ScriptTab> {
     }
     // Not staged: either a vanilla module (show info + Edit) or a dangling
     // selection (e.g. a staged 'add' that was removed — its path isn't in the
-    // vanilla tree, so fall back to the placeholder).
-    final module = _byTreePath?[selectedKey];
+    // vanilla tree, so fall back to the placeholder). Resolve through the same
+    // tree-path mapping as the browser so a real-relPath selection (from the
+    // staged panel / post-unstage) lands on the leaf's module.
+    final treePath = _selectedTreePath(selectedKey);
+    final module = treePath == null ? null : _byTreePath?[treePath];
     if (module == null) return placeholder;
     // Keyed by the TREE path so the emit-busy state resets when the selection
     // changes; the detail itself works on the module's REAL relPath (identical
     // except for collision-disambiguated leaves).
     return _VanillaModuleDetail(
-        key: ValueKey(selectedKey),
+        key: ValueKey(treePath),
         module: module,
         relPath: _moduleRelPath(module));
   }

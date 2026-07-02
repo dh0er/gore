@@ -157,6 +157,35 @@ void main() {
     expect(staged.values.single.op, ScriptOp.edit);
     // The staged detail replaces the vanilla card.
     expect(find.text('Edit existing module'), findsOneWidget);
+
+    // Marker semantics: the staged key is the REAL relPath, which BOTH leaves
+    // share (their staging keys collide for such data) — so the check marker
+    // shows on every leaf whose real relPath is staged, disambiguated or not.
+    for (final leaf in ['Foo.as', 'Foo (2).as']) {
+      final tile =
+          find.ancestor(of: find.text(leaf), matching: find.byType(ListTile));
+      expect(find.descendant(of: tile, matching: find.byIcon(Icons.check)),
+          findsOneWidget, reason: 'leaf $leaf should be check-marked');
+    }
+    // The selection (the staged mod's REAL relPath) highlights its first
+    // owning leaf in the tree.
+    expect(
+      tester
+          .widget<ListTile>(find.ancestor(
+              of: find.text('Foo.as'), matching: find.byType(ListTile)))
+          .selected,
+      isTrue,
+    );
+
+    // The flat search list uses the same real-relPath marker semantics: both
+    // hits (matched via their tree paths) carry the staged check.
+    await tester.enterText(find.byType(TextField), 'foo');
+    await tester.pump();
+    expect(
+      find.descendant(
+          of: find.byType(ListTile), matching: find.byIcon(Icons.check)),
+      findsNWidgets(2),
+    );
   });
 
   testWidgets('staged panel lists the mod with compile status, tapping selects '
