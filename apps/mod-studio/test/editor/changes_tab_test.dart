@@ -20,6 +20,8 @@ void main() {
   const locCatalog = <String, Map<String, String>>{
     'info_aaron_001': {'de_A': 'Hallo', 'en_A': 'Hello'},
     'info_bob_001': {'de_A': 'Moin', 'en_A': 'Hi'},
+    // A non-dialog loc id (item name): never part of the Dialogs section.
+    'itfo_apple_name': {'de_A': 'Apfel', 'en_A': 'Apple'},
   };
   const stagedTexture = TextureReplacement(
     asset: 'Game/Textures/T_Apple_D',
@@ -113,6 +115,48 @@ void main() {
     expect(find.text('Apple'), findsOneWidget);
     expect(find.text('Sword'), findsNothing);
     expect(find.text('Select an item to edit its fields.'), findsOneWidget);
+  });
+
+  testWidgets('non-dialog loc edits count toward All but not Dialogs',
+      (tester) async {
+    final container = makeContainer();
+    addTearDown(container.dispose);
+    // Stage an item-NAME loc edit (non-dialog prefix) on top of the fixture.
+    container
+        .read(locEditsProvider.notifier)
+        .setEdit('itfo_apple_name', 'de_A', 'Superapfel');
+    await pumpHarness(tester, container);
+
+    // entryCount (All / OverridesPanel header) includes it, Dialogs does not.
+    expect(find.text('All (4)'), findsOneWidget);
+    expect(find.text('Changes (4)'), findsOneWidget);
+    expect(find.text('Dialogs (1)'), findsOneWidget);
+
+    // The filtered dialog view doesn't surface it either.
+    await tester.tap(find.text('Dialogs (1)'));
+    await tester.pumpAndSettle();
+    expect(find.text('Aaron (1)'), findsOneWidget);
+    expect(find.text('itfo_apple_name'), findsNothing);
+  });
+
+  testWidgets('a dialog id edited in two languages counts once in Dialogs',
+      (tester) async {
+    final container = makeContainer();
+    addTearDown(container.dispose);
+    // Second language for the already-staged info_aaron_001 edit.
+    container
+        .read(locEditsProvider.notifier)
+        .setEdit('info_aaron_001', 'en_A', 'Howdy');
+    await pumpHarness(tester, container);
+
+    // All counts id x language pairs (2), Dialogs counts distinct ids (1).
+    expect(find.text('All (4)'), findsOneWidget);
+    expect(find.text('Dialogs (1)'), findsOneWidget);
+
+    await tester.tap(find.text('Dialogs (1)'));
+    await tester.pumpAndSettle();
+    expect(find.text('Aaron (1)'), findsOneWidget);
+    expect(find.text('info_aaron_001'), findsOneWidget);
   });
 
   testWidgets('counts update live after un-staging through the notifiers',

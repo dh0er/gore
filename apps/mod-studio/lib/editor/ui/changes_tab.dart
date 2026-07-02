@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -6,6 +7,7 @@ import '../../audio/domain/audio_replacements_notifier.dart';
 import '../../audio/ui/audio_tab.dart';
 import '../../catalog/ui/items_tab.dart';
 import '../../catalog/ui/sidebar_tile.dart';
+import '../../dialog/domain/dialog_catalog_provider.dart';
 import '../../dialog/ui/dialoge_tab.dart';
 import '../../l10n/app_localizations.dart';
 import '../../loc/domain/loc_edits_notifier.dart';
@@ -33,10 +35,32 @@ class ChangesTab extends ConsumerStatefulWidget {
 class _ChangesTabState extends ConsumerState<ChangesTab> {
   _ChangesSection _section = _ChangesSection.all;
 
+  /// Distinct dialog loc ids among the staged loc edits — drives BOTH the
+  /// Dialoge sidebar count and the [DialogeTab.onlyIds] filter, so the two
+  /// can't disagree: non-dialog loc edits (e.g. item names staged via the
+  /// field editor) are excluded from this section and stay reviewable under
+  /// "All", and an id edited in several languages counts once.
+  ///
+  /// Cached in state behind a content compare: [locEditsProvider] emits a
+  /// new edits map per keystroke even when the edited ID SET is unchanged,
+  /// and a stable set identity lets the dialog browser's [DialogRowsMemo]
+  /// skip re-scanning the catalog on those rebuilds.
+  Set<String> _dialogIds = const {};
+
+  Set<String> _dialogIdsFor(LocEditsState locState) {
+    final ids = <String>{
+      for (final id in locState.edits.keys)
+        if (isDialogLocId(id)) id,
+    };
+    if (!setEquals(ids, _dialogIds)) _dialogIds = ids;
+    return _dialogIds;
+  }
+
   @override
   Widget build(BuildContext context) {
     final overridesState = ref.watch(overridesProvider);
     final locState = ref.watch(locEditsProvider);
+    final dialogIds = _dialogIdsFor(locState);
     final audioState = ref.watch(audioReplacementsProvider);
     final textureState = ref.watch(textureReplacementsProvider);
     final scriptState = ref.watch(scriptModsProvider);
@@ -73,7 +97,7 @@ class _ChangesTabState extends ConsumerState<ChangesTab> {
         section: _ChangesSection.dialogs,
         icon: Icons.forum_outlined,
         label: l10n.tabDialogs,
-        count: locState.entryCount,
+        count: dialogIds.length,
       ),
       (
         section: _ChangesSection.audio,
@@ -128,12 +152,12 @@ class _ChangesTabState extends ConsumerState<ChangesTab> {
         // trade-off is that a filtered view's local UI state (search text,
         // tree expansion) resets on section switch — acceptable for a
         // review surface; the main tabs keep their own state independently.
-        Expanded(child: _buildContent(overridesState, locState)),
+        Expanded(child: _buildContent(overridesState, dialogIds)),
       ],
     );
   }
 
-  Widget _buildContent(OverridesState overridesState, LocEditsState locState) {
+  Widget _buildContent(OverridesState overridesState, Set<String> dialogIds) {
     switch (_section) {
       case _ChangesSection.all:
         // The flat all-domains list, centred like the previous Changes tab.
@@ -149,7 +173,7 @@ class _ChangesTabState extends ConsumerState<ChangesTab> {
           onlyIds: {for (final e in overridesState.entries) e.classId},
         );
       case _ChangesSection.dialogs:
-        return DialogeTab(onlyIds: locState.edits.keys.toSet());
+        return DialogeTab(onlyIds: dialogIds);
       // The install-bound views keep the main tabs' GamePathScope so a game
       // path change drops any subtree state tied to the previous install.
       case _ChangesSection.audio:

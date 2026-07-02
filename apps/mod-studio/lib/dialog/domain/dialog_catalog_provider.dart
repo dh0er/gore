@@ -33,7 +33,8 @@ class DialogGroupRow extends DialogRow {
   /// Whether this is a bark group (`gvl_`/`svm_`) vs a conversation group.
   final bool isBark;
 
-  /// Number of line rows in this group (before filtering).
+  /// Number of line rows in this group. When [buildDialogRows] was given an
+  /// `onlyIds` filter, this counts only the included lines.
   final int lineCount;
 
   /// Stable key identifying this group; its line rows carry the same
@@ -76,6 +77,16 @@ String _leadingToken(String id) {
   return i < 0 ? id : id.substring(0, i);
 }
 
+/// Whether a (lowercased) loc id is a dialog/bark line by prefix — the same
+/// per-entry test [buildDialogRows] applies. Used by the Changes tab so its
+/// Dialoge count/filter cover exactly the ids the dialog browser can show
+/// (item-name and other non-dialog loc edits are excluded).
+bool isDialogLocId(String id) {
+  final token = _leadingToken(id);
+  return _kConversationPrefixes.contains(token) ||
+      _kBarkPrefixes.contains(token);
+}
+
 /// Second underscore token of [id], the speaker (`info_aaron_001` -> `aaron`,
 /// `gvl_g1hero_x` -> `g1hero`). Falls back to the whole id when absent.
 String _speakerToken(String id) {
@@ -105,10 +116,8 @@ List<DialogRow> buildDialogRows(
   final groups = <String, _DialogGroup>{};
   for (final id in catalog.keys) {
     if (onlyIds != null && !onlyIds.contains(id)) continue;
-    final token = _leadingToken(id);
-    final isConv = _kConversationPrefixes.contains(token);
-    final isBark = _kBarkPrefixes.contains(token);
-    if (!isConv && !isBark) continue;
+    if (!isDialogLocId(id)) continue;
+    final isBark = _kBarkPrefixes.contains(_leadingToken(id));
     final speaker = _speakerToken(id);
     final key = _encodeGroupKey(isBark, speaker);
     (groups[key] ??= _DialogGroup(speaker: speaker, isBark: isBark)).ids.add(id);
@@ -134,6 +143,35 @@ List<DialogRow> buildDialogRows(
     }
   }
   return rows;
+}
+
+/// Identity-keyed memo around [buildDialogRows] for filtered (`onlyIds`)
+/// views.
+///
+/// The filtered dialog browser rebuilds on every staged-edit change —
+/// [locEditsProvider] emits per keystroke while editing — and each row build
+/// scans the whole catalog (~43k ids). Both inputs are treated as immutable
+/// values: callers keep the SAME instances while the content is unchanged
+/// (the Changes tab content-compares its dialog-id set before swapping it),
+/// so cheap identity comparison suffices as the cache key.
+class DialogRowsMemo {
+  Map<String, Map<String, String>>? _catalog;
+  Set<String>? _onlyIds;
+  List<DialogRow>? _rows;
+
+  /// Rows for ([catalog], [onlyIds]); returns the previously built list
+  /// instance when both arguments are identical to the last call's.
+  List<DialogRow> rowsFor(
+    Map<String, Map<String, String>> catalog,
+    Set<String> onlyIds,
+  ) {
+    if (!identical(catalog, _catalog) || !identical(onlyIds, _onlyIds)) {
+      _catalog = catalog;
+      _onlyIds = onlyIds;
+      _rows = buildDialogRows(catalog, onlyIds: onlyIds);
+    }
+    return _rows!;
+  }
 }
 
 /// Derives the dialog browser model from [locCatalogProvider] via

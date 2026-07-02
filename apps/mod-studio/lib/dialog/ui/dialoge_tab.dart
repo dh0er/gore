@@ -100,6 +100,10 @@ class _DialogBrowserState extends ConsumerState<_DialogBrowser> {
   final TextEditingController _searchController = TextEditingController();
   String _query = '';
 
+  /// Memoizes the filtered row build (see [DialogRowsMemo]) so per-keystroke
+  /// rebuilds while editing inside the Changes tab don't re-scan the catalog.
+  final DialogRowsMemo _rowsMemo = DialogRowsMemo();
+
   /// Key of the speaker group shown in the line list while not searching
   /// (see [DialogGroupRow.groupKey]). Null / vanished keys fall back to the
   /// selected line's group, then to the first group.
@@ -135,12 +139,13 @@ class _DialogBrowserState extends ConsumerState<_DialogBrowser> {
     final theme = Theme.of(context);
     final l10n = AppLocalizations.of(context);
     final catalog = ref.watch(locCatalogProvider).value ?? const {};
-    // Filtered views derive their rows locally so the shared unfiltered
-    // provider path stays untouched (and un-invalidated) for the main tab.
+    // Filtered views derive their rows locally (memoized on input identity)
+    // so the shared unfiltered provider path stays untouched (and
+    // un-invalidated) for the main tab.
     final onlyIds = widget.onlyIds;
     final allRows = onlyIds == null
         ? ref.watch(dialogRowsProvider)
-        : buildDialogRows(catalog, onlyIds: onlyIds);
+        : _rowsMemo.rowsFor(catalog, onlyIds);
     final query = _query.trim().toLowerCase();
     final searching = query.isNotEmpty;
     final editedIds = ref.watch(locEditsProvider).edits;

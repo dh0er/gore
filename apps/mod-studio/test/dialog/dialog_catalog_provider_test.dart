@@ -133,4 +133,70 @@ void main() {
       expect(unfiltered.whereType<DialogLineRow>(), hasLength(4));
     });
   });
+
+  group('isDialogLocId', () {
+    test('accepts dialog/bark prefixes, rejects everything else', () {
+      expect(isDialogLocId('info_aaron_001'), isTrue);
+      expect(isDialogLocId('dia_alice_001'), isTrue);
+      expect(isDialogLocId('gvl_zed_001'), isTrue);
+      expect(isDialogLocId('svm_guard_001'), isTrue);
+      expect(isDialogLocId('itfo_apple_name'), isFalse);
+      expect(isDialogLocId('text_menu_001'), isFalse);
+      // Whole-token match, not a substring prefix match.
+      expect(isDialogLocId('information_x'), isFalse);
+    });
+
+    test('agrees with buildDialogRows inclusion per id', () {
+      const catalog = <String, Map<String, String>>{
+        'info_aaron_001': {'de_A': 'Hallo'},
+        'svm_guard_001': {'de_A': 'Halt!'},
+        'itfo_apple_name': {'de_A': 'Apfel'},
+      };
+      final included = buildDialogRows(catalog)
+          .whereType<DialogLineRow>()
+          .map((l) => l.id)
+          .toSet();
+      for (final id in catalog.keys) {
+        expect(isDialogLocId(id), included.contains(id), reason: id);
+      }
+    });
+  });
+
+  group('DialogRowsMemo', () {
+    const catalog = <String, Map<String, String>>{
+      'info_aaron_001': {'de_A': 'Hallo'},
+      'info_bob_001': {'de_A': 'Moin'},
+    };
+
+    test('identical inputs return the identical rows list instance', () {
+      final memo = DialogRowsMemo();
+      final ids = {'info_aaron_001'};
+      final a = memo.rowsFor(catalog, ids);
+      final b = memo.rowsFor(catalog, ids);
+      expect(identical(a, b), isTrue);
+      expect(a.whereType<DialogLineRow>().single.id, 'info_aaron_001');
+    });
+
+    test('a new input identity rebuilds, even with equal content', () {
+      final memo = DialogRowsMemo();
+      final a = memo.rowsFor(catalog, {'info_aaron_001'});
+      final b = memo.rowsFor(catalog, {'info_aaron_001'});
+      expect(identical(a, b), isFalse);
+      // The rebuilt result is still correct.
+      expect(b.whereType<DialogLineRow>().single.id, 'info_aaron_001');
+    });
+
+    test('changing ids then reverting to a kept instance rebuilds once', () {
+      final memo = DialogRowsMemo();
+      final aaronOnly = {'info_aaron_001'};
+      final both = {'info_aaron_001', 'info_bob_001'};
+      final a = memo.rowsFor(catalog, aaronOnly);
+      final b = memo.rowsFor(catalog, both);
+      expect(b.whereType<DialogLineRow>(), hasLength(2));
+      // Memo holds only the last input pair, so the old set rebuilds fresh.
+      final c = memo.rowsFor(catalog, aaronOnly);
+      expect(identical(a, c), isFalse);
+      expect(c.whereType<DialogLineRow>().single.id, 'info_aaron_001');
+    });
+  });
 }
