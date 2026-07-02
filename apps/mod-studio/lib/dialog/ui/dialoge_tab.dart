@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
 
 import '../../app/domain/ui_settings.dart';
+import '../../catalog/ui/sidebar_tile.dart';
+import '../../l10n/app_localizations.dart';
 import '../../loc/domain/loc_catalog_provider.dart';
 import '../../loc/domain/loc_edits_notifier.dart';
 import '../../loc/game_lang.dart';
@@ -80,36 +82,24 @@ class _DialogBrowser extends ConsumerStatefulWidget {
 /// Stable key for a speaker group: `'${isBark}:${speaker}'`.
 String _groupKey(bool isBark, String speaker) => '$isBark:$speaker';
 
+/// Sidebar display label for a raw speaker token (`aaron` -> `Aaron`).
+String _speakerLabel(String speaker) {
+  if (speaker.isEmpty) return '(unknown)';
+  return speaker[0].toUpperCase() + speaker.substring(1);
+}
+
 class _DialogBrowserState extends ConsumerState<_DialogBrowser> {
   final TextEditingController _searchController = TextEditingController();
   String _query = '';
 
-  /// Groups the user expanded while NOT searching. Empty = collapsed by default.
-  final Set<String> _expanded = <String>{};
-
-  /// Groups the user explicitly collapsed WHILE searching. While searching,
-  /// matching groups are open by default, so this records the exceptions —
-  /// letting groups stay collapsible even with an active query.
-  final Set<String> _collapsed = <String>{};
+  /// Key of the speaker group shown in the line list while not searching
+  /// (see [_groupKey]). Null / vanished keys fall back to the first group.
+  String? _selectedGroupKey;
 
   @override
   void dispose() {
     _searchController.dispose();
     super.dispose();
-  }
-
-  /// Whether a group is open: default-collapsed (opt-in via [_expanded]) with no
-  /// query; default-open (opt-out via [_collapsed]) while searching.
-  bool _isOpen(String key, bool searching) =>
-      searching ? !_collapsed.contains(key) : _expanded.contains(key);
-
-  void _toggleGroup(DialogGroupRow row) {
-    final key = _groupKey(row.isBark, row.speaker);
-    final searching = _query.trim().isNotEmpty;
-    setState(() {
-      final set = searching ? _collapsed : _expanded;
-      if (!set.remove(key)) set.add(key);
-    });
   }
 
   /// Whether [id]'s catalog entry matches [query] by id substring or by any of
@@ -131,46 +121,34 @@ class _DialogBrowserState extends ConsumerState<_DialogBrowser> {
     return false;
   }
 
-  /// Flattened view: emit a group header for every group that has ≥1 qualifying
-  /// line (matching the query when searching, else any line), and that group's
-  /// (matching) line rows only when the group is open. Collapsing works in both
-  /// modes.
-  List<DialogRow> _visibleRows(
-    List<DialogRow> rows,
-    String query,
-    Map<String, Map<String, String>> catalog,
-    Map<String, Map<String, String>> edits,
-  ) {
-    final searching = query.isNotEmpty;
-    final out = <DialogRow>[];
-    DialogGroupRow? header;
-    var headerEmitted = false;
-    var open = false;
-    for (final row in rows) {
-      if (row is DialogGroupRow) {
-        header = row;
-        headerEmitted = false;
-        open = _isOpen(_groupKey(row.isBark, row.speaker), searching);
-      } else if (row is DialogLineRow) {
-        if (searching && !_matches(row.id, query, catalog, edits)) continue;
-        if (header != null && !headerEmitted) {
-          out.add(header);
-          headerEmitted = true;
-        }
-        if (open) out.add(row);
-      }
-    }
-    return out;
-  }
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final l10n = AppLocalizations.of(context);
     final catalog = ref.watch(locCatalogProvider).value ?? const {};
     final allRows = ref.watch(dialogRowsProvider);
     final query = _query.trim().toLowerCase();
+    final searching = query.isNotEmpty;
     final editedIds = ref.watch(locEditsProvider).edits;
-    final rows = _visibleRows(allRows, query, catalog, editedIds);
+
+    final groups = allRows.whereType<DialogGroupRow>().toList();
+
+    // Resolve selected group; fall back to the first group when the stored
+    // selection vanished (or nothing was selected yet).
+    var selectedKey = _selectedGroupKey;
+    if (!groups.any((g) => _groupKey(g.isBark, g.speaker) == selectedKey)) {
+      selectedKey = groups.isEmpty
+          ? null
+          : _groupKey(groups.first.isBark, groups.first.speaker);
+    }
+
+    // Searching: flat cross-group hit list. Otherwise: the selected group's lines.
+    final lines = allRows.whereType<DialogLineRow>();
+    final shownLines = searching
+        ? lines.where((l) => _matches(l.id, query, catalog, editedIds)).toList()
+        : lines
+            .where((l) => _groupKey(l.isBark, l.speaker) == selectedKey)
+            .toList();
 
     final lang = gameLangByCode(ref.watch(localeProvider));
     final selectedId = ref.watch(_selectedDialogIdProvider);
@@ -190,109 +168,92 @@ class _DialogBrowserState extends ConsumerState<_DialogBrowser> {
           ),
         ),
         Expanded(
-          child: rows.isEmpty
+          child: groups.isEmpty
               ? const Center(child: Text('No dialog lines match'))
-              : ListView.builder(
-                  itemCount: rows.length,
-                  itemBuilder: (context, index) {
-                    final row = rows[index];
-                    if (row is DialogGroupRow) {
-                      final expanded = _isOpen(
-                        _groupKey(row.isBark, row.speaker),
-                        query.isNotEmpty,
-                      );
-                      return _GroupHeader(
-                        row: row,
-                        expanded: expanded,
-                        onTap: () => _toggleGroup(row),
-                      );
-                    }
-                    final line = row as DialogLineRow;
-                    // Match the editor field exactly: the staged edit, else the value in THIS
-                    // language's target set — with NO English fallback. So the list preview shows
-                    // what editing/deploy actually change; a line empty in the current language
-                    // shows no preview (like its editor field), instead of misleading English copy.
-                    final set = primarySetFor(catalog, line.id, lang);
-                    final stagedText = editedIds[line.id]?[set];
-                    final langValue = catalog[line.id.toLowerCase()]?[set];
-                    final preview = stagedText ??
-                        ((langValue != null && langValue.trim().isNotEmpty)
-                            ? langValue
-                            : null);
-                    return ListTile(
-                      dense: true,
-                      selected: line.id == selectedId,
-                      selectedTileColor: theme.colorScheme.primaryContainer,
-                      leading: editedIds.containsKey(line.id)
-                          ? Icon(Icons.circle,
-                              size: 10, color: theme.colorScheme.primary)
-                          : const SizedBox(width: 10),
-                      title: Text(line.id,
-                          maxLines: 1, overflow: TextOverflow.ellipsis),
-                      subtitle: preview == null
-                          ? null
-                          : Text(preview,
-                              maxLines: 1, overflow: TextOverflow.ellipsis),
-                      onTap: () => ref
-                          .read(_selectedDialogIdProvider.notifier)
-                          .state = line.id,
-                    );
-                  },
+              : Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    if (!searching)
+                      SizedBox(
+                        width: 230,
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            color: theme.colorScheme.surfaceContainerLow,
+                          ),
+                          child: ListView(
+                            padding: const EdgeInsets.symmetric(vertical: 6),
+                            children: [
+                              for (final g in groups)
+                                SidebarTile(
+                                  icon: g.isBark
+                                      ? Icons.campaign_outlined
+                                      : Icons.forum_outlined,
+                                  label: l10n.categoryWithCount(
+                                      _speakerLabel(g.speaker), g.lineCount),
+                                  selected:
+                                      _groupKey(g.isBark, g.speaker) ==
+                                          selectedKey,
+                                  onTap: () => setState(() {
+                                    _selectedGroupKey =
+                                        _groupKey(g.isBark, g.speaker);
+                                  }),
+                                ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    const VerticalDivider(width: 1),
+                    Expanded(
+                      child: shownLines.isEmpty
+                          ? const Center(child: Text('No dialog lines match'))
+                          : ListView.builder(
+                              itemCount: shownLines.length,
+                              itemBuilder: (context, index) {
+                                final line = shownLines[index];
+                                // Match the editor field exactly: the staged edit, else the value
+                                // in THIS language's target set — with NO English fallback. So the
+                                // list preview shows what editing/deploy actually change; a line
+                                // empty in the current language shows no preview (like its editor
+                                // field), instead of misleading English copy.
+                                final set =
+                                    primarySetFor(catalog, line.id, lang);
+                                final stagedText = editedIds[line.id]?[set];
+                                final langValue =
+                                    catalog[line.id.toLowerCase()]?[set];
+                                final preview = stagedText ??
+                                    ((langValue != null &&
+                                            langValue.trim().isNotEmpty)
+                                        ? langValue
+                                        : null);
+                                return ListTile(
+                                  dense: true,
+                                  selected: line.id == selectedId,
+                                  selectedTileColor:
+                                      theme.colorScheme.primaryContainer,
+                                  leading: editedIds.containsKey(line.id)
+                                      ? Icon(Icons.circle,
+                                          size: 10,
+                                          color: theme.colorScheme.primary)
+                                      : const SizedBox(width: 10),
+                                  title: Text(line.id,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis),
+                                  subtitle: preview == null
+                                      ? null
+                                      : Text(preview,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis),
+                                  onTap: () => ref
+                                      .read(_selectedDialogIdProvider.notifier)
+                                      .state = line.id,
+                                );
+                              },
+                            ),
+                    ),
+                  ],
                 ),
         ),
       ],
-    );
-  }
-}
-
-class _GroupHeader extends StatelessWidget {
-  const _GroupHeader({
-    required this.row,
-    required this.expanded,
-    required this.onTap,
-  });
-  final DialogGroupRow row;
-  final bool expanded;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return InkWell(
-      onTap: onTap,
-      child: Container(
-        color: theme.colorScheme.surfaceContainerHigh,
-        padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-        child: Row(
-          children: [
-            Icon(
-              expanded ? Icons.expand_more : Icons.chevron_right,
-              size: 18,
-              color: theme.colorScheme.onSurfaceVariant,
-            ),
-            const SizedBox(width: 4),
-            Icon(
-              row.isBark ? Icons.campaign_outlined : Icons.forum_outlined,
-              size: 16,
-              color: theme.colorScheme.onSurfaceVariant,
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                row.speaker.isEmpty ? '(unknown)' : row.speaker,
-                style: theme.textTheme.titleSmall,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-            Text(
-              row.isBark ? 'bark · ${row.lineCount}' : '${row.lineCount}',
-              style: theme.textTheme.labelSmall
-                  ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-            ),
-          ],
-        ),
-      ),
     );
   }
 }

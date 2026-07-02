@@ -1,0 +1,39 @@
+import 'package:flutter_test/flutter_test.dart';
+import 'package:gore_mod/dialog/domain/dialog_catalog_provider.dart';
+
+void main() {
+  group('buildDialogRows', () {
+    test('line rows carry bark flag matching their group', () {
+      final rows = buildDialogRows({
+        'info_aaron_001': {'de_A': 'Hallo'},
+        'gvl_aaron_002': {'de_A': 'Weg da'},
+      });
+      final lines = rows.whereType<DialogLineRow>().toList();
+      expect(lines.singleWhere((l) => l.id == 'info_aaron_001').isBark, false);
+      expect(lines.singleWhere((l) => l.id == 'gvl_aaron_002').isBark, true);
+    });
+
+    test('conversation groups precede bark groups, speakers alphabetical', () {
+      final rows = buildDialogRows({
+        'gvl_zed_001': {'de_A': 'z'},
+        'info_bob_001': {'de_A': 'b'},
+        'dia_alice_002': {'de_A': 'a2'},
+        'dia_alice_001': {'de_A': 'a1'},
+        'text_menu_001': {'de_A': 'excluded'},
+      });
+      final groups = rows.whereType<DialogGroupRow>().toList();
+      expect(
+        groups.map((g) => '${g.isBark}:${g.speaker}').toList(),
+        ['false:alice', 'false:bob', 'true:zed'],
+      );
+      expect(groups.first.lineCount, 2);
+      // Lines are id-sorted within their group.
+      final aliceIds = rows
+          .whereType<DialogLineRow>()
+          .where((l) => l.speaker == 'alice')
+          .map((l) => l.id)
+          .toList();
+      expect(aliceIds, ['dia_alice_001', 'dia_alice_002']);
+    });
+  });
+}

@@ -34,13 +34,20 @@ class DialogGroupRow extends DialogRow {
 
 /// A single dialog line row.
 class DialogLineRow extends DialogRow {
-  const DialogLineRow({required this.id, required this.speaker});
+  const DialogLineRow({
+    required this.id,
+    required this.speaker,
+    required this.isBark,
+  });
 
   /// The (lowercased) loc id.
   final String id;
 
   /// The owning speaker group.
   final String speaker;
+
+  /// Whether the owning group is a bark group (`gvl_`/`svm_`).
+  final bool isBark;
 }
 
 /// A speaker group with its lines, used to build the flattened view.
@@ -67,11 +74,11 @@ String _speakerToken(String id) {
   return id.substring(first + 1, second);
 }
 
-/// Derives the dialog browser model from [locCatalogProvider]: the flattened
-/// list of group-header + line rows, conversation groups first, then bark
-/// groups, each alphabetical by speaker. Lines within a group are sorted by id.
-final dialogRowsProvider = Provider<List<DialogRow>>((ref) {
-  final catalog = ref.watch(locCatalogProvider).value ?? const {};
+/// Pure grouping logic behind [dialogRowsProvider]: builds the flattened list
+/// of group-header + line rows from a loc catalog, conversation groups first,
+/// then bark groups, each alphabetical by speaker. Lines within a group are
+/// sorted by id.
+List<DialogRow> buildDialogRows(Map<String, Map<String, String>> catalog) {
   if (catalog.isEmpty) return const [];
 
   // group by (isBark, speaker)
@@ -102,8 +109,15 @@ final dialogRowsProvider = Provider<List<DialogRow>>((ref) {
       lineCount: g.ids.length,
     ));
     for (final id in g.ids) {
-      rows.add(DialogLineRow(id: id, speaker: g.speaker));
+      rows.add(DialogLineRow(id: id, speaker: g.speaker, isBark: g.isBark));
     }
   }
   return rows;
+}
+
+/// Derives the dialog browser model from [locCatalogProvider] via
+/// [buildDialogRows].
+final dialogRowsProvider = Provider<List<DialogRow>>((ref) {
+  final catalog = ref.watch(locCatalogProvider).value ?? const {};
+  return buildDialogRows(catalog);
 });
