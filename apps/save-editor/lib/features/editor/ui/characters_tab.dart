@@ -129,35 +129,51 @@ class CharactersTab extends ConsumerWidget {
       ],
     );
 
-    // Ereignisse (events) are keyed by GlobalId. The player's events live
-    // under the save's own Hero ACTOR GlobalId, stashed in
-    // `state.heroGlobalId` when the character index loads (null until then →
-    // the detail's own empty state; EventsDetail re-selects when the id
-    // arrives). Orphans have no GlobalId → null → empty state. The header
-    // always renders (the detail below shows its own empty state when the
-    // globalId is null), matching the other sub-tabs.
-    final Widget eventsBody = Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        ActorDetailHeader(actor: selected, locCatalog: locCatalog, lang: lang),
-        Expanded(
-          // Shared sub-tab layout (see class comment): outer padding around
-          // the detail's Card, matching Attribute/Inventar.
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
-            child: EventsDetail(
-              globalId: selected.isPlayer
-                  ? state.heroGlobalId
-                  : (selected.isOrphan ? null : selected.id),
-              notifier: notifier,
-              editable: progressionEditable,
-              reloadKey: inspection,
-              theme: theme,
-            ),
-          ),
-        ),
-      ],
-    );
+    // Ereignisse (events) are keyed by GlobalId. Orphans have no GlobalId (and
+    // so no events): like Attribute/Inventar they get the clean no-actor empty
+    // state instead of the detail (whose null branch is the misleading
+    // "select a character" prompt). The player's events live under the save's
+    // own Hero ACTOR GlobalId, stashed in `state.heroGlobalId` when the
+    // character index loads — until that id arrives, a spinner under the same
+    // ActorDetailHeader holds the pane (so the layout doesn't jump), then
+    // EventsDetail mounts with the id.
+    final Widget eventsBody = isOrphan
+        ? _MessagePane(
+            icon: Icons.history_outlined,
+            title: l10n.sectionEvents,
+            body: l10n.characterNoActorBody,
+          )
+        : Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              ActorDetailHeader(
+                actor: selected,
+                locCatalog: locCatalog,
+                lang: lang,
+              ),
+              Expanded(
+                child: selected.isPlayer && state.heroGlobalId == null
+                    // Character-index load still in flight: the hero id is not
+                    // known yet, so show progress rather than mounting the
+                    // detail with a null id.
+                    ? const Center(child: CircularProgressIndicator())
+                    // Shared sub-tab layout (see class comment): outer padding
+                    // around the detail's Card, matching Attribute/Inventar.
+                    : Padding(
+                        padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+                        child: EventsDetail(
+                          globalId: selected.isPlayer
+                              ? state.heroGlobalId
+                              : selected.id,
+                          notifier: notifier,
+                          editable: progressionEditable,
+                          reloadKey: inspection,
+                          theme: theme,
+                        ),
+                      ),
+              ),
+            ],
+          );
 
     return Row(
       crossAxisAlignment: CrossAxisAlignment.stretch,

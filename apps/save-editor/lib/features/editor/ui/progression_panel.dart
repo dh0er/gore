@@ -659,6 +659,15 @@ class _KnowledgeDetailState extends ConsumerState<KnowledgeDetail> {
   bool _loadingEntries = false;
   // Epoch guards the entries loader so a stale load never clobbers a newer one.
   int _entriesEpoch = 0;
+  // Armed by _ensureCharacterEntry right before its applyAddKnowledgeCharacter
+  // write refreshes the inspection. That refresh is SELF-INFLICTED: the
+  // in-flight first-add flow reloads entries itself and queues its pending
+  // edit against the fresh inspection AFTER didUpdateWidget fires for it —
+  // so didUpdateWidget must treat exactly that one reloadKey change as "ours"
+  // (no _pending.clear(), no re-select) instead of as staleness, or the
+  // user's typed entry is silently dropped next to a freshly created EMPTY
+  // knowledge set. Consumed by the first reloadKey change after arming.
+  bool _expectSelfRefresh = false;
   int _entryPageSize = _defaultPageSize;
   // Used during the cross-page duplicate check in _addEntry.
   bool _checkingDuplicate = false;
@@ -713,13 +722,22 @@ class _KnowledgeDetailState extends ConsumerState<KnowledgeDetail> {
     super.didUpdateWidget(oldWidget);
     final reloaded = widget.reloadKey != oldWidget.reloadKey;
     final selectionChanged = widget.uniqueName != oldWidget.uniqueName;
+    // A reload caused by _ensureCharacterEntry's own write (the first-add
+    // flow) is NOT staleness: that flow reloads entries itself and queues the
+    // pending add afterwards. Clearing _pending or re-selecting (which bumps
+    // _entriesEpoch and resets _entries) here would drop the in-flight add.
+    final selfRefresh = reloaded && _expectSelfRefresh;
     if (reloaded) {
-      // Pending edits belong to the old inspection — always clear them.
-      _pending.clear();
+      _expectSelfRefresh = false;
+      if (!selfRefresh) {
+        // Pending edits belong to the old inspection — clear them.
+        _pending.clear();
+      }
     }
     // Reload the selected character's entries when either the shared selection
-    // changed or a fresh inspection arrived (post-save reload / new file).
-    if (reloaded || selectionChanged) {
+    // changed or a fresh EXTERNAL inspection arrived (post-save reload / new
+    // file). The self-refresh reload happens inside _ensureCharacterEntry.
+    if ((reloaded && !selfRefresh) || selectionChanged) {
       _selectCharacter(widget.uniqueName);
     }
   }
@@ -837,21 +855,33 @@ class _KnowledgeDetailState extends ConsumerState<KnowledgeDetail> {
     // Only the benign "no knowledge yet" state may auto-create. An empty
     // setPath from any other cause (still loading, real error) must not write.
     if (!_noKnowledgeYet) return false;
+    // The write below refreshes the inspection (reloadKey changes). Arm the
+    // self-refresh marker BEFORE the write so didUpdateWidget — which can fire
+    // on any frame between here and the end of _addEntry — treats that one
+    // refresh as ours instead of clearing _pending / re-selecting the same
+    // character mid-flight.
+    _expectSelfRefresh = true;
     final ok = await widget.notifier.applyAddKnowledgeCharacter(character);
+    // A failed write never refreshed anything — disarm the marker so the NEXT
+    // (genuinely external) reload is not mistaken for a self-refresh.
+    if (!ok) _expectSelfRefresh = false;
     // The notifier sets state.error on failure; also guard unmount/reselect.
     if (!mounted || _selectedCharacter != character) return false;
     if (!ok) return false;
-    // applyAddKnowledgeCharacter refreshed the inspection (reloadKey changed),
-    // which will drive a didUpdateWidget reload too; reload here as well so the
+    // applyAddKnowledgeCharacter refreshed the inspection; reload here so the
     // populated setPath is available synchronously for the add below rather
-    // than depending on the parent rebuild's timing.
-    final epoch = ++_entriesEpoch;
+    // than depending on the parent rebuild's timing. Bump the epoch so any
+    // OLDER in-flight load can't clobber this fresh page — but do NOT compare
+    // against it below: a same-character refresh-driven reload bumping the
+    // epoch is not staleness for this flow. Only a real character switch or
+    // unmount (both covered by the guard) may abort the add.
+    ++_entriesEpoch;
     final page = await widget.notifier.loadKnowledgeEntries(
       character,
       offset: 0,
       limit: _entryPageSize,
     );
-    if (!mounted || _selectedCharacter != character || epoch != _entriesEpoch) {
+    if (!mounted || _selectedCharacter != character) {
       return false;
     }
     setState(() {
@@ -893,9 +923,12 @@ class _KnowledgeDetailState extends ConsumerState<KnowledgeDetail> {
       return;
     }
 
-    // Issue B: cross-page duplicate check via a server query.
+    // Issue B: cross-page duplicate check via a server query. The stale
+    // guards below check unmount and character switch ONLY — deliberately
+    // not the entries epoch: the first-add flow's own inspection refresh may
+    // reload the same character's entries mid-check, and that must not drop
+    // the add (see _expectSelfRefresh).
     final checkCharacter = character;
-    final checkEpoch = _entriesEpoch;
     setState(() {
       _checkingDuplicate = true;
       _addError = null;
@@ -913,9 +946,7 @@ class _KnowledgeDetailState extends ConsumerState<KnowledgeDetail> {
           limit: 200,
           offset: offset,
         );
-        if (!mounted ||
-            _selectedCharacter != checkCharacter ||
-            _entriesEpoch != checkEpoch) {
+        if (!mounted || _selectedCharacter != checkCharacter) {
           return;
         }
         if (checkPage.error != null) {
@@ -933,9 +964,7 @@ class _KnowledgeDetailState extends ConsumerState<KnowledgeDetail> {
       // Clear the lock on every exit path (unmount, stale, error).
       if (mounted) setState(() => _checkingDuplicate = false);
     }
-    if (!mounted ||
-        _selectedCharacter != checkCharacter ||
-        _entriesEpoch != checkEpoch) {
+    if (!mounted || _selectedCharacter != checkCharacter) {
       return;
     }
     // A failed query must NOT fall through to a pending add.
@@ -950,11 +979,15 @@ class _KnowledgeDetailState extends ConsumerState<KnowledgeDetail> {
       return;
     }
 
+    // Re-read the setPath AFTER all awaits above: on the first-add path
+    // _entries was replaced with the post-refresh page, so the queued edit
+    // addresses the FRESH inspection. If an interleaved reload left it empty
+    // (transient reset), do not queue a pathless edit — mirrors the Issue C
+    // guard above.
+    final setPath = _entries.setPath;
+    if (setPath.isEmpty) return;
     setState(() {
-      _pending[key] = KnowledgeEntryEdit.add(
-        setPath: _entries.setPath,
-        entry: trimmed,
-      );
+      _pending[key] = KnowledgeEntryEdit.add(setPath: setPath, entry: trimmed);
       _addController.clear();
       _addError = null;
     });

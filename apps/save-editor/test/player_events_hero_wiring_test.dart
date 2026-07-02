@@ -77,12 +77,12 @@ void main() {
   );
 
   testWidgets(
-    'a late-arriving hero GlobalId re-keys the already-open Events detail',
+    'a late-arriving hero GlobalId mounts the Events detail with the id',
     (tester) async {
       // The hero id is stashed only when the character index LOADS. If the
-      // user opens Events before that (slow decompress), the detail builds
-      // with a null id; when the id lands, EventsDetail.didUpdateWidget must
-      // re-select and load the Hero events — no manual refresh needed.
+      // user opens Events before that (slow decompress), the pane shows a
+      // spinner (no detail yet); when the id lands, the tab mounts
+      // EventsDetail with it and the Hero events load — no manual refresh.
       final core = _GatedHeroEventsCoreService();
       await pumpApp(tester, core);
 
@@ -97,15 +97,24 @@ void main() {
       await tester.pump(const Duration(milliseconds: 400));
       await tester.pump(const Duration(milliseconds: 400));
 
-      // No hero id yet → the detail's own empty state, and no events query.
-      expect(find.text('Select a character to see events'), findsOneWidget);
+      // No hero id yet → a progress spinner holds the events pane (NOT the
+      // detail's misleading "select a character" prompt), and no events query
+      // has been issued.
+      expect(find.text('Select a character to see events'), findsNothing);
+      expect(
+        find.descendant(
+          of: find.byType(TabBarView),
+          matching: find.byType(CircularProgressIndicator),
+        ),
+        findsWidgets,
+      );
       expect(
         core.requests.where((r) => r.command == 'query_progression'),
         isEmpty,
       );
 
-      // The index lands: heroGlobalId is stashed → the tab re-passes it →
-      // the detail re-selects (null → 'Hero') and queries the Hero events.
+      // The index lands: heroGlobalId is stashed → the tab swaps the spinner
+      // for EventsDetail keyed by 'Hero', which queries the Hero events.
       core.charactersListGate.complete();
       await tester.pumpAndSettle();
 
@@ -121,6 +130,46 @@ void main() {
       // The canned Hero event content renders — proof the (re-keyed) Hero
       // events query returned and populated the list.
       expect(find.text('MEMORY_HERO_EVENT'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'an orphan selection shows the no-actor empty state on Events, not the '
+    'select-a-character prompt',
+    (tester) async {
+      final core = _HeroEventsCoreService();
+      await pumpApp(tester, core);
+
+      await tester.tap(find.widgetWithText(Tab, 'Characters'));
+      await tester.pumpAndSettle();
+
+      // Select the knowledge-only orphan from the trailing "Other" group.
+      await tester.tap(find.text('Ghostvoice'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.widgetWithText(Tab, 'Events'));
+      await tester.pumpAndSettle();
+
+      // The Ereignisse pane shows the same clean no-actor empty state
+      // Attribute/Inventar use (the kept-alive Attribute pane shows it too,
+      // hence findsWidgets) — NOT the detail's "select a character" prompt.
+      expect(
+        find.text(
+          'This character has no in-world actor, so it has no attributes, '
+          'inventory, or events.',
+        ),
+        findsWidgets,
+      );
+      expect(find.text('Select a character to see events'), findsNothing);
+      // And no events query was ever issued for the orphan.
+      expect(
+        core.requests.where(
+          (r) =>
+              r.command == 'query_progression' &&
+              r.payload['section'] == 'events',
+        ),
+        isEmpty,
+      );
     },
   );
 }
@@ -268,6 +317,14 @@ class _HeroEventsCoreService implements GoresaveCoreService {
                 'isDead': false,
                 'hasInventory': false,
                 'hasKnowledge': false,
+                'hasEvents': false,
+              },
+              // Knowledge-only orphan: no globalId → no actor, no events.
+              {
+                'uniqueName': 'Ghostvoice',
+                'isDead': false,
+                'hasInventory': false,
+                'hasKnowledge': true,
                 'hasEvents': false,
               },
             ],
