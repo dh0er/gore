@@ -321,7 +321,14 @@ class _CharacterMasterListState extends State<CharacterMasterList> {
         ListTile(
           dense: true,
           leading: const Icon(Icons.person_outline),
-          title: Text(l10n.tabPlayer),
+          title: Text(
+            l10n.tabPlayer,
+            style: const TextStyle(fontWeight: FontWeight.bold),
+          ),
+          // The player has no id, but an empty subtitle line (same style as the
+          // NPC rows' GlobalId subtitle) keeps the tile the SAME height as the
+          // NPC tiles instead of collapsing to a shorter single-line row.
+          subtitle: const Text(' ', style: TextStyle(fontSize: 11)),
           selected: widget.selected.isPlayer,
           selectedTileColor: scheme.primaryContainer,
           selectedColor: scheme.primary,
