@@ -129,36 +129,24 @@ class ProfileDifficultyChip extends StatelessWidget {
           width: 1,
         ),
       ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            Icons.local_fire_department,
-            size: 18,
-            color: enabled ? color : theme.colorScheme.onSurfaceVariant,
-          ),
-          const SizedBox(width: 6),
-          Flexible(
-            child: Text(
-              label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              softWrap: false,
-              style: theme.textTheme.labelLarge?.copyWith(
-                fontWeight: FontWeight.w600,
-                color: enabled
-                    ? (known
-                          ? color.withValues(alpha: 0.95)
-                          : theme.colorScheme.onSurface)
-                    : theme.colorScheme.onSurfaceVariant,
-              ),
-            ),
-          ),
-          if (enabled) ...[
-            const SizedBox(width: 4),
-            Icon(Icons.edit, size: 14, color: color.withValues(alpha: 0.8)),
-          ],
-        ],
+      // Label only — no leading difficulty icon, no trailing edit icon: the
+      // tinted pill + tooltip already carry the tap affordance, and the label
+      // needs the room (it must never truncate while row space is free). The
+      // chip sizes to its intrinsic width (labels come from a small fixed
+      // set), so the parent row must not wrap it in a flex widget.
+      child: Text(
+        label,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        softWrap: false,
+        style: theme.textTheme.labelLarge?.copyWith(
+          fontWeight: FontWeight.w600,
+          color: enabled
+              ? (known
+                    ? color.withValues(alpha: 0.95)
+                    : theme.colorScheme.onSurface)
+              : theme.colorScheme.onSurfaceVariant,
+        ),
       ),
     );
 
@@ -541,8 +529,9 @@ class _LevelPicker extends StatelessWidget {
             emptySelectionAllowed: value == null,
             selected: value == null ? const <String>{} : {value!},
             showSelectedIcon: false,
-            onSelectionChanged:
-                enabled ? (selection) => onChanged(selection.first) : null,
+            onSelectionChanged: enabled
+                ? (selection) => onChanged(selection.first)
+                : null,
           ),
         ),
       ],

@@ -23,6 +23,15 @@ import '../domain/editor_notifier.dart';
 /// Orphan characters (knowledge-only, no spawned actor / GlobalId) have no
 /// attributes, inventory, or events; for an orphan selection those three
 /// sub-tabs show a clean empty state and only Wissen is wired up.
+///
+/// Shared sub-tab layout: every sub-tab body is
+/// `ActorDetailHeader` above `Padding(EdgeInsets.all(20))` → one `Card` →
+/// `Padding(EdgeInsets.all(16))` → content. The 20 outer padding is the card's
+/// distance to the pane edges AND the gap below the header; the 16 inner
+/// padding is the card's content inset. Attribute/Inventar apply this inside
+/// their detail widgets; Wissen/Ereignisse get the outer 20 here (their detail
+/// widgets provide the Card + inner 16). Card titles are intentionally absent —
+/// the sub-tab labels already name the views.
 class CharactersTab extends ConsumerWidget {
   const CharactersTab({
     super.key,
@@ -57,8 +66,7 @@ class CharactersTab extends ConsumerWidget {
     final state = ref.watch(editorProvider);
     final selected = state.selectedActor;
     final lang = ref.watch(currentGameLangProvider);
-    final locCatalog =
-        ref.watch(locCatalogProvider).asData?.value ?? const {};
+    final locCatalog = ref.watch(locCatalogProvider).asData?.value ?? const {};
 
     // Orphans have no actor-backed data: guard Attribute/Inventar/Ereignisse to
     // a clean empty state so they never issue an NPC load with the `orphan:`
@@ -101,18 +109,19 @@ class CharactersTab extends ConsumerWidget {
     final Widget knowledgeBody = Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        ActorDetailHeader(
-          actor: selected,
-          locCatalog: locCatalog,
-          lang: lang,
-        ),
+        ActorDetailHeader(actor: selected, locCatalog: locCatalog, lang: lang),
         Expanded(
-          child: KnowledgeDetail(
-            uniqueName: selected.uniqueName,
-            notifier: notifier,
-            editable: progressionEditable,
-            reloadKey: inspection,
-            theme: theme,
+          // Shared sub-tab layout (see class comment): outer 20 around the
+          // detail's Card, matching Attribute/Inventar.
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: KnowledgeDetail(
+              uniqueName: selected.uniqueName,
+              notifier: notifier,
+              editable: progressionEditable,
+              reloadKey: inspection,
+              theme: theme,
+            ),
           ),
         ),
       ],
@@ -128,20 +137,21 @@ class CharactersTab extends ConsumerWidget {
     final Widget eventsBody = Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        ActorDetailHeader(
-          actor: selected,
-          locCatalog: locCatalog,
-          lang: lang,
-        ),
+        ActorDetailHeader(actor: selected, locCatalog: locCatalog, lang: lang),
         Expanded(
-          child: EventsDetail(
-            globalId: selected.isPlayer
-                ? state.heroGlobalId
-                : (selected.isOrphan ? null : selected.id),
-            notifier: notifier,
-            editable: progressionEditable,
-            reloadKey: inspection,
-            theme: theme,
+          // Shared sub-tab layout (see class comment): outer 20 around the
+          // detail's Card, matching Attribute/Inventar.
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: EventsDetail(
+              globalId: selected.isPlayer
+                  ? state.heroGlobalId
+                  : (selected.isOrphan ? null : selected.id),
+              notifier: notifier,
+              editable: progressionEditable,
+              reloadKey: inspection,
+              theme: theme,
+            ),
           ),
         ),
       ],

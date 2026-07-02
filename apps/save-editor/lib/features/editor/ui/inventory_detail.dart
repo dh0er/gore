@@ -81,8 +81,7 @@ class InventoryDetail extends ConsumerWidget {
 
     final selected = actor;
     final lang = ref.watch(currentGameLangProvider);
-    final locCatalog =
-        ref.watch(locCatalogProvider).asData?.value ?? const {};
+    final locCatalog = ref.watch(locCatalogProvider).asData?.value ?? const {};
 
     final Widget body;
     if (selected.isPlayer) {
@@ -109,11 +108,7 @@ class InventoryDetail extends ConsumerWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        ActorDetailHeader(
-          actor: selected,
-          locCatalog: locCatalog,
-          lang: lang,
-        ),
+        ActorDetailHeader(actor: selected, locCatalog: locCatalog, lang: lang),
         Expanded(child: body),
       ],
     );
@@ -349,8 +344,9 @@ class _PrivateInventorySummaryCardState
             slotId: slotId,
             containerType: containerType,
           );
-          _pendingCountChanges[_inventoryItemKey(item)] =
-              InventoryItemCountChange(
+          _pendingCountChanges[_inventoryItemKey(
+            item,
+          )] = InventoryItemCountChange(
             id: id,
             path: itemPath,
             count: count,
@@ -432,11 +428,7 @@ class _PrivateInventorySummaryCardState
             containerType: _pendingRemove!.containerType,
           ).toEditJson()
         : null;
-    final allEdits = [
-      ...countEdits,
-      ?addEdit,
-      ?removeEdit,
-    ];
+    final allEdits = [...countEdits, ?addEdit, ?removeEdit];
     if (allEdits.isEmpty) {
       widget.notifier.clearPendingEdit(widget.pendingKey);
     } else {
@@ -503,8 +495,7 @@ class _PrivateInventorySummaryCardState
     final theme = Theme.of(context);
     final l10n = AppLocalizations.of(context);
     final lang = ref.watch(currentGameLangProvider);
-    final locCatalog =
-        ref.watch(locCatalogProvider).asData?.value ?? const {};
+    final locCatalog = ref.watch(locCatalogProvider).asData?.value ?? const {};
     final inventory = widget.inventory;
     final query = _query.trim().toLowerCase();
     final items = inventory.items.where((item) {
@@ -530,8 +521,9 @@ class _PrivateInventorySummaryCardState
     if (groups.every((g) => g.category != selected)) {
       selected = groups.isEmpty ? null : groups.first.category;
     }
-    final selectedGroup =
-        groups.where((g) => g.category == selected).firstOrNull;
+    final selectedGroup = groups
+        .where((g) => g.category == selected)
+        .firstOrNull;
 
     // An active search shows matches across all categories as a flat list;
     // an empty query browses by the selected category.
@@ -552,8 +544,10 @@ class _PrivateInventorySummaryCardState
     // count edits are kept mutually exclusive in the UI: a structural edit is
     // blocked while counts are pending, and count editing is blocked while a
     // structural edit is pending.
-    final structuralBlocked = hasPendingAdd || hasPendingRemove || hasPendingCount;
-    final countEditable = widget.editable && !hasPendingAdd && !hasPendingRemove;
+    final structuralBlocked =
+        hasPendingAdd || hasPendingRemove || hasPendingCount;
+    final countEditable =
+        widget.editable && !hasPendingAdd && !hasPendingRemove;
 
     return Card(
       child: Padding(
@@ -561,51 +555,47 @@ class _PrivateInventorySummaryCardState
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              children: [
-                const Icon(Icons.inventory_2_outlined),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    l10n.inventoryTitle,
-                    style: theme.textTheme.titleMedium,
-                  ),
-                ),
-                if (widget.editable && hasPendingChanges) ...[
-                  Tooltip(
-                    message: l10n.resetInventoryChanges,
-                    child: IconButton(
-                      icon: const Icon(Icons.undo_outlined),
-                      onPressed: () {
-                        setState(() {
-                          _pendingCountChanges.clear();
-                          _pendingAdd = null;
-                          _pendingRemove = null;
-                        });
-                        widget.notifier.clearPendingEdit(widget.pendingKey);
-                      },
+            // Right-aligned actions row. The decorative "Inventar" icon+title
+            // header was removed (the sub-tab label already names the view);
+            // the functional undo/add actions keep their old top-right spot.
+            if ((widget.editable && hasPendingChanges) || widget.canAddItem)
+              Row(
+                children: [
+                  const Spacer(),
+                  if (widget.editable && hasPendingChanges)
+                    Tooltip(
+                      message: l10n.resetInventoryChanges,
+                      child: IconButton(
+                        icon: const Icon(Icons.undo_outlined),
+                        onPressed: () {
+                          setState(() {
+                            _pendingCountChanges.clear();
+                            _pendingAdd = null;
+                            _pendingRemove = null;
+                          });
+                          widget.notifier.clearPendingEdit(widget.pendingKey);
+                        },
+                      ),
                     ),
-                  ),
-                ],
-                if (widget.canAddItem) ...[
-                  const SizedBox(width: 8),
-                  Tooltip(
-                    message: hasPendingAdd
-                        ? l10n.addItemTooltipPendingAdd
-                        : hasPendingRemove
-                            ? l10n.addItemTooltipPendingRemove
-                            : hasPendingCount
-                                ? l10n.addItemTooltipPendingCount
-                                : l10n.addItemTooltipDefault,
-                    child: FilledButton.icon(
-                      icon: const Icon(Icons.add, size: 18),
-                      label: Text(l10n.addItemButton),
-                      onPressed: structuralBlocked ? null : _openAddDialog,
+                  if (widget.canAddItem) ...[
+                    const SizedBox(width: 8),
+                    Tooltip(
+                      message: hasPendingAdd
+                          ? l10n.addItemTooltipPendingAdd
+                          : hasPendingRemove
+                          ? l10n.addItemTooltipPendingRemove
+                          : hasPendingCount
+                          ? l10n.addItemTooltipPendingCount
+                          : l10n.addItemTooltipDefault,
+                      child: FilledButton.icon(
+                        icon: const Icon(Icons.add, size: 18),
+                        label: Text(l10n.addItemButton),
+                        onPressed: structuralBlocked ? null : _openAddDialog,
+                      ),
                     ),
-                  ),
+                  ],
                 ],
-              ],
-            ),
+              ),
             if (hasPendingAdd) ...[
               const SizedBox(height: 12),
               _PendingStructuralRow(
@@ -666,8 +656,9 @@ class _PrivateInventorySummaryCardState
                                 borderRadius: BorderRadius.circular(12),
                               ),
                               child: SingleChildScrollView(
-                                padding:
-                                    const EdgeInsets.symmetric(vertical: 6),
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 6,
+                                ),
                                 child: Column(
                                   children: [
                                     for (final group in groups)
@@ -682,7 +673,8 @@ class _PrivateInventorySummaryCardState
                                           ),
                                           group.items.length,
                                         ),
-                                        selected: !searching &&
+                                        selected:
+                                            !searching &&
                                             group.category == selected,
                                         onTap: () => setState(() {
                                           _selectedCategory = group.category;
@@ -796,7 +788,8 @@ class _PrivateInventorySummaryCardState
                                                             Container(
                                                               padding:
                                                                   const EdgeInsets.symmetric(
-                                                                    horizontal: 6,
+                                                                    horizontal:
+                                                                        6,
                                                                     vertical: 1,
                                                                   ),
                                                               decoration: BoxDecoration(
@@ -1073,7 +1066,8 @@ class _InventoryItemCountEditorState extends State<_InventoryItemCountEditor> {
         _pendingCount == widget.pendingCount) {
       return;
     }
-    final isSameItem = _path == widget.item.path &&
+    final isSameItem =
+        _path == widget.item.path &&
         _id == widget.item.id &&
         _slotId == widget.item.slotId;
     _path = widget.item.path;

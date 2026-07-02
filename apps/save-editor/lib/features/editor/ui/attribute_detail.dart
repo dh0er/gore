@@ -89,8 +89,7 @@ class AttributeDetail extends ConsumerWidget {
     final state = ref.watch(editorProvider);
     final selected = actor;
     final lang = ref.watch(currentGameLangProvider);
-    final locCatalog =
-        ref.watch(locCatalogProvider).asData?.value ?? const {};
+    final locCatalog = ref.watch(locCatalogProvider).asData?.value ?? const {};
 
     if (selected.isPlayer) {
       // Player → a shared header ("Player", no GlobalId) above the EXISTING
@@ -156,56 +155,66 @@ class AttributeDetail extends ConsumerWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        ActorDetailHeader(
-          actor: selected,
-          locCatalog: locCatalog,
-          lang: lang,
-        ),
+        ActorDetailHeader(actor: selected, locCatalog: locCatalog, lang: lang),
         Expanded(
-          child: NpcAttributesPanel(
-            // Reload when the inspected save OR the selected NPC changes, so
-            // the list re-seeds from this NPC's saved values.
-            reloadKey: (inspection, npcId),
-            load: () => notifier.loadNpcAttributes(npcId),
-            editable: editable,
-            // Status row lives at the top of the core ("Hauptwerte") group.
-            status: statusConfig,
-            // Resume from this NPC's queued attribute drafts on revisit:
-            // reverse the stored typed.setValue edits back into the panel's
-            // NpcTypedEdit drafts. Without this, returning to a previously
-            // edited NPC and editing another attribute would replace the
-            // stored entry with only the newly-dirty field, dropping the rest.
-            initialPending: () => _npcAttributeDraftsFromPending(
-              notifier.pendingEditFor(pendingKey),
-            ),
-            onPendingChanged: (edits, validationError) {
-              if (validationError != null) {
-                // Transient invalid/empty input in one field must NOT discard
-                // the NPC's already-stored valid drafts (switching actors
-                // disposes this panel and loses its local _pending). Keep the
-                // stored drafts but BLOCK global Save while invalid, so the
-                // now-stale stored value is never written behind the bad field.
-                notifier.setNpcEditInvalid(pendingKey);
-                return;
-              }
-              notifier.setNpcEditInvalid(null);
-              if (edits.isEmpty) {
-                notifier.clearPendingEdit(pendingKey);
-              } else {
-                notifier.setPendingEdit(
-                  pendingKey,
-                  PendingSaveEdit(
-                    edits: [
-                      for (final edit in edits)
-                        {
-                          'path': 'private.typed.setValue',
-                          'value': {'path': edit.path, 'value': edit.value},
-                        },
-                    ],
+          // Shared sub-tab layout (see CharactersTab): outer 20 → one Card →
+          // inner 16 around the whole attribute editor.
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: NpcAttributesPanel(
+                  // Reload when the inspected save OR the selected NPC
+                  // changes, so the list re-seeds from this NPC's saved
+                  // values.
+                  reloadKey: (inspection, npcId),
+                  load: () => notifier.loadNpcAttributes(npcId),
+                  editable: editable,
+                  // Status row lives at the top of the core ("Hauptwerte") group.
+                  status: statusConfig,
+                  // Resume from this NPC's queued attribute drafts on revisit:
+                  // reverse the stored typed.setValue edits back into the panel's
+                  // NpcTypedEdit drafts. Without this, returning to a previously
+                  // edited NPC and editing another attribute would replace the
+                  // stored entry with only the newly-dirty field, dropping the rest.
+                  initialPending: () => _npcAttributeDraftsFromPending(
+                    notifier.pendingEditFor(pendingKey),
                   ),
-                );
-              }
-            },
+                  onPendingChanged: (edits, validationError) {
+                    if (validationError != null) {
+                      // Transient invalid/empty input in one field must NOT discard
+                      // the NPC's already-stored valid drafts (switching actors
+                      // disposes this panel and loses its local _pending). Keep the
+                      // stored drafts but BLOCK global Save while invalid, so the
+                      // now-stale stored value is never written behind the bad field.
+                      notifier.setNpcEditInvalid(pendingKey);
+                      return;
+                    }
+                    notifier.setNpcEditInvalid(null);
+                    if (edits.isEmpty) {
+                      notifier.clearPendingEdit(pendingKey);
+                    } else {
+                      notifier.setPendingEdit(
+                        pendingKey,
+                        PendingSaveEdit(
+                          edits: [
+                            for (final edit in edits)
+                              {
+                                'path': 'private.typed.setValue',
+                                'value': {
+                                  'path': edit.path,
+                                  'value': edit.value,
+                                },
+                              },
+                          ],
+                        ),
+                      );
+                    }
+                  },
+                ),
+              ),
+            ),
           ),
         ),
       ],
@@ -232,35 +241,39 @@ class _PrivatePanel extends StatelessWidget {
   final bool editable;
   final String lockedBody;
 
-  Widget _legacyAttributesCard() {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        child: _PrivatePlayerAttributesEditor(
-          player: inspection.privatePlayer,
-          notifier: notifier,
-          editable: editable,
-          reloadKey: inspection,
-        ),
-      ),
+  /// The legacy attributes editor, flattened: the whole tab body sits inside
+  /// ONE main card now, so the section renders bare (no inner Card).
+  Widget _legacyAttributesSection() {
+    return _PrivatePlayerAttributesEditor(
+      player: inspection.privatePlayer,
+      notifier: notifier,
+      editable: editable,
+      reloadKey: inspection,
     );
   }
 
-  Widget? _transformCard() {
+  /// The transform editor, flattened (see [_legacyAttributesSection]).
+  Widget? _transformSection() {
     if (inspection.privatePlayer.transform == null) return null;
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        child: _PrivatePlayerTransformEditor(
-          transform: inspection.privatePlayer.transform!,
-          editable:
-              editable &&
-              inspection.privatePlayer.writable.contains(
-                'private.player.setTransform',
-              ),
-          notifier: notifier,
-          reloadKey: inspection,
-        ),
+    return _PrivatePlayerTransformEditor(
+      transform: inspection.privatePlayer.transform!,
+      editable:
+          editable &&
+          inspection.privatePlayer.writable.contains(
+            'private.player.setTransform',
+          ),
+      notifier: notifier,
+      reloadKey: inspection,
+    );
+  }
+
+  /// Shared sub-tab layout (see CharactersTab): outer 20 → one Card →
+  /// inner 16 around the whole attribute editor.
+  Widget _mainCard(Widget content) {
+    return Padding(
+      padding: const EdgeInsets.all(20),
+      child: Card(
+        child: Padding(padding: const EdgeInsets.all(16), child: content),
       ),
     );
   }
@@ -269,12 +282,12 @@ class _PrivatePanel extends StatelessWidget {
   Widget build(BuildContext context) {
     if (inspection.privateDecoded) {
       // Typed path: HeroStatsCard manages its own internal scroll for the
-      // detail area and pins the sidebar. Give it the full pane via Padding
-      // (not ListView) so it has a finite height to work with.
+      // detail area and pins the sidebar. Give it the full pane via the main
+      // card's Padding (not a ListView) so it has a finite height to work
+      // with.
       if (isPlayer && inspection.privateTypedVerified) {
-        return Padding(
-          padding: const EdgeInsets.all(20),
-          child: HeroStatsCard(
+        return _mainCard(
+          HeroStatsCard(
             // New SaveInspection instance after every write/refresh —
             // changing identity drops pending edits and reloads.
             reloadKey: inspection,
@@ -304,29 +317,31 @@ class _PrivatePanel extends StatelessWidget {
             // Spec: if the typed search errors out or finds nothing on a
             // typed-OK save, the heuristic editor stays available.
             fallback: inspection.privatePlayer.attributes.isNotEmpty
-                ? _legacyAttributesCard()
+                ? _legacyAttributesSection()
                 : null,
-            transformCard: _transformCard(),
+            transformCard: _transformSection(),
           ),
         );
       }
-      // Legacy / non-typed path: stacked layout in a ListView.
-      return ListView(
-        padding: const EdgeInsets.all(20),
-        children: [
-          if (isPlayer) ...[
-            // Typed parse failed or not verified: stacked legacy layout —
-            // no sidebar, no typed load call.
-            if (inspection.privatePlayer.attributes.isNotEmpty) ...[
-              _legacyAttributesCard(),
-              const SizedBox(height: 16),
-            ],
-            if (inspection.privatePlayer.transform != null) ...[
-              _transformCard()!,
-              const SizedBox(height: 16),
+      // Legacy / non-typed path: stacked layout in a ListView inside the same
+      // single main card.
+      return _mainCard(
+        ListView(
+          children: [
+            if (isPlayer) ...[
+              // Typed parse failed or not verified: stacked legacy layout —
+              // no sidebar, no typed load call.
+              if (inspection.privatePlayer.attributes.isNotEmpty) ...[
+                _legacyAttributesSection(),
+                const SizedBox(height: 16),
+              ],
+              if (inspection.privatePlayer.transform != null) ...[
+                _transformSection()!,
+                const SizedBox(height: 16),
+              ],
             ],
           ],
-        ],
+        ),
       );
     }
     return _MessagePane(icon: icon, title: title, body: lockedBody);

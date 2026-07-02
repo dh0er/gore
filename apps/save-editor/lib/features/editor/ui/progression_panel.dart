@@ -1009,33 +1009,8 @@ class _KnowledgeDetailState extends ConsumerState<KnowledgeDetail> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // Header
-            Row(
-              children: [
-                Icon(Icons.school_outlined, color: scheme.primary),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    l10n.dialogKnowledge,
-                    style: widget.theme.textTheme.titleMedium,
-                  ),
-                ),
-                if (widget.editable && _pending.isNotEmpty)
-                  Tooltip(
-                    message: l10n.resetKnowledgeChanges,
-                    child: IconButton(
-                      icon: const Icon(Icons.undo_outlined),
-                      onPressed: () {
-                        setState(_pending.clear);
-                        widget.notifier.clearPendingEdit(
-                          'progression.knowledge',
-                        );
-                      },
-                    ),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 8),
+            // No card title: the sub-tab label already says "Dialogwissen".
+            // The reset-pending-edits action moved into the add-entry row.
             // Entries for the externally-selected character. The character list
             // lives in a shared master pane elsewhere; this panel is detail-only
             // and keyed off widget.uniqueName.
@@ -1118,6 +1093,22 @@ class _KnowledgeDetailState extends ConsumerState<KnowledgeDetail> {
                                     ? null
                                     : _browseAddEntry,
                               ),
+                              // Reset-pending-edits: lived in the removed
+                              // card-title row; now rides at the end of the
+                              // add-entry row (same icon + tooltip).
+                              if (_pending.isNotEmpty)
+                                Tooltip(
+                                  message: l10n.resetKnowledgeChanges,
+                                  child: IconButton(
+                                    icon: const Icon(Icons.undo_outlined),
+                                    onPressed: () {
+                                      setState(_pending.clear);
+                                      widget.notifier.clearPendingEdit(
+                                        'progression.knowledge',
+                                      );
+                                    },
+                                  ),
+                                ),
                             ],
                           );
                         },
@@ -1435,20 +1426,8 @@ class _EventsDetailState extends ConsumerState<EventsDetail> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // Header
-            Row(
-              children: [
-                Icon(Icons.history_outlined, color: scheme.primary),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    l10n.memoryEvents,
-                    style: widget.theme.textTheme.titleMedium,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
+            // No card title: the sub-tab label already says "Ereignisse". The
+            // "Events — <name>" info label below identifies the selection.
             // Events for the externally-selected character. The character list
             // lives in a shared master pane elsewhere; this panel is detail-only
             // and keyed off widget.globalId.

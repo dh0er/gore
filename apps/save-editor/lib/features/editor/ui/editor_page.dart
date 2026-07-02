@@ -344,12 +344,14 @@ class _ProfileHeader extends StatelessWidget {
                         ),
                 ),
                 const SizedBox(width: 12),
-                Flexible(
-                  child: ProfileDifficultyChip(
-                    profile: profile,
-                    notifier: notifier,
-                    isLoading: isLoading,
-                  ),
+                // Inflexible on purpose: the chip label comes from a small
+                // fixed set, so the chip takes its intrinsic width and never
+                // truncates; the (flexible) profile name to its left yields
+                // the remaining space instead.
+                ProfileDifficultyChip(
+                  profile: profile,
+                  notifier: notifier,
+                  isLoading: isLoading,
                 ),
               ],
             ),
@@ -683,7 +685,10 @@ class _EditorWorkspace extends StatelessWidget {
                           icon: const Icon(Icons.public),
                           text: l10n.tabWorld,
                         ),
-                        Tab(icon: const Icon(Icons.tune), text: l10n.tabAllData),
+                        Tab(
+                          icon: const Icon(Icons.tune),
+                          text: l10n.tabAllData,
+                        ),
                         Tab(
                           icon: const Icon(Icons.history),
                           text: l10n.tabBackups,
@@ -888,7 +893,8 @@ class _OverviewPanel extends StatelessWidget {
         _GameTimeCard(
           inspection: inspection,
           notifier: notifier,
-          editable: inspection.privateEditable &&
+          editable:
+              inspection.privateEditable &&
               inspection.privateTypedVerified &&
               state.codecCompressReady,
         ),
@@ -1435,8 +1441,9 @@ class _GameTimeCardState extends State<_GameTimeCard> {
     _loaded = false;
     _gameTime = null;
     _error = null;
-    final loaded =
-        widget.inspection.privateDecoded ? await widget.notifier.loadGameTime() : null;
+    final loaded = widget.inspection.privateDecoded
+        ? await widget.notifier.loadGameTime()
+        : null;
     // Drop stale results; a newer _load already advanced the epoch.
     if (!mounted || epoch != _epoch) return;
     setState(() {
@@ -1477,9 +1484,12 @@ class _GameTimeCardState extends State<_GameTimeCard> {
       return;
     }
     setState(() => _error = null);
-    final total =
-        GameTimeParts(day: day, hour: hour, minute: minute, second: second)
-            .toTotalSeconds();
+    final total = GameTimeParts(
+      day: day,
+      hour: hour,
+      minute: minute,
+      second: second,
+    ).toTotalSeconds();
     // Compare against the truncated original: re-typing the same clock must not
     // leave a no-op edit that still bumps the Save counter (and would rewrite
     // away the harmless sub-second fraction for nothing).
@@ -1517,9 +1527,13 @@ class _GameTimeCardState extends State<_GameTimeCard> {
     final second = _field(_second, 59);
     final liveTotal =
         (day != null && hour != null && minute != null && second != null)
-            ? GameTimeParts(day: day, hour: hour, minute: minute, second: second)
-                .toTotalSeconds()
-            : _gameTime!.totalSeconds.floor();
+        ? GameTimeParts(
+            day: day,
+            hour: hour,
+            minute: minute,
+            second: second,
+          ).toTotalSeconds()
+        : _gameTime!.totalSeconds.floor();
 
     Widget unit(String label, TextEditingController controller) {
       return SizedBox(
@@ -1980,10 +1994,7 @@ class _AllDataPanelState extends State<_AllDataPanel> {
           style: muted,
         ),
         const SizedBox(width: 8),
-        Text(
-          l10n.rangeOfTotal(first, last, result.total),
-          style: muted,
-        ),
+        Text(l10n.rangeOfTotal(first, last, result.total), style: muted),
         const SizedBox(width: 8),
         Text(l10n.perPage, style: muted),
         DropdownButton<int>(
@@ -2244,7 +2255,10 @@ class _BackupsPanel extends StatelessWidget {
           children: [
             const Icon(Icons.history),
             const SizedBox(width: 8),
-            Text(l10n.backupsTitle, style: Theme.of(context).textTheme.titleLarge),
+            Text(
+              l10n.backupsTitle,
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
             const Spacer(),
             Tooltip(
               message: l10n.refreshBackups,
@@ -2263,7 +2277,10 @@ class _BackupsPanel extends StatelessWidget {
             body: l10n.noBackupsBody,
           ),
         if (backups.isNotEmpty) ...[
-          Text(l10n.slotBackups, style: Theme.of(context).textTheme.titleMedium),
+          Text(
+            l10n.slotBackups,
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
           const SizedBox(height: 8),
           ...backups.map(
             (backup) => _BackupCard(
@@ -2358,7 +2375,9 @@ class _BackupCard extends StatelessWidget {
                         ),
                         _SmallFact(
                           label: l10n.backupFactSize,
-                          value: l10n.bytesValue(_bytes.format(backup.fileSize)),
+                          value: l10n.bytesValue(
+                            _bytes.format(backup.fileSize),
+                          ),
                         ),
                         _SmallFact(
                           label: l10n.backupFactStatus,
@@ -2563,7 +2582,11 @@ class _SettingsPanel extends StatelessWidget {
 }
 
 class CodecStatusView extends StatelessWidget {
-  const CodecStatusView({super.key, required this.codec, required this.codecError});
+  const CodecStatusView({
+    super.key,
+    required this.codec,
+    required this.codecError,
+  });
 
   final CodecStatus? codec;
   final String? codecError;
@@ -2619,15 +2642,13 @@ class CodecStatusView extends StatelessWidget {
         Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Icon(
-              statusIcon,
-              size: 18,
-              color: statusColor,
-            ),
+            Icon(statusIcon, size: 18, color: statusColor),
             const SizedBox(width: 6),
             Expanded(
-              child: Text(title,
-                  style: TextStyle(color: isReady ? null : statusColor)),
+              child: Text(
+                title,
+                style: TextStyle(color: isReady ? null : statusColor),
+              ),
             ),
           ],
         ),
@@ -2643,10 +2664,12 @@ class CodecStatusView extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(l10n.codecStatusLine(codec.status)),
-                  Text(l10n.codecCapabilityLine(
-                    codec.canDecompress ? l10n.yes : l10n.no,
-                    codec.canCompress ? l10n.yes : l10n.no,
-                  )),
+                  Text(
+                    l10n.codecCapabilityLine(
+                      codec.canDecompress ? l10n.yes : l10n.no,
+                      codec.canCompress ? l10n.yes : l10n.no,
+                    ),
+                  ),
                   Text(l10n.codecBackendLine(codec.adapter ?? codec.backend)),
                 ],
               ),
