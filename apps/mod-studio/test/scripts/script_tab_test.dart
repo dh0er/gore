@@ -281,6 +281,46 @@ void main() {
     expect(find.text('Mod29'), findsOneWidget);
   });
 
+  testWidgets('remounting the tab (game-path change) resets the selection',
+      (tester) async {
+    // One container across both mounts — exactly like the real app, where the
+    // selection provider lives in the root ProviderScope and GamePathScope
+    // only swaps the ScriptTab subtree key when the game exe path changes.
+    final container = ProviderContainer(overrides: [
+      scriptModulesProvider.overrideWith((ref) async => _fakeModules()),
+    ]);
+    addTearDown(container.dispose);
+
+    Future<void> pumpTab(Key key) async {
+      await tester.pumpWidget(UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp(home: Scaffold(body: ScriptTab(key: key))),
+      ));
+      await tester.pump();
+      await tester.pump();
+    }
+
+    await pumpTab(const ValueKey('install-1'));
+    await tester.tap(find.text('Bar.as'));
+    await tester.pump();
+    expect(find.text('Vanilla module — not staged'), findsOneWidget);
+
+    // Simulate GamePathScope swapping the subtree key on a game-path change:
+    // fresh State, same container — without the initState reset the previous
+    // install's selection would survive into the new install's tree.
+    await pumpTab(const ValueKey('install-2'));
+    expect(find.text('Vanilla module — not staged'), findsNothing);
+    expect(find.text('Select or add a script mod'), findsOneWidget);
+    // The previously selected leaf is no longer highlighted.
+    expect(
+      tester
+          .widget<ListTile>(find.ancestor(
+              of: find.text('Bar.as'), matching: find.byType(ListTile)))
+          .selected,
+      isFalse,
+    );
+  });
+
   // Fix 3: loadProject treats the script relPath as untrusted (defense-in-depth, matching the
   // asPath guard + gore-as compile-side check) and drops mods whose relPath is empty/absolute/'..'.
   test('loadProject drops script mods with an unsafe relPath', () async {

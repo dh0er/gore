@@ -69,6 +69,21 @@ class _ScriptTabState extends ConsumerState<ScriptTab> {
   Set<String>? _markedTreePaths;
 
   @override
+  void initState() {
+    super.initState();
+    // This State only (re)mounts on app start or when GamePathScope swaps its
+    // subtree key on a game-exe-path change — KeepAliveTab keeps it alive
+    // across plain tab switches. The selection provider is app-scoped, so it
+    // would survive that remount and carry the PREVIOUS install's selection
+    // (highlighting/opening a same-named path in the new install). Reset it
+    // once per mount; deferred to a microtask because providers must not be
+    // mutated while the widget tree is building.
+    Future.microtask(() {
+      if (mounted) ref.read(_selectedModuleProvider.notifier).state = null;
+    });
+  }
+
+  @override
   void dispose() {
     _searchController.dispose();
     super.dispose();
