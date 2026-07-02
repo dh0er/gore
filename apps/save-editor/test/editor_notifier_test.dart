@@ -1028,6 +1028,43 @@ void main() {
     expect(listCalls[1].payload['path'], r'C:\tmp\saves\G1R-001.sav');
   });
 
+  // ---------------------------------------------------------------------------
+  // Charaktere master list index (Task 10: Player/Hero de-duplication). The
+  // save's own "Hero" ACTOR row keys the player's memory events; the pinned
+  // Player row represents it, so its GlobalId is stashed for the events wiring.
+  // ---------------------------------------------------------------------------
+
+  test('loadAllCharacters stashes the hero actor GlobalId', () async {
+    final core = _CharactersListCoreService();
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+    expect(notifier.state.heroGlobalId, isNull);
+
+    final page = await notifier.loadAllCharacters();
+
+    expect(page.error, isNull);
+    expect(page.characters, hasLength(3));
+    expect(notifier.state.heroGlobalId, 'Hero');
+  });
+
+  test(
+    'loadAllCharacters leaves the stashed heroGlobalId untouched on an error page',
+    () async {
+      final core = _CharactersListCoreService();
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+      await notifier.loadAllCharacters();
+      expect(notifier.state.heroGlobalId, 'Hero');
+
+      core.failList = true;
+      final page = await notifier.loadAllCharacters();
+
+      expect(page.error, isNotNull);
+      // A stale value from the same save is still correct — keep it.
+      expect(notifier.state.heroGlobalId, 'Hero');
+    },
+  );
+
   test('failed same-save re-inspect keeps pending edits retryable', () async {
     final core = _FailingSecondInspectCoreService();
     final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
@@ -2464,6 +2501,66 @@ class _PagedNpcCoreService extends _RecordingCoreService {
           'total': total,
           'offset': offset,
           'limit': limit,
+        },
+      };
+    }
+    return super.execute(command, payload: payload);
+  }
+}
+
+/// Serves `private.characters.list` with the save's own "Hero" ACTOR row (as
+/// real saves carry — see the gore-save `characters_list` integration test)
+/// plus a normal NPC and a knowledge-only orphan. [failList] flips the command
+/// to an error response, proving an error page leaves the stashed hero
+/// GlobalId untouched.
+class _CharactersListCoreService extends _RecordingCoreService {
+  var failList = false;
+
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    if (command == 'private.characters.list') {
+      requests.add(
+        _RecordedRequest(command, Map<String, Object?>.from(payload)),
+      );
+      if (failList) {
+        return {
+          'ok': false,
+          'error': {'message': 'characters list failed'},
+        };
+      }
+      return {
+        'ok': true,
+        'data': {
+          'total': 3,
+          'characters': [
+            {
+              'globalId': 'Hero',
+              'uniqueName': 'Hero',
+              'isDead': false,
+              'hasInventory': false,
+              'hasKnowledge': true,
+              'hasEvents': true,
+            },
+            {
+              'globalId': 'Lizard-WP_A',
+              'uniqueName': 'Lizard',
+              'isDead': false,
+              'hasInventory': true,
+              'hasKnowledge': false,
+              'hasEvents': false,
+            },
+            {
+              'globalId': null,
+              'uniqueName': 'ST_VLK_Mud_Sleeper',
+              'isDead': false,
+              'hasInventory': false,
+              'hasKnowledge': true,
+              'hasEvents': false,
+            },
+          ],
         },
       };
     }

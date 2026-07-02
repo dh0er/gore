@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:goresave/features/editor/domain/actor.dart';
-import 'package:goresave/features/editor/ui/actor_selector.dart' show localizedNpcName;
+import 'package:goresave/features/editor/ui/character_master_list.dart'
+    show localizedNpcName;
 import 'package:goresave/l10n/app_localizations.dart';
 import 'package:goresave/loc/game_lang.dart';
 

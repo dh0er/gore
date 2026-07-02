@@ -3,14 +3,93 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:goresave/features/editor/domain/actor.dart';
 import 'package:goresave/features/editor/domain/character_index.dart';
-import 'package:goresave/features/editor/ui/actor_selector.dart' show localizedNpcName;
 import 'package:goresave/l10n/app_localizations.dart';
 import 'package:goresave/loc/game_lang.dart';
+import 'package:goresave/loc/loc_catalog_provider.dart';
+
+/// Localized NPC display name for a GlobalId. The loc catalog is keyed by the
+/// character key — the GlobalId prefix before the first `-`, lowercased (the
+/// resolver lowercases). When the catalog has no entry (~42% of NPCs carry
+/// generic class-name ids), fall back to a PRETTIFIED key rather than the raw
+/// id: classification prefixes are stripped and the remainder is humanized.
+///
+/// Exported so the shared actor detail header resolves an NPC name the SAME way
+/// the list tiles do (loc catalog + prettify fallback).
+String localizedNpcName(
+  Map<String, Map<String, String>> catalog,
+  GameLang lang,
+  String id,
+) {
+  final charKey = id.split('-').first;
+  final localized = localizedGameName(catalog, lang, charKey);
+  if (localized != null && localized.trim().isNotEmpty) return localized;
+  return _prettifyNpcKey(charKey);
+}
+
+/// Leading classification prefixes that carry no display value (NPC archetype /
+/// faction tags). Stripped before humanizing a fallback name.
+const _npcKeyPrefixes = <String>[
+  'OC_',
+  'OM_',
+  'NPC_',
+  'Creature_',
+  'AM_',
+  'PC_',
+  'BL_',
+  'VLK_',
+  'KDF_',
+  'STT_',
+  'SLD_',
+  'GRD_',
+  'MIL_',
+  'EBR_',
+  'BAU_',
+  'TPL_',
+  'NOV_',
+  'DJG_',
+  'SFB_',
+  'GUR_',
+  'OUT_',
+  'SUM_',
+];
+
+/// Turn a generic character key (e.g. `OC_VLK_Guard_01`, `Creature_Meatbug`)
+/// into a readable label: strip leading classification prefixes + trailing
+/// numeric ids, then humanize (`_` → space, Title Case). Robust to keys with no
+/// recognizable prefix (returns a humanized form of the whole key).
+String _prettifyNpcKey(String key) {
+  var rest = key;
+  // Strip recognized leading prefixes, repeatedly (ids often stack two/three).
+  var stripped = true;
+  while (stripped) {
+    stripped = false;
+    for (final prefix in _npcKeyPrefixes) {
+      if (rest.length > prefix.length &&
+          rest.toUpperCase().startsWith(prefix.toUpperCase())) {
+        rest = rest.substring(prefix.length);
+        stripped = true;
+        break;
+      }
+    }
+  }
+  // Drop a trailing numeric id segment (e.g. `_01`, `_1234`).
+  rest = rest.replaceFirst(RegExp(r'[_-]?\d+$'), '');
+  if (rest.isEmpty) rest = key;
+  // Humanize: split on separators + camelCase boundaries, Title Case words.
+  final words = rest
+      .replaceAllMapped(RegExp('([a-z])([A-Z])'), (m) => '${m[1]} ${m[2]}')
+      .split(RegExp(r'[_\s-]+'))
+      .where((w) => w.isNotEmpty)
+      .map((w) => w[0].toUpperCase() + w.substring(1).toLowerCase())
+      .toList();
+  final pretty = words.join(' ').trim();
+  return pretty.isEmpty ? key : pretty;
+}
 
 /// A single [CharacterRow] paired with its precomputed, lowercased search string
-/// and resolved display name. Mirrors `_SearchableNpc` in [ActorSelector]: names
-/// resolve ONCE when the list loads so each keystroke is a cheap substring scan
-/// over the cached strings rather than re-resolving every name.
+/// and resolved display name. Names resolve ONCE when the list loads so each
+/// keystroke is a cheap substring scan over the cached strings rather than
+/// re-resolving every name.
 class _SearchableRow {
   const _SearchableRow(this.row, this.name, this.search);
 
@@ -27,8 +106,8 @@ class _SearchableRow {
 /// The full list is fetched ONCE (one save decompress) and cached; search and
 /// pagination then run entirely CLIENT-SIDE. This makes search instant and lets
 /// it match the RESOLVED display name (loc catalog / prettify fallback) in
-/// addition to the raw id. Cloned from [ActorSelector]'s proven structure for a
-/// different row type ([CharacterRow] instead of `NpcActor`).
+/// addition to the raw id. Cloned from the retired `ActorSelector`'s proven
+/// structure for a different row type ([CharacterRow] instead of `NpcActor`).
 class CharacterMasterList extends StatefulWidget {
   const CharacterMasterList({
     super.key,
@@ -61,7 +140,7 @@ class CharacterMasterList extends StatefulWidget {
   final Object reloadKey;
 
   /// Loaded localization catalog (`id -> {set -> text}`) used to resolve NPC
-  /// display names the SAME way [ActorSelector] does.
+  /// display names via [localizedNpcName].
   final Map<String, Map<String, String>> locCatalog;
 
   /// The current game language, driving which loc set the name resolves from.
@@ -145,8 +224,16 @@ class _CharacterMasterListState extends State<CharacterMasterList> {
     ];
   }
 
+  /// True for the save's own "Hero" ACTOR row (the player's avatar). The core
+  /// emits it like any other actor (it IS real data), but the pinned Player row
+  /// already represents it — so the NPC section excludes it, or the player
+  /// would be listed twice.
+  static bool _isHeroRow(CharacterRow row) =>
+      row.globalId != null && row.uniqueName.toLowerCase() == 'hero';
+
   /// Fetch the ENTIRE character index once and cache it, split into actors
-  /// (`!isOrphan`) and orphans (`isOrphan`).
+  /// (`!isOrphan`, minus the [_isHeroRow] the pinned Player row represents) and
+  /// orphans (`isOrphan`).
   Future<void> _loadAll() async {
     final epoch = ++_epoch;
     setState(() => _loading = true);
@@ -156,7 +243,9 @@ class _CharacterMasterListState extends State<CharacterMasterList> {
       _loading = false;
       _error = page.error;
       _actors = _decorate(
-        page.characters.where((r) => !r.isOrphan).toList(growable: false),
+        page.characters
+            .where((r) => !r.isOrphan && !_isHeroRow(r))
+            .toList(growable: false),
       );
       _orphans = _decorate(
         page.characters.where((r) => r.isOrphan).toList(growable: false),
@@ -266,8 +355,11 @@ class _CharacterMasterListState extends State<CharacterMasterList> {
         // Clean visual boundary between the pagination bar and the list.
         const Divider(height: 1),
         // Scrollable list — fills the remaining height. The ClipRect bounds the
-        // list, and its own Material keeps `ListTile.selectedTileColor` clipped
-        // to the list bounds (see ActorSelector for the rationale).
+        // list, but `ListTile.selectedTileColor` is painted by the NEAREST
+        // enclosing Material — without one here it would draw on the ancestor
+        // Scaffold Material (outside the clip) and bleed above the top edge when
+        // a selected tile scrolls past it. Wrapping the list in its own Material
+        // inside the ClipRect keeps that highlight clipped to the list bounds.
         Expanded(
           child: ClipRect(
             child: Material(
@@ -400,8 +492,8 @@ class _CharacterMasterListState extends State<CharacterMasterList> {
   }
 }
 
-/// Compact prev/next pagination row for the actor list. Mirrors
-/// [ActorSelector]'s `_NpcPaginationBar` page math but stays self-contained.
+/// Compact prev/next pagination row for the actor list. Mirrors the retired
+/// `ActorSelector`'s `_NpcPaginationBar` page math but stays self-contained.
 class _CharacterPaginationBar extends StatelessWidget {
   const _CharacterPaginationBar({
     required this.first,

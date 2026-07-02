@@ -100,10 +100,15 @@ class CharactersTab extends ConsumerWidget {
       theme: theme,
     );
 
-    // Ereignisse (events) are keyed by GlobalId: only spawned NPCs have one.
-    // Player and orphan → null → the detail's own empty state.
+    // Ereignisse (events) are keyed by GlobalId. The player's events live
+    // under the save's own Hero ACTOR GlobalId, stashed in
+    // `state.heroGlobalId` when the character index loads (null until then →
+    // the detail's own empty state; EventsDetail re-selects when the id
+    // arrives). Orphans have no GlobalId → null → empty state.
     final Widget eventsBody = EventsDetail(
-      globalId: selected.isPlayer || selected.isOrphan ? null : selected.id,
+      globalId: selected.isPlayer
+          ? state.heroGlobalId
+          : (selected.isOrphan ? null : selected.id),
       notifier: notifier,
       editable: progressionEditable,
       reloadKey: inspection,

@@ -1,6 +1,6 @@
 /// A single NPC actor row from the core `private.npc.list` command. Carries the
 /// id (a GlobalId used to build an [Actor.npc]) plus a small status snapshot
-/// (dead / hp) shown as a badge in the ActorSelector list.
+/// (dead / hp), e.g. driving the NPC status row's revive action.
 class NpcActor {
   const NpcActor({
     required this.id,

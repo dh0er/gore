@@ -73,6 +73,7 @@ class EditorState {
     this.pendingEdits = const {},
     this.selectedActor = const Actor.player(),
     this.invalidNpcEditKey,
+    this.heroGlobalId,
   });
 
   final String saveDir;
@@ -115,6 +116,13 @@ class EditorState {
 
   /// True while an NPC attribute field is invalid — global Save is disabled.
   bool get hasInvalidNpcEdit => invalidNpcEditKey != null;
+
+  /// GlobalId of the save's own "Hero" ACTOR row (the player's avatar),
+  /// stashed when the character index loads (see
+  /// [EditorNotifier.loadAllCharacters]). The pinned Player row in the
+  /// Charaktere master list represents this actor; its GlobalId keys the
+  /// player's memory events. Null until the index has loaded.
+  final String? heroGlobalId;
 
   final String? error;
 
@@ -198,6 +206,7 @@ class EditorState {
     Map<String, PendingSaveEdit>? pendingEdits,
     Actor? selectedActor,
     Object? invalidNpcEditKey = _unchanged,
+    Object? heroGlobalId = _unchanged,
     bool clearInspection = false,
     bool clearBackups = false,
     bool clearError = false,
@@ -242,6 +251,9 @@ class EditorState {
           : identical(invalidNpcEditKey, _unchanged)
           ? this.invalidNpcEditKey
           : invalidNpcEditKey as String?,
+      heroGlobalId: identical(heroGlobalId, _unchanged)
+          ? this.heroGlobalId
+          : heroGlobalId as String?,
     );
   }
 }
@@ -937,7 +949,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
       // The fresh inspection re-seeds every editor, so pending edits are
       // discarded in the same state change — never earlier (see above).
       // A fresh inspection re-seeds every editor; drop the cached full NPC list
-      // so the ActorSelector re-fetches against the new save state.
+      // so the next list load re-fetches against the new save state.
       _invalidateNpcCache();
       state = state.copyWith(
         inspection: SaveInspection.fromJson(data),
@@ -1349,8 +1361,8 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// Load one page of NPC actors from the core `private.npc.list` command for
   /// the currently selected save. Mirrors [loadMemoryCharacters]: server-side
   /// pagination + optional query, returning a typed page that carries an inline
-  /// error instead of throwing so the ActorSelector can render it. The full NPC
-  /// set (~1484) is large, so callers MUST paginate rather than fetch it all.
+  /// error instead of throwing so the caller can render it. The full NPC set
+  /// (~1484) is large, so callers MUST paginate rather than fetch it all.
   Future<NpcActorsPage> loadNpcActors({
     String query = '',
     int offset = 0,
@@ -1392,6 +1404,12 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// [loadNpcActors]: reads [state.selectedPath], goes through [_execute], and
   /// returns a typed page carrying an inline [CharacterIndexPage.error] instead
   /// of throwing so the caller can render it.
+  ///
+  /// A successful parse also stashes [EditorState.heroGlobalId]: the save's own
+  /// "Hero" ACTOR row is the player's avatar — the pinned Player row in the
+  /// master list represents it, and its GlobalId keys the player's memory
+  /// events. Error pages leave the state untouched (a stale value from the
+  /// same save is still correct; the next successful load re-stashes it).
   Future<CharacterIndexPage> loadAllCharacters() async {
     final path = state.selectedPath;
     if (path == null) {
@@ -1405,21 +1423,27 @@ class EditorNotifier extends StateNotifier<EditorState> {
       if (response['ok'] != true) {
         return CharacterIndexPage(error: _errorMessage(response));
       }
-      return CharacterIndexPage.fromJson(
+      final page = CharacterIndexPage.fromJson(
         (response['data'] as Map).cast<String, Object?>(),
       );
+      for (final row in page.characters) {
+        if (row.globalId != null && row.uniqueName.toLowerCase() == 'hero') {
+          state = state.copyWith(heroGlobalId: row.globalId);
+          break;
+        }
+      }
+      return page;
     } catch (error) {
       return CharacterIndexPage(error: 'Character list failed: $error');
     }
   }
 
-  /// Cached full NPC list, memoized per inspection. The ActorSelector fetches
-  /// the ENTIRE list once (no server `query`) and filters/paginates it
-  /// client-side, so both the Attribute and Inventory tabs — and every
-  /// keystroke — reuse a single decompress instead of re-hitting the core. The
-  /// cache is keyed by the inspection identity it was loaded for; a refresh /
-  /// slot switch produces a fresh inspection, which invalidates it (see
-  /// [_invalidateNpcCache]).
+  /// Cached full NPC list, memoized per inspection. [loadAllNpcActors] fetches
+  /// the ENTIRE list once (no server `query`) so its consumers (e.g. the NPC
+  /// status row's exact-id lookup) reuse a single decompress instead of
+  /// re-hitting the core. The cache is keyed by the inspection identity it was
+  /// loaded for; a refresh / slot switch produces a fresh inspection, which
+  /// invalidates it (see [_invalidateNpcCache]).
   Future<NpcActorsPage>? _allNpcActorsFuture;
   SaveInspection? _allNpcActorsFor;
 
@@ -1430,12 +1454,12 @@ class EditorNotifier extends StateNotifier<EditorState> {
     _allNpcActorsFor = null;
   }
 
-  /// Load (and memoize) the FULL NPC list for the current inspection. The
-  /// signature matches [NpcActorsLoader] so the ActorSelector can pass it
-  /// directly; [query]/[offset]/[limit] are ignored — the selector filters and
-  /// paginates client-side. Subsequent calls within the same inspection return
-  /// the cached future (one decompress shared across both tabs + all
-  /// keystrokes). A failed load is NOT cached, so a transient error can retry.
+  /// Load (and memoize) the FULL NPC list for the current inspection.
+  /// [query]/[offset]/[limit] are ignored (kept for loader-signature
+  /// compatibility) — consumers filter client-side. Subsequent calls within
+  /// the same inspection return the cached future (one decompress shared
+  /// across all consumers). A failed load is NOT cached, so a transient error
+  /// can retry.
   Future<NpcActorsPage> loadAllNpcActors({
     String query = '',
     int offset = 0,
