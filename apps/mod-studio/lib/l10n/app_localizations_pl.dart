@@ -18,6 +18,69 @@ class AppLocalizationsPl extends AppLocalizations {
   String get tabSettings => 'Settings';
 
   @override
+  String get tabDialogs => 'Dialogi';
+
+  @override
+  String get tabAudio => 'Audio';
+
+  @override
+  String get tabTextures => 'Tekstury';
+
+  @override
+  String get tabScripts => 'Skrypty';
+
+  @override
+  String get sectionItemValues => 'Wartości przedmiotów';
+
+  @override
+  String get sectionLocalizedText => 'Zlokalizowane teksty';
+
+  @override
+  String get audioCatCreatures => 'Stworzenia';
+
+  @override
+  String get audioCatObjects => 'Obiekty';
+
+  @override
+  String get audioCatMagic => 'Magia';
+
+  @override
+  String get audioCatMovement => 'Ruch';
+
+  @override
+  String get audioCatWorld => 'Świat';
+
+  @override
+  String get audioCatAction => 'Akcje';
+
+  @override
+  String get audioCatCombat => 'Walka';
+
+  @override
+  String get audioCatPhysics => 'Fizyka';
+
+  @override
+  String get audioCatItems => 'Przedmioty';
+
+  @override
+  String get audioCatUi => 'Interfejs';
+
+  @override
+  String get audioCatFoley => 'Foley';
+
+  @override
+  String get audioCatUnderwater => 'Pod wodą';
+
+  @override
+  String get audioCatVision => 'Wizje';
+
+  @override
+  String get audioCatDialog => 'Dialog';
+
+  @override
+  String get audioCatOther => 'Inne';
+
+  @override
   String get gameExecutable => 'Game executable';
 
   @override

@@ -18,6 +18,69 @@ class AppLocalizationsPt extends AppLocalizations {
   String get tabSettings => 'Settings';
 
   @override
+  String get tabDialogs => 'Diálogos';
+
+  @override
+  String get tabAudio => 'Áudio';
+
+  @override
+  String get tabTextures => 'Texturas';
+
+  @override
+  String get tabScripts => 'Scripts';
+
+  @override
+  String get sectionItemValues => 'Valores dos itens';
+
+  @override
+  String get sectionLocalizedText => 'Textos localizados';
+
+  @override
+  String get audioCatCreatures => 'Criaturas';
+
+  @override
+  String get audioCatObjects => 'Objetos';
+
+  @override
+  String get audioCatMagic => 'Magia';
+
+  @override
+  String get audioCatMovement => 'Movimento';
+
+  @override
+  String get audioCatWorld => 'Mundo';
+
+  @override
+  String get audioCatAction => 'Ações';
+
+  @override
+  String get audioCatCombat => 'Combate';
+
+  @override
+  String get audioCatPhysics => 'Física';
+
+  @override
+  String get audioCatItems => 'Itens';
+
+  @override
+  String get audioCatUi => 'Interface';
+
+  @override
+  String get audioCatFoley => 'Foley';
+
+  @override
+  String get audioCatUnderwater => 'Subaquático';
+
+  @override
+  String get audioCatVision => 'Visões';
+
+  @override
+  String get audioCatDialog => 'Diálogo';
+
+  @override
+  String get audioCatOther => 'Outros';
+
+  @override
   String get gameExecutable => 'Game executable';
 
   @override
@@ -276,6 +339,69 @@ class AppLocalizationsPt extends AppLocalizations {
 /// The translations for Portuguese, as used in Brazil (`pt_BR`).
 class AppLocalizationsPtBr extends AppLocalizationsPt {
   AppLocalizationsPtBr() : super('pt_BR');
+
+  @override
+  String get tabDialogs => 'Diálogos';
+
+  @override
+  String get tabAudio => 'Áudio';
+
+  @override
+  String get tabTextures => 'Texturas';
+
+  @override
+  String get tabScripts => 'Scripts';
+
+  @override
+  String get sectionItemValues => 'Valores dos itens';
+
+  @override
+  String get sectionLocalizedText => 'Textos localizados';
+
+  @override
+  String get audioCatCreatures => 'Criaturas';
+
+  @override
+  String get audioCatObjects => 'Objetos';
+
+  @override
+  String get audioCatMagic => 'Magia';
+
+  @override
+  String get audioCatMovement => 'Movimento';
+
+  @override
+  String get audioCatWorld => 'Mundo';
+
+  @override
+  String get audioCatAction => 'Ações';
+
+  @override
+  String get audioCatCombat => 'Combate';
+
+  @override
+  String get audioCatPhysics => 'Física';
+
+  @override
+  String get audioCatItems => 'Itens';
+
+  @override
+  String get audioCatUi => 'Interface';
+
+  @override
+  String get audioCatFoley => 'Foley';
+
+  @override
+  String get audioCatUnderwater => 'Subaquático';
+
+  @override
+  String get audioCatVision => 'Visões';
+
+  @override
+  String get audioCatDialog => 'Diálogo';
+
+  @override
+  String get audioCatOther => 'Outros';
 
   @override
   String get extractLocalizedText => 'Extrair textos localizados';

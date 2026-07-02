@@ -18,6 +18,69 @@ class AppLocalizationsEs extends AppLocalizations {
   String get tabSettings => 'Settings';
 
   @override
+  String get tabDialogs => 'Diálogos';
+
+  @override
+  String get tabAudio => 'Audio';
+
+  @override
+  String get tabTextures => 'Texturas';
+
+  @override
+  String get tabScripts => 'Scripts';
+
+  @override
+  String get sectionItemValues => 'Valores de objetos';
+
+  @override
+  String get sectionLocalizedText => 'Textos localizados';
+
+  @override
+  String get audioCatCreatures => 'Criaturas';
+
+  @override
+  String get audioCatObjects => 'Objetos';
+
+  @override
+  String get audioCatMagic => 'Magia';
+
+  @override
+  String get audioCatMovement => 'Movimiento';
+
+  @override
+  String get audioCatWorld => 'Mundo';
+
+  @override
+  String get audioCatAction => 'Acciones';
+
+  @override
+  String get audioCatCombat => 'Combate';
+
+  @override
+  String get audioCatPhysics => 'Física';
+
+  @override
+  String get audioCatItems => 'Ítems';
+
+  @override
+  String get audioCatUi => 'Interfaz';
+
+  @override
+  String get audioCatFoley => 'Foley';
+
+  @override
+  String get audioCatUnderwater => 'Bajo el agua';
+
+  @override
+  String get audioCatVision => 'Visiones';
+
+  @override
+  String get audioCatDialog => 'Diálogo';
+
+  @override
+  String get audioCatOther => 'Otros';
+
+  @override
   String get gameExecutable => 'Game executable';
 
   @override

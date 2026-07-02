@@ -18,6 +18,69 @@ class AppLocalizationsZh extends AppLocalizations {
   String get tabSettings => 'Settings';
 
   @override
+  String get tabDialogs => '对话';
+
+  @override
+  String get tabAudio => '音频';
+
+  @override
+  String get tabTextures => '纹理';
+
+  @override
+  String get tabScripts => '脚本';
+
+  @override
+  String get sectionItemValues => '物品数值';
+
+  @override
+  String get sectionLocalizedText => '本地化文本';
+
+  @override
+  String get audioCatCreatures => '生物';
+
+  @override
+  String get audioCatObjects => '物体';
+
+  @override
+  String get audioCatMagic => '魔法';
+
+  @override
+  String get audioCatMovement => '移动';
+
+  @override
+  String get audioCatWorld => '世界';
+
+  @override
+  String get audioCatAction => '动作';
+
+  @override
+  String get audioCatCombat => '战斗';
+
+  @override
+  String get audioCatPhysics => '物理';
+
+  @override
+  String get audioCatItems => '物品';
+
+  @override
+  String get audioCatUi => '界面';
+
+  @override
+  String get audioCatFoley => '拟音';
+
+  @override
+  String get audioCatUnderwater => '水下';
+
+  @override
+  String get audioCatVision => '幻象';
+
+  @override
+  String get audioCatDialog => '对话';
+
+  @override
+  String get audioCatOther => '其他';
+
+  @override
   String get gameExecutable => 'Game executable';
 
   @override
@@ -272,6 +335,69 @@ class AppLocalizationsZh extends AppLocalizations {
 /// The translations for Chinese, using the Han script (`zh_Hans`).
 class AppLocalizationsZhHans extends AppLocalizationsZh {
   AppLocalizationsZhHans() : super('zh_Hans');
+
+  @override
+  String get tabDialogs => '对话';
+
+  @override
+  String get tabAudio => '音频';
+
+  @override
+  String get tabTextures => '纹理';
+
+  @override
+  String get tabScripts => '脚本';
+
+  @override
+  String get sectionItemValues => '物品数值';
+
+  @override
+  String get sectionLocalizedText => '本地化文本';
+
+  @override
+  String get audioCatCreatures => '生物';
+
+  @override
+  String get audioCatObjects => '物体';
+
+  @override
+  String get audioCatMagic => '魔法';
+
+  @override
+  String get audioCatMovement => '移动';
+
+  @override
+  String get audioCatWorld => '世界';
+
+  @override
+  String get audioCatAction => '动作';
+
+  @override
+  String get audioCatCombat => '战斗';
+
+  @override
+  String get audioCatPhysics => '物理';
+
+  @override
+  String get audioCatItems => '物品';
+
+  @override
+  String get audioCatUi => '界面';
+
+  @override
+  String get audioCatFoley => '拟音';
+
+  @override
+  String get audioCatUnderwater => '水下';
+
+  @override
+  String get audioCatVision => '幻象';
+
+  @override
+  String get audioCatDialog => '对话';
+
+  @override
+  String get audioCatOther => '其他';
 
   @override
   String get extractLocalizedText => '提取本地化文本';

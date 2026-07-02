@@ -90,27 +90,27 @@ class OverridesPanel extends ConsumerWidget {
                   padding: const EdgeInsets.symmetric(vertical: 6),
                   children: [
                     if (overrideEntries.isNotEmpty) ...[
-                      const _SectionHeader('Item values'),
+                      _SectionHeader(l10n.sectionItemValues),
                       for (final entry in overrideEntries)
                         _OverrideRow(entry: entry, notifier: overrides),
                     ],
                     if (locPairs.isNotEmpty) ...[
-                      const _SectionHeader('Localized text'),
+                      _SectionHeader(l10n.sectionLocalizedText),
                       for (final row in locPairs)
                         _LocRow(row: row, notifier: locEdits),
                     ],
                     if (audioEntries.isNotEmpty) ...[
-                      const _SectionHeader('Audio'),
+                      _SectionHeader(l10n.tabAudio),
                       for (final entry in audioEntries)
                         _AudioRow(entry: entry, notifier: audio),
                     ],
                     if (textureEntries.isNotEmpty) ...[
-                      const _SectionHeader('Textures'),
+                      _SectionHeader(l10n.tabTextures),
                       for (final entry in textureEntries)
                         _TextureRow(entry: entry, notifier: textures),
                     ],
                     if (scriptEntries.isNotEmpty) ...[
-                      const _SectionHeader('AngelScript'),
+                      _SectionHeader(l10n.tabScripts),
                       for (final entry in scriptEntries)
                         _ScriptRow(entry: entry, notifier: scripts),
                     ],

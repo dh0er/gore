@@ -259,21 +259,21 @@ class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver
                           icon: const Icon(Icons.inventory_2_outlined),
                           text: l10n.tabItems,
                         ),
-                        const Tab(
-                          icon: Icon(Icons.forum_outlined),
-                          text: 'Dialoge',
+                        Tab(
+                          icon: const Icon(Icons.forum_outlined),
+                          text: l10n.tabDialogs,
                         ),
-                        const Tab(
-                          icon: Icon(Icons.audiotrack_outlined),
-                          text: 'Audio',
+                        Tab(
+                          icon: const Icon(Icons.audiotrack_outlined),
+                          text: l10n.tabAudio,
                         ),
-                        const Tab(
-                          icon: Icon(Icons.texture),
-                          text: 'Textures',
+                        Tab(
+                          icon: const Icon(Icons.texture),
+                          text: l10n.tabTextures,
                         ),
-                        const Tab(
-                          icon: Icon(Icons.code),
-                          text: 'AngelScript',
+                        Tab(
+                          icon: const Icon(Icons.code),
+                          text: l10n.tabScripts,
                         ),
                         Tab(
                           icon: const Icon(Icons.edit_note_outlined),

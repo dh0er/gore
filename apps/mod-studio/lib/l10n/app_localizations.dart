@@ -134,6 +134,132 @@ abstract class AppLocalizations {
   /// **'Settings'**
   String get tabSettings;
 
+  /// No description provided for @tabDialogs.
+  ///
+  /// In en, this message translates to:
+  /// **'Dialogs'**
+  String get tabDialogs;
+
+  /// No description provided for @tabAudio.
+  ///
+  /// In en, this message translates to:
+  /// **'Audio'**
+  String get tabAudio;
+
+  /// No description provided for @tabTextures.
+  ///
+  /// In en, this message translates to:
+  /// **'Textures'**
+  String get tabTextures;
+
+  /// No description provided for @tabScripts.
+  ///
+  /// In en, this message translates to:
+  /// **'Scripts'**
+  String get tabScripts;
+
+  /// No description provided for @sectionItemValues.
+  ///
+  /// In en, this message translates to:
+  /// **'Item values'**
+  String get sectionItemValues;
+
+  /// No description provided for @sectionLocalizedText.
+  ///
+  /// In en, this message translates to:
+  /// **'Localized text'**
+  String get sectionLocalizedText;
+
+  /// No description provided for @audioCatCreatures.
+  ///
+  /// In en, this message translates to:
+  /// **'Creatures'**
+  String get audioCatCreatures;
+
+  /// No description provided for @audioCatObjects.
+  ///
+  /// In en, this message translates to:
+  /// **'Objects'**
+  String get audioCatObjects;
+
+  /// No description provided for @audioCatMagic.
+  ///
+  /// In en, this message translates to:
+  /// **'Magic'**
+  String get audioCatMagic;
+
+  /// No description provided for @audioCatMovement.
+  ///
+  /// In en, this message translates to:
+  /// **'Movement'**
+  String get audioCatMovement;
+
+  /// No description provided for @audioCatWorld.
+  ///
+  /// In en, this message translates to:
+  /// **'World'**
+  String get audioCatWorld;
+
+  /// No description provided for @audioCatAction.
+  ///
+  /// In en, this message translates to:
+  /// **'Action'**
+  String get audioCatAction;
+
+  /// No description provided for @audioCatCombat.
+  ///
+  /// In en, this message translates to:
+  /// **'Combat'**
+  String get audioCatCombat;
+
+  /// No description provided for @audioCatPhysics.
+  ///
+  /// In en, this message translates to:
+  /// **'Physics'**
+  String get audioCatPhysics;
+
+  /// No description provided for @audioCatItems.
+  ///
+  /// In en, this message translates to:
+  /// **'Items'**
+  String get audioCatItems;
+
+  /// No description provided for @audioCatUi.
+  ///
+  /// In en, this message translates to:
+  /// **'UI'**
+  String get audioCatUi;
+
+  /// No description provided for @audioCatFoley.
+  ///
+  /// In en, this message translates to:
+  /// **'Foley'**
+  String get audioCatFoley;
+
+  /// No description provided for @audioCatUnderwater.
+  ///
+  /// In en, this message translates to:
+  /// **'Underwater'**
+  String get audioCatUnderwater;
+
+  /// No description provided for @audioCatVision.
+  ///
+  /// In en, this message translates to:
+  /// **'Vision'**
+  String get audioCatVision;
+
+  /// No description provided for @audioCatDialog.
+  ///
+  /// In en, this message translates to:
+  /// **'Dialog'**
+  String get audioCatDialog;
+
+  /// No description provided for @audioCatOther.
+  ///
+  /// In en, this message translates to:
+  /// **'Other'**
+  String get audioCatOther;
+
   /// No description provided for @gameExecutable.
   ///
   /// In en, this message translates to:
