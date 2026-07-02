@@ -7,6 +7,7 @@ import 'package:gore_mod/editor/domain/override_entry.dart';
 import 'package:gore_mod/editor/domain/overrides_notifier.dart';
 import 'package:gore_mod/editor/ui/field_editor.dart';
 import 'package:gore_mod/l10n/app_localizations.dart';
+import 'package:gore_mod/loc/domain/loc_catalog_provider.dart';
 import 'package:gore_mod/loc/domain/loc_edits_notifier.dart';
 
 /// Wraps [child] in a localized MaterialApp so AppLocalizations.of works.
@@ -43,9 +44,17 @@ void main() {
   /// FieldEditor wired to the real providers, mirroring the items_tab wiring:
   /// pendingOverrides watched from [overridesProvider], delete taps remove the
   /// entry from the notifier. Needs a ProviderScope (onlyEdited also watches
-  /// [locEditsProvider] for the name section).
-  Widget providerApp({bool onlyEdited = false}) {
+  /// [locEditsProvider] for the name section). [locCatalog] seeds the loc
+  /// catalog so the name section's LangFieldsEditor renders editable fields.
+  Widget providerApp({
+    bool onlyEdited = false,
+    Map<String, Map<String, String>>? locCatalog,
+  }) {
     return ProviderScope(
+      overrides: [
+        if (locCatalog != null)
+          locCatalogProvider.overrideWith((ref) async => locCatalog),
+      ],
       child: MaterialApp(
         localizationsDelegates: AppLocalizations.localizationsDelegates,
         supportedLocales: AppLocalizations.supportedLocales,
@@ -194,6 +203,28 @@ void main() {
         .removeEdit('itfo_apple', 'english');
     await tester.pump();
     expect(find.text('Name (all languages)'), findsNothing);
+  });
+
+  testWidgets('onlyEdited name expansion lists only the edited language',
+      (tester) async {
+    // Catalog carries English and German names for the apple.
+    await tester.pumpWidget(providerApp(onlyEdited: true, locCatalog: {
+      'itfo_apple': {'english_newer': 'Apple', 'german_new': 'Apfel'},
+    }));
+    await tester.pumpAndSettle();
+    // Stage a name edit for German only (its primary set is german_new).
+    containerOf(tester).read(locEditsProvider.notifier)
+        .setEdit('itfo_apple', 'german_new', 'Goldapfel');
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Name (all languages)'));
+    await tester.pumpAndSettle();
+    // Exactly the edited language row — no English (or other) rows.
+    expect(find.text('de'), findsOneWidget);
+    expect(find.text('en'), findsNothing);
+    final langFields = find.byType(TextField);
+    expect(langFields, findsOneWidget);
+    expect(tester.widget<TextField>(langFields).controller!.text, 'Goldapfel');
   });
 
   testWidgets('entering 0 emits an override (not treated as a clear)', (tester) async {

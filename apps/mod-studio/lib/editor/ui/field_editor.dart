@@ -281,7 +281,12 @@ class _FieldEditorState extends State<FieldEditor> {
       title: const Text('Name (all languages)'),
       childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
       children: [
-        LangFieldsEditor(locId: locIdForCatalogId(widget.item.id)),
+        // Forward edited-only mode so the Changes embed lists just the
+        // languages with a staged name edit, matching the dialog embed.
+        LangFieldsEditor(
+          locId: locIdForCatalogId(widget.item.id),
+          onlyEdited: widget.onlyEdited,
+        ),
       ],
     ),
   );
