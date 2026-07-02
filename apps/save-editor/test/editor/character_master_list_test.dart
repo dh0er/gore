@@ -164,6 +164,9 @@ void main() {
     expect(find.text('Player'), findsOneWidget);
     expect(find.text('Lizard'), findsOneWidget);
     expect(find.text('St Vlk Mud Sleeper'), findsOneWidget);
+    // English-locale harness → the orphan group header is the localized
+    // 'Other' (the German suite above pins 'Weitere' for the same header).
+    expect(find.text('Other'), findsOneWidget);
     // No 'Hero' NPC row: neither its resolved title nor its id subtitle
     // render (both would be the text 'Hero').
     expect(find.text('Hero'), findsNothing);

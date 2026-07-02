@@ -13,6 +13,7 @@
   "tabWorld": "World",
   "tabCharacters": "Characters",
   "characterNoActorBody": "This character has no in-world actor, so it has no attributes, inventory, or events.",
+  "characterOrphanGroup": "Other",
   "tabAllData": "All data",
   "tabBackups": "Backups",
   "tabSettings": "Settings",

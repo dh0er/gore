@@ -1308,22 +1308,6 @@ class EditorNotifier extends StateNotifier<EditorState> {
     return ProgressionQuestPage.fromJson(data);
   }
 
-  Future<KnowledgeCharactersPage> loadKnowledgeCharacters({
-    String query = '',
-    int offset = 0,
-    int limit = 100,
-  }) async {
-    String? error;
-    final data = await _queryProgression({
-      'section': 'knowledge',
-      'query': query,
-      'offset': offset,
-      'limit': limit,
-    }, onError: (message) => error = message);
-    if (data == null) return KnowledgeCharactersPage(error: error);
-    return KnowledgeCharactersPage.fromJson(data);
-  }
-
   Future<KnowledgeEntriesPage> loadKnowledgeEntries(
     String character, {
     String query = '',
@@ -1342,24 +1326,8 @@ class EditorNotifier extends StateNotifier<EditorState> {
     return KnowledgeEntriesPage.fromJson(data);
   }
 
-  Future<MemoryCharactersPage> loadMemoryCharacters({
-    String query = '',
-    int offset = 0,
-    int limit = 100,
-  }) async {
-    String? error;
-    final data = await _queryProgression({
-      'section': 'events',
-      'query': query,
-      'offset': offset,
-      'limit': limit,
-    }, onError: (message) => error = message);
-    if (data == null) return MemoryCharactersPage(error: error);
-    return MemoryCharactersPage.fromJson(data);
-  }
-
   /// Load one page of NPC actors from the core `private.npc.list` command for
-  /// the currently selected save. Mirrors [loadMemoryCharacters]: server-side
+  /// the currently selected save. Mirrors [loadKnowledgeEntries]: server-side
   /// pagination + optional query, returning a typed page that carries an inline
   /// error instead of throwing so the caller can render it. The full NPC set
   /// (~1484) is large, so callers MUST paginate rather than fetch it all.

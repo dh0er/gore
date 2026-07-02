@@ -49,6 +49,9 @@ class AppLocalizationsJa extends AppLocalizations {
       'このキャラクターはワールド内のアクターを持たないため、属性、インベントリ、イベントはありません。';
 
   @override
+  String get characterOrphanGroup => 'その他';
+
+  @override
   String get tabAllData => '全データ';
 
   @override

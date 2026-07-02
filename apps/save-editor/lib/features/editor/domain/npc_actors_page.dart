@@ -31,7 +31,7 @@ class NpcActor {
 }
 
 /// A paginated page of NPC actors, mirroring the shape of the other progression
-/// page models (e.g. `MemoryCharactersPage`): the typed rows plus the
+/// page models (e.g. `MemoryEventsPage`): the typed rows plus the
 /// server-side pagination cursor and an optional inline [error]. The core caps
 /// `total` at the full NPC count (~1484) so the list must be paginated.
 class NpcActorsPage {

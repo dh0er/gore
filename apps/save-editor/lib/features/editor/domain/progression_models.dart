@@ -132,58 +132,6 @@ class ProgressionQuestPage {
   int get pageCount => total == 0 ? 1 : (total + limit - 1) ~/ limit;
 }
 
-class KnowledgeCharacter {
-  const KnowledgeCharacter({required this.name, required this.entryCount});
-
-  factory KnowledgeCharacter.fromJson(Map<String, Object?> json) {
-    return KnowledgeCharacter(
-      name: json['name'] as String? ?? '',
-      entryCount: (json['entryCount'] as num?)?.toInt() ?? 0,
-    );
-  }
-
-  final String name;
-  final int entryCount;
-}
-
-class KnowledgeCharactersPage {
-  const KnowledgeCharactersPage({
-    this.characters = const [],
-    this.total = 0,
-    this.offset = 0,
-    this.limit = 100,
-    this.error,
-  });
-
-  factory KnowledgeCharactersPage.fromJson(Map<String, Object?> json) {
-    return KnowledgeCharactersPage(
-      characters:
-          (json['characters'] as List?)
-              ?.whereType<Map>()
-              .map(
-                (e) => KnowledgeCharacter.fromJson(e.cast<String, Object?>()),
-              )
-              .toList(growable: false) ??
-          const [],
-      total: (json['total'] as num?)?.toInt() ?? 0,
-      offset: (json['offset'] as num?)?.toInt() ?? 0,
-      limit: (json['limit'] as num?)?.toInt() ?? 100,
-    );
-  }
-
-  final List<KnowledgeCharacter> characters;
-  final int total;
-  final int offset;
-  final int limit;
-  final String? error;
-
-  bool get hasMore => offset + characters.length < total;
-  bool get hasNext => offset + characters.length < total;
-  bool get hasPrevious => offset > 0;
-  int get pageIndex => limit == 0 ? 0 : offset ~/ limit;
-  int get pageCount => total == 0 ? 1 : (total + limit - 1) ~/ limit;
-}
-
 class KnowledgeEntriesPage {
   const KnowledgeEntriesPage({
     this.character = '',
@@ -224,56 +172,6 @@ class KnowledgeEntriesPage {
 
   bool get hasMore => offset + entries.length < total;
   bool get hasNext => offset + entries.length < total;
-  bool get hasPrevious => offset > 0;
-  int get pageIndex => limit == 0 ? 0 : offset ~/ limit;
-  int get pageCount => total == 0 ? 1 : (total + limit - 1) ~/ limit;
-}
-
-class MemoryCharacter {
-  const MemoryCharacter({required this.id, required this.eventCount});
-
-  factory MemoryCharacter.fromJson(Map<String, Object?> json) {
-    return MemoryCharacter(
-      id: json['id'] as String? ?? '',
-      eventCount: (json['eventCount'] as num?)?.toInt() ?? 0,
-    );
-  }
-
-  final String id;
-  final int eventCount;
-}
-
-class MemoryCharactersPage {
-  const MemoryCharactersPage({
-    this.characters = const [],
-    this.total = 0,
-    this.offset = 0,
-    this.limit = 100,
-    this.error,
-  });
-
-  factory MemoryCharactersPage.fromJson(Map<String, Object?> json) {
-    return MemoryCharactersPage(
-      characters:
-          (json['characters'] as List?)
-              ?.whereType<Map>()
-              .map((e) => MemoryCharacter.fromJson(e.cast<String, Object?>()))
-              .toList(growable: false) ??
-          const [],
-      total: (json['total'] as num?)?.toInt() ?? 0,
-      offset: (json['offset'] as num?)?.toInt() ?? 0,
-      limit: (json['limit'] as num?)?.toInt() ?? 100,
-    );
-  }
-
-  final List<MemoryCharacter> characters;
-  final int total;
-  final int offset;
-  final int limit;
-  final String? error;
-
-  bool get hasMore => offset + characters.length < total;
-  bool get hasNext => offset + characters.length < total;
   bool get hasPrevious => offset > 0;
   int get pageIndex => limit == 0 ? 0 : offset ~/ limit;
   int get pageCount => total == 0 ? 1 : (total + limit - 1) ~/ limit;

@@ -13,6 +13,7 @@
   "tabWorld": "ワールド",
   "tabCharacters": "キャラクター",
   "characterNoActorBody": "このキャラクターはワールド内のアクターを持たないため、属性、インベントリ、イベントはありません。",
+  "characterOrphanGroup": "その他",
   "tabAllData": "全データ",
   "tabBackups": "バックアップ",
   "tabSettings": "設定",

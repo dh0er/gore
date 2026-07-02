@@ -1501,6 +1501,8 @@ void main() {
   test('progression loaders surface core errors inline', () async {
     // The default _RecordingCoreService returns ok:false for query_progression
     // (no progressionData set), so the loader should surface the error inline.
+    // All progression loaders share _queryProgression; loadKnowledgeEntries is
+    // the exercised representative.
     final core = _RecordingCoreService();
     final notifier = EditorNotifier(
       core,
@@ -1508,7 +1510,7 @@ void main() {
     );
     await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
 
-    final page = await notifier.loadKnowledgeCharacters();
+    final page = await notifier.loadKnowledgeEntries('OC_STT_Diego');
 
     expect(page.error, isNotNull);
   });

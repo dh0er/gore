@@ -49,6 +49,9 @@ class AppLocalizationsRu extends AppLocalizations {
       'У этого персонажа нет актёра в мире, поэтому нет атрибутов, инвентаря или событий.';
 
   @override
+  String get characterOrphanGroup => 'Прочие';
+
+  @override
   String get tabAllData => 'Все данные';
 
   @override

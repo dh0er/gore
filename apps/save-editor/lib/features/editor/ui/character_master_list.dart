@@ -374,10 +374,9 @@ class _CharacterMasterListState extends State<CharacterMasterList> {
                         ],
                         // Orphan group: rendered ONLY when non-empty.
                         if (_orphans.isNotEmpty) ...[
-                          const Padding(
-                            padding: EdgeInsets.fromLTRB(16, 12, 16, 4),
-                            // Plain string for now — a later task localizes it.
-                            child: Text('Weitere'),
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+                            child: Text(l10n.characterOrphanGroup),
                           ),
                           for (final entry in _orphans) ...[
                             _orphanTile(entry, scheme, l10n),

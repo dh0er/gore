@@ -194,6 +194,12 @@ abstract class AppLocalizations {
   /// **'This character has no in-world actor, so it has no attributes, inventory, or events.'**
   String get characterNoActorBody;
 
+  /// No description provided for @characterOrphanGroup.
+  ///
+  /// In en, this message translates to:
+  /// **'Other'**
+  String get characterOrphanGroup;
+
   /// No description provided for @tabAllData.
   ///
   /// In en, this message translates to:
