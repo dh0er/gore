@@ -212,9 +212,13 @@ class _CharacterMasterListState extends State<CharacterMasterList> {
   /// Pair each row with its resolved display name + a lowercased search string,
   /// computed once so per-keystroke filtering is a cheap scan. The name/search
   /// key is the GlobalId for actors and the uniqueName for orphans (which have
-  /// no GlobalId).
+  /// no GlobalId). The result is sorted alphabetically by the RESOLVED display
+  /// name (case-insensitive), so the list order follows the localized names the
+  /// user sees rather than the core's emission order; the key is the tie-break
+  /// for a stable order among same-named rows. Re-run on a locale/catalog change
+  /// (see [didUpdateWidget]) so the order tracks the active language.
   List<_SearchableRow> _decorate(List<CharacterRow> rows) {
-    return [
+    final decorated = [
       for (final row in rows)
         () {
           final key = row.globalId ?? row.uniqueName;
@@ -222,6 +226,14 @@ class _CharacterMasterListState extends State<CharacterMasterList> {
           return _SearchableRow(row, name, '$key\n$name'.toLowerCase());
         }(),
     ];
+    decorated.sort((a, b) {
+      final byName = a.name.toLowerCase().compareTo(b.name.toLowerCase());
+      if (byName != 0) return byName;
+      final aKey = a.row.globalId ?? a.row.uniqueName;
+      final bKey = b.row.globalId ?? b.row.uniqueName;
+      return aKey.compareTo(bKey);
+    });
+    return decorated;
   }
 
   /// True for the save's own "Hero" ACTOR row (the player's avatar). The core

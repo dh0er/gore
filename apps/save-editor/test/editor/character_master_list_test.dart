@@ -558,4 +558,25 @@ void main() {
     // The previous save's actor is gone (state reset, not appended).
     expect(find.text('Lizard'), findsNothing);
   });
+
+  testWidgets('actor rows are sorted alphabetically by resolved name', (
+    tester,
+  ) async {
+    // Fed out of order; prettified names are Zeta / Alpha / Mango.
+    await tester.pumpWidget(
+      _pump(
+        load: () async => CharacterIndexPage(
+          characters: [_actor('Zeta-1'), _actor('Alpha-1'), _actor('Mango-1')],
+          total: 3,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final alphaY = tester.getTopLeft(find.text('Alpha')).dy;
+    final mangoY = tester.getTopLeft(find.text('Mango')).dy;
+    final zetaY = tester.getTopLeft(find.text('Zeta')).dy;
+    expect(alphaY, lessThan(mangoY));
+    expect(mangoY, lessThan(zetaY));
+  });
 }
