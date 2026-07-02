@@ -293,7 +293,7 @@ void main() {
     expect(find.text('ItFo_Cheese'), findsOneWidget);
     expect(find.text('ItMi_Orenugget'), findsNothing);
 
-    await tester.tap(find.widgetWithText(Tab, 'Progression'));
+    await tester.tap(find.widgetWithText(Tab, 'World'));
     await tester.pumpAndSettle();
 
     // Overview/summary card is gone; sidebar entries are visible instead.

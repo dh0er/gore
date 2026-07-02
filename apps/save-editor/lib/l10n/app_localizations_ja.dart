@@ -42,6 +42,9 @@ class AppLocalizationsJa extends AppLocalizations {
   String get tabProgression => '進行状況';
 
   @override
+  String get tabWorld => 'ワールド';
+
+  @override
   String get tabCharacters => 'キャラクター';
 
   @override

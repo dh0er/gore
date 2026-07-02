@@ -22,7 +22,7 @@ import 'package:goresave/loc/loc_catalog_provider.dart';
 import 'package:goresave/providers/data_providers.dart';
 import 'package:intl/intl.dart';
 import 'difficulty_dialog.dart';
-import 'progression_panel.dart';
+import 'world_tab.dart';
 
 final _bytes = NumberFormat.decimalPattern();
 
@@ -680,8 +680,8 @@ class _EditorWorkspace extends StatelessWidget {
                           text: l10n.tabCharacters,
                         ),
                         Tab(
-                          icon: const Icon(Icons.flag_outlined),
-                          text: l10n.tabProgression,
+                          icon: const Icon(Icons.public),
+                          text: l10n.tabWorld,
                         ),
                         Tab(icon: const Icon(Icons.tune), text: l10n.tabAllData),
                         Tab(
@@ -770,8 +770,8 @@ class _EditorWorkspace extends StatelessWidget {
                           state.codecCompressReady,
                       // Same value the old Inventory tab received for canCompress.
                       inventoryCanCompress: state.codecCompressReady,
-                      // Same gating the Progression tab uses for its knowledge/
-                      // events detail panels.
+                      // Same gating the World tab uses for its quests/factions
+                      // detail panels.
                       progressionEditable:
                           inspection.privateEditable &&
                           inspection.privateTypedVerified &&
@@ -779,7 +779,7 @@ class _EditorWorkspace extends StatelessWidget {
                     ),
                   ),
                   _KeepAliveTab(
-                    child: ProgressionPanel(
+                    child: WorldTab(
                       inspection: inspection,
                       notifier: notifier,
                       editable:

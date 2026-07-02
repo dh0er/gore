@@ -11,6 +11,7 @@
   "tabAttribute": "Атрибуты",
   "tabInventory": "Инвентарь",
   "tabProgression": "Прогресс",
+  "tabWorld": "Мир",
   "tabCharacters": "Персонажи",
   "characterNoActorBody": "У этого персонажа нет актёра в мире, поэтому нет атрибутов, инвентаря или событий.",
   "tabAllData": "Все данные",

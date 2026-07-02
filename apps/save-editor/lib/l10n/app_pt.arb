@@ -11,6 +11,7 @@
   "tabAttribute": "Atributos",
   "tabInventory": "Inventário",
   "tabProgression": "Progresso",
+  "tabWorld": "Mundo",
   "tabCharacters": "Personagens",
   "characterNoActorBody": "Este personagem não tem um ator no mundo, portanto não tem atributos, inventário ou eventos.",
   "tabAllData": "Todos os dados",

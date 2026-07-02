@@ -42,6 +42,9 @@ class AppLocalizationsRu extends AppLocalizations {
   String get tabProgression => 'Прогресс';
 
   @override
+  String get tabWorld => 'Мир';
+
+  @override
   String get tabCharacters => 'Персонажи';
 
   @override

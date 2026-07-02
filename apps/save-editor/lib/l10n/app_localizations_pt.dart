@@ -42,6 +42,9 @@ class AppLocalizationsPt extends AppLocalizations {
   String get tabProgression => 'Progresso';
 
   @override
+  String get tabWorld => 'Mundo';
+
+  @override
   String get tabCharacters => 'Personagens';
 
   @override
@@ -1179,6 +1182,9 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
 
   @override
   String get tabProgression => 'Progresso';
+
+  @override
+  String get tabWorld => 'Mundo';
 
   @override
   String get tabCharacters => 'Personagens';

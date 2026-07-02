@@ -42,6 +42,9 @@ class AppLocalizationsFr extends AppLocalizations {
   String get tabProgression => 'Progression';
 
   @override
+  String get tabWorld => 'Monde';
+
+  @override
   String get tabCharacters => 'Personnages';
 
   @override

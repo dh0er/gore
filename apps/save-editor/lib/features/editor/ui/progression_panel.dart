@@ -176,7 +176,7 @@ class _ProgressionPanelState extends State<ProgressionPanel> {
               children: [
                 Offstage(
                   offstage: _selected != _ProgSection.quests,
-                  child: _QuestsDetail(
+                  child: QuestsDetail(
                     key: const ValueKey('quests'),
                     notifier: widget.notifier,
                     editable: widget.editable,
@@ -186,7 +186,7 @@ class _ProgressionPanelState extends State<ProgressionPanel> {
                 ),
                 Offstage(
                   offstage: _selected != _ProgSection.factions,
-                  child: _FactionsDetail(
+                  child: FactionsDetail(
                     key: const ValueKey('factions'),
                     notifier: widget.notifier,
                     editable: widget.editable,
@@ -396,8 +396,8 @@ class _PaginationBar extends StatelessWidget {
 // Quests detail (stateful, pending-edit pattern)
 // ---------------------------------------------------------------------------
 
-class _QuestsDetail extends ConsumerStatefulWidget {
-  const _QuestsDetail({
+class QuestsDetail extends ConsumerStatefulWidget {
+  const QuestsDetail({
     super.key,
     required this.notifier,
     required this.editable,
@@ -411,10 +411,10 @@ class _QuestsDetail extends ConsumerStatefulWidget {
   final ThemeData theme;
 
   @override
-  ConsumerState<_QuestsDetail> createState() => _QuestsDetailState();
+  ConsumerState<QuestsDetail> createState() => _QuestsDetailState();
 }
 
-class _QuestsDetailState extends ConsumerState<_QuestsDetail> {
+class _QuestsDetailState extends ConsumerState<QuestsDetail> {
   static const _defaultPageSize = 50;
 
   final TextEditingController _search = TextEditingController();
@@ -443,7 +443,7 @@ class _QuestsDetailState extends ConsumerState<_QuestsDetail> {
   }
 
   @override
-  void didUpdateWidget(covariant _QuestsDetail oldWidget) {
+  void didUpdateWidget(covariant QuestsDetail oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.reloadKey != oldWidget.reloadKey) {
       _pending.clear();
@@ -1824,8 +1824,8 @@ class _StatusBadge extends StatelessWidget {
   }
 }
 
-class _FactionsDetail extends ConsumerStatefulWidget {
-  const _FactionsDetail({
+class FactionsDetail extends ConsumerStatefulWidget {
+  const FactionsDetail({
     super.key,
     required this.notifier,
     required this.editable,
@@ -1839,10 +1839,10 @@ class _FactionsDetail extends ConsumerStatefulWidget {
   final ThemeData theme;
 
   @override
-  ConsumerState<_FactionsDetail> createState() => _FactionsDetailState();
+  ConsumerState<FactionsDetail> createState() => _FactionsDetailState();
 }
 
-class _FactionsDetailState extends ConsumerState<_FactionsDetail> {
+class _FactionsDetailState extends ConsumerState<FactionsDetail> {
   FactionsPage _page = const FactionsPage();
   bool _loading = false;
   int _reloadEpoch = 0;
@@ -1862,7 +1862,7 @@ class _FactionsDetailState extends ConsumerState<_FactionsDetail> {
   }
 
   @override
-  void didUpdateWidget(covariant _FactionsDetail oldWidget) {
+  void didUpdateWidget(covariant FactionsDetail oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.reloadKey != oldWidget.reloadKey) {
       // Reload the fresh tallies. The pending-forgive reflect is derived from

@@ -182,6 +182,12 @@ abstract class AppLocalizations {
   /// **'Progression'**
   String get tabProgression;
 
+  /// No description provided for @tabWorld.
+  ///
+  /// In en, this message translates to:
+  /// **'World'**
+  String get tabWorld;
+
   /// No description provided for @tabCharacters.
   ///
   /// In en, this message translates to:

@@ -3,7 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:goresave/features/editor/domain/core_service.dart';
 import 'package:goresave/features/editor/domain/editor_notifier.dart';
-import 'package:goresave/features/editor/ui/progression_panel.dart';
+import 'package:goresave/features/editor/ui/world_tab.dart';
 import 'package:goresave/l10n/app_localizations.dart';
 
 import '../../../support/l10n_test_app.dart';
@@ -91,9 +91,9 @@ class _FactionsCore implements GoresaveCoreService {
           'data': {'guilds': guilds},
         };
       case 'query_progression':
-        // The Quests/Knowledge/Events panes are always-mounted siblings of the
-        // Factions pane; they query progression in initState. Answer with an
-        // empty result so their spinners settle (else pumpAndSettle never ends).
+        // The Quests pane is an always-mounted sibling of the Factions pane;
+        // it queries progression in initState. Answer with an empty result so
+        // its spinner settles (else pumpAndSettle never ends).
         return {
           'ok': true,
           'data': {
@@ -162,7 +162,7 @@ Future<EditorNotifier> _notifier(WidgetTester tester, _FactionsCore core) async 
 }
 
 Widget _wrap(Widget child) => ProviderScope(
-  // The progression sub-panes (Quests/Knowledge/Events) are ConsumerStatefulWidgets
+  // The World-tab sub-panes (Quests/Factions) are ConsumerStatefulWidgets
   // that ref.watch the editor providers, so they need a ProviderScope ancestor.
   child: MaterialApp(
     locale: const Locale('en'),
@@ -186,13 +186,13 @@ Future<void> _settle(WidgetTester tester) async {
 }
 
 void main() {
-  testWidgets('Fraktionen entry sits in the Progress sidebar', (tester) async {
+  testWidgets('Fraktionen entry sits in the World sidebar', (tester) async {
     final core = _FactionsCore(guilds: []);
     final notifier = await _notifier(tester, core);
 
     await tester.pumpWidget(
       _wrap(
-        ProgressionPanel(
+        WorldTab(
           inspection: notifier.state.inspection!,
           notifier: notifier,
           editable: true,
@@ -228,7 +228,7 @@ void main() {
 
     await tester.pumpWidget(
       _wrap(
-        ProgressionPanel(
+        WorldTab(
           inspection: notifier.state.inspection!,
           notifier: notifier,
           editable: true,
@@ -283,7 +283,7 @@ void main() {
 
       await tester.pumpWidget(
         _wrap(
-          ProgressionPanel(
+          WorldTab(
             inspection: notifier.state.inspection!,
             notifier: notifier,
             editable: true,
@@ -328,7 +328,7 @@ void main() {
 
     await tester.pumpWidget(
       _wrap(
-        ProgressionPanel(
+        WorldTab(
           inspection: notifier.state.inspection!,
           notifier: notifier,
           editable: true,
