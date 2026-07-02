@@ -160,11 +160,23 @@ class _ScriptTabState extends ConsumerState<ScriptTab> {
 
   /// The tree leaf for the current selection. The selection store mixes key
   /// spaces — browser taps store TREE paths, while the staged panel and
-  /// staging itself store REAL relPaths: known tree paths pass through, real
-  /// relPaths map to their first owning leaf (all colliding leaves share one
-  /// staging key anyway, so "the first" is the only sensible highlight).
-  String? _selectedTreePath(String? selectedKey) {
+  /// staging itself store REAL relPaths.
+  ///
+  /// Precedence: a key that is currently STAGED is a real relPath by
+  /// construction, so it resolves through the relPath map FIRST — a
+  /// pathological vanilla list can contain a real path that literally equals
+  /// another module's generated ' (n)' collision leaf, and the tree-path
+  /// pass-through would then highlight/open that OTHER module. Everything
+  /// else: known tree paths pass through, real relPaths map to their first
+  /// owning leaf (all colliding leaves share one staging key anyway, so "the
+  /// first" is the only sensible highlight).
+  String? _selectedTreePath(String? selectedKey, ScriptModsState staged) {
     if (selectedKey == null) return null;
+    if (staged.items.containsKey(selectedKey)) {
+      // Staged 'add' keys have no vanilla leaf → null (the detail pane still
+      // resolves the mod through the staged-items lookup).
+      return _treePathByRelPath![selectedKey];
+    }
     if (_byTreePath!.containsKey(selectedKey)) return selectedKey;
     return _treePathByRelPath![selectedKey];
   }
@@ -316,7 +328,7 @@ class _ScriptTabState extends ConsumerState<ScriptTab> {
     // Staged keys are REAL relPaths — map both the marker set and the selected
     // highlight into tree-path space so disambiguated leaves behave.
     final marked = _markedFor(staged);
-    final selectedTreePath = _selectedTreePath(selectedKey);
+    final selectedTreePath = _selectedTreePath(selectedKey, staged);
     return Column(
       children: [
         Padding(
@@ -414,7 +426,7 @@ class _ScriptTabState extends ConsumerState<ScriptTab> {
     if (selectedKey == null) return placeholder;
     // Resolve the selection to its tree leaf's module (null for staged 'add'
     // keys with no vanilla leaf, and for dangling selections).
-    final treePath = _selectedTreePath(selectedKey);
+    final treePath = _selectedTreePath(selectedKey, state);
     final module = treePath == null ? null : _byTreePath?[treePath];
     // Staged lookup: the selection may be a staged key itself (a REAL relPath —
     // staged-panel taps, staging) or a TREE path, so also resolve through the
@@ -430,6 +442,13 @@ class _ScriptTabState extends ConsumerState<ScriptTab> {
       // _error compile UI) is reused for the next mod.
       return _ModDetail(key: ValueKey(staged.key), mod: staged);
     }
+    // onlyStaged (Changes embed): the selection is SHARED with the main tab,
+    // so it can point at a module that is not staged at all (selected on the
+    // main tab, or its mod was just un-staged). The filtered browser lists no
+    // such entry — a vanilla editor here would contradict the view, so show
+    // the placeholder instead. View-level only: the shared provider is NOT
+    // cleared, the main tab keeps its selection.
+    if (widget.onlyStaged) return placeholder;
     // Not staged: either a vanilla module (show info + Edit) or a dangling
     // selection (e.g. a staged 'add' that was removed — its path isn't in the
     // vanilla tree, so fall back to the placeholder).

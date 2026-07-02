@@ -379,8 +379,9 @@ void main() {
     expect(find.text('New'), findsOneWidget);
   });
 
-  testWidgets('onlyStaged embed mount does not clear the shared selection',
-      (tester) async {
+  testWidgets('onlyStaged embed keeps the shared selection but shows the '
+      'placeholder for non-staged selections; un-staging falls back to the '
+      'placeholder, never the vanilla editor', (tester) async {
     // One container across both mounts — like the real app, where the main
     // Scripts tab (kept alive) and the ChangesTab embed share the app-scoped
     // selection provider.
@@ -406,14 +407,89 @@ void main() {
     expect(find.text('Vanilla module — not staged'), findsOneWidget);
 
     // Opening Changes>Scripts mounts a FRESH staged-only embed on every visit
-    // (plain content swap, no keep-alive). Its initState must NOT null the
-    // shared selection: the detail keeps showing the selected module instead
-    // of falling back to the placeholder.
+    // (plain content swap, no keep-alive). The selection is not staged, so
+    // the browser shows the empty hint and the detail shows the PLACEHOLDER —
+    // a vanilla editor for an entry the filtered browser doesn't list would
+    // contradict the view.
     await pumpTab(const ScriptTab(onlyStaged: true));
-    expect(find.text('Vanilla module — not staged'), findsOneWidget);
-    expect(find.text('Select or add a script mod'), findsNothing);
-    // (Nothing is staged, so the embed's browser shows the staged-empty hint.)
     expect(find.textContaining('No staged edits of vanilla modules'),
+        findsOneWidget);
+    expect(find.text('Select or add a script mod'), findsOneWidget);
+    expect(find.text('Vanilla module — not staged'), findsNothing);
+
+    // The embed's initState must NOT have nulled the shared selection:
+    // staging the selected module makes its staged detail (and highlighted
+    // leaf) appear WITHOUT any new tap.
+    container.read(scriptModsProvider.notifier).setMod(_stagedBar());
+    await tester.pump();
+    expect(find.text('Edit existing module'), findsOneWidget);
+    expect(
+      tester
+          .widget<ListTile>(find.ancestor(
+              of: find.text('Bar.as'), matching: find.byType(ListTile)))
+          .selected,
+      isTrue,
+    );
+
+    // Un-staging the last mod while it is selected: back to the placeholder —
+    // never the vanilla editor the main tab would show.
+    container.read(scriptModsProvider.notifier).remove('Bar.as');
+    await tester.pump();
+    expect(find.text('Select or add a script mod'), findsOneWidget);
+    expect(find.text('Vanilla module — not staged'), findsNothing);
+    expect(find.text('Edit existing module'), findsNothing);
+  });
+
+  testWidgets('staged-panel selection resolves by REAL relPath even when it '
+      'equals another module\'s generated collision leaf', (tester) async {
+    // Pathological vanilla list: two modules collide on real 'Foo.as' (the
+    // second gets the generated leaf 'Foo (2).as'), and a third module's REAL
+    // path is literally 'Foo (2).as' — displaced to leaf 'Foo (2) (2).as'.
+    final modules = [
+      ScriptModuleInfo(name: 'Foo', file: 'Foo.as'),
+      ScriptModuleInfo(name: 'Bar', file: 'Foo.as'),
+      ScriptModuleInfo(name: 'Baz', file: 'Foo (2).as'),
+    ];
+    final notifier = ScriptModsNotifier()
+      ..setMod(const ScriptMod(
+          op: ScriptOp.edit,
+          moduleName: 'Baz',
+          relPath: 'Foo (2).as',
+          asPath: ''));
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          scriptModulesProvider.overrideWith((ref) async => modules),
+          scriptModsProvider.overrideWith((ref) => notifier),
+        ],
+        child: const MaterialApp(home: Scaffold(body: ScriptTab())),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+    expect(find.text('Foo.as'), findsOneWidget);
+    expect(find.text('Foo (2).as'), findsOneWidget);
+    expect(find.text('Foo (2) (2).as'), findsOneWidget);
+
+    // Select the staged mod via the staged panel — the selection becomes the
+    // mod's REAL relPath 'Foo (2).as', which TEXT-equals Bar's generated leaf.
+    await tester.tap(find.text('Staged script mods (1)'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Baz'));
+    await tester.pumpAndSettle();
+
+    // A staged key resolves by relPath FIRST: the highlight lands on Baz's
+    // ACTUAL leaf, not on Bar's same-text generated leaf, and the detail is
+    // the staged mod (not Bar's vanilla card).
+    expect(find.text('Edit existing module'), findsOneWidget);
+    ListTile tileOf(String label) => tester.widget<ListTile>(find.ancestor(
+        of: find.text(label), matching: find.byType(ListTile)));
+    expect(tileOf('Foo (2) (2).as').selected, isTrue);
+    expect(tileOf('Foo (2).as').selected, isFalse);
+    // The staged check marker agrees (real-relPath keyed): Baz's leaf only.
+    final bazTile = find.ancestor(
+        of: find.text('Foo (2) (2).as'), matching: find.byType(ListTile));
+    expect(find.descendant(of: bazTile, matching: find.byIcon(Icons.check)),
         findsOneWidget);
   });
 
