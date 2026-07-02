@@ -18,6 +18,21 @@ void main() {
     expect(s.editFor('itfo_cheese', 'german_new'), 'Käse-Mod');
   });
 
+  test('removeEdit removes exactly one language set; others stay', () {
+    final c = makeContainer();
+    addTearDown(c.dispose);
+    final n = c.read(locEditsProvider.notifier);
+    n.setEdit('dia_x', 'german_new', 'Hallo');
+    n.setEdit('dia_x', 'french', 'Salut');
+    n.setEdit('dia_y', 'german_new', 'Moin');
+    n.removeEdit('dia_x', 'german_new');
+    final s = c.read(locEditsProvider);
+    expect(s.editFor('dia_x', 'german_new'), isNull);
+    expect(s.editFor('dia_x', 'french'), 'Salut');
+    expect(s.editFor('dia_y', 'german_new'), 'Moin');
+    expect(s.entryCount, 2);
+  });
+
   test('removeEdit drops the set; clearing last set drops the id', () {
     final c = makeContainer();
     addTearDown(c.dispose);

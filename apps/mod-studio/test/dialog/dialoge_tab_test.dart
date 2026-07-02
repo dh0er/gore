@@ -4,6 +4,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:gore_mod/dialog/ui/dialoge_tab.dart';
 import 'package:gore_mod/l10n/app_localizations.dart';
 import 'package:gore_mod/loc/domain/loc_catalog_provider.dart';
+import 'package:gore_mod/loc/domain/loc_edits_notifier.dart';
+import 'package:gore_mod/loc/game_lang.dart';
 
 const _kPlaceholder = 'Select a dialog line to edit';
 
@@ -156,6 +158,52 @@ void main() {
     expect(find.text(_kPlaceholder), findsOneWidget);
     expect(find.text('info_bob_001'), findsNothing);
     expect(container.read(selectedDialogIdProvider), 'info_bob_001');
+  });
+
+  testWidgets(
+      'filtered editor shows only edited language fields; '
+      'the main tab shows all languages', (tester) async {
+    tester.view.physicalSize = const Size(1400, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final container = ProviderContainer(overrides: [
+      locCatalogProvider.overrideWith((ref) => Future.value(catalog)),
+    ]);
+    addTearDown(container.dispose);
+    // A staged German edit for Bob's line ('german_new' is the primary set
+    // the editor resolves for 'de' against this catalog).
+    container
+        .read(locEditsProvider.notifier)
+        .setEdit('info_bob_001', 'german_new', 'Servus');
+    container.read(selectedDialogIdProvider.notifier).state = 'info_bob_001';
+
+    Future<void> pump({Set<String>? onlyIds}) async {
+      await tester.pumpWidget(UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: Scaffold(body: DialogeTab(onlyIds: onlyIds)),
+        ),
+      ));
+      await tester.pumpAndSettle();
+    }
+
+    // Filtered embedding (Changes tab): only the edited language renders.
+    await pump(onlyIds: {'info_bob_001'});
+    final germanField = find.widgetWithText(TextField, 'Deutsch');
+    expect(germanField, findsOneWidget);
+    expect(
+      find.descendant(of: germanField, matching: find.text('Servus')),
+      findsOneWidget,
+    );
+    expect(find.widgetWithText(TextField, 'English'), findsNothing);
+
+    // Main tab (no filter): every language gets a field (+ the search box).
+    await pump();
+    expect(find.byType(TextField), findsNWidgets(kGameLangs.length + 1));
+    expect(find.widgetWithText(TextField, 'English'), findsOneWidget);
   });
 
   testWidgets('unfiltered editor still follows the shared selection',

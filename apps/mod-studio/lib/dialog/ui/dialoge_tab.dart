@@ -367,7 +367,9 @@ class _DialogEditor extends ConsumerWidget {
           ],
         ),
         const SizedBox(height: 12),
-        LangFieldsEditor(locId: id),
+        // Filtered embeddings (the Changes tab) review staged edits, so show
+        // only the languages that actually carry one; the main tab shows all.
+        LangFieldsEditor(locId: id, onlyEdited: onlyIds != null),
       ],
     );
   }
