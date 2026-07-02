@@ -182,7 +182,7 @@ class CharactersTab extends ConsumerWidget {
                     ),
                     Tab(
                       icon: const Icon(Icons.school_outlined),
-                      text: l10n.sectionKnowledge,
+                      text: l10n.dialogKnowledge,
                     ),
                     Tab(
                       icon: const Icon(Icons.history_outlined),

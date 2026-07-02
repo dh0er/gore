@@ -453,7 +453,7 @@ class _CharacterMasterListState extends State<CharacterMasterList> {
       title: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis),
       trailing: row.hasKnowledge
           ? Tooltip(
-              message: l10n.sectionKnowledge,
+              message: l10n.dialogKnowledge,
               child: Icon(
                 Icons.menu_book_outlined,
                 size: 18,
@@ -484,7 +484,7 @@ class _CharacterMasterListState extends State<CharacterMasterList> {
     final badges = <Widget>[
       if (row.hasKnowledge)
         Tooltip(
-          message: l10n.sectionKnowledge,
+          message: l10n.dialogKnowledge,
           child: Icon(
             Icons.menu_book_outlined,
             size: 18,
