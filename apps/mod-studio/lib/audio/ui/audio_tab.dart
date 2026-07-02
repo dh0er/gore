@@ -7,10 +7,13 @@ import 'package:path/path.dart' as p;
 
 import '../../app/domain/ui_settings.dart';
 import '../../app/game_paths.dart';
+import '../../catalog/ui/sidebar_tile.dart';
 import '../../core/mod_ffi.dart';
 import '../../core/providers.dart';
+import '../../l10n/app_localizations.dart';
 import '../domain/audio_replacements_notifier.dart';
 import '../domain/audio_samples_provider.dart';
+import '../domain/sfx_categories.dart';
 
 /// Browse the game's FMOD bank samples, preview originals, and stage WAV
 /// replacements into [audioReplacementsProvider].
@@ -37,16 +40,29 @@ class _AudioBrowser extends ConsumerStatefulWidget {
   ConsumerState<_AudioBrowser> createState() => _AudioBrowserState();
 }
 
-class _AudioBrowserState extends ConsumerState<_AudioBrowser> {
+class _AudioBrowserState extends ConsumerState<_AudioBrowser>
+    with SingleTickerProviderStateMixin {
   String _bankFileName = kModdableBanks.first;
   AudioSampleInfo? _selected;
+  SfxCategory? _selectedCategory;
   String _query = '';
   final TextEditingController _searchController = TextEditingController();
+  late final TabController _tabController;
 
   String get _bankFullPath => p.join(widget.fmodDir, _bankFileName);
 
   @override
+  void initState() {
+    super.initState();
+    _tabController = TabController(length: kModdableBanks.length, vsync: this);
+    _tabController.addListener(
+      () => _selectBank(kModdableBanks[_tabController.index]),
+    );
+  }
+
+  @override
   void dispose() {
+    _tabController.dispose();
     _searchController.dispose();
     super.dispose();
   }
@@ -59,11 +75,27 @@ class _AudioBrowserState extends ConsumerState<_AudioBrowser> {
     });
   }
 
+  /// Tab label for a bank file: basename without extension, with all-caps
+  /// names longer than an acronym title-cased ("CINEMATICS" -> "Cinematics").
+  String _bankTabLabel(String bankFileName) {
+    final base = p.basenameWithoutExtension(bankFileName);
+    if (base.length > 3 && base == base.toUpperCase()) {
+      return base[0] + base.substring(1).toLowerCase();
+    }
+    return base;
+  }
+
   @override
   Widget build(BuildContext context) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        TabBar(
+          controller: _tabController,
+          tabs: [
+            for (final bank in kModdableBanks) Tab(text: _bankTabLabel(bank)),
+          ],
+        ),
         Expanded(
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -87,22 +119,7 @@ class _AudioBrowserState extends ConsumerState<_AudioBrowser> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Padding(
-          padding: const EdgeInsets.all(12),
-          child: Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              for (final bank in kModdableBanks)
-                ChoiceChip(
-                  label: Text(bank),
-                  selected: bank == _bankFileName,
-                  onSelected: (_) => _selectBank(bank),
-                ),
-            ],
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12),
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
           child: TextField(
             controller: _searchController,
             decoration: const InputDecoration(
@@ -134,14 +151,80 @@ class _AudioBrowserState extends ConsumerState<_AudioBrowser> {
   }
 
   Widget _buildSampleList(BuildContext context, List<AudioSampleInfo> samples) {
+    final query = _query.trim().toLowerCase();
+    final searching = query.isNotEmpty;
+    final filtered = searching
+        ? samples
+            .where((s) => s.name.toLowerCase().contains(query))
+            .toList()
+        : samples;
+
+    // The SFX bank is huge (7k+ samples), so browse it through a category
+    // sidebar. An active search hides the sidebar and scans the whole bank.
+    if (_bankFileName == 'SFX.bank' && !searching) {
+      return _buildSfxSplitView(context, filtered);
+    }
+    return _sampleListView(context, filtered);
+  }
+
+  Widget _buildSfxSplitView(
+      BuildContext context, List<AudioSampleInfo> samples) {
+    final theme = Theme.of(context);
+    final l10n = AppLocalizations.of(context);
+
+    final grouped = <SfxCategory, List<AudioSampleInfo>>{};
+    for (final s in samples) {
+      grouped.putIfAbsent(sfxCategoryForSample(s.name), () => []).add(s);
+    }
+    final categories = [
+      for (final c in SfxCategory.values)
+        if (grouped.containsKey(c)) c,
+    ];
+    if (categories.isEmpty) {
+      return const Center(child: Text('No samples match'));
+    }
+
+    // Resolve selected category, falling back to the first available.
+    var selectedCat = _selectedCategory;
+    if (selectedCat == null || !grouped.containsKey(selectedCat)) {
+      selectedCat = categories.first;
+    }
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SizedBox(
+          width: 230,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: theme.colorScheme.surfaceContainerLow,
+            ),
+            child: ListView(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              children: [
+                for (final c in categories)
+                  SidebarTile(
+                    icon: Icons.graphic_eq,
+                    label: l10n.categoryWithCount(
+                      c.localizedLabel(l10n),
+                      grouped[c]!.length,
+                    ),
+                    selected: c == selectedCat,
+                    onTap: () => setState(() => _selectedCategory = c),
+                  ),
+              ],
+            ),
+          ),
+        ),
+        const VerticalDivider(width: 1),
+        Expanded(child: _sampleListView(context, grouped[selectedCat]!)),
+      ],
+    );
+  }
+
+  Widget _sampleListView(BuildContext context, List<AudioSampleInfo> filtered) {
     final theme = Theme.of(context);
     final replacements = ref.watch(audioReplacementsProvider);
-    final query = _query.trim().toLowerCase();
-    final filtered = query.isEmpty
-        ? samples
-        : samples
-            .where((s) => s.name.toLowerCase().contains(query))
-            .toList();
 
     if (filtered.isEmpty) {
       return const Center(child: Text('No samples match'));
