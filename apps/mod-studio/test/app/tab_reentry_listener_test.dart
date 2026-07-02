@@ -4,6 +4,15 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:gore_mod/app/ui/keep_alive_tab.dart';
 import 'package:gore_mod/app/ui/tab_reentry_listener.dart';
 
+/// Exposes [ChangeNotifier.notifyListeners] so tests can simulate the
+/// repeated same-settled-index notifications a TabBarView swipe gesture
+/// produces (indexIsChanging stays false throughout).
+class _RefiringTabController extends TabController {
+  _RefiringTabController({required super.length, required super.vsync});
+
+  void refire() => notifyListeners();
+}
+
 void main() {
   testWidgets(
     'tab re-entry invalidates provider while KeepAliveTab preserves UI state',
@@ -80,6 +89,75 @@ void main() {
       expect(buildCount, 2);
       expect(find.text('build 2'), findsOneWidget);
       expect(find.text('kept text'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'callback fires exactly once per settled tab change despite repeated '
+    'notifications on the same index',
+    (tester) async {
+      final controller = _RefiringTabController(
+        length: 2,
+        vsync: const TestVSync(),
+      );
+      addTearDown(controller.dispose);
+      final log = <int>[];
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: TabReentryListener(
+            controller: controller,
+            onTabReentered: log.add,
+            child: Scaffold(
+              appBar: TabBar(
+                controller: controller,
+                tabs: const [
+                  Tab(text: 'A'),
+                  Tab(text: 'B'),
+                ],
+              ),
+              body: TabBarView(
+                controller: controller,
+                children: const [
+                  KeepAliveTab(child: Center(child: Text('Tab A'))),
+                  KeepAliveTab(child: Center(child: Text('Tab B'))),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+
+      // Repeat notifications on the initial settled tab: no callback.
+      controller.refire();
+      controller.refire();
+      expect(log, isEmpty);
+
+      // First arrival at tab B: no callback (first entry is excluded)...
+      controller.index = 1;
+      await tester.pumpAndSettle();
+      expect(log, isEmpty);
+
+      // ...and swipe-style repeat notifications right after the arrival must
+      // not turn the first entry into a phantom re-entry.
+      controller.refire();
+      controller.refire();
+      expect(log, isEmpty);
+
+      // Back to A (visited): exactly one callback per actual change, however
+      // many notifications the gesture produces on the settled index.
+      controller.index = 0;
+      await tester.pumpAndSettle();
+      controller.refire();
+      controller.refire();
+      controller.refire();
+      expect(log, [0]);
+
+      // And once more to B (now visited).
+      controller.index = 1;
+      await tester.pumpAndSettle();
+      controller.refire();
+      expect(log, [0, 1]);
     },
   );
 }
