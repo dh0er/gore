@@ -236,6 +236,15 @@ class AppLocalizationsEs extends AppLocalizations {
   String get removeOverride => 'Quitar cambio';
 
   @override
+  String get searchChanges => 'Buscar cambios';
+
+  @override
+  String get noChangesMatch => 'Ningún cambio coincide';
+
+  @override
+  String get clearSection => 'Borrar este grupo';
+
+  @override
   String get modName => 'Nombre del mod';
 
   @override

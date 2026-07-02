@@ -235,6 +235,15 @@ class AppLocalizationsRu extends AppLocalizations {
   String get removeOverride => 'Удалить изменение';
 
   @override
+  String get searchChanges => 'Поиск изменений';
+
+  @override
+  String get noChangesMatch => 'Нет подходящих изменений';
+
+  @override
+  String get clearSection => 'Очистить эту группу';
+
+  @override
   String get modName => 'Название мода';
 
   @override

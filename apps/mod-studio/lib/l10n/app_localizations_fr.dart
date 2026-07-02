@@ -235,6 +235,15 @@ class AppLocalizationsFr extends AppLocalizations {
   String get removeOverride => 'Supprimer la modification';
 
   @override
+  String get searchChanges => 'Rechercher des modifications';
+
+  @override
+  String get noChangesMatch => 'Aucune modification correspondante';
+
+  @override
+  String get clearSection => 'Effacer ce groupe';
+
+  @override
   String get modName => 'Nom du mod';
 
   @override

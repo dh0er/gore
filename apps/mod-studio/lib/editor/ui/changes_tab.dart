@@ -160,12 +160,16 @@ class _ChangesTabState extends ConsumerState<ChangesTab> {
   Widget _buildContent(OverridesState overridesState, Set<String> dialogIds) {
     switch (_section) {
       case _ChangesSection.all:
-        // The flat all-domains list, centred like the previous Changes tab.
+        // The flat all-domains list: top-left aligned at a comfortable
+        // reading width instead of stretching across the whole pane.
         return Align(
-          alignment: Alignment.topCenter,
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 600),
-            child: const OverridesPanel(),
+          alignment: Alignment.topLeft,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 720),
+              child: const OverridesPanel(),
+            ),
           ),
         );
       case _ChangesSection.items:

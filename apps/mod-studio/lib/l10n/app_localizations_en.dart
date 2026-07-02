@@ -235,6 +235,15 @@ class AppLocalizationsEn extends AppLocalizations {
   String get removeOverride => 'Remove override';
 
   @override
+  String get searchChanges => 'Search changes';
+
+  @override
+  String get noChangesMatch => 'No changes match';
+
+  @override
+  String get clearSection => 'Clear this group';
+
+  @override
   String get modName => 'Mod name';
 
   @override

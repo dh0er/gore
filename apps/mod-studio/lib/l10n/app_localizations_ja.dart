@@ -233,6 +233,15 @@ class AppLocalizationsJa extends AppLocalizations {
   String get removeOverride => '変更を削除';
 
   @override
+  String get searchChanges => '変更を検索';
+
+  @override
+  String get noChangesMatch => '一致する変更がありません';
+
+  @override
+  String get clearSection => 'このグループをクリア';
+
+  @override
   String get modName => 'Mod名';
 
   @override

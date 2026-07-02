@@ -542,6 +542,24 @@ abstract class AppLocalizations {
   /// **'Remove override'**
   String get removeOverride;
 
+  /// No description provided for @searchChanges.
+  ///
+  /// In en, this message translates to:
+  /// **'Search changes'**
+  String get searchChanges;
+
+  /// No description provided for @noChangesMatch.
+  ///
+  /// In en, this message translates to:
+  /// **'No changes match'**
+  String get noChangesMatch;
+
+  /// No description provided for @clearSection.
+  ///
+  /// In en, this message translates to:
+  /// **'Clear this group'**
+  String get clearSection;
+
   /// No description provided for @modName.
   ///
   /// In en, this message translates to:

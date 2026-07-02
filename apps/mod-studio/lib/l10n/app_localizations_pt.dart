@@ -234,6 +234,15 @@ class AppLocalizationsPt extends AppLocalizations {
   String get removeOverride => 'Remover alteração';
 
   @override
+  String get searchChanges => 'Pesquisar alterações';
+
+  @override
+  String get noChangesMatch => 'Nenhuma alteração corresponde';
+
+  @override
+  String get clearSection => 'Limpar este grupo';
+
+  @override
   String get modName => 'Nome do mod';
 
   @override
@@ -539,6 +548,15 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
 
   @override
   String get removeOverride => 'Remover alteração';
+
+  @override
+  String get searchChanges => 'Pesquisar alterações';
+
+  @override
+  String get noChangesMatch => 'Nenhuma alteração corresponde';
+
+  @override
+  String get clearSection => 'Limpar este grupo';
 
   @override
   String get modName => 'Nome do mod';

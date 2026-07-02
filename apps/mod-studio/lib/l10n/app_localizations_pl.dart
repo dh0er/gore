@@ -234,6 +234,15 @@ class AppLocalizationsPl extends AppLocalizations {
   String get removeOverride => 'Usuń zmianę';
 
   @override
+  String get searchChanges => 'Szukaj zmian';
+
+  @override
+  String get noChangesMatch => 'Brak pasujących zmian';
+
+  @override
+  String get clearSection => 'Wyczyść tę grupę';
+
+  @override
   String get modName => 'Nazwa moda';
 
   @override

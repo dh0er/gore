@@ -234,6 +234,15 @@ class AppLocalizationsZh extends AppLocalizations {
   String get removeOverride => '移除修改';
 
   @override
+  String get searchChanges => '搜索修改';
+
+  @override
+  String get noChangesMatch => '没有匹配的修改';
+
+  @override
+  String get clearSection => '清除此分组';
+
+  @override
   String get modName => 'Mod 名称';
 
   @override
@@ -535,6 +544,15 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get removeOverride => '移除修改';
+
+  @override
+  String get searchChanges => '搜索修改';
+
+  @override
+  String get noChangesMatch => '没有匹配的修改';
+
+  @override
+  String get clearSection => '清除此分组';
 
   @override
   String get modName => 'Mod 名称';

@@ -78,8 +78,10 @@ void main() {
     expect(find.text('Textures (1)'), findsOneWidget);
     expect(find.text('Scripts (0)'), findsOneWidget);
 
-    // Default section is "All": the flat OverridesPanel with its own header.
-    expect(find.text('Changes (3)'), findsOneWidget);
+    // Default section is "All": the flat OverridesPanel with its search
+    // header (the redundant "Changes (N)" title is gone).
+    expect(find.textContaining('Changes ('), findsNothing);
+    expect(find.text('Search changes'), findsOneWidget);
     expect(find.text('ItFo_Apple.m_Value'), findsOneWidget);
   });
 
@@ -98,7 +100,7 @@ void main() {
     expect(find.text('Bob (1)'), findsNothing);
     expect(find.text('info_bob_001'), findsNothing);
     // The All list is gone.
-    expect(find.text('Changes (3)'), findsNothing);
+    expect(find.text('Search changes'), findsNothing);
   });
 
   testWidgets('Items section shows the items view filtered to changed ids',
@@ -127,9 +129,8 @@ void main() {
         .setEdit('itfo_apple_name', 'de_A', 'Superapfel');
     await pumpHarness(tester, container);
 
-    // entryCount (All / OverridesPanel header) includes it, Dialogs does not.
+    // entryCount (All) includes it, Dialogs does not.
     expect(find.text('All (4)'), findsOneWidget);
-    expect(find.text('Changes (4)'), findsOneWidget);
     expect(find.text('Dialogs (1)'), findsOneWidget);
 
     // The filtered dialog view doesn't surface it either.
@@ -174,6 +175,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('All (1)'), findsOneWidget);
     expect(find.text('Textures (0)'), findsOneWidget);
-    expect(find.text('Changes (1)'), findsOneWidget);
+    // The All list still shows the one remaining change.
+    expect(find.text('ItFo_Apple.m_Value'), findsOneWidget);
   });
 }

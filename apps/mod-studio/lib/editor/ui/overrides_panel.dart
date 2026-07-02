@@ -12,12 +12,26 @@ import '../domain/overrides_notifier.dart';
 /// Unified "Changes" panel: lists every staged mod change across all
 /// domains (item value overrides, localized text edits, audio replacements,
 /// texture replacements, AngelScript modules), each row individually removable,
-/// with a single clear-all action.
-class OverridesPanel extends ConsumerWidget {
+/// searchable across all sections, with per-section and global clear actions.
+class OverridesPanel extends ConsumerStatefulWidget {
   const OverridesPanel({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<OverridesPanel> createState() => _OverridesPanelState();
+}
+
+class _OverridesPanelState extends ConsumerState<OverridesPanel> {
+  final TextEditingController _searchController = TextEditingController();
+  String _query = '';
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final overridesState = ref.watch(overridesProvider);
     final overrides      = ref.read(overridesProvider.notifier);
     final locState       = ref.watch(locEditsProvider);
@@ -29,54 +43,78 @@ class OverridesPanel extends ConsumerWidget {
     final scriptState    = ref.watch(scriptModsProvider);
     final scripts        = ref.read(scriptModsProvider.notifier);
 
-    final theme  = Theme.of(context);
-    final scheme = theme.colorScheme;
+    final scheme = Theme.of(context).colorScheme;
     final l10n   = AppLocalizations.of(context);
 
-    final overrideEntries = overridesState.entries;
-    final locPairs        = <_LocEditRow>[
+    // Case-insensitive substring filter over everything a row shows plus the
+    // useful raw fields behind it. Matching mirrors the row rendering below.
+    final q = _query.trim().toLowerCase();
+    bool matches(Iterable<String> haystack) =>
+        q.isEmpty || haystack.any((s) => s.toLowerCase().contains(q));
+
+    final overrideEntries = <OverrideEntry>[
+      for (final e in overridesState.entries)
+        if (matches(['${e.classId}.${e.field}', '${e.oldValue} → ${e.newValue}'])) e,
+    ];
+    final locPairs = <_LocEditRow>[
       for (final outer in locState.edits.entries)
         for (final inner in outer.value.entries)
-          _LocEditRow(locId: outer.key, set: inner.key, text: inner.value),
+          if (matches([outer.key, inner.key, inner.value]))
+            _LocEditRow(locId: outer.key, set: inner.key, text: inner.value),
     ];
-    final audioEntries = audioState.entries;
-    final textureEntries = textureState.entries;
-    final scriptEntries = scriptState.entries;
+    final audioEntries = <AudioReplacement>[
+      for (final e in audioState.entries)
+        if (matches([e.bank, e.sample, p.basename(e.wavPath)])) e,
+    ];
+    final textureEntries = <TextureReplacement>[
+      for (final e in textureState.entries)
+        if (matches([e.asset, p.basename(e.imagePath)])) e,
+    ];
+    final scriptEntries = <ScriptMod>[
+      for (final e in scriptState.entries)
+        if (matches([e.moduleName, e.relPath])) e,
+    ];
 
     final total   = overridesState.count + locState.entryCount + audioState.count + textureState.count + scriptState.count;
     final isEmpty = total == 0;
+    final visible = overrideEntries.length + locPairs.length + audioEntries.length + textureEntries.length + scriptEntries.length;
 
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Container(
-          color: scheme.surfaceContainerLowest,
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        // Slim header: search across all sections + clear-all.
+        Padding(
+          padding: const EdgeInsets.fromLTRB(4, 4, 4, 8),
           child: Row(
             children: [
-              const Icon(Icons.pending_actions_outlined),
-              const SizedBox(width: 8),
               Expanded(
-                child: Text(
-                  'Changes ($total)',
-                  style: theme.textTheme.titleSmall,
+                child: TextField(
+                  controller: _searchController,
+                  decoration: InputDecoration(
+                    labelText: l10n.searchChanges,
+                    prefixIcon: const Icon(Icons.search),
+                    isDense: true,
+                  ),
+                  onChanged: (v) => setState(() => _query = v),
                 ),
               ),
-              if (!isEmpty)
-                TextButton.icon(
-                  icon: const Icon(Icons.clear_all, size: 18),
-                  label: Text(l10n.clearAll),
-                  onPressed: () {
-                    overrides.clearAll();
-                    locEdits.clearAll();
-                    audio.clearAll();
-                    textures.clearAll();
-                    scripts.clearAll();
-                  },
-                ),
+              const SizedBox(width: 8),
+              TextButton.icon(
+                icon: const Icon(Icons.clear_all, size: 18),
+                label: Text(l10n.clearAll),
+                onPressed: isEmpty
+                    ? null
+                    : () {
+                        overrides.clearAll();
+                        locEdits.clearAll();
+                        audio.clearAll();
+                        textures.clearAll();
+                        scripts.clearAll();
+                      },
+              ),
             ],
           ),
         ),
-        const Divider(height: 1),
         Expanded(
           child: isEmpty
               ? Center(
@@ -86,36 +124,64 @@ class OverridesPanel extends ConsumerWidget {
                     style: TextStyle(color: scheme.onSurfaceVariant),
                   ),
                 )
-              : ListView(
-                  padding: const EdgeInsets.symmetric(vertical: 6),
-                  children: [
-                    if (overrideEntries.isNotEmpty) ...[
-                      _SectionHeader(l10n.sectionItemValues),
-                      for (final entry in overrideEntries)
-                        _OverrideRow(entry: entry, notifier: overrides),
-                    ],
-                    if (locPairs.isNotEmpty) ...[
-                      _SectionHeader(l10n.sectionLocalizedText),
-                      for (final row in locPairs)
-                        _LocRow(row: row, notifier: locEdits),
-                    ],
-                    if (audioEntries.isNotEmpty) ...[
-                      _SectionHeader(l10n.tabAudio),
-                      for (final entry in audioEntries)
-                        _AudioRow(entry: entry, notifier: audio),
-                    ],
-                    if (textureEntries.isNotEmpty) ...[
-                      _SectionHeader(l10n.tabTextures),
-                      for (final entry in textureEntries)
-                        _TextureRow(entry: entry, notifier: textures),
-                    ],
-                    if (scriptEntries.isNotEmpty) ...[
-                      _SectionHeader(l10n.tabScripts),
-                      for (final entry in scriptEntries)
-                        _ScriptRow(entry: entry, notifier: scripts),
-                    ],
-                  ],
-                ),
+              : visible == 0
+                  ? Center(
+                      child: Text(
+                        l10n.noChangesMatch,
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: scheme.onSurfaceVariant),
+                      ),
+                    )
+                  : ListView(
+                      padding: const EdgeInsets.only(bottom: 12),
+                      children: [
+                        if (overrideEntries.isNotEmpty) ...[
+                          _SectionHeader(
+                            l10n.sectionItemValues,
+                            clearKey: const ValueKey('clear-section-items'),
+                            onClear: overrides.clearAll,
+                          ),
+                          for (final entry in overrideEntries)
+                            _OverrideRow(entry: entry, notifier: overrides),
+                        ],
+                        if (locPairs.isNotEmpty) ...[
+                          _SectionHeader(
+                            l10n.sectionLocalizedText,
+                            clearKey: const ValueKey('clear-section-loc'),
+                            onClear: locEdits.clearAll,
+                          ),
+                          for (final row in locPairs)
+                            _LocRow(row: row, notifier: locEdits),
+                        ],
+                        if (audioEntries.isNotEmpty) ...[
+                          _SectionHeader(
+                            l10n.tabAudio,
+                            clearKey: const ValueKey('clear-section-audio'),
+                            onClear: audio.clearAll,
+                          ),
+                          for (final entry in audioEntries)
+                            _AudioRow(entry: entry, notifier: audio),
+                        ],
+                        if (textureEntries.isNotEmpty) ...[
+                          _SectionHeader(
+                            l10n.tabTextures,
+                            clearKey: const ValueKey('clear-section-textures'),
+                            onClear: textures.clearAll,
+                          ),
+                          for (final entry in textureEntries)
+                            _TextureRow(entry: entry, notifier: textures),
+                        ],
+                        if (scriptEntries.isNotEmpty) ...[
+                          _SectionHeader(
+                            l10n.tabScripts,
+                            clearKey: const ValueKey('clear-section-scripts'),
+                            onClear: scripts.clearAll,
+                          ),
+                          for (final entry in scriptEntries)
+                            _ScriptRow(entry: entry, notifier: scripts),
+                        ],
+                      ],
+                    ),
         ),
       ],
     );
@@ -123,23 +189,41 @@ class OverridesPanel extends ConsumerWidget {
 }
 
 class _SectionHeader extends StatelessWidget {
-  const _SectionHeader(this.title);
+  const _SectionHeader(this.title, {required this.onClear, this.clearKey});
 
   final String title;
+
+  /// Clears ALL changes of this section's domain — intentionally independent
+  /// of the current search filter (the whole group, not just visible rows).
+  final VoidCallback onClear;
+  final Key? clearKey;
 
   @override
   Widget build(BuildContext context) {
     final theme  = Theme.of(context);
     final scheme = theme.colorScheme;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-      child: Text(
-        title,
-        style: theme.textTheme.labelSmall?.copyWith(
-          color: scheme.onSurfaceVariant,
-          fontWeight: FontWeight.w700,
-          letterSpacing: 0.6,
-        ),
+      padding: const EdgeInsets.fromLTRB(8, 8, 4, 0),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              title,
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: scheme.onSurfaceVariant,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.6,
+              ),
+            ),
+          ),
+          IconButton(
+            key: clearKey,
+            icon: const Icon(Icons.delete_sweep_outlined, size: 18),
+            visualDensity: VisualDensity.compact,
+            tooltip: AppLocalizations.of(context).clearSection,
+            onPressed: onClear,
+          ),
+        ],
       ),
     );
   }
@@ -155,7 +239,7 @@ class _OverrideRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
       child: Row(
         children: [
           Expanded(
@@ -208,7 +292,7 @@ class _LocRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
       child: Row(
         children: [
           Expanded(
@@ -255,7 +339,7 @@ class _AudioRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
       child: Row(
         children: [
           Expanded(
@@ -302,7 +386,7 @@ class _TextureRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
       child: Row(
         children: [
           Expanded(
@@ -349,7 +433,7 @@ class _ScriptRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
       child: Row(
         children: [
           Expanded(
