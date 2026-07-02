@@ -13,7 +13,7 @@ import 'audio/domain/audio_replacements_notifier.dart';
 import 'audio/ui/audio_tab.dart';
 import 'dialog/ui/dialoge_tab.dart';
 import 'editor/domain/overrides_notifier.dart';
-import 'editor/ui/overrides_panel.dart';
+import 'editor/ui/changes_tab.dart';
 import 'export/ui/build_deploy_dialog.dart';
 import 'l10n/app_localizations.dart';
 import 'loc/domain/loc_catalog_provider.dart';
@@ -333,16 +333,10 @@ class _HomePageState extends ConsumerState<HomePage>
                     const KeepAliveTab(
                       child: GamePathScope(child: ScriptTab()),
                     ),
-                    // Changes: all staged item/loc/audio changes, centred.
-                    KeepAliveTab(
-                      child: Align(
-                        alignment: Alignment.topCenter,
-                        child: ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 600),
-                          child: const OverridesPanel(),
-                        ),
-                      ),
-                    ),
+                    // Changes: per-domain sidebar over all staged changes
+                    // ("All" = the flat OverridesPanel list, other sections =
+                    // the main-tab views filtered to staged entries).
+                    const KeepAliveTab(child: ChangesTab()),
                     // Settings.
                     const KeepAliveTab(child: SettingsTab()),
                   ],

@@ -4,6 +4,7 @@
   "tabAudio": "音频",
   "tabTextures": "纹理",
   "tabScripts": "脚本",
+  "changesAll": "全部",
   "sectionItemValues": "物品数值",
   "sectionLocalizedText": "本地化文本",
   "audioCatCreatures": "生物",

@@ -4,6 +4,7 @@
   "tabAudio": "Audio",
   "tabTextures": "Texture",
   "tabScripts": "Script",
+  "changesAll": "Tutti",
   "sectionItemValues": "Valori degli oggetti",
   "sectionLocalizedText": "Testi localizzati",
   "audioCatCreatures": "Creature",

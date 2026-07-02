@@ -30,6 +30,9 @@ class AppLocalizationsPt extends AppLocalizations {
   String get tabScripts => 'Scripts';
 
   @override
+  String get changesAll => 'Todos';
+
+  @override
   String get sectionItemValues => 'Valores dos itens';
 
   @override
@@ -351,6 +354,9 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
 
   @override
   String get tabScripts => 'Scripts';
+
+  @override
+  String get changesAll => 'Todos';
 
   @override
   String get sectionItemValues => 'Valores dos itens';

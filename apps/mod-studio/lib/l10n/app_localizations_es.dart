@@ -30,6 +30,9 @@ class AppLocalizationsEs extends AppLocalizations {
   String get tabScripts => 'Scripts';
 
   @override
+  String get changesAll => 'Todos';
+
+  @override
   String get sectionItemValues => 'Valores de objetos';
 
   @override

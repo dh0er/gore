@@ -30,6 +30,9 @@ class AppLocalizationsZh extends AppLocalizations {
   String get tabScripts => '脚本';
 
   @override
+  String get changesAll => '全部';
+
+  @override
   String get sectionItemValues => '物品数值';
 
   @override
@@ -347,6 +350,9 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get tabScripts => '脚本';
+
+  @override
+  String get changesAll => '全部';
 
   @override
   String get sectionItemValues => '物品数值';

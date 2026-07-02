@@ -158,6 +158,12 @@ abstract class AppLocalizations {
   /// **'Scripts'**
   String get tabScripts;
 
+  /// No description provided for @changesAll.
+  ///
+  /// In en, this message translates to:
+  /// **'All'**
+  String get changesAll;
+
   /// No description provided for @sectionItemValues.
   ///
   /// In en, this message translates to:

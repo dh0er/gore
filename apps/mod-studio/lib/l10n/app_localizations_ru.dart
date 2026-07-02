@@ -30,6 +30,9 @@ class AppLocalizationsRu extends AppLocalizations {
   String get tabScripts => 'Скрипты';
 
   @override
+  String get changesAll => 'Все';
+
+  @override
   String get sectionItemValues => 'Значения предметов';
 
   @override
