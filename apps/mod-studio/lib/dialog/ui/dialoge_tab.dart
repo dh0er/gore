@@ -19,7 +19,14 @@ final _selectedDialogIdProvider = StateProvider<String?>((ref) => null);
 /// Browse & edit the game's dialog / bark lines across languages. Edits are
 /// staged into the shared [locEditsProvider].
 class DialogeTab extends ConsumerWidget {
-  const DialogeTab({super.key});
+  const DialogeTab({super.key, this.onlyIds});
+
+  /// When non-null, the browser shows only dialog lines whose (lowercased)
+  /// loc id is in this set — the same key space as [locEditsProvider] edit
+  /// keys. The restriction applies before grouping, so the speaker sidebar
+  /// only lists groups with at least one filtered line and counts reflect
+  /// the filtered lines. Null (default) shows the full catalog.
+  final Set<String>? onlyIds;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -31,10 +38,10 @@ class DialogeTab extends ConsumerWidget {
         if (catalog.isEmpty) return const _EmptyHint();
         return Row(
           crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: const [
-            SizedBox(width: 560, child: _DialogBrowser()),
-            VerticalDivider(width: 1),
-            Expanded(child: _DialogEditor()),
+          children: [
+            SizedBox(width: 560, child: _DialogBrowser(onlyIds: onlyIds)),
+            const VerticalDivider(width: 1),
+            const Expanded(child: _DialogEditor()),
           ],
         );
       },
@@ -74,7 +81,10 @@ class _EmptyHint extends StatelessWidget {
 }
 
 class _DialogBrowser extends ConsumerStatefulWidget {
-  const _DialogBrowser();
+  const _DialogBrowser({this.onlyIds});
+
+  /// See [DialogeTab.onlyIds].
+  final Set<String>? onlyIds;
 
   @override
   ConsumerState<_DialogBrowser> createState() => _DialogBrowserState();
@@ -125,7 +135,12 @@ class _DialogBrowserState extends ConsumerState<_DialogBrowser> {
     final theme = Theme.of(context);
     final l10n = AppLocalizations.of(context);
     final catalog = ref.watch(locCatalogProvider).value ?? const {};
-    final allRows = ref.watch(dialogRowsProvider);
+    // Filtered views derive their rows locally so the shared unfiltered
+    // provider path stays untouched (and un-invalidated) for the main tab.
+    final onlyIds = widget.onlyIds;
+    final allRows = onlyIds == null
+        ? ref.watch(dialogRowsProvider)
+        : buildDialogRows(catalog, onlyIds: onlyIds);
     final query = _query.trim().toLowerCase();
     final searching = query.isNotEmpty;
     final editedIds = ref.watch(locEditsProvider).edits;

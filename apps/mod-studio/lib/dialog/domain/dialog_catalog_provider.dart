@@ -90,12 +90,21 @@ String _speakerToken(String id) {
 /// of group-header + line rows from a loc catalog, conversation groups first,
 /// then bark groups, each alphabetical by speaker. Lines within a group are
 /// sorted by id.
-List<DialogRow> buildDialogRows(Map<String, Map<String, String>> catalog) {
+///
+/// When [onlyIds] is non-null, only catalog entries whose (lowercased) id is
+/// in the set are considered — the restriction happens BEFORE grouping, so
+/// group membership and [DialogGroupRow.lineCount] reflect only the filtered
+/// lines. An empty set yields no rows.
+List<DialogRow> buildDialogRows(
+  Map<String, Map<String, String>> catalog, {
+  Set<String>? onlyIds,
+}) {
   if (catalog.isEmpty) return const [];
 
   // group by (isBark, speaker)
   final groups = <String, _DialogGroup>{};
   for (final id in catalog.keys) {
+    if (onlyIds != null && !onlyIds.contains(id)) continue;
     final token = _leadingToken(id);
     final isConv = _kConversationPrefixes.contains(token);
     final isBark = _kBarkPrefixes.contains(token);

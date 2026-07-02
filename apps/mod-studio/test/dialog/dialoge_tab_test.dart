@@ -15,7 +15,7 @@ void main() {
 
   // Desktop-sized surface: the tab's fixed 560px browser leaves the editor
   // pane too narrow on the 800x600 test default, overflowing its header row.
-  Future<void> pumpHarness(WidgetTester tester) async {
+  Future<void> pumpHarness(WidgetTester tester, {Set<String>? onlyIds}) async {
     tester.view.physicalSize = const Size(1400, 900);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
@@ -23,10 +23,10 @@ void main() {
       overrides: [
         locCatalogProvider.overrideWith((ref) => Future.value(catalog)),
       ],
-      child: const MaterialApp(
+      child: MaterialApp(
         localizationsDelegates: AppLocalizations.localizationsDelegates,
         supportedLocales: AppLocalizations.supportedLocales,
-        home: Scaffold(body: DialogeTab()),
+        home: Scaffold(body: DialogeTab(onlyIds: onlyIds)),
       ),
     ));
     await tester.pumpAndSettle();
@@ -70,5 +70,41 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text(_kPlaceholder), findsNothing);
     expect(find.text('info_aaron_001'), findsNWidgets(2));
+  });
+
+  testWidgets('onlyIds restricts sidebar groups and lines to the given ids',
+      (tester) async {
+    await pumpHarness(tester, onlyIds: {'info_bob_001'});
+
+    // Only Bob's group survives the filter; Aaron is gone entirely.
+    expect(find.text('Bob (1)'), findsOneWidget);
+    expect(find.text('Aaron (1)'), findsNothing);
+    expect(find.text('info_bob_001'), findsOneWidget);
+    expect(find.text('info_aaron_001'), findsNothing);
+  });
+
+  testWidgets('search inside a filtered view only searches filtered lines',
+      (tester) async {
+    await pumpHarness(tester, onlyIds: {'info_bob_001'});
+
+    // 'aaron' matches a catalog line, but that line is filtered out.
+    await tester.enterText(find.byType(TextField).first, 'aaron');
+    await tester.pumpAndSettle();
+    expect(find.text('info_aaron_001'), findsNothing);
+    expect(find.text('No dialog lines match'), findsWidgets);
+
+    // The filtered line itself is still searchable (by text value).
+    await tester.enterText(find.byType(TextField).first, 'moin');
+    await tester.pumpAndSettle();
+    expect(find.text('info_bob_001'), findsOneWidget);
+  });
+
+  testWidgets('empty onlyIds set shows the no-match hint', (tester) async {
+    await pumpHarness(tester, onlyIds: const {});
+
+    expect(find.text('No dialog lines match'), findsOneWidget);
+    expect(find.text(_kPlaceholder), findsOneWidget);
+    expect(find.text('info_aaron_001'), findsNothing);
+    expect(find.text('info_bob_001'), findsNothing);
   });
 }

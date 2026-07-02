@@ -85,4 +85,52 @@ void main() {
       expect(line.groupKey, group.groupKey);
     });
   });
+
+  group('buildDialogRows with onlyIds', () {
+    const catalog = <String, Map<String, String>>{
+      'info_aaron_001': {'de_A': 'Hallo'},
+      'info_aaron_002': {'de_A': 'Tschau'},
+      'info_bob_001': {'de_A': 'Moin'},
+      'gvl_zed_001': {'de_A': 'Weg da'},
+    };
+
+    test('restricts before grouping: only filtered lines, groups, counts', () {
+      final rows = buildDialogRows(
+        catalog,
+        onlyIds: {'info_aaron_002', 'gvl_zed_001'},
+      );
+      final ids = rows.whereType<DialogLineRow>().map((l) => l.id).toList();
+      expect(ids, ['info_aaron_002', 'gvl_zed_001']);
+      final groups = rows.whereType<DialogGroupRow>().toList();
+      // Bob has no filtered line, so his group is gone entirely; Aaron's
+      // count reflects the filtered lines (1), not the catalog total (2).
+      expect(
+        groups.map((g) => '${g.isBark}:${g.speaker}:${g.lineCount}').toList(),
+        ['false:aaron:1', 'true:zed:1'],
+      );
+    });
+
+    test('empty set yields no rows', () {
+      expect(buildDialogRows(catalog, onlyIds: const {}), isEmpty);
+    });
+
+    test('ids absent from the catalog are ignored', () {
+      final rows = buildDialogRows(
+        catalog,
+        onlyIds: {'info_bob_001', 'info_ghost_999'},
+      );
+      expect(rows.whereType<DialogLineRow>().single.id, 'info_bob_001');
+      expect(rows.whereType<DialogGroupRow>().single.lineCount, 1);
+    });
+
+    test('null onlyIds behaves like the unfiltered call', () {
+      final unfiltered = buildDialogRows(catalog);
+      final explicitNull = buildDialogRows(catalog, onlyIds: null);
+      expect(
+        explicitNull.whereType<DialogLineRow>().map((l) => l.id).toList(),
+        unfiltered.whereType<DialogLineRow>().map((l) => l.id).toList(),
+      );
+      expect(unfiltered.whereType<DialogLineRow>(), hasLength(4));
+    });
+  });
 }
