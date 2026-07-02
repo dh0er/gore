@@ -50,10 +50,20 @@ List<CatalogItem> sortByLocalizedName(
 /// Category-grouped, searchable item browser.
 /// Calls [onItemSelected] when the user taps an item.
 class CatalogBrowser extends ConsumerStatefulWidget {
-  const CatalogBrowser({super.key, required this.onItemSelected, this.selected});
+  const CatalogBrowser({
+    super.key,
+    required this.onItemSelected,
+    this.selected,
+    this.onlyIds,
+  });
 
   final void Function(CatalogItem) onItemSelected;
   final CatalogItem? selected;
+
+  /// When non-null, restricts the item universe to these class ids before
+  /// grouping/search, so categories with no remaining items disappear
+  /// (via [groupCatalogItems] omitting empty groups). Null = full catalog.
+  final Set<String>? onlyIds;
 
   @override
   ConsumerState<CatalogBrowser> createState() => _CatalogBrowserState();
@@ -82,6 +92,13 @@ class _CatalogBrowserState extends ConsumerState<CatalogBrowser> {
   }
 
   Widget _buildBrowser(BuildContext context, List<CatalogItem> items) {
+    // Restrict the item universe before search/grouping when a filter is set
+    // (e.g. the Changes tab showing only staged item ids). An empty set yields
+    // no groups, which renders the existing generic "no items match" state.
+    final onlyIds = widget.onlyIds;
+    if (onlyIds != null) {
+      items = items.where((i) => onlyIds.contains(i.id)).toList();
+    }
     final theme = Theme.of(context);
     final l10n = AppLocalizations.of(context);
     final locCatalog = ref.watch(locCatalogProvider).value ?? const {};

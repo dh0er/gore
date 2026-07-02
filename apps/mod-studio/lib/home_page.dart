@@ -1,30 +1,24 @@
-import 'package:collection/collection.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter_riverpod/legacy.dart';
 import 'app/domain/ui_settings.dart';
 import 'app/game_paths.dart';
 import 'app/ui/game_path_scope.dart';
 import 'app/ui/keep_alive_tab.dart';
 import 'app/ui/tab_reentry_listener.dart';
 import 'app/ui/window_chrome.dart';
-import 'catalog/domain/catalog_provider.dart';
-import 'catalog/domain/item_entry.dart';
-import 'catalog/ui/catalog_browser.dart';
+import 'catalog/ui/items_tab.dart';
 import 'core/mod_ffi.dart';
 import 'core/providers.dart';
 import 'audio/domain/audio_replacements_notifier.dart';
 import 'audio/ui/audio_tab.dart';
 import 'dialog/ui/dialoge_tab.dart';
 import 'editor/domain/overrides_notifier.dart';
-import 'editor/ui/field_editor.dart';
 import 'editor/ui/overrides_panel.dart';
 import 'export/ui/build_deploy_dialog.dart';
 import 'l10n/app_localizations.dart';
 import 'loc/domain/loc_catalog_provider.dart';
 import 'loc/domain/loc_edits_notifier.dart';
 import 'loc/domain/loc_notifier.dart';
-import 'loc/game_lang.dart';
 import 'loc/ui/loc_extract_flow.dart';
 import 'project/project_controller.dart';
 import 'scripts/domain/script_mods_notifier.dart';
@@ -34,8 +28,6 @@ import 'settings/ui/settings_tab.dart';
 import 'textures/domain/texture_index_provider.dart';
 import 'textures/domain/texture_replacements_notifier.dart';
 import 'textures/ui/texture_tab.dart';
-
-final _selectedItemProvider = StateProvider<CatalogItem?>((ref) => null);
 
 /// Main tab indices, matching the [TabBar] tab order in [HomePage].
 const _texturesTabIndex = 3;
@@ -177,24 +169,12 @@ class _HomePageState extends ConsumerState<HomePage>
     ref.listen(dumpPathProvider, (prev, next) {
       if (prev != next) {
         ref.read(overridesProvider.notifier).clearAll();
-        ref.read(_selectedItemProvider.notifier).state = null;
+        ref.read(selectedItemProvider.notifier).state = null;
       }
     });
 
-    final selectedRaw = ref.watch(_selectedItemProvider);
-    // Re-resolve the selection against the current catalog so that loading or
-    // resetting a dump re-renders the editor with the refreshed item (same id,
-    // new fields/defaults) instead of the stale CatalogItem object.
-    final selected = selectedRaw == null
-        ? null
-        : (ref
-                  .watch(catalogProvider)
-                  .value
-                  ?.firstWhereOrNull((i) => i.id == selectedRaw.id) ??
-              selectedRaw);
-    final overridesState = ref.watch(overridesProvider);
     final dirty =
-        overridesState.count > 0 ||
+        ref.watch(overridesProvider).count > 0 ||
         ref.watch(locEditsProvider).isDirty ||
         ref.watch(audioReplacementsProvider).count > 0 ||
         ref.watch(textureReplacementsProvider).count > 0 ||
@@ -337,68 +317,7 @@ class _HomePageState extends ConsumerState<HomePage>
                 child: TabBarView(
                   children: [
                     // Items: catalog browser + field editor.
-                    KeepAliveTab(
-                      child: Row(
-                        children: [
-                          // Left: catalog browser
-                          SizedBox(
-                            width: 560,
-                            child: CatalogBrowser(
-                              selected: selected,
-                              onItemSelected: (item) =>
-                                  ref
-                                          .read(_selectedItemProvider.notifier)
-                                          .state =
-                                      item,
-                            ),
-                          ),
-                          const VerticalDivider(width: 1),
-                          // Centre: field editor. Cap the editing column width and
-                          // centre it so the inputs don't stretch across the whole
-                          // window on wide displays.
-                          Expanded(
-                            child: selected == null
-                                ? Center(
-                                    child: Text(
-                                      l10n.selectAnItemToEdit,
-                                      style: TextStyle(
-                                        color: scheme.onSurfaceVariant,
-                                      ),
-                                    ),
-                                  )
-                                : Align(
-                                    alignment: Alignment.topCenter,
-                                    child: ConstrainedBox(
-                                      constraints: const BoxConstraints(
-                                        maxWidth: 720,
-                                      ),
-                                      child: FieldEditor(
-                                        item: selected,
-                                        displayName: displayNameForItem(
-                                          selected,
-                                          ref.watch(locCatalogProvider).value ??
-                                              const {},
-                                          gameLangByCode(
-                                            ref.watch(localeProvider),
-                                          ),
-                                        ),
-                                        pendingOverrides: {
-                                          for (final e
-                                              in overridesState.entries.where(
-                                                (e) => e.classId == selected.id,
-                                              ))
-                                            e.field: e,
-                                        },
-                                        onOverrideChanged: (entry) => ref
-                                            .read(overridesProvider.notifier)
-                                            .setOverride(entry),
-                                      ),
-                                    ),
-                                  ),
-                          ),
-                        ],
-                      ),
-                    ),
+                    const KeepAliveTab(child: ItemsTab()),
                     // Dialoge: localized dialog/bark line editor.
                     const KeepAliveTab(child: DialogeTab()),
                     // Audio: FMOD bank sample browser + replacement.
