@@ -83,16 +83,24 @@ class _ScriptTabState extends ConsumerState<ScriptTab> {
   @override
   void initState() {
     super.initState();
-    // This State only (re)mounts on app start or when GamePathScope swaps its
-    // subtree key on a game-exe-path change — KeepAliveTab keeps it alive
-    // across plain tab switches. The selection provider is app-scoped, so it
-    // would survive that remount and carry the PREVIOUS install's selection
-    // (highlighting/opening a same-named path in the new install). Reset it
-    // once per mount; deferred to a microtask because providers must not be
-    // mutated while the widget tree is building.
-    Future.microtask(() {
-      if (mounted) ref.read(_selectedModuleProvider.notifier).state = null;
-    });
+    // MAIN tab only: its State (re)mounts on app start or when GamePathScope
+    // swaps its subtree key on a game-exe-path change — KeepAliveTab keeps it
+    // alive across plain tab switches. The selection provider is app-scoped,
+    // so it would survive that remount and carry the PREVIOUS install's
+    // selection (highlighting/opening a same-named path in the new install).
+    // Reset it once per mount; deferred to a microtask because providers must
+    // not be mutated while the widget tree is building.
+    //
+    // The staged-only embed must NOT reset: ChangesTab mounts a FRESH
+    // ScriptTab(onlyStaged: true) on every Changes>Scripts visit (plain
+    // content swap, no keep-alive), so resetting here would wipe the main
+    // tab's selection on each visit. Sharing the selection between the main
+    // tab and the embed is deliberate — both views point at the same modules.
+    if (!widget.onlyStaged) {
+      Future.microtask(() {
+        if (mounted) ref.read(_selectedModuleProvider.notifier).state = null;
+      });
+    }
   }
 
   @override

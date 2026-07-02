@@ -379,6 +379,44 @@ void main() {
     expect(find.text('New'), findsOneWidget);
   });
 
+  testWidgets('onlyStaged embed mount does not clear the shared selection',
+      (tester) async {
+    // One container across both mounts — like the real app, where the main
+    // Scripts tab (kept alive) and the ChangesTab embed share the app-scoped
+    // selection provider.
+    final container = ProviderContainer(overrides: [
+      scriptModulesProvider.overrideWith((ref) async => _fakeModules()),
+    ]);
+    addTearDown(container.dispose);
+
+    Future<void> pumpTab(Widget tab) async {
+      await tester.pumpWidget(UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp(home: Scaffold(body: tab)),
+      ));
+      await tester.pump();
+      await tester.pump();
+    }
+
+    // Seed the selection through the MAIN tab (the provider is private to the
+    // library, so seed it the way the app does — by selecting a module).
+    await pumpTab(const ScriptTab());
+    await tester.tap(find.text('Bar.as'));
+    await tester.pump();
+    expect(find.text('Vanilla module — not staged'), findsOneWidget);
+
+    // Opening Changes>Scripts mounts a FRESH staged-only embed on every visit
+    // (plain content swap, no keep-alive). Its initState must NOT null the
+    // shared selection: the detail keeps showing the selected module instead
+    // of falling back to the placeholder.
+    await pumpTab(const ScriptTab(onlyStaged: true));
+    expect(find.text('Vanilla module — not staged'), findsOneWidget);
+    expect(find.text('Select or add a script mod'), findsNothing);
+    // (Nothing is staged, so the embed's browser shows the staged-empty hint.)
+    expect(find.textContaining('No staged edits of vanilla modules'),
+        findsOneWidget);
+  });
+
   testWidgets('remounting the tab (game-path change) resets the selection',
       (tester) async {
     // One container across both mounts — exactly like the real app, where the
