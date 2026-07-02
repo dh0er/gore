@@ -134,6 +134,56 @@ void main() {
   );
 
   testWidgets(
+    'a FAILED character-index load settles the player Events pane to the '
+    'empty state instead of an eternal spinner',
+    (tester) async {
+      // Cursor (Medium): the hero id is stashed only by a SUCCESSFUL index
+      // load. When the load fails, no id is ever coming — the pane must leave
+      // the spinner for the clean no-events empty state, not spin forever.
+      final core = _GatedHeroEventsCoreService()..failCharactersList = true;
+      await pumpApp(tester, core);
+
+      // Open Characters → Events while the character index is still loading
+      // (gated). Plain pump()s — pumpAndSettle would spin on the loading
+      // indicator.
+      await tester.tap(find.widgetWithText(Tab, 'Characters'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.tap(find.widgetWithText(Tab, 'Events'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+
+      // Load in flight: the spinner holds the pane, as in the success case.
+      expect(
+        find.descendant(
+          of: find.byType(TabBarView),
+          matching: find.byType(CircularProgressIndicator),
+        ),
+        findsWidgets,
+      );
+
+      // The gate releases with a FAILING index response: the pane settles to
+      // the no-events empty state — the spinner is gone, and no events query
+      // was ever issued (there is no id to query with).
+      core.charactersListGate.complete();
+      await tester.pumpAndSettle();
+
+      expect(find.text('No events for this character.'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byType(TabBarView),
+          matching: find.byType(CircularProgressIndicator),
+        ),
+        findsNothing,
+      );
+      expect(
+        core.requests.where((r) => r.command == 'query_progression'),
+        isEmpty,
+      );
+    },
+  );
+
+  testWidgets(
     'an orphan selection shows the no-actor empty state on Events, not the '
     'select-a-character prompt',
     (tester) async {
@@ -367,9 +417,14 @@ class _HeroEventsCoreService implements GoresaveCoreService {
 
 /// [_HeroEventsCoreService] whose character index does not respond until
 /// [charactersListGate] completes — the "slow decompress" case where the user
-/// reaches the Events sub-tab before the hero GlobalId is known.
+/// reaches the Events sub-tab before the hero GlobalId is known. With
+/// [failCharactersList] set, the gated index responds with an ERROR page
+/// instead of the character rows — the "index load failed" case, where no hero
+/// id is ever coming.
 class _GatedHeroEventsCoreService extends _HeroEventsCoreService {
   final charactersListGate = Completer<void>();
+
+  var failCharactersList = false;
 
   @override
   Future<Map<String, Object?>> execute(
@@ -378,6 +433,15 @@ class _GatedHeroEventsCoreService extends _HeroEventsCoreService {
   }) async {
     if (command == 'private.characters.list') {
       await charactersListGate.future;
+      if (failCharactersList) {
+        requests.add(
+          _RecordedRequest(command, Map<String, Object?>.from(payload)),
+        );
+        return {
+          'ok': false,
+          'error': {'message': 'characters list failed'},
+        };
+      }
     }
     return super.execute(command, payload: payload);
   }

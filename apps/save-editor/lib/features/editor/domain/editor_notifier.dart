@@ -74,6 +74,7 @@ class EditorState {
     this.selectedActor = const Actor.player(),
     this.invalidNpcEditKey,
     this.heroGlobalId,
+    this.heroGlobalIdSettled = false,
   });
 
   final String saveDir;
@@ -123,6 +124,14 @@ class EditorState {
   /// Charaktere master list represents this actor; its GlobalId keys the
   /// player's memory events. Null until the index has loaded.
   final String? heroGlobalId;
+
+  /// True once the character-index load for the CURRENT save has completed at
+  /// least once — success or failure — so [heroGlobalId] is as resolved as
+  /// it's going to get. The player's Ereignisse pane keys its spinner off
+  /// this: null id + not settled = index load in flight (spinner); null id +
+  /// settled = no hero row is coming (empty state, never an eternal spinner).
+  /// Reset to false on a slot switch alongside [heroGlobalId].
+  final bool heroGlobalIdSettled;
 
   final String? error;
 
@@ -207,6 +216,7 @@ class EditorState {
     Actor? selectedActor,
     Object? invalidNpcEditKey = _unchanged,
     Object? heroGlobalId = _unchanged,
+    bool? heroGlobalIdSettled,
     bool clearInspection = false,
     bool clearBackups = false,
     bool clearError = false,
@@ -254,6 +264,7 @@ class EditorState {
       heroGlobalId: identical(heroGlobalId, _unchanged)
           ? this.heroGlobalId
           : heroGlobalId as String?,
+      heroGlobalIdSettled: heroGlobalIdSettled ?? this.heroGlobalIdSettled,
     );
   }
 }
@@ -926,8 +937,10 @@ class EditorNotifier extends StateNotifier<EditorState> {
       clearPendingEdits: switchingSlot,
       // Slot switch: the hero GlobalId belongs to the PREVIOUS save. Drop it
       // so the player's Ereignisse sub-tab never queries the old id against
-      // the new file; the master list's index load re-stashes it.
+      // the new file; the master list's index load re-stashes it. Its settled
+      // flag resets with it — the new save's index has not completed yet.
       heroGlobalId: switchingSlot ? null : _unchanged,
+      heroGlobalIdSettled: switchingSlot ? false : null,
     );
     try {
       final payload = <String, Object?>{
@@ -1380,27 +1393,42 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// A successful parse also stashes [EditorState.heroGlobalId]: the save's own
   /// "Hero" ACTOR row is the player's avatar — the pinned Player row in the
   /// master list represents it, and its GlobalId keys the player's memory
-  /// events. Error pages leave the state untouched (a stale value from the
+  /// events. Error pages leave the id itself untouched (a stale value from the
   /// same save is still correct; the next successful load re-stashes it).
+  ///
+  /// EVERY completed attempt — success (with or without a hero row), error
+  /// page, or thrown failure — additionally marks
+  /// [EditorState.heroGlobalIdSettled] for the save it was issued against, so
+  /// the player's Ereignisse pane can stop showing its "index load in flight"
+  /// spinner and settle to an empty state when no id is coming.
   Future<CharacterIndexPage> loadAllCharacters() async {
     final path = state.selectedPath;
     if (path == null) {
       return const CharacterIndexPage(error: 'No save selected.');
     }
+    // Marks the load settled — only for the save this request was issued
+    // against: a slot switch during the (serialized, possibly slow) core call
+    // must not let the PREVIOUS save's outcome settle the newly selected file.
+    void settle() {
+      if (state.selectedPath == path) {
+        state = state.copyWith(heroGlobalIdSettled: true);
+      }
+    }
+
     try {
       final response = await _execute(
         'private.characters.list',
         payload: {'path': path},
       );
       if (response['ok'] != true) {
+        settle();
         return CharacterIndexPage(error: _errorMessage(response));
       }
       final page = CharacterIndexPage.fromJson(
         (response['data'] as Map).cast<String, Object?>(),
       );
-      // Only stash for the save this request was issued against: a slot
-      // switch during the (serialized, possibly slow) core call must not let
-      // the PREVIOUS save's hero id land on the newly selected file.
+      // Same path pin as settle(): the PREVIOUS save's hero id must not land
+      // on the newly selected file.
       if (state.selectedPath == path) {
         for (final row in page.characters) {
           if (row.globalId != null && row.uniqueName.toLowerCase() == 'hero') {
@@ -1408,9 +1436,11 @@ class EditorNotifier extends StateNotifier<EditorState> {
             break;
           }
         }
+        state = state.copyWith(heroGlobalIdSettled: true);
       }
       return page;
     } catch (error) {
+      settle();
       return CharacterIndexPage(error: 'Character list failed: $error');
     }
   }

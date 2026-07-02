@@ -1039,12 +1039,15 @@ void main() {
     final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
     await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
     expect(notifier.state.heroGlobalId, isNull);
+    expect(notifier.state.heroGlobalIdSettled, isFalse);
 
     final page = await notifier.loadAllCharacters();
 
     expect(page.error, isNull);
     expect(page.characters, hasLength(3));
     expect(notifier.state.heroGlobalId, 'Hero');
+    // The load completed — the hero id is settled for this save.
+    expect(notifier.state.heroGlobalIdSettled, isTrue);
   });
 
   test(
@@ -1062,6 +1065,30 @@ void main() {
       expect(page.error, isNotNull);
       // A stale value from the same save is still correct — keep it.
       expect(notifier.state.heroGlobalId, 'Hero');
+      // The failed attempt still COMPLETED, so the id stays settled.
+      expect(notifier.state.heroGlobalIdSettled, isTrue);
+    },
+  );
+
+  // Cursor (Medium): with the Player selected, the Ereignisse pane spun
+  // forever when the index load failed before ever stashing a hero id. A
+  // completed attempt — even a failed one — must mark the id settled so the
+  // pane can leave the spinner for the empty state.
+  test(
+    'loadAllCharacters settles the hero id even when the very first load fails',
+    () async {
+      final core = _CharactersListCoreService();
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+      expect(notifier.state.heroGlobalIdSettled, isFalse);
+
+      core.failList = true;
+      final page = await notifier.loadAllCharacters();
+
+      expect(page.error, isNotNull);
+      // No id was ever stashed, but the load completed: settled, id null.
+      expect(notifier.state.heroGlobalId, isNull);
+      expect(notifier.state.heroGlobalIdSettled, isTrue);
     },
   );
 
@@ -1074,10 +1101,14 @@ void main() {
     await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
     await notifier.loadAllCharacters();
     expect(notifier.state.heroGlobalId, 'Hero');
+    expect(notifier.state.heroGlobalIdSettled, isTrue);
 
     await notifier.inspect(r'C:\tmp\saves\G1R-002.sav');
 
     expect(notifier.state.heroGlobalId, isNull);
+    // The new save's index has not completed yet — the settled flag resets
+    // with the id, so the events pane shows the spinner, not the empty state.
+    expect(notifier.state.heroGlobalIdSettled, isFalse);
   });
 
   // Cursor (Medium): a slow characters.list response must not stash the
@@ -1099,6 +1130,9 @@ void main() {
 
     expect(page.error, isNull);
     expect(notifier.state.heroGlobalId, isNull);
+    // The settled flag is pinned to the same path: the stale completion must
+    // not mark the NEW save's index as settled either.
+    expect(notifier.state.heroGlobalIdSettled, isFalse);
   });
 
   test('failed same-save re-inspect keeps pending edits retryable', () async {

@@ -134,9 +134,13 @@ class CharactersTab extends ConsumerWidget {
     // state instead of the detail (whose null branch is the misleading
     // "select a character" prompt). The player's events live under the save's
     // own Hero ACTOR GlobalId, stashed in `state.heroGlobalId` when the
-    // character index loads — until that id arrives, a spinner under the same
-    // ActorDetailHeader holds the pane (so the layout doesn't jump), then
-    // EventsDetail mounts with the id.
+    // character index loads — three states under the same ActorDetailHeader
+    // (so the layout doesn't jump): while the index load is in flight
+    // (`heroGlobalIdSettled` false) a spinner holds the pane; once it settles
+    // WITHOUT an id (index failed or carried no hero row) the pane shows the
+    // no-events empty state instead of spinning forever (the master list
+    // separately surfaces a load error with retry); with the id, EventsDetail
+    // mounts keyed by it.
     final Widget eventsBody = isOrphan
         ? _MessagePane(
             icon: Icons.history_outlined,
@@ -153,10 +157,20 @@ class CharactersTab extends ConsumerWidget {
               ),
               Expanded(
                 child: selected.isPlayer && state.heroGlobalId == null
-                    // Character-index load still in flight: the hero id is not
-                    // known yet, so show progress rather than mounting the
-                    // detail with a null id.
-                    ? const Center(child: CircularProgressIndicator())
+                    ? (state.heroGlobalIdSettled
+                          // The index load completed without a hero id (error
+                          // or no hero row): no id is coming, so settle to the
+                          // clean no-events empty state — never an eternal
+                          // spinner.
+                          ? _MessagePane(
+                              icon: Icons.history_outlined,
+                              title: l10n.sectionEvents,
+                              body: l10n.characterNoEventsBody,
+                            )
+                          // Character-index load still in flight: the hero id
+                          // is not known yet, so show progress rather than
+                          // mounting the detail with a null id.
+                          : const Center(child: CircularProgressIndicator()))
                     // Shared sub-tab layout (see class comment): outer padding
                     // around the detail's Card, matching Attribute/Inventar.
                     : Padding(
