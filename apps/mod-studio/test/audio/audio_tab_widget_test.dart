@@ -91,14 +91,21 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Creatures (1)'), findsNothing);
     expect(find.text('taiko_hit'), findsOneWidget);
-    await tester.enterText(find.byType(TextField), '');
-    await tester.pumpAndSettle();
-    expect(find.text('Creatures (1)'), findsOneWidget);
 
-    // Non-SFX banks keep the flat whole-bank list without a sidebar.
+    // Switching banks clears the search: Music shows its flat whole-bank
+    // list (no sidebar) instead of a stale 'taiko' filter.
     await tester.tap(find.widgetWithText(Tab, 'Music'));
     await tester.pumpAndSettle();
+    expect(
+      tester.widget<TextField>(find.byType(TextField)).controller!.text,
+      isEmpty,
+    );
     expect(find.text('MUS_Theme_01'), findsOneWidget);
     expect(find.text('Creatures (1)'), findsNothing);
+
+    // Back on SFX the sidebar returns (search stayed cleared).
+    await tester.tap(find.widgetWithText(Tab, 'SFX'));
+    await tester.pumpAndSettle();
+    expect(find.text('Creatures (1)'), findsOneWidget);
   });
 }

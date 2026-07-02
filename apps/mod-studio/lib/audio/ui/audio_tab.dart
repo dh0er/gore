@@ -40,6 +40,9 @@ class _AudioBrowser extends ConsumerStatefulWidget {
   ConsumerState<_AudioBrowser> createState() => _AudioBrowserState();
 }
 
+/// The only bank large enough to warrant the category split view.
+const String _sfxBank = 'SFX.bank';
+
 class _AudioBrowserState extends ConsumerState<_AudioBrowser>
     with SingleTickerProviderStateMixin {
   String _bankFileName = kModdableBanks.first;
@@ -49,12 +52,22 @@ class _AudioBrowserState extends ConsumerState<_AudioBrowser>
   final TextEditingController _searchController = TextEditingController();
   late final TabController _tabController;
 
+  // Cache of the SFX category grouping, keyed on list identity: the provider
+  // returns the same list instance across rebuilds, so regrouping 7k+ names
+  // on every setState (sample click, category click) would be wasted work.
+  List<AudioSampleInfo>? _lastGroupedSource;
+  Map<SfxCategory, List<AudioSampleInfo>>? _lastGrouped;
+
   String get _bankFullPath => p.join(widget.fmodDir, _bankFileName);
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: kModdableBanks.length, vsync: this);
+    _tabController = TabController(
+      length: kModdableBanks.length,
+      initialIndex: kModdableBanks.indexOf(_bankFileName),
+      vsync: this,
+    );
     _tabController.addListener(
       () => _selectBank(kModdableBanks[_tabController.index]),
     );
@@ -72,6 +85,10 @@ class _AudioBrowserState extends ConsumerState<_AudioBrowser>
     setState(() {
       _bankFileName = bankFileName;
       _selected = null;
+      // A search only makes sense within one bank; drop it on switch so the
+      // new bank starts from its full list (and SFX from its sidebar).
+      _query = '';
+      _searchController.clear();
     });
   }
 
@@ -161,10 +178,22 @@ class _AudioBrowserState extends ConsumerState<_AudioBrowser>
 
     // The SFX bank is huge (7k+ samples), so browse it through a category
     // sidebar. An active search hides the sidebar and scans the whole bank.
-    if (_bankFileName == 'SFX.bank' && !searching) {
+    if (_bankFileName == _sfxBank && !searching) {
       return _buildSfxSplitView(context, filtered);
     }
     return _sampleListView(context, filtered);
+  }
+
+  Map<SfxCategory, List<AudioSampleInfo>> _groupedSfx(
+      List<AudioSampleInfo> samples) {
+    if (identical(samples, _lastGroupedSource)) return _lastGrouped!;
+    final grouped = <SfxCategory, List<AudioSampleInfo>>{};
+    for (final s in samples) {
+      grouped.putIfAbsent(sfxCategoryForSample(s.name), () => []).add(s);
+    }
+    _lastGroupedSource = samples;
+    _lastGrouped = grouped;
+    return grouped;
   }
 
   Widget _buildSfxSplitView(
@@ -172,10 +201,7 @@ class _AudioBrowserState extends ConsumerState<_AudioBrowser>
     final theme = Theme.of(context);
     final l10n = AppLocalizations.of(context);
 
-    final grouped = <SfxCategory, List<AudioSampleInfo>>{};
-    for (final s in samples) {
-      grouped.putIfAbsent(sfxCategoryForSample(s.name), () => []).add(s);
-    }
+    final grouped = _groupedSfx(samples);
     final categories = [
       for (final c in SfxCategory.values)
         if (grouped.containsKey(c)) c,
@@ -222,18 +248,18 @@ class _AudioBrowserState extends ConsumerState<_AudioBrowser>
     );
   }
 
-  Widget _sampleListView(BuildContext context, List<AudioSampleInfo> filtered) {
+  Widget _sampleListView(BuildContext context, List<AudioSampleInfo> samples) {
     final theme = Theme.of(context);
     final replacements = ref.watch(audioReplacementsProvider);
 
-    if (filtered.isEmpty) {
+    if (samples.isEmpty) {
       return const Center(child: Text('No samples match'));
     }
 
     return ListView.builder(
-      itemCount: filtered.length,
+      itemCount: samples.length,
       itemBuilder: (context, index) {
-        final sample = filtered[index];
+        final sample = samples[index];
         final isSelected = _selected?.name == sample.name;
         final replaced = replacements.items.containsKey(
           AudioReplacement(

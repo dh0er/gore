@@ -14,6 +14,12 @@ void main() {
     expect(sfxCategoryForSample('SFX_ACTIONS_Foo'), SfxCategory.action);
     expect(sfxCategoryForSample('SFX_COMBAT_Ranged_Bow_Draw_04'), SfxCategory.combat);
     expect(sfxCategoryForSample('SFX_UI_X'), SfxCategory.ui);
+    expect(sfxCategoryForSample('SFX_PHYSICS_Impact_Wood_01'), SfxCategory.physics);
+    expect(sfxCategoryForSample('SFX_ITEMS_Pickup_Gold_01'), SfxCategory.items);
+    expect(sfxCategoryForSample('SFX_FOLEY_Cloth_Rustle_01'), SfxCategory.foley);
+    expect(sfxCategoryForSample('SFX_UNDERWATER_Loop_L1_01'), SfxCategory.underwater);
+    expect(sfxCategoryForSample('SFX_VISION_Enter_01'), SfxCategory.vision);
+    expect(sfxCategoryForSample('SFX_DIALOG_Blip_01'), SfxCategory.dialog);
     expect(sfxCategoryForSample('taiko_hit'), SfxCategory.other);
     expect(sfxCategoryForSample('SFX'), SfxCategory.other);
   });
