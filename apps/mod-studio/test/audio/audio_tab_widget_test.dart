@@ -27,9 +27,42 @@ AudioSampleInfo _sample(String name) => AudioSampleInfo(
       seconds: 1.0,
     );
 
+/// Pumps [AudioTab] with the settings store and sample provider faked, so the
+/// test never touches the real settings file or FFI.
+Future<void> _pumpAudioTab(
+  WidgetTester tester,
+  Map<String, List<AudioSampleInfo>> samplesByBank,
+) async {
+  await tester.pumpWidget(
+    ProviderScope(
+      overrides: [
+        uiSettingsStoreProvider.overrideWith(
+          (ref) => _MemUiSettingsStore(
+            const UiSettings(
+              gameExePath:
+                  r'C:\game\G1R\Binaries\Win64\G1R-Win64-Shipping.exe',
+            ),
+          ),
+        ),
+        audioSamplesProvider.overrideWith(
+          (ref, bankFullPath) async =>
+              samplesByBank[bankFullPath.split(RegExp(r'[\\/]')).last] ??
+              const [],
+        ),
+      ],
+      child: MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: const Scaffold(body: AudioTab()),
+      ),
+    ),
+  );
+  await tester.pumpAndSettle();
+}
+
 void main() {
   testWidgets('bank TabBar and categorized SFX split view', (tester) async {
-    final samplesByBank = <String, List<AudioSampleInfo>>{
+    await _pumpAudioTab(tester, {
       'SFX.bank': [
         _sample('SFX_CREA_Wolf_Growl_01'),
         _sample('SFX_MAGIC_Impact_01'),
@@ -38,33 +71,14 @@ void main() {
       'Music.bank': [_sample('MUS_Theme_01')],
       'CINEMATICS.bank': [],
       'VO.bank': [],
-    };
+    });
 
-    await tester.pumpWidget(
-      ProviderScope(
-        overrides: [
-          uiSettingsStoreProvider.overrideWith(
-            (ref) => _MemUiSettingsStore(
-              const UiSettings(
-                gameExePath:
-                    r'C:\game\G1R\Binaries\Win64\G1R-Win64-Shipping.exe',
-              ),
-            ),
-          ),
-          audioSamplesProvider.overrideWith(
-            (ref, bankFullPath) async =>
-                samplesByBank[bankFullPath.split(RegExp(r'[\\/]')).last] ??
-                const [],
-          ),
-        ],
-        child: MaterialApp(
-          localizationsDelegates: AppLocalizations.localizationsDelegates,
-          supportedLocales: AppLocalizations.supportedLocales,
-          home: const Scaffold(body: AudioTab()),
-        ),
-      ),
+    // The bank TabBar is constrained to the 560px browser pane instead of
+    // spanning the whole tab (test surface is 800px wide).
+    expect(
+      tester.getSize(find.byType(TabBar)).width,
+      lessThanOrEqualTo(560),
     );
-    await tester.pumpAndSettle();
 
     // One tab per moddable bank, extension stripped, CINEMATICS title-cased.
     expect(find.widgetWithText(Tab, 'SFX'), findsOneWidget);
@@ -107,5 +121,55 @@ void main() {
     await tester.tap(find.widgetWithText(Tab, 'SFX'));
     await tester.pumpAndSettle();
     expect(find.text('Creatures (1)'), findsOneWidget);
+  });
+
+  testWidgets('sample lists render alphabetically, case-insensitive',
+      (tester) async {
+    // Samples deliberately shuffled relative to alphabetical order: raw FSB
+    // bank order would render them exactly as given here.
+    await _pumpAudioTab(tester, {
+      'SFX.bank': [
+        _sample('SFX_CREA_Wolf_Growl_01'),
+        _sample('SFX_CREA_Bloodfly_Idle_01'),
+        _sample('SFX_CREA_Molerat_Attack_01'),
+      ],
+      'Music.bank': [
+        _sample('MUS_Zen_01'),
+        _sample('mus_battle_01'),
+        _sample('MUS_Ambient_01'),
+      ],
+      'CINEMATICS.bank': [],
+      'VO.bank': [],
+    });
+
+    // Orders [names] by their rendered vertical position (top to bottom).
+    List<String> renderedOrder(List<String> names) => [...names]..sort(
+          (a, b) => tester
+              .getTopLeft(find.text(a))
+              .dy
+              .compareTo(tester.getTopLeft(find.text(b)).dy),
+        );
+
+    // SFX category list (Creatures bucket, selected by default).
+    expect(
+      renderedOrder([
+        'SFX_CREA_Wolf_Growl_01',
+        'SFX_CREA_Bloodfly_Idle_01',
+        'SFX_CREA_Molerat_Attack_01',
+      ]),
+      [
+        'SFX_CREA_Bloodfly_Idle_01',
+        'SFX_CREA_Molerat_Attack_01',
+        'SFX_CREA_Wolf_Growl_01',
+      ],
+    );
+
+    // Non-SFX bank flat list, mixed-case names sorted case-insensitively.
+    await tester.tap(find.widgetWithText(Tab, 'Music'));
+    await tester.pumpAndSettle();
+    expect(
+      renderedOrder(['MUS_Zen_01', 'mus_battle_01', 'MUS_Ambient_01']),
+      ['MUS_Ambient_01', 'mus_battle_01', 'MUS_Zen_01'],
+    );
   });
 }

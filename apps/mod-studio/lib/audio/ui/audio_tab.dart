@@ -58,6 +58,12 @@ class _AudioBrowserState extends ConsumerState<_AudioBrowser>
   List<AudioSampleInfo>? _lastGroupedSource;
   Map<SfxCategory, List<AudioSampleInfo>>? _lastGrouped;
 
+  // Cache of the alphabetically sorted copy used by flat (non-category)
+  // lists, keyed on list identity for the same reason as _lastGrouped:
+  // re-sorting 7k+ samples per search keystroke would be wasted work.
+  List<AudioSampleInfo>? _lastSortedSource;
+  List<AudioSampleInfo>? _lastSorted;
+
   String get _bankFullPath => p.join(widget.fmodDir, _bankFileName);
 
   @override
@@ -107,12 +113,6 @@ class _AudioBrowserState extends ConsumerState<_AudioBrowser>
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        TabBar(
-          controller: _tabController,
-          tabs: [
-            for (final bank in kModdableBanks) Tab(text: _bankTabLabel(bank)),
-          ],
-        ),
         Expanded(
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -135,6 +135,14 @@ class _AudioBrowserState extends ConsumerState<_AudioBrowser>
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        // The bank tabs only switch what the browser column below shows, so
+        // they live inside the 560px pane instead of spanning the whole tab.
+        TabBar(
+          controller: _tabController,
+          tabs: [
+            for (final bank in kModdableBanks) Tab(text: _bankTabLabel(bank)),
+          ],
+        ),
         Padding(
           padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
           child: TextField(
@@ -180,18 +188,37 @@ class _AudioBrowserState extends ConsumerState<_AudioBrowser>
   Widget _buildSampleList(BuildContext context, List<AudioSampleInfo> samples) {
     final query = _query.trim().toLowerCase();
     final searching = query.isNotEmpty;
-    final filtered = searching
-        ? samples
-            .where((s) => s.name.toLowerCase().contains(query))
-            .toList()
-        : samples;
 
     // The SFX bank is huge (7k+ samples), so browse it through a category
-    // sidebar. An active search hides the sidebar and scans the whole bank.
+    // sidebar (buckets sorted at grouping time). An active search hides the
+    // sidebar and scans the whole bank.
     if (_bankFileName == _sfxBank && !searching) {
-      return _buildSfxSplitView(context, filtered);
+      return _buildSfxSplitView(context, samples);
     }
+
+    // Flat list (non-SFX banks, or any bank during a search): display in
+    // alphabetical order rather than FSB bank order. Filter over the cached
+    // pre-sorted copy so a keystroke never re-sorts the whole bank.
+    final sorted = _sortedByName(samples);
+    final filtered = searching
+        ? sorted
+            .where((s) => s.name.toLowerCase().contains(query))
+            .toList()
+        : sorted;
     return _sampleListView(context, filtered);
+  }
+
+  static int _byNameCaseInsensitive(AudioSampleInfo a, AudioSampleInfo b) =>
+      a.name.toLowerCase().compareTo(b.name.toLowerCase());
+
+  /// Sorted copy of [samples] (never sorts the provider's list in place),
+  /// memoized on list identity.
+  List<AudioSampleInfo> _sortedByName(List<AudioSampleInfo> samples) {
+    if (identical(samples, _lastSortedSource)) return _lastSorted!;
+    final sorted = [...samples]..sort(_byNameCaseInsensitive);
+    _lastSortedSource = samples;
+    _lastSorted = sorted;
+    return sorted;
   }
 
   Map<SfxCategory, List<AudioSampleInfo>> _groupedSfx(
@@ -200,6 +227,11 @@ class _AudioBrowserState extends ConsumerState<_AudioBrowser>
     final grouped = <SfxCategory, List<AudioSampleInfo>>{};
     for (final s in samples) {
       grouped.putIfAbsent(sfxCategoryForSample(s.name), () => []).add(s);
+    }
+    // Buckets are fresh copies, so sorting them in place is safe; category
+    // lists then render alphabetically instead of in FSB bank order.
+    for (final bucket in grouped.values) {
+      bucket.sort(_byNameCaseInsensitive);
     }
     _lastGroupedSource = samples;
     _lastGrouped = grouped;
