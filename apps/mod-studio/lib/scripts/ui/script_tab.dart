@@ -39,7 +39,13 @@ class _ModuleEntry {
 }
 
 class ScriptTab extends ConsumerStatefulWidget {
-  const ScriptTab({super.key});
+  const ScriptTab({super.key, this.onlyStaged = false});
+
+  /// Changes-tab mode: the left browser (tree, flat search list, count
+  /// caption) shows only modules whose REAL relPath is a staged key. Staged
+  /// 'add' mods have no vanilla leaf, so they stay reachable via the staged
+  /// bottom panel (unchanged). Default false = the full vanilla browser.
+  final bool onlyStaged;
 
   @override
   ConsumerState<ScriptTab> createState() => _ScriptTabState();
@@ -67,6 +73,12 @@ class _ScriptTabState extends ConsumerState<ScriptTab> {
   // Marked-leaf memo, valid per (staged items identity, modules identity).
   Object? _markedSource;
   Set<String>? _markedTreePaths;
+  // onlyStaged: the filtered browse view (identity-stable tree-path list +
+  // search entries restricted to staged real relPaths), memoized per (staged
+  // items identity, modules identity — the latter reset by [_refreshCaches]).
+  Object? _stagedFilterSource;
+  List<String>? _stagedTreePaths;
+  List<_ModuleEntry>? _stagedSearchEntries;
 
   @override
   void initState() {
@@ -81,6 +93,17 @@ class _ScriptTabState extends ConsumerState<ScriptTab> {
     Future.microtask(() {
       if (mounted) ref.read(_selectedModuleProvider.notifier).state = null;
     });
+  }
+
+  @override
+  void didUpdateWidget(ScriptTab oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.onlyStaged != widget.onlyStaged) {
+      // The match memo is keyed on the ACTIVE entries source (filtered vs
+      // full), so a mode flip invalidates it even with query + data unchanged.
+      _matchQuery = null;
+      _matchResult = null;
+    }
   }
 
   @override
@@ -122,6 +145,9 @@ class _ScriptTabState extends ConsumerState<ScriptTab> {
     _matchResult = null;
     _markedSource = null;
     _markedTreePaths = null;
+    _stagedFilterSource = null;
+    _stagedTreePaths = null;
+    _stagedSearchEntries = null;
   }
 
   /// The tree leaf for the current selection. The selection store mixes key
@@ -150,6 +176,30 @@ class _ScriptTabState extends ConsumerState<ScriptTab> {
     return _markedTreePaths!;
   }
 
+  /// onlyStaged: rebuild the filtered browse view — only modules whose REAL
+  /// relPath is a staged key (derived from [_markedFor], so colliding leaves
+  /// that share a staged real path all stay visible). Memoized per (staged
+  /// items identity, modules identity): PathTreeBrowser rebuilds its tree per
+  /// paths-list IDENTITY, so a fresh list every build would rebuild the tree
+  /// every frame. The search-match memo is keyed on the entries this produces,
+  /// so it resets alongside (un-staging during an active search must re-filter).
+  void _refreshStagedFilter(ScriptModsState staged) {
+    if (identical(_stagedFilterSource, staged.items) &&
+        _stagedTreePaths != null) {
+      return;
+    }
+    _stagedFilterSource = staged.items;
+    final marked = _markedFor(staged);
+    final entries = <_ModuleEntry>[
+      for (final e in _searchEntries!)
+        if (marked.contains(e.treePath)) e,
+    ];
+    _stagedSearchEntries = entries;
+    _stagedTreePaths = [for (final e in entries) e.treePath];
+    _matchQuery = null;
+    _matchResult = null;
+  }
+
   /// 'Dir/Foo.as' + n → 'Dir/Foo (n).as' (suffix before the extension).
   static String _suffixedPath(String path, int n) {
     final slash = path.lastIndexOf('/');
@@ -162,12 +212,15 @@ class _ScriptTabState extends ConsumerState<ScriptTab> {
   }
 
   /// Matches for [query], memoized so rebuilds while a search is active (e.g.
-  /// selection changes) don't re-filter + re-sort the ~7k entries.
+  /// selection changes) don't re-filter + re-sort the ~7k entries. onlyStaged
+  /// searches the FILTERED entries, so hits are staged modules only.
   List<_ModuleEntry> _matchesFor(String query) {
     final q = query.toLowerCase();
     if (_matchQuery == q && _matchResult != null) return _matchResult!;
     _matchQuery = q;
-    return _matchResult = (_searchEntries!
+    final entries =
+        widget.onlyStaged ? _stagedSearchEntries! : _searchEntries!;
+    return _matchResult = (entries
         .where((e) => e.nameLc.contains(q) || e.pathLc.contains(q))
         .toList()
       ..sort((a, b) => a.pathLc.compareTo(b.pathLc)));
@@ -215,13 +268,35 @@ class _ScriptTabState extends ConsumerState<ScriptTab> {
 
   Widget _browser(List<ScriptModuleInfo> modules, ScriptModsState staged,
       String? selectedKey, ColorScheme scheme) {
-    if (modules.isEmpty) {
+    if (widget.onlyStaged) {
+      // Changes-tab mode: browse only the staged slice of the vanilla list.
+      // build watches scriptModsProvider, so un-staging refreshes this live.
+      _refreshStagedFilter(staged);
+    } else if (modules.isEmpty) {
       // No cache found (or no game configured) — same hint the old picker gave.
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(16),
           child: Text(
             'No vanilla modules — set the game path in Settings.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: scheme.onSurfaceVariant),
+          ),
+        ),
+      );
+    }
+    final treePaths = widget.onlyStaged ? _stagedTreePaths! : _treePaths!;
+    if (treePaths.isEmpty) {
+      // onlyStaged with nothing to browse: nothing staged, or only 'add' mods
+      // (no vanilla leaf — those live in the staged panel below), or no module
+      // list at all. Only reachable in onlyStaged mode: the full list is
+      // non-empty here (the modules.isEmpty hint above returned already).
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Text(
+            'No staged edits of vanilla modules.\n'
+            'Staged new .as modules appear in the panel below.',
             textAlign: TextAlign.center,
             style: TextStyle(color: scheme.onSurfaceVariant),
           ),
@@ -272,7 +347,7 @@ class _ScriptTabState extends ConsumerState<ScriptTab> {
                 child: ExcludeFocus(
                   excluding: _query.isNotEmpty,
                   child: PathTreeBrowser(
-                    paths: _treePaths!,
+                    paths: treePaths,
                     selectedPath: selectedTreePath,
                     onSelect: _select,
                     leafIcon: Icons.description_outlined,
@@ -286,10 +361,11 @@ class _ScriptTabState extends ConsumerState<ScriptTab> {
           ),
         ),
         Text(
-          // Tree-path count (== one leaf per module, incl. disambiguated ones).
+          // Tree-path count (== one leaf per module, incl. disambiguated
+          // ones); in onlyStaged mode both counts cover the staged slice only.
           _query.isEmpty
-              ? '${_treePaths!.length} modules'
-              : '${matches.length} match / ${_treePaths!.length} total',
+              ? '${treePaths.length} modules'
+              : '${matches.length} match / ${treePaths.length} total',
           style: Theme.of(context).textTheme.bodySmall,
         ),
       ],

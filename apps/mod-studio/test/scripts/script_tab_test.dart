@@ -24,7 +24,8 @@ List<ScriptModuleInfo> _fakeModules() => [
 ScriptMod _stagedBar() => const ScriptMod(
     op: ScriptOp.edit, moduleName: 'Bar', relPath: 'Bar.as', asPath: '');
 
-Future<void> _pumpTab(WidgetTester tester, {ScriptMod? staged}) async {
+Future<void> _pumpTab(WidgetTester tester,
+    {ScriptMod? staged, bool onlyStaged = false}) async {
   await tester.pumpWidget(
     ProviderScope(
       overrides: [
@@ -33,7 +34,8 @@ Future<void> _pumpTab(WidgetTester tester, {ScriptMod? staged}) async {
           scriptModsProvider
               .overrideWith((ref) => ScriptModsNotifier()..setMod(staged)),
       ],
-      child: const MaterialApp(home: Scaffold(body: ScriptTab())),
+      child: MaterialApp(
+          home: Scaffold(body: ScriptTab(onlyStaged: onlyStaged))),
     ),
   );
   // Resolve the modules future (loading spinner → data).
@@ -279,6 +281,102 @@ void main() {
     await tester.scrollUntilVisible(find.text('Mod29'), 80,
         scrollable: find.byType(Scrollable).first);
     expect(find.text('Mod29'), findsOneWidget);
+  });
+
+  testWidgets('onlyStaged: browser shows only staged leaves, search filters '
+      'within them, un-staging empties live and re-staging restores',
+      (tester) async {
+    await _pumpTab(tester, staged: _stagedBar(), onlyStaged: true);
+
+    // Only the staged module's leaf renders — vanilla folders/leaves are out,
+    // and the count caption covers the staged slice only.
+    expect(find.text('Bar.as'), findsOneWidget);
+    expect(find.text('Gameplay'), findsNothing);
+    expect(find.text('Misc'), findsNothing);
+    expect(find.text('1 modules'), findsOneWidget);
+    // The staged bottom panel is unchanged.
+    expect(find.text('Staged script mods (1)'), findsOneWidget);
+
+    // Search runs over the FILTERED entries: 'ba' matches staged Bar but must
+    // not surface the unstaged Baz; the totals are staged-slice totals.
+    await tester.enterText(find.byType(TextField), 'ba');
+    await tester.pump();
+    expect(find.text('Bar'), findsOneWidget);
+    expect(find.text('Baz'), findsNothing);
+    expect(find.text('1 match / 1 total'), findsOneWidget);
+    await tester.tap(find.byIcon(Icons.clear));
+    await tester.pump();
+
+    // Un-stage through the container (as any outside action would): the
+    // browser empties LIVE to the hint while the staged panel follows.
+    final container = ProviderScope.containerOf(
+        tester.element(find.byType(ScriptTab)),
+        listen: false);
+    container.read(scriptModsProvider.notifier).remove('Bar.as');
+    await tester.pump();
+    expect(find.text('Bar.as'), findsNothing);
+    expect(find.textContaining('No staged edits of vanilla modules'),
+        findsOneWidget);
+    expect(find.text('Staged script mods (0)'), findsOneWidget);
+
+    // Re-staging brings the leaf back (fresh filtered-list identity → the
+    // tree rebuilds).
+    container.read(scriptModsProvider.notifier).setMod(_stagedBar());
+    await tester.pump();
+    expect(find.text('Bar.as'), findsOneWidget);
+    expect(find.text('1 modules'), findsOneWidget);
+  });
+
+  testWidgets('onlyStaged: a staged add (no vanilla leaf) stays out of the '
+      'browser but in the panel; a folder-nested staged edit shows only its '
+      'own leaf', (tester) async {
+    final notifier = ScriptModsNotifier()
+      ..setMod(const ScriptMod(
+          op: ScriptOp.edit,
+          moduleName: 'Foo',
+          relPath: 'Gameplay/Foo.as',
+          asPath: ''))
+      ..setMod(const ScriptMod(
+          op: ScriptOp.add,
+          moduleName: 'New',
+          relPath: 'Mods/New.as',
+          asPath: ''));
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          scriptModulesProvider.overrideWith((ref) async => _fakeModules()),
+          scriptModsProvider.overrideWith((ref) => notifier),
+        ],
+        child: const MaterialApp(
+            home: Scaffold(body: ScriptTab(onlyStaged: true))),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    // Only the staged EDIT's folder renders; the add has no vanilla leaf and
+    // must not invent one. The caption counts vanilla leaves only.
+    expect(find.text('Gameplay'), findsOneWidget);
+    expect(find.text('Mods'), findsNothing);
+    expect(find.text('Bar.as'), findsNothing);
+    expect(find.text('1 modules'), findsOneWidget);
+
+    // Expanding the folder shows only the staged leaf (check-marked), not the
+    // unstaged sibling.
+    await tester.tap(find.text('Gameplay'));
+    await tester.pump();
+    expect(find.text('Foo.as'), findsOneWidget);
+    expect(find.text('Baz.as'), findsNothing);
+    final fooTile = find.ancestor(
+        of: find.text('Foo.as'), matching: find.byType(ListTile));
+    expect(find.descendant(of: fooTile, matching: find.byIcon(Icons.check)),
+        findsOneWidget);
+
+    // The add remains reachable via the staged panel.
+    expect(find.text('Staged script mods (2)'), findsOneWidget);
+    await tester.tap(find.text('Staged script mods (2)'));
+    await tester.pumpAndSettle();
+    expect(find.text('New'), findsOneWidget);
   });
 
   testWidgets('remounting the tab (game-path change) resets the selection',
