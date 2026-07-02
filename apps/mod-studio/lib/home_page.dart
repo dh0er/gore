@@ -24,6 +24,8 @@ import 'loc/domain/loc_notifier.dart';
 import 'loc/game_lang.dart';
 import 'loc/ui/loc_extract_flow.dart';
 import 'project/project_controller.dart';
+import 'scripts/domain/script_mods_notifier.dart';
+import 'scripts/ui/script_tab.dart';
 import 'settings/ui/settings_tab.dart';
 import 'textures/domain/texture_replacements_notifier.dart';
 import 'textures/ui/texture_tab.dart';
@@ -171,7 +173,8 @@ class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver
     final dirty = overridesState.count > 0 ||
         ref.watch(locEditsProvider).isDirty ||
         ref.watch(audioReplacementsProvider).count > 0 ||
-        ref.watch(textureReplacementsProvider).count > 0;
+        ref.watch(textureReplacementsProvider).count > 0 ||
+        ref.watch(scriptModsProvider).count > 0;
     // Keep Build/Deploy reachable when a game is configured even with no staged edits, so the
     // dialog's Undeploy (restore *.gore-bak) stays available to GUI users.
     final gameConfigured = gameRootFromExe(ref.watch(gameExePathProvider)) != null;
@@ -241,7 +244,7 @@ class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver
         ],
       ),
       body: DefaultTabController(
-        length: 6,
+        length: 7,
         child: Column(
           children: [
             Container(
@@ -267,6 +270,10 @@ class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver
                         const Tab(
                           icon: Icon(Icons.texture),
                           text: 'Textures',
+                        ),
+                        const Tab(
+                          icon: Icon(Icons.code),
+                          text: 'AngelScript',
                         ),
                         Tab(
                           icon: const Icon(Icons.edit_note_outlined),
@@ -346,6 +353,8 @@ class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver
                   const AudioTab(),
                   // Textures: texture asset browser + replacement.
                   const TextureTab(),
+                  // AngelScript: stage .as mods, compile, splice.
+                  const ScriptTab(),
                   // Changes: all staged item/loc/audio changes, centred.
                   Align(
                     alignment: Alignment.topCenter,

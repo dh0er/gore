@@ -3,6 +3,7 @@
 //! See `docs/superpowers/specs/2026-06-20-gore-as-angelscript-decode-design.md`.
 
 pub mod cache;
+pub mod compile;
 
 #[cfg(test)]
 mod tests {

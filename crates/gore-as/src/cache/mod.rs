@@ -5,6 +5,7 @@ pub mod cfg;
 pub mod decompile;
 pub mod disasm;
 pub mod emit;
+pub mod emit_all;
 pub mod header;
 pub mod isa;
 pub mod model;
