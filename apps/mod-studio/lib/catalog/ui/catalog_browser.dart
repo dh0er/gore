@@ -9,14 +9,42 @@ import '../domain/item_categories.dart';
 import '../domain/item_entry.dart';
 import 'sidebar_tile.dart';
 
+/// Simple diacritic fold for sort keys (applied after lowercasing) so that
+/// e.g. "Öllampe" sorts near "O" instead of after "Z". Deliberately minimal —
+/// no intl/collator dependency.
+const Map<String, String> _sortCharFold = {
+  'ä': 'a', 'ö': 'o', 'ü': 'u', 'ß': 'ss',
+  'à': 'a', 'á': 'a', 'â': 'a',
+  'è': 'e', 'é': 'e', 'ê': 'e',
+  'ì': 'i', 'í': 'i', 'î': 'i',
+  'ò': 'o', 'ó': 'o', 'ô': 'o',
+  'ù': 'u', 'ú': 'u', 'û': 'u',
+};
+
+String _localizedSortKey(String name) {
+  final lower = name.toLowerCase();
+  final buf = StringBuffer();
+  for (final rune in lower.runes) {
+    final ch = String.fromCharCode(rune);
+    buf.write(_sortCharFold[ch] ?? ch);
+  }
+  return buf.toString();
+}
+
 /// Returns a copy of [items] sorted by the localized display name
-/// (case-insensitive), falling back to the class id as tiebreaker.
-List<CatalogItem> sortByDisplayName(
+/// (case-insensitive, diacritics folded), falling back to the class id as
+/// tiebreaker. Decorate-sort-undecorate: [nameOf] is evaluated once per
+/// item, not once per comparison.
+List<CatalogItem> sortByLocalizedName(
     List<CatalogItem> items, String Function(CatalogItem) nameOf) {
-  return [...items]..sort((a, b) {
-    final c = nameOf(a).toLowerCase().compareTo(nameOf(b).toLowerCase());
-    return c != 0 ? c : a.id.compareTo(b.id);
-  });
+  final decorated = [
+    for (final item in items)
+      (key: _localizedSortKey(nameOf(item)), item: item),
+  ]..sort((a, b) {
+      final c = a.key.compareTo(b.key);
+      return c != 0 ? c : a.item.id.compareTo(b.item.id);
+    });
+  return [for (final d in decorated) d.item];
 }
 
 /// Category-grouped, searchable item browser.
@@ -78,7 +106,7 @@ class _CatalogBrowserState extends ConsumerState<CatalogBrowser> {
       selectedCat = groups.isEmpty ? null : groups.first.category;
     }
 
-    final shownItems = sortByDisplayName(
+    final shownItems = sortByLocalizedName(
         searching
             ? filtered
             : (groups.where((g) => g.category == selectedCat).firstOrNull?.items ??

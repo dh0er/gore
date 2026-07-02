@@ -1,7 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gore_mod/catalog/domain/item_entry.dart';
 import 'package:gore_mod/catalog/ui/catalog_browser.dart'
-    show sortByDisplayName;
+    show sortByLocalizedName;
 
 CatalogItem _item(String id) =>
     CatalogItem(id: id, displayName: id, fields: const []);
@@ -13,14 +13,36 @@ void main() {
       _item('ItMw_Axt'),
       _item('ItMw_Beil'),
     ];
-    final names = {
+    const names = {
       'ItMw_Zweihander': 'Anderthalbhänder',
       'ItMw_Axt': 'zerbrochene Axt',
       'ItMw_Beil': 'Beil',
     };
-    final sorted = sortByDisplayName(items, (i) => names[i.id]!);
+    final sorted = sortByLocalizedName(items, (i) => names[i.id]!);
     expect(sorted.map((i) => names[i.id]).toList(),
         ['Anderthalbhänder', 'Beil', 'zerbrochene Axt']);
+  });
+
+  test('is case-insensitive (lowercase does not sort after uppercase)', () {
+    // Case-sensitive code-unit order would put 'Beil' before 'apfel'.
+    final items = [_item('ItMw_Beil'), _item('ItFo_Apple')];
+    const names = {
+      'ItFo_Apple': 'apfel',
+      'ItMw_Beil': 'Beil',
+    };
+    final sorted = sortByLocalizedName(items, (i) => names[i.id]!);
+    expect(sorted.map((i) => names[i.id]).toList(), ['apfel', 'Beil']);
+  });
+
+  test('folds umlauts so Ö sorts near O, not after Z', () {
+    // Code-unit order (even lowercased) would put 'Öllampe' after 'Zweihänder'.
+    final items = [_item('ItMw_Zweihander'), _item('ItMi_Lampe')];
+    const names = {
+      'ItMi_Lampe': 'Öllampe',
+      'ItMw_Zweihander': 'Zweihänder',
+    };
+    final sorted = sortByLocalizedName(items, (i) => names[i.id]!);
+    expect(sorted.map((i) => names[i.id]).toList(), ['Öllampe', 'Zweihänder']);
   });
 
   test('falls back to id order when names are equal', () {
@@ -29,7 +51,7 @@ void main() {
       _item('ItMw_Axt'),
     ];
     // Both map to the same display name -> id decides.
-    final sorted = sortByDisplayName(items, (_) => 'Schwert');
+    final sorted = sortByLocalizedName(items, (_) => 'Schwert');
     expect(sorted.map((i) => i.id).toList(),
         ['ItMw_Axt', 'ItMw_Zweihander']);
   });
@@ -39,7 +61,7 @@ void main() {
       _item('ItMw_Zweihander'),
       _item('ItMw_Axt'),
     ];
-    sortByDisplayName(items, (i) => i.id);
+    sortByLocalizedName(items, (i) => i.id);
     expect(items.map((i) => i.id).toList(),
         ['ItMw_Zweihander', 'ItMw_Axt']);
   });
