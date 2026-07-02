@@ -221,10 +221,7 @@ void main() {
     expect(find.text('ItMi_Orenugget'), findsOneWidget);
     expect(find.text('ItFo_Cheese'), findsNothing);
     // Clear the filter to resume category browsing.
-    await tester.enterText(
-      find.widgetWithText(TextField, 'Filter items'),
-      '',
-    );
+    await tester.enterText(find.widgetWithText(TextField, 'Filter items'), '');
     await tester.pump();
 
     // Edit the visible Cheese stack.
@@ -299,8 +296,11 @@ void main() {
     // Sidebar: Quests is default selection; quest list loads immediately.
     // 'Quests' appears in both the sidebar tile and the detail header.
     expect(find.text('Quests'), findsAtLeastNWidgets(1));
-    expect(find.text('Knowledge'), findsOneWidget);
-    expect(find.text('Events'), findsOneWidget);
+    // Knowledge and Events are no longer sidebar sections here: they moved to
+    // detail-only panels (KnowledgeDetail / EventsDetail) keyed by a shared
+    // character selection and are mounted from the Characters tab instead.
+    // Factions remains alongside Quests in this sidebar.
+    expect(find.text('Factions'), findsOneWidget);
     // Quests detail loads and shows the fake quest name.
     expect(find.text('SLEEPER'), findsOneWidget);
 
@@ -496,8 +496,7 @@ void main() {
     expect(find.bySemanticsLabel('Loading editor data'), findsNothing);
   });
 
-  testWidgets(
-      'non-removable inventory item shows a disabled trash button with an '
+  testWidgets('non-removable inventory item shows a disabled trash button with an '
       'explanatory tooltip', (tester) async {
     await tester.binding.setSurfaceSize(const Size(1400, 1000));
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -535,7 +534,10 @@ void main() {
     );
     expect(cheeseDeleteTooltip, findsOneWidget);
     final cheeseDelete = tester.widget<IconButton>(
-      find.descendant(of: cheeseDeleteTooltip, matching: find.byType(IconButton)),
+      find.descendant(
+        of: cheeseDeleteTooltip,
+        matching: find.byType(IconButton),
+      ),
     );
     expect(cheeseDelete.onPressed, isNull);
 
