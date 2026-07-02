@@ -64,6 +64,15 @@ class _TextureTabState extends ConsumerState<TextureTab> {
   static const _previewCacheCap = 24;
   final Map<String, _Preview> _previewCache = {};
 
+  // Decoded dimensions of staged replacement PNGs, keyed by image path. A null
+  // VALUE means the file failed to decode (unreadable/corrupt), which flips the
+  // preview back to the original with a hint; sticky for the session (retrying
+  // on every build would loop). The staged PNGs are the user's own files (never
+  // temp copies), so unlike [_previewCache] there is nothing to clean up in
+  // dispose(), and the map stays tiny (one entry per staged PNG path browsed).
+  final Map<String, (int, int)?> _stagedDims = {};
+  final Set<String> _stagedDimsInFlight = {};
+
   // Identity-stable leaf-path list for [PathTreeBrowser], rebuilt only when the
   // entries map identity changes so the widget's identity-keyed tree cache
   // holds (matching the old once-per-index tree build).
@@ -442,7 +451,7 @@ class _TextureTabState extends ConsumerState<TextureTab> {
             ],
           ),
           const SizedBox(height: 12),
-          Expanded(child: _previewArea(sel)),
+          Expanded(child: _previewArea(sel, replaced)),
           if (replaced != null)
             Padding(
               padding: const EdgeInsets.only(top: 8),
@@ -475,58 +484,168 @@ class _TextureTabState extends ConsumerState<TextureTab> {
   /// fully-black textures are visible), the image at its native size scaled DOWN
   /// to fit (never blown up to fill the pane), pan/zoom via [InteractiveViewer],
   /// and a dims + pixel-format caption.
-  Widget _previewArea(String asset) {
-    if (_inFlight.contains(asset)) {
-      return const Center(child: CircularProgressIndicator());
-    }
-    final pv = _previewCache[asset];
-    if (pv == null) {
-      return const Center(child: Text('Preview to see the current texture'));
-    }
+  ///
+  /// When a replacement is staged for [asset] ([replaced] non-null) the STAGED
+  /// PNG is shown instead — this branch runs before the native preview-cache
+  /// lookup, so the pane flips to the new image right after Replace… and back
+  /// to the original on Remove (build() watches [textureReplacementsProvider],
+  /// so every staging change re-evaluates it; the original's cache entry stays
+  /// valid throughout). A 'Replacement' badge marks the staged view. A missing
+  /// or unreadable staged PNG falls back to the original plus a small hint.
+  Widget _previewArea(String asset, TextureReplacement? replaced) {
     final theme = Theme.of(context);
+    String? stagedHint;
+    if (replaced != null) {
+      final path = replaced.imagePath;
+      final knownBad =
+          _stagedDims.containsKey(path) && _stagedDims[path] == null;
+      if (!File(path).existsSync()) {
+        stagedHint = 'Staged PNG missing — showing original';
+      } else if (knownBad) {
+        stagedHint = 'Staged PNG unreadable — showing original';
+      } else {
+        final dims = _stagedDims[path];
+        if (dims == null) _loadStagedDims(path);
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 2,
+                  ),
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.secondaryContainer,
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text(
+                    'Replacement',
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: theme.colorScheme.onSecondaryContainer,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Expanded(
+              child: _imageBox(
+                theme,
+                File(path),
+                // A PNG that fails to decode is detected by _loadStagedDims,
+                // which flips this pane back to the original on the next build;
+                // until then render the failure inline instead of throwing.
+                errorBuilder: (_, e, st) =>
+                    Center(child: SelectableText('Cannot display PNG: $e')),
+              ),
+            ),
+            if (dims != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(
+                  '${dims.$1} × ${dims.$2} · PNG',
+                  style: theme.textTheme.bodySmall,
+                ),
+              ),
+          ],
+        );
+      }
+    }
+    Widget original;
+    final pv = _previewCache[asset];
+    if (_inFlight.contains(asset)) {
+      original = const Center(child: CircularProgressIndicator());
+    } else if (pv == null) {
+      original = const Center(
+        child: Text('Preview to see the current texture'),
+      );
+    } else {
+      original = Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Expanded(child: _imageBox(theme, File(pv.pngPath))),
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Text(
+              '${pv.width} × ${pv.height} · ${pv.format}',
+              style: theme.textTheme.bodySmall,
+            ),
+          ),
+        ],
+      );
+    }
+    if (stagedHint == null) return original;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Expanded(
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              border: Border.all(color: theme.dividerColor),
-            ),
-            child: CustomPaint(
-              painter: _CheckerPainter(theme.brightness),
-              child: InteractiveViewer(
-                maxScale: 64,
-                child: Center(
-                  child: Image.file(
-                    File(pv.pngPath),
-                    // Native size, downscaled only when larger than the pane —
-                    // small textures stay small (zoom in to inspect) instead of
-                    // being stretched to full width.
-                    fit: BoxFit.scaleDown,
-                    // Texture data is pixels: nearest-neighbour keeps them crisp
-                    // when zoomed rather than blurring.
-                    filterQuality: FilterQuality.none,
-                    gaplessPlayback: true,
-                  ),
-                ),
-              ),
-            ),
+        Text(
+          stagedHint,
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.colorScheme.error,
           ),
         ),
-        Padding(
-          padding: const EdgeInsets.only(top: 6),
-          child: Text(
-            '${pv.width} × ${pv.height} · ${pv.format}',
-            style: theme.textTheme.bodySmall,
-          ),
-        ),
+        const SizedBox(height: 6),
+        Expanded(child: original),
       ],
     );
   }
 
-  /// Export the asset's decoded texture as a PNG to a user-chosen path. Reuses
-  /// the cached preview when present; otherwise extracts first (the same path the
-  /// Preview button takes, including its error dialog on failure).
+  /// The checkerboard-backed, pan/zoomable image box shared by the original and
+  /// staged-replacement previews.
+  Widget _imageBox(
+    ThemeData theme,
+    File file, {
+    ImageErrorWidgetBuilder? errorBuilder,
+  }) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        border: Border.all(color: theme.dividerColor),
+      ),
+      child: CustomPaint(
+        painter: _CheckerPainter(theme.brightness),
+        child: InteractiveViewer(
+          maxScale: 64,
+          child: Center(
+            child: Image.file(
+              file,
+              // Native size, downscaled only when larger than the pane —
+              // small textures stay small (zoom in to inspect) instead of
+              // being stretched to full width.
+              fit: BoxFit.scaleDown,
+              // Texture data is pixels: nearest-neighbour keeps them crisp
+              // when zoomed rather than blurring.
+              filterQuality: FilterQuality.none,
+              gaplessPlayback: true,
+              errorBuilder: errorBuilder,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Decode the staged PNG's dimensions once per path (for the caption). A null
+  /// result — missing/corrupt file — is recorded too: it flips [_previewArea]
+  /// back to the original preview with a hint on the rebuild it triggers.
+  void _loadStagedDims(String path) {
+    if (_stagedDimsInFlight.contains(path)) return;
+    _stagedDimsInFlight.add(path);
+    _imageDimensions(path).then((dims) {
+      _stagedDimsInFlight.remove(path);
+      if (!mounted) return;
+      setState(() => _stagedDims[path] = dims);
+    });
+  }
+
+  /// Export the asset's decoded texture as a PNG to a user-chosen path. Always
+  /// exports the ORIGINAL game texture, even when a replacement is staged and
+  /// the preview shows the staged PNG — intentional: the staged PNG is the
+  /// user's own file, while Export exists to get the original out as an editing
+  /// base. Reuses the cached preview when present; otherwise extracts first
+  /// (the same path the Preview button takes, including its error dialog on
+  /// failure).
   Future<void> _export(String gameDir, String asset, String? packageId) async {
     if (!_previewCache.containsKey(asset)) {
       await _preview(gameDir, asset, packageId);
