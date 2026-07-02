@@ -3,12 +3,15 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gore_mod/catalog/domain/catalog_provider.dart';
 import 'package:gore_mod/catalog/domain/item_entry.dart';
+import 'package:gore_mod/core/mod_ffi.dart';
 import 'package:gore_mod/editor/domain/override_entry.dart';
 import 'package:gore_mod/editor/domain/overrides_notifier.dart';
 import 'package:gore_mod/editor/ui/changes_tab.dart';
 import 'package:gore_mod/l10n/app_localizations.dart';
 import 'package:gore_mod/loc/domain/loc_catalog_provider.dart';
 import 'package:gore_mod/loc/domain/loc_edits_notifier.dart';
+import 'package:gore_mod/scripts/domain/script_modules_provider.dart';
+import 'package:gore_mod/textures/domain/texture_index_provider.dart';
 import 'package:gore_mod/textures/domain/texture_replacements_notifier.dart';
 
 void main() {
@@ -177,5 +180,63 @@ void main() {
     expect(find.text('Textures (0)'), findsOneWidget);
     // The All list still shows the one remaining change.
     expect(find.text('ItFo_Apple.m_Value'), findsOneWidget);
+  });
+
+  testWidgets('re-entering the Textures/Scripts sections refreshes their providers',
+      (tester) async {
+    var textureBuilds = 0;
+    var scriptBuilds = 0;
+    final container = ProviderContainer(overrides: [
+      textureIndexProvider.overrideWith((ref) {
+        textureBuilds++;
+        return Future.value(const <String, String>{});
+      }),
+      scriptModulesProvider.overrideWith((ref) {
+        scriptBuilds++;
+        return Future.value(const <ScriptModuleInfo>[]);
+      }),
+    ]);
+    addTearDown(container.dispose);
+    // Stand-in for the keep-alive MAIN tabs, which watch the same providers
+    // in the real app: keeps both autoDispose providers alive across section
+    // switches, so a refetch on re-entry can only come from an explicit
+    // invalidate — not from autoDispose disposal/re-creation.
+    container.listen(textureIndexProvider, (_, _) {});
+    container.listen(scriptModulesProvider, (_, _) {});
+    await pumpHarness(tester, container);
+    expect(textureBuilds, 1);
+    expect(scriptBuilds, 1);
+
+    // FIRST entry into each section: no invalidate on top of the fresh
+    // build (no double fetch) — TabReentryListener visited semantics.
+    await tester.tap(find.text('Textures (0)'));
+    await tester.pumpAndSettle();
+    expect(textureBuilds, 1);
+    await tester.tap(find.text('Scripts (0)'));
+    await tester.pumpAndSettle();
+    expect(scriptBuilds, 1);
+    expect(textureBuilds, 1);
+
+    // RE-entry: the section's data provider re-evaluates (fresh after a
+    // deploy/undeploy); the other section's provider is untouched.
+    await tester.tap(find.text('Textures (0)'));
+    await tester.pumpAndSettle();
+    expect(textureBuilds, 2);
+    expect(scriptBuilds, 1);
+    await tester.tap(find.text('Scripts (0)'));
+    await tester.pumpAndSettle();
+    expect(scriptBuilds, 2);
+    expect(textureBuilds, 2);
+
+    // Audio re-entry deliberately refreshes nothing (parity with main-tab
+    // re-entry, which doesn't invalidate audio providers either).
+    await tester.tap(find.text('Audio (0)'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('All (0)'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Audio (0)'));
+    await tester.pumpAndSettle();
+    expect(textureBuilds, 2);
+    expect(scriptBuilds, 2);
   });
 }
