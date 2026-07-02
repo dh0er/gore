@@ -39,9 +39,6 @@ class AppLocalizationsPt extends AppLocalizations {
   String get tabInventory => 'Inventário';
 
   @override
-  String get tabProgression => 'Progresso';
-
-  @override
   String get tabWorld => 'Mundo';
 
   @override
@@ -1179,9 +1176,6 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
 
   @override
   String get tabInventory => 'Inventário';
-
-  @override
-  String get tabProgression => 'Progresso';
 
   @override
   String get tabWorld => 'Mundo';

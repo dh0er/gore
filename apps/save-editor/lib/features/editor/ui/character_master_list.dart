@@ -380,7 +380,7 @@ class _CharacterMasterListState extends State<CharacterMasterList> {
                             child: Text('Weitere'),
                           ),
                           for (final entry in _orphans) ...[
-                            _orphanTile(entry, scheme),
+                            _orphanTile(entry, scheme, l10n),
                             const Divider(height: 1),
                           ],
                         ],
@@ -437,7 +437,11 @@ class _CharacterMasterListState extends State<CharacterMasterList> {
 
   /// A knowledge-only orphan row: no GlobalId, so it is built with an
   /// `orphan:<uniqueName>` id sentinel (see [Actor.isOrphan]).
-  Widget _orphanTile(_SearchableRow entry, ColorScheme scheme) {
+  Widget _orphanTile(
+    _SearchableRow entry,
+    ColorScheme scheme,
+    AppLocalizations l10n,
+  ) {
     final row = entry.row;
     // Fall back to the uniqueName if the resolved display name is blank.
     final name = entry.name.trim().isEmpty ? row.uniqueName : entry.name;
@@ -449,7 +453,14 @@ class _CharacterMasterListState extends State<CharacterMasterList> {
       leading: const Icon(Icons.help_outline),
       title: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis),
       trailing: row.hasKnowledge
-          ? Icon(Icons.menu_book_outlined, size: 18, color: scheme.onSurfaceVariant)
+          ? Tooltip(
+              message: l10n.sectionKnowledge,
+              child: Icon(
+                Icons.menu_book_outlined,
+                size: 18,
+                color: scheme.onSurfaceVariant,
+              ),
+            )
           : null,
       selected: isSelected,
       selectedTileColor: scheme.primaryContainer,

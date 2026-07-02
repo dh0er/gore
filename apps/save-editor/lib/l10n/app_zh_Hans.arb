@@ -10,7 +10,6 @@
   "tabPlayer": "玩家",
   "tabAttribute": "属性",
   "tabInventory": "物品栏",
-  "tabProgression": "进度",
   "tabWorld": "世界",
   "tabCharacters": "角色",
   "characterNoActorBody": "该角色在世界中没有对应的实体，因此没有属性、物品栏或事件。",

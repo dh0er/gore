@@ -145,10 +145,10 @@ class AttributeDetail extends ConsumerWidget {
       // for when the async summary reload fails / the id is missing.
       knownDead: selected.isDead,
       reloadKey: (inspection, npcId),
-      // Use the cached FULL NPC list (shared with the selector, one decompress)
-      // and let the row pick the exact-id match. A substring query with the
-      // default 100-row page could miss this NPC when many ids match, leaving
-      // the action disabled and isDead wrongly defaulting.
+      // Use the cached FULL NPC list (shared across master-list selections,
+      // one decompress) and let the row pick the exact-id match. A substring
+      // query with the default 100-row page could miss this NPC when many ids
+      // match, leaving the action disabled and isDead wrongly defaulting.
       load: () => notifier.loadAllNpcActors(),
       onRevive: () => notifier.setPendingNpcRevive(npcId),
       revivePending: revivePending,
@@ -848,7 +848,7 @@ String _formatAttributeValue(double? value) {
 }
 
 /// Centered icon + title + body message pane for empty/locked states. A private
-/// copy of the same widget in `editor_page.dart` / `progression_panel.dart`
+/// copy of the same widget in `editor_page.dart` / `world_tab.dart`
 /// (kept per-file so these detail widgets have no cross-file dependency).
 class _MessagePane extends StatelessWidget {
   const _MessagePane({

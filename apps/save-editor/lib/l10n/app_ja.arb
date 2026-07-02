@@ -10,7 +10,6 @@
   "tabPlayer": "プレイヤー",
   "tabAttribute": "属性",
   "tabInventory": "インベントリ",
-  "tabProgression": "進行状況",
   "tabWorld": "ワールド",
   "tabCharacters": "キャラクター",
   "characterNoActorBody": "このキャラクターはワールド内のアクターを持たないため、属性、インベントリ、イベントはありません。",

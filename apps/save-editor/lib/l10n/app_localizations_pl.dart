@@ -39,9 +39,6 @@ class AppLocalizationsPl extends AppLocalizations {
   String get tabInventory => 'Ekwipunek';
 
   @override
-  String get tabProgression => 'Postępy';
-
-  @override
   String get tabWorld => 'Świat';
 
   @override

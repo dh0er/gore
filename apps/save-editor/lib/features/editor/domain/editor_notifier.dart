@@ -1448,7 +1448,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
   SaveInspection? _allNpcActorsFor;
 
   /// Drop the cached full NPC list. Called whenever a fresh inspection lands so
-  /// the next selector load re-fetches against the new save state.
+  /// the next [loadAllNpcActors] call re-fetches against the new save state.
   void _invalidateNpcCache() {
     _allNpcActorsFuture = null;
     _allNpcActorsFor = null;

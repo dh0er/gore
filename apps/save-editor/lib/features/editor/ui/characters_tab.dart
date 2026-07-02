@@ -43,7 +43,8 @@ class CharactersTab extends ConsumerWidget {
   /// (`state.codecCompressReady`).
   final bool inventoryCanCompress;
 
-  /// Same gating the `ProgressionPanel` receives for its knowledge/events
+  /// Same gating the Welt (World) tab passes its quests/factions details — the
+  /// old Progression tab's convention
   /// (`inspection.privateEditable && inspection.privateTypedVerified &&
   /// state.codecCompressReady`).
   final bool progressionEditable;

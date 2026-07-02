@@ -39,9 +39,6 @@ class AppLocalizationsRu extends AppLocalizations {
   String get tabInventory => 'Инвентарь';
 
   @override
-  String get tabProgression => 'Прогресс';
-
-  @override
   String get tabWorld => 'Мир';
 
   @override

@@ -22,7 +22,8 @@ class NpcActor {
   final String id;
 
   /// True ONLY when the NPC was KILLED. A merely defeated / knocked-out NPC is
-  /// still ALIVE (`isDead == false`). Drives the selector skull badge and the
+  /// still ALIVE (`isDead == false`). Same killed-only semantics as the
+  /// master list's skull avatar; here it drives the NPC status row and the
   /// Revive action's enablement.
   final bool isDead;
   final double? hp;

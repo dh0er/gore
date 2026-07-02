@@ -176,12 +176,6 @@ abstract class AppLocalizations {
   /// **'Inventory'**
   String get tabInventory;
 
-  /// No description provided for @tabProgression.
-  ///
-  /// In en, this message translates to:
-  /// **'Progression'**
-  String get tabProgression;
-
   /// No description provided for @tabWorld.
   ///
   /// In en, this message translates to:

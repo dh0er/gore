@@ -10,7 +10,6 @@
   "tabPlayer": "Spieler",
   "tabAttribute": "Attribute",
   "tabInventory": "Inventar",
-  "tabProgression": "Fortschritt",
   "tabWorld": "Welt",
   "tabCharacters": "Charaktere",
   "characterNoActorBody": "Dieser Charakter hat keinen Akteur in der Welt und daher keine Attribute, kein Inventar und keine Ereignisse.",

@@ -1160,7 +1160,7 @@ String _inventoryItemKey(PrivateInventoryItem item) {
 }
 
 /// Centered icon + title + body message pane for empty/locked states. A private
-/// copy of the same widget in `editor_page.dart` / `progression_panel.dart`
+/// copy of the same widget in `editor_page.dart` / `world_tab.dart`
 /// (kept per-file so these detail widgets have no cross-file dependency).
 class _MessagePane extends StatelessWidget {
   const _MessagePane({

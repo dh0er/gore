@@ -39,9 +39,6 @@ class AppLocalizationsIt extends AppLocalizations {
   String get tabInventory => 'Inventario';
 
   @override
-  String get tabProgression => 'Progressione';
-
-  @override
   String get tabWorld => 'Mondo';
 
   @override

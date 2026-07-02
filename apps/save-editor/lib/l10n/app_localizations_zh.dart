@@ -39,9 +39,6 @@ class AppLocalizationsZh extends AppLocalizations {
   String get tabInventory => '物品栏';
 
   @override
-  String get tabProgression => '进度';
-
-  @override
   String get tabWorld => '世界';
 
   @override
@@ -1139,9 +1136,6 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get tabInventory => '物品栏';
-
-  @override
-  String get tabProgression => '进度';
 
   @override
   String get tabWorld => '世界';
