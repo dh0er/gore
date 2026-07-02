@@ -40,6 +40,16 @@ class ItemsTab extends ConsumerWidget {
                   .value
                   ?.firstWhereOrNull((i) => i.id == selectedRaw.id) ??
               selectedRaw);
+    // View-level guard: the shared selection may have been made outside this
+    // filtered view (on the main Items tab), or its change may just have been
+    // removed — either way the filtered browser doesn't list the item, so
+    // don't show its editor here either. The shared provider itself is left
+    // untouched: the main Items tab owns that selection.
+    final ids = onlyIds;
+    final visible =
+        (ids == null || selected == null || ids.contains(selected.id))
+        ? selected
+        : null;
     final overridesState = ref.watch(overridesProvider);
     final scheme = Theme.of(context).colorScheme;
     final l10n = AppLocalizations.of(context);
@@ -51,7 +61,7 @@ class ItemsTab extends ConsumerWidget {
           width: 560,
           child: CatalogBrowser(
             onlyIds: onlyIds,
-            selected: selected,
+            selected: visible,
             onItemSelected: (item) =>
                 ref.read(selectedItemProvider.notifier).state = item,
           ),
@@ -61,7 +71,7 @@ class ItemsTab extends ConsumerWidget {
         // centre it so the inputs don't stretch across the whole
         // window on wide displays.
         Expanded(
-          child: selected == null
+          child: visible == null
               ? Center(
                   child: Text(
                     l10n.selectAnItemToEdit,
@@ -73,15 +83,15 @@ class ItemsTab extends ConsumerWidget {
                   child: ConstrainedBox(
                     constraints: const BoxConstraints(maxWidth: 720),
                     child: FieldEditor(
-                      item: selected,
+                      item: visible,
                       displayName: displayNameForItem(
-                        selected,
+                        visible,
                         ref.watch(locCatalogProvider).value ?? const {},
                         gameLangByCode(ref.watch(localeProvider)),
                       ),
                       pendingOverrides: {
                         for (final e in overridesState.entries.where(
-                          (e) => e.classId == selected.id,
+                          (e) => e.classId == visible.id,
                         ))
                           e.field: e,
                       },

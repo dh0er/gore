@@ -81,4 +81,32 @@ void main() {
     expect(find.text('Select an item to edit its fields.'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('filtered view ignores an out-of-filter shared selection',
+      (tester) async {
+    useDesktopSurface(tester);
+    await tester.pumpWidget(buildTab(
+      catalog: [apple, sword],
+      onlyIds: {'ItFo_Apple'},
+    ));
+    await tester.pumpAndSettle();
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(ItemsTab)),
+      listen: false,
+    );
+    // A selection made elsewhere (e.g. the main Items tab) on an item that is
+    // not part of this filter: the browser doesn't list it, so no editor.
+    container.read(selectedItemProvider.notifier).state = sword;
+    await tester.pumpAndSettle();
+    expect(find.byType(FieldEditor), findsNothing);
+    expect(find.text('Select an item to edit its fields.'), findsOneWidget);
+    // The guard is view-level only — the shared selection stays untouched.
+    expect(container.read(selectedItemProvider)?.id, 'ItMw_1H_Sword_01');
+    // Selecting inside the filtered browser still works.
+    await tester.tap(find.text('Apple'));
+    await tester.pumpAndSettle();
+    expect(find.byType(FieldEditor), findsOneWidget);
+    expect(find.text('Select an item to edit its fields.'), findsNothing);
+    expect(container.read(selectedItemProvider)?.id, 'ItFo_Apple');
+  });
 }
