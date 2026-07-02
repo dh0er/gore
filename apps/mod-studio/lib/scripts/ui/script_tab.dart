@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:file_selector/file_selector.dart';
@@ -25,6 +26,17 @@ final _selectedModuleProvider = StateProvider<String?>((ref) => null);
 String _moduleRelPath(ScriptModuleInfo m) =>
     m.file.isEmpty ? '${m.name}.as' : m.file;
 
+/// A vanilla module plus its (possibly disambiguated) browse path and lowered
+/// search keys, precomputed once per modules load so an active search doesn't
+/// re-lowercase ~7k names on every rebuild.
+class _ModuleEntry {
+  const _ModuleEntry(this.module, this.treePath, this.nameLc, this.pathLc);
+  final ScriptModuleInfo module;
+  final String treePath;
+  final String nameLc;
+  final String pathLc;
+}
+
 class ScriptTab extends ConsumerStatefulWidget {
   const ScriptTab({super.key});
 
@@ -36,13 +48,18 @@ class _ScriptTabState extends ConsumerState<ScriptTab> {
   String _query = '';
   final TextEditingController _searchController = TextEditingController();
 
-  // Identity-stable tree-path list + relPath→module lookup, rebuilt only when
-  // the modules LIST identity changes (i.e. the provider reloaded).
-  // PathTreeBrowser caches its built tree by list identity, so passing a fresh
-  // list per build would rebuild the ~7k-leaf tree every frame.
+  // Identity-stable tree-path list + treePath→module lookup + lowered search
+  // entries, rebuilt only when the modules LIST identity changes (i.e. the
+  // provider reloaded). PathTreeBrowser caches its built tree by list identity,
+  // so passing a fresh list per build would rebuild the ~7k-leaf tree every
+  // frame.
   List<ScriptModuleInfo>? _cacheSource;
   List<String>? _treePaths;
-  Map<String, ScriptModuleInfo>? _byRelPath;
+  Map<String, ScriptModuleInfo>? _byTreePath;
+  List<_ModuleEntry>? _searchEntries;
+  // Search-match memo, valid per (query, modules identity); cleared on reload.
+  String? _matchQuery;
+  List<_ModuleEntry>? _matchResult;
 
   @override
   void dispose() {
@@ -53,8 +70,53 @@ class _ScriptTabState extends ConsumerState<ScriptTab> {
   void _refreshCaches(List<ScriptModuleInfo> modules) {
     if (identical(_cacheSource, modules) && _treePaths != null) return;
     _cacheSource = modules;
-    _treePaths = [for (final m in modules) _moduleRelPath(m)];
-    _byRelPath = {for (final m in modules) _moduleRelPath(m): m};
+    // relPaths are NOT guaranteed unique: two modules can share a `file`, and
+    // the '<name>.as' empty-file fallback can collide with a real root-level
+    // file. A plain map would silently last-win (one tree leaf for two modules,
+    // Edit staging the wrong one) — so the FIRST occurrence keeps the pristine
+    // path and later collisions get a display-only ' (n)' suffix. Staging
+    // always uses the module's REAL relPath; only the browse path differs.
+    final treePaths = <String>[];
+    final byTreePath = <String, ScriptModuleInfo>{};
+    final entries = <_ModuleEntry>[];
+    for (final m in modules) {
+      var path = _moduleRelPath(m);
+      for (var n = 2; byTreePath.containsKey(path); n++) {
+        path = _suffixedPath(_moduleRelPath(m), n);
+      }
+      treePaths.add(path);
+      byTreePath[path] = m;
+      entries.add(
+          _ModuleEntry(m, path, m.name.toLowerCase(), path.toLowerCase()));
+    }
+    _treePaths = treePaths;
+    _byTreePath = byTreePath;
+    _searchEntries = entries;
+    _matchQuery = null;
+    _matchResult = null;
+  }
+
+  /// 'Dir/Foo.as' + n → 'Dir/Foo (n).as' (suffix before the extension).
+  static String _suffixedPath(String path, int n) {
+    final slash = path.lastIndexOf('/');
+    final dir = slash < 0 ? '' : path.substring(0, slash + 1);
+    final base = slash < 0 ? path : path.substring(slash + 1);
+    final dot = base.lastIndexOf('.');
+    return dot <= 0
+        ? '$dir$base ($n)'
+        : '$dir${base.substring(0, dot)} ($n)${base.substring(dot)}';
+  }
+
+  /// Matches for [query], memoized so rebuilds while a search is active (e.g.
+  /// selection changes) don't re-filter + re-sort the ~7k entries.
+  List<_ModuleEntry> _matchesFor(String query) {
+    final q = query.toLowerCase();
+    if (_matchQuery == q && _matchResult != null) return _matchResult!;
+    _matchQuery = q;
+    return _matchResult = (_searchEntries!
+        .where((e) => e.nameLc.contains(q) || e.pathLc.contains(q))
+        .toList()
+      ..sort((a, b) => a.pathLc.compareTo(b.pathLc)));
   }
 
   @override
@@ -112,17 +174,8 @@ class _ScriptTabState extends ConsumerState<ScriptTab> {
         ),
       );
     }
-    final q = _query.toLowerCase();
-    final matches = _query.isEmpty
-        ? const <ScriptModuleInfo>[]
-        : (modules
-            .where((m) =>
-                m.name.toLowerCase().contains(q) ||
-                _moduleRelPath(m).toLowerCase().contains(q))
-            .toList()
-          ..sort((a, b) => _moduleRelPath(a)
-              .toLowerCase()
-              .compareTo(_moduleRelPath(b).toLowerCase())));
+    final matches =
+        _query.isEmpty ? const <_ModuleEntry>[] : _matchesFor(_query);
     return Column(
       children: [
         Padding(
@@ -168,31 +221,33 @@ class _ScriptTabState extends ConsumerState<ScriptTab> {
           ),
         ),
         Text(
+          // Tree-path count (== one leaf per module, incl. disambiguated ones).
           _query.isEmpty
-              ? '${modules.length} modules'
-              : '${matches.length} match / ${modules.length} total',
+              ? '${_treePaths!.length} modules'
+              : '${matches.length} match / ${_treePaths!.length} total',
           style: Theme.of(context).textTheme.bodySmall,
         ),
       ],
     );
   }
 
-  Widget _flatList(List<ScriptModuleInfo> matches, ScriptModsState staged,
-      String? selectedKey) {
+  Widget _flatList(
+      List<_ModuleEntry> matches, ScriptModsState staged, String? selectedKey) {
     return ListView.builder(
       itemCount: matches.length,
       itemBuilder: (c, i) {
-        final m = matches[i];
-        final rel = _moduleRelPath(m);
+        final e = matches[i];
         return ListTile(
           dense: true,
-          selected: rel == selectedKey,
-          title: Text(m.name, maxLines: 1, overflow: TextOverflow.ellipsis),
-          subtitle: Text(rel, maxLines: 1, overflow: TextOverflow.ellipsis),
-          trailing: staged.items.containsKey(rel)
+          selected: e.treePath == selectedKey,
+          title: Text(e.module.name,
+              maxLines: 1, overflow: TextOverflow.ellipsis),
+          subtitle:
+              Text(e.treePath, maxLines: 1, overflow: TextOverflow.ellipsis),
+          trailing: staged.items.containsKey(e.treePath)
               ? const Icon(Icons.check, size: 16)
               : null,
-          onTap: () => _select(rel),
+          onTap: () => _select(e.treePath),
         );
       },
     );
@@ -216,11 +271,15 @@ class _ScriptTabState extends ConsumerState<ScriptTab> {
     // Not staged: either a vanilla module (show info + Edit) or a dangling
     // selection (e.g. a staged 'add' that was removed — its path isn't in the
     // vanilla tree, so fall back to the placeholder).
-    final module = _byRelPath?[selectedKey];
+    final module = _byTreePath?[selectedKey];
     if (module == null) return placeholder;
-    // Keyed so the emit-busy state resets when the selection changes.
+    // Keyed by the TREE path so the emit-busy state resets when the selection
+    // changes; the detail itself works on the module's REAL relPath (identical
+    // except for collision-disambiguated leaves).
     return _VanillaModuleDetail(
-        key: ValueKey(selectedKey), module: module, relPath: selectedKey);
+        key: ValueKey(selectedKey),
+        module: module,
+        relPath: _moduleRelPath(module));
   }
 }
 
@@ -276,36 +335,51 @@ class _VanillaModuleDetailState extends ConsumerState<_VanillaModuleDetail> {
   }
 
   /// Stage an edit of this vanilla module: emit its recompilable .as source to
-  /// a temp file (best-effort) and stage a [ScriptOp.edit] mod for it. Same
-  /// body the old "Edit existing" picker flow used, minus the picker.
+  /// a temp file and stage a [ScriptOp.edit] mod for it. Same body the old
+  /// "Edit existing" picker flow used, minus the picker.
   Future<void> _stageEdit(String? cache) async {
-    // Capture the target + notifiers BEFORE any await: staging switches the
-    // detail pane to _ModDetail, which disposes this state while the emit may
-    // still be in flight — reading widget/ref afterwards would throw.
+    // Capture the target + notifiers/messenger BEFORE any await: staging
+    // switches the detail pane to _ModDetail, which disposes this state while
+    // the emit may still be in flight — reading widget/ref/context afterwards
+    // would throw.
     final module = widget.module;
     final relPath = widget.relPath;
     final mods = ref.read(scriptModsProvider.notifier);
     final selection = ref.read(_selectedModuleProvider.notifier);
+    final messenger = ScaffoldMessenger.of(context);
     setState(() => _busy = true);
     String asPath = '';
     if (cache != null) {
       final ffi = ModFfi(ref.read(coreServiceProvider));
       try {
         final src = await ffi.scriptEmitModule(cache, module.name);
-        final dir = await Directory.systemTemp.createTemp('goremod_emit_');
-        final f = File(p.join(dir.path, p.basename(relPath)));
-        await f.create(recursive: true);
+        // Emit to a STABLE per-module path so re-clicking Edit overwrites
+        // instead of leaking one fresh temp dir per click. The relPath hash
+        // guards against two distinct relPaths sanitizing to the same name
+        // (e.g. 'AI/Foo.as' vs a literal 'AI_Foo.as').
+        final safe = relPath.replaceAll(RegExp(r'[\\/]+'), '_');
+        final tag = fnv1aHex(utf8.encode(relPath)).substring(0, 8);
+        final f = File(
+            p.join(Directory.systemTemp.path, 'goremod_emit', '${tag}_$safe'));
+        await f.parent.create(recursive: true);
         await f.writeAsString(src);
         asPath = f.path;
-      } catch (_) {/* leave asPath empty; user can pick a .as in the detail pane */}
+      } catch (e) {
+        // Emit failed: surface it and stage NOTHING — a silently staged edit
+        // with an empty source would only fail later with no hint why.
+        messenger.showSnackBar(
+            SnackBar(content: Text('Could not emit ${module.name}: $e')));
+        if (mounted) setState(() => _busy = false);
+        return;
+      }
     }
     mods.setMod(ScriptMod(
         op: ScriptOp.edit,
         moduleName: module.name,
         relPath: relPath,
         asPath: asPath));
-    // Selection already points at relPath; keep it explicit so the detail pane
-    // lands on the freshly staged mod even if the user clicked elsewhere.
+    // Point the selection at the staged mod's key (the REAL relPath — for a
+    // collision-disambiguated tree leaf this differs from the tree path).
     selection.state = relPath;
     if (mounted) setState(() => _busy = false);
   }

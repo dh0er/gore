@@ -93,8 +93,70 @@ void main() {
           matching: find.byWidgetPredicate((w) => w is FilledButton)),
       findsOneWidget,
     );
-    // The detail pane echoes the game-relative path (also in the hit subtitle).
-    expect(find.text('Misc/Other.as'), findsNWidgets(2));
+    // Left pane: the flat hit's subtitle shows the path.
+    expect(
+      find.descendant(
+          of: find.byType(ListTile), matching: find.text('Misc/Other.as')),
+      findsOneWidget,
+    );
+    // Right pane: the detail's Path row echoes it (the only occurrence that is
+    // NOT inside a ListTile).
+    final inDetail = find
+        .text('Misc/Other.as')
+        .evaluate()
+        .where((e) => e.findAncestorWidgetOfExactType<ListTile>() == null);
+    expect(inDetail.length, 1);
+  });
+
+  testWidgets('colliding relPaths are disambiguated in the tree and Edit '
+      'stages the right module under its REAL relPath', (tester) async {
+    // 'Foo' has no recorded file → fallback 'Foo.as', which collides with the
+    // real root-level file of 'Bar'.
+    final modules = [
+      ScriptModuleInfo(name: 'Foo', file: ''),
+      ScriptModuleInfo(name: 'Bar', file: 'Foo.as'),
+    ];
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          scriptModulesProvider.overrideWith((ref) async => modules),
+        ],
+        child: const MaterialApp(home: Scaffold(body: ScriptTab())),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    // Both modules appear: the FIRST keeps the pristine path, the collision
+    // gets a display-only suffix — and the caption agrees with the leaf count.
+    expect(find.text('Foo.as'), findsOneWidget);
+    expect(find.text('Foo (2).as'), findsOneWidget);
+    expect(find.text('2 modules'), findsOneWidget);
+
+    // The pristine leaf maps to the first module...
+    await tester.tap(find.text('Foo.as'));
+    await tester.pump();
+    expect(find.text('Vanilla module — not staged'), findsOneWidget);
+    expect(find.text('Foo'), findsNWidgets(2)); // detail title + Module row
+
+    // ...and the disambiguated leaf maps to the second.
+    await tester.tap(find.text('Foo (2).as'));
+    await tester.pump();
+    expect(find.text('Bar'), findsNWidgets(2));
+
+    // Edit stages THAT module, keyed by its REAL relPath (no game configured
+    // in tests → no emit; staged without a source, like the old picker flow).
+    await tester.tap(find.text('Edit'));
+    await tester.pumpAndSettle();
+    final container = ProviderScope.containerOf(
+        tester.element(find.byType(ScriptTab)),
+        listen: false);
+    final staged = container.read(scriptModsProvider).items;
+    expect(staged.keys.single, 'Foo.as');
+    expect(staged.values.single.moduleName, 'Bar');
+    expect(staged.values.single.op, ScriptOp.edit);
+    // The staged detail replaces the vanilla card.
+    expect(find.text('Edit existing module'), findsOneWidget);
   });
 
   testWidgets('staged panel lists the mod with compile status, tapping selects '
