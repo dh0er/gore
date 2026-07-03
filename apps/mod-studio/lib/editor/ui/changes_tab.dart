@@ -10,6 +10,7 @@ import '../../catalog/ui/sidebar_tile.dart';
 import '../../dialog/domain/dialog_catalog_provider.dart';
 import '../../dialog/ui/dialoge_tab.dart';
 import '../../l10n/app_localizations.dart';
+import '../../loc/domain/loc_catalog_provider.dart';
 import '../../loc/domain/loc_edits_notifier.dart';
 import '../../scripts/domain/script_mods_notifier.dart';
 import '../../scripts/domain/script_modules_provider.dart';
@@ -69,16 +70,25 @@ class _ChangesTabState extends ConsumerState<ChangesTab> {
   /// field editor) are excluded from this section and stay reviewable under
   /// "All", and an id edited in several languages counts once.
   ///
+  /// Intersected with the loaded loc catalog: the embedded [DialogeTab] can
+  /// only render ids the catalog carries (its [buildDialogRows] iterates
+  /// catalog keys), so a staged dialog id absent from the catalog — or any
+  /// dialog edit while the catalog is still loading/empty — must not inflate
+  /// the badge past the browsable rows. Such edits stay reviewable under "All".
+  ///
   /// Cached in state behind a content compare: [locEditsProvider] emits a
   /// new edits map per keystroke even when the edited ID SET is unchanged,
   /// and a stable set identity lets the dialog browser's [DialogRowsMemo]
   /// skip re-scanning the catalog on those rebuilds.
   Set<String> _dialogIds = const {};
 
-  Set<String> _dialogIdsFor(LocEditsState locState) {
+  Set<String> _dialogIdsFor(
+    LocEditsState locState,
+    Map<String, Map<String, String>> catalog,
+  ) {
     final ids = <String>{
       for (final id in locState.edits.keys)
-        if (isDialogLocId(id)) id,
+        if (isDialogLocId(id) && catalog.containsKey(id)) id,
     };
     if (!setEquals(ids, _dialogIds)) _dialogIds = ids;
     return _dialogIds;
@@ -88,7 +98,9 @@ class _ChangesTabState extends ConsumerState<ChangesTab> {
   Widget build(BuildContext context) {
     final overridesState = ref.watch(overridesProvider);
     final locState = ref.watch(locEditsProvider);
-    final dialogIds = _dialogIdsFor(locState);
+    final locCatalog =
+        ref.watch(locCatalogProvider).value ?? const <String, Map<String, String>>{};
+    final dialogIds = _dialogIdsFor(locState, locCatalog);
     final audioState = ref.watch(audioReplacementsProvider);
     final textureState = ref.watch(textureReplacementsProvider);
     final scriptState = ref.watch(scriptModsProvider);

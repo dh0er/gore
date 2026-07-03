@@ -88,6 +88,30 @@ void main() {
     expect(find.text('ItFo_Apple.m_Value'), findsOneWidget);
   });
 
+  testWidgets('Dialogs count omits staged dialog ids absent from the catalog',
+      (tester) async {
+    final container = makeContainer();
+    addTearDown(container.dispose);
+    // A dialog-prefixed loc edit whose id is NOT in the loaded catalog: the
+    // embedded browser can't render it (buildDialogRows iterates catalog keys),
+    // so it must not inflate the Dialogs badge — but it still counts under All.
+    container
+        .read(locEditsProvider.notifier)
+        .setEdit('info_ghost_999', 'de_A', 'Boo');
+    await pumpHarness(tester, container);
+
+    // Base All(3) + the extra ghost loc entry = 4; Dialogs stays at the one
+    // catalog-present edited id.
+    expect(find.text('All (4)'), findsOneWidget);
+    expect(find.text('Dialogs (1)'), findsOneWidget);
+
+    // Opening the section lists only the browsable line, matching the badge.
+    await tester.tap(find.text('Dialogs (1)'));
+    await tester.pumpAndSettle();
+    expect(find.text('info_aaron_001'), findsOneWidget);
+    expect(find.text('info_ghost_999'), findsNothing);
+  });
+
   testWidgets('Dialogs section shows the dialog browser filtered to edited ids',
       (tester) async {
     final container = makeContainer();
