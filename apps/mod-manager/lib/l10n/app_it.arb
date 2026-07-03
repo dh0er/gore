@@ -1,0 +1,19 @@
+{
+  "@@locale": "it",
+  "appTitle": "gore-manager",
+  "tabMods": "Mod",
+  "tabSettings": "Impostazioni",
+  "settingsGameExe": "Eseguibile del gioco",
+  "settingsGameExePick": "Scegli…",
+  "settingsLanguage": "Lingua",
+  "statusInSync": "Sincronizzato",
+  "statusChangesPending": "Modifiche in sospeso",
+  "statusGameUpdated": "Gioco aggiornato",
+  "statusStudioDeploy": "Distribuzione Studio attiva",
+  "statusNothingDeployed": "Niente distribuito",
+  "actionImport": "Importa",
+  "actionApply": "Applica",
+  "actionUndeployAll": "Ritira tutto",
+  "commonCancel": "Annulla",
+  "commonOk": "OK"
+}

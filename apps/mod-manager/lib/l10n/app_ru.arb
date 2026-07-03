@@ -1,0 +1,19 @@
+{
+  "@@locale": "ru",
+  "appTitle": "gore-manager",
+  "tabMods": "Моды",
+  "tabSettings": "Настройки",
+  "settingsGameExe": "Исполняемый файл игры",
+  "settingsGameExePick": "Выбрать…",
+  "settingsLanguage": "Язык",
+  "statusInSync": "Синхронизировано",
+  "statusChangesPending": "Есть неприменённые изменения",
+  "statusGameUpdated": "Игра обновлена",
+  "statusStudioDeploy": "Активно развёртывание Studio",
+  "statusNothingDeployed": "Ничего не развёрнуто",
+  "actionImport": "Импортировать",
+  "actionApply": "Применить",
+  "actionUndeployAll": "Убрать всё из игры",
+  "commonCancel": "Отмена",
+  "commonOk": "OK"
+}

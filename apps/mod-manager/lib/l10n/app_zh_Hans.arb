@@ -1,0 +1,19 @@
+{
+  "@@locale": "zh_Hans",
+  "appTitle": "gore-manager",
+  "tabMods": "模组",
+  "tabSettings": "设置",
+  "settingsGameExe": "游戏可执行文件",
+  "settingsGameExePick": "选择…",
+  "settingsLanguage": "语言",
+  "statusInSync": "已同步",
+  "statusChangesPending": "有待应用的更改",
+  "statusGameUpdated": "游戏已更新",
+  "statusStudioDeploy": "Studio 部署已激活",
+  "statusNothingDeployed": "尚未部署任何内容",
+  "actionImport": "导入",
+  "actionApply": "应用",
+  "actionUndeployAll": "撤销全部部署",
+  "commonCancel": "取消",
+  "commonOk": "确定"
+}

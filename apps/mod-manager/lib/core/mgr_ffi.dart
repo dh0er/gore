@@ -1,0 +1,106 @@
+import '../library/domain/models.dart';
+import 'core_service.dart';
+
+/// Typed wrappers over the gore-ffi mod-manager commands (`mgr_*`).
+///
+/// Every command returns the standard envelope `{ok, ...}` /
+/// `{ok: false, error: {code, message}}`; failures throw [MgrFfiException]
+/// tagged with the command name.
+class MgrFfi {
+  MgrFfi(this._core);
+  final GoreCoreFfiService _core;
+
+  Future<Map<String, Object?>> _call(
+    String cmd,
+    Map<String, Object?> payload,
+  ) async {
+    final r = await _core.execute(cmd, payload: payload);
+    if (r['ok'] != true) {
+      final e = r['error'];
+      final msg = e is Map ? (e['message'] ?? e.toString()) : 'unknown error';
+      throw MgrFfiException('$cmd: $msg');
+    }
+    return r;
+  }
+
+  /// The mod library plus the current loadout order.
+  Future<(List<ModEntryMetaView>, LoadoutView)> libraryList() async {
+    final r = await _call('mgr_library_list', const {});
+    final mods = ((r['mods'] as List?) ?? const [])
+        .whereType<Map>()
+        .map((m) => ModEntryMetaView.fromJson(m.cast<String, Object?>()))
+        .toList();
+    final loadout = r['loadout'];
+    return (
+      mods,
+      loadout is Map
+          ? LoadoutView.fromJson(loadout.cast<String, Object?>())
+          : const LoadoutView(),
+    );
+  }
+
+  /// Import a mod file/folder into the library; returns its library entry.
+  Future<ModEntryMetaView> import(String path) async {
+    final r = await _call('mgr_import', {'path': path});
+    final entry = r['entry'];
+    if (entry is! Map) {
+      throw MgrFfiException('mgr_import: response is missing entry');
+    }
+    return ModEntryMetaView.fromJson(entry.cast<String, Object?>());
+  }
+
+  /// Remove a mod from the library. True when an entry was actually removed.
+  Future<bool> remove(String id) async {
+    final r = await _call('mgr_remove', {'id': id});
+    return _truthy(r['removed']);
+  }
+
+  /// Persist the loadout (order + enabled flags).
+  Future<void> setLoadout(LoadoutView loadout) =>
+      _call('mgr_set_loadout', {'loadout': loadout.toJson()});
+
+  /// Conflicts across the enabled mods of the current loadout.
+  Future<List<ConflictView>> analyze() async {
+    final r = await _call('mgr_analyze', const {});
+    return ((r['conflicts'] as List?) ?? const [])
+        .whereType<Map>()
+        .map((m) => ConflictView.fromJson(m.cast<String, Object?>()))
+        .toList();
+  }
+
+  /// Declaratively apply the current loadout to the game install.
+  Future<ApplyReportView> apply(String gameRoot) async {
+    final r = await _call('mgr_apply', {'game_root': gameRoot});
+    final report = r['report'];
+    return report is Map
+        ? ApplyReportView.fromJson(report.cast<String, Object?>())
+        : const ApplyReportView();
+  }
+
+  /// Deployment status of the install relative to the current loadout.
+  Future<ManagerStatusView> status(String gameRoot) async {
+    final r = await _call('mgr_status', {'game_root': gameRoot});
+    final status = r['status'];
+    return ManagerStatusView.fromJson(
+      status is Map ? status.cast<String, Object?>() : const {},
+    );
+  }
+
+  /// Remove everything the manager deployed from the install. True when
+  /// anything was actually removed.
+  Future<bool> undeployAll(String gameRoot) async {
+    final r = await _call('mgr_undeploy_all', {'game_root': gameRoot});
+    return _truthy(r['removed']);
+  }
+}
+
+/// True for `true` and for positive counts — tolerates the Rust side
+/// reporting `removed` as either a bool or a count.
+bool _truthy(Object? value) => value == true || (value is num && value > 0);
+
+class MgrFfiException implements Exception {
+  MgrFfiException(this.message);
+  final String message;
+  @override
+  String toString() => message;
+}
