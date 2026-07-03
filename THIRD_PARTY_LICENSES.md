@@ -1,14 +1,18 @@
 # Third-Party Licenses
 
-This file lists the licenses of third-party software distributed as part of the
-gore binaries. It is generated with
+This file lists the licenses of the **Rust crate dependencies** compiled into
+the gore binaries. It is generated with
 [`cargo-about`](https://github.com/EmbarkStudios/cargo-about) from the Cargo
 dependency graph.
+
+It does **not** cover the Dart/Flutter packages that the `save-editor` and
+`mod-studio` GUI apps additionally bundle into their Windows builds; those
+packages carry their own (mostly BSD/MIT) licenses and are not reproduced here.
 
 ## Overview
 
 - **Apache License 2.0** — 179 crate(s)
-- **MIT License** — 67 crate(s)
+- **MIT License** — 68 crate(s)
 - **BSD 3-Clause "New" or "Revised" License** — 5 crate(s)
 - **BSD 2-Clause "Simplified" License** — 4 crate(s)
 - **University of Illinois/NCSA Open Source License** — 1 crate(s)
@@ -6394,6 +6398,7 @@ Used by:
 - [gore-loc 0.0.0](https://crates.io/crates/gore-loc)
 - [gore-mod 0.0.0](https://crates.io/crates/gore-mod)
 - [gore-modgen 0.0.0](https://crates.io/crates/gore-modgen)
+- [gore-oodle 0.0.0](https://crates.io/crates/gore-oodle)
 - [gore-reflect 0.0.0](https://crates.io/crates/gore-reflect)
 - [gore-save 0.0.0](https://crates.io/crates/gore-save)
 - [gore-tex 0.0.0](https://crates.io/crates/gore-tex)
