@@ -19,6 +19,18 @@ import '../domain/script_modules_provider.dart';
 /// mod's key = REAL relPath (staged-panel taps, staging). The two spaces are
 /// identical except for collision-disambiguated leaves; `_selectedTreePath`
 /// maps a real relPath back onto its first owning leaf for highlighting.
+///
+/// App-scoped and deliberately SHARED between the main Scripts tab and the
+/// Changes>Scripts embed — both views point at the same modules, and either
+/// may set the selection before the other ever builds. So NO view resets it
+/// on mount (a main-tab initState reset used to clobber a selection made in
+/// the embed before the main tab first built). Stale selections are handled
+/// at RENDER time instead: after a game-path change (GamePathScope remounts
+/// the tab while scriptModulesProvider reloads the new install's list) a
+/// selection that resolves to neither a staged key nor a current module
+/// highlights no leaf and `_detail` falls back to the action-less
+/// placeholder. A stale relPath that also exists in the new install simply
+/// selects that install's module — a valid selection there.
 final _selectedModuleProvider = StateProvider<String?>((ref) => null);
 
 /// Game-relative path for a vanilla module. Some cache entries have no recorded
@@ -79,29 +91,6 @@ class _ScriptTabState extends ConsumerState<ScriptTab> {
   Object? _stagedFilterSource;
   List<String>? _stagedTreePaths;
   List<_ModuleEntry>? _stagedSearchEntries;
-
-  @override
-  void initState() {
-    super.initState();
-    // MAIN tab only: its State (re)mounts on app start or when GamePathScope
-    // swaps its subtree key on a game-exe-path change — KeepAliveTab keeps it
-    // alive across plain tab switches. The selection provider is app-scoped,
-    // so it would survive that remount and carry the PREVIOUS install's
-    // selection (highlighting/opening a same-named path in the new install).
-    // Reset it once per mount; deferred to a microtask because providers must
-    // not be mutated while the widget tree is building.
-    //
-    // The staged-only embed must NOT reset: ChangesTab mounts a FRESH
-    // ScriptTab(onlyStaged: true) on every Changes>Scripts visit (plain
-    // content swap, no keep-alive), so resetting here would wipe the main
-    // tab's selection on each visit. Sharing the selection between the main
-    // tab and the embed is deliberate — both views point at the same modules.
-    if (!widget.onlyStaged) {
-      Future.microtask(() {
-        if (mounted) ref.read(_selectedModuleProvider.notifier).state = null;
-      });
-    }
-  }
 
   @override
   void didUpdateWidget(ScriptTab oldWidget) {

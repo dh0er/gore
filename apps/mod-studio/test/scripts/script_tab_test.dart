@@ -440,6 +440,50 @@ void main() {
     expect(find.text('Edit existing module'), findsNothing);
   });
 
+  testWidgets('a fresh main-tab mount keeps a shared selection made in the '
+      'Changes embed first (no mount-time reset)', (tester) async {
+    // One container across both mounts. The user visits Changes>Scripts and
+    // selects a staged module BEFORE the main Scripts tab has ever built —
+    // the first main-tab mount must NOT clobber the shared selection.
+    final container = ProviderContainer(overrides: [
+      scriptModulesProvider.overrideWith((ref) async => _fakeModules()),
+      scriptModsProvider
+          .overrideWith((ref) => ScriptModsNotifier()..setMod(_stagedBar())),
+    ]);
+    addTearDown(container.dispose);
+
+    Future<void> pumpTab(Widget tab) async {
+      await tester.pumpWidget(UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp(home: Scaffold(body: tab)),
+      ));
+      await tester.pump();
+      await tester.pump();
+    }
+
+    // Select the staged module in the embed.
+    await pumpTab(const ScriptTab(key: ValueKey('embed'), onlyStaged: true));
+    await tester.tap(find.text('Bar.as'));
+    await tester.pump();
+    expect(find.text('Edit existing module'), findsOneWidget);
+
+    // First-ever MAIN mount (distinct key → fresh State, initState runs; in
+    // the real app the embed and the main tab are separate mounts anyway).
+    // The selection survives: staged detail + highlighted leaf, no
+    // placeholder.
+    await pumpTab(const ScriptTab(key: ValueKey('main')));
+    expect(find.text('Gameplay'), findsOneWidget); // full browser = main tab
+    expect(find.text('Edit existing module'), findsOneWidget);
+    expect(find.text('Select or add a script mod'), findsNothing);
+    expect(
+      tester
+          .widget<ListTile>(find.ancestor(
+              of: find.text('Bar.as'), matching: find.byType(ListTile)))
+          .selected,
+      isTrue,
+    );
+  });
+
   testWidgets('staged-panel selection resolves by REAL relPath even when it '
       'equals another module\'s generated collision leaf', (tester) async {
     // Pathological vanilla list: two modules collide on real 'Foo.as' (the
@@ -493,13 +537,17 @@ void main() {
         findsOneWidget);
   });
 
-  testWidgets('remounting the tab (game-path change) resets the selection',
-      (tester) async {
-    // One container across both mounts — exactly like the real app, where the
-    // selection provider lives in the root ProviderScope and GamePathScope
-    // only swaps the ScriptTab subtree key when the game exe path changes.
+  testWidgets('game-path change: after remount + module reload a selection '
+      'the new install cannot resolve shows the placeholder', (tester) async {
+    // One container across both mounts — like the real app: the selection
+    // provider lives in the root ProviderScope, GamePathScope swaps the
+    // subtree key on a game-exe-path change (fresh State), and
+    // scriptModulesProvider reloads the NEW install's list. There is no
+    // mount-time selection reset (it would clobber valid cross-view
+    // selections) — a stale selection is neutralized by the render guards.
+    var modules = _fakeModules();
     final container = ProviderContainer(overrides: [
-      scriptModulesProvider.overrideWith((ref) async => _fakeModules()),
+      scriptModulesProvider.overrideWith((ref) async => modules),
     ]);
     addTearDown(container.dispose);
 
@@ -517,20 +565,17 @@ void main() {
     await tester.pump();
     expect(find.text('Vanilla module — not staged'), findsOneWidget);
 
-    // Simulate GamePathScope swapping the subtree key on a game-path change:
-    // fresh State, same container — without the initState reset the previous
-    // install's selection would survive into the new install's tree.
+    // Install 2 has no 'Bar.as' (nor any other install-1 path): the stale
+    // selection resolves to neither a staged key nor a current module, so
+    // the detail falls back to the action-less placeholder — the render
+    // guards cover what the old mount-time reset was for.
+    modules = [ScriptModuleInfo(name: 'Other', file: 'Misc/Other.as')];
+    container.refresh(scriptModulesProvider);
     await pumpTab(const ValueKey('install-2'));
     expect(find.text('Vanilla module — not staged'), findsNothing);
     expect(find.text('Select or add a script mod'), findsOneWidget);
-    // The previously selected leaf is no longer highlighted.
-    expect(
-      tester
-          .widget<ListTile>(find.ancestor(
-              of: find.text('Bar.as'), matching: find.byType(ListTile)))
-          .selected,
-      isFalse,
-    );
+    // No stale-module action is reachable: no vanilla Edit button anywhere.
+    expect(find.text('Edit'), findsNothing);
   });
 
   // Fix 3: loadProject treats the script relPath as untrusted (defense-in-depth, matching the
