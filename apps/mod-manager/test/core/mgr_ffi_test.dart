@@ -17,33 +17,36 @@ Map<String, Object?> _libraryListResponse() => {
           'author': 'dh',
           'imported_at': '2026-07-01T12:00:00Z',
           'source': 'BetterTorches.goremod',
+          // `targets` are conflict-analysis footprint keys, not file paths:
+          // ue4ss dir name, loc "id|set", audio "bank|sample", asset paths,
+          // AngelScript module names.
           'components': [
             {
               'type': 'ue4ss_lua',
               'name': 'torches',
               'rel': 'scripts/torches',
-              'targets': ['ue4ss/Mods/torches'],
+              'targets': ['torches'],
               'opaque': true,
             },
             {
               'type': 'loc_patch',
               'rel': 'loc/patch.json',
-              'targets': ['G1R/Content/Localization/Game.lcache'],
+              'targets': ['itlstorch|german'],
             },
             {
               'type': 'audio_patch',
               'rel': 'audio/sfx_patch.json',
-              'targets': ['G1R/Content/FMOD/Desktop/SFX.bank'],
+              'targets': ['SFX|vob_fire_torch'],
             },
             {
               'type': 'texture_patch',
               'rel': 'textures/torches',
-              'targets': ['G1R/Content/Paks/~mods/torches_P.pak'],
+              'targets': ['/Game/Gothic/Textures/T_Torch_D'],
             },
             {
               'type': 'angel_script_patch',
               'rel': 'scripts/patch.as',
-              'targets': ['G1R/Content/Scripts/cache.bin'],
+              'targets': ['Game/Items/ItLsTorch'],
             },
           ],
         },
@@ -56,15 +59,15 @@ Map<String, Object?> _libraryListResponse() => {
               'type': 'triplet',
               'rel_base': 'triplet/pack',
               'targets': [
-                'G1R/Content/Paks/~mods/pack.pak',
-                'G1R/Content/Paks/~mods/pack.ucas',
-                'G1R/Content/Paks/~mods/pack.utoc',
+                '/Game/Gothic/Textures/T_Pack_A',
+                '/Game/Gothic/Textures/T_Pack_B',
+                '/Game/Gothic/Meshes/SM_Pack',
               ],
             },
             {
               'type': 'loose_pak',
               'rel': 'paks/loose_P.pak',
-              'targets': ['G1R/Content/Paks/~mods/loose_P.pak'],
+              'targets': ['/Game/Gothic/Textures/T_Loose'],
             },
             {
               'type': 'raw_file',
@@ -131,12 +134,12 @@ void main() {
       final lua = a.components[0];
       expect(lua.name, 'torches');
       expect(lua.rel, 'scripts/torches');
-      expect(lua.targets, ['ue4ss/Mods/torches']);
+      expect(lua.targets, ['torches']);
       expect(lua.opaque, isTrue);
       expect(lua.displayLabel, 'torches');
       final loc = a.components[1];
       expect(loc.rel, 'loc/patch.json');
-      expect(loc.targets, ['G1R/Content/Localization/Game.lcache']);
+      expect(loc.targets, ['itlstorch|german']);
       expect(loc.opaque, isFalse);
       expect(loc.displayLabel, 'loc/patch.json');
 
@@ -202,7 +205,20 @@ void main() {
       expect((s as ManagerStatusStudioDeployActive).modName, 'MyStudioMod');
     });
 
-    test('parses in_sync with loadout', () async {
+    test('parses in_sync with loadout (wire shape: entry ARRAY)', () async {
+      final s = await parse({
+        'state': 'in_sync',
+        'loadout': [
+          {'id': 'mod-a', 'enabled': true},
+        ],
+      });
+      expect(s, isA<ManagerStatusInSync>());
+      final inSync = s as ManagerStatusInSync;
+      expect(inSync.loadout?.entries.single.id, 'mod-a');
+      expect(inSync.loadout?.entries.single.enabled, isTrue);
+    });
+
+    test('in_sync also tolerates the {format, entries} map shape', () async {
       final s = await parse({
         'state': 'in_sync',
         'loadout': {
@@ -212,32 +228,25 @@ void main() {
           ],
         },
       });
-      expect(s, isA<ManagerStatusInSync>());
-      final inSync = s as ManagerStatusInSync;
-      expect(inSync.loadout?.entries.single.id, 'mod-a');
+      expect((s as ManagerStatusInSync).loadout?.entries.single.id, 'mod-a');
     });
 
-    test('parses changes_pending with deployed and target', () async {
+    test('parses changes_pending with deployed/target entry ARRAYS', () async {
       final s = await parse({
         'state': 'changes_pending',
-        'deployed': {
-          'format': 1,
-          'entries': [
-            {'id': 'mod-a', 'enabled': true},
-          ],
-        },
-        'target': {
-          'format': 1,
-          'entries': [
-            {'id': 'mod-a', 'enabled': true},
-            {'id': 'mod-b', 'enabled': true},
-          ],
-        },
+        'deployed': [
+          {'id': 'mod-a', 'enabled': true},
+        ],
+        'target': [
+          {'id': 'mod-a', 'enabled': true},
+          {'id': 'mod-b', 'enabled': true},
+        ],
       });
       expect(s, isA<ManagerStatusChangesPending>());
       final pending = s as ManagerStatusChangesPending;
       expect(pending.deployed?.entries, hasLength(1));
       expect(pending.target?.entries, hasLength(2));
+      expect(pending.target?.entries[1].id, 'mod-b');
     });
 
     test('parses game_updated with drifted files', () async {
@@ -261,37 +270,64 @@ void main() {
   });
 
   group('MgrFfi errors', () {
-    test('error envelope throws MgrFfiException naming the command', () async {
+    test('error envelope throws MgrFfiException with command + code', () async {
       final fake = FakeGoreCoreFfiService(
         responses: {
           'mgr_apply': {
             'ok': false,
-            'error': {'code': 'E_NO_GAME', 'message': 'game root not found'},
+            'error': {
+              'code': 'STUDIO_DEPLOY_ACTIVE',
+              'message': 'undeploy the studio mod first',
+            },
           },
         },
       );
       expect(
         () => MgrFfi(fake).apply('C:/game'),
         throwsA(
-          isA<MgrFfiException>().having(
-            (e) => e.message,
-            'message',
-            allOf(contains('mgr_apply'), contains('game root not found')),
-          ),
+          isA<MgrFfiException>()
+              .having(
+                (e) => e.message,
+                'message',
+                allOf(
+                  contains('mgr_apply'),
+                  contains('undeploy the studio mod first'),
+                ),
+              )
+              // The UI branches on this code.
+              .having((e) => e.code, 'code', 'STUDIO_DEPLOY_ACTIVE'),
         ),
       );
     });
 
-    test('unknown command (fake default) also throws', () async {
+    test('non-map error value is stringified; code falls back', () async {
+      final fake = FakeGoreCoreFfiService(
+        responses: {
+          'mgr_remove': {'ok': false, 'error': 'disk on fire'},
+        },
+      );
+      expect(
+        () => MgrFfi(fake).remove('mod-a'),
+        throwsA(
+          isA<MgrFfiException>()
+              .having(
+                (e) => e.message,
+                'message',
+                allOf(contains('mgr_remove'), contains('disk on fire')),
+              )
+              .having((e) => e.code, 'code', 'UNKNOWN'),
+        ),
+      );
+    });
+
+    test('unknown command (fake default, no code) also throws', () async {
       final fake = FakeGoreCoreFfiService(responses: {});
       expect(
         () => MgrFfi(fake).analyze(),
         throwsA(
-          isA<MgrFfiException>().having(
-            (e) => e.message,
-            'message',
-            contains('mgr_analyze'),
-          ),
+          isA<MgrFfiException>()
+              .having((e) => e.message, 'message', contains('mgr_analyze'))
+              .having((e) => e.code, 'code', 'UNKNOWN'),
         ),
       );
     });
@@ -373,12 +409,15 @@ void main() {
         responses: {
           'mgr_analyze': {
             'ok': true,
+            // kind ∈ loc|audio|asset|cdo|script_module|raw_file|
+            // ue4ss_dir_name; severity ∈ soft|hard|info; target is the
+            // footprint key ("bank|sample" here).
             'conflicts': [
               {
-                'kind': 'file_overlap',
-                'target': 'G1R/Content/FMOD/Desktop/SFX.bank',
+                'kind': 'audio',
+                'target': 'SFX|vob_fire_torch',
                 'mods': ['mod-a', 'mod-b'],
-                'severity': 'warning',
+                'severity': 'soft',
               },
             ],
           },
@@ -386,10 +425,10 @@ void main() {
       );
       final conflicts = await MgrFfi(fake).analyze();
       expect(conflicts, hasLength(1));
-      expect(conflicts.single.kind, 'file_overlap');
-      expect(conflicts.single.target, 'G1R/Content/FMOD/Desktop/SFX.bank');
+      expect(conflicts.single.kind, 'audio');
+      expect(conflicts.single.target, 'SFX|vob_fire_torch');
       expect(conflicts.single.modIds, ['mod-a', 'mod-b']);
-      expect(conflicts.single.severity, 'warning');
+      expect(conflicts.single.severity, 'soft');
     });
 
     test('apply parses the report', () async {

@@ -10,12 +10,30 @@ library;
 String? _optString(Object? value) =>
     value is String && value.isNotEmpty ? value : null;
 
+String _stringOr(Object? value, String fallback) =>
+    value is String ? value : fallback;
+
 List<String> _stringList(Object? value) =>
     value is List ? value.whereType<String>().toList() : const [];
 
-LoadoutView? _loadoutOrNull(Object? value) => value is Map
-    ? LoadoutView.fromJson(value.cast<String, Object?>())
-    : null;
+List<Map<String, Object?>> _mapList(Object? value) => value is List
+    ? [for (final item in value.whereType<Map>()) item.cast<String, Object?>()]
+    : const [];
+
+/// ManagerStatus serializes loadouts on the wire as plain ARRAYS of entries
+/// (`[{id, enabled}, ...]`); the library file / `mgr_set_loadout` shape is
+/// the `{format, entries}` map. Accept both; anything else is null.
+LoadoutView? _loadoutOrNull(Object? value) {
+  if (value is List) {
+    return LoadoutView(
+      entries: [for (final m in _mapList(value)) LoadoutEntryView.fromJson(m)],
+    );
+  }
+  if (value is Map) {
+    return LoadoutView.fromJson(value.cast<String, Object?>());
+  }
+  return null;
+}
 
 /// Library metadata for one installed mod (`ModEntryMeta` on the Rust side).
 class ModEntryMetaView {
@@ -32,17 +50,16 @@ class ModEntryMetaView {
 
   factory ModEntryMetaView.fromJson(Map<String, Object?> json) {
     return ModEntryMetaView(
-      id: json['id'] as String? ?? '',
-      kind: json['kind'] as String? ?? '',
-      name: json['name'] as String? ?? '',
+      id: _stringOr(json['id'], ''),
+      kind: _stringOr(json['kind'], ''),
+      name: _stringOr(json['name'], ''),
       version: _optString(json['version']),
       author: _optString(json['author']),
       importedAt: _optString(json['imported_at']),
       source: _optString(json['source']),
-      components: ((json['components'] as List?) ?? const [])
-          .whereType<Map>()
-          .map((m) => ComponentView.fromJson(m.cast<String, Object?>()))
-          .toList(),
+      components: [
+        for (final m in _mapList(json['components'])) ComponentView.fromJson(m),
+      ],
     );
   }
 
@@ -77,7 +94,7 @@ class ComponentView {
   });
 
   factory ComponentView.fromJson(Map<String, Object?> json) {
-    final kind = json['type'] as String? ?? 'unknown';
+    final kind = _stringOr(json['type'], 'unknown');
     return ComponentView(
       kind: kind,
       name: _optString(json['name']),
@@ -102,8 +119,11 @@ class ComponentView {
   /// for triplets).
   final String? rel;
 
-  /// Game-relative paths this component writes to (empty for `raw_file`,
-  /// which uses [rawFileTarget] instead).
+  /// Conflict-analysis footprint keys this component claims — NOT file
+  /// paths: loc entries as `id|set`, audio samples as `bank|sample`, CDO
+  /// overrides as `Class.Field`, texture/pak content as asset/package
+  /// paths, AngelScript patches as module names. Empty for `raw_file`,
+  /// which uses [rawFileTarget] instead.
   final List<String> targets;
 
   /// `ue4ss_lua` only: true when the script body wasn't parseable.
@@ -159,7 +179,7 @@ class LoadoutEntryView {
 
   factory LoadoutEntryView.fromJson(Map<String, Object?> json) {
     return LoadoutEntryView(
-      id: json['id'] as String? ?? '',
+      id: _stringOr(json['id'], ''),
       enabled: json['enabled'] != false,
     );
   }
@@ -181,10 +201,9 @@ class LoadoutView {
         final num value => value.toInt(),
         _ => 1,
       },
-      entries: ((json['entries'] as List?) ?? const [])
-          .whereType<Map>()
-          .map((m) => LoadoutEntryView.fromJson(m.cast<String, Object?>()))
-          .toList(),
+      entries: [
+        for (final m in _mapList(json['entries'])) LoadoutEntryView.fromJson(m),
+      ],
     );
   }
 
@@ -208,10 +227,10 @@ class ConflictView {
 
   factory ConflictView.fromJson(Map<String, Object?> json) {
     return ConflictView(
-      kind: json['kind'] as String? ?? '',
-      target: json['target'] as String? ?? '',
+      kind: _stringOr(json['kind'], ''),
+      target: _stringOr(json['target'], ''),
       modIds: _stringList(json['mods']),
-      severity: json['severity'] as String? ?? '',
+      severity: _stringOr(json['severity'], ''),
     );
   }
 
@@ -325,5 +344,5 @@ class ManagerStatusUnknown extends ManagerStatusView {
   const ManagerStatusUnknown(super.raw);
 
   @override
-  String get state => raw['state'] as String? ?? 'unknown';
+  String get state => _stringOr(raw['state'], 'unknown');
 }

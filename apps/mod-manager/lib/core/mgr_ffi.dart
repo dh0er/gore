@@ -17,8 +17,15 @@ class MgrFfi {
     final r = await _core.execute(cmd, payload: payload);
     if (r['ok'] != true) {
       final e = r['error'];
-      final msg = e is Map ? (e['message'] ?? e.toString()) : 'unknown error';
-      throw MgrFfiException('$cmd: $msg');
+      if (e is Map) {
+        final code = switch (e['code']) {
+          final String code when code.isNotEmpty => code,
+          _ => 'UNKNOWN',
+        };
+        throw MgrFfiException('$cmd: ${e['message'] ?? e}', code: code);
+      }
+      // Non-map error value (string, number, null, ...): stringify it.
+      throw MgrFfiException('$cmd: ${e ?? 'unknown error'}');
     }
     return r;
   }
@@ -26,10 +33,9 @@ class MgrFfi {
   /// The mod library plus the current loadout order.
   Future<(List<ModEntryMetaView>, LoadoutView)> libraryList() async {
     final r = await _call('mgr_library_list', const {});
-    final mods = ((r['mods'] as List?) ?? const [])
-        .whereType<Map>()
-        .map((m) => ModEntryMetaView.fromJson(m.cast<String, Object?>()))
-        .toList();
+    final mods = [
+      for (final m in _maps(r['mods'])) ModEntryMetaView.fromJson(m),
+    ];
     final loadout = r['loadout'];
     return (
       mods,
@@ -62,10 +68,7 @@ class MgrFfi {
   /// Conflicts across the enabled mods of the current loadout.
   Future<List<ConflictView>> analyze() async {
     final r = await _call('mgr_analyze', const {});
-    return ((r['conflicts'] as List?) ?? const [])
-        .whereType<Map>()
-        .map((m) => ConflictView.fromJson(m.cast<String, Object?>()))
-        .toList();
+    return [for (final m in _maps(r['conflicts'])) ConflictView.fromJson(m)];
   }
 
   /// Declaratively apply the current loadout to the game install.
@@ -98,9 +101,21 @@ class MgrFfi {
 /// reporting `removed` as either a bool or a count.
 bool _truthy(Object? value) => value == true || (value is num && value > 0);
 
+/// Non-throwing list-of-maps accessor for response arrays.
+List<Map<String, Object?>> _maps(Object? value) => value is List
+    ? [for (final item in value.whereType<Map>()) item.cast<String, Object?>()]
+    : const [];
+
 class MgrFfiException implements Exception {
-  MgrFfiException(this.message);
+  MgrFfiException(this.message, {this.code = 'UNKNOWN'});
+
   final String message;
+
+  /// Machine-readable code from the FFI error envelope (`error.code`);
+  /// 'UNKNOWN' when absent. The UI branches on codes such as
+  /// STUDIO_DEPLOY_ACTIVE.
+  final String code;
+
   @override
   String toString() => message;
 }

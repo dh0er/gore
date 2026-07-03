@@ -6,15 +6,9 @@ import 'package:gore_manager/gore_manager_app.dart';
 
 void main() {
   testWidgets('app boots with a fake core service', (tester) async {
-    final fake = FakeGoreCoreFfiService(
-      responses: {
-        'mgr_library_list': {
-          'ok': true,
-          'mods': <Object?>[],
-          'loadout': {'format': 1, 'entries': <Object?>[]},
-        },
-      },
-    );
+    // The skeleton home makes no FFI calls yet; the empty fake just proves
+    // the app boots against an injected service.
+    final fake = FakeGoreCoreFfiService(responses: const {});
     await tester.pumpWidget(
       ProviderScope(
         overrides: [coreServiceProvider.overrideWithValue(fake)],
