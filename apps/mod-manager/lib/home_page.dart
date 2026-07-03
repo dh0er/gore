@@ -187,14 +187,18 @@ class _ModsTab extends ConsumerWidget {
     final gamePath = ref.watch(gameExePathProvider);
     final gameRoot = gameRootFromExe(gamePath);
     final status = ref.watch(statusProvider);
+    final library = ref.watch(libraryProvider);
     final conflicts = ref.watch(conflictsProvider);
     final conflictCount = conflicts.value?.length ?? 0;
 
-    final canApply = switch (status.status) {
-      ManagerStatusChangesPending() => true,
-      ManagerStatusGameUpdated() => true,
-      _ => false,
-    };
+    // Apply is enabled when the enabled loadout differs from what's deployed —
+    // including the first-ever deploy (nothing_deployed + >=1 enabled mod).
+    final applyEnabled = canApply(
+      status.status,
+      library,
+      gameRoot != null,
+      status.busy,
+    );
 
     return Column(
       children: [
@@ -231,7 +235,7 @@ class _ModsTab extends ConsumerWidget {
                 message: l10n.applyTooltip,
                 child: FilledButton.icon(
                   onPressed:
-                      canApply ? () => _apply(context, ref) : null,
+                      applyEnabled ? () => _apply(context, ref) : null,
                   icon: const Icon(Icons.play_arrow),
                   label: Text(l10n.actionApply),
                 ),
@@ -303,6 +307,36 @@ class _ModsTab extends ConsumerWidget {
       ],
     );
   }
+}
+
+/// Whether the Apply button should be enabled.
+///
+/// Apply is offered whenever the target (the enabled subset of the current
+/// loadout) differs from what is deployed — which includes the very first
+/// deploy. Concretely:
+///  * always disabled without a game path or while an FFI call is in flight;
+///  * enabled for [ManagerStatusChangesPending] / [ManagerStatusGameUpdated]
+///    (deployed drifted from target);
+///  * enabled for [ManagerStatusNothingDeployed] only when the loadout has at
+///    least one enabled mod (there is something to deploy) — this is what makes
+///    the first-ever deploy, and the post-studio-take-over deploy, reachable;
+///  * disabled otherwise: [ManagerStatusInSync] (nothing changed),
+///    [ManagerStatusStudioDeployActive] (that path shows take-over, not Apply),
+///    an unknown/null status, or NothingDeployed with zero enabled mods.
+bool canApply(
+  ManagerStatusView? status,
+  LibraryState library,
+  bool gameRootSet,
+  bool busy,
+) {
+  if (!gameRootSet || busy) return false;
+  return switch (status) {
+    ManagerStatusChangesPending() => true,
+    ManagerStatusGameUpdated() => true,
+    ManagerStatusNothingDeployed() =>
+      library.loadout.entries.any((e) => e.enabled),
+    _ => false,
+  };
 }
 
 enum _OverflowAction { refresh, undeployAll }

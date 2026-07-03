@@ -152,6 +152,58 @@ void main() {
     expect(applyBtn.onPressed, isNull); // disabled
   });
 
+  testWidgets(
+      'apply is enabled on nothing_deployed with an enabled mod + game path',
+      (tester) async {
+    // Regression: the first-ever deploy. mgr_status reports nothing_deployed
+    // (nothing deployed yet), the loadout has enabled mods, and a game path is
+    // set — Apply must be enabled so the user can perform the first deploy.
+    final exe = _makeGameExe();
+    final fake = FakeGoreCoreFfiService(
+      responses: {
+        'mgr_library_list': _libraryList(), // both mods enabled
+        'mgr_analyze': {'ok': true, 'conflicts': []},
+        'mgr_status': {
+          'ok': true,
+          'status': {'state': 'nothing_deployed'},
+        },
+      },
+    );
+    await tester.pumpWidget(_appWith(fake, exePath: exe));
+    await tester.pumpAndSettle();
+
+    final l10n = await AppLocalizations.delegate.load(const Locale('en'));
+    final applyBtn = tester.widget<FilledButton>(
+      find.widgetWithText(FilledButton, l10n.actionApply),
+    );
+    expect(applyBtn.onPressed, isNotNull); // enabled
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('apply is disabled on nothing_deployed with no game path',
+      (tester) async {
+    // Without a game path there's nowhere to deploy, so Apply stays disabled
+    // even though the loadout has enabled mods.
+    final fake = FakeGoreCoreFfiService(
+      responses: {
+        'mgr_library_list': _libraryList(), // both mods enabled
+        'mgr_analyze': {'ok': true, 'conflicts': []},
+        'mgr_status': {
+          'ok': true,
+          'status': {'state': 'nothing_deployed'},
+        },
+      },
+    );
+    await tester.pumpWidget(_appWith(fake)); // no exePath
+    await tester.pumpAndSettle();
+
+    final l10n = await AppLocalizations.delegate.load(const Locale('en'));
+    final applyBtn = tester.widget<FilledButton>(
+      find.widgetWithText(FilledButton, l10n.actionApply),
+    );
+    expect(applyBtn.onPressed, isNull); // disabled
+  });
+
   testWidgets('apply is enabled when changes are pending', (tester) async {
     final exe = _makeGameExe();
     final fake = FakeGoreCoreFfiService(
