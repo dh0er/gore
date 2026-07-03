@@ -375,7 +375,14 @@ class _AudioBrowserState extends ConsumerState<_AudioBrowser>
 
   Widget _buildDetail(BuildContext context) {
     final sample = _selected;
-    if (sample == null) {
+    // Staged-only view: when the selected sample's replacement is un-staged it
+    // drops out of the list, so the detail pane must not keep offering it
+    // (parity with the other filtered views: Dialog, Items, Textures). A
+    // render guard suffices — build watches audioReplacementsProvider, so
+    // un-staging swaps this pane to the placeholder live.
+    final stagedNames = _stagedNamesOrNull();
+    if (sample == null ||
+        (stagedNames != null && !stagedNames.contains(sample.name))) {
       return const Center(child: Text('Select a sample'));
     }
     final theme = Theme.of(context);

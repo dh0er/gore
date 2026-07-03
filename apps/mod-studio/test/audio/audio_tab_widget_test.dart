@@ -248,6 +248,67 @@ void main() {
     expect(find.text('No samples match'), findsOneWidget);
   });
 
+  testWidgets('onlyStaged detail pane hides a selection that gets un-staged',
+      (tester) async {
+    // The detail pane's action row needs more than the ~240px left over from
+    // the 560px browser pane on the 800x600 test default; use a desktop-like
+    // window, matching the real app.
+    tester.view.physicalSize = const Size(1400, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    await _pumpAudioTab(
+      tester,
+      {
+        'SFX.bank': [
+          _sample('SFX_CREA_Wolf_Growl_01'),
+          _sample('SFX_CREA_Bloodfly_Idle_01'),
+        ],
+        'Music.bank': [],
+        'CINEMATICS.bank': [],
+        'VO.bank': [],
+      },
+      onlyStaged: true,
+    );
+
+    // Stage two samples in the same bank, then select A.
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(AudioTab)),
+      listen: false,
+    );
+    container.read(audioReplacementsProvider.notifier).loadAll([
+      AudioReplacement(
+        bank: 'SFX.bank',
+        sample: 'SFX_CREA_Wolf_Growl_01',
+        wavPath: p.join('wavs', 'wolf.wav'),
+      ),
+      AudioReplacement(
+        bank: 'SFX.bank',
+        sample: 'SFX_CREA_Bloodfly_Idle_01',
+        wavPath: p.join('wavs', 'bloodfly.wav'),
+      ),
+    ]);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('SFX_CREA_Wolf_Growl_01'));
+    await tester.pumpAndSettle();
+
+    // Detail pane shows A (list tile + detail title) with its actions.
+    expect(find.text('SFX_CREA_Wolf_Growl_01'), findsNWidgets(2));
+    expect(find.text('Replace…'), findsOneWidget);
+    expect(find.text('Select a sample'), findsNothing);
+
+    // Un-staging A (as the Changes tab's providers would) drops it from the
+    // list AND the detail pane, which falls back to the placeholder; the
+    // other staged sample keeps the bank populated.
+    container
+        .read(audioReplacementsProvider.notifier)
+        .remove('SFX.bank/SFX_CREA_Wolf_Growl_01');
+    await tester.pumpAndSettle();
+    expect(find.text('SFX_CREA_Wolf_Growl_01'), findsNothing);
+    expect(find.text('Replace…'), findsNothing);
+    expect(find.text('Select a sample'), findsOneWidget);
+    expect(find.text('SFX_CREA_Bloodfly_Idle_01'), findsOneWidget);
+  });
+
   testWidgets('staged replacements panel scrolls instead of overflowing',
       (tester) async {
     await _pumpAudioTab(tester, {
