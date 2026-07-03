@@ -462,6 +462,182 @@ mod tests {
         lc.export(false).get(key).and_then(|m| m.get("german")).cloned().unwrap_or_default()
     }
 
+    // ── audio bank fixture (a REAL pristine RIFF/FEV bank the audio arm can inject into) ─────────
+    // gore-fmod ships no bank-builder: `build_fsb5_pcm16` emits only the inner FSB5 block (magic
+    // `FSB5`), which is NOT a `.bank` — `parse_bank`/`is_pristine_bank` reject it ("not a RIFF/FEV
+    // bank"). The audio arm reads the base bank via `read_pristine` (whose no-backup branch gates on
+    // `is_pristine_bank`) and calls `gore_fmod::replace_samples`, which needs a full RIFF/FEV
+    // wrapper: a top-level LIST/PROJ/BNKI region with an SNDH entry pointing at the FSB5 and a WAV
+    // node referencing (SoundBankIndex 0, SubsoundIndex 0). So we hand-roll that minimal wrapper
+    // here around a `build_fsb5_pcm16` FSB5. Byte layout is validated by both gore-fmod walkers
+    // (`parse_bank` and the private `gather`/`inject_fsb5`), which frame every sub-chunk as
+    // `[fourcc][u32 size][body]` starting right after PROJ — so BNKI carries its own size too.
+
+    /// One PCM16 sample named `sample` (mono, `freq` Hz) wrapped in a pristine `.bank`, encrypted
+    /// with `key`. `is_pristine_bank` returns true and `replace_samples` accepts it as the base.
+    fn build_pristine_bank(sample: &str, freq: u32, pcm: &[i16], key: &[u8]) -> Vec<u8> {
+        use gore_fmod::{build_fsb5_pcm16, fsb5_encrypt};
+        let mut fsb5 = build_fsb5_pcm16(sample, freq, 1, pcm).unwrap();
+        fsb5_encrypt(&mut fsb5, key);
+        let u32b = |v: u32| v.to_le_bytes();
+
+        let mut b: Vec<u8> = Vec::new();
+        b.extend_from_slice(b"RIFF");
+        b.extend_from_slice(&u32b(0)); // riff size @0x04 (backpatched)
+        b.extend_from_slice(b"FEV ");
+        // FMT chunk @0x0C: parse_bank reads the bank version at absolute 0x14, so FMT's body must
+        // start there. version 0x30 (>0x28) → 8-byte SNDH entries carrying explicit FSB5 sizes.
+        b.extend_from_slice(b"FMT ");
+        let fmt_size_pos = b.len(); // 0x10
+        b.extend_from_slice(&u32b(0));
+        assert_eq!(b.len(), 0x14, "FMT body must land at 0x14");
+        b.extend_from_slice(&u32b(0x30)); // version
+        b.extend_from_slice(&u32b(0)); // filler
+        let fmt_size = (b.len() - (fmt_size_pos + 4)) as u32;
+        b[fmt_size_pos..fmt_size_pos + 4].copy_from_slice(&u32b(fmt_size));
+
+        // Top-level LIST enclosing PROJ/BNKI and the sub-chunks.
+        b.extend_from_slice(b"LIST");
+        let list_size_pos = b.len();
+        b.extend_from_slice(&u32b(0));
+        let list_body = b.len();
+        b.extend_from_slice(b"PROJ");
+        // Both walkers begin at list_body+4 (right after PROJ) framing chunks as
+        // [fourcc][u32 size][body]; BNKI is the first sub-chunk header → give it a size.
+        b.extend_from_slice(b"BNKI");
+        b.extend_from_slice(&u32b(0)); // empty BNKI body
+
+        // SNDH: 4-byte chunk-version prefix (its low 2 bytes double as the injector's X16 count)
+        // + one 8-byte entry (abs FSB5 offset, FSB5 size).
+        b.extend_from_slice(b"SNDH");
+        let sndh_size_pos = b.len();
+        b.extend_from_slice(&u32b(0));
+        let sndh_body = b.len();
+        b.extend_from_slice(&[2u8, 0, 0, 0]); // X16 count = 1 (1<<1)
+        let sndh_entry = b.len();
+        b.extend_from_slice(&u32b(0)); // entry.offset (backpatched)
+        b.extend_from_slice(&u32b(0)); // entry.size   (backpatched)
+        let sndh_size = (b.len() - sndh_body) as u32;
+        b[sndh_size_pos..sndh_size_pos + 4].copy_from_slice(&u32b(sndh_size));
+
+        // WAV node: body ≥ 0x1A; SoundBankIndex (i32 @+0x12) and SubsoundIndex (i32 @+0x16) = (0,0),
+        // so inject_fsb5 repoints (0,0) → the appended FSB5.
+        b.extend_from_slice(b"WAV ");
+        let wav_size_pos = b.len();
+        b.extend_from_slice(&u32b(0));
+        let wav_body = b.len();
+        b.extend_from_slice(&[0u8; 0x1A]);
+        let wav_size = (b.len() - wav_body) as u32;
+        b[wav_size_pos..wav_size_pos + 4].copy_from_slice(&u32b(wav_size));
+
+        let list_size = (b.len() - list_body) as u32;
+        b[list_size_pos..list_size_pos + 4].copy_from_slice(&u32b(list_size));
+
+        // SND chunk carrying the encrypted FSB5, 32-aligned.
+        b.extend_from_slice(b"SND ");
+        let snd_size_pos = b.len();
+        b.extend_from_slice(&u32b(0));
+        while b.len() % 32 != 0 {
+            b.push(0);
+        }
+        let fsb5_abs = b.len() as u32;
+        b.extend_from_slice(&fsb5);
+        let snd_size = (b.len() - (snd_size_pos + 4)) as u32;
+        b[snd_size_pos..snd_size_pos + 4].copy_from_slice(&u32b(snd_size));
+
+        b[sndh_entry..sndh_entry + 4].copy_from_slice(&u32b(fsb5_abs));
+        b[sndh_entry + 4..sndh_entry + 8].copy_from_slice(&u32b(fsb5.len() as u32));
+        let riff = (b.len() - 8) as u32;
+        b[4..8].copy_from_slice(&u32b(riff));
+        // Sanity: our synthetic bank satisfies the exact gate the audio arm relies on.
+        assert!(gore_fmod::is_pristine_bank(&b), "fixture bank must be pristine");
+        b
+    }
+
+    /// Decode the LAST FSB5 in `bank` and return its first sample's interleaved PCM16 frames.
+    /// After `replace_samples` the injected sample lives in the appended FSB5 (#1); on a pristine
+    /// bank this is FSB5 #0 (the original). Lets a test assert the LIVE bank now carries the
+    /// injected pattern (proving materialization, not merely that the file changed).
+    fn decode_last_fsb5_pcm(bank: &[u8], key: &[u8]) -> Vec<i16> {
+        let entries = gore_fmod::parse_bank(bank).expect("parse_bank");
+        let e = entries.last().expect("bank has an FSB5");
+        let mut blk = bank[e.fsb5_offset..e.fsb5_offset + e.fsb5_size].to_vec();
+        gore_fmod::fsb5_decrypt(&mut blk, key);
+        let fsb = gore_fmod::parse_fsb5(&blk).expect("parse_fsb5");
+        assert_eq!(fsb.codec, gore_fmod::Codec::Pcm16, "expected PCM16 FSB5");
+        let s = &fsb.samples[0];
+        let start = (fsb.data_section + s.data_offset) as usize;
+        let end = start + s.num_samples as usize * s.channels as usize * 2;
+        blk[start..end].chunks_exact(2).map(|c| i16::from_le_bytes([c[0], c[1]])).collect()
+    }
+
+    // ── precompiled-script cache fixture (a REAL cache the script arm can splice) ────────────────
+    // gore-as's own splice tests read their `.Cache` samples from `work/reversing/gore-as/samples/`
+    // — a gitignored scratch dir NOT present in-tree (only an 8 KB header slice is committed as a
+    // fixture, and it is not a spliceable module cache). Rather than depend on those, we synthesize
+    // a minimal-but-VALID cache from the documented wire format (header.rs / wire.rs / walk_modules
+    // / tables.rs): a 0x18 header (16-byte hash + magic + Modules count), N module TMap entries with
+    // zero functions/classes/enums/globals/imports, and 7 EMPTY global tail tables (28 zero bytes).
+    // This is exactly the shape `splice_auto`'s case-(b) fast path and `replace_module` accept, and
+    // it round-trips through `module_count`/`module_names`/`module_region_end` — verified by the
+    // tests below driving the REAL `gore_as::cache::splice` functions, no game bytes required.
+
+    /// `FStringInArchive`: i32 length (chars); if >0, `length+1` bytes incl trailing NUL.
+    fn as_sia(s: &str) -> Vec<u8> {
+        if s.is_empty() {
+            return 0i32.to_le_bytes().to_vec();
+        }
+        let mut o = (s.len() as i32).to_le_bytes().to_vec();
+        o.extend_from_slice(s.as_bytes());
+        o.push(0);
+        o
+    }
+
+    /// UE `FString` (the `Modules` TMap key): i32 len (= chars+1 incl NUL); then `len` bytes.
+    fn as_fstring(s: &str) -> Vec<u8> {
+        if s.is_empty() {
+            return 0i32.to_le_bytes().to_vec();
+        }
+        let mut o = ((s.len() + 1) as i32).to_le_bytes().to_vec();
+        o.extend_from_slice(s.as_bytes());
+        o.push(0);
+        o
+    }
+
+    /// One `FAngelscriptPrecompiledModule` value with no members (all count-prefixed arrays empty),
+    /// laid out exactly as `walk_modules::read_module` consumes it.
+    fn as_module_value(module: &str) -> Vec<u8> {
+        let mut m = Vec::new();
+        m.extend_from_slice(&as_sia(module)); // ModuleName
+        for _ in 0..5 {
+            m.extend_from_slice(&0i32.to_le_bytes()); // Functions/Classes/Enums/Globals/Imports = 0
+        }
+        m.extend_from_slice(&0i64.to_le_bytes()); // CodeHash
+        m.extend_from_slice(&0i32.to_le_bytes()); // ImportedModules (TArray<SIA>) = 0
+        m.extend_from_slice(&as_sia("")); // StaticsClassName
+        m.extend_from_slice(&0i32.to_le_bytes()); // DeclaredEvents = 0
+        m.extend_from_slice(&0i32.to_le_bytes()); // DeclaredDelegates = 0
+        m.extend_from_slice(&as_sia("")); // ScriptRelativeFilename
+        m.extend_from_slice(&0i32.to_le_bytes()); // PostInitFunctions = 0
+        m
+    }
+
+    /// A full minimal precompiled cache carrying `modules` (each a name→empty-module TMap entry)
+    /// with empty global tail tables. Accepted by `splice_auto`/`replace_module`.
+    fn build_script_cache(modules: &[&str]) -> Vec<u8> {
+        use gore_as::cache::header::CACHE_MAGIC;
+        let mut out = Vec::new();
+        out.extend_from_slice(&[0u8; 16]); // 16-byte validation hash (unchecked by the loader)
+        out.extend_from_slice(&CACHE_MAGIC.to_le_bytes()); // magic @0x10
+        out.extend_from_slice(&(modules.len() as u32).to_le_bytes()); // Modules count @0x14
+        for name in modules {
+            out.extend_from_slice(&as_fstring(name)); // TMap key
+            out.extend_from_slice(&as_module_value(name)); // TMap value
+        }
+        out.extend_from_slice(&[0u8; 7 * 4]); // 7 empty tail tables
+        out
+    }
+
     // ── fake game tree ──────────────────────────────────────────────────────────────────────────
 
     struct FakeGame {
@@ -504,6 +680,73 @@ mod tests {
         }
         fn ue4ss(&self) -> PathBuf {
             self.root.join("G1R/Binaries/Win64/ue4ss/Mods")
+        }
+        /// `<root>/G1R/Content/FMOD/Desktop/<name>` — where `RawTarget::Bank`/audio patches land.
+        fn bank(&self, name: &str) -> PathBuf {
+            self.root.join("G1R/Content/FMOD/Desktop").join(name)
+        }
+        /// `<root>/G1R/Script/PrecompiledScript_Shipping.Cache` — the script-cache live target.
+        fn script_cache(&self) -> PathBuf {
+            self.root.join("G1R/Script/PrecompiledScript_Shipping.Cache")
+        }
+
+        /// Add an audio-patch mod: `audio/manifest.json` = {bank:{sample:wav_rel}} plus the WAV.
+        fn add_audio_mod(&self, id: &str, name: &str, bank: &str, sample: &str, wav: &[u8]) -> String {
+            let wav_rel = format!("audio/0_{sample}.wav");
+            let mut manifest: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
+            manifest.entry(bank.into()).or_default().insert(sample.into(), wav_rel.clone());
+            self.add_mod(
+                id,
+                name,
+                vec![ComponentInfo::AudioPatch { rel: "audio".into(), targets: vec![] }],
+                |dir| {
+                    fs::create_dir_all(dir.join("audio")).unwrap();
+                    fs::write(dir.join("audio/manifest.json"), serde_json::to_vec(&manifest).unwrap())
+                        .unwrap();
+                    fs::write(dir.join(&wav_rel), wav).unwrap();
+                },
+            )
+        }
+
+        /// Add an AngelScript-patch mod: `scripts/manifest.json` = [{op,module,mini}] + the mini cache.
+        fn add_script_mod(
+            &self,
+            id: &str,
+            name: &str,
+            op: &str,
+            module: &str,
+            mini: &[u8],
+        ) -> String {
+            let mini_rel = "scripts/0_mod.cache".to_string();
+            let entries = vec![crate::ScriptEntry {
+                op: op.into(),
+                module: module.into(),
+                mini: mini_rel.clone(),
+            }];
+            self.add_mod(
+                id,
+                name,
+                vec![ComponentInfo::AngelScriptPatch { rel: "scripts".into(), targets: vec![] }],
+                |dir| {
+                    fs::create_dir_all(dir.join("scripts")).unwrap();
+                    fs::write(
+                        dir.join("scripts/manifest.json"),
+                        serde_json::to_vec(&entries).unwrap(),
+                    )
+                    .unwrap();
+                    fs::write(dir.join(&mini_rel), mini).unwrap();
+                },
+            )
+        }
+
+        /// Add a rawfile mod that replaces one whole game file (`target`) with `bytes`.
+        fn add_rawfile_mod(&self, id: &str, name: &str, target: RawTarget, bytes: &[u8]) -> String {
+            self.add_mod(
+                id,
+                name,
+                vec![ComponentInfo::RawFile { rel: "raw.bin".into(), target_file: target }],
+                |dir| fs::write(dir.join("raw.bin"), bytes).unwrap(),
+            )
         }
 
         /// Materialize a library mod dir `<lib>/<id>/` with a sidecar for `components`, then
@@ -782,5 +1025,189 @@ mod tests {
             }
             other => panic!("expected GameUpdated, got {other:?}"),
         }
+    }
+
+    // ── AUDIO materialization ───────────────────────────────────────────────────────────────────
+
+    /// End-to-end proof that the audio arm MATERIALIZES an injected sample (not merely that a file
+    /// changed): a synthesized pristine bank holds sample "shout" with a known PCM pattern; an
+    /// AudioPatch mod points "shout" at a WAV carrying a DIFFERENT known pattern; after
+    /// `apply_loadout` the LIVE bank is decoded back and its "shout" PCM must equal the injected
+    /// pattern (and differ from the original). Exercises the real
+    /// `read_wav_pcm16` → `replace_samples` path with the `GOTHIC_STUDIO_KEY` fallback
+    /// (`resolve_fmod_key` finds no `gore_fmod_key.json`, so the constant key is used on both sides).
+    #[test]
+    fn apply_audio_replaces_sample() {
+        let g = FakeGame::new();
+        let key = gore_fmod::GOTHIC_STUDIO_KEY;
+
+        // Pristine bank: "shout" = an ascending known pattern.
+        let orig: Vec<i16> = (0..64).map(|i| (i as i32 * 300 - 9000) as i16).collect();
+        let bank = build_pristine_bank("shout", 44100, &orig, key);
+        fs::write(g.bank("Voice.bank"), &bank).unwrap();
+        // Precondition: the live bank really does decode to the original pattern.
+        assert_eq!(decode_last_fsb5_pcm(&fs::read(g.bank("Voice.bank")).unwrap(), key), orig);
+
+        // The replacement WAV carries a DIFFERENT known pattern (also a different length).
+        let repl: Vec<i16> = (0..80).map(|i| (12000 - i as i32 * 250) as i16).collect();
+        let wav = gore_fmod::wav_pcm16(44100, 1, &repl);
+        let a = g.add_audio_mod("mod-audio", "AudioMod", "Voice.bank", "shout", &wav);
+
+        let report = apply_loadout(&g.root, &g.lib, &loadout(&[(&a, true)])).unwrap();
+        assert_eq!(report.applied, vec!["AudioMod".to_string()]);
+        assert!(report.warnings.is_empty(), "warnings: {:?}", report.warnings);
+
+        // Decode the LIVE bank: "shout" now carries the injected pattern, not the original.
+        let live = fs::read(g.bank("Voice.bank")).unwrap();
+        assert!(!gore_fmod::is_pristine_bank(&live), "modded bank has a 2nd FSB5");
+        let got = decode_last_fsb5_pcm(&live, key);
+        assert_eq!(got, repl, "live bank must carry the INJECTED sample PCM");
+        assert_ne!(got, orig, "injected sample must differ from the original");
+    }
+
+    /// A `RawFile{Bank}` supplies the whole bank BASE; an AudioPatch then injects on top of it —
+    /// mirroring the loc rawfile-then-patch layering for audio. The base bank's sample starts as
+    /// one pattern; the final live bank must carry the patch's pattern.
+    #[test]
+    fn apply_audio_rawfile_bank_is_base_then_patched() {
+        let g = FakeGame::new();
+        let key = gore_fmod::GOTHIC_STUDIO_KEY;
+        // Live pristine bank (pattern P0). The rawfile base will OVERRIDE this with pattern P1.
+        fs::write(
+            g.bank("Voice.bank"),
+            build_pristine_bank("shout", 44100, &[0i16; 64], key),
+        )
+        .unwrap();
+        let base_pat: Vec<i16> = (0..64).map(|i| (i as i32 * 100) as i16).collect();
+        let raw_bank = build_pristine_bank("shout", 44100, &base_pat, key);
+        let raw = g.add_rawfile_mod(
+            "mod-rawbank",
+            "RawBank",
+            RawTarget::Bank { name: "Voice.bank".into() },
+            &raw_bank,
+        );
+        // Patch injects pattern P2 on top of the rawfile base.
+        let patch_pat: Vec<i16> = (0..48).map(|i| (7000 - i as i32 * 100) as i16).collect();
+        let wav = gore_fmod::wav_pcm16(44100, 1, &patch_pat);
+        let patch = g.add_audio_mod("mod-audiopatch", "AudioPatch", "Voice.bank", "shout", &wav);
+
+        // Raw first (base), patch second (on top).
+        let report = apply_loadout(&g.root, &g.lib, &loadout(&[(&raw, true), (&patch, true)])).unwrap();
+        assert!(report.warnings.is_empty(), "warnings: {:?}", report.warnings);
+
+        let got = decode_last_fsb5_pcm(&fs::read(g.bank("Voice.bank")).unwrap(), key);
+        assert_eq!(got, patch_pat, "patch pattern must win over the rawfile base");
+        assert_ne!(got, base_pat, "must not be the un-patched rawfile base");
+    }
+
+    // ── SCRIPTS materialization ─────────────────────────────────────────────────────────────────
+
+    /// End-to-end proof that the script arm MATERIALIZES a splice: a synthesized pristine cache
+    /// holds one module; an AngelScriptPatch `add` mod ships a 1-module mini-cache; after
+    /// `apply_loadout` the LIVE cache is re-walked with the real `gore_as` reader and must contain
+    /// BOTH modules (count bumped, new module name present) — i.e. `splice_auto` actually ran on the
+    /// bytes on disk, not just by construction. (See `build_script_cache` for why a synthetic cache
+    /// is used: gore-as's real samples are gitignored scratch, absent in-tree.)
+    #[test]
+    fn apply_scripts_splice_module() {
+        use gore_as::cache::walk_modules::{module_count, module_names};
+        let g = FakeGame::new();
+
+        // Pristine cache with a single base module.
+        let base = build_script_cache(&["_gore_base"]);
+        fs::write(g.script_cache(), &base).unwrap();
+        assert_eq!(module_count(&base), 1);
+
+        // Mod ships a 1-module mini to ADD.
+        let mini = build_script_cache(&["_gore_added"]);
+        let a = g.add_script_mod("mod-as", "AsMod", "add", "_gore_added", &mini);
+
+        let report = apply_loadout(&g.root, &g.lib, &loadout(&[(&a, true)])).unwrap();
+        assert_eq!(report.applied, vec!["AsMod".to_string()]);
+        assert!(report.warnings.is_empty(), "warnings: {:?}", report.warnings);
+
+        // The LIVE cache now has 2 modules including the added one — proving the splice ran on disk.
+        let live = fs::read(g.script_cache()).unwrap();
+        assert_eq!(module_count(&live), 2, "add must bump the module count on the live cache");
+        let names = module_names(&live).unwrap();
+        assert_eq!(names, vec!["_gore_base".to_string(), "_gore_added".to_string()]);
+    }
+
+    /// The script `edit` op materializes a `replace_module`: a 2-module base has one module swapped
+    /// in place (count unchanged), and the LIVE cache re-walks with the replacement present and the
+    /// old module gone.
+    #[test]
+    fn apply_scripts_replace_module() {
+        use gore_as::cache::walk_modules::{module_count, module_names};
+        let g = FakeGame::new();
+
+        // Base with two modules; we will replace "_gore_old".
+        let base = build_script_cache(&["_gore_keep", "_gore_old"]);
+        fs::write(g.script_cache(), &base).unwrap();
+
+        let repl_mini = build_script_cache(&["_gore_new"]);
+        let a = g.add_script_mod("mod-as", "AsMod", "edit", "_gore_old", &repl_mini);
+
+        let report = apply_loadout(&g.root, &g.lib, &loadout(&[(&a, true)])).unwrap();
+        assert!(report.warnings.is_empty(), "warnings: {:?}", report.warnings);
+
+        let live = fs::read(g.script_cache()).unwrap();
+        assert_eq!(module_count(&live), 2, "edit keeps the module count");
+        let names = module_names(&live).unwrap();
+        assert!(names.contains(&"_gore_keep".to_string()), "kept module preserved: {names:?}");
+        assert!(names.contains(&"_gore_new".to_string()), "replacement present: {names:?}");
+        assert!(!names.contains(&"_gore_old".to_string()), "old module replaced: {names:?}");
+    }
+
+    /// The script-cache arm's rawfile path: a `RawFile{ScriptCache}` with arbitrary bytes and NO
+    /// script patches is written to the live cache VERBATIM (base with no overlay). This exercises
+    /// the deterministic orchestration of the script-cache target without needing real gore-as
+    /// bytes — the whole-file replacement that a script rawfile performs.
+    #[test]
+    fn apply_scripts_rawfile_written_verbatim() {
+        let g = FakeGame::new();
+        // A live pristine cache that must be fully replaced by the rawfile.
+        fs::write(g.script_cache(), b"PRISTINE-CACHE-BYTES").unwrap();
+        let raw = b"\x00\x01\x02RAW-SCRIPT-CACHE\xff\xfe".to_vec();
+        let a = g.add_rawfile_mod("mod-rawsc", "RawSc", RawTarget::ScriptCache, &raw);
+
+        let report = apply_loadout(&g.root, &g.lib, &loadout(&[(&a, true)])).unwrap();
+        assert!(report.warnings.is_empty(), "warnings: {:?}", report.warnings);
+        assert_eq!(
+            fs::read(g.script_cache()).unwrap(),
+            raw,
+            "rawfile ScriptCache must be written verbatim as the live cache"
+        );
+    }
+
+    /// Real-cache splice, opt-in like gore-as's own `#[ignore]` tests. The synthetic fixtures above
+    /// prove the arm's plumbing; this proves it against ACTUAL game bytes when available. Run with:
+    ///   GORE_TEST_CACHE=<...>/PrecompiledScript_Shipping.Cache
+    ///   GORE_TEST_MINI=<...>/one-module-mini.Cache
+    ///   cargo test -p gore-mod -- --ignored apply_scripts_splice_real
+    #[test]
+    #[ignore]
+    fn apply_scripts_splice_real() {
+        use gore_as::cache::walk_modules::{module_count, module_names};
+        let (Ok(cache), Ok(mini)) =
+            (std::env::var("GORE_TEST_CACHE"), std::env::var("GORE_TEST_MINI"))
+        else {
+            eprintln!("skip: set GORE_TEST_CACHE and GORE_TEST_MINI to real cache + 1-module mini");
+            return;
+        };
+        let base = fs::read(&cache).expect("read real cache");
+        let mini_bytes = fs::read(&mini).expect("read real mini");
+        let before = module_count(&base);
+        let new_name = module_names(&mini_bytes).unwrap().into_iter().next().unwrap();
+
+        let g = FakeGame::new();
+        fs::write(g.script_cache(), &base).unwrap();
+        let a = g.add_script_mod("mod-as-real", "AsReal", "add", &new_name, &mini_bytes);
+
+        apply_loadout(&g.root, &g.lib, &loadout(&[(&a, true)])).unwrap();
+
+        let live = fs::read(g.script_cache()).unwrap();
+        assert_eq!(module_count(&live), before + 1, "real splice adds exactly one module");
+        assert!(module_names(&live).unwrap().contains(&new_name), "added module present");
     }
 }
