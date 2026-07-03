@@ -343,6 +343,23 @@ pub struct DeployRecord {
     /// deletes them. `#[serde(default)]` keeps old records loadable.
     #[serde(default)]
     pub texture_triplets: Vec<String>,
+    /// Who owns this deployment: `""` = legacy/studio single-mod deploy, `"manager"` = the
+    /// multi-mod manager. `#[serde(default)]` keeps old records loadable (as `""`).
+    #[serde(default)]
+    pub owner: String,
+    /// Manager only: the loadout snapshot this deployment realized (library ids + enabled),
+    /// so status/apply can diff the deployed state against the current loadout.
+    #[serde(default)]
+    pub loadout: Vec<crate::mgr::LoadoutEntry>,
+    /// Manager only: ALL deployed UE4SS mod dirs (absolute) — the manager installs one per
+    /// enabled Lua mod, unlike the single `ue4ss_mod_dir`. Undeploy removes each with the
+    /// same semantics as `ue4ss_mod_dir`.
+    #[serde(default)]
+    pub ue4ss_mod_dirs: Vec<String>,
+    /// Absolute dst paths of manager-installed pak/triplet files (loose paks, foreign
+    /// triplets) in `~mods`. Pure additions like `texture_triplets`; undeploy deletes them.
+    #[serde(default)]
+    pub managed_paks: Vec<String>,
 }
 
 /// Stable content fingerprint for drift detection (not cryptographic — only distinguishes our own
@@ -1324,6 +1341,27 @@ fn restore_record(record: &mut DeployRecord) -> bool {
             all_ok = false;
         }
     }
+    // Manager-installed pak/triplet files in `~mods` (pure additions, no backup) — delete
+    // them, with the same keep-on-failure accounting as `texture_triplets` above.
+    for f in std::mem::take(&mut record.managed_paks) {
+        let p = Path::new(&f);
+        if !p.exists() || std::fs::remove_file(p).is_ok() {
+            // removed (or already gone) — drop it
+        } else {
+            record.managed_paks.push(f); // locked — keep for a retry
+            all_ok = false;
+        }
+    }
+    // Manager-installed UE4SS mod dirs — remove each with the same semantics as the single
+    // `ue4ss_mod_dir` above: cleaned entries are dropped, failed ones kept for a retry.
+    for dir in std::mem::take(&mut record.ue4ss_mod_dirs) {
+        if !Path::new(&dir).exists() || std::fs::remove_dir_all(&dir).is_ok() {
+            // cleaned — drop it
+        } else {
+            record.ue4ss_mod_dirs.push(dir); // keep for a retry
+            all_ok = false;
+        }
+    }
     all_ok
 }
 
@@ -1668,6 +1706,52 @@ mod tests {
         std::fs::write(record_path(&game), serde_json::to_vec(&rec).unwrap()).unwrap();
         undeploy(&game).unwrap();
         for f in &files { assert!(!std::path::Path::new(f).exists(), "triplet not removed: {f}"); }
+    }
+
+    /// A record written by a pre-manager build (only the original fields) must still parse,
+    /// with the v2 fields defaulted: no owner (legacy/studio), empty loadout/dirs/paks.
+    #[test]
+    fn legacy_record_json_parses_owner_empty() {
+        let json = r#"{
+            "mod_name": "OldMod",
+            "ue4ss_mod_dir": "C:/game/G1R/Binaries/Win64/ue4ss/Mods/OldMod",
+            "backups": [["C:/game/G1R/Story/Cache/A.lcache", "C:/game/G1R/Story/Cache/A.lcache.gore-bak", true]]
+        }"#;
+        let rec: DeployRecord = serde_json::from_str(json).unwrap();
+        assert_eq!(rec.mod_name, "OldMod");
+        assert_eq!(rec.ue4ss_mod_dir.as_deref(), Some("C:/game/G1R/Binaries/Win64/ue4ss/Mods/OldMod"));
+        assert_eq!(rec.backups.len(), 1);
+        assert_eq!(rec.owner, "");
+        assert!(rec.loadout.is_empty());
+        assert!(rec.ue4ss_mod_dirs.is_empty());
+        assert!(rec.managed_paks.is_empty());
+    }
+
+    /// Undeploying a v2 record must delete its manager-installed pak files and remove each
+    /// of its UE4SS mod dirs, exactly like the single-mod fields.
+    #[test]
+    fn restore_removes_managed_paks_and_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let game = dir.path().join("game");
+        let mods = game.join("G1R/Content/Paks/~mods");
+        std::fs::create_dir_all(&mods).unwrap();
+        let pak = mods.join("zzz_mgr_A_P.pak");
+        std::fs::write(&pak, b"pak").unwrap();
+        let ue4ss_dir = game.join("G1R/Binaries/Win64/ue4ss/Mods/MgrModA");
+        std::fs::create_dir_all(&ue4ss_dir).unwrap();
+        std::fs::write(ue4ss_dir.join("enabled.txt"), b"").unwrap();
+        let rec = DeployRecord {
+            mod_name: "manager".into(),
+            owner: "manager".into(),
+            ue4ss_mod_dirs: vec![ue4ss_dir.display().to_string()],
+            managed_paks: vec![pak.display().to_string()],
+            ..Default::default()
+        };
+        std::fs::write(record_path(&game), serde_json::to_vec(&rec).unwrap()).unwrap();
+        let restored = undeploy(&game).unwrap();
+        assert!(restored.is_some(), "undeploy should report the restored record");
+        assert!(!pak.exists(), "managed pak not removed");
+        assert!(!ue4ss_dir.exists(), "managed ue4ss dir not removed");
     }
 
     #[test]

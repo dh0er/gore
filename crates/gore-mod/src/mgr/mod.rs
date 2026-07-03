@@ -14,4 +14,5 @@ pub mod analyze;
 pub mod apply;
 pub mod status;
 
+pub use loadout::{Loadout, LoadoutEntry};
 pub use model::*;
