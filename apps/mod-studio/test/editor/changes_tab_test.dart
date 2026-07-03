@@ -206,6 +206,63 @@ void main() {
     expect(find.text('ItFo_Apple.m_Value'), findsOneWidget);
   });
 
+  testWidgets('section selection publishes the embedded asset section for '
+      'main-tab re-entry', (tester) async {
+    final container = makeContainer();
+    addTearDown(container.dispose);
+    await pumpHarness(tester, container);
+
+    // Initial "All" section: no asset-backed view embedded, matching the
+    // provider's null default without any initState write.
+    expect(container.read(changesAssetSectionProvider), isNull);
+
+    await tester.tap(find.text('Textures (1)'));
+    await tester.pumpAndSettle();
+    expect(
+      container.read(changesAssetSectionProvider),
+      ChangesAssetSection.textures,
+    );
+
+    // Every non-asset section publishes null again.
+    await tester.tap(find.text('Items (1)'));
+    await tester.pumpAndSettle();
+    expect(container.read(changesAssetSectionProvider), isNull);
+
+    await tester.tap(find.text('Scripts (0)'));
+    await tester.pumpAndSettle();
+    expect(
+      container.read(changesAssetSectionProvider),
+      ChangesAssetSection.scripts,
+    );
+
+    await tester.tap(find.text('Audio (0)'));
+    await tester.pumpAndSettle();
+    expect(container.read(changesAssetSectionProvider), isNull);
+
+    // Re-selecting an asset section (re-entry path) publishes it again.
+    await tester.tap(find.text('Textures (1)'));
+    await tester.pumpAndSettle();
+    expect(
+      container.read(changesAssetSectionProvider),
+      ChangesAssetSection.textures,
+    );
+
+    await tester.tap(find.text('Dialogs (1)'));
+    await tester.pumpAndSettle();
+    expect(container.read(changesAssetSectionProvider), isNull);
+
+    await tester.tap(find.text('Scripts (0)'));
+    await tester.pumpAndSettle();
+    expect(
+      container.read(changesAssetSectionProvider),
+      ChangesAssetSection.scripts,
+    );
+
+    await tester.tap(find.text('All (3)'));
+    await tester.pumpAndSettle();
+    expect(container.read(changesAssetSectionProvider), isNull);
+  });
+
   testWidgets('re-entering the Textures/Scripts sections refreshes their providers',
       (tester) async {
     var textureBuilds = 0;

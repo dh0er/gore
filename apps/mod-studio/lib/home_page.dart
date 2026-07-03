@@ -32,6 +32,38 @@ import 'textures/ui/texture_tab.dart';
 /// Main tab indices, matching the [TabBar] tab order in [HomePage].
 const _texturesTabIndex = 3;
 const _scriptsTabIndex = 4;
+const _changesTabIndex = 5;
+
+/// Re-entry refresh for the kept-alive main tabs (see the
+/// [TabReentryListener] in [HomePage]): invalidates the data providers
+/// backing the re-entered tab so it refetches — the pre-keep-alive
+/// freshness semantics.
+///
+/// The Changes tab embeds the same Textures/Scripts views itself; in parity
+/// with the standalone tab cases, only the provider of the asset section it
+/// CURRENTLY displays is refreshed (no over-fetch for sections that aren't
+/// on screen; nothing for All/Items/Dialogs/Audio). Section re-entry INSIDE
+/// the Changes tab is handled by [ChangesTab]'s own selection logic.
+///
+/// Top-level so tests can exercise the real mapping against a real
+/// [TabReentryListener] without pumping the FFI-heavy [HomePage].
+void handleMainTabReentered(WidgetRef ref, int index) {
+  switch (index) {
+    case _texturesTabIndex:
+      ref.invalidate(textureIndexProvider);
+    case _scriptsTabIndex:
+      ref.invalidate(scriptModulesProvider);
+    case _changesTabIndex:
+      switch (ref.read(changesAssetSectionProvider)) {
+        case ChangesAssetSection.textures:
+          ref.invalidate(textureIndexProvider);
+        case ChangesAssetSection.scripts:
+          ref.invalidate(scriptModulesProvider);
+        case null:
+          break;
+      }
+  }
+}
 
 class HomePage extends ConsumerStatefulWidget {
   const HomePage({super.key});
@@ -256,14 +288,7 @@ class _HomePageState extends ConsumerState<HomePage>
         // those tabs refetches — the pre-keep-alive freshness semantics —
         // while the tabs' UI state survives.
         child: TabReentryListener(
-          onTabReentered: (index) {
-            switch (index) {
-              case _texturesTabIndex:
-                ref.invalidate(textureIndexProvider);
-              case _scriptsTabIndex:
-                ref.invalidate(scriptModulesProvider);
-            }
-          },
+          onTabReentered: (index) => handleMainTabReentered(ref, index),
           child: Column(
             children: [
               Container(

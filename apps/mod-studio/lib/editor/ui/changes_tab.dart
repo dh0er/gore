@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/legacy.dart'; // StateProvider
 
 import '../../app/ui/game_path_scope.dart';
 import '../../audio/domain/audio_replacements_notifier.dart';
@@ -23,6 +24,24 @@ import 'overrides_panel.dart';
 
 /// Sidebar sections of the Changes tab.
 enum _ChangesSection { all, items, dialogs, audio, textures, scripts }
+
+/// The Changes-tab sections whose content is backed by an install-bound data
+/// provider (texture index / script module list) rather than staged state.
+enum ChangesAssetSection { textures, scripts }
+
+/// The asset-backed section the (kept-alive) Changes tab currently embeds,
+/// or null while a non-asset section (All/Items/Dialogs/Audio) is shown —
+/// the default matches the tab's initial "All" section.
+///
+/// Published by [ChangesTab] on section selection so home_page's main-tab
+/// re-entry handler can refresh exactly the provider backing the embedded
+/// view, in parity with the standalone Textures/Scripts tab re-entries.
+/// Without it, leaving the Changes MAIN tab parked on Textures/Scripts and
+/// re-entering it later would keep showing a stale texture index / script
+/// module list after a deploy, undeploy, or game patch until the user
+/// manually switched sections.
+final changesAssetSectionProvider =
+    StateProvider<ChangesAssetSection?>((ref) => null);
 
 /// The Änderungen/Changes main tab: a 230px sidebar with one entry per
 /// change domain (plus "All") and a content pane showing either the flat
@@ -61,7 +80,21 @@ class _ChangesTabState extends ConsumerState<ChangesTab> {
       // (TabReentryListener in home_page) doesn't refresh the audio
       // providers either — keep the two entry paths in parity.
     }
-    setState(() => _section = section);
+    setState(() {
+      _section = section;
+      // Publish the embedded asset section for home_page's main-tab
+      // re-entry refresh. Safe to write here: sections change only via
+      // sidebar taps, never during another consumer's build. (The initial
+      // "All" needs no write — it matches the provider's null default.)
+      ref.read(changesAssetSectionProvider.notifier).state = switch (section) {
+        _ChangesSection.textures => ChangesAssetSection.textures,
+        _ChangesSection.scripts => ChangesAssetSection.scripts,
+        _ChangesSection.all ||
+        _ChangesSection.items ||
+        _ChangesSection.dialogs ||
+        _ChangesSection.audio => null,
+      };
+    });
   }
 
   /// Distinct dialog loc ids among the staged loc edits — drives BOTH the
