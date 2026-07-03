@@ -13,6 +13,8 @@ use std::path::{Path, PathBuf};
 
 use gore_modgen::gen::{gen_lua, MetaConfig, OverridesConfig, SingleOverride};
 
+pub mod mgr;
+
 pub type Files = BTreeMap<String, Vec<u8>>;
 
 // ── Errors ───────────────────────────────────────────────────────────────────
@@ -1369,7 +1371,7 @@ fn backup(live: &Path, record: &mut DeployRecord) -> Result<(PathBuf, bool)> {
     Ok((bak, created))
 }
 
-fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
+pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
     let mut tmp = path.as_os_str().to_os_string();
     tmp.push(".gore-tmp");
     let tmp = PathBuf::from(tmp);
