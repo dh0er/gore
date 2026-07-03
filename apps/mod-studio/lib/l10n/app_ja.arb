@@ -95,5 +95,6 @@
   "modNameControlCharacters": "制御文字を含めることはできません",
   "modNamePathSeparators": "パス区切り文字を含めることはできません",
   "modNameNotAFolderName": "有効なフォルダ名ではありません",
-  "localizedTextExtractedCount": "{languageCount}言語で{idCount}個のIDを抽出しました"
+  "localizedTextExtractedCount": "{languageCount}言語で{idCount}個のIDを抽出しました",
+  "managerDeployActive": "mod-manager のロードアウトが有効です。先に gore-manager で undeploy してください。"
 }

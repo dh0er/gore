@@ -104,5 +104,6 @@
   "modNameControlCharacters": "Darf keine Steuerzeichen enthalten",
   "modNamePathSeparators": "Darf keine Pfadtrennzeichen enthalten",
   "modNameNotAFolderName": "Kein gültiger Ordnername",
-  "localizedTextExtractedCount": "{idCount} IDs in {languageCount} Sprachen extrahiert"
+  "localizedTextExtractedCount": "{idCount} IDs in {languageCount} Sprachen extrahiert",
+  "managerDeployActive": "Ein mod-manager-Loadout ist aktiv. Bitte zuerst in gore-manager undeployen."
 }

@@ -346,6 +346,10 @@ class AppLocalizationsPt extends AppLocalizations {
   String localizedTextExtractedCount(int idCount, int languageCount) {
     return '$idCount IDs extraídos em $languageCount idiomas';
   }
+
+  @override
+  String get managerDeployActive =>
+      'Um loadout do mod-manager está ativo. Faça primeiro o undeploy no gore-manager.';
 }
 
 /// The translations for Portuguese, as used in Brazil (`pt_BR`).
@@ -662,4 +666,8 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
   String localizedTextExtractedCount(int idCount, int languageCount) {
     return '$idCount IDs extraídos em $languageCount idiomas';
   }
+
+  @override
+  String get managerDeployActive =>
+      'Um loadout do mod-manager está ativo. Primeiro faça o undeploy no gore-manager.';
 }

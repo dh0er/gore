@@ -95,5 +95,6 @@
   "modNameControlCharacters": "Não deve conter caracteres de controle",
   "modNamePathSeparators": "Não deve conter separadores de caminho",
   "modNameNotAFolderName": "Nome de pasta inválido",
-  "localizedTextExtractedCount": "{idCount} IDs extraídos em {languageCount} idiomas"
+  "localizedTextExtractedCount": "{idCount} IDs extraídos em {languageCount} idiomas",
+  "managerDeployActive": "Um loadout do mod-manager está ativo. Primeiro faça o undeploy no gore-manager."
 }

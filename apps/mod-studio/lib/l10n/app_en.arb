@@ -173,5 +173,6 @@
         "type": "int"
       }
     }
-  }
+  },
+  "managerDeployActive": "A mod-manager loadout is active. Undeploy it in gore-manager first."
 }
