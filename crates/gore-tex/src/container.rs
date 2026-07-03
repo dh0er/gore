@@ -50,12 +50,37 @@ const TEXTURE2D_CLASS_PATH: &str = "/Script/Engine.Texture2D";
 /// resolution here is driven by the container's own script-object table (which is
 /// exact for the cooked class name) and does not require usmap property parsing.
 pub fn list_textures(utoc: &Path, _usmap: &Path, filter: Option<&str>) -> Result<Vec<TextureEntry>> {
-    let store = iostore::open(utoc, Arc::new(Config::default()))?;
-
     // The script-import index UE assigns to the Texture2D class. Computed the same
     // way the cooker does (cityhash of the normalised path) so we can match it
     // without the engine's global script-object table.
     let texture2d_class = FPackageObjectIndex::create_script_import(TEXTURE2D_CLASS_PATH);
+
+    let paths = collect_package_paths(utoc, Some(texture2d_class))?;
+    Ok(paths
+        .into_iter()
+        .filter(|p| filter.is_none_or(|f| p.contains(f)))
+        .map(|asset_path| TextureEntry { asset_path })
+        .collect())
+}
+
+/// List every package asset path in the container at `utoc` (standalone foreign
+/// triplets OK: `iostore::open` dispatches a file path to a single-container
+/// store). Returns sorted, deduped cooked package paths, e.g.
+/// `/Game/Characters/Hero/T_Hero_BaseColor` -- the mod-manager uses this to
+/// detect asset overlaps between mods.
+pub fn list_packages(utoc: &Path) -> Result<Vec<String>> {
+    collect_package_paths(utoc, None)
+}
+
+/// Shared per-package scan behind `list_textures`/`list_packages`: parse every
+/// package's zen header and collect its asset path, keeping only packages with an
+/// export of class `class_filter` when one is given (every package when `None`).
+/// Returns sorted, deduped paths.
+fn collect_package_paths(
+    utoc: &Path,
+    class_filter: Option<FPackageObjectIndex>,
+) -> Result<Vec<String>> {
+    let store = iostore::open(utoc, Arc::new(Config::default()))?;
 
     let container_version = store
         .container_file_version()
@@ -80,8 +105,8 @@ pub fn list_textures(utoc: &Path, _usmap: &Path, filter: Option<&str>) -> Result
         // e.g. `header.package_name()` -> `FNameMap::get` asserts on name kind and
         // indexes `self.names` unchecked, so an out-of-range name index aborts. We
         // wrap the whole body in `catch_unwind` so one bad package is skipped, not
-        // fatal to the entire listing. The closure returns `Some(entry)` for a
-        // matching texture, `None` for a non-match or any handled failure; a caught
+        // fatal to the entire listing. The closure returns `Some(path)` for a
+        // matching package, `None` for a non-match or any handled failure; a caught
         // panic is treated exactly like the previous `Err(_) => continue` path.
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let chunk_id =
@@ -105,28 +130,25 @@ pub fn list_textures(utoc: &Path, _usmap: &Path, filter: Option<&str>) -> Result
                 Err(_) => return None,
             };
 
-            // Is any export a Texture2D? Compare each export's class import index to
-            // the precomputed Texture2D script-import index.
-            let is_texture = header
-                .export_map
-                .iter()
-                .any(|export| export.class_index == texture2d_class);
+            // Does any export match the requested class? Compare each export's class
+            // import index to the precomputed script-import index (no filter == keep).
+            let keep = class_filter.is_none_or(|class| {
+                header
+                    .export_map
+                    .iter()
+                    .any(|export| export.class_index == class)
+            });
 
-            if !is_texture {
+            if !keep {
                 return None;
             }
 
-            let path = header.package_name();
-            if filter.is_none_or(|f| path.contains(f)) {
-                Some(TextureEntry { asset_path: path })
-            } else {
-                None
-            }
+            Some(header.package_name())
         }));
 
         // Caught panic == skip this package (same as the `Err(_) => continue` arms).
-        if let Ok(Some(entry)) = result {
-            out.push(entry);
+        if let Ok(Some(path)) = result {
+            out.push(path);
         }
     }
 
@@ -135,6 +157,21 @@ pub fn list_textures(utoc: &Path, _usmap: &Path, filter: Option<&str>) -> Result
     out.sort();
     out.dedup();
     Ok(out)
+}
+
+/// List the file entry paths of a plain (non-IoStore) V11 `.pak`, sorted and
+/// deduped. Paths are as recorded in the pak index (relative to its mount
+/// point), e.g. `G1R/Content/UI/Textures/Common/T_HardwareCursor.uasset` -- the
+/// mod-manager uses this to inspect foreign pak-only mods.
+pub fn list_pak_files(pak: &Path) -> Result<Vec<String>> {
+    let mut file = std::io::BufReader::new(std::fs::File::open(pak)?);
+    let reader = repak::PakBuilder::new()
+        .reader(&mut file)
+        .map_err(|e| anyhow::anyhow!("failed to read pak index of {}: {e}", pak.display()))?;
+    let mut files = reader.files();
+    files.sort();
+    files.dedup();
+    Ok(files)
 }
 
 /// Unpack a single asset's cooked files (.uasset/.uexp/.ubulk) from the
@@ -834,6 +871,75 @@ mod tests {
             ubulk.exists(),
             ubulk.exists().then(|| std::fs::metadata(&ubulk).unwrap().len()).unwrap_or(0),
         );
+    }
+
+    /// `list_pak_files` over a tiny plain V11 pak built with the same repak writer
+    /// API `repack_to_zen` uses. Entries are written out of order to prove the
+    /// returned list is sorted.
+    #[test]
+    fn list_pak_files_reads_v11_pak() {
+        let dir = unique_tmp("listpak");
+        let pak_path = dir.join("tiny.pak");
+        {
+            use std::io::BufWriter;
+            let mut pak_file = BufWriter::new(std::fs::File::create(&pak_path).unwrap());
+            let mut w = repak::PakBuilder::new().writer(
+                &mut pak_file,
+                repak::Version::V11,
+                "../../../".to_string(),
+                None,
+            );
+            w.write_file("G1R/Content/B.txt", false, b"bee").unwrap();
+            w.write_file("G1R/Content/A.txt", false, b"aye").unwrap();
+            w.write_index().unwrap();
+        }
+
+        let files = list_pak_files(&pak_path).unwrap();
+        assert_eq!(
+            files,
+            vec!["G1R/Content/A.txt".to_string(), "G1R/Content/B.txt".to_string()]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A nonexistent container path must surface as an error (io-ish TexError),
+    /// not a panic or an empty listing.
+    #[test]
+    fn list_packages_missing_file_errors() {
+        let dir = unique_tmp("nopkg");
+        let missing = dir.join("does_not_exist.utoc");
+        let err = list_packages(&missing).unwrap_err();
+        assert!(
+            matches!(err, TexError::Retoc(_) | TexError::Io(_)),
+            "expected io-ish error, got: {err:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `list_packages` against the real main container: every package (not just
+    /// textures) is listed, so the result must be much larger than the texture
+    /// listing and include `/Game/` paths.
+    #[test]
+    #[ignore = "slow: full container scan; run with --ignored"]
+    fn list_packages_main_container_nonempty() {
+        let Some(g) = game_dir() else {
+            eprintln!("skip: game not installed");
+            return;
+        };
+        let utoc = crate::paths::main_container(&g).unwrap();
+
+        let all = list_packages(&utoc).unwrap();
+        eprintln!("total packages: {}", all.len());
+        for p in all.iter().take(20) {
+            eprintln!("  {p}");
+        }
+        assert!(all.len() > 1000, "expected many packages, got {}", all.len());
+        assert!(
+            all.iter().any(|p| p.starts_with("/Game/")),
+            "expected at least one /Game/ package path"
+        );
+        // Sorted + deduped contract.
+        assert!(all.windows(2).all(|w| w[0] < w[1]), "paths not sorted/deduped");
     }
 
     /// The real-container test above needs the game installed; this fast test pins
