@@ -71,12 +71,17 @@ pub fn import(library_dir: &Path, source: &Path) -> crate::Result<ModEntryMeta> 
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
-    // Fold BOTH the display name and the source file/dir name into the disambiguating hash: a
-    // re-import of the same source (name + source_name) resolves to the same id and replaces the
-    // entry (update), while two different mods sharing only a display name (distinct source files)
-    // get different ids and coexist instead of one clobbering the other. The `slug(name)` prefix
-    // keeps the dir human-readable.
-    let id = format!("{}-{}", slug(&name), crate::name_hash(&format!("{name}\0{source_name}")));
+    // Fold the display name and the FULL canonical source path into the disambiguating hash: a
+    // re-import of the same source path resolves to the same id and replaces the entry (update),
+    // while two different mods that share a display name AND a bare filename but live in different
+    // directories (e.g. two `mod.zip` in different folders) still get different ids and coexist
+    // instead of one silently clobbering the other. The `slug(name)` prefix keeps the dir
+    // human-readable.
+    let id = format!(
+        "{}-{}",
+        slug(&name),
+        crate::name_hash(&format!("{name}\0{}", canon.display()))
+    );
     let meta = ModEntryMeta {
         id: id.clone(),
         kind,
@@ -972,6 +977,29 @@ mod tests {
         assert_eq!(from_dir.name, from_zip.name, "precondition: same display name");
         assert_ne!(from_dir.source, from_zip.source, "precondition: different source");
         assert_ne!(from_dir.id, from_zip.id, "distinct sources must not collide into one id");
+        assert_eq!(list(&lib).unwrap().len(), 2, "both must coexist");
+    }
+
+    /// [import 11c] The nastier collision the name-only id missed: two DIFFERENT mods that share
+    /// both a display name AND a bare filename but live in different directories (`a/mod` vs
+    /// `b/mod`). Only the FULL source path disambiguates them; a filename-only hash would give
+    /// both the same id and silently clobber the first. Must yield distinct ids and coexist.
+    #[test]
+    fn same_filename_different_dir_coexist() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("lib");
+        let a = tmp.path().join("a").join("mod");
+        let b = tmp.path().join("b").join("mod");
+        for d in [&a, &b] {
+            fs::create_dir_all(d).unwrap();
+            fs::write(d.join("bar.utoc"), b"junk").unwrap();
+            fs::write(d.join("bar.ucas"), b"junk").unwrap();
+        }
+        let from_a = import(&lib, &a).unwrap();
+        let from_b = import(&lib, &b).unwrap();
+        assert_eq!(from_a.name, from_b.name, "precondition: same display name");
+        assert_eq!(from_a.source, from_b.source, "precondition: same bare filename");
+        assert_ne!(from_a.id, from_b.id, "same-name+filename in different dirs must not collide");
         assert_eq!(list(&lib).unwrap().len(), 2, "both must coexist");
     }
 
