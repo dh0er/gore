@@ -102,7 +102,15 @@ pub struct BuildSpec {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Component {
     /// A UE4SS Lua mod folder at `path`, deployed to `ue4ss/Mods/<name>`.
-    Ue4ssLua { name: String, path: String },
+    Ue4ssLua {
+        name: String,
+        path: String,
+        /// The `Class.Field` CDO targets this mod overrides (sorted, deduped) — the
+        /// mod-manager's conflict-detection contract. `#[serde(default)]` keeps old
+        /// manifests parseable; omitted from the JSON when empty to keep byte-noise low.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        targets: Vec<String>,
+    },
     /// Declarative loc edits at `path` (`{id:{set:text}}`), applied to the .lcache.
     LocPatch { path: String },
     /// Audio patch dir at `path` (manifest.json + wavs), applied to `banks`.
@@ -150,7 +158,16 @@ pub fn build_bundle(spec: &BuildSpec) -> Result<Bundle> {
         let lua = gen_lua(&cfg);
         files.insert(format!("ue4ss/{name}/enabled.txt"), Vec::new());
         files.insert(format!("ue4ss/{name}/Scripts/main.lua"), lua.into_bytes());
-        components.push(Component::Ue4ssLua { name: name.clone(), path: format!("ue4ss/{name}") });
+        // The `Class.Field` CDO targets this mod sets, for the manager's conflict detection.
+        let mut targets: Vec<String> =
+            spec.overrides.iter().map(|o| format!("{}.{}", o.class, o.field)).collect();
+        targets.sort();
+        targets.dedup();
+        components.push(Component::Ue4ssLua {
+            name: name.clone(),
+            path: format!("ue4ss/{name}"),
+            targets,
+        });
     }
 
     // loc edits → declarative patch
@@ -492,6 +509,16 @@ pub fn deploy(bundle_dir: &Path, game_root: &Path) -> Result<DeployRecord> {
     // during prepare and to fold its leftovers during commit.
     let prev = read_record(game_root);
 
+    // A manager-owned deployment composes MULTIPLE mods; letting the single-mod deploy fold it
+    // away would silently retire the whole loadout. Refuse before any prepare/commit work.
+    if prev.as_ref().is_some_and(|p| p.owner == "manager") {
+        return Err(ModError::Other(
+            "manager loadout active — use gore mod-manager to change deployments \
+             (undeploy there first)"
+                .into(),
+        ));
+    }
+
     // PHASE 1 — prepare (no game writes). The previous deployment is left intact if this fails.
     let plan = prepare(bundle_dir, &manifest, &gp, prev.as_ref())?;
 
@@ -771,7 +798,7 @@ fn prepare(
     let mut plan = DeployPlan::default();
     for (comp_idx, comp) in manifest.components.iter().enumerate() {
         match comp {
-            Component::Ue4ssLua { name, path } => {
+            Component::Ue4ssLua { name, path, .. } => {
                 // The manifest may come from an untrusted bundle: reject names/paths that could
                 // escape the bundle source or the UE4SS Mods directory.
                 if !is_safe_mod_name(name) || !is_safe_rel_path(path) {
@@ -1872,5 +1899,103 @@ mod tests {
     fn rel_path_with_dotdot_is_unsafe() {
         assert!(!is_safe_rel_path("G1R/Content/../../../Foo"));
         assert!(is_safe_rel_path("G1R/Content/UI/Textures/T_X"));
+    }
+
+    /// The Ue4ssLua component must carry the `Class.Field` CDO targets of the spec's
+    /// overrides (sorted, deduped) — the mod-manager's conflict-detection contract.
+    #[test]
+    fn build_bundle_fills_ue4ss_targets() {
+        let spec = BuildSpec {
+            meta: ModMeta { name: "TgtMod".into(), version: String::new(), author: String::new() },
+            delay_ms: 0,
+            // Deliberately unsorted so the sort is observable.
+            overrides: vec![
+                SingleOverride {
+                    class: "ClassB".into(),
+                    field: "FieldY".into(),
+                    module: "Angelscript".into(),
+                    value: OverrideValue::Int(1),
+                },
+                SingleOverride {
+                    class: "ClassA".into(),
+                    field: "FieldX".into(),
+                    module: "Angelscript".into(),
+                    value: OverrideValue::Int(2),
+                },
+            ],
+            loc_edits: BTreeMap::new(),
+            audio: vec![],
+            texture: vec![],
+            scripts: vec![],
+        };
+        let bundle = build_bundle(&spec).unwrap();
+        let expected = vec!["ClassA.FieldX".to_string(), "ClassB.FieldY".to_string()];
+        let Some(Component::Ue4ssLua { targets, .. }) = bundle.manifest.components.first() else {
+            panic!("expected a Ue4ssLua component");
+        };
+        assert_eq!(targets, &expected);
+        // And the serialized manifest round-trips them.
+        let m: ModManifest = serde_json::from_slice(&bundle.files["gore-mod.json"]).unwrap();
+        assert!(matches!(
+            m.components.first(),
+            Some(Component::Ue4ssLua { targets, .. }) if targets == &expected
+        ));
+    }
+
+    /// A format-1 manifest written before `targets` existed must still parse, with the
+    /// field defaulting to empty.
+    #[test]
+    fn manifest_v1_json_without_targets_parses() {
+        let json = r#"{
+            "format": 1,
+            "mod": { "name": "OldMod", "version": "", "author": "" },
+            "components": [
+                { "type": "ue4ss_lua", "name": "OldMod", "path": "ue4ss/OldMod" }
+            ]
+        }"#;
+        let m: ModManifest = serde_json::from_str(json).unwrap();
+        assert!(matches!(
+            m.components.first(),
+            Some(Component::Ue4ssLua { name, path, targets })
+                if name == "OldMod" && path == "ue4ss/OldMod" && targets.is_empty()
+        ));
+    }
+
+    /// The single-mod deploy must refuse to clobber a manager-owned deployment — it would
+    /// silently retire the whole multi-mod loadout.
+    #[test]
+    fn deploy_refuses_manager_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let game = dir.path().join("game");
+        std::fs::create_dir_all(&game).unwrap();
+        let rec =
+            DeployRecord { mod_name: "loadout".into(), owner: "manager".into(), ..Default::default() };
+        std::fs::write(record_path(&game), serde_json::to_vec(&rec).unwrap()).unwrap();
+
+        // A minimal valid bundle (one override → one Ue4ssLua component).
+        let spec = BuildSpec {
+            meta: ModMeta { name: "Solo".into(), version: String::new(), author: String::new() },
+            delay_ms: 0,
+            overrides: vec![SingleOverride {
+                class: "ClassA".into(),
+                field: "FieldX".into(),
+                module: "Angelscript".into(),
+                value: OverrideValue::Int(1),
+            }],
+            loc_edits: BTreeMap::new(),
+            audio: vec![],
+            texture: vec![],
+            scripts: vec![],
+        };
+        let bundle_dir = dir.path().join("bundle");
+        write_bundle(&bundle_dir, &build_bundle(&spec).unwrap()).unwrap();
+
+        let err = deploy(&bundle_dir, &game).unwrap_err();
+        assert!(err.to_string().contains("manager"), "got: {err}");
+        // The guard must trip BEFORE any commit work: the manager record is untouched.
+        let after: DeployRecord =
+            serde_json::from_slice(&std::fs::read(record_path(&game)).unwrap()).unwrap();
+        assert_eq!(after.owner, "manager");
+        assert_eq!(after.mod_name, "loadout");
     }
 }
