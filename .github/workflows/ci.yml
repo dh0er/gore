@@ -48,3 +48,12 @@ jobs:
           flutter pub get
           flutter analyze
           flutter test
+
+      # Same story for the mod-manager GUI (gore-manager): a separate Flutter
+      # package test.py never reaches, so analyze/test it explicitly.
+      - name: gore-manager analyze + test
+        working-directory: apps/mod-manager
+        run: |
+          flutter pub get
+          flutter analyze
+          flutter test
