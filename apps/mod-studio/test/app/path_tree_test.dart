@@ -102,4 +102,34 @@ void main() {
     expect(find.text('A'), findsOneWidget);
     expect(find.text('X'), findsOneWidget);
   });
+
+  testWidgets('prunes stale folder expansion when the tree is rebuilt', (
+    t,
+  ) async {
+    Widget host(List<String> paths) => MaterialApp(
+      home: Scaffold(
+        body: PathTreeBrowser(
+          paths: paths,
+          selectedPath: null,
+          onSelect: (_) {},
+          leafIcon: Icons.image_outlined,
+        ),
+      ),
+    );
+    // Open folder A.
+    await t.pumpWidget(host(['A/leaf1.uasset']));
+    await t.tap(find.text('A'));
+    await t.pumpAndSettle();
+    expect(find.text('leaf1.uasset'), findsOneWidget);
+    // Reload with a tree where A no longer exists (new list identity): the
+    // stale 'A' expanded id must be dropped.
+    await t.pumpWidget(host(['C/leaf3.uasset']));
+    await t.pumpAndSettle();
+    // Reload again with A back: it must render collapsed, proving the stale id
+    // was pruned rather than silently re-expanding the folder.
+    await t.pumpWidget(host(['A/leaf1.uasset']));
+    await t.pumpAndSettle();
+    expect(find.text('A'), findsOneWidget);
+    expect(find.text('leaf1.uasset'), findsNothing);
+  });
 }

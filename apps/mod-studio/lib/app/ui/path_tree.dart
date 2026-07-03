@@ -67,6 +67,22 @@ class _PathTreeBrowserState extends State<PathTreeBrowser> {
     super.didUpdateWidget(oldWidget);
     if (!identical(oldWidget.paths, widget.paths)) {
       _root = _buildTree(widget.paths);
+      // Drop expanded ids that no longer exist as folders in the rebuilt tree,
+      // so a reload can't leave a stale folder appearing open (or a recycled id
+      // matching an unrelated new node). Folder ids that survive the rebuild
+      // keep their expansion, so a reload preserves what the user had open.
+      final validFolderIds = <String>{};
+      void collect(List<_DisplayNode> nodes) {
+        for (final n in nodes) {
+          if (!n.isLeaf) {
+            validFolderIds.add(n.id);
+            collect(n.children!);
+          }
+        }
+      }
+
+      collect(_root.children!);
+      _expanded.retainWhere(validFolderIds.contains);
     }
   }
 
