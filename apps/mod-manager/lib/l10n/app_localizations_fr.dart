@@ -55,4 +55,99 @@ class AppLocalizationsFr extends AppLocalizations {
 
   @override
   String get commonOk => 'OK';
+
+  @override
+  String get importFolder => 'Importer un dossier…';
+
+  @override
+  String get importFile => 'Importer un fichier…';
+
+  @override
+  String get applyTooltip => 'Appliquer la configuration au jeu';
+
+  @override
+  String get undeployAllAction => 'Tout retirer';
+
+  @override
+  String get undeployAllConfirm =>
+      'Retirer du jeu tout ce que le gestionnaire a déployé ?';
+
+  @override
+  String get takeOverTitle => 'Déploiement Studio actif';
+
+  @override
+  String get takeOverBody =>
+      'mod-studio a déployé un mod dans le jeu. Prendre le relais pour que le gestionnaire applique cette configuration ?';
+
+  @override
+  String get takeOverAction => 'Prendre le relais';
+
+  @override
+  String get refreshAction => 'Actualiser';
+
+  @override
+  String conflictsTitle(int count) {
+    return 'Conflits ($count)';
+  }
+
+  @override
+  String get conflictWinner => 'gagnant';
+
+  @override
+  String get componentsTitle => 'Composants';
+
+  @override
+  String targetsMore(int count) {
+    return '+$count de plus';
+  }
+
+  @override
+  String get removeModAction => 'Retirer';
+
+  @override
+  String removeModConfirm(String name) {
+    return 'Retirer « $name » de la bibliothèque ?';
+  }
+
+  @override
+  String get errorSetGamePath =>
+      'Définissez d’abord le chemin du jeu dans les Paramètres.';
+
+  @override
+  String applyReportApplied(int count) {
+    return '$count mods appliqués.';
+  }
+
+  @override
+  String get warningsTitle => 'Avertissements';
+
+  @override
+  String get modDisabledHint => 'Désactivé';
+
+  @override
+  String get kindGoremod => 'goremod';
+
+  @override
+  String get kindTriplet => 'triplet';
+
+  @override
+  String get kindPak => 'pak';
+
+  @override
+  String get kindUe4ss => 'UE4SS';
+
+  @override
+  String get kindRawfile => 'fichier brut';
+
+  @override
+  String get kindMixed => 'mixte';
+
+  @override
+  String get sevHard => 'fort';
+
+  @override
+  String get sevSoft => 'faible';
+
+  @override
+  String get sevInfo => 'info';
 }

@@ -55,6 +55,101 @@ class AppLocalizationsPt extends AppLocalizations {
 
   @override
   String get commonOk => 'OK';
+
+  @override
+  String get importFolder => 'Importar pasta…';
+
+  @override
+  String get importFile => 'Importar ficheiro…';
+
+  @override
+  String get applyTooltip => 'Aplicar a configuração ao jogo';
+
+  @override
+  String get undeployAllAction => 'Remover tudo';
+
+  @override
+  String get undeployAllConfirm =>
+      'Remover do jogo tudo o que o gestor implementou?';
+
+  @override
+  String get takeOverTitle => 'Implementação do Studio ativa';
+
+  @override
+  String get takeOverBody =>
+      'O mod-studio implementou um mod no jogo. Assumir o controlo para que o gestor possa aplicar esta configuração?';
+
+  @override
+  String get takeOverAction => 'Assumir';
+
+  @override
+  String get refreshAction => 'Atualizar';
+
+  @override
+  String conflictsTitle(int count) {
+    return 'Conflitos ($count)';
+  }
+
+  @override
+  String get conflictWinner => 'vencedor';
+
+  @override
+  String get componentsTitle => 'Componentes';
+
+  @override
+  String targetsMore(int count) {
+    return '+$count mais';
+  }
+
+  @override
+  String get removeModAction => 'Remover';
+
+  @override
+  String removeModConfirm(String name) {
+    return 'Remover «$name» da biblioteca?';
+  }
+
+  @override
+  String get errorSetGamePath =>
+      'Defina primeiro o caminho do jogo nas Definições.';
+
+  @override
+  String applyReportApplied(int count) {
+    return '$count mods aplicados.';
+  }
+
+  @override
+  String get warningsTitle => 'Avisos';
+
+  @override
+  String get modDisabledHint => 'Desativado';
+
+  @override
+  String get kindGoremod => 'goremod';
+
+  @override
+  String get kindTriplet => 'triplet';
+
+  @override
+  String get kindPak => 'pak';
+
+  @override
+  String get kindUe4ss => 'UE4SS';
+
+  @override
+  String get kindRawfile => 'ficheiro em bruto';
+
+  @override
+  String get kindMixed => 'misto';
+
+  @override
+  String get sevHard => 'grave';
+
+  @override
+  String get sevSoft => 'ligeiro';
+
+  @override
+  String get sevInfo => 'info';
 }
 
 /// The translations for Portuguese, as used in Brazil (`pt_BR`).
@@ -108,4 +203,99 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
 
   @override
   String get commonOk => 'OK';
+
+  @override
+  String get importFolder => 'Importar pasta…';
+
+  @override
+  String get importFile => 'Importar arquivo…';
+
+  @override
+  String get applyTooltip => 'Aplicar a configuração ao jogo';
+
+  @override
+  String get undeployAllAction => 'Remover tudo';
+
+  @override
+  String get undeployAllConfirm =>
+      'Remover do jogo tudo o que o gerenciador implantou?';
+
+  @override
+  String get takeOverTitle => 'Implantação do Studio ativa';
+
+  @override
+  String get takeOverBody =>
+      'O mod-studio implantou um mod no jogo. Assumir o controle para que o gerenciador possa aplicar esta configuração?';
+
+  @override
+  String get takeOverAction => 'Assumir';
+
+  @override
+  String get refreshAction => 'Atualizar';
+
+  @override
+  String conflictsTitle(int count) {
+    return 'Conflitos ($count)';
+  }
+
+  @override
+  String get conflictWinner => 'vencedor';
+
+  @override
+  String get componentsTitle => 'Componentes';
+
+  @override
+  String targetsMore(int count) {
+    return '+$count mais';
+  }
+
+  @override
+  String get removeModAction => 'Remover';
+
+  @override
+  String removeModConfirm(String name) {
+    return 'Remover “$name” da biblioteca?';
+  }
+
+  @override
+  String get errorSetGamePath =>
+      'Defina primeiro o caminho do jogo nas Configurações.';
+
+  @override
+  String applyReportApplied(int count) {
+    return '$count mods aplicados.';
+  }
+
+  @override
+  String get warningsTitle => 'Avisos';
+
+  @override
+  String get modDisabledHint => 'Desativado';
+
+  @override
+  String get kindGoremod => 'goremod';
+
+  @override
+  String get kindTriplet => 'triplet';
+
+  @override
+  String get kindPak => 'pak';
+
+  @override
+  String get kindUe4ss => 'UE4SS';
+
+  @override
+  String get kindRawfile => 'arquivo bruto';
+
+  @override
+  String get kindMixed => 'misto';
+
+  @override
+  String get sevHard => 'grave';
+
+  @override
+  String get sevSoft => 'leve';
+
+  @override
+  String get sevInfo => 'info';
 }

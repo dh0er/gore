@@ -55,4 +55,97 @@ class AppLocalizationsJa extends AppLocalizations {
 
   @override
   String get commonOk => 'OK';
+
+  @override
+  String get importFolder => 'フォルダーをインポート…';
+
+  @override
+  String get importFile => 'ファイルをインポート…';
+
+  @override
+  String get applyTooltip => 'ロードアウトをゲームに適用';
+
+  @override
+  String get undeployAllAction => 'すべて解除';
+
+  @override
+  String get undeployAllConfirm => 'マネージャーがデプロイしたものをすべてゲームから削除しますか？';
+
+  @override
+  String get takeOverTitle => 'Studio のデプロイが有効';
+
+  @override
+  String get takeOverBody =>
+      'mod-studio がゲームに Mod をデプロイしています。マネージャーがこのロードアウトを適用できるように引き継ぎますか？';
+
+  @override
+  String get takeOverAction => '引き継ぐ';
+
+  @override
+  String get refreshAction => '更新';
+
+  @override
+  String conflictsTitle(int count) {
+    return '競合 ($count)';
+  }
+
+  @override
+  String get conflictWinner => '優先';
+
+  @override
+  String get componentsTitle => 'コンポーネント';
+
+  @override
+  String targetsMore(int count) {
+    return '他 $count 件';
+  }
+
+  @override
+  String get removeModAction => '削除';
+
+  @override
+  String removeModConfirm(String name) {
+    return '「$name」をライブラリから削除しますか？';
+  }
+
+  @override
+  String get errorSetGamePath => '先に設定でゲームのパスを指定してください。';
+
+  @override
+  String applyReportApplied(int count) {
+    return '$count 個の Mod を適用しました。';
+  }
+
+  @override
+  String get warningsTitle => '警告';
+
+  @override
+  String get modDisabledHint => '無効';
+
+  @override
+  String get kindGoremod => 'goremod';
+
+  @override
+  String get kindTriplet => 'triplet';
+
+  @override
+  String get kindPak => 'pak';
+
+  @override
+  String get kindUe4ss => 'UE4SS';
+
+  @override
+  String get kindRawfile => '生ファイル';
+
+  @override
+  String get kindMixed => '混合';
+
+  @override
+  String get sevHard => '重大';
+
+  @override
+  String get sevSoft => '軽微';
+
+  @override
+  String get sevInfo => '情報';
 }

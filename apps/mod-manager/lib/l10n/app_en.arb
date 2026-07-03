@@ -15,5 +15,61 @@
   "actionApply": "Apply",
   "actionUndeployAll": "Undeploy all",
   "commonCancel": "Cancel",
-  "commonOk": "OK"
+  "commonOk": "OK",
+  "importFolder": "Import folder…",
+  "importFile": "Import file…",
+  "applyTooltip": "Apply the loadout to the game",
+  "undeployAllAction": "Undeploy all",
+  "undeployAllConfirm": "Remove everything the manager deployed from the game?",
+  "takeOverTitle": "Studio deployment active",
+  "takeOverBody": "mod-studio has deployed a mod to the game. Take over so the manager can apply this loadout?",
+  "takeOverAction": "Take over",
+  "refreshAction": "Refresh",
+  "conflictsTitle": "Conflicts ({count})",
+  "@conflictsTitle": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "conflictWinner": "winner",
+  "componentsTitle": "Components",
+  "targetsMore": "+{count} more",
+  "@targetsMore": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "removeModAction": "Remove",
+  "removeModConfirm": "Remove “{name}” from the library?",
+  "@removeModConfirm": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "errorSetGamePath": "Set the game path in Settings first.",
+  "applyReportApplied": "Applied {count} mods.",
+  "@applyReportApplied": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "warningsTitle": "Warnings",
+  "modDisabledHint": "Disabled",
+  "kindGoremod": "goremod",
+  "kindTriplet": "triplet",
+  "kindPak": "pak",
+  "kindUe4ss": "UE4SS",
+  "kindRawfile": "raw file",
+  "kindMixed": "mixed",
+  "sevHard": "hard",
+  "sevSoft": "soft",
+  "sevInfo": "info"
 }

@@ -211,6 +211,174 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'OK'**
   String get commonOk;
+
+  /// No description provided for @importFolder.
+  ///
+  /// In en, this message translates to:
+  /// **'Import folder…'**
+  String get importFolder;
+
+  /// No description provided for @importFile.
+  ///
+  /// In en, this message translates to:
+  /// **'Import file…'**
+  String get importFile;
+
+  /// No description provided for @applyTooltip.
+  ///
+  /// In en, this message translates to:
+  /// **'Apply the loadout to the game'**
+  String get applyTooltip;
+
+  /// No description provided for @undeployAllAction.
+  ///
+  /// In en, this message translates to:
+  /// **'Undeploy all'**
+  String get undeployAllAction;
+
+  /// No description provided for @undeployAllConfirm.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove everything the manager deployed from the game?'**
+  String get undeployAllConfirm;
+
+  /// No description provided for @takeOverTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Studio deployment active'**
+  String get takeOverTitle;
+
+  /// No description provided for @takeOverBody.
+  ///
+  /// In en, this message translates to:
+  /// **'mod-studio has deployed a mod to the game. Take over so the manager can apply this loadout?'**
+  String get takeOverBody;
+
+  /// No description provided for @takeOverAction.
+  ///
+  /// In en, this message translates to:
+  /// **'Take over'**
+  String get takeOverAction;
+
+  /// No description provided for @refreshAction.
+  ///
+  /// In en, this message translates to:
+  /// **'Refresh'**
+  String get refreshAction;
+
+  /// No description provided for @conflictsTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Conflicts ({count})'**
+  String conflictsTitle(int count);
+
+  /// No description provided for @conflictWinner.
+  ///
+  /// In en, this message translates to:
+  /// **'winner'**
+  String get conflictWinner;
+
+  /// No description provided for @componentsTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Components'**
+  String get componentsTitle;
+
+  /// No description provided for @targetsMore.
+  ///
+  /// In en, this message translates to:
+  /// **'+{count} more'**
+  String targetsMore(int count);
+
+  /// No description provided for @removeModAction.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove'**
+  String get removeModAction;
+
+  /// No description provided for @removeModConfirm.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove “{name}” from the library?'**
+  String removeModConfirm(String name);
+
+  /// No description provided for @errorSetGamePath.
+  ///
+  /// In en, this message translates to:
+  /// **'Set the game path in Settings first.'**
+  String get errorSetGamePath;
+
+  /// No description provided for @applyReportApplied.
+  ///
+  /// In en, this message translates to:
+  /// **'Applied {count} mods.'**
+  String applyReportApplied(int count);
+
+  /// No description provided for @warningsTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Warnings'**
+  String get warningsTitle;
+
+  /// No description provided for @modDisabledHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Disabled'**
+  String get modDisabledHint;
+
+  /// No description provided for @kindGoremod.
+  ///
+  /// In en, this message translates to:
+  /// **'goremod'**
+  String get kindGoremod;
+
+  /// No description provided for @kindTriplet.
+  ///
+  /// In en, this message translates to:
+  /// **'triplet'**
+  String get kindTriplet;
+
+  /// No description provided for @kindPak.
+  ///
+  /// In en, this message translates to:
+  /// **'pak'**
+  String get kindPak;
+
+  /// No description provided for @kindUe4ss.
+  ///
+  /// In en, this message translates to:
+  /// **'UE4SS'**
+  String get kindUe4ss;
+
+  /// No description provided for @kindRawfile.
+  ///
+  /// In en, this message translates to:
+  /// **'raw file'**
+  String get kindRawfile;
+
+  /// No description provided for @kindMixed.
+  ///
+  /// In en, this message translates to:
+  /// **'mixed'**
+  String get kindMixed;
+
+  /// No description provided for @sevHard.
+  ///
+  /// In en, this message translates to:
+  /// **'hard'**
+  String get sevHard;
+
+  /// No description provided for @sevSoft.
+  ///
+  /// In en, this message translates to:
+  /// **'soft'**
+  String get sevSoft;
+
+  /// No description provided for @sevInfo.
+  ///
+  /// In en, this message translates to:
+  /// **'info'**
+  String get sevInfo;
 }
 
 class _AppLocalizationsDelegate

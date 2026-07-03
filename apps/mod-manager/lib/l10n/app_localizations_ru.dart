@@ -55,4 +55,98 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get commonOk => 'OK';
+
+  @override
+  String get importFolder => 'Импортировать папку…';
+
+  @override
+  String get importFile => 'Импортировать файл…';
+
+  @override
+  String get applyTooltip => 'Применить набор модов к игре';
+
+  @override
+  String get undeployAllAction => 'Убрать всё из игры';
+
+  @override
+  String get undeployAllConfirm =>
+      'Удалить из игры всё, что развернул менеджер?';
+
+  @override
+  String get takeOverTitle => 'Активно развёртывание Studio';
+
+  @override
+  String get takeOverBody =>
+      'mod-studio развернуло мод в игре. Перехватить управление, чтобы менеджер применил этот набор?';
+
+  @override
+  String get takeOverAction => 'Перехватить';
+
+  @override
+  String get refreshAction => 'Обновить';
+
+  @override
+  String conflictsTitle(int count) {
+    return 'Конфликты ($count)';
+  }
+
+  @override
+  String get conflictWinner => 'приоритет';
+
+  @override
+  String get componentsTitle => 'Компоненты';
+
+  @override
+  String targetsMore(int count) {
+    return '+ещё $count';
+  }
+
+  @override
+  String get removeModAction => 'Удалить';
+
+  @override
+  String removeModConfirm(String name) {
+    return 'Удалить «$name» из библиотеки?';
+  }
+
+  @override
+  String get errorSetGamePath => 'Сначала укажите путь к игре в настройках.';
+
+  @override
+  String applyReportApplied(int count) {
+    return 'Применено модов: $count.';
+  }
+
+  @override
+  String get warningsTitle => 'Предупреждения';
+
+  @override
+  String get modDisabledHint => 'Отключён';
+
+  @override
+  String get kindGoremod => 'goremod';
+
+  @override
+  String get kindTriplet => 'triplet';
+
+  @override
+  String get kindPak => 'pak';
+
+  @override
+  String get kindUe4ss => 'UE4SS';
+
+  @override
+  String get kindRawfile => 'сырой файл';
+
+  @override
+  String get kindMixed => 'смешанный';
+
+  @override
+  String get sevHard => 'серьёзный';
+
+  @override
+  String get sevSoft => 'лёгкий';
+
+  @override
+  String get sevInfo => 'инфо';
 }

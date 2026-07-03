@@ -55,4 +55,99 @@ class AppLocalizationsIt extends AppLocalizations {
 
   @override
   String get commonOk => 'OK';
+
+  @override
+  String get importFolder => 'Importa cartella…';
+
+  @override
+  String get importFile => 'Importa file…';
+
+  @override
+  String get applyTooltip => 'Applica la configurazione al gioco';
+
+  @override
+  String get undeployAllAction => 'Ritira tutto';
+
+  @override
+  String get undeployAllConfirm =>
+      'Rimuovere dal gioco tutto ciò che il gestore ha distribuito?';
+
+  @override
+  String get takeOverTitle => 'Distribuzione Studio attiva';
+
+  @override
+  String get takeOverBody =>
+      'mod-studio ha distribuito un mod nel gioco. Subentrare così che il gestore possa applicare questa configurazione?';
+
+  @override
+  String get takeOverAction => 'Subentra';
+
+  @override
+  String get refreshAction => 'Aggiorna';
+
+  @override
+  String conflictsTitle(int count) {
+    return 'Conflitti ($count)';
+  }
+
+  @override
+  String get conflictWinner => 'vincitore';
+
+  @override
+  String get componentsTitle => 'Componenti';
+
+  @override
+  String targetsMore(int count) {
+    return '+$count altri';
+  }
+
+  @override
+  String get removeModAction => 'Rimuovi';
+
+  @override
+  String removeModConfirm(String name) {
+    return 'Rimuovere «$name» dalla libreria?';
+  }
+
+  @override
+  String get errorSetGamePath =>
+      'Imposta prima il percorso del gioco nelle Impostazioni.';
+
+  @override
+  String applyReportApplied(int count) {
+    return '$count mod applicati.';
+  }
+
+  @override
+  String get warningsTitle => 'Avvisi';
+
+  @override
+  String get modDisabledHint => 'Disattivato';
+
+  @override
+  String get kindGoremod => 'goremod';
+
+  @override
+  String get kindTriplet => 'triplet';
+
+  @override
+  String get kindPak => 'pak';
+
+  @override
+  String get kindUe4ss => 'UE4SS';
+
+  @override
+  String get kindRawfile => 'file grezzo';
+
+  @override
+  String get kindMixed => 'misto';
+
+  @override
+  String get sevHard => 'grave';
+
+  @override
+  String get sevSoft => 'lieve';
+
+  @override
+  String get sevInfo => 'info';
 }

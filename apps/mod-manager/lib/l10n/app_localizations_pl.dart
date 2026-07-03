@@ -55,4 +55,98 @@ class AppLocalizationsPl extends AppLocalizations {
 
   @override
   String get commonOk => 'OK';
+
+  @override
+  String get importFolder => 'Importuj folder…';
+
+  @override
+  String get importFile => 'Importuj plik…';
+
+  @override
+  String get applyTooltip => 'Zastosuj zestaw modów do gry';
+
+  @override
+  String get undeployAllAction => 'Wycofaj wszystko';
+
+  @override
+  String get undeployAllConfirm =>
+      'Usunąć z gry wszystko, co wdrożył menedżer?';
+
+  @override
+  String get takeOverTitle => 'Wdrożenie Studio aktywne';
+
+  @override
+  String get takeOverBody =>
+      'mod-studio wdrożyło mod do gry. Przejąć kontrolę, aby menedżer mógł zastosować ten zestaw?';
+
+  @override
+  String get takeOverAction => 'Przejmij';
+
+  @override
+  String get refreshAction => 'Odśwież';
+
+  @override
+  String conflictsTitle(int count) {
+    return 'Konflikty ($count)';
+  }
+
+  @override
+  String get conflictWinner => 'zwycięzca';
+
+  @override
+  String get componentsTitle => 'Składniki';
+
+  @override
+  String targetsMore(int count) {
+    return '+$count więcej';
+  }
+
+  @override
+  String get removeModAction => 'Usuń';
+
+  @override
+  String removeModConfirm(String name) {
+    return 'Usunąć „$name” z biblioteki?';
+  }
+
+  @override
+  String get errorSetGamePath => 'Najpierw ustaw ścieżkę gry w Ustawieniach.';
+
+  @override
+  String applyReportApplied(int count) {
+    return 'Zastosowano $count modów.';
+  }
+
+  @override
+  String get warningsTitle => 'Ostrzeżenia';
+
+  @override
+  String get modDisabledHint => 'Wyłączony';
+
+  @override
+  String get kindGoremod => 'goremod';
+
+  @override
+  String get kindTriplet => 'triplet';
+
+  @override
+  String get kindPak => 'pak';
+
+  @override
+  String get kindUe4ss => 'UE4SS';
+
+  @override
+  String get kindRawfile => 'surowy plik';
+
+  @override
+  String get kindMixed => 'mieszany';
+
+  @override
+  String get sevHard => 'poważny';
+
+  @override
+  String get sevSoft => 'łagodny';
+
+  @override
+  String get sevInfo => 'info';
 }

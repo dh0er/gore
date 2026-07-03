@@ -55,4 +55,98 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get commonOk => 'OK';
+
+  @override
+  String get importFolder => 'Import folder…';
+
+  @override
+  String get importFile => 'Import file…';
+
+  @override
+  String get applyTooltip => 'Apply the loadout to the game';
+
+  @override
+  String get undeployAllAction => 'Undeploy all';
+
+  @override
+  String get undeployAllConfirm =>
+      'Remove everything the manager deployed from the game?';
+
+  @override
+  String get takeOverTitle => 'Studio deployment active';
+
+  @override
+  String get takeOverBody =>
+      'mod-studio has deployed a mod to the game. Take over so the manager can apply this loadout?';
+
+  @override
+  String get takeOverAction => 'Take over';
+
+  @override
+  String get refreshAction => 'Refresh';
+
+  @override
+  String conflictsTitle(int count) {
+    return 'Conflicts ($count)';
+  }
+
+  @override
+  String get conflictWinner => 'winner';
+
+  @override
+  String get componentsTitle => 'Components';
+
+  @override
+  String targetsMore(int count) {
+    return '+$count more';
+  }
+
+  @override
+  String get removeModAction => 'Remove';
+
+  @override
+  String removeModConfirm(String name) {
+    return 'Remove “$name” from the library?';
+  }
+
+  @override
+  String get errorSetGamePath => 'Set the game path in Settings first.';
+
+  @override
+  String applyReportApplied(int count) {
+    return 'Applied $count mods.';
+  }
+
+  @override
+  String get warningsTitle => 'Warnings';
+
+  @override
+  String get modDisabledHint => 'Disabled';
+
+  @override
+  String get kindGoremod => 'goremod';
+
+  @override
+  String get kindTriplet => 'triplet';
+
+  @override
+  String get kindPak => 'pak';
+
+  @override
+  String get kindUe4ss => 'UE4SS';
+
+  @override
+  String get kindRawfile => 'raw file';
+
+  @override
+  String get kindMixed => 'mixed';
+
+  @override
+  String get sevHard => 'hard';
+
+  @override
+  String get sevSoft => 'soft';
+
+  @override
+  String get sevInfo => 'info';
 }
