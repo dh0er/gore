@@ -353,6 +353,9 @@ def dist_project(project: str, dry: bool) -> Path | None:
         shutil.copytree(rel, staging)
         if license_file.exists():
             shutil.copy2(license_file, staging / "LICENSE")
+        third_party = ROOT / "THIRD_PARTY_LICENSES.md"
+        if third_party.exists():
+            shutil.copy2(third_party, staging / "THIRD_PARTY_LICENSES.md")
         # The auto-updater DLLs are false-positive virus magnets that NexusMods
         # quarantines. The portable build never calls the updater (it is gated
         # to Inno-installed copies); the runner delay-loads the plugin and stubs
@@ -385,6 +388,8 @@ def dist_project(project: str, dry: bool) -> Path | None:
     shutil.copy2(exe, staging / exe.name)
     if (ROOT / "LICENSE").exists():
         shutil.copy2(ROOT / "LICENSE", staging / "LICENSE")
+    if (ROOT / "THIRD_PARTY_LICENSES.md").exists():
+        shutil.copy2(ROOT / "THIRD_PARTY_LICENSES.md", staging / "THIRD_PARTY_LICENSES.md")
     # stage any bundled data dirs beside the exe (e.g. gore's lua/shared SDK)
     for src_rel, dest_name in cfg.get("bundle_dirs", []):
         src_dir = ROOT / src_rel

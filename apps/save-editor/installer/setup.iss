@@ -62,6 +62,11 @@ Type: files; Name: "{localappdata}\goresave\g1r_codec_host_derived_profiles.json
 
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; LICENSE + third-party attributions live at the repo root, not in SourceDir
+; (the Flutter Release dir), so include them explicitly. Paths are relative to
+; this .iss (apps\<app>\installer\ -> repo root is ..\..\..).
+Source: "..\..\..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\..\THIRD_PARTY_LICENSES.md"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\goresave"; Filename: "{app}\goresave.exe"
