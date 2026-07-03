@@ -16,7 +16,10 @@ use crate::{Component, ModError, ModManifest, ScriptEntry};
 ///
 /// Pipeline: materialize into a `.staging-*` dir under the library (same volume, so activation
 /// is a rename) → detect components + extract targets → write the sidecar → swap into place.
-/// Re-importing a same-named mod replaces its entry (the id is derived from the name only).
+/// Re-importing the SAME source (same name AND same source file/dir name) replaces its entry —
+/// a mod update — because the id folds both into its hash. Two DIFFERENT mods that happen to
+/// share a display name but come from different sources get DISTINCT ids and coexist, rather than
+/// one silently clobbering the other.
 pub fn import(library_dir: &Path, source: &Path) -> crate::Result<ModEntryMeta> {
     if !source.exists() {
         return Err(ModError::Other(format!("import source not found: {}", source.display())));
@@ -68,7 +71,12 @@ pub fn import(library_dir: &Path, source: &Path) -> crate::Result<ModEntryMeta> 
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
-    let id = format!("{}-{}", slug(&name), crate::name_hash(&name));
+    // Fold BOTH the display name and the source file/dir name into the disambiguating hash: a
+    // re-import of the same source (name + source_name) resolves to the same id and replaces the
+    // entry (update), while two different mods sharing only a display name (distinct source files)
+    // get different ids and coexist instead of one clobbering the other. The `slug(name)` prefix
+    // keeps the dir human-readable.
+    let id = format!("{}-{}", slug(&name), crate::name_hash(&format!("{name}\0{source_name}")));
     let meta = ModEntryMeta {
         id: id.clone(),
         kind,
@@ -86,7 +94,9 @@ pub fn import(library_dir: &Path, source: &Path) -> crate::Result<ModEntryMeta> 
         .map_err(crate::io("writing entry sidecar"))?;
     let entry_dir = library_dir.join(&id);
     if entry_dir.exists() {
-        // Same name ⇒ same id: re-import replaces the previous copy.
+        // Same source (name + source name) ⇒ same id: re-import replaces the previous copy (an
+        // update). A different source with the same display name hashes to a different id, so it
+        // lands in its own dir here instead of overwriting this one.
         std::fs::remove_dir_all(&entry_dir).map_err(crate::io("replacing existing entry"))?;
     }
     std::fs::rename(&staging, &entry_dir).map_err(crate::io("activating library entry"))?;
@@ -403,11 +413,17 @@ fn goremod_components(
 /// Walk the staged tree and collect foreign components (deterministic: sorted per dir).
 fn scan_foreign(root: &Path) -> crate::Result<Vec<ComponentInfo>> {
     let mut out = Vec::new();
-    scan_dir(root, root, &mut out)?;
+    scan_dir(root, root, 0, &mut out)?;
     Ok(out)
 }
 
-fn scan_dir(root: &Path, dir: &Path, out: &mut Vec<ComponentInfo>) -> crate::Result<()> {
+/// Deepest directory nesting `scan_dir` will descend into. Real mods are shallow; a cap here
+/// bounds the recursion so a symlink loop (or a maliciously deep archive) can't recurse forever
+/// / overflow the stack — past the cap we just stop descending (files already at that depth are
+/// still classified).
+const MAX_SCAN_DEPTH: usize = 16;
+
+fn scan_dir(root: &Path, dir: &Path, depth: usize, out: &mut Vec<ComponentInfo>) -> crate::Result<()> {
     let mut entries: Vec<std::fs::DirEntry> = std::fs::read_dir(dir)
         .map_err(crate::io(&format!("scanning {}", dir.display())))?
         .filter_map(|e| e.ok())
@@ -426,8 +442,9 @@ fn scan_dir(root: &Path, dir: &Path, out: &mut Vec<ComponentInfo>) -> crate::Res
                     targets: Vec::new(),
                     opaque: true,
                 });
-            } else {
-                scan_dir(root, &path, out)?;
+            } else if depth < MAX_SCAN_DEPTH {
+                // Stop descending past the cap — a symlink loop would otherwise recurse forever.
+                scan_dir(root, &path, depth + 1, out)?;
             }
         } else if ft.is_file() {
             classify_file(root, &path, out);
@@ -698,7 +715,10 @@ mod tests {
         assert_eq!(list(&lib).unwrap(), vec![meta]);
     }
 
-    /// [import 2] The SAME bundle zipped (manifest at zip root) imports identically to the dir.
+    /// [import 2] The SAME bundle zipped (manifest at zip root) imports to the same CONTENT as the
+    /// dir (kind, name, components). The id now differs because it folds in the source name (dir
+    /// "Target Probe" vs "Target Probe.zip") — so a dir and its zip are treated as two distinct
+    /// sources, which lets both coexist rather than clobbering each other.
     #[test]
     fn import_zip_bundle_roundtrip() {
         let tmp = tempfile::tempdir().unwrap();
@@ -711,7 +731,9 @@ mod tests {
 
         assert_eq!(from_zip.kind, ModKind::Goremod);
         assert_eq!(from_zip.name, from_dir.name);
-        assert_eq!(from_zip.id, from_dir.id);
+        // Same slug prefix (same display name), different hash suffix (different source name).
+        assert!(from_zip.id.starts_with("target-probe-"));
+        assert_ne!(from_zip.id, from_dir.id, "dir vs zip are distinct sources → distinct ids");
         assert_eq!(from_zip.components, from_dir.components);
         assert_eq!(from_zip.source, "Target Probe.zip");
     }
@@ -914,9 +936,10 @@ mod tests {
         assert!(leftovers.is_empty(), "staging leftovers: {leftovers:?}");
     }
 
-    /// [import 11] Re-importing the same-named mod REPLACES its entry (same id, one copy).
+    /// [import 11] Re-importing the SAME source (same name + same source dir/file name) REPLACES
+    /// its entry (same id, one copy) — a mod update.
     #[test]
-    fn reimport_same_name_replaces_entry() {
+    fn reimport_same_source_replaces_entry() {
         let tmp = tempfile::tempdir().unwrap();
         let lib = tmp.path().join("lib");
         let src = tmp.path().join("BarMod");
@@ -928,6 +951,28 @@ mod tests {
         let b = import(&lib, &src).unwrap();
         assert_eq!(a.id, b.id);
         assert_eq!(list(&lib).unwrap().len(), 1);
+    }
+
+    /// [import 11b] Two mods that share a display NAME but come from DIFFERENT sources must get
+    /// distinct ids and coexist — otherwise the old name-only id let one silently clobber the
+    /// other (data loss). A goremod bundle's name comes from its manifest, so importing the SAME
+    /// manifest-name bundle once as a dir ("Target Probe") and once as a differently-named zip
+    /// ("other.zip") yields identical display names but different `source`s → different ids.
+    #[test]
+    fn different_source_same_name_coexist() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("lib");
+        let bdir = mk_goremod_bundle(tmp.path()); // manifest name "Target Probe"
+
+        let from_dir = import(&lib, &bdir).unwrap();
+        let zp = tmp.path().join("other.zip");
+        zip_dir_with_prefix(&bdir, "", &zp);
+        let from_zip = import(&lib, &zp).unwrap();
+
+        assert_eq!(from_dir.name, from_zip.name, "precondition: same display name");
+        assert_ne!(from_dir.source, from_zip.source, "precondition: different source");
+        assert_ne!(from_dir.id, from_zip.id, "distinct sources must not collide into one id");
+        assert_eq!(list(&lib).unwrap().len(), 2, "both must coexist");
     }
 
     /// [remove] Deletes exactly the entry dir; absent id → Ok(false); ids that could climb
@@ -971,6 +1016,36 @@ mod tests {
         let all = list(&lib).unwrap();
         assert_eq!(all.len(), 1, "only the good entry: {all:?}");
         assert_eq!(all[0], good);
+    }
+
+    /// [import 12] A pathologically DEEP source tree imports without hanging or overflowing the
+    /// stack: `scan_dir` stops descending past `MAX_SCAN_DEPTH`. A recognizable file is placed
+    /// ABOVE the cap so the import still succeeds (finds something) rather than erroring empty.
+    #[test]
+    fn scan_dir_depth_capped() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("lib");
+        let src = tmp.path().join("DeepMod");
+        fs::create_dir_all(&src).unwrap();
+        // A rawfile near the top guarantees a component regardless of the deep tree below.
+        fs::write(src.join("top.lcache"), b"x").unwrap();
+        // Build a 20-deep nested chain (deeper than the depth cap of 16).
+        let mut d = src.clone();
+        for i in 0..20 {
+            d = d.join(format!("d{i}"));
+            fs::create_dir_all(&d).unwrap();
+        }
+        // A file only reachable BELOW the cap: it must not be classified (proves we stopped),
+        // but its presence must not break the scan either.
+        fs::write(d.join("buried.lcache"), b"x").unwrap();
+
+        let meta = import(&lib, &src).unwrap();
+        assert_eq!(meta.kind, ModKind::ForeignRawfile);
+        // Exactly the top-level rawfile was collected; the buried one past the cap was skipped.
+        assert_eq!(
+            meta.components,
+            vec![ComponentInfo::RawFile { rel: "top.lcache".into(), target_file: RawTarget::Lcache }]
+        );
     }
 
     /// The epoch→RFC3339 formatter, incl. a leap day and a modern date.
