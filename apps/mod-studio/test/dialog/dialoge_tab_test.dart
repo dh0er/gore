@@ -161,6 +161,67 @@ void main() {
   });
 
   testWidgets(
+      'filtered sidebar tap does not clear an out-of-filter shared selection',
+      (tester) async {
+    tester.view.physicalSize = const Size(1400, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final container = ProviderContainer(overrides: [
+      locCatalogProvider.overrideWith((ref) => Future.value(catalog)),
+    ]);
+    addTearDown(container.dispose);
+
+    // Shared selection made outside the filter (e.g. on the main Dialoge tab).
+    container.read(selectedDialogIdProvider.notifier).state = 'info_aaron_001';
+    await tester.pumpWidget(UncontrolledProviderScope(
+      container: container,
+      child: MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: const Scaffold(body: DialogeTab(onlyIds: {'info_bob_001'})),
+      ),
+    ));
+    await tester.pumpAndSettle();
+
+    // Tapping the (only) speaker group in the filtered embed must NOT wipe the
+    // main tab's out-of-filter selection.
+    await tester.tap(find.text('Bob (1)'));
+    await tester.pumpAndSettle();
+    expect(container.read(selectedDialogIdProvider), 'info_aaron_001');
+  });
+
+  testWidgets(
+      'main-tab sidebar tap clears a selection from another group',
+      (tester) async {
+    tester.view.physicalSize = const Size(1400, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final container = ProviderContainer(overrides: [
+      locCatalogProvider.overrideWith((ref) => Future.value(catalog)),
+    ]);
+    addTearDown(container.dispose);
+
+    // Unfiltered main tab owns the shared provider: tapping a different group
+    // must clear a selection that belongs to another group.
+    container.read(selectedDialogIdProvider.notifier).state = 'info_aaron_001';
+    await tester.pumpWidget(UncontrolledProviderScope(
+      container: container,
+      child: MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: const Scaffold(body: DialogeTab()),
+      ),
+    ));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Bob (1)'));
+    await tester.pumpAndSettle();
+    expect(container.read(selectedDialogIdProvider), isNull);
+  });
+
+  testWidgets(
       'filtered editor shows only edited language fields; '
       'the main tab shows all languages', (tester) async {
     tester.view.physicalSize = const Size(1400, 900);

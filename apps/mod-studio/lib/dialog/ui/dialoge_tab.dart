@@ -227,12 +227,20 @@ class _DialogBrowserState extends ConsumerState<_DialogBrowser> {
                                     // Don't leave a line from ANOTHER group
                                     // open in the editor pane: clear the
                                     // selection unless it belongs to the
-                                    // tapped group.
+                                    // tapped group. Only in the main tab
+                                    // (onlyIds == null): a filtered embed does
+                                    // NOT own the shared provider — the shared
+                                    // selection may be an out-of-filter line
+                                    // from the main tab, and the editor's
+                                    // out-of-filter guard already shows the
+                                    // placeholder, so clearing here would wipe
+                                    // the main tab's selection.
                                     final selLine = selectedId == null
                                         ? null
                                         : lines.firstWhereOrNull(
                                             (l) => l.id == selectedId);
-                                    if (selectedId != null &&
+                                    if (onlyIds == null &&
+                                        selectedId != null &&
                                         selLine?.groupKey != g.groupKey) {
                                       ref
                                           .read(selectedDialogIdProvider
