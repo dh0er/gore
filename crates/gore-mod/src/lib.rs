@@ -366,7 +366,7 @@ pub struct DeployRecord {
 /// deployed bytes from a later external overwrite). FNV-1a 64-bit: a fixed algorithm whose output
 /// never changes across Rust/tool versions, unlike `DefaultHasher` (SipHash), so a record written
 /// by one build is read back consistently by a later one.
-fn content_hash(bytes: &[u8]) -> String {
+pub(crate) fn content_hash(bytes: &[u8]) -> String {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325; // FNV offset basis
     for &b in bytes {
         h ^= b as u64;
@@ -401,7 +401,7 @@ const RECORD_NAME: &str = "gore-mod.deployed.json";
 /// (written to `Binaries/Win64`) if present and valid, else the known [`gore_fmod::GOTHIC_STUDIO_KEY`]
 /// constant. The key stays constant until a game patch changes it; a user who re-dumps after such a
 /// patch can then deploy audio without the build/deploy path being stuck on the old constant.
-fn resolve_fmod_key(gp: &GamePaths) -> Vec<u8> {
+pub(crate) fn resolve_fmod_key(gp: &GamePaths) -> Vec<u8> {
     #[derive(Deserialize)]
     struct FmodKeyFile {
         #[serde(default)]
@@ -448,17 +448,24 @@ fn record_path(root: &Path) -> PathBuf {
 }
 
 /// A fully-prepared deployment: everything to write, computed in memory so the failure-prone
-/// work happens BEFORE the game is touched.
-#[derive(Debug)]
-struct DeployPlan {
-    ue4ss: Option<(PathBuf, PathBuf)>, // (source dir in bundle, dest under ue4ss/Mods)
-    writes: Vec<(PathBuf, Vec<u8>)>,   // (live game file, new contents)
+/// work happens BEFORE the game is touched. The single-bundle [`deploy`] fills 0/1 `ue4ss_dirs`
+/// entries and no `managed_paks`; the multi-mod manager composes several of each.
+#[derive(Debug, Default)]
+pub(crate) struct DeployPlan {
+    /// (source dir on disk, dest under ue4ss/Mods) — each installed via staged swap.
+    pub(crate) ue4ss_dirs: Vec<(PathBuf, PathBuf)>,
+    /// (live game file, new contents)
+    pub(crate) writes: Vec<(PathBuf, Vec<u8>)>,
     /// Live files whose preserved `*.gore-bak` is stale because the file drifted (game updated)
     /// since we deployed: stage must drop that backup so it re-snapshots the current pristine.
-    refresh_baks: Vec<PathBuf>,
+    pub(crate) refresh_baks: Vec<PathBuf>,
     /// Additive texture-override Zen triplet files to copy: (src triplet file in temp, dst in
     /// `~mods`). No backup — undeploy deletes the dst.
-    texture_triplets: Vec<(PathBuf, PathBuf)>,
+    pub(crate) texture_triplets: Vec<(PathBuf, PathBuf)>,
+    /// Manager-installed pak/triplet files to copy: (src in the mod library, dst in `~mods`).
+    /// Pure additions like `texture_triplets` (no backup; undeploy deletes the dst), but the
+    /// srcs are durable library files, never temp dirs to clean up.
+    pub(crate) managed_paks: Vec<(PathBuf, PathBuf)>,
 }
 
 /// Deploy a built bundle dir into the game at `game_root`. Two phases so a previous working
@@ -484,14 +491,33 @@ pub fn deploy(bundle_dir: &Path, game_root: &Path) -> Result<DeployRecord> {
     // The previous deployment's record — used both to detect externally-updated (drifted) files
     // during prepare and to fold its leftovers during commit.
     let prev = read_record(game_root);
-    let prev_record_bytes = std::fs::read(record_path(game_root)).ok();
 
     // PHASE 1 — prepare (no game writes). The previous deployment is left intact if this fails.
     let plan = prepare(bundle_dir, &manifest, &gp, prev.as_ref())?;
 
-    // PHASE 2 — commit. `undo` captures the exact pre-deploy state for an in-process rollback;
+    // PHASE 2 — commit.
+    let record = DeployRecord { mod_name: manifest.mod_meta.name.clone(), ..Default::default() };
+    commit_plan(&gp, game_root, plan, record, prev)
+}
+
+/// Commit a prepared [`DeployPlan`]: stage backups, persist the record crash-safely BEFORE any
+/// live write, apply the writes, then retire the previous deployment's leftover footprint.
+/// `record` is the caller-built record for THIS deployment (identity fields like `mod_name`/
+/// `owner`/`loadout` already set); `prev` is the record the plan was prepared against, whose
+/// not-overwritten leftovers/stale dirs/additive files are folded in here. On failure the game
+/// is rolled back to the exact prior state and the previous record file is restored.
+pub(crate) fn commit_plan(
+    _gp: &GamePaths,
+    abs_root: &Path,
+    plan: DeployPlan,
+    mut record: DeployRecord,
+    prev: Option<DeployRecord>,
+) -> Result<DeployRecord> {
+    let game_root = abs_root;
+    let prev_record_bytes = std::fs::read(record_path(game_root)).ok();
+
+    // `undo` captures the exact pre-deploy state for an in-process rollback;
     // the record is persisted BEFORE any live write so even a crash mid-write is recoverable.
-    let mut record = DeployRecord { mod_name: manifest.mod_meta.name.clone(), ..Default::default() };
     let mut undo = Undo::default();
 
     // (a) Stage: snapshot prior bytes + create every *.gore-bak, and note the intended UE4SS
@@ -531,9 +557,15 @@ pub fn deploy(bundle_dir: &Path, game_root: &Path) -> Result<DeployRecord> {
     // in this window would otherwise leave them orphaned-and-active with no record to clean them
     // up. retire_leftovers prunes any it later removes successfully.
     if let Some(prev) = prev.as_ref() {
-        let new_dir = plan.ue4ss.as_ref().map(|(_, dst)| dst.display().to_string());
-        for d in prev.ue4ss_mod_dir.iter().chain(prev.stale_ue4ss_dirs.iter()) {
-            if new_dir.as_deref() != Some(d.as_str()) && !record.stale_ue4ss_dirs.contains(d) {
+        let new_dirs: Vec<String> =
+            plan.ue4ss_dirs.iter().map(|(_, dst)| dst.display().to_string()).collect();
+        for d in prev
+            .ue4ss_mod_dir
+            .iter()
+            .chain(prev.stale_ue4ss_dirs.iter())
+            .chain(prev.ue4ss_mod_dirs.iter())
+        {
+            if !new_dirs.contains(d) && !record.stale_ue4ss_dirs.contains(d) {
                 record.stale_ue4ss_dirs.push(d.clone());
             }
         }
@@ -550,6 +582,16 @@ pub fn deploy(bundle_dir: &Path, game_root: &Path) -> Result<DeployRecord> {
         for t in &prev.texture_triplets {
             if !new_triplets.contains(t) && !record.texture_triplets.contains(t) {
                 record.texture_triplets.push(t.clone());
+            }
+        }
+        // Same again for the previous deploy's manager-installed pak/triplet files (additive,
+        // no backup): pre-seed the not-re-created ones so a crash mid-retire still lets
+        // undeploy remove them; retire_leftovers deletes + prunes the ones it cleans.
+        let new_paks: Vec<String> =
+            plan.managed_paks.iter().map(|(_, dst)| dst.display().to_string()).collect();
+        for p in &prev.managed_paks {
+            if !new_paks.contains(p) && !record.managed_paks.contains(p) {
+                record.managed_paks.push(p.clone());
             }
         }
     }
@@ -586,12 +628,12 @@ pub fn deploy(bundle_dir: &Path, game_root: &Path) -> Result<DeployRecord> {
         return Err(e);
     }
 
-    // (d) committed — drop the kept-aside previous UE4SS mod, then retire the previous mod's
+    // (d) committed — drop the kept-aside previous UE4SS mod(s), then retire the previous mod's
     //     footprint now (best-effort), pruning retired leftovers from the record.
     let aside_failed = undo.discard();
     let (mut changed, pending_deletes) = retire_leftovers(&leftovers, prev.as_ref(), &plan, &mut record);
-    if let Some(old) = aside_failed {
-        // The moved-aside previous mod couldn't be removed — track it so undeploy cleans it up.
+    for old in aside_failed {
+        // A moved-aside previous mod couldn't be removed — track it so undeploy cleans it up.
         let s = old.display().to_string();
         if !record.stale_ue4ss_dirs.contains(&s) {
             record.stale_ue4ss_dirs.push(s);
@@ -657,10 +699,10 @@ struct Undo {
     /// (bak path, prior bytes) for a STALE backup deleted during drift-refresh — write back on
     /// rollback so the restored previous record doesn't point at a now-missing backup.
     removed_baks: Vec<(PathBuf, Vec<u8>)>,
-    /// (old-aside dir, dst) — a previous UE4SS mod moved aside: restore on rollback, drop on success.
-    ue4ss_old: Option<(PathBuf, PathBuf)>,
-    /// a UE4SS mod installed where there was none — remove on rollback.
-    ue4ss_fresh: Option<PathBuf>,
+    /// (old-aside dir, dst) — previous UE4SS mods moved aside: restore on rollback, drop on success.
+    ue4ss_old: Vec<(PathBuf, PathBuf)>,
+    /// UE4SS mods installed where there was none — remove on rollback.
+    ue4ss_fresh: Vec<PathBuf>,
     /// Texture triplet files copied into `~mods`, each with its PRE-OVERWRITE bytes: `None` if the
     /// file did not exist before this deploy (delete on rollback), `Some(bytes)` if it did (a same-
     /// named redeploy overwrote a currently-active triplet — restore the OLD bytes on rollback so a
@@ -681,10 +723,11 @@ impl Undo {
         for (bak, bytes) in &self.removed_baks {
             let _ = atomic_write(bak, bytes);
         }
-        if let Some((old, dst)) = &self.ue4ss_old {
+        for (old, dst) in &self.ue4ss_old {
             let _ = std::fs::remove_dir_all(dst);
             let _ = std::fs::rename(old, dst);
-        } else if let Some(dst) = &self.ue4ss_fresh {
+        }
+        for dst in &self.ue4ss_fresh {
             let _ = std::fs::remove_dir_all(dst);
         }
         // Restore each texture triplet file we copied into `~mods`: put back the bytes it had
@@ -702,18 +745,19 @@ impl Undo {
         }
     }
 
-    /// Commit: drop the previous UE4SS mod that was moved aside (`<mod>.gore-old`). Returns that
-    /// dir if it couldn't be removed (locked/permissions/AV) so the caller can track it — left
-    /// untracked it would keep loading under `ue4ss/Mods` with no record for undeploy to clean up.
-    fn discard(self) -> Option<PathBuf> {
-        if let Some((old, _)) = &self.ue4ss_old {
+    /// Commit: drop the previous UE4SS mods that were moved aside (`<mod>.gore-old`). Returns the
+    /// dirs that couldn't be removed (locked/permissions/AV) so the caller can track them — left
+    /// untracked they would keep loading under `ue4ss/Mods` with no record for undeploy to clean up.
+    fn discard(self) -> Vec<PathBuf> {
+        let mut failed = Vec::new();
+        for (old, _) in &self.ue4ss_old {
             if std::fs::remove_dir_all(old).is_err() && old.exists() {
                 // Best-effort: stop it loading meanwhile by removing its enable flag.
                 let _ = std::fs::remove_file(old.join("enabled.txt"));
-                return Some(old.clone());
+                failed.push(old.clone());
             }
         }
-        None
+        failed
     }
 }
 
@@ -724,12 +768,7 @@ fn prepare(
     gp: &GamePaths,
     prev: Option<&DeployRecord>,
 ) -> Result<DeployPlan> {
-    let mut plan = DeployPlan {
-        ue4ss: None,
-        writes: Vec::new(),
-        refresh_baks: Vec::new(),
-        texture_triplets: Vec::new(),
-    };
+    let mut plan = DeployPlan::default();
     for (comp_idx, comp) in manifest.components.iter().enumerate() {
         match comp {
             Component::Ue4ssLua { name, path } => {
@@ -740,7 +779,9 @@ fn prepare(
                         "unsafe ue4ss component in manifest: name={name:?} path={path:?}"
                     )));
                 }
-                plan.ue4ss = Some((bundle_dir.join(path), gp.ue4ss_mods.join(name)));
+                // A single bundle installs at most ONE UE4SS mod — a later Ue4ssLua component
+                // replaces an earlier one (same last-wins semantics as the old Option field).
+                plan.ue4ss_dirs = vec![(bundle_dir.join(path), gp.ue4ss_mods.join(name))];
             }
             Component::LocPatch { path } => {
                 if !is_safe_rel_path(path) {
@@ -804,112 +845,14 @@ fn prepare(
                 }
             }
             Component::TexturePatch { path, assets: _ } => {
-                if !is_safe_rel_path(path) {
-                    return Err(ModError::Other(format!("unsafe texture patch path: {path:?}")));
-                }
-                let map: BTreeMap<String, String> = serde_json::from_slice(
-                    &std::fs::read(bundle_dir.join(path).join("manifest.json"))
-                        .map_err(io("reading texture manifest"))?)?;
-                // game install dir: ue4ss_mods == <root>/G1R/Binaries/Win64/ue4ss/Mods -> 5 up.
-                let game_dir = gp.ue4ss_mods.ancestors().nth(5)
-                    .ok_or_else(|| ModError::Other("cannot derive game dir from paths".into()))?
-                    .to_path_buf();
-                let utoc = gore_tex::paths::main_container(&game_dir)
-                    .map_err(|e| ModError::Other(format!("container: {e}")))?;
-                let usmap = gore_tex::paths::usmap(&game_dir)
-                    .map_err(|e| ModError::Other(format!("usmap: {e}")))?;
-                let usmap_bytes = std::fs::read(&usmap).map_err(io("reading usmap"))?;
-                // Only use the cached index if it's current for this game build; a stale index
-                // (game patched, .usmap/build_id changed) would map paths to outdated package
-                // ids and cook the wrong texture. If stale/absent, fall back to a name scan.
-                let index = gore_tex::index::TextureIndex::load_current(
-                    &gore_tex::paths::texture_index_path(),
-                    &gore_tex::index::build_id_for(&utoc, &usmap),
-                );
-                // Scope temp dirs by component index too (not just pid): a bundle with >1
-                // TexturePatch must not have a later component's `remove_dir_all` wipe an earlier
-                // one's cooked tree / packed triplet (whose src paths are already queued in
-                // `plan.texture_triplets`).
-                let cook_dir = std::env::temp_dir()
-                    .join(format!("gore-mod-tex-cook-{}-{}", std::process::id(), comp_idx));
-                let _ = std::fs::remove_dir_all(&cook_dir);
-                for (asset, png_rel) in &map {
-                    if !is_safe_rel_path(png_rel) {
-                        return Err(ModError::Other(format!("unsafe png path: {png_rel:?}")));
-                    }
-                    let leaf = asset.rsplit('/').next().unwrap_or(asset);
-                    // Map the UE mount root to its physical content path. Non-/Game
-                    // assets (e.g. /Engine/...) must NOT be forced under G1R/Content
-                    // or the override lands at the wrong virtual path and silently
-                    // does nothing; unknown roots (plugins) are rejected.
-                    let rel = gore_tex::paths::content_mount_rel(asset).ok_or_else(|| {
-                        ModError::Other(format!(
-                            "unsupported asset mount root (only /Game and /Engine): {asset}"
-                        ))
-                    })?;
-                    if !is_safe_rel_path(&rel) {
-                        return Err(ModError::Other(format!("unsafe asset path: {asset:?}")));
-                    }
-                    let dest_dir = cook_dir.join(std::path::Path::new(&rel).parent()
-                        .ok_or_else(|| ModError::Other(format!("bad asset path {asset}")))?);
-                    std::fs::create_dir_all(&dest_dir).map_err(io("mkdir cook dir"))?;
-                    // Unique per-asset temp dir so concurrent deploys don't clobber each other.
-                    let tmp_orig = gore_tex::paths::unique_temp_dir("gore-mod-tex-orig")
-                        .map_err(io("mkdir orig"))?;
-                    let orig_uasset = match index.as_ref().and_then(|i| i.entries.get(asset)) {
-                        Some(&pid) => gore_tex::container::unpack_asset_by_id(&utoc, &usmap, pid, leaf, &tmp_orig),
-                        None => gore_tex::container::unpack_asset(&utoc, &usmap, asset, &tmp_orig),
-                    }.map_err(|e| ModError::Other(format!("unpack {asset}: {e}")))?;
-                    let ua = std::fs::read(&orig_uasset).map_err(io("read uasset"))?;
-                    let ue = std::fs::read(orig_uasset.with_extension("uexp")).map_err(io("read uexp"))?;
-                    let ub = gore_tex::paths::read_optional(&orig_uasset.with_extension("ubulk"))
-                        .map_err(io("read ubulk"))?;
-                    let img = image::open(bundle_dir.join(png_rel))
-                        .map_err(|e| ModError::Other(format!("png {png_rel}: {e}")))?.to_rgba8();
-                    let (w, h) = (img.width(), img.height());
-                    let info = gore_tex::decode::parse(&ua, &ue, &ub, &usmap_bytes)
-                        .map_err(|e| ModError::Other(format!("parse {asset}: {e}")))?;
-                    // Unified entry: encodes mips (regular) or re-tiles (virtual
-                    // texture) internally based on the original's shape.
-                    let (na, ne, nb) = gore_tex::texdata::replace_texture_image(
-                        &ua, &ue, &ub, img.as_raw(), w, h, &info.format,
-                    )
-                        .map_err(|e| ModError::Other(format!("replace {asset}: {e}")))?;
-                    std::fs::write(dest_dir.join(format!("{leaf}.uasset")), &na).map_err(io("write uasset"))?;
-                    std::fs::write(dest_dir.join(format!("{leaf}.uexp")), &ne).map_err(io("write uexp"))?;
-                    if !nb.is_empty() {
-                        std::fs::write(dest_dir.join(format!("{leaf}.ubulk")), &nb).map_err(io("write ubulk"))?;
-                    }
-                    // The unpacked original is consumed (rewritten into cook_dir); drop its unique
-                    // temp dir now so a many-texture mod doesn't leak one multi-MB dir per asset.
-                    let _ = std::fs::remove_dir_all(&tmp_orig);
-                }
-                // Triplet name must be unique across DISTINCT mods (so one mod's mounted pak can't
-                // be clobbered by another whose name sanitizes to the same stem) AND across multiple
-                // texture components WITHIN this bundle. Append a stable hash of the original
-                // (unsanitized) mod name for the former and the component index for the latter.
-                let triplet_name = format!(
-                    "zzz_{}_{}_{}_tex_P",
-                    sanitize(&manifest.mod_meta.name),
-                    name_hash(&manifest.mod_meta.name),
-                    comp_idx
-                );
-                let pack_out = std::env::temp_dir()
-                    .join(format!("gore-mod-tex-pack-{}-{}", std::process::id(), comp_idx));
-                let _ = std::fs::remove_dir_all(&pack_out);
-                std::fs::create_dir_all(&pack_out).map_err(io("mkdir pack"))?;
-                let triplet = gore_tex::container::repack_to_zen(&cook_dir, &triplet_name, &pack_out, &game_dir, false)
-                    .map_err(|e| ModError::Other(format!("pack: {e}")))?;
-                // The cooked tree is now packed into the triplet; drop it. (cook_dir/pack_out are
-                // pid+component scoped and cleared at the next deploy, so they don't leak per-deploy;
-                // the triplet in pack_out is consumed by apply_writes copying it into ~mods.)
-                let _ = std::fs::remove_dir_all(&cook_dir);
-                let mods_dir = game_dir.join("G1R").join("Content").join("Paks").join("~mods");
-                for src in triplet {
-                    let dst = mods_dir.join(src.file_name()
-                        .ok_or_else(|| ModError::Other("triplet file".into()))?);
-                    plan.texture_triplets.push((src, dst));
-                }
+                let triplets = prepare_texture_component(
+                    bundle_dir,
+                    path,
+                    &manifest.mod_meta.name,
+                    comp_idx,
+                    gp,
+                )?;
+                plan.texture_triplets.extend(triplets);
             }
             Component::AngelScriptPatch { path } => {
                 if !is_safe_rel_path(path) {
@@ -954,19 +897,151 @@ fn prepare(
     Ok(plan)
 }
 
+/// Prepare ONE texture component: cook each PNG in the patch dir at `path` (bundle-relative)
+/// over its original cooked asset and pack the result into a Zen triplet named
+/// `zzz_{sanitize(mod_name)}_{name_hash(mod_name)}_{comp_idx}_tex_P`. Returns the (src, dst)
+/// triplet file pairs to copy into `~mods` — purely in-memory/temp work, no game writes.
+fn prepare_texture_component(
+    bundle_dir: &Path,
+    path: &str,
+    mod_name: &str,
+    comp_idx: usize,
+    gp: &GamePaths,
+) -> Result<Vec<(PathBuf, PathBuf)>> {
+    if !is_safe_rel_path(path) {
+        return Err(ModError::Other(format!("unsafe texture patch path: {path:?}")));
+    }
+    let map: BTreeMap<String, String> = serde_json::from_slice(
+        &std::fs::read(bundle_dir.join(path).join("manifest.json"))
+            .map_err(io("reading texture manifest"))?)?;
+    // game install dir: ue4ss_mods == <root>/G1R/Binaries/Win64/ue4ss/Mods -> 5 up.
+    let game_dir = gp.ue4ss_mods.ancestors().nth(5)
+        .ok_or_else(|| ModError::Other("cannot derive game dir from paths".into()))?
+        .to_path_buf();
+    let utoc = gore_tex::paths::main_container(&game_dir)
+        .map_err(|e| ModError::Other(format!("container: {e}")))?;
+    let usmap = gore_tex::paths::usmap(&game_dir)
+        .map_err(|e| ModError::Other(format!("usmap: {e}")))?;
+    let usmap_bytes = std::fs::read(&usmap).map_err(io("reading usmap"))?;
+    // Only use the cached index if it's current for this game build; a stale index
+    // (game patched, .usmap/build_id changed) would map paths to outdated package
+    // ids and cook the wrong texture. If stale/absent, fall back to a name scan.
+    let index = gore_tex::index::TextureIndex::load_current(
+        &gore_tex::paths::texture_index_path(),
+        &gore_tex::index::build_id_for(&utoc, &usmap),
+    );
+    // Scope temp dirs by component index too (not just pid): a bundle with >1
+    // TexturePatch must not have a later component's `remove_dir_all` wipe an earlier
+    // one's cooked tree / packed triplet (whose src paths are already queued in
+    // `plan.texture_triplets`).
+    let cook_dir = std::env::temp_dir()
+        .join(format!("gore-mod-tex-cook-{}-{}", std::process::id(), comp_idx));
+    let _ = std::fs::remove_dir_all(&cook_dir);
+    for (asset, png_rel) in &map {
+        if !is_safe_rel_path(png_rel) {
+            return Err(ModError::Other(format!("unsafe png path: {png_rel:?}")));
+        }
+        let leaf = asset.rsplit('/').next().unwrap_or(asset);
+        // Map the UE mount root to its physical content path. Non-/Game
+        // assets (e.g. /Engine/...) must NOT be forced under G1R/Content
+        // or the override lands at the wrong virtual path and silently
+        // does nothing; unknown roots (plugins) are rejected.
+        let rel = gore_tex::paths::content_mount_rel(asset).ok_or_else(|| {
+            ModError::Other(format!(
+                "unsupported asset mount root (only /Game and /Engine): {asset}"
+            ))
+        })?;
+        if !is_safe_rel_path(&rel) {
+            return Err(ModError::Other(format!("unsafe asset path: {asset:?}")));
+        }
+        let dest_dir = cook_dir.join(std::path::Path::new(&rel).parent()
+            .ok_or_else(|| ModError::Other(format!("bad asset path {asset}")))?);
+        std::fs::create_dir_all(&dest_dir).map_err(io("mkdir cook dir"))?;
+        // Unique per-asset temp dir so concurrent deploys don't clobber each other.
+        let tmp_orig = gore_tex::paths::unique_temp_dir("gore-mod-tex-orig")
+            .map_err(io("mkdir orig"))?;
+        let orig_uasset = match index.as_ref().and_then(|i| i.entries.get(asset)) {
+            Some(&pid) => gore_tex::container::unpack_asset_by_id(&utoc, &usmap, pid, leaf, &tmp_orig),
+            None => gore_tex::container::unpack_asset(&utoc, &usmap, asset, &tmp_orig),
+        }.map_err(|e| ModError::Other(format!("unpack {asset}: {e}")))?;
+        let ua = std::fs::read(&orig_uasset).map_err(io("read uasset"))?;
+        let ue = std::fs::read(orig_uasset.with_extension("uexp")).map_err(io("read uexp"))?;
+        let ub = gore_tex::paths::read_optional(&orig_uasset.with_extension("ubulk"))
+            .map_err(io("read ubulk"))?;
+        let img = image::open(bundle_dir.join(png_rel))
+            .map_err(|e| ModError::Other(format!("png {png_rel}: {e}")))?.to_rgba8();
+        let (w, h) = (img.width(), img.height());
+        let info = gore_tex::decode::parse(&ua, &ue, &ub, &usmap_bytes)
+            .map_err(|e| ModError::Other(format!("parse {asset}: {e}")))?;
+        // Unified entry: encodes mips (regular) or re-tiles (virtual
+        // texture) internally based on the original's shape.
+        let (na, ne, nb) = gore_tex::texdata::replace_texture_image(
+            &ua, &ue, &ub, img.as_raw(), w, h, &info.format,
+        )
+            .map_err(|e| ModError::Other(format!("replace {asset}: {e}")))?;
+        std::fs::write(dest_dir.join(format!("{leaf}.uasset")), &na).map_err(io("write uasset"))?;
+        std::fs::write(dest_dir.join(format!("{leaf}.uexp")), &ne).map_err(io("write uexp"))?;
+        if !nb.is_empty() {
+            std::fs::write(dest_dir.join(format!("{leaf}.ubulk")), &nb).map_err(io("write ubulk"))?;
+        }
+        // The unpacked original is consumed (rewritten into cook_dir); drop its unique
+        // temp dir now so a many-texture mod doesn't leak one multi-MB dir per asset.
+        let _ = std::fs::remove_dir_all(&tmp_orig);
+    }
+    // Triplet name must be unique across DISTINCT mods (so one mod's mounted pak can't
+    // be clobbered by another whose name sanitizes to the same stem) AND across multiple
+    // texture components WITHIN this bundle. Append a stable hash of the original
+    // (unsanitized) mod name for the former and the component index for the latter.
+    let triplet_name = format!(
+        "zzz_{}_{}_{}_tex_P",
+        sanitize(mod_name),
+        name_hash(mod_name),
+        comp_idx
+    );
+    let pack_out = std::env::temp_dir()
+        .join(format!("gore-mod-tex-pack-{}-{}", std::process::id(), comp_idx));
+    let _ = std::fs::remove_dir_all(&pack_out);
+    std::fs::create_dir_all(&pack_out).map_err(io("mkdir pack"))?;
+    let triplet = gore_tex::container::repack_to_zen(&cook_dir, &triplet_name, &pack_out, &game_dir, false)
+        .map_err(|e| ModError::Other(format!("pack: {e}")))?;
+    // The cooked tree is now packed into the triplet; drop it. (cook_dir/pack_out are
+    // pid+component scoped and cleared at the next deploy, so they don't leak per-deploy;
+    // the triplet in pack_out is consumed by apply_writes copying it into ~mods.)
+    let _ = std::fs::remove_dir_all(&cook_dir);
+    let mods_dir = game_dir.join("G1R").join("Content").join("Paks").join("~mods");
+    let mut out = Vec::new();
+    for src in triplet {
+        let dst = mods_dir.join(src.file_name()
+            .ok_or_else(|| ModError::Other("triplet file".into()))?);
+        out.push((src, dst));
+    }
+    Ok(out)
+}
+
 /// Stage a prepared plan WITHOUT touching any live game file: snapshot each target's current
 /// (pre-deploy) bytes into the undo, create its `*.gore-bak` backup, and record the intended
 /// UE4SS mod dir. This runs BEFORE the deploy record is persisted; the actual live writes happen
 /// later in [`apply_writes`], so a crash between record-write and apply is still recoverable.
 fn stage(plan: &DeployPlan, record: &mut DeployRecord, undo: &mut Undo) -> Result<()> {
-    // Note the intended UE4SS target now so the persisted record knows about it even if a crash
-    // interrupts the swap in `apply_writes` — undeploy can then still clean it up.
-    if let Some((_, dst)) = &plan.ue4ss {
-        record.ue4ss_mod_dir = Some(dst.display().to_string());
+    // Note the intended UE4SS target(s) now so the persisted record knows about them even if a
+    // crash interrupts the swap in `apply_writes` — undeploy can then still clean them up. The
+    // first goes into the single-mod `ue4ss_mod_dir` (legacy shape); any further dirs (manager
+    // deployments only) into `ue4ss_mod_dirs`.
+    for (i, (_, dst)) in plan.ue4ss_dirs.iter().enumerate() {
+        let s = dst.display().to_string();
+        if i == 0 {
+            record.ue4ss_mod_dir = Some(s);
+        } else if !record.ue4ss_mod_dirs.contains(&s) {
+            record.ue4ss_mod_dirs.push(s);
+        }
     }
     // Record the additive texture triplet dsts so undeploy can delete them (no backup needed).
     for (_, dst) in &plan.texture_triplets {
         record.texture_triplets.push(dst.display().to_string());
+    }
+    // Same for the manager-installed pak/triplet dsts (additive, no backup).
+    for (_, dst) in &plan.managed_paks {
+        record.managed_paks.push(dst.display().to_string());
     }
     for (live, _) in &plan.writes {
         // Snapshot the current (pre-deploy) bytes so rollback restores the EXACT prior state —
@@ -1008,7 +1083,7 @@ fn stage(plan: &DeployPlan, record: &mut DeployRecord, undo: &mut Undo) -> Resul
 /// file. Backups and undo snapshots were already taken by [`stage`]; on error the caller calls
 /// `undo.rollback()` to restore the exact prior state.
 fn apply_writes(plan: &DeployPlan, undo: &mut Undo) -> Result<()> {
-    if let Some((src, dst)) = &plan.ue4ss {
+    for (src, dst) in &plan.ue4ss_dirs {
         // Stage into a sibling temp dir, then swap into place — a failed/partial copy never
         // destroys a previous same-named UE4SS mod already at `dst`.
         let staging = staging_dir(dst);
@@ -1028,7 +1103,7 @@ fn apply_writes(plan: &DeployPlan, undo: &mut Undo) -> Result<()> {
             std::fs::rename(dst, &old).map_err(io("moving old ue4ss mod aside"))?;
             match std::fs::rename(&staging, dst) {
                 Ok(()) => {
-                    undo.ue4ss_old = Some((old, dst.clone()));
+                    undo.ue4ss_old.push((old, dst.clone()));
                 }
                 Err(e) => {
                     let _ = std::fs::rename(&old, dst); // restore the previous mod
@@ -1038,7 +1113,7 @@ fn apply_writes(plan: &DeployPlan, undo: &mut Undo) -> Result<()> {
             }
         } else {
             std::fs::rename(&staging, dst).map_err(io("installing ue4ss mod"))?;
-            undo.ue4ss_fresh = Some(dst.clone());
+            undo.ue4ss_fresh.push(dst.clone());
         }
     }
     // Copy each texture triplet file into `~mods`, tracking it for rollback. Snapshot any bytes
@@ -1058,6 +1133,21 @@ fn apply_writes(plan: &DeployPlan, undo: &mut Undo) -> Result<()> {
         };
         undo.texture_files.push((dst.clone(), prior));
         std::fs::copy(src, dst).map_err(io(&format!("copy triplet to {}", dst.display())))?;
+    }
+    // Copy each manager-installed pak/triplet file into place, tracked for rollback exactly
+    // like the texture triplets above (prior bytes restored, fresh additions deleted). Their
+    // srcs are durable library files — no temp pack dirs to clean up afterwards.
+    for (src, dst) in &plan.managed_paks {
+        if let Some(p) = dst.parent() {
+            std::fs::create_dir_all(p).map_err(io("mkdir ~mods"))?;
+        }
+        let prior = match std::fs::read(dst) {
+            Ok(b) => Some(b),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(io(&format!("snapshot existing pak {}", dst.display()))(e)),
+        };
+        undo.texture_files.push((dst.clone(), prior));
+        std::fs::copy(src, dst).map_err(io(&format!("copy pak to {}", dst.display())))?;
     }
     // The packed triplets are now in ~mods; remove their temp pack dirs
     // (gore-mod-tex-pack-<pid>-<idx>) so a successful deploy doesn't leave a full
@@ -1124,15 +1214,21 @@ fn retire_leftovers(
         }
     }
     if let Some(prev) = prev {
-        let new_dir = plan.ue4ss.as_ref().map(|(_, dst)| dst.display().to_string());
-        // Retire the previous deploy's UE4SS dir AND any dirs it had already failed to remove
+        let new_dirs: Vec<String> =
+            plan.ue4ss_dirs.iter().map(|(_, dst)| dst.display().to_string()).collect();
+        // Retire the previous deploy's UE4SS dir(s) AND any dirs it had already failed to remove
         // (its own `stale_ue4ss_dirs`). These were pre-seeded into `record.stale_ue4ss_dirs` for
         // crash-safety; here we actually remove them and reconcile the list: drop the ones we
         // cleaned, keep (locked/permissions) ones so a later undeploy still cleans them up.
-        let prev_dirs: Vec<String> =
-            prev.ue4ss_mod_dir.iter().chain(prev.stale_ue4ss_dirs.iter()).cloned().collect();
+        let prev_dirs: Vec<String> = prev
+            .ue4ss_mod_dir
+            .iter()
+            .chain(prev.stale_ue4ss_dirs.iter())
+            .chain(prev.ue4ss_mod_dirs.iter())
+            .cloned()
+            .collect();
         for prev_dir in prev_dirs {
-            if new_dir.as_deref() == Some(prev_dir.as_str()) {
+            if new_dirs.contains(&prev_dir) {
                 continue;
             }
             let removed = std::fs::remove_dir_all(&prev_dir).is_ok() || !Path::new(&prev_dir).exists();
@@ -1172,6 +1268,24 @@ fn retire_leftovers(
                 }
             }
             // not removed (locked) -> leave it in record.texture_triplets for undeploy to retry
+        }
+
+        // And the previous deploy's manager-installed pak/triplet files (additive, no backup),
+        // with the same delete-and-prune / keep-on-failure handling as the texture triplets.
+        let new_paks: Vec<String> =
+            plan.managed_paks.iter().map(|(_, dst)| dst.display().to_string()).collect();
+        for t in prev.managed_paks.iter() {
+            if new_paks.contains(t) {
+                continue; // this deploy re-creates it; it stays as the active deployment's pak
+            }
+            let removed = std::fs::remove_file(Path::new(t)).is_ok() || !Path::new(t).exists();
+            if removed {
+                if let Some(i) = record.managed_paks.iter().position(|x| x == t) {
+                    record.managed_paks.remove(i);
+                    changed = true;
+                }
+            }
+            // not removed (locked) -> leave it in record.managed_paks for undeploy to retry
         }
     }
     (changed, pending_deletes)
@@ -1227,7 +1341,7 @@ fn read_record(game_root: &Path) -> Option<DeployRecord> {
 /// current live no longer matches it while a backup exists, that backup is stale (pre-update) —
 /// rebuilding from it would write an old asset over the newer game file. In that case the
 /// (updated) live IS the new pristine and the caller must refresh the stale backup. Never writes.
-fn read_pristine(live: &Path, prev: Option<&DeployRecord>) -> Result<(Vec<u8>, bool)> {
+pub(crate) fn read_pristine(live: &Path, prev: Option<&DeployRecord>) -> Result<(Vec<u8>, bool)> {
     let bak = bak_path(live);
     if bak.exists() {
         let live_key = live.display().to_string();
@@ -1261,7 +1375,7 @@ fn read_pristine(live: &Path, prev: Option<&DeployRecord>) -> Result<(Vec<u8>, b
     Ok((bytes, false))
 }
 
-fn bak_path(live: &Path) -> PathBuf {
+pub(crate) fn bak_path(live: &Path) -> PathBuf {
     let mut s = live.as_os_str().to_os_string();
     s.push(".gore-bak");
     PathBuf::from(s)
@@ -1394,7 +1508,7 @@ pub fn undeploy(game_root: &Path) -> Result<Option<DeployRecord>> {
 
 /// Back up `live` to `live.gore-bak` if no backup exists yet (preserving the pristine file),
 /// register it in `record`, and return the backup path. The backup is the pristine source.
-fn backup(live: &Path, record: &mut DeployRecord) -> Result<(PathBuf, bool)> {
+pub(crate) fn backup(live: &Path, record: &mut DeployRecord) -> Result<(PathBuf, bool)> {
     if !live.exists() {
         return Err(ModError::Other(format!("game file not found: {}", live.display())));
     }
@@ -1686,7 +1800,7 @@ mod tests {
         // The new record was pre-seeded with the prev triplets (as deploy() step (b) does).
         let mut record = DeployRecord { mod_name: "New".into(), texture_triplets: old.clone(), ..Default::default() };
         // New plan has NO texture triplets (e.g. a non-texture mod) -> all prev ones are stale.
-        let plan = DeployPlan { ue4ss: None, writes: Vec::new(), refresh_baks: Vec::new(), texture_triplets: Vec::new() };
+        let plan = DeployPlan::default();
         let (changed, _) = retire_leftovers(&[], Some(&prev), &plan, &mut record);
         assert!(changed);
         for f in &old { assert!(!std::path::Path::new(f).exists(), "stale triplet not deleted: {f}"); }
