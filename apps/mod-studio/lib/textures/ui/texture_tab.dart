@@ -315,8 +315,21 @@ class _TextureTabState extends ConsumerState<TextureTab> {
   Widget _detail(Map<String, String> entries, TextureReplacementsState staged) {
     final sel = _selected;
     if (sel == null) return const Center(child: Text('Select a texture'));
-    final gameDir = gameRootFromExe(ref.read(gameExePathProvider));
     final replaced = staged.items[sel];
+    // Changes>Textures (onlyStaged) reviews staged assets only: the browser is
+    // filtered to the staged keys, so a selection that gets un-staged (e.g.
+    // removing A's replacement while B stays staged) drops out of the tree but
+    // could still linger here. Render a placeholder instead of a preview /
+    // Replace button for it — parity with the other filtered views, which never
+    // let the detail pane operate on an item outside the active filter. No hard
+    // clear of _selected is needed; build() watches the provider, so re-staging
+    // brings the same selection right back.
+    if (widget.onlyStaged && replaced == null) {
+      return const Center(
+        child: Text('This texture is no longer staged.'),
+      );
+    }
+    final gameDir = gameRootFromExe(ref.read(gameExePathProvider));
     // Replace capability is only known after the preview (auto-loaded on select)
     // resolves: the FFI reports whether the texture's format is re-encodable and,
     // for virtual textures, whether its shape is retileable. Block while loading,

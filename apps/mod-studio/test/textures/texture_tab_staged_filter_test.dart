@@ -135,6 +135,57 @@ void main() {
     expect(after, ['Game/Textures/A', 'Game/Textures/B']);
   });
 
+  testWidgets('onlyStaged: detail hides a selection once it is un-staged', (
+    t,
+  ) async {
+    await pumpApp(t, onlyStaged: true);
+    // Two staged assets so un-staging one leaves the filtered view non-empty.
+    notifierOf(t).setReplacement(
+      const TextureReplacement(asset: 'Game/Textures/A', imagePath: 'a.png'),
+    );
+    notifierOf(t).setReplacement(
+      const TextureReplacement(asset: 'Game/Textures/B', imagePath: 'b.png'),
+    );
+    await t.pump();
+
+    // Select A via the flat search list (the game root is null, so no FFI
+    // extract runs; the detail pane still renders A's header + Replace button).
+    await t.enterText(find.byType(TextField), 'Game/Textures/A');
+    await t.pump();
+    await t.tap(find.byType(ListTile).first);
+    await t.pump();
+    expect(find.widgetWithText(FilledButton, 'Replace…'), findsOneWidget);
+    expect(find.text('This texture is no longer staged.'), findsNothing);
+
+    // Un-stage A while B stays staged: the detail pane must stop showing A's
+    // preview/Replace and fall back to the placeholder, while B remains in the
+    // (still non-empty) filtered browser.
+    notifierOf(t).remove('Game/Textures/A');
+    await t.pump();
+    expect(find.text('This texture is no longer staged.'), findsOneWidget);
+    expect(find.widgetWithText(FilledButton, 'Replace…'), findsNothing);
+    expect(find.text('No staged texture replacements.'), findsNothing);
+
+    // B is still the sole staged path in the browser list (search for "A":
+    // filtered to staged keys, only B remains, so A no longer matches).
+    await t.enterText(find.byType(TextField), 'Game/Textures/');
+    await t.pump();
+    expect(
+      find.descendant(
+        of: find.byType(ListTile),
+        matching: find.text('Game/Textures/B'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: find.byType(ListTile),
+        matching: find.text('Game/Textures/A'),
+      ),
+      findsNothing,
+    );
+  });
+
   testWidgets('default mode: full index shown regardless of staging', (
     t,
   ) async {
