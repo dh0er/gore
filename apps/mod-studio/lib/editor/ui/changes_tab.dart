@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart'; // StateProvider
 
+import '../../app/domain/asset_entry_tracker.dart';
 import '../../app/ui/game_path_scope.dart';
 import '../../audio/domain/audio_replacements_notifier.dart';
 import '../../audio/ui/audio_tab.dart';
@@ -34,8 +35,8 @@ enum ChangesAssetSection { textures, scripts }
 /// the default matches the tab's initial "All" section.
 ///
 /// Published by [ChangesTab] on section selection so home_page's main-tab
-/// re-entry handler can refresh exactly the provider backing the embedded
-/// view, in parity with the standalone Textures/Scripts tab re-entries.
+/// entry handler can refresh exactly the provider backing the embedded
+/// view, in parity with the standalone Textures/Scripts tab entries.
 /// Without it, leaving the Changes MAIN tab parked on Textures/Scripts and
 /// re-entering it later would keep showing a stale texture index / script
 /// module list after a deploy, undeploy, or game patch until the user
@@ -57,33 +58,33 @@ class ChangesTab extends ConsumerStatefulWidget {
 class _ChangesTabState extends ConsumerState<ChangesTab> {
   _ChangesSection _section = _ChangesSection.all;
 
-  /// Sections shown at least once — mirrors the visited semantics of the
-  /// main tabs' TabReentryListener (home_page) for the embedded
-  /// install-bound views. On FIRST entry a section's data providers are
-  /// created fresh by that very build, so invalidating would double-fetch.
-  /// On RE-entry they may have stayed alive the whole time (the keep-alive
-  /// main tabs watch the same providers), so without a refresh a
-  /// deploy/undeploy between visits would leave this tab showing a stale
-  /// texture index / script module list.
-  final Set<_ChangesSection> _visited = {_ChangesSection.all};
-
   void _selectSection(_ChangesSection section) {
     if (section == _section) return;
-    if (!_visited.add(section)) {
-      // Re-entry only (never per build, never on first display).
-      if (section == _ChangesSection.textures) {
-        ref.invalidate(textureIndexProvider);
-      } else if (section == _ChangesSection.scripts) {
-        ref.invalidate(scriptModulesProvider);
-      }
-      // Audio is deliberately NOT invalidated: main-tab re-entry
-      // (TabReentryListener in home_page) doesn't refresh the audio
-      // providers either — keep the two entry paths in parity.
+    // Entering an install-bound asset section refreshes its shared data
+    // provider — unless this is the very first time that asset kind is
+    // shown ANYWHERE this session (then this very build creates the
+    // provider fresh, and invalidating would double-fetch). The gate is the
+    // session-wide tracker rather than a per-surface visited set on
+    // purpose: the standalone Textures/Scripts main tabs watch the same
+    // autoDispose providers and, kept alive, can hold a value from before a
+    // deploy, undeploy, or game patch — so even this tab's FIRST section
+    // entry may hit a stale provider. (Runs on section taps only — never
+    // during a build.)
+    final tracker = ref.read(assetEntryTrackerProvider);
+    if (section == _ChangesSection.textures &&
+        tracker.shouldInvalidateOnEntry(AssetKind.textureIndex)) {
+      ref.invalidate(textureIndexProvider);
+    } else if (section == _ChangesSection.scripts &&
+        tracker.shouldInvalidateOnEntry(AssetKind.scriptModules)) {
+      ref.invalidate(scriptModulesProvider);
     }
+    // Audio is deliberately NOT invalidated: main-tab entry
+    // (TabEntryListener in home_page) doesn't refresh the audio providers
+    // either — keep the two entry paths in parity.
     setState(() {
       _section = section;
       // Publish the embedded asset section for home_page's main-tab
-      // re-entry refresh. Safe to write here: sections change only via
+      // entry refresh. Safe to write here: sections change only via
       // sidebar taps, never during another consumer's build. (The initial
       // "All" needs no write — it matches the provider's null default.)
       ref.read(changesAssetSectionProvider.notifier).state = switch (section) {

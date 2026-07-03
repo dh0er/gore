@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'app/domain/asset_entry_tracker.dart';
 import 'app/domain/ui_settings.dart';
 import 'app/game_paths.dart';
 import 'app/ui/game_path_scope.dart';
 import 'app/ui/keep_alive_tab.dart';
-import 'app/ui/tab_reentry_listener.dart';
+import 'app/ui/tab_entry_listener.dart';
 import 'app/ui/window_chrome.dart';
 import 'catalog/ui/items_tab.dart';
 import 'core/mod_ffi.dart';
@@ -34,31 +35,49 @@ const _texturesTabIndex = 3;
 const _scriptsTabIndex = 4;
 const _changesTabIndex = 5;
 
-/// Re-entry refresh for the kept-alive main tabs (see the
-/// [TabReentryListener] in [HomePage]): invalidates the data providers
-/// backing the re-entered tab so it refetches — the pre-keep-alive
-/// freshness semantics.
+/// Entry refresh for the kept-alive main tabs (see the [TabEntryListener]
+/// in [HomePage]): invalidates the install-bound data providers backing the
+/// entered tab so it refetches — the pre-keep-alive freshness semantics.
 ///
-/// The Changes tab embeds the same Textures/Scripts views itself; in parity
-/// with the standalone tab cases, only the provider of the asset section it
-/// CURRENTLY displays is refreshed (no over-fetch for sections that aren't
-/// on screen; nothing for All/Items/Dialogs/Audio). Section re-entry INSIDE
-/// the Changes tab is handled by [ChangesTab]'s own selection logic.
+/// Runs on EVERY settled tab entry, first entries included; whether an
+/// entry actually refreshes is the session-wide [AssetEntryTracker]'s call.
+/// A per-tab "first entry = fresh build, skip" shortcut would be wrong
+/// here: the Changes tab embeds the same Textures/Scripts views, and while
+/// its embed keeps the shared `autoDispose` provider alive a deploy,
+/// undeploy, or game patch can stale the value before the standalone tab is
+/// ever opened. Only the very first display of an asset kind ANYWHERE
+/// skips the invalidate — that build creates the provider fresh, so
+/// invalidating would double-fetch.
+///
+/// For the Changes tab, in parity with the standalone tab cases, only the
+/// provider of the asset section it CURRENTLY displays is refreshed (no
+/// over-fetch for sections that aren't on screen; nothing for
+/// All/Items/Dialogs/Audio). Section entry INSIDE the Changes tab is
+/// handled by [ChangesTab]'s own selection logic, against the same tracker.
 ///
 /// Top-level so tests can exercise the real mapping against a real
-/// [TabReentryListener] without pumping the FFI-heavy [HomePage].
-void handleMainTabReentered(WidgetRef ref, int index) {
+/// [TabEntryListener] without pumping the FFI-heavy [HomePage].
+void handleMainTabEntered(WidgetRef ref, int index) {
+  final tracker = ref.read(assetEntryTrackerProvider);
   switch (index) {
     case _texturesTabIndex:
-      ref.invalidate(textureIndexProvider);
+      if (tracker.shouldInvalidateOnEntry(AssetKind.textureIndex)) {
+        ref.invalidate(textureIndexProvider);
+      }
     case _scriptsTabIndex:
-      ref.invalidate(scriptModulesProvider);
+      if (tracker.shouldInvalidateOnEntry(AssetKind.scriptModules)) {
+        ref.invalidate(scriptModulesProvider);
+      }
     case _changesTabIndex:
       switch (ref.read(changesAssetSectionProvider)) {
         case ChangesAssetSection.textures:
-          ref.invalidate(textureIndexProvider);
+          if (tracker.shouldInvalidateOnEntry(AssetKind.textureIndex)) {
+            ref.invalidate(textureIndexProvider);
+          }
         case ChangesAssetSection.scripts:
-          ref.invalidate(scriptModulesProvider);
+          if (tracker.shouldInvalidateOnEntry(AssetKind.scriptModules)) {
+            ref.invalidate(scriptModulesProvider);
+          }
         case null:
           break;
       }
@@ -284,11 +303,12 @@ class _HomePageState extends ConsumerState<HomePage>
         length: 7,
         // KeepAliveTab keeps every tab (and its autoDispose providers)
         // mounted across switches, so the texture index / script module list
-        // would go stale after a deploy, undeploy, or game patch. Re-entering
-        // those tabs refetches — the pre-keep-alive freshness semantics —
-        // while the tabs' UI state survives.
-        child: TabReentryListener(
-          onTabReentered: (index) => handleMainTabReentered(ref, index),
+        // would go stale after a deploy, undeploy, or game patch. Entering
+        // those tabs refetches (tracker-gated: only an asset kind's very
+        // first display anywhere builds fresh instead) — the pre-keep-alive
+        // freshness semantics — while the tabs' UI state survives.
+        child: TabEntryListener(
+          onTabEntered: (index) => handleMainTabEntered(ref, index),
           child: Column(
             children: [
               Container(

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:gore_mod/app/domain/asset_entry_tracker.dart';
 import 'package:gore_mod/catalog/domain/catalog_provider.dart';
 import 'package:gore_mod/catalog/domain/item_entry.dart';
 import 'package:gore_mod/core/mod_ffi.dart';
@@ -288,8 +289,9 @@ void main() {
     expect(textureBuilds, 1);
     expect(scriptBuilds, 1);
 
-    // FIRST entry into each section: no invalidate on top of the fresh
-    // build (no double fetch) — TabReentryListener visited semantics.
+    // FIRST entry into each section — and the kinds' first display anywhere
+    // this session: no invalidate on top of the fresh build (no double
+    // fetch) — AssetEntryTracker first-display semantics.
     await tester.tap(find.text('Textures (0)'));
     await tester.pumpAndSettle();
     expect(textureBuilds, 1);
@@ -319,5 +321,51 @@ void main() {
     await tester.pumpAndSettle();
     expect(textureBuilds, 2);
     expect(scriptBuilds, 2);
+  });
+
+  testWidgets(
+      'first section entry refreshes when the standalone tab already loaded '
+      'the shared provider', (tester) async {
+    var textureBuilds = 0;
+    var scriptBuilds = 0;
+    final container = ProviderContainer(overrides: [
+      textureIndexProvider.overrideWith((ref) {
+        textureBuilds++;
+        return Future.value(const <String, String>{});
+      }),
+      scriptModulesProvider.overrideWith((ref) {
+        scriptBuilds++;
+        return Future.value(const <ScriptModuleInfo>[]);
+      }),
+    ]);
+    addTearDown(container.dispose);
+    // Stand-in for the standalone Textures/Scripts MAIN tabs having been
+    // opened before this tab: they built the shared autoDispose providers,
+    // keep them alive across tab switches (the listens here), and marked
+    // both kinds as displayed via handleMainTabEntered's tracker consult.
+    container.listen(textureIndexProvider, (_, _) {});
+    container.listen(scriptModulesProvider, (_, _) {});
+    final tracker = container.read(assetEntryTrackerProvider);
+    tracker.shouldInvalidateOnEntry(AssetKind.textureIndex);
+    tracker.shouldInvalidateOnEntry(AssetKind.scriptModules);
+    await pumpHarness(tester, container);
+    expect(textureBuilds, 1);
+    expect(scriptBuilds, 1);
+
+    // A deploy/undeploy/game patch happens here: the still-alive providers
+    // now hold stale data.
+
+    // FIRST entry into each section must refetch. (With the per-surface
+    // visited set these first entries counted as "fresh build" and the
+    // refresh was skipped — the embeds showed the stale values.)
+    await tester.tap(find.text('Textures (0)'));
+    await tester.pumpAndSettle();
+    expect(textureBuilds, 2);
+    expect(scriptBuilds, 1);
+
+    await tester.tap(find.text('Scripts (0)'));
+    await tester.pumpAndSettle();
+    expect(scriptBuilds, 2);
+    expect(textureBuilds, 2);
   });
 }

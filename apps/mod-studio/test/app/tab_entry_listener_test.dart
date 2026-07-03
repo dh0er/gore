@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:gore_mod/app/domain/asset_entry_tracker.dart';
 import 'package:gore_mod/app/ui/keep_alive_tab.dart';
-import 'package:gore_mod/app/ui/tab_reentry_listener.dart';
+import 'package:gore_mod/app/ui/tab_entry_listener.dart';
 
 /// Exposes [ChangeNotifier.notifyListeners] so tests can simulate the
 /// repeated same-settled-index notifications a TabBarView swipe gesture
@@ -15,7 +16,8 @@ class _RefiringTabController extends TabController {
 
 void main() {
   testWidgets(
-    'tab re-entry invalidates provider while KeepAliveTab preserves UI state',
+    'tracker-gated tab entry invalidates the provider while KeepAliveTab '
+    'preserves UI state',
     (tester) async {
       var buildCount = 0;
       final countingProvider = Provider.autoDispose<int>((ref) => ++buildCount);
@@ -26,9 +28,18 @@ void main() {
             home: DefaultTabController(
               length: 2,
               child: Consumer(
-                builder: (context, ref, _) => TabReentryListener(
-                  onTabReentered: (index) {
-                    if (index == 1) ref.invalidate(countingProvider);
+                builder: (context, ref, _) => TabEntryListener(
+                  // The production wiring (handleMainTabEntered): the
+                  // callback fires on EVERY settled entry — first ones
+                  // included — and the session tracker decides whether the
+                  // entry needs the invalidate.
+                  onTabEntered: (index) {
+                    if (index == 1 &&
+                        ref
+                            .read(assetEntryTrackerProvider)
+                            .shouldInvalidateOnEntry(AssetKind.textureIndex)) {
+                      ref.invalidate(countingProvider);
+                    }
                   },
                   child: Scaffold(
                     appBar: const TabBar(
@@ -65,8 +76,9 @@ void main() {
       // Provider tab not visited yet: never built.
       expect(buildCount, 0);
 
-      // First entry into tab B: provider builds once, NOT invalidated on top
-      // (that would double-fetch).
+      // First entry into tab B — the kind's first display anywhere: the
+      // entry's own build creates the provider; the tracker skips the
+      // invalidate (no double fetch).
       await tester.tap(find.text('B'));
       await tester.pumpAndSettle();
       expect(find.text('build 1'), findsOneWidget);
@@ -93,8 +105,8 @@ void main() {
   );
 
   testWidgets(
-    'callback fires exactly once per settled tab change despite repeated '
-    'notifications on the same index',
+    'callback fires exactly once per settled tab change — first entries '
+    'included — despite repeated notifications on the same index',
     (tester) async {
       final controller = _RefiringTabController(
         length: 2,
@@ -105,9 +117,9 @@ void main() {
 
       await tester.pumpWidget(
         MaterialApp(
-          home: TabReentryListener(
+          home: TabEntryListener(
             controller: controller,
-            onTabReentered: log.add,
+            onTabEntered: log.add,
             child: Scaffold(
               appBar: TabBar(
                 controller: controller,
@@ -128,36 +140,38 @@ void main() {
         ),
       );
 
-      // Repeat notifications on the initial settled tab: no callback.
+      // Repeat notifications on the initial settled tab: no tab change, no
+      // callback (the attach tab's providers come from the initial build).
       controller.refire();
       controller.refire();
       expect(log, isEmpty);
 
-      // First arrival at tab B: no callback (first entry is excluded)...
+      // First arrival at tab B IS an entry (whether it needs a refresh is
+      // the caller's tracker decision, not this widget's)...
       controller.index = 1;
       await tester.pumpAndSettle();
-      expect(log, isEmpty);
+      expect(log, [1]);
 
       // ...and swipe-style repeat notifications right after the arrival must
-      // not turn the first entry into a phantom re-entry.
+      // not fire it again.
       controller.refire();
       controller.refire();
-      expect(log, isEmpty);
+      expect(log, [1]);
 
-      // Back to A (visited): exactly one callback per actual change, however
-      // many notifications the gesture produces on the settled index.
+      // Back to A: exactly one callback per actual change, however many
+      // notifications the gesture produces on the settled index.
       controller.index = 0;
       await tester.pumpAndSettle();
       controller.refire();
       controller.refire();
       controller.refire();
-      expect(log, [0]);
+      expect(log, [1, 0]);
 
-      // And once more to B (now visited).
+      // And once more to B.
       controller.index = 1;
       await tester.pumpAndSettle();
       controller.refire();
-      expect(log, [0, 1]);
+      expect(log, [1, 0, 1]);
     },
   );
 }

@@ -2,49 +2,53 @@ import 'package:flutter/material.dart';
 
 import 'keep_alive_tab.dart';
 
-/// Calls [onTabReentered] when the observed [TabController] settles on a tab
-/// the user has visited before in this controller's lifetime.
+/// Calls [onTabEntered] whenever the observed [TabController] settles on a
+/// different tab — first entries included.
 ///
 /// Companion to [KeepAliveTab]: keep-alive keeps a tab's widget subtree (and
 /// therefore its `autoDispose` providers) mounted after the user leaves, so
 /// data that previously refreshed on every tab entry — because leaving the
 /// tab disposed the provider — would go stale. The caller restores those
-/// freshness semantics by invalidating the relevant providers on re-entry,
+/// freshness semantics by invalidating the relevant providers on entry,
 /// while the tab's UI state (search text, expansion, selection, scroll)
 /// survives untouched.
 ///
-/// First entry is deliberately excluded: the tab's providers are freshly
-/// created by that build anyway, and invalidating would double-fetch.
+/// Whether a given entry actually needs an invalidate is the CALLER's
+/// decision (see `AssetEntryTracker`), not this widget's: a tab's first
+/// entry is not necessarily a fresh provider build, because another surface
+/// (the Changes tab embeds the same Textures/Scripts views) may already be
+/// keeping the shared provider alive — with a value from before a deploy,
+/// undeploy, or game patch. Only the tab the controller is on at attach
+/// never produces a callback by itself: there is no tab CHANGE to react to,
+/// and its providers are created by the initial build.
 ///
 /// The callback fires exactly once per settled tab change. The controller
 /// notifies more often than that — during a tap's animation
 /// (`indexIsChanging` true) and repeatedly with `indexIsChanging` false
 /// during swipe gestures — so both the animation phase and repeat
 /// notifications for an already-settled index are filtered out.
-class TabReentryListener extends StatefulWidget {
-  const TabReentryListener({
+class TabEntryListener extends StatefulWidget {
+  const TabEntryListener({
     super.key,
     this.controller,
-    required this.onTabReentered,
+    required this.onTabEntered,
     required this.child,
   });
 
   /// The tab controller to observe. Defaults to [DefaultTabController.of].
   final TabController? controller;
 
-  /// Called with the settled tab index, only for tabs already visited, once
-  /// per actual tab change.
-  final ValueChanged<int> onTabReentered;
+  /// Called with the settled tab index, once per actual tab change.
+  final ValueChanged<int> onTabEntered;
 
   final Widget child;
 
   @override
-  State<TabReentryListener> createState() => _TabReentryListenerState();
+  State<TabEntryListener> createState() => _TabEntryListenerState();
 }
 
-class _TabReentryListenerState extends State<TabReentryListener> {
+class _TabEntryListenerState extends State<TabEntryListener> {
   TabController? _controller;
-  final Set<int> _visited = {};
   int _lastSettledIndex = 0;
 
   @override
@@ -54,7 +58,7 @@ class _TabReentryListenerState extends State<TabReentryListener> {
   }
 
   @override
-  void didUpdateWidget(TabReentryListener oldWidget) {
+  void didUpdateWidget(TabEntryListener oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.controller != oldWidget.controller) _updateController();
   }
@@ -65,9 +69,6 @@ class _TabReentryListenerState extends State<TabReentryListener> {
     _controller?.removeListener(_onControllerChanged);
     _controller = controller;
     _lastSettledIndex = controller.index;
-    _visited
-      ..clear()
-      ..add(controller.index);
     controller.addListener(_onControllerChanged);
   }
 
@@ -83,13 +84,10 @@ class _TabReentryListenerState extends State<TabReentryListener> {
     final index = controller.index;
     // Swipes (and other paths) notify repeatedly with indexIsChanging false
     // for the same settled index; without this guard one gesture would
-    // re-fire the callback several times (including on a tab's first entry,
-    // right after the visited-set add).
+    // re-fire the callback several times.
     if (index == _lastSettledIndex) return;
     _lastSettledIndex = index;
-    if (!_visited.add(index)) {
-      widget.onTabReentered(index);
-    }
+    widget.onTabEntered(index);
   }
 
   @override
