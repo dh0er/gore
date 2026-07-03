@@ -14,6 +14,7 @@ void main() {
   Widget buildBrowser({
     required List<CatalogItem> catalog,
     void Function(CatalogItem)? onSelected,
+    Set<String>? onlyIds,
   }) {
     return ProviderScope(
       overrides: [
@@ -25,6 +26,7 @@ void main() {
         home: Scaffold(
           body: CatalogBrowser(
             onItemSelected: onSelected ?? (_) {},
+            onlyIds: onlyIds,
           ),
         ),
       ),
@@ -75,5 +77,47 @@ void main() {
     await tester.enterText(find.byType(TextField), 'xyzzy');
     await tester.pumpAndSettle();
     expect(find.text('No items match'), findsOneWidget);
+  });
+
+  testWidgets('onlyIds restricts items and drops empty categories', (tester) async {
+    await tester.pumpWidget(buildBrowser(
+      catalog: [apple, cheese, sword],
+      onlyIds: {'ItFo_Apple'},
+    ));
+    await tester.pumpAndSettle();
+    // Only the food category survives (melee weapons has no remaining items).
+    expect(find.text('Food & potions (1)'), findsOneWidget);
+    expect(find.textContaining('Melee weapons'), findsNothing);
+    expect(find.text('Apple'),  findsOneWidget);
+    expect(find.text('Cheese'), findsNothing);
+    expect(find.text('Sword'),  findsNothing);
+  });
+
+  testWidgets('onlyIds applies before search', (tester) async {
+    await tester.pumpWidget(buildBrowser(
+      catalog: [apple, cheese, sword],
+      onlyIds: {'ItFo_Apple', 'ItFo_Cheese'},
+    ));
+    await tester.pumpAndSettle();
+    // An excluded item is not reachable via search.
+    await tester.enterText(find.byType(TextField), 'sword');
+    await tester.pumpAndSettle();
+    expect(find.text('No items match'), findsOneWidget);
+    // An included item still is.
+    await tester.enterText(find.byType(TextField), 'cheese');
+    await tester.pumpAndSettle();
+    expect(find.text('Cheese'), findsOneWidget);
+  });
+
+  testWidgets('empty onlyIds shows the generic empty state without crashing',
+      (tester) async {
+    await tester.pumpWidget(buildBrowser(
+      catalog: [apple, cheese, sword],
+      onlyIds: const {},
+    ));
+    await tester.pumpAndSettle();
+    expect(find.text('No items match'), findsOneWidget);
+    expect(find.byType(ListTile), findsNothing);
+    expect(tester.takeException(), isNull);
   });
 }

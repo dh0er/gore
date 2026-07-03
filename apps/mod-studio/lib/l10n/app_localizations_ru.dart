@@ -18,6 +18,72 @@ class AppLocalizationsRu extends AppLocalizations {
   String get tabSettings => 'Settings';
 
   @override
+  String get tabDialogs => 'Диалоги';
+
+  @override
+  String get tabAudio => 'Аудио';
+
+  @override
+  String get tabTextures => 'Текстуры';
+
+  @override
+  String get tabScripts => 'Скрипты';
+
+  @override
+  String get changesAll => 'Все';
+
+  @override
+  String get sectionItemValues => 'Значения предметов';
+
+  @override
+  String get sectionLocalizedText => 'Локализованные тексты';
+
+  @override
+  String get audioCatCreatures => 'Существа';
+
+  @override
+  String get audioCatObjects => 'Объекты';
+
+  @override
+  String get audioCatMagic => 'Магия';
+
+  @override
+  String get audioCatMovement => 'Движение';
+
+  @override
+  String get audioCatWorld => 'Мир';
+
+  @override
+  String get audioCatAction => 'Действия';
+
+  @override
+  String get audioCatCombat => 'Бой';
+
+  @override
+  String get audioCatPhysics => 'Физика';
+
+  @override
+  String get audioCatItems => 'Предметы';
+
+  @override
+  String get audioCatUi => 'Интерфейс';
+
+  @override
+  String get audioCatFoley => 'Фоли';
+
+  @override
+  String get audioCatUnderwater => 'Под водой';
+
+  @override
+  String get audioCatVision => 'Видения';
+
+  @override
+  String get audioCatDialog => 'Диалог';
+
+  @override
+  String get audioCatOther => 'Прочее';
+
+  @override
   String get gameExecutable => 'Game executable';
 
   @override
@@ -167,6 +233,15 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get removeOverride => 'Удалить изменение';
+
+  @override
+  String get searchChanges => 'Поиск изменений';
+
+  @override
+  String get noChangesMatch => 'Нет подходящих изменений';
+
+  @override
+  String get clearSection => 'Очистить эту группу';
 
   @override
   String get modName => 'Название мода';

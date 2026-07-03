@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/domain/ui_settings.dart';
 import '../../app/game_paths.dart';
+import '../../app/ui/path_tree.dart';
 import '../../core/mod_ffi.dart';
 import '../../core/providers.dart';
 import '../domain/texture_index_provider.dart';
@@ -16,7 +17,13 @@ import '../domain/texture_replacements_notifier.dart';
 /// Browse the game's cooked textures, preview the original PNG, and stage PNG
 /// replacements into [textureReplacementsProvider].
 class TextureTab extends ConsumerStatefulWidget {
-  const TextureTab({super.key});
+  const TextureTab({super.key, this.onlyStaged = false});
+
+  /// When true (the Changes tab), the browser — folder tree, flat search list,
+  /// and count caption — covers only asset paths with a staged replacement
+  /// ([textureReplacementsProvider] keys), updating live as replacements are
+  /// (un)staged. The detail pane is unchanged. Default false: the full index.
+  final bool onlyStaged;
 
   @override
   ConsumerState<TextureTab> createState() => _TextureTabState();
@@ -57,11 +64,27 @@ class _TextureTabState extends ConsumerState<TextureTab> {
   static const _previewCacheCap = 24;
   final Map<String, _Preview> _previewCache = {};
 
-  // Tree-browser state: the set of expanded folder ids, plus a compressed tree
-  // built once per index (rebuilt only when the entries map identity changes).
-  final Set<String> _expanded = {};
+  // Decoded dimensions of staged replacement PNGs, keyed by image path. A null
+  // VALUE means the file failed to decode (unreadable/corrupt), which flips the
+  // preview back to the original with a hint; sticky for the session (retrying
+  // on every build would loop). The staged PNGs are the user's own files (never
+  // temp copies), so unlike [_previewCache] there is nothing to clean up in
+  // dispose(), and the map stays tiny (one entry per staged PNG path browsed).
+  final Map<String, (int, int)?> _stagedDims = {};
+  final Set<String> _stagedDimsInFlight = {};
+
+  // Identity-stable leaf-path list for [PathTreeBrowser], rebuilt only when the
+  // entries map identity changes so the widget's identity-keyed tree cache
+  // holds (matching the old once-per-index tree build).
   Map<String, String>? _treeEntries;
-  _DisplayNode? _treeRoot;
+  List<String>? _treePaths;
+  // onlyStaged mode: copy of the staged key set [_treePaths] was filtered by.
+  // Compared by CONTENT, not state identity — the replacements notifier emits a
+  // new state object on every change (including re-staging the same asset with
+  // a different PNG, which leaves the key set untouched), and the filtered list
+  // must keep its identity unless the key set really changed, or the tree
+  // browser's identity-keyed cache would rebuild needlessly.
+  Set<String>? _stagedKeys;
 
   /// Delete a cached preview's temp PNG and drop it from the image cache.
   void _evictPreview(_Preview pv) {
@@ -71,6 +94,17 @@ class _TextureTabState extends ConsumerState<TextureTab> {
       if (file.existsSync()) file.deleteSync();
     } catch (_) {
       // Best-effort cleanup: a locked/already-gone temp file is harmless.
+    }
+  }
+
+  @override
+  void didUpdateWidget(TextureTab oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // The filter flipped: the cached paths list was built for the other mode.
+    if (oldWidget.onlyStaged != widget.onlyStaged) {
+      _treeEntries = null;
+      _treePaths = null;
+      _stagedKeys = null;
     }
   }
 
@@ -120,11 +154,19 @@ class _TextureTabState extends ConsumerState<TextureTab> {
           _sourceEntries = entries;
           _sourceGame = game;
         }
-        // No cap: filter the full index then sort. The ListView below is lazy
+        // The browsable path set: the full index, or (onlyStaged) just the
+        // assets with a staged replacement. Identity-stable per (index
+        // identity, staged key-set content) — see [_treePathsFor].
+        final treePaths = _treePathsFor(entries, staged);
+        if (widget.onlyStaged && treePaths.isEmpty) {
+          // Nothing staged (the tree/list would render as a blank pane).
+          return const Center(child: Text('No staged texture replacements.'));
+        }
+        // No cap: filter the browsable set then sort. The ListView below is lazy
         // (builder), so even the unfiltered ~13k entries render fine and every
         // matching asset stays selectable (a fixed .take() silently hid the rest).
         final matches =
-            entries.keys
+            treePaths
                 .where(
                   (p) =>
                       _query.isEmpty ||
@@ -161,15 +203,37 @@ class _TextureTabState extends ConsumerState<TextureTab> {
                   ),
                   Expanded(
                     // Browse = lazy folder tree; an active search = flat hit list
-                    // (paths matched anywhere, not just by folder).
-                    child: _query.isEmpty
-                        ? _treeBrowser(gameDir, entries, staged)
-                        : _flatList(gameDir, matches, entries, staged),
+                    // (paths matched anywhere, not just by folder). The tree
+                    // stays mounted (just offstage) during a search so its
+                    // expansion state and built tree survive the search being
+                    // cleared — exactly as when that state lived on this tab.
+                    child: Stack(
+                      children: [
+                        Offstage(
+                          offstage: _query.isNotEmpty,
+                          // Offstage skips paint/hit-test/semantics but NOT
+                          // focus traversal — without this, Tab could reach
+                          // the hidden tree's tiles during a search.
+                          child: ExcludeFocus(
+                            excluding: _query.isNotEmpty,
+                            child: PathTreeBrowser(
+                              paths: treePaths,
+                              selectedPath: _selected,
+                              onSelect: (p) => _select(gameDir, p, entries[p]),
+                              leafIcon: Icons.image_outlined,
+                              markedPaths: staged.items.keys.toSet(),
+                            ),
+                          ),
+                        ),
+                        if (_query.isNotEmpty)
+                          _flatList(gameDir, matches, entries, staged),
+                      ],
+                    ),
                   ),
                   Text(
                     _query.isEmpty
-                        ? '${entries.length} textures'
-                        : '${matches.length} match / ${entries.length} total',
+                        ? '${treePaths.length} textures'
+                        : '${matches.length} match / ${treePaths.length} total',
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
                 ],
@@ -213,160 +277,59 @@ class _TextureTabState extends ConsumerState<TextureTab> {
     );
   }
 
-  Widget _treeBrowser(
-    String? gameDir,
+  /// The identity-stable leaf-path list for [entries]: all index paths, or —
+  /// when [TextureTab.onlyStaged] — only those with a staged replacement.
+  /// Recomputed only when the entries map identity changes (i.e. the index
+  /// reloaded) or, in onlyStaged mode, when the staged key SET content changes
+  /// (not on every replacements-state emission — re-staging the same asset
+  /// keeps the set), so the tree browser's identity-keyed cache doesn't
+  /// rebuild per frame.
+  List<String> _treePathsFor(
     Map<String, String> entries,
     TextureReplacementsState staged,
   ) {
-    final root = _ensureTree(entries);
-    // Flatten only the currently-expanded nodes (default collapsed → just the
-    // top level), so this stays cheap regardless of the ~13k leaves.
-    final visible = <_DisplayNode>[];
-    void walk(List<_DisplayNode> nodes) {
-      for (final n in nodes) {
-        visible.add(n);
-        if (!n.isLeaf && _expanded.contains(n.id)) walk(n.children!);
+    if (!widget.onlyStaged) {
+      if (!identical(_treeEntries, entries) || _treePaths == null) {
+        _treeEntries = entries;
+        _treePaths = entries.keys.toList(growable: false);
       }
+      return _treePaths!;
     }
-
-    walk(root.children!);
-    final scheme = Theme.of(context).colorScheme;
-    return ListView.builder(
-      itemCount: visible.length,
-      itemBuilder: (c, i) {
-        final n = visible[i];
-        final indent = n.depth * 14.0;
-        if (n.isLeaf) {
-          final isReplaced = staged.items.containsKey(n.assetPath);
-          return Padding(
-            padding: EdgeInsets.only(left: indent),
-            child: ListTile(
-              dense: true,
-              selected: n.assetPath == _selected,
-              leading: const Icon(Icons.image_outlined, size: 18),
-              title: Text(n.label, maxLines: 1, overflow: TextOverflow.ellipsis),
-              trailing: isReplaced ? const Icon(Icons.check, size: 16) : null,
-              onTap: () => _select(gameDir, n.assetPath!, entries[n.assetPath]),
-            ),
-          );
-        }
-        final isOpen = _expanded.contains(n.id);
-        return Padding(
-          padding: EdgeInsets.only(left: indent),
-          child: ListTile(
-            dense: true,
-            leading: Icon(
-              isOpen ? Icons.expand_more : Icons.chevron_right,
-              size: 18,
-            ),
-            title: Row(
-              children: [
-                Icon(
-                  isOpen ? Icons.folder_open : Icons.folder,
-                  size: 18,
-                  color: scheme.primary,
-                ),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: Text(
-                    n.label,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-                const SizedBox(width: 6),
-                Text(
-                  '${n.leafCount}',
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: scheme.onSurfaceVariant,
-                  ),
-                ),
-              ],
-            ),
-            onTap: () => setState(() {
-              if (isOpen) {
-                _expanded.remove(n.id);
-              } else {
-                _expanded.add(n.id);
-              }
-            }),
-          ),
-        );
-      },
-    );
-  }
-
-  /// Build (and cache) the compressed display tree for [entries]. Rebuilt only
-  /// when the entries map identity changes (i.e. the index reloaded).
-  _DisplayNode _ensureTree(Map<String, String> entries) {
-    if (identical(_treeEntries, entries) && _treeRoot != null) {
-      return _treeRoot!;
+    final cachedKeys = _stagedKeys;
+    final sameKeys =
+        cachedKeys != null &&
+        cachedKeys.length == staged.items.length &&
+        staged.items.keys.every(cachedKeys.contains);
+    if (!identical(_treeEntries, entries) || !sameKeys || _treePaths == null) {
+      _treeEntries = entries;
+      _stagedKeys = staged.items.keys.toSet();
+      // Iterate the index (not the staged map) so tree order matches the full
+      // browser and stale staged keys absent from the index are dropped.
+      _treePaths = entries.keys
+          .where(staged.items.containsKey)
+          .toList(growable: false);
     }
-    final raw = _RawNode('');
-    for (final p in entries.keys) {
-      var node = raw;
-      for (final seg in p.split('/')) {
-        if (seg.isEmpty) continue;
-        node = node.children.putIfAbsent(seg, () => _RawNode(seg));
-      }
-      node.assetPath = p;
-    }
-    final children = raw.children.values
-        .map((c) => _toDisplay(c, 0, ''))
-        .toList()
-      ..sort(_nodeSort);
-    final root = _DisplayNode(label: '', depth: -1, id: '', leafCount: 0)
-      ..children = children;
-    _treeEntries = entries;
-    _treeRoot = root;
-    return root;
-  }
-
-  /// Convert a raw segment node to a display node, compressing single-child
-  /// folder chains ("A" whose only child is folder "B" → "A/B") so deep paths
-  /// don't cost one click per level.
-  _DisplayNode _toDisplay(_RawNode raw, int depth, String parentId) {
-    var label = raw.label;
-    var cur = raw;
-    while (cur.assetPath == null && cur.children.length == 1) {
-      final only = cur.children.values.first;
-      if (only.assetPath != null) break; // single child is a texture — keep folder
-      label = '$label/${only.label}';
-      cur = only;
-    }
-    final id = parentId.isEmpty ? label : '$parentId/$label';
-    if (cur.assetPath != null) {
-      return _DisplayNode(
-        label: label,
-        depth: depth,
-        id: cur.assetPath!,
-        assetPath: cur.assetPath,
-        leafCount: 1,
-      );
-    }
-    final kids = cur.children.values
-        .map((c) => _toDisplay(c, depth + 1, id))
-        .toList()
-      ..sort(_nodeSort);
-    var count = 0;
-    for (final k in kids) {
-      count += k.leafCount;
-    }
-    return _DisplayNode(label: label, depth: depth, id: id, leafCount: count)
-      ..children = kids;
-  }
-
-  /// Folders before leaves, then case-insensitive alpha.
-  int _nodeSort(_DisplayNode a, _DisplayNode b) {
-    if (a.isLeaf != b.isLeaf) return a.isLeaf ? 1 : -1;
-    return a.label.toLowerCase().compareTo(b.label.toLowerCase());
+    return _treePaths!;
   }
 
   Widget _detail(Map<String, String> entries, TextureReplacementsState staged) {
     final sel = _selected;
     if (sel == null) return const Center(child: Text('Select a texture'));
-    final gameDir = gameRootFromExe(ref.read(gameExePathProvider));
     final replaced = staged.items[sel];
+    // Changes>Textures (onlyStaged) reviews staged assets only: the browser is
+    // filtered to the staged keys, so a selection that gets un-staged (e.g.
+    // removing A's replacement while B stays staged) drops out of the tree but
+    // could still linger here. Render a placeholder instead of a preview /
+    // Replace button for it — parity with the other filtered views, which never
+    // let the detail pane operate on an item outside the active filter. No hard
+    // clear of _selected is needed; build() watches the provider, so re-staging
+    // brings the same selection right back.
+    if (widget.onlyStaged && replaced == null) {
+      return const Center(
+        child: Text('This texture is no longer staged.'),
+      );
+    }
+    final gameDir = gameRootFromExe(ref.read(gameExePathProvider));
     // Replace capability is only known after the preview (auto-loaded on select)
     // resolves: the FFI reports whether the texture's format is re-encodable and,
     // for virtual textures, whether its shape is retileable. Block while loading,
@@ -501,7 +464,7 @@ class _TextureTabState extends ConsumerState<TextureTab> {
             ],
           ),
           const SizedBox(height: 12),
-          Expanded(child: _previewArea(sel)),
+          Expanded(child: _previewArea(sel, replaced)),
           if (replaced != null)
             Padding(
               padding: const EdgeInsets.only(top: 8),
@@ -534,58 +497,168 @@ class _TextureTabState extends ConsumerState<TextureTab> {
   /// fully-black textures are visible), the image at its native size scaled DOWN
   /// to fit (never blown up to fill the pane), pan/zoom via [InteractiveViewer],
   /// and a dims + pixel-format caption.
-  Widget _previewArea(String asset) {
-    if (_inFlight.contains(asset)) {
-      return const Center(child: CircularProgressIndicator());
-    }
-    final pv = _previewCache[asset];
-    if (pv == null) {
-      return const Center(child: Text('Preview to see the current texture'));
-    }
+  ///
+  /// When a replacement is staged for [asset] ([replaced] non-null) the STAGED
+  /// PNG is shown instead — this branch runs before the native preview-cache
+  /// lookup, so the pane flips to the new image right after Replace… and back
+  /// to the original on Remove (build() watches [textureReplacementsProvider],
+  /// so every staging change re-evaluates it; the original's cache entry stays
+  /// valid throughout). A 'Replacement' badge marks the staged view. A missing
+  /// or unreadable staged PNG falls back to the original plus a small hint.
+  Widget _previewArea(String asset, TextureReplacement? replaced) {
     final theme = Theme.of(context);
+    String? stagedHint;
+    if (replaced != null) {
+      final path = replaced.imagePath;
+      final knownBad =
+          _stagedDims.containsKey(path) && _stagedDims[path] == null;
+      if (!File(path).existsSync()) {
+        stagedHint = 'Staged PNG missing — showing original';
+      } else if (knownBad) {
+        stagedHint = 'Staged PNG unreadable — showing original';
+      } else {
+        final dims = _stagedDims[path];
+        if (dims == null) _loadStagedDims(path);
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 2,
+                  ),
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.secondaryContainer,
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text(
+                    'Replacement',
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: theme.colorScheme.onSecondaryContainer,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Expanded(
+              child: _imageBox(
+                theme,
+                File(path),
+                // A PNG that fails to decode is detected by _loadStagedDims,
+                // which flips this pane back to the original on the next build;
+                // until then render the failure inline instead of throwing.
+                errorBuilder: (_, e, st) =>
+                    Center(child: SelectableText('Cannot display PNG: $e')),
+              ),
+            ),
+            if (dims != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(
+                  '${dims.$1} × ${dims.$2} · PNG',
+                  style: theme.textTheme.bodySmall,
+                ),
+              ),
+          ],
+        );
+      }
+    }
+    Widget original;
+    final pv = _previewCache[asset];
+    if (_inFlight.contains(asset)) {
+      original = const Center(child: CircularProgressIndicator());
+    } else if (pv == null) {
+      original = const Center(
+        child: Text('Preview to see the current texture'),
+      );
+    } else {
+      original = Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Expanded(child: _imageBox(theme, File(pv.pngPath))),
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Text(
+              '${pv.width} × ${pv.height} · ${pv.format}',
+              style: theme.textTheme.bodySmall,
+            ),
+          ),
+        ],
+      );
+    }
+    if (stagedHint == null) return original;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Expanded(
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              border: Border.all(color: theme.dividerColor),
-            ),
-            child: CustomPaint(
-              painter: _CheckerPainter(theme.brightness),
-              child: InteractiveViewer(
-                maxScale: 64,
-                child: Center(
-                  child: Image.file(
-                    File(pv.pngPath),
-                    // Native size, downscaled only when larger than the pane —
-                    // small textures stay small (zoom in to inspect) instead of
-                    // being stretched to full width.
-                    fit: BoxFit.scaleDown,
-                    // Texture data is pixels: nearest-neighbour keeps them crisp
-                    // when zoomed rather than blurring.
-                    filterQuality: FilterQuality.none,
-                    gaplessPlayback: true,
-                  ),
-                ),
-              ),
-            ),
+        Text(
+          stagedHint,
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.colorScheme.error,
           ),
         ),
-        Padding(
-          padding: const EdgeInsets.only(top: 6),
-          child: Text(
-            '${pv.width} × ${pv.height} · ${pv.format}',
-            style: theme.textTheme.bodySmall,
-          ),
-        ),
+        const SizedBox(height: 6),
+        Expanded(child: original),
       ],
     );
   }
 
-  /// Export the asset's decoded texture as a PNG to a user-chosen path. Reuses
-  /// the cached preview when present; otherwise extracts first (the same path the
-  /// Preview button takes, including its error dialog on failure).
+  /// The checkerboard-backed, pan/zoomable image box shared by the original and
+  /// staged-replacement previews.
+  Widget _imageBox(
+    ThemeData theme,
+    File file, {
+    ImageErrorWidgetBuilder? errorBuilder,
+  }) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        border: Border.all(color: theme.dividerColor),
+      ),
+      child: CustomPaint(
+        painter: _CheckerPainter(theme.brightness),
+        child: InteractiveViewer(
+          maxScale: 64,
+          child: Center(
+            child: Image.file(
+              file,
+              // Native size, downscaled only when larger than the pane —
+              // small textures stay small (zoom in to inspect) instead of
+              // being stretched to full width.
+              fit: BoxFit.scaleDown,
+              // Texture data is pixels: nearest-neighbour keeps them crisp
+              // when zoomed rather than blurring.
+              filterQuality: FilterQuality.none,
+              gaplessPlayback: true,
+              errorBuilder: errorBuilder,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Decode the staged PNG's dimensions once per path (for the caption). A null
+  /// result — missing/corrupt file — is recorded too: it flips [_previewArea]
+  /// back to the original preview with a hint on the rebuild it triggers.
+  void _loadStagedDims(String path) {
+    if (_stagedDimsInFlight.contains(path)) return;
+    _stagedDimsInFlight.add(path);
+    _imageDimensions(path).then((dims) {
+      _stagedDimsInFlight.remove(path);
+      if (!mounted) return;
+      setState(() => _stagedDims[path] = dims);
+    });
+  }
+
+  /// Export the asset's decoded texture as a PNG to a user-chosen path. Always
+  /// exports the ORIGINAL game texture, even when a replacement is staged and
+  /// the preview shows the staged PNG — intentional: the staged PNG is the
+  /// user's own file, while Export exists to get the original out as an editing
+  /// base. Reuses the cached preview when present; otherwise extracts first
+  /// (the same path the Preview button takes, including its error dialog on
+  /// failure).
   Future<void> _export(String gameDir, String asset, String? packageId) async {
     if (!_previewCache.containsKey(asset)) {
       await _preview(gameDir, asset, packageId);
@@ -733,34 +806,6 @@ class _TextureTabState extends ConsumerState<TextureTab> {
       if (mounted) setState(() => _inFlight.remove(asset));
     }
   }
-}
-
-/// Raw prefix-tree node: one per path segment, built directly from asset paths.
-class _RawNode {
-  _RawNode(this.label);
-  final String label;
-  final Map<String, _RawNode> children = {};
-  String? assetPath; // non-null = a texture leaf
-}
-
-/// Display node: a compressed folder (possibly merged segments, with [children])
-/// or a texture leaf ([assetPath] set). [id] is the stable folder path used for
-/// expand/collapse tracking; [leafCount] is the texture count beneath it.
-class _DisplayNode {
-  _DisplayNode({
-    required this.label,
-    required this.depth,
-    required this.id,
-    required this.leafCount,
-    this.assetPath,
-  });
-  final String label;
-  final int depth;
-  final String id;
-  final int leafCount;
-  final String? assetPath;
-  List<_DisplayNode>? children;
-  bool get isLeaf => assetPath != null;
 }
 
 /// A cached texture preview: the temp PNG path plus the source's native

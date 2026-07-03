@@ -9,13 +9,61 @@ import '../domain/item_categories.dart';
 import '../domain/item_entry.dart';
 import 'sidebar_tile.dart';
 
+/// Simple diacritic fold for sort keys (applied after lowercasing) so that
+/// e.g. "Öllampe" sorts near "O" instead of after "Z". Deliberately minimal —
+/// no intl/collator dependency.
+const Map<String, String> _sortCharFold = {
+  'ä': 'a', 'ö': 'o', 'ü': 'u', 'ß': 'ss',
+  'à': 'a', 'á': 'a', 'â': 'a',
+  'è': 'e', 'é': 'e', 'ê': 'e',
+  'ì': 'i', 'í': 'i', 'î': 'i',
+  'ò': 'o', 'ó': 'o', 'ô': 'o',
+  'ù': 'u', 'ú': 'u', 'û': 'u',
+};
+
+String _localizedSortKey(String name) {
+  final lower = name.toLowerCase();
+  final buf = StringBuffer();
+  for (final rune in lower.runes) {
+    final ch = String.fromCharCode(rune);
+    buf.write(_sortCharFold[ch] ?? ch);
+  }
+  return buf.toString();
+}
+
+/// Returns a copy of [items] sorted by the localized display name
+/// (case-insensitive, diacritics folded), falling back to the class id as
+/// tiebreaker. Decorate-sort-undecorate: [nameOf] is evaluated once per
+/// item, not once per comparison.
+List<CatalogItem> sortByLocalizedName(
+    List<CatalogItem> items, String Function(CatalogItem) nameOf) {
+  final decorated = [
+    for (final item in items)
+      (key: _localizedSortKey(nameOf(item)), item: item),
+  ]..sort((a, b) {
+      final c = a.key.compareTo(b.key);
+      return c != 0 ? c : a.item.id.compareTo(b.item.id);
+    });
+  return [for (final d in decorated) d.item];
+}
+
 /// Category-grouped, searchable item browser.
 /// Calls [onItemSelected] when the user taps an item.
 class CatalogBrowser extends ConsumerStatefulWidget {
-  const CatalogBrowser({super.key, required this.onItemSelected, this.selected});
+  const CatalogBrowser({
+    super.key,
+    required this.onItemSelected,
+    this.selected,
+    this.onlyIds,
+  });
 
   final void Function(CatalogItem) onItemSelected;
   final CatalogItem? selected;
+
+  /// When non-null, restricts the item universe to these class ids before
+  /// grouping/search, so categories with no remaining items disappear
+  /// (via [groupCatalogItems] omitting empty groups). Null = full catalog.
+  final Set<String>? onlyIds;
 
   @override
   ConsumerState<CatalogBrowser> createState() => _CatalogBrowserState();
@@ -44,6 +92,13 @@ class _CatalogBrowserState extends ConsumerState<CatalogBrowser> {
   }
 
   Widget _buildBrowser(BuildContext context, List<CatalogItem> items) {
+    // Restrict the item universe before search/grouping when a filter is set
+    // (e.g. the Changes tab showing only staged item ids). An empty set yields
+    // no groups, which renders the existing generic "no items match" state.
+    final onlyIds = widget.onlyIds;
+    if (onlyIds != null) {
+      items = items.where((i) => onlyIds.contains(i.id)).toList();
+    }
     final theme = Theme.of(context);
     final l10n = AppLocalizations.of(context);
     final locCatalog = ref.watch(locCatalogProvider).value ?? const {};
@@ -68,9 +123,12 @@ class _CatalogBrowserState extends ConsumerState<CatalogBrowser> {
       selectedCat = groups.isEmpty ? null : groups.first.category;
     }
 
-    final shownItems = searching
-        ? filtered
-        : (groups.where((g) => g.category == selectedCat).firstOrNull?.items ?? []);
+    final shownItems = sortByLocalizedName(
+        searching
+            ? filtered
+            : (groups.where((g) => g.category == selectedCat).firstOrNull?.items ??
+                const []),
+        nameOf);
 
     return Column(
       children: [

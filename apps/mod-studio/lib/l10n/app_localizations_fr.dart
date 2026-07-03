@@ -18,6 +18,72 @@ class AppLocalizationsFr extends AppLocalizations {
   String get tabSettings => 'Settings';
 
   @override
+  String get tabDialogs => 'Dialogues';
+
+  @override
+  String get tabAudio => 'Audio';
+
+  @override
+  String get tabTextures => 'Textures';
+
+  @override
+  String get tabScripts => 'Scripts';
+
+  @override
+  String get changesAll => 'Tout';
+
+  @override
+  String get sectionItemValues => 'Valeurs des objets';
+
+  @override
+  String get sectionLocalizedText => 'Textes localisés';
+
+  @override
+  String get audioCatCreatures => 'Créatures';
+
+  @override
+  String get audioCatObjects => 'Objets';
+
+  @override
+  String get audioCatMagic => 'Magie';
+
+  @override
+  String get audioCatMovement => 'Mouvement';
+
+  @override
+  String get audioCatWorld => 'Monde';
+
+  @override
+  String get audioCatAction => 'Actions';
+
+  @override
+  String get audioCatCombat => 'Combat';
+
+  @override
+  String get audioCatPhysics => 'Physique';
+
+  @override
+  String get audioCatItems => 'Items';
+
+  @override
+  String get audioCatUi => 'Interface';
+
+  @override
+  String get audioCatFoley => 'Bruitages';
+
+  @override
+  String get audioCatUnderwater => 'Sous l\'eau';
+
+  @override
+  String get audioCatVision => 'Visions';
+
+  @override
+  String get audioCatDialog => 'Dialogue';
+
+  @override
+  String get audioCatOther => 'Autre';
+
+  @override
   String get gameExecutable => 'Game executable';
 
   @override
@@ -167,6 +233,15 @@ class AppLocalizationsFr extends AppLocalizations {
 
   @override
   String get removeOverride => 'Supprimer la modification';
+
+  @override
+  String get searchChanges => 'Rechercher des modifications';
+
+  @override
+  String get noChangesMatch => 'Aucune modification correspondante';
+
+  @override
+  String get clearSection => 'Effacer ce groupe';
 
   @override
   String get modName => 'Nom du mod';

@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../catalog/domain/field_schema.dart';
 import '../../catalog/domain/item_entry.dart';
 import '../../l10n/app_localizations.dart';
 import '../../l10n/l10n_errors.dart';
+import '../../loc/domain/loc_edits_notifier.dart';
 import '../../loc/game_lang.dart';
 import '../../loc/ui/lang_fields.dart';
 import '../domain/field_validator.dart';
@@ -12,14 +14,17 @@ import '../domain/override_entry.dart';
 /// Calls [onOverrideChanged] with a valid [OverrideEntry] on every committed
 /// valid change — including values that equal the placeholder default (e.g.
 /// `0`), since the model carries no real CDO default to compare against.
-/// Removing an override is done explicitly from the OverridesPanel.
+/// Removing an override is done from the OverridesPanel, or per field via the
+/// delete button shown on fields with a pending override ([onOverrideRemoved]).
 class FieldEditor extends StatefulWidget {
   const FieldEditor({
     super.key,
     required this.item,
     required this.pendingOverrides,
     required this.onOverrideChanged,
+    this.onOverrideRemoved,
     this.displayName,
+    this.onlyEdited = false,
   });
 
   final CatalogItem item;
@@ -29,9 +34,18 @@ class FieldEditor extends StatefulWidget {
   /// name here so the header follows the chosen language.
   final String? displayName;
 
+  /// When true, renders only fields that currently have a pending override —
+  /// used by the Changes tab embed. The localized-name section then appears
+  /// only when a name edit is staged for this item. Default false: all fields.
+  final bool onlyEdited;
+
   /// Existing pending overrides for this item (keyed by field name).
   final Map<String, OverrideEntry> pendingOverrides;
   final void Function(OverrideEntry) onOverrideChanged;
+
+  /// Called with the pending override to remove when the user taps a field's
+  /// delete button. The field then falls back to showing the catalog value.
+  final void Function(OverrideEntry)? onOverrideRemoved;
 
   @override
   State<FieldEditor> createState() => _FieldEditorState();
@@ -188,6 +202,15 @@ class _FieldEditorState extends State<FieldEditor> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final l10n = AppLocalizations.of(context);
+    // Edited-only mode (Changes tab embed): show just the fields that carry a
+    // pending override. The parent watches overridesProvider, so removing the
+    // last override rebuilds this with an empty map — no field rows — and the
+    // Changes tab's onlyIds guard then drops the item from the view entirely.
+    final fields = widget.onlyEdited
+        ? widget.item.fields
+              .where((f) => widget.pendingOverrides.containsKey(f.name))
+              .toList()
+        : widget.item.fields;
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
@@ -213,19 +236,23 @@ class _FieldEditorState extends State<FieldEditor> {
           ),
         ),
         // Localized item name (one field per language), above the stat fields.
-        // Collapsed by default.
-        Card(
-          margin: const EdgeInsets.only(bottom: 12),
-          child: ExpansionTile(
-            leading: const Icon(Icons.translate_outlined, size: 20),
-            title: const Text('Name (all languages)'),
-            childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-            children: [
-              LangFieldsEditor(locId: locIdForCatalogId(widget.item.id)),
-            ],
-          ),
-        ),
-        for (final field in widget.item.fields)
+        // Collapsed by default. In edited-only mode the section shows only
+        // when a name edit is actually staged for this item (watched live, so
+        // reverting the last name edit hides it again).
+        if (widget.onlyEdited)
+          Consumer(
+            builder: (context, ref, _) {
+              final hasNameEdit = ref.watch(
+                locEditsProvider.select(
+                  (s) => s.edits.containsKey(locIdForCatalogId(widget.item.id)),
+                ),
+              );
+              return hasNameEdit ? _nameSection() : const SizedBox.shrink();
+            },
+          )
+        else
+          _nameSection(),
+        for (final field in fields)
           Padding(
             padding: const EdgeInsets.only(bottom: 12),
             child: _FieldRow(
@@ -237,11 +264,32 @@ class _FieldEditorState extends State<FieldEditor> {
               },
               hasPending: widget.pendingOverrides.containsKey(field.name),
               onChanged:  (raw) => _onChanged(field, raw),
+              onRemove:   () {
+                final pending = widget.pendingOverrides[field.name];
+                if (pending != null) widget.onOverrideRemoved?.call(pending);
+              },
             ),
           ),
       ],
     );
   }
+
+  Widget _nameSection() => Card(
+    margin: const EdgeInsets.only(bottom: 12),
+    child: ExpansionTile(
+      leading: const Icon(Icons.translate_outlined, size: 20),
+      title: const Text('Name (all languages)'),
+      childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+      children: [
+        // Forward edited-only mode so the Changes embed lists just the
+        // languages with a staged name edit, matching the dialog embed.
+        LangFieldsEditor(
+          locId: locIdForCatalogId(widget.item.id),
+          onlyEdited: widget.onlyEdited,
+        ),
+      ],
+    ),
+  );
 }
 
 class _FieldRow extends StatelessWidget {
@@ -251,6 +299,7 @@ class _FieldRow extends StatelessWidget {
     required this.error,
     required this.hasPending,
     required this.onChanged,
+    required this.onRemove,
   });
 
   final FieldSchema schema;
@@ -258,10 +307,20 @@ class _FieldRow extends StatelessWidget {
   final String? error;
   final bool hasPending;
   final void Function(String) onChanged;
+  final VoidCallback onRemove;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    // A pending override marks the field with a delete button that removes
+    // just this field's change; the field then resyncs to the catalog value.
+    final removeButton = hasPending
+        ? IconButton(
+            tooltip: 'Remove change',
+            icon: Icon(Icons.delete_outline, size: 18, color: scheme.primary),
+            onPressed: onRemove,
+          )
+        : null;
     Widget input;
 
     if (schema.type == FieldType.bool_) {
@@ -277,6 +336,7 @@ class _FieldRow extends StatelessWidget {
           ),
           const SizedBox(width: 8),
           Text(boolVal ? 'true' : 'false'),
+          if (removeButton != null) ...[const SizedBox(width: 8), removeButton],
         ],
       );
     } else if (schema.type == FieldType.enum_) {
@@ -294,6 +354,11 @@ class _FieldRow extends StatelessWidget {
           }
         },
       );
+      if (removeButton != null) {
+        input = Row(
+          children: [input, const SizedBox(width: 8), removeButton],
+        );
+      }
     } else {
       input = TextField(
         controller: controller,
@@ -301,9 +366,7 @@ class _FieldRow extends StatelessWidget {
           // The field name is already shown in the left label column.
           errorText: error,
           isDense: true,
-          suffixIcon: hasPending
-              ? Icon(Icons.edit, size: 16, color: scheme.primary)
-              : null,
+          suffixIcon: removeButton,
         ),
         keyboardType: schema.type == FieldType.int_
             ? TextInputType.number

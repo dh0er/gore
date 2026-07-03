@@ -9,10 +9,18 @@ import '../domain/loc_edits_notifier.dart';
 /// One editable text field per game language for a single loc id, shared by the Dialoge tab
 /// and the Items name editor. Each field is prefilled from the staged edit (if any) or the
 /// catalog value; editing writes through [LocEditsNotifier] to that language's primary set.
-/// Setting the field back to the catalog value clears the edit.
+/// Setting the field back to the catalog value clears the edit; a modified field also carries
+/// a delete button that removes the staged change outright.
 class LangFieldsEditor extends ConsumerWidget {
-  const LangFieldsEditor({super.key, required this.locId});
+  const LangFieldsEditor({super.key, required this.locId, this.onlyEdited = false});
   final String locId;
+
+  /// When true, render only the languages whose target set carries a staged edit for
+  /// [locId] (used by filtered embeddings such as the Changes tab). Tracks
+  /// [locEditsProvider] live: removing the last edit renders nothing — at the same
+  /// moment the id drops out of the surrounding view's filter, which then shows its
+  /// own placeholder instead.
+  final bool onlyEdited;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -34,11 +42,23 @@ class LangFieldsEditor extends ConsumerWidget {
         ),
       );
     }
+    // In [onlyEdited] mode watch the edits so fields appear/disappear as changes are
+    // staged/removed. The per-language keys keep each field's state (controller text)
+    // bound to its language while the filtered list changes shape.
+    final edits = onlyEdited ? ref.watch(locEditsProvider) : null;
+    final langs = edits == null
+        ? kGameLangs
+        : [
+            for (final lang in kGameLangs)
+              if (edits.editFor(locId, primarySetFor(catalog, locId, lang)) != null)
+                lang,
+          ];
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        for (final lang in kGameLangs)
+        for (final lang in langs)
           Padding(
+            key: ValueKey(lang.code),
             padding: const EdgeInsets.symmetric(vertical: 4),
             child: _LangField(locId: locId, lang: lang, catalog: catalog),
           ),
@@ -149,9 +169,11 @@ class _LangFieldState extends ConsumerState<_LangField> {
               labelText: widget.lang.endonym,
               suffixIcon: modified
                   ? IconButton(
-                      tooltip: 'Revert',
-                      icon: const Icon(Icons.undo, size: 18),
+                      tooltip: 'Remove change',
+                      icon: const Icon(Icons.delete_outline, size: 18),
                       onPressed: () {
+                        // Delete the staged CHANGE ENTRY for this language; the field
+                        // (if it stays visible) syncs back to the catalog value.
                         ref
                             .read(locEditsProvider.notifier)
                             .removeEdit(widget.locId, _set);

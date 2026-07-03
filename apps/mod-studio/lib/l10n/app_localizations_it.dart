@@ -18,6 +18,72 @@ class AppLocalizationsIt extends AppLocalizations {
   String get tabSettings => 'Settings';
 
   @override
+  String get tabDialogs => 'Dialoghi';
+
+  @override
+  String get tabAudio => 'Audio';
+
+  @override
+  String get tabTextures => 'Texture';
+
+  @override
+  String get tabScripts => 'Script';
+
+  @override
+  String get changesAll => 'Tutti';
+
+  @override
+  String get sectionItemValues => 'Valori degli oggetti';
+
+  @override
+  String get sectionLocalizedText => 'Testi localizzati';
+
+  @override
+  String get audioCatCreatures => 'Creature';
+
+  @override
+  String get audioCatObjects => 'Oggetti';
+
+  @override
+  String get audioCatMagic => 'Magia';
+
+  @override
+  String get audioCatMovement => 'Movimento';
+
+  @override
+  String get audioCatWorld => 'Mondo';
+
+  @override
+  String get audioCatAction => 'Azioni';
+
+  @override
+  String get audioCatCombat => 'Combattimento';
+
+  @override
+  String get audioCatPhysics => 'Fisica';
+
+  @override
+  String get audioCatItems => 'Item';
+
+  @override
+  String get audioCatUi => 'Interfaccia';
+
+  @override
+  String get audioCatFoley => 'Foley';
+
+  @override
+  String get audioCatUnderwater => 'Sott\'acqua';
+
+  @override
+  String get audioCatVision => 'Visioni';
+
+  @override
+  String get audioCatDialog => 'Dialogo';
+
+  @override
+  String get audioCatOther => 'Altro';
+
+  @override
   String get gameExecutable => 'Game executable';
 
   @override
@@ -168,6 +234,15 @@ class AppLocalizationsIt extends AppLocalizations {
 
   @override
   String get removeOverride => 'Rimuovi modifica';
+
+  @override
+  String get searchChanges => 'Cerca modifiche';
+
+  @override
+  String get noChangesMatch => 'Nessuna modifica corrispondente';
+
+  @override
+  String get clearSection => 'Cancella questo gruppo';
 
   @override
   String get modName => 'Nome della mod';
