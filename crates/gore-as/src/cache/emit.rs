@@ -365,11 +365,13 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
         // assignment to a declaration-with-initializer (in-place construction — the original
         // source form). Any other reference shape keeps the hoist (status quo).
         let (body, suppressed) = rewrite_ctor_only_locals(&body, &locals);
+        // Iterator locals have no default ctor either; declare them at their `Iterator()` call.
+        let (body, iter_suppressed) = rewrite_iterator_decl_init(&body, &locals);
         // hoist local declarations; primitives must be initialized (AngelScript errors on
         // "may not be initialized"), objects/structs/handles default-construct themselves.
         for (slot, ty) in &locals {
-            if suppressed.contains(slot) {
-                continue; // Class A: declared at its (rewritten) assignment site instead
+            if suppressed.contains(slot) || iter_suppressed.contains(slot) {
+                continue; // declared at its (rewritten) assignment/Iterator() site instead
             }
             if is_primitive(ty) {
                 let _ = writeln!(s, "{ind}    {ty} local_{slot} = {};", default_for(ty));
@@ -1074,6 +1076,63 @@ fn rewrite_ctor_only_locals(body: &str, locals: &BTreeMap<i32, String>) -> (Stri
         }
         out = rewritten;
         suppressed.insert(*slot);
+    }
+    (out, suppressed)
+}
+
+/// Iterator locals (`TArrayIterator<T>`, `TSetIterator<T>`, `TMapIterator<T>`, ... incl. Const
+/// variants) have NO default constructor, so a bare hoisted `TArrayIterator<T> local_N;` fails
+/// "No default constructor". The only legal form is declaration-with-initializer from the
+/// `Iterator()` call that produces it: `TArrayIterator<T> local_N = container.Iterator();`. Unlike
+/// the ctor-only (FStatID) case an iterator IS read afterwards (in its loop), so the gate is only
+/// that the local's FIRST mention in the body is a single-`ident` assignment `local_N = ...;` —
+/// then decl-init at that site is valid and nothing reads it before. Returns the rewritten body +
+/// the set of slots whose hoisted declaration must be suppressed.
+fn rewrite_iterator_decl_init(body: &str, locals: &BTreeMap<i32, String>) -> (String, HashSet<i32>) {
+    let is_iter = |ty: &str| {
+        let h = ty.split('<').next().unwrap_or(ty);
+        matches!(h, "TArrayIterator" | "TArrayConstIterator" | "TSetIterator" | "TSetConstIterator"
+            | "TMapIterator" | "TMapConstIterator")
+    };
+    let mut suppressed: HashSet<i32> = HashSet::new();
+    let mut out = body.to_string();
+    for (slot, ty) in locals {
+        if !is_iter(ty) {
+            continue;
+        }
+        let ident = format!("local_{slot}");
+        let pat = format!("{ident} = ");
+        // The FIRST line mentioning the ident must be a single-occurrence assignment `local_N = …;`.
+        let mut first_ok = false;
+        for line in out.lines() {
+            if count_ident(line, &ident) == 0 {
+                continue;
+            }
+            let t = line.trim_start();
+            first_ok = count_ident(line, &ident) == 1 && t.starts_with(&pat) && t.ends_with(';');
+            break;
+        }
+        if !first_ok {
+            continue;
+        }
+        // Rewrite ONLY that first assignment to a decl-init; leave later reads untouched.
+        let mut done = false;
+        let mut rewritten = String::with_capacity(out.len() + 32);
+        for line in out.lines() {
+            let t = line.trim_start();
+            if !done && count_ident(line, &ident) == 1 && t.starts_with(&pat) && t.ends_with(';') {
+                let indent = &line[..line.len() - t.len()];
+                let _ = writeln!(rewritten, "{indent}{ty} {t}");
+                done = true;
+            } else {
+                rewritten.push_str(line);
+                rewritten.push('\n');
+            }
+        }
+        if done {
+            out = rewritten;
+            suppressed.insert(*slot);
+        }
     }
     (out, suppressed)
 }
