@@ -70,7 +70,11 @@ class StatusNotifier extends StateNotifier<StatusState> {
     }
     await _run(() async {
       final status = await _mgr.status(gameRoot);
-      state = state.copyWith(status: status);
+      // The fresh status is authoritative for whether a studio deploy is active
+      // (the `StudioDeployActive` variant drives the take-over chip). Clear the
+      // transient [studioActive] flag left by an earlier blocked apply so a
+      // later "no studio deploy" refresh can't keep the take-over prompt armed.
+      state = state.copyWith(status: status, studioActive: false);
     });
   }
 

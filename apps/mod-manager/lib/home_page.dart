@@ -55,6 +55,21 @@ class _HomePageState extends ConsumerState<HomePage> {
       ref.read(statusProvider.notifier).refresh(gameRootFromExe(next));
     });
 
+    // Enabling, disabling, reordering, importing, or removing mods changes what a
+    // deploy would install, but only the loadout is persisted — nothing else
+    // re-queries mgr_status, so the deployment chip + Apply gating would stay
+    // stale ("In sync", Apply disabled) until the manual Refresh. Re-check status
+    // once the library settles (not busy) whenever the loadout entries changed.
+    ref.listen<LibraryState>(libraryProvider, (previous, next) {
+      if (!mounted || next.busy) return;
+      final changed = previous == null ||
+          previous.busy ||
+          !_sameLoadoutEntries(previous.loadout, next.loadout);
+      if (changed) {
+        ref.read(statusProvider.notifier).refresh(_gameRoot);
+      }
+    });
+
     final l10n = AppLocalizations.of(context);
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
@@ -390,6 +405,20 @@ bool canApply(
       library.loadout.entries.any((e) => e.enabled),
     _ => false,
   };
+}
+
+/// True when two loadouts hold the same entries in the same order (by id +
+/// enabled). The status-refresh listener uses this so a pure busy/error flip on
+/// [LibraryState] doesn't count as a loadout change.
+bool _sameLoadoutEntries(LoadoutView a, LoadoutView b) {
+  if (a.entries.length != b.entries.length) return false;
+  for (var i = 0; i < a.entries.length; i++) {
+    if (a.entries[i].id != b.entries[i].id ||
+        a.entries[i].enabled != b.entries[i].enabled) {
+      return false;
+    }
+  }
+  return true;
 }
 
 enum _OverflowAction { refresh, undeployAll }

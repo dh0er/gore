@@ -8,6 +8,7 @@ import 'package:gore_manager/core/core_service.dart';
 import 'package:gore_manager/core/providers.dart';
 import 'package:gore_manager/home_page.dart';
 import 'package:gore_manager/l10n/app_localizations.dart';
+import 'package:gore_manager/library/domain/library_notifier.dart';
 
 /// A settings store that starts with no game path so the startup status runs
 /// against a null root (the set-path sentinel), letting the test isolate the
@@ -41,7 +42,114 @@ Widget _app(FakeGoreCoreFfiService fake, UiSettingsStore store) {
   );
 }
 
+/// A minimal stateful core service: `mgr_set_loadout` actually updates the
+/// loadout that `mgr_library_list` reports back, so a toggle produces a real
+/// loadout delta the way the DLL would (a canned-response fake cannot). Records
+/// every call for assertions.
+class _StatefulFake implements GoreCoreFfiService {
+  _StatefulFake(this._loadout);
+
+  List<Map<String, Object?>> _loadout;
+  final calls = <({String command, Map<String, Object?> payload})>[];
+
+  static const _mods = [
+    {
+      'id': 'm1',
+      'kind': 'goremod',
+      'name': 'M1',
+      'version': '',
+      'author': '',
+      'imported_at': '',
+      'source': '',
+      'components': <Object?>[],
+    },
+  ];
+
+  @override
+  bool get isAvailable => true;
+
+  @override
+  String get description => 'stateful-fake';
+
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    calls.add((command: command, payload: payload));
+    switch (command) {
+      case 'mgr_library_list':
+        return {
+          'ok': true,
+          'mods': _mods,
+          'loadout': {'entries': _loadout},
+        };
+      case 'mgr_set_loadout':
+        final lo = payload['loadout'] as Map<String, Object?>?;
+        final entries = (lo?['entries'] as List?)?.cast<Map<String, Object?>>();
+        if (entries != null) _loadout = entries;
+        return {'ok': true};
+      case 'mgr_analyze':
+        return {'ok': true, 'conflicts': <Object?>[]};
+      case 'mgr_status':
+        return {
+          'ok': true,
+          'status': {'state': 'nothing_deployed'},
+        };
+      default:
+        return {'ok': true};
+    }
+  }
+}
+
+Widget _appService(GoreCoreFfiService svc, UiSettingsStore store) {
+  return ProviderScope(
+    overrides: [
+      coreServiceProvider.overrideWithValue(svc),
+      uiSettingsStoreProvider.overrideWithValue(store),
+    ],
+    child: MaterialApp(
+      localizationsDelegates: const [
+        AppLocalizations.delegate,
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
+      supportedLocales: AppLocalizations.supportedLocales,
+      home: const HomePage(),
+    ),
+  );
+}
+
 void main() {
+  testWidgets('a loadout edit re-queries deployment status', (tester) async {
+    // Start with the game path already set so status refreshes hit the FFI.
+    final store = _EmptySettingsStore()
+      ..write(const UiSettings().copyWith(
+        gameExePath: 'C:/games/gothic/G1R/Binaries/Win64/G1R-Win64-Shipping.exe',
+      ));
+    final fake = _StatefulFake([
+      {'id': 'm1', 'enabled': false},
+    ]);
+    await tester.pumpWidget(_appService(fake, store));
+    await tester.pumpAndSettle();
+
+    final before = fake.calls.where((c) => c.command == 'mgr_status').length;
+    expect(before, greaterThanOrEqualTo(1), reason: 'startup refresh ran');
+
+    // Flip the mod's enabled flag (persists the loadout).
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(HomePage)),
+    );
+    await container.read(libraryProvider.notifier).toggle('m1');
+    await tester.pumpAndSettle();
+
+    // The loadout changed, so status was re-queried.
+    final after = fake.calls.where((c) => c.command == 'mgr_status').length;
+    expect(after, greaterThan(before),
+        reason: 'a loadout edit must refresh status');
+  });
+
   testWidgets('changing the game exe path refreshes status for the new root',
       (tester) async {
     final fake = FakeGoreCoreFfiService(

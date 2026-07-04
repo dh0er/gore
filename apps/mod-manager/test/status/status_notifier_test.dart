@@ -53,6 +53,30 @@ void main() {
         isA<ManagerStatusStudioDeployActive>(),
       );
     });
+
+    test('a successful refresh clears a stale studioActive flag', () async {
+      final fake = FakeGoreCoreFfiService(
+        responses: {
+          'mgr_apply': {
+            'ok': false,
+            'error': {'code': 'STUDIO_DEPLOY_ACTIVE', 'message': 'studio'},
+          },
+          'mgr_status': {
+            'ok': true,
+            'status': {'state': 'nothing_deployed'},
+          },
+        },
+      );
+      final n = _notifier(fake);
+      // A blocked apply arms studioActive.
+      await n.apply('C:/game');
+      expect(n.state.studioActive, isTrue);
+      // A later refresh where the install has no studio deploy must disarm it,
+      // or the take-over prompt stays wrongly available.
+      await n.refresh('C:/game');
+      expect(n.state.studioActive, isFalse);
+      expect(n.state.status, isA<ManagerStatusNothingDeployed>());
+    });
   });
 
   group('StatusNotifier.apply', () {
