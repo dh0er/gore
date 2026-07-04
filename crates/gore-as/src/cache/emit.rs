@@ -217,15 +217,8 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
     // override -> "must have the same return type as in the base class". Stripping makes them match.
     let ret = f.ret.render(refs).trim_start_matches("const ").to_string();
     let params = render_params(f, refs);
-    if f.is_ufunction {
-        let _ = writeln!(s, "{ind}UFUNCTION()");
-    }
-    if is_ctor {
-        let _ = writeln!(s, "{ind}{}({params})", f.name); // constructors have no return type
-    } else {
-        let _ = writeln!(s, "{ind}{ret} {}({params})", f.name);
-    }
-    let _ = writeln!(s, "{ind}{{");
+    // NOTE: the signature is written AFTER the body is computed (below) — the ref-return `&`
+    // rendering must know whether the body falls back to a stub / RVODEF default return.
 
     let fc = FuncCode {
         func: f.name.clone(),
@@ -251,6 +244,15 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
     // slot used as a member-access base; apply AFTER (overriding) the call-arg guess.
     let member_overrides = infer_slot_types_from_members(f, refs);
     for (slot, ty) in &member_overrides {
+        local_types.insert(*slot, ty.clone());
+    }
+    // iterator-instance subtypes (illegal-op-round2.md A1): the T1 entry for a `T*Iterator`
+    // template INSTANCE carries no SubTypes, so every slot typed from it declares as a bare
+    // head (`TArrayConstIterator local_N;`) — a template-arity error that makes the local
+    // `Unknown`. Derive `<T>` from the `Iterator()` call's container receiver; applied AFTER
+    // the member pass so the composed type wins over the bare member-derived head.
+    let iter_overrides = infer_iterator_types(f, &fc, refs, fields, &local_types);
+    for (slot, ty) in &iter_overrides {
         local_types.insert(*slot, ty.clone());
     }
     let body = body_statements_ctor(&fc, refs, depth + 1, super_ctor, Some(&f.ret), fields, Some(&param_types), class_name, Some(&local_types));
@@ -296,6 +298,13 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
             locals.insert(*slot, ty.clone());
         }
     }
+    // iterator-subtype overrides (A1) replace the bare `T*Iterator` declaration with the
+    // container-derived instantiation; never downgrade an already-subtyped declaration.
+    for (slot, ty) in &iter_overrides {
+        if used.contains(slot) && !locals.get(slot).is_some_and(|t| t.contains('<')) {
+            locals.insert(*slot, ty.clone());
+        }
+    }
     // Drop locals never referenced in the body: `obj_locals` includes profiling temporaries like
     // FScopeCycleCounter / FStatID that the body never uses, and they have no default constructor,
     // so declaring an unused one fails ("No default constructor"). An unused declaration is dead.
@@ -323,10 +332,45 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
         stub_reason(&body, &locals, f.params.len(), ret == "void")
     };
 
+    // Class B1 (emission-classes.md): the cache flags 266 script functions with a REFERENCE
+    // return (`FPerceptionHandler& OnSensedSelf(...)` — chainable builders); rendering them
+    // by value makes every call site a temporary, which the game compiler rejects ("Cannot
+    // call non-const method on a temporary object" / temp into non-const `&` param). Emit
+    // `{ty}&` (keeping a leading `const` — meaningful on a ref return) for object-token
+    // by-ref value returns. A ref return never has an RVO slot, so `__return` can't occur;
+    // the only exposures are the RVODEF default-return and the stub fallback, which declare
+    // `{ret} __r;` — invalid for a reference type — so those keep the by-value signature
+    // (status quo).
+    let ref_ret = f.ret.is_reference && f.ret.token == 5 && !f.ret.is_object_handle;
+    let ret_sig = if ref_ret && reason.is_none() && !body.contains(RVODEF) && !body.contains("__return") {
+        format!("{}&", f.ret.render(refs))
+    } else {
+        ret.clone()
+    };
+    if f.is_ufunction {
+        let _ = writeln!(s, "{ind}UFUNCTION()");
+    }
+    if is_ctor {
+        let _ = writeln!(s, "{ind}{}({params})", f.name); // constructors have no return type
+    } else {
+        let _ = writeln!(s, "{ind}{ret_sig} {}({params})", f.name);
+    }
+    let _ = writeln!(s, "{ind}{{");
+
     if reason.is_none() {
+        // Class A (emission-classes.md): FStatID/FScopeCycleCounter have neither a default
+        // constructor nor an opAssign, so BOTH the bare hoisted declaration and the later
+        // whole-object ctor-assign fail. When every reference to such a local is the
+        // write-only `local_N = TY(...);` shape, suppress the hoist and rewrite each
+        // assignment to a declaration-with-initializer (in-place construction — the original
+        // source form). Any other reference shape keeps the hoist (status quo).
+        let (body, suppressed) = rewrite_ctor_only_locals(&body, &locals);
         // hoist local declarations; primitives must be initialized (AngelScript errors on
         // "may not be initialized"), objects/structs/handles default-construct themselves.
         for (slot, ty) in &locals {
+            if suppressed.contains(slot) {
+                continue; // Class A: declared at its (rewritten) assignment site instead
+            }
             if is_primitive(ty) {
                 let _ = writeln!(s, "{ind}    {ty} local_{slot} = {};", default_for(ty));
             } else {
@@ -692,6 +736,194 @@ fn infer_slot_types_from_members(f: &Func, refs: &RefResolver) -> HashMap<i32, S
     cand.into_iter().filter_map(|(s, t)| t.map(|t| (s, t))).collect()
 }
 
+/// A1 (illegal-op-round2.md): subtype inference for iterator locals. An `Iterator()` call
+/// lowers as `PSF <out> ; ... ; <receiver push> ; CALLSYS <ptr>` — the hidden RVO out-slot
+/// is pushed before the container receiver (a PSF/PshVPtr slot, or `PshVPtr w0 ; ADDSi` for
+/// a `this.<field>` container), possibly with a whole interleaved call in between. The
+/// iterator INSTANCE's T1 entry usually carries no SubTypes, so the out-slot would declare
+/// bare (`TArrayConstIterator local_N;` — template-arity error, every use `Unknown`).
+/// Compose the type as: head from `func_ret_by_ptr` (TArrayIterator vs TArrayConstIterator
+/// vs TMap/TSetIterator) + the container's `<...>` subtype list. Uses the same light
+/// operand-stack model as `infer_slot_types` (pushes + per-call consumption) so interleaved
+/// calls don't break the out-slot/receiver association. Conservative: unknown-arity calls
+/// clear the stack, un-subtyped containers are skipped, an out-slot whose existing bare
+/// head disagrees is skipped, already-subtyped slots are never overridden, and conflicting
+/// candidates drop (regression-free).
+fn infer_iterator_types(
+    f: &Func,
+    fc: &FuncCode,
+    refs: &RefResolver,
+    fields: Option<&HashMap<String, String>>,
+    known: &HashMap<i32, String>,
+) -> HashMap<i32, String> {
+    let instrs = match disassemble(&fc.bytecode) {
+        Ok(i) => i,
+        Err(_) => return HashMap::new(),
+    };
+    // frame offset -> param index, for container receivers that are parameters.
+    let (param_off_map, _rvo_off) = super::decompile::build_param_off_map_rvo(fc, &instrs, refs);
+    let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32).unwrap_or(0);
+    // authoritative composed obj-local types: a `$beh0`/call-arg override may have CLOBBERED a
+    // slot's entry in `known` down to a bare template head (`TMap`), while the cache's own
+    // obj_locals entry composes fully (`TMap<A, B>`). Prefer whichever is subtyped.
+    let obj_composed: HashMap<i32, String> = f
+        .obj_locals
+        .iter()
+        .map(|(slot, tinfo)| {
+            let ty = super::types::DataType { token: 5, type_info: *tinfo, is_object_handle: true, ..Default::default() }.base_name(refs);
+            (*slot, ty)
+        })
+        .collect();
+    // composed container type (e.g. `TArray<AGothicCharacter>`) for a receiver slot.
+    let container_of = |slot: i32| -> Option<String> {
+        if slot > 0 {
+            // local: prefer the subtyped candidate (override map first, then obj_locals).
+            return match (known.get(&slot), obj_composed.get(&slot)) {
+                (Some(k), _) if k.contains('<') => Some(k.clone()),
+                (_, Some(o)) if o.contains('<') => Some(o.clone()),
+                (k, o) => k.or(o).cloned(),
+            };
+        }
+        if slot == 0 && fc.is_method {
+            return None; // `this` is not a container
+        }
+        let idx = *param_off_map.get(&slot)?;
+        fc.param_types.get(idx).map(|d| d.base_name(refs))
+    };
+    /// Operand-stack entry: enough to identify a receiver's container and a PSF'd out-slot.
+    #[derive(Clone)]
+    enum Ent {
+        /// `PSF wN` / `PshVPtr wN`.
+        Slot { slot: i32, psf: bool },
+        /// After `ADDSi` (member access rewrites the top in place): the composed container
+        /// type when resolvable (`this.<field>` via the class fields map), else None.
+        Member(Option<String>),
+        /// Any other push (constants, globals, register re-pushes, value slots).
+        Other,
+    }
+    let mut stack: Vec<Ent> = Vec::new();
+    let mut cand: HashMap<i32, Option<String>> = HashMap::new();
+    // per-call consumption, mirroring `infer_slot_types::pair`: params + receiver + RVO
+    // out-slot for methods; unknown param info -> clear (conservative: drop pending slots).
+    let consume = |stack: &mut Vec<Ent>, params: Option<usize>, is_method: bool, ret_struct: bool| {
+        let Some(n) = params else { stack.clear(); return; };
+        let rvo = (ret_struct && is_method) as usize;
+        let total = if is_method { n + 1 + rvo } else { n };
+        stack.truncate(stack.len() - total.min(stack.len()));
+    };
+    for ins in &instrs {
+        match ins.op.name {
+            "PshVPtr" | "PSF" => {
+                stack.push(Ent::Slot { slot: w0(ins), psf: ins.op.name == "PSF" });
+            }
+            "PshV4" | "PshV8" | "PshC4" | "PshC8" | "PshNull" | "PGA" | "PshGPtr" | "PshG4"
+            | "PshRPtr" | "STR" | "TYPEID" | "OBJTYPE" | "PshListElmnt" => stack.push(Ent::Other),
+            "ADDSi" => {
+                // member access rewrites the pushed pointer in place: `this.<field>` resolves
+                // its container type via the class fields map; anything else is unresolvable
+                // here (a foreign class's field value type isn't in the tail tables).
+                let c = match stack.last() {
+                    Some(Ent::Slot { slot: 0, .. }) if fc.is_method => {
+                        let off = ins.words.first().copied().unwrap_or(0) as i32;
+                        let tid = ins.dwords.first().copied().unwrap_or(0) as i32;
+                        refs.member(tid, off)
+                            .and_then(|name| fields.and_then(|m| m.get(name)))
+                            .cloned()
+                    }
+                    _ => None,
+                };
+                if let Some(top) = stack.last_mut() {
+                    *top = Ent::Member(c);
+                }
+            }
+            "CALL" | "CALLINTF" | "CALLBND" => {
+                let id = ins.dwords.first().copied().unwrap_or(0) as i32;
+                let rs = refs.func_ret_by_id(id).map(|d| ret_is_struct(&d.base_name(refs))).unwrap_or(false);
+                consume(&mut stack, refs.func_params_by_id(id).map(|p| p.len()), refs.is_method_by_id(id), rs);
+            }
+            "CALLSYS" | "Thiscall1" => {
+                let ptr = ins.qwords.first().copied().unwrap_or(0) as i64;
+                if refs.func_by_ptr(ptr) == Some("$beh0") {
+                    // in-place construct: receiver + ctor args (mirror infer_slot_types).
+                    let nargs = refs.func_params_by_ptr(ptr).map(|p| p.len()).unwrap_or(0);
+                    let drop_n = (1 + nargs).min(stack.len());
+                    stack.truncate(stack.len() - drop_n);
+                    continue;
+                }
+                if refs.func_by_ptr(ptr) == Some("Iterator") && stack.len() >= 2 {
+                    // receiver = top; hidden RVO out-slot = the PSF entry directly below.
+                    let recv = &stack[stack.len() - 1];
+                    let out = &stack[stack.len() - 2];
+                    let container = match recv {
+                        Ent::Slot { slot, .. } => container_of(*slot),
+                        Ent::Member(c) => c.clone(),
+                        Ent::Other => None,
+                    };
+                    if let Ent::Slot { slot: out_slot, psf: true } = *out {
+                        record_iterator_candidate(refs, known, &mut cand, out_slot, ptr, container);
+                    }
+                }
+                let rs = refs.func_ret_by_ptr(ptr).map(|d| ret_is_struct(&d.base_name(refs))).unwrap_or(false);
+                consume(&mut stack, refs.func_params_by_ptr(ptr).map(|p| p.len()), refs.is_method_by_ptr(ptr), rs);
+            }
+            _ => {}
+        }
+    }
+    cand.into_iter().filter_map(|(s, t)| t.map(|t| (s, t))).collect()
+}
+
+/// Compose + record one iterator out-slot candidate (see [`infer_iterator_types`]).
+fn record_iterator_candidate(
+    refs: &RefResolver,
+    known: &HashMap<i32, String>,
+    cand: &mut HashMap<i32, Option<String>>,
+    out_slot: i32,
+    ptr: i64,
+    container: Option<String>,
+) {
+    if out_slot <= 0 {
+        return; // only local out-slots get declarations
+    }
+    // never override a slot that already has a subtyped (template-complete) type.
+    if known.get(&out_slot).is_some_and(|t| t.contains('<')) {
+        return;
+    }
+    // head = the Iterator() return type. Iterator INSTANCES usually serialize BARE (then the
+    // container's `<...>` subtype list is appended), but some (TMap) compose fully — use
+    // those directly, no container needed.
+    let Some(head) = refs.func_ret_by_ptr(ptr).map(|d| d.base_name(refs)) else { return };
+    if !head.starts_with('T') || !head.contains("Iterator") {
+        return;
+    }
+    let ty = if head.contains('<') {
+        head
+    } else {
+        // the container must itself be a subtyped template (`TArray<AGothicCharacter>`).
+        let Some(c) = container else { return };
+        let (Some(lt), Some(gt)) = (c.find('<'), c.rfind('>')) else { return };
+        if gt <= lt + 1 {
+            return;
+        }
+        format!("{head}<{}>", &c[lt + 1..gt])
+    };
+    // stack-model safety: if the slot already has a BARE type (member-pass derived), its head
+    // must agree with ours — a mismatch means a mis-associated out-slot, so skip.
+    if let Some(prev) = known.get(&out_slot) {
+        if !prev.is_empty() && ty.split('<').next() != Some(prev.as_str()) {
+            return;
+        }
+    }
+    match cand.get(&out_slot) {
+        None => {
+            cand.insert(out_slot, Some(ty));
+        }
+        Some(Some(prev)) if *prev != ty => {
+            cand.insert(out_slot, None); // slot reused across containers: drop
+        }
+        _ => {}
+    }
+}
+
 /// §3.3 consumer-driven typing of out-of-range `argN` slots. Scans the body for the RHS of an
 /// `argN = <expr>` assignment (including `return argN = <expr>;`) and resolves `<expr>`'s type
 /// from the maps we already have: `this.<field>` -> field type, `local_M` -> local type,
@@ -751,6 +983,99 @@ fn infer_oor_arg_types(
         let _ = param_types;
     }
     out
+}
+
+/// Types with NEITHER a default constructor NOR an opAssign in this AS binding (emission-
+/// classes.md Class A): a hoisted bare declaration fails ("No default constructor") AND the
+/// later whole-object assignment fails ("No appropriate opAssign"); the only legal form is
+/// declaration-with-initializer (in-place construction).
+fn has_no_default_ctor(ty: &str) -> bool {
+    matches!(ty, "FStatID" | "FScopeCycleCounter")
+}
+
+/// Count identifier-boundary occurrences of `ident` in `line` (so `local_3` does not match
+/// inside `local_32` or `local_3_2`).
+fn count_ident(line: &str, ident: &str) -> usize {
+    let (b, ib) = (line.as_bytes(), ident.as_bytes());
+    let is_id = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    let (mut n, mut i) = (0usize, 0usize);
+    while i + ib.len() <= b.len() {
+        if &b[i..i + ib.len()] == ib
+            && (i == 0 || !is_id(b[i - 1]))
+            && (i + ib.len() == b.len() || !is_id(b[i + ib.len()]))
+        {
+            n += 1;
+            i += ib.len();
+        } else {
+            i += 1;
+        }
+    }
+    n
+}
+
+/// Class A (emission-classes.md): for a hoisted local whose type has no default ctor AND no
+/// opAssign (`FStatID`/`FScopeCycleCounter`), when EVERY body reference is the write-only
+/// whole-object ctor-assign `local_N = TY(...);`, suppress the hoisted declaration and
+/// rewrite each assignment to a declaration-with-initializer `TY local_N = TY(...);`. A
+/// 2nd..nth assignment to the same (compiler-reused) slot gets a fresh name (`local_N_2`) so
+/// sibling-scope re-declarations of one name are avoided. If any reference does NOT match
+/// the pattern (a read), the local keeps its hoist (status-quo error, never force-stub).
+/// Returns the rewritten body + the slots whose hoisted declaration must be suppressed.
+fn rewrite_ctor_only_locals(body: &str, locals: &BTreeMap<i32, String>) -> (String, HashSet<i32>) {
+    let mut suppressed: HashSet<i32> = HashSet::new();
+    let mut out = body.to_string();
+    for (slot, ty) in locals {
+        if !has_no_default_ctor(ty) {
+            continue;
+        }
+        let ident = format!("local_{slot}");
+        let pat = format!("{ident} = {ty}(");
+        // gate: every referencing line is exactly `local_N = TY(...);` with a single occurrence.
+        let mut assigns = 0usize;
+        let mut ok = true;
+        for line in out.lines() {
+            match count_ident(line, &ident) {
+                0 => continue,
+                1 => {
+                    let t = line.trim_start();
+                    if t.starts_with(&pat) && t.ends_with(");") {
+                        assigns += 1;
+                    } else {
+                        ok = false;
+                        break;
+                    }
+                }
+                _ => {
+                    ok = false;
+                    break;
+                }
+            }
+        }
+        if !ok || assigns == 0 {
+            continue;
+        }
+        let mut k = 0usize;
+        let mut rewritten = String::with_capacity(out.len() + 32);
+        for line in out.lines() {
+            let t = line.trim_start();
+            if count_ident(line, &ident) == 1 && t.starts_with(&pat) && t.ends_with(");") {
+                k += 1;
+                let indent = &line[..line.len() - t.len()];
+                let rest = &t[ident.len()..]; // ` = TY(...);`
+                if k == 1 {
+                    let _ = writeln!(rewritten, "{indent}{ty} {ident}{rest}");
+                } else {
+                    let _ = writeln!(rewritten, "{indent}{ty} {ident}_{k}{rest}");
+                }
+            } else {
+                rewritten.push_str(line);
+                rewritten.push('\n');
+            }
+        }
+        out = rewritten;
+        suppressed.insert(*slot);
+    }
+    (out, suppressed)
 }
 
 /// Infer (slot, type) for primitive + object locals to hoist as declarations.
