@@ -410,9 +410,23 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
     // Untrusted -> keep the original take-all (cache native param counts are unreliable).
     // A method returning a struct BY VALUE (F*/T* head) also pushes a hidden RVO out-slot, so its
     // frame is params + receiver + 1; account for it or the split drops a real leading arg.
-    let rvo_slot = is_method && ret_ty
-        .map(|t| matches!(t.split('<').next().unwrap_or(t).bytes().next(), Some(b'F') | Some(b'T')))
-        .unwrap_or(false);
+    // A method returning a struct BY VALUE pushes a hidden RVO out-slot, so its frame is
+    // params + receiver + 1. But a method returning by REFERENCE (`TArray& Last()`, container
+    // accessors) does NOT — and ret_ty is only the base-name string, so the is_reference flag is
+    // erased. Blindly adding +1 for any F/T-head return over-widens the split window and EATS an
+    // enclosing call's arg (proven: TArray::Last inside `container.Last(i).AddTag(tag)` ate the
+    // tag). Data-driven guard: only count the RVO slot when it is ACTUALLY on the stack — the
+    // entry directly below the receiver is a PSF slot whose type head equals the return-type head
+    // (the same condition the Fix-b3 out-slot probe uses). This can only SHRINK the window vs the
+    // old heuristic, never widen, so it cannot break a real by-value RVO recovery.
+    fn tyhead(s: &str) -> &str { s.split('<').next().unwrap_or(s) }
+    let rvo_slot = is_method
+        && ret_ty.map(|t| matches!(tyhead(t).bytes().next(), Some(b'F') | Some(b'T'))).unwrap_or(false)
+        && stack.len() >= 2
+        && {
+            let below = &stack[stack.len() - 2];
+            below.is_psf && below.ty.as_deref().map(tyhead) == ret_ty.map(tyhead)
+        };
     let need = trusted_arity.map(|n| n + is_method as usize + rvo_slot as usize);
     let mut a: Vec<Arg> = match need {
         Some(k) if stack.len() > k => {
