@@ -389,6 +389,13 @@ pub fn apply_loadout(
         owner: "manager".into(),
         mod_name: "<manager>".into(),
         loadout: loaded.iter().map(|l| LoadoutEntry { id: l.entry.id.clone(), enabled: true }).collect(),
+        // Snapshot each deployed mod's content fingerprint so status can detect a same-id UPDATE
+        // (a re-import that changed a mod's components but kept its id) — a loadout-id match alone
+        // would otherwise report InSync over stale deployed bytes.
+        deployed_fingerprints: loaded
+            .iter()
+            .map(|l| (l.entry.id.clone(), l.meta.fingerprint()))
+            .collect(),
         ..Default::default()
     };
     crate::commit_plan(&gp, &abs_root, plan, record, None)?;
@@ -1145,12 +1152,13 @@ mod tests {
         let target = loadout(&[(&a, true), (&b, true)]);
 
         // 1) Nothing deployed.
-        assert_eq!(status(&g.root, &target).unwrap(), ManagerStatus::NothingDeployed);
+        assert_eq!(status(&g.root, &g.lib, &target).unwrap(), ManagerStatus::NothingDeployed);
 
-        // 2) Apply the target → InSync.
+        // 2) Apply the target → InSync (apply records each mod's fingerprint; the library is
+        //    unchanged, so status confirms it and reports InSync).
         apply_loadout(&g.root, &g.lib, &target).unwrap();
         assert_eq!(
-            status(&g.root, &target).unwrap(),
+            status(&g.root, &g.lib, &target).unwrap(),
             ManagerStatus::InSync {
                 loadout: vec![
                     LoadoutEntry { id: "mod-a".into(), enabled: true },
@@ -1162,19 +1170,69 @@ mod tests {
         // 3) Ask for a different target (mod-b disabled) → ChangesPending.
         let narrowed = loadout(&[(&a, true), (&b, false)]);
         assert!(matches!(
-            status(&g.root, &narrowed).unwrap(),
+            status(&g.root, &g.lib, &narrowed).unwrap(),
             ManagerStatus::ChangesPending { .. }
         ));
 
         // 4) Externally truncate a deployed live file → GameUpdated.
         fs::write(g.lcache(), b"").unwrap();
-        match status(&g.root, &target).unwrap() {
+        match status(&g.root, &g.lib, &target).unwrap() {
             ManagerStatus::GameUpdated { drifted } => {
                 assert_eq!(drifted.len(), 1);
                 assert!(drifted[0].ends_with("AlkimiaLocalization_0.lcache"));
             }
             other => panic!("expected GameUpdated, got {other:?}"),
         }
+    }
+
+    /// End-to-end same-id UPDATE: apply mod-a (whose fingerprint is recorded), then re-import it
+    /// under the SAME id with different components (rewrite its library sidecar) — the loadout ids
+    /// are unchanged, but the content fingerprint now differs from the recorded one. Status must
+    /// report ChangesPending (the deployed bytes are stale), NOT InSync — the bug this fix targets.
+    #[test]
+    fn status_same_id_update_is_changes_pending() {
+        use crate::mgr::status::{status, ManagerStatus};
+        let g = FakeGame::new();
+        // A loc mod editing cheese→Gouda; apply records its fingerprint.
+        let a = g.add_loc_mod("mod-a", "Alpha", "itfo_cheese", "Gouda");
+        let target = loadout(&[(&a, true)]);
+        apply_loadout(&g.root, &g.lib, &target).unwrap();
+        assert_eq!(status(&g.root, &g.lib, &target).unwrap(), ManagerStatus::InSync {
+            loadout: vec![LoadoutEntry { id: "mod-a".into(), enabled: true }],
+        });
+
+        // Re-import mod-a as an UPDATE: SAME id, but a different loc edit → different components →
+        // different fingerprint. Rewrite only the library sidecar (what a re-import produces).
+        let dir = g.lib.join("mod-a");
+        let mut edits: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
+        edits.entry("itfo_cheese".into()).or_default().insert("german".into(), "Brie".into());
+        fs::write(dir.join("loc/edits.json"), serde_json::to_vec(&edits).unwrap()).unwrap();
+        let updated = ModEntryMeta {
+            id: "mod-a".into(),
+            kind: ModKind::Goremod,
+            name: "Alpha".into(),
+            version: String::new(),
+            author: String::new(),
+            imported_at: "2026-07-03T00:00:00Z".into(),
+            source: String::new(),
+            // A DIFFERENT target than the original (which had itfo_cheese|german too, but the
+            // fingerprint hashes the serialized components — here we add a second target so it
+            // provably differs regardless of import_at).
+            components: vec![ComponentInfo::LocPatch {
+                rel: "loc/edits.json".into(),
+                targets: vec!["itfo_cheese|german".into(), "itfo_apple|german".into()],
+            }],
+        };
+        fs::write(dir.join(META_FILE), serde_json::to_vec_pretty(&updated).unwrap()).unwrap();
+
+        // Loadout ids unchanged, but the library content fingerprint moved → ChangesPending.
+        assert_eq!(
+            status(&g.root, &g.lib, &target).unwrap(),
+            ManagerStatus::ChangesPending {
+                deployed: vec![LoadoutEntry { id: "mod-a".into(), enabled: true }],
+                target: vec![LoadoutEntry { id: "mod-a".into(), enabled: true }],
+            }
+        );
     }
 
     // ── AUDIO materialization ───────────────────────────────────────────────────────────────────

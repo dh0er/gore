@@ -297,10 +297,16 @@ fn mgr_apply_on_temp_game() {
         "apply must patch the loc value"
     );
 
-    // status now reports in-sync for the same target.
+    // status now reports in-sync for the same target. Pass --library so the fingerprint check
+    // reads the SAME library apply recorded against (its default would be the shared per-user one).
     Command::cargo_bin("gore")
         .unwrap()
-        .args(["mgr", "status", "--game", game.to_str().unwrap(), "--loadout", loadout.to_str().unwrap()])
+        .args([
+            "mgr", "status",
+            "--game", game.to_str().unwrap(),
+            "--library", lib.to_str().unwrap(),
+            "--loadout", loadout.to_str().unwrap(),
+        ])
         .assert()
         .success()
         .stdout(predicates::str::contains("in sync"));

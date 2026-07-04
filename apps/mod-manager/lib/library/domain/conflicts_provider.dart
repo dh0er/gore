@@ -6,20 +6,42 @@ import 'models.dart';
 
 /// Conflicts across the enabled mods of the current loadout.
 ///
-/// Re-runs when the loadout's ENTRIES change, so toggling or reordering a mod
-/// re-analyzes automatically.
+/// Re-runs when the loadout's ENTRIES change (toggle/reorder) OR when a mod's
+/// CONTENT changes (a same-id re-import that swaps its components/targets),
+/// so analyze recomputes automatically in both cases.
 final conflictsProvider = FutureProvider<List<ConflictView>>((ref) {
-  // Key on the entries (id + enabled), NOT the whole LibraryState: a mutation
-  // flips LibraryState.busy at its start while it persists the new loadout via
-  // mgr_set_loadout asynchronously. Re-analyzing on that busy flip would read
-  // the still-stale on-disk loadout. The notifier only updates state.loadout
-  // AFTER the persist lands, so keying on the entries defers the analyze to a
-  // point where mgr_analyze reads the already-written loadout.
-  ref.watch(libraryProvider.select(
-    (s) => [for (final e in s.loadout.entries) '${e.id}:${e.enabled}'].join(','),
-  ));
+  // Key on a stable String derived from BOTH:
+  //  * the loadout entries (id + enabled) — toggling/reordering changes this;
+  //  * each mod's content signature (id + its components' kind|targets) —
+  //    re-importing a mod under the SAME id changes LibraryState.mods (its
+  //    components/targets) but NOT the loadout entries, so without this a
+  //    same-id update would keep the stale conflicts.
+  // NOT the whole LibraryState: a mutation flips LibraryState.busy at its start
+  // while it persists the new loadout via mgr_set_loadout asynchronously.
+  // Re-analyzing on that busy flip would read the still-stale on-disk loadout.
+  // Both `loadout` and `mods` only change on a settled refresh (after the
+  // persist lands / the library reload completes), not on the busy flip, so
+  // this preserves the "don't recompute mid-mutation" property.
+  ref.watch(libraryProvider.select((s) => _conflictsKey(s)));
   return ref.watch(mgrFfiProvider).analyze();
 });
+
+/// A stable, value-comparable key that changes when the loadout entries change
+/// OR when any mod's deployable content (its components' kinds + targets)
+/// changes — including a same-id re-import that swaps a mod's targets.
+String _conflictsKey(LibraryState s) {
+  final loadout = [
+    for (final e in s.loadout.entries) '${e.id}:${e.enabled}',
+  ].join(',');
+  // Per mod: id plus a join of each component's kind and its target list, so a
+  // changed target set (the conflict-analysis footprint) alters the key.
+  final mods = [
+    for (final m in s.mods)
+      '${m.id}='
+          '${[for (final c in m.components) '${c.kind}[${c.targets.join('+')}]'].join(';')}',
+  ].join(',');
+  return '$loadout|$mods';
+}
 
 /// Every conflict that involves [modId].
 List<ConflictView> conflictsForMod(

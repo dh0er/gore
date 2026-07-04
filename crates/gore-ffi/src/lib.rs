@@ -687,17 +687,20 @@ fn mgr_apply(payload: Value) -> Value {
     }
 }
 
-/// `{game_root, loadout_path?}` → `{ok, status:ManagerStatus}` — diff deployed vs target loadout.
+/// `{game_root, library_dir?, loadout_path?}` → `{ok, status:ManagerStatus}` — diff deployed vs
+/// target loadout. `library_dir` lets status fingerprint each enabled mod's current content so a
+/// same-id re-import (update) is reported as changes-pending rather than in-sync.
 fn mgr_status(payload: Value) -> Value {
     let Some(game_root) = payload.get("game_root").and_then(Value::as_str) else {
         return err("BAD_REQUEST", "missing 'game_root'");
     };
+    let lib = mgr_library_dir(&payload);
     let lo_path = mgr_loadout_path(&payload);
     let loadout = match gore_mod::mgr::loadout::load(&lo_path) {
         Ok(l) => l,
         Err(e) => return err("STATUS_FAILED", e.to_string()),
     };
-    match gore_mod::mgr::status::status(std::path::Path::new(game_root), &loadout) {
+    match gore_mod::mgr::status::status(std::path::Path::new(game_root), &lib, &loadout) {
         Ok(status) => json!({"ok": true, "status": serde_json::to_value(&status).unwrap_or(Value::Null)}),
         Err(e) => err("STATUS_FAILED", e.to_string()),
     }
@@ -1042,6 +1045,66 @@ mod tests {
         );
         assert_eq!(v["ok"], true, "resp: {v}");
         assert_eq!(v["status"]["state"], "nothing_deployed");
+    }
+
+    /// After importing + enabling a mod and applying it, `mgr_status` against the SAME library
+    /// reports `in_sync` — the deploy record's per-mod fingerprints match the current library, so
+    /// the fingerprint gate the same-id-update fix added does not falsely fire. Uses a UE4SS mod
+    /// (apply only copies its dir — no .lcache/bank fixture needed).
+    #[test]
+    fn mgr_status_in_sync_after_apply() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("library");
+        let lo = tmp.path().join("loadout.json");
+        // Minimal game tree: apply only needs the ue4ss Mods dir for a UE4SS-only mod.
+        let game = tmp.path().join("game");
+        std::fs::create_dir_all(game.join("G1R/Binaries/Win64/ue4ss/Mods")).unwrap();
+
+        // Import a UE4SS bundle → it registers a disabled loadout slot.
+        let bdir = write_goremod_bundle(tmp.path(), "Probe");
+        let imp = mgr_call(
+            "mgr_import",
+            json!({
+                "path": bdir.display().to_string(),
+                "library_dir": lib.display().to_string(),
+                "loadout_path": lo.display().to_string()
+            }),
+        );
+        assert_eq!(imp["ok"], true, "resp: {imp}");
+        let id = imp["entry"]["id"].as_str().unwrap().to_string();
+
+        // Enable it: set the loadout to [{id, enabled:true}].
+        let set = mgr_call(
+            "mgr_set_loadout",
+            json!({
+                "loadout": {"format": 1, "entries": [{"id": id, "enabled": true}]},
+                "loadout_path": lo.display().to_string()
+            }),
+        );
+        assert_eq!(set["ok"], true, "resp: {set}");
+
+        // Apply → creates a manager deploy record (recording the mod's fingerprint).
+        let ap = mgr_call(
+            "mgr_apply",
+            json!({
+                "game_root": game.display().to_string(),
+                "library_dir": lib.display().to_string(),
+                "loadout_path": lo.display().to_string()
+            }),
+        );
+        assert_eq!(ap["ok"], true, "apply resp: {ap}");
+
+        // Status with the SAME library → in_sync (loadout matches AND fingerprint matches).
+        let st = mgr_call(
+            "mgr_status",
+            json!({
+                "game_root": game.display().to_string(),
+                "library_dir": lib.display().to_string(),
+                "loadout_path": lo.display().to_string()
+            }),
+        );
+        assert_eq!(st["ok"], true, "status resp: {st}");
+        assert_eq!(st["status"]["state"], "in_sync", "resp: {st}");
     }
 
     #[test]

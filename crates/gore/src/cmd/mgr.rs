@@ -102,6 +102,8 @@ pub enum MgrAction {
         #[arg(long)]
         game: PathBuf,
         #[arg(long)]
+        library: Option<PathBuf>,
+        #[arg(long)]
         loadout: Option<PathBuf>,
     },
     /// Undeploy everything the manager has active (restore pristine)
@@ -289,10 +291,11 @@ pub fn run(action: MgrAction) -> Result<()> {
             Ok(())
         }
 
-        MgrAction::Status { game, loadout } => {
+        MgrAction::Status { game, library, loadout } => {
+            let lib = library_of(library);
             let ld_path = loadout_of(loadout);
             let ld = loadout::load(&ld_path).map_err(|e| anyhow::anyhow!("{e}"))?;
-            let st = status(&game, &ld).map_err(|e| anyhow::anyhow!("{e}"))?;
+            let st = status(&game, &lib, &ld).map_err(|e| anyhow::anyhow!("{e}"))?;
             println!("{}", describe_status(&st));
             Ok(())
         }

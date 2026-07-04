@@ -378,6 +378,15 @@ pub struct DeployRecord {
     /// triplets) in `~mods`. Pure additions like `texture_triplets`; undeploy deletes them.
     #[serde(default)]
     pub managed_paks: Vec<String>,
+    /// Manager only: mod id → the library entry's content [`fingerprint`] at deploy time. Lets
+    /// status detect a same-id UPDATE (a re-import that changed a mod's components/bytes but not
+    /// its id): if a library mod's current fingerprint differs from the one recorded here, the
+    /// deployed bytes are stale even though the loadout id set still matches. Old records parse as
+    /// empty (`#[serde(default)]`), where a missing fingerprint reads as changed (re-apply needed).
+    ///
+    /// [`fingerprint`]: crate::mgr::model::ModEntryMeta::fingerprint
+    #[serde(default)]
+    pub deployed_fingerprints: std::collections::BTreeMap<String, String>,
 }
 
 /// Stable content fingerprint for drift detection (not cryptographic — only distinguishes our own
