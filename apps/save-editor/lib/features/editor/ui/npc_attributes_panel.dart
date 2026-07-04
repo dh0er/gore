@@ -81,6 +81,7 @@ class NpcAttributesPanel extends StatefulWidget {
     required this.reloadKey,
     this.status,
     this.initialPending,
+    this.skillsSection,
   });
 
   final Future<NpcAttributesResult> Function() load;
@@ -107,6 +108,12 @@ class NpcAttributesPanel extends StatefulWidget {
 
   final bool editable;
   final Object reloadKey;
+
+  /// When provided, the NPC's learned-skills editor is hosted in a "Talente"
+  /// group (this actor's GameplayEffect skills). NPCs never carry thieving
+  /// attribute values, so that group is otherwise dropped; the skills editor
+  /// gives it a purpose.
+  final Widget? skillsSection;
 
   @override
   State<NpcAttributesPanel> createState() => _NpcAttributesPanelState();
@@ -136,7 +143,8 @@ class _NpcAttributesPanelState extends State<NpcAttributesPanel> {
         HeroAttributeGroup.core => l10n.heroGroupMainStats,
         HeroAttributeGroup.combat => l10n.heroGroupCombatSkills,
         HeroAttributeGroup.resistances => l10n.heroGroupResistances,
-        HeroAttributeGroup.thieving => l10n.heroGroupThieving,
+        // NPC thieving group is repurposed to host the skills editor.
+        HeroAttributeGroup.thieving => l10n.heroGroupSkills,
         HeroAttributeGroup.advanced => l10n.heroGroupAdvanced,
       };
 
@@ -144,7 +152,7 @@ class _NpcAttributesPanelState extends State<NpcAttributesPanel> {
     HeroAttributeGroup.core => Icons.favorite_border,
     HeroAttributeGroup.combat => Icons.shield_outlined,
     HeroAttributeGroup.resistances => Icons.security_outlined,
-    HeroAttributeGroup.thieving => Icons.key_outlined,
+    HeroAttributeGroup.thieving => Icons.military_tech_outlined,
     HeroAttributeGroup.advanced => Icons.tune,
   };
 
@@ -329,20 +337,22 @@ class _NpcAttributesPanelState extends State<NpcAttributesPanel> {
     final byGroup = _byGroup();
     final hasStatus = widget.status != null;
     // Only groups with at least one NPC attribute appear, in enum order. The
-    // Thieving group is dropped for NPCs: no NPC ever carries a non-zero
-    // thieving value (PickPocketing appears on many NPCs but is always 0;
-    // Lockpick* never appear), so it would only ever surface dead 0-rows. The
-    // player view (HeroStatsCard) keeps Thieving — this exclusion is NPC-only.
+    // Thieving group carries no NPC attribute values (PickPocketing appears on
+    // many NPCs but is always 0; Lockpick* never appear) — it is repurposed as
+    // the "Talente" home for the skills editor and appears ONLY when one is
+    // provided.
     //
     // When a status config is supplied the core ("Hauptwerte") group always
     // appears even with no core attributes, since the Status row lives at the
     // top of that group's detail and must have a home.
+    final hasSkills = widget.skillsSection != null;
     final groups = HeroAttributeGroup.values
-        .where((g) => g != HeroAttributeGroup.thieving)
         .where(
           (g) =>
-              byGroup[g]?.isNotEmpty == true ||
-              (hasStatus && g == HeroAttributeGroup.core),
+              g == HeroAttributeGroup.thieving
+                  ? hasSkills
+                  : byGroup[g]?.isNotEmpty == true ||
+                        (hasStatus && g == HeroAttributeGroup.core),
         )
         .toList();
 
@@ -362,6 +372,13 @@ class _NpcAttributesPanelState extends State<NpcAttributesPanel> {
         : groups.first;
 
     Widget detailFor(HeroAttributeGroup group) {
+      // The "Talente" (thieving) pane hosts only the skills editor for NPCs.
+      if (group == HeroAttributeGroup.thieving) {
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [?errorRow, ?widget.skillsSection],
+        );
+      }
       final attributes = byGroup[group] ?? const [];
       // The Status row is the FIRST entry of the core group detail (NPC-only).
       final statusRow = (hasStatus && group == HeroAttributeGroup.core)

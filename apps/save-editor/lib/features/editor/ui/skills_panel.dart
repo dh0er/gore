@@ -1,40 +1,59 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:goresave/features/editor/domain/editor_models.dart';
 import 'package:goresave/features/editor/domain/pending_edits.dart';
 import 'package:goresave/features/editor/domain/skills_models.dart';
 import 'package:goresave/l10n/app_localizations.dart';
 
 import '../domain/editor_notifier.dart';
 
-/// The hero's learned skills, rendered inside the "Talente" group of the
+/// An actor's learned skills, rendered inside the "Talente" group of the
 /// attribute tab in the SAME row style as attributes: a fixed-width label and a
-/// tier dropdown. Skills are the hero's GameplayEffects; every catalogued skill
-/// is listed (learned ones with their tier, the rest as roster entries the hero
-/// can learn), grouped by category.
+/// tier dropdown. Skills are the actor's GameplayEffects.
 ///
-/// Self-contained: loads via [EditorNotifier.loadSkills] and manages its own
-/// `skills` pending-registry entry (declarative `private.skills.set` intents
-/// keyed by skill base), so the shared Save button writes all changed skills.
-/// [reloadKey] is the current [SaveInspection]; a change (save/refresh/switch)
-/// clears local drafts and reloads — the registry is cleared centrally.
-class HeroSkillsSection extends ConsumerStatefulWidget {
-  const HeroSkillsSection({
+/// For the hero ([showRoster] true) every catalogued skill is listed — learned
+/// ones with their tier, the rest as roster entries to learn. For an NPC
+/// ([showRoster] false) only its learned skills are shown (the full roster would
+/// be noise).
+///
+/// Self-contained: loads via [EditorNotifier.loadSkills] for [actor] and manages
+/// its own [pendingKey] registry entry (declarative `private.skills.set` intents
+/// keyed by skill base, each carrying [actor]), so the shared Save button writes
+/// all changed skills. [reloadKey] is the current inspection identity; a change
+/// (save/refresh/switch) clears local drafts and reloads — the registry is
+/// cleared centrally.
+class SkillsSection extends ConsumerStatefulWidget {
+  const SkillsSection({
     super.key,
     required this.notifier,
     required this.editable,
     required this.reloadKey,
+    this.actor = 'Hero',
+    this.pendingKey = 'skills',
+    this.showRoster = true,
   });
 
   final EditorNotifier notifier;
   final bool editable;
   final Object reloadKey;
 
+  /// The actor whose skills these are: `'Hero'` for the player, else an NPC's
+  /// GlobalId. Passed to `loadSkills` and each `private.skills.set` edit.
+  final String actor;
+
+  /// The pending-registry key these edits live under. Per-actor (`skills` for
+  /// the hero, `skills:<npcId>` for an NPC) so different actors' skill edits do
+  /// not collide.
+  final String pendingKey;
+
+  /// Whether to show the full learnable roster (hero) or only learned skills
+  /// (NPC).
+  final bool showRoster;
+
   @override
-  ConsumerState<HeroSkillsSection> createState() => _HeroSkillsSectionState();
+  ConsumerState<SkillsSection> createState() => _SkillsSectionState();
 }
 
-class _HeroSkillsSectionState extends ConsumerState<HeroSkillsSection> {
+class _SkillsSectionState extends ConsumerState<SkillsSection> {
   SkillsResult? _result;
   bool _loading = false;
   int _epoch = 0;
@@ -56,7 +75,7 @@ class _HeroSkillsSectionState extends ConsumerState<HeroSkillsSection> {
   /// Reconstruct [_pending] (base -> target tier) from the registry's queued
   /// `private.skills.set` edits. Inverse of [_pushPending].
   void _seedFromPending() {
-    final pending = widget.notifier.pendingEditFor('skills');
+    final pending = widget.notifier.pendingEditFor(widget.pendingKey);
     if (pending == null) return;
     for (final edit in pending.edits) {
       if (edit['path'] != 'private.skills.set') continue;
@@ -69,7 +88,7 @@ class _HeroSkillsSectionState extends ConsumerState<HeroSkillsSection> {
   }
 
   @override
-  void didUpdateWidget(covariant HeroSkillsSection oldWidget) {
+  void didUpdateWidget(covariant SkillsSection oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.reloadKey != oldWidget.reloadKey) {
       // Drop local drafts and re-seed from the registry: a normal save/refresh
@@ -93,7 +112,7 @@ class _HeroSkillsSectionState extends ConsumerState<HeroSkillsSection> {
       _loading = true;
       _result = null;
     });
-    final result = await widget.notifier.loadSkills();
+    final result = await widget.notifier.loadSkills(actor: widget.actor);
     if (!mounted || epoch != _epoch) return;
     setState(() {
       _result = result;
@@ -103,14 +122,20 @@ class _HeroSkillsSectionState extends ConsumerState<HeroSkillsSection> {
 
   void _pushPending() {
     if (_pending.isEmpty) {
-      widget.notifier.clearPendingEdit('skills');
+      widget.notifier.clearPendingEdit(widget.pendingKey);
       return;
     }
     widget.notifier.setPendingEdit(
-      'skills',
+      widget.pendingKey,
       PendingSaveEdit(
         edits: _pending.entries
-            .map((e) => SkillSetEdit(base: e.key, tier: e.value).toEditJson())
+            .map(
+              (e) => SkillSetEdit(
+                base: e.key,
+                tier: e.value,
+                actor: widget.actor,
+              ).toEditJson(),
+            )
             .toList(),
       ),
     );
@@ -161,14 +186,25 @@ class _HeroSkillsSectionState extends ConsumerState<HeroSkillsSection> {
         child: Text(l10n.skillsUnavailableBody),
       );
     }
-    if (result == null || result.skills.isEmpty) {
+    if (result == null) {
+      return const SizedBox.shrink();
+    }
+    // The hero shows the full roster (learn anything); an NPC shows only its
+    // learned skills — the whole 29-skill catalog would be noise on an NPC.
+    final visible = widget.showRoster
+        ? result.skills
+        : result.skills.where((s) => s.learned).toList();
+    if (visible.isEmpty) {
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 8),
         child: Text(l10n.skillsNoneBody),
       );
     }
 
-    final byCategory = result.byCategory;
+    final byCategory = <String, List<Skill>>{};
+    for (final s in visible) {
+      byCategory.putIfAbsent(s.category, () => []).add(s);
+    }
     final categories = byCategory.entries.toList();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
