@@ -155,6 +155,22 @@ pub fn find(base: &str) -> Option<&'static SkillDef> {
     SKILLS.iter().find(|s| s.base == base)
 }
 
+/// Every tier value a skill accepts (the `value`s of its UI options, learned or
+/// roster): `Untrained` plus each ladder rung for ladder/circle skills, or
+/// `Untrained` plus the learn value for on/off (hunting/binary/language) skills.
+/// Used to validate a `private.skills.set` before it composes a GE class.
+pub fn valid_tiers(def: &SkillDef) -> Vec<&'static str> {
+    match def.kind {
+        Kind::Ladder | Kind::Circle => {
+            let mut tiers = Vec::with_capacity(def.ladder.len() + 1);
+            tiers.push("Untrained");
+            tiers.extend_from_slice(def.ladder);
+            tiers
+        }
+        other => vec!["Untrained", learn_value(other)],
+    }
+}
+
 /// Full GE class path for a `(base, chosen value)`. For ladder/circle skills the
 /// value IS the tier suffix; for hunting/binary/language the suffix is fixed.
 pub fn skill_class(base: &str, value: &str) -> String {

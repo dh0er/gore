@@ -365,6 +365,18 @@ impl SkillSetEdit {
             .filter(|s| !s.is_empty())
             .unwrap_or(HERO)
             .to_string();
+        // Validate against the catalog before this ever composes a GE class: an
+        // unknown base or a tier outside the skill's options (a stale UI option,
+        // a typo, a manual API caller) would otherwise build and write a
+        // `GE_Skill_*` reference the game does not define.
+        let def = catalog::find(&base).ok_or_else(|| {
+            CoreError::InvalidRequest(format!("private.skills.set: unknown skill base {base:?}"))
+        })?;
+        if !catalog::valid_tiers(def).contains(&tier.as_str()) {
+            return Err(CoreError::InvalidRequest(format!(
+                "private.skills.set: tier {tier:?} is not valid for skill {base:?}"
+            )));
+        }
         Ok(SkillSetEdit { actor, base, tier })
     }
 }
@@ -623,5 +635,20 @@ mod tests {
     fn edit_from_json_requires_base_and_tier() {
         assert!(SkillSetEdit::from_json(&json!({"tier": "Learned"})).is_err());
         assert!(SkillSetEdit::from_json(&json!({"base": "Sneak"})).is_err());
+    }
+
+    #[test]
+    fn edit_from_json_rejects_unknown_base() {
+        assert!(SkillSetEdit::from_json(&json!({"base": "NotASkill", "tier": "Master"})).is_err());
+    }
+
+    #[test]
+    fn edit_from_json_rejects_tier_not_in_skill_options() {
+        // Master is not a valid tier for a binary skill (only Untrained/Learned).
+        assert!(SkillSetEdit::from_json(&json!({"base": "Sneak", "tier": "Master"})).is_err());
+        // Circle 7 is out of the Mage_Circle ladder (Amateur, 1..6).
+        assert!(SkillSetEdit::from_json(&json!({"base": "Mage_Circle", "tier": "7"})).is_err());
+        // A valid ladder tier is accepted.
+        assert!(SkillSetEdit::from_json(&json!({"base": "Ranged_Bow", "tier": "Master"})).is_ok());
     }
 }
