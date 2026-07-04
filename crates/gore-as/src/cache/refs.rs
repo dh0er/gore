@@ -171,6 +171,21 @@ impl RefResolver {
             .and_then(|p| self.type_by_ptr.get(p))
             .map(|s| s.as_str())
     }
+    /// Type name by id WITH template subtypes composed
+    /// (`TArrayConstIterator<AGothicCharacter>`), mirroring `DataType::render` — `type_by_id`
+    /// returns the bare head, which is a template-arity error when used as a declaration.
+    /// Falls back to the bare name when the T1 entry records no subtypes.
+    pub fn type_by_id_composed(&self, id: i32) -> Option<String> {
+        let ptr = self.typeid_to_ptr.get(&id)?;
+        let base = self.type_by_ptr.get(ptr)?;
+        match self.type_subtypes.get(ptr) {
+            Some(subs) if !subs.is_empty() => {
+                let inner: Vec<String> = subs.iter().map(|s| s.base_name(self)).collect();
+                Some(format!("{base}<{}>", inner.join(", ")))
+            }
+            _ => Some(base.clone()),
+        }
+    }
     pub fn func_by_id(&self, id: i32) -> Option<&str> {
         self.funcid_to_ptr
             .get(&id)
@@ -322,5 +337,13 @@ impl RefResolver {
     pub fn member_type(&self, type_id: i32, offset: i32) -> Option<&str> {
         let key = ((type_id as i64) << 1) | ((offset as i64) << 33) | 1;
         self.prop_type_id.get(&key).and_then(|id| self.type_by_id(*id))
+    }
+    /// [`Self::member_type`], composed variant (declaring class INCLUDING template subtypes,
+    /// e.g. `TArrayConstIterator<AGothicCharacter>` instead of the bare head). Used where the
+    /// name becomes a slot DECLARATION (is-not-a-member.md §2.1/§2.2); the bare variant stays
+    /// for the head-comparing cast paths in structure.rs.
+    pub fn member_type_composed(&self, type_id: i32, offset: i32) -> Option<String> {
+        let key = ((type_id as i64) << 1) | ((offset as i64) << 33) | 1;
+        self.prop_type_id.get(&key).and_then(|id| self.type_by_id_composed(*id))
     }
 }

@@ -242,7 +242,7 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
     }
     // member-access-derived types: the field's declaring class is the strongest signal for a
     // slot used as a member-access base; apply AFTER (overriding) the call-arg guess.
-    let member_overrides = infer_slot_types_from_members(f, refs);
+    let member_overrides = infer_slot_types_from_members(f, refs, fields, class_name);
     for (slot, ty) in &member_overrides {
         local_types.insert(*slot, ty.clone());
     }
@@ -255,6 +255,12 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
     for (slot, ty) in &iter_overrides {
         local_types.insert(*slot, ty.clone());
     }
+    // A3 (illegal-op-round2.md): a `CpyRtoV4/CpyRtoV8 wD` that copies a CALL RESULT out of the
+    // value register carries no type, so the slot declares as the write-width default (`int`)
+    // and every member use fails "Illegal operation on 'int'". Adopt the call's rendered return
+    // type for the DECLARATION only (never fed to the structurer -> body render unchanged).
+    // Consumes the iterator subtypes above for bare `TMap*` pair returns.
+    let callret_overrides = infer_call_result_types(f, refs, &local_types);
     let body = body_statements_ctor(&fc, refs, depth + 1, super_ctor, Some(&f.ret), fields, Some(&param_types), class_name, Some(&local_types));
     // hoist every referenced local; infer_locals types what it can, the rest default to `int`
     // (a wrong type just becomes a compile error the in-game loop force-stubs, rather than the
@@ -302,6 +308,14 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
     // container-derived instantiation; never downgrade an already-subtyped declaration.
     for (slot, ty) in &iter_overrides {
         if used.contains(slot) && !locals.get(slot).is_some_and(|t| t.contains('<')) {
+            locals.insert(*slot, ty.clone());
+        }
+    }
+    // call-result types (A3): only upgrade a width-guessed PRIMITIVE declaration — an
+    // obj_locals / member-derived / iterator-derived object type is a stronger signal
+    // (all non-primitive, so they are naturally never overridden here).
+    for (slot, ty) in &callret_overrides {
+        if used.contains(slot) && locals.get(slot).map(|t| is_primitive(t)).unwrap_or(true) {
             locals.insert(*slot, ty.clone());
         }
     }
@@ -654,6 +668,17 @@ fn infer_slot_types(f: &Func, refs: &RefResolver) -> HashMap<i32, String> {
             }
             "PshC4" | "PshC8" | "PshNull" | "PGA" | "PshGPtr" | "PshG4" | "PshRPtr" | "STR"
             | "TYPEID" | "OBJTYPE" | "PshListElmnt" => ostack.push(None),
+            // P1 (is-not-a-member.md §2.3): ADDSi rewrites the pushed pointer in place into
+            // `&slotN.field` — the entry no longer identifies slot N, so a later call-arg
+            // pairing must not attribute the FIELD's param type to the BASE slot (e.g.
+            // `slot24.AllRequired` feeding `AppendTags(const FGameplayTagContainer&)` typed
+            // slot 24 as FGameplayTagContainer). The §2.2 member peephole supplies the
+            // correct owner-derived type for these bases instead.
+            "ADDSi" => {
+                if let Some(top) = ostack.last_mut() {
+                    *top = None;
+                }
+            }
             "CALL" | "CALLINTF" | "CALLBND" => {
                 let id = ins.dwords.first().copied().unwrap_or(0) as i32;
                 let rs = refs.func_ret_by_id(id).map(|d| ret_is_struct(&d.base_name(refs))).unwrap_or(false);
@@ -707,32 +732,116 @@ fn infer_slot_types(f: &Func, refs: &RefResolver) -> HashMap<i32, String> {
 /// or not at all (`int`), producing "<field> is not a member of <T>". Override the slot with the
 /// declaring class. Conservative: LOCAL slots only (base > 0), single consistent declaring type
 /// (conflict -> drop), non-empty non-primitive.
-fn infer_slot_types_from_members(f: &Func, refs: &RefResolver) -> HashMap<i32, String> {
+///
+/// A5 extension (illegal-op-round2.md): a `LoadRObjR/LoadVObjR` immediately followed by
+/// `CpyRtoV8 wD` copies the member REFERENCE into slot `wD` — the destination's type is the
+/// field's VALUE type. That is only recoverable from the emitting class's own fields map (T7
+/// PropertyReferences' OldTypeId is the OWNER class, not the value type — see the structure.rs
+/// ADDSi arm caveat), so it applies only when the member's owner IS the current class.
+fn infer_slot_types_from_members(
+    f: &Func,
+    refs: &RefResolver,
+    fields: Option<&HashMap<String, String>>,
+    class_name: Option<&str>,
+) -> HashMap<i32, String> {
     let instrs = match disassemble(&f.bytecode) {
         Ok(i) => i,
         Err(_) => return HashMap::new(),
     };
     let mut cand: HashMap<i32, Option<String>> = HashMap::new();
-    for ins in &instrs {
-        if matches!(ins.op.name, "LoadRObjR" | "LoadVObjR") {
-            let base = match ins.words.first() {
-                Some(w) => *w as i16 as i32,
-                None => continue,
-            };
-            if base <= 0 {
-                continue; // this / param-as-receiver: skip (only local slots here)
+    // Candidate merge, inheritance-aware (is-not-a-member.md §2.2): one slot can collect the
+    // declaring classes of members from BOTH a derived class and its script base (e.g.
+    // UAIGroup_Combat's `TargetEnemy` + base UGothicAIGroup's `JoinedCharacters`) — the more
+    // DERIVED class has ALL the accessed members, so keep it. A bare vs composed instantiation
+    // of the SAME template head keeps the composed one. Anything else (unrelated types /
+    // native-only hierarchies / differing compositions) is genuine slot reuse -> drop (None),
+    // exactly the pre-existing conservative behaviour.
+    let record = |cand: &mut HashMap<i32, Option<String>>, slot: i32, ty: String| {
+        if ty.is_empty() || is_primitive(ty.split('<').next().unwrap_or(&ty)) {
+            return;
+        }
+        match cand.get(&slot) {
+            None => {
+                cand.insert(slot, Some(ty));
             }
-            let off = ins.words.get(1).copied().unwrap_or(0) as i32;
-            let tid = ins.dwords.first().copied().unwrap_or(0) as i32;
-            let Some(ty) = refs.member_type(tid, off) else { continue };
-            if ty.is_empty() || is_primitive(ty) {
-                continue;
+            Some(Some(prev)) if *prev != ty => {
+                let (ph, nh) = (prev.split('<').next().unwrap_or(prev), ty.split('<').next().unwrap_or(&ty));
+                let merged = if ph == nh {
+                    match (prev.contains('<'), ty.contains('<')) {
+                        (true, false) => Some(prev.clone()),
+                        (false, true) => Some(ty),
+                        _ => None, // two DIFFERENT compositions of one head: conflict
+                    }
+                } else if refs.is_subclass(&ty, prev) {
+                    Some(ty)
+                } else if refs.is_subclass(prev, &ty) {
+                    Some(prev.clone())
+                } else {
+                    None
+                };
+                cand.insert(slot, merged);
             }
-            match cand.get(&base) {
-                None => { cand.insert(base, Some(ty.to_string())); }
-                Some(Some(prev)) if prev != ty => { cand.insert(base, None); }
-                _ => {}
+            _ => {}
+        }
+    };
+    for (i, ins) in instrs.iter().enumerate() {
+        match ins.op.name {
+            "LoadRObjR" | "LoadVObjR" => {
+                let base = match ins.words.first() {
+                    Some(w) => *w as i16 as i32,
+                    None => continue,
+                };
+                let off = ins.words.get(1).copied().unwrap_or(0) as i32;
+                let tid = ins.dwords.first().copied().unwrap_or(0) as i32;
+                if base > 0 {
+                    // base-slot typing: the field's declaring class (skip this/params).
+                    // Composed (§2.1): the bare head of a template instance is a declaration
+                    // arity error that turns the whole slot `Unknown`.
+                    if let Some(ty) = refs.member_type_composed(tid, off) {
+                        record(&mut cand, base, ty);
+                    }
+                }
+                // A5: `LoadRObjR/LoadVObjR ; CpyRtoV8 wD` — type the copy DESTINATION with the
+                // field's value type (current-class fields only; the owner check guards
+                // against cross-class field-name collisions).
+                if let Some(next) = instrs.get(i + 1) {
+                    if next.op.name == "CpyRtoV8" {
+                        let dst = next.words.first().map(|w| *w as i16 as i32).unwrap_or(0);
+                        if dst > 0
+                            && class_name.is_some()
+                            && refs.type_by_id(tid) == class_name
+                        {
+                            let vty = refs
+                                .member(tid, off)
+                                .and_then(|name| fields.and_then(|m| m.get(name)));
+                            if let Some(vty) = vty {
+                                record(&mut cand, dst, vty.clone());
+                            }
+                        }
+                    }
+                }
             }
+            // §2.2 sub-case M: Idiom-A member access — `PshVPtr wN`/`PSF wN` immediately
+            // followed by `ADDSi off, tid` reads a member off the object in slot N; these
+            // bases never appear in LoadRObjR form, so STEP 1 was blind to them. Chained
+            // walks (`PshVPtr w0; ADDSi a; RDSPtr; ADDSi b`) skip automatically: the second
+            // ADDSi's predecessor is RDSPtr, not a push.
+            "ADDSi" => {
+                let prev = match i.checked_sub(1).and_then(|j| instrs.get(j)) {
+                    Some(p) if matches!(p.op.name, "PshVPtr" | "PSF") => p,
+                    _ => continue,
+                };
+                let base = prev.words.first().map(|w| *w as i16 as i32).unwrap_or(0);
+                if base <= 0 {
+                    continue; // this / param receivers: locals only (STEP 1 scope)
+                }
+                let off = ins.words.first().copied().unwrap_or(0) as i32;
+                let tid = ins.dwords.first().copied().unwrap_or(0) as i32;
+                if let Some(ty) = refs.member_type_composed(tid, off) {
+                    record(&mut cand, base, ty);
+                }
+            }
+            _ => {}
         }
     }
     cand.into_iter().filter_map(|(s, t)| t.map(|t| (s, t))).collect()
@@ -924,6 +1033,157 @@ fn record_iterator_candidate(
         }
         _ => {}
     }
+}
+
+/// A3 (illegal-op-round2.md): call-result register-copy typing. A reference/element-returning
+/// call (`X.Proceed()`, `pair.GetKey()`, ...) leaves its result in the VALUE register; the
+/// following `CpyRtoV4/CpyRtoV8 wD` copies it into slot `wD`, which `infer_locals` can only
+/// width-guess (`int`/`int64`) — so `local_38 = local_28.Proceed(); local_38.GetActor...()`
+/// fails "Illegal operation on 'int'". Track the last CALL/CALLINTF/CALLBND/CALLSYS/Thiscall1
+/// and its rendered return type; when the next instruction (only benign SUSPENDs between) is a
+/// `CpyRtoV*` into a local slot, adopt the return type for that slot's DECLARATION.
+/// Conservative: never for obj_locals slots, never for slots also written by non-CpyRtoV ops
+/// (int/float scratch reuse), never primitives/enums/`?`, and a BARE template head (e.g. the
+/// `TMap*` iterator pair) is only adopted after composing `<...>` from the receiver iterator's
+/// inferred instantiation (`known`, which includes the A1 pass results) — else skipped.
+/// Conflicting candidates for one slot drop (regression-free).
+fn infer_call_result_types(
+    f: &Func,
+    refs: &RefResolver,
+    known: &HashMap<i32, String>,
+) -> HashMap<i32, String> {
+    let instrs = match disassemble(&f.bytecode) {
+        Ok(i) => i,
+        Err(_) => return HashMap::new(),
+    };
+    let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32).unwrap_or(0);
+    // slots also written by a non-CpyRtoV writing op are int/float scratch (slot reuse) — never
+    // adopt an object type for them. ADDSi is excluded: its first word is a member OFFSET.
+    let writes_other = |op: &str| {
+        op != "ADDSi"
+            && (op.starts_with("SetV") || op.starts_with("CpyVtoV") || op.starts_with("RDR")
+                || op.contains("TO") || op == "PopRPtr"
+                || op.starts_with("ADD") || op.starts_with("SUB") || op.starts_with("MUL")
+                || op.starts_with("DIV") || op.starts_with("MOD") || op.starts_with("NEG")
+                || op.starts_with("Inc") || op.starts_with("Dec") || op == "NOT")
+    };
+    let mut disq: HashSet<i32> = HashSet::new();
+    for ins in &instrs {
+        if writes_other(ins.op.name) {
+            let d = w0(ins);
+            if d > 0 {
+                disq.insert(d);
+            }
+        }
+    }
+    let obj: HashSet<i32> = f.obj_locals.iter().map(|(s, _)| *s).collect();
+    // per-call operand-stack consumption, mirroring `infer_slot_types`.
+    let consume = |stack: &mut Vec<Option<i32>>, params: Option<usize>, is_method: bool, ret_struct: bool| {
+        let Some(n) = params else { stack.clear(); return; };
+        let rvo = (ret_struct && is_method) as usize;
+        let total = if is_method { n + 1 + rvo } else { n };
+        stack.truncate(stack.len() - total.min(stack.len()));
+    };
+    // rendered return type + receiver slot of the just-completed call (None once anything
+    // non-benign executes, so a later CpyRtoV can't adopt a stale type).
+    let mut last: Option<(String, Option<i32>)> = None;
+    let mut ostack: Vec<Option<i32>> = Vec::new();
+    let mut cand: HashMap<i32, Option<String>> = HashMap::new();
+    for ins in &instrs {
+        match ins.op.name {
+            "PshVPtr" | "PSF" => {
+                let s = w0(ins);
+                ostack.push((s > 0).then_some(s));
+                last = None;
+            }
+            "PshV4" | "PshV8" | "PshC4" | "PshC8" | "PshNull" | "PGA" | "PshGPtr" | "PshG4"
+            | "PshRPtr" | "STR" | "TYPEID" | "OBJTYPE" | "PshListElmnt" => {
+                ostack.push(None);
+                last = None;
+            }
+            "ADDSi" => {
+                // member access rewrites the pushed pointer: no longer the bare slot.
+                if let Some(top) = ostack.last_mut() {
+                    *top = None;
+                }
+                last = None;
+            }
+            "CALL" | "CALLINTF" | "CALLBND" => {
+                let id = ins.dwords.first().copied().unwrap_or(0) as i32;
+                let is_m = refs.is_method_by_id(id);
+                let recv = if is_m { ostack.last().copied().flatten() } else { None };
+                let ret = refs.func_ret_by_id(id).map(|d| d.base_name(refs));
+                let rs = ret.as_deref().map(ret_is_struct).unwrap_or(false);
+                consume(&mut ostack, refs.func_params_by_id(id).map(|p| p.len()), is_m, rs);
+                last = ret.map(|t| (t, recv));
+            }
+            "CALLSYS" | "Thiscall1" => {
+                let ptr = ins.qwords.first().copied().unwrap_or(0) as i64;
+                if refs.func_by_ptr(ptr) == Some("$beh0") {
+                    // in-place construct: receiver + ctor args, no register result.
+                    let nargs = refs.func_params_by_ptr(ptr).map(|p| p.len()).unwrap_or(0);
+                    let drop_n = (1 + nargs).min(ostack.len());
+                    ostack.truncate(ostack.len() - drop_n);
+                    last = None;
+                    continue;
+                }
+                let is_m = refs.is_method_by_ptr(ptr);
+                let recv = if is_m { ostack.last().copied().flatten() } else { None };
+                let ret = refs.func_ret_by_ptr(ptr).map(|d| d.base_name(refs));
+                let rs = ret.as_deref().map(ret_is_struct).unwrap_or(false);
+                consume(&mut ostack, refs.func_params_by_ptr(ptr).map(|p| p.len()), is_m, rs);
+                last = ret.map(|t| (t, recv));
+            }
+            "CpyRtoV4" | "CpyRtoV8" => {
+                if let Some((ty, recv)) = last.take() {
+                    let d = w0(ins);
+                    if d > 0 && !obj.contains(&d) && !disq.contains(&d) {
+                        if let Some(ty) = usable_ret_type(ty, recv, known) {
+                            match cand.get(&d) {
+                                None => {
+                                    cand.insert(d, Some(ty));
+                                }
+                                Some(Some(prev)) if *prev != ty => {
+                                    cand.insert(d, None); // slot reused across types: drop
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+            }
+            "SUSPEND" => {} // benign: doesn't touch the value register
+            _ => {
+                last = None;
+            }
+        }
+    }
+    cand.into_iter().filter_map(|(s, t)| t.map(|t| (s, t))).collect()
+}
+
+/// Filter/compose one A3 return-type candidate (see [`infer_call_result_types`]):
+/// primitives/enums/placeholders are rejected (int declarations already work for them); a bare
+/// template head (`TMapIteratorPair` with no `<...>` in its T1 entry) is composed from the
+/// receiver iterator's inferred instantiation, or rejected when that isn't available either.
+fn usable_ret_type(ty: String, recv: Option<i32>, known: &HashMap<i32, String>) -> Option<String> {
+    if ty.is_empty() || ty == "void" || ty == "?" || ty == "auto" || is_primitive(&ty) || is_enum(&ty) {
+        return None;
+    }
+    let b = ty.as_bytes();
+    let bare_template = !ty.contains('<') && b.len() >= 2 && b[0] == b'T' && b[1].is_ascii_uppercase();
+    if !bare_template {
+        return Some(ty);
+    }
+    // compose the bare head from the receiver's iterator instantiation (A1 pass result).
+    let r = known.get(&recv?)?;
+    if !r.split('<').next().unwrap_or(r).contains("Iterator") {
+        return None;
+    }
+    let (lt, gt) = (r.find('<')?, r.rfind('>')?);
+    if gt <= lt + 1 {
+        return None;
+    }
+    Some(format!("{ty}<{}>", &r[lt + 1..gt]))
 }
 
 /// §3.3 consumer-driven typing of out-of-range `argN` slots. Scans the body for the RHS of an
