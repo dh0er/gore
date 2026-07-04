@@ -578,6 +578,17 @@ fn arg_mismatch_count(a: &[Arg], params: &[DataType], refs: &RefResolver) -> usi
         if pt.token != 5 {
             continue; // primitive/enum param: int casts handle it, not a definite mismatch
         }
+        // mirror cast_arg: an int-origin arg feeding a token-5 param that is NOT an enum
+        // (the only int-castable token-5 target) can never match — this is the exact
+        // condition that produces amm("argint") at render time. Count it so
+        // maybe_reverse_args sees the evidence and can flip a reverse-pushed call. An int
+        // const carries `ty: None`, so without this it was invisible to the scorer.
+        if arg.is_int {
+            if cast_to_typename("0", &pt.base_name(refs)).is_none() {
+                n += 1;
+            }
+            continue;
+        }
         let Some(at) = &arg.ty else { continue };
         let (ph, ah) = (head(&pt.base_name(refs)), head(at));
         if is_value(&ph) && is_value(&ah) && ph != ah {
@@ -887,7 +898,19 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 let b = ins.qwords.first().copied().unwrap_or(0);
                 stack.push(Arg::iconst((b as i64).to_string(), ConstBits::W8(b)));
             }
-            "PshV4" | "PshV8" => stack.push(Arg::int(name(w(ins, 0)))),
+            "PshV4" | "PshV8" => {
+                // A bool slot pushed as an arg must render BARE (`WasCancelled`), not as
+                // `(WasCancelled != 0)` — AngelScript has no `bool != 0`. cast_arg wraps every
+                // is_int arg feeding a bool param, so a genuine bool slot has to carry its type
+                // (is_int=false) to pass through unwrapped. Only exactly-`bool` slots are typed;
+                // enum/int slots stay int so their enum/`!= 0` casts still fire.
+                let off = w(ins, 0);
+                if ctx.slot_type(off).as_deref() == Some("bool") {
+                    stack.push(Arg::typed(name(off), Some("bool".to_string())));
+                } else {
+                    stack.push(Arg::int(name(off)));
+                }
+            }
             "PshVPtr" => stack.push(Arg::typed(name(w(ins, 0)), ctx.slot_type(w(ins, 0)))),
             "PSF" => {
                 // &local, unless it's the destination of a following ALLOC
