@@ -72,9 +72,13 @@ class _HeroSkillsSectionState extends ConsumerState<HeroSkillsSection> {
   void didUpdateWidget(covariant HeroSkillsSection oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.reloadKey != oldWidget.reloadKey) {
-      // The registry's 'skills' entry is cleared centrally on save/refresh;
-      // just drop the local drafts and reload the on-disk state.
+      // Drop local drafts and re-seed from the registry: a normal save/refresh
+      // clears the 'skills' entry centrally (so this seeds nothing), but a
+      // PARTIAL save whose trailing skill write failed keeps that entry for
+      // retry — re-seeding keeps the dropdowns in sync with the edits the next
+      // Save will still apply, instead of showing on-disk values.
       _pending.clear();
+      _seedFromPending();
       _load();
     }
   }
