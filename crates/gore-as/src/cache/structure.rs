@@ -1032,15 +1032,31 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
             _ if n.starts_with("WRTV") => {
                 flush!();
                 if let Some(r) = &ref_reg {
-                    let rhs = name(w(ins, 0));
+                    let slot = w(ins, 0);
+                    let raw = name(slot);
                     // a constant slot stored into a float/double field carries IEEE-754 bits,
                     // not an int — decode it; else apply the bool/enum/incompatible cast.
-                    let rhs = match ref_reg_ty.as_deref() {
-                        Some("float32") => float_lit(&set_consts, w(ins, 0), false).unwrap_or(rhs),
-                        Some("float") | Some("double") => float_lit(&set_consts, w(ins, 0), true).unwrap_or(rhs),
-                        Some(t) if looks_int(&rhs) => field_assign_rhs(&rhs, t),
-                        _ => rhs,
+                    let mut rhs = match ref_reg_ty.as_deref() {
+                        Some("float32") => float_lit(&set_consts, slot, false).unwrap_or(raw.clone()),
+                        Some("float") | Some("double") => float_lit(&set_consts, slot, true).unwrap_or(raw.clone()),
+                        Some(t) if looks_int(&raw) => field_assign_rhs(&raw, t),
+                        _ => raw.clone(),
                     };
+                    // A 1-byte write (WRTV1) to a field whose type we could NOT resolve to bool
+                    // (a foreign nested member -> ref_reg_ty is the owner/None) is almost always a
+                    // bool UPROPERTY, whose auto-generated accessor is `bool&`: `field = intSlot`
+                    // fails "int -> bool&" (e.g. `m_CanAttack = local_1` where local_1 is a
+                    // decompiled const-`0` bool). Cast the RHS to bool. Guard: the RHS was NOT
+                    // already transformed above (a bare slot), is resolved, and is not a KNOWN
+                    // bool slot (which compiles bare and must not become the illegal `bool != 0`).
+                    if n == "WRTV1"
+                        && ref_reg_ty.as_deref() != Some("bool")
+                        && rhs == raw
+                        && rhs != UNRESOLVED
+                        && ctx.slot_type(slot).as_deref() != Some("bool")
+                    {
+                        rhs = format!("({rhs} != 0)");
+                    }
                     out.push(format!("{r} = {rhs};"));
                 }
             }
