@@ -413,7 +413,17 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
     let rvo_slot = is_method && ret_ty
         .map(|t| matches!(t.split('<').next().unwrap_or(t).bytes().next(), Some(b'F') | Some(b'T')))
         .unwrap_or(false);
-    let need = trusted_arity.map(|n| n + is_method as usize + rvo_slot as usize);
+    // NESTED-CALL ARG-DROP fix: when arity is untrusted (native call, no Binds -> trusted_arity=None),
+    // the old `mem::take` DRAINED the whole stack — annihilating an ENCLOSING call's already-pushed
+    // args when a nested FREE/STATIC call (e.g. `UQuestSubsystem::Get()`, a factory/getter) runs in
+    // the middle of the enclosing arg-push (proven: `Get().GetQuestByClass(TSubclassOf(...))` lost the
+    // TSubclassOf arg -> 0-arg call). For a NON-METHOD call the cache FunctionReference param count is
+    // reliable (no implicit-`this` undercount), so use it as a soft cap to take ONLY this call's own
+    // args and preserve deeper enclosing operands. METHOD calls keep take-all (their cache counts are
+    // unreliable due to the implicit `this`, and their receiver-on-top means deeper entries are rarely
+    // a separate enclosing frame). StaticClass is already special-cased (0 operands, no drain).
+    let soft_arity = trusted_arity.or_else(|| if !is_method { params.map(|p| p.len()) } else { None });
+    let need = soft_arity.map(|n| n + is_method as usize + rvo_slot as usize);
     let mut a: Vec<Arg> = match need {
         Some(k) if stack.len() > k => {
             // Split off this call's own operands (top `k`); the deeper entries belong to an
