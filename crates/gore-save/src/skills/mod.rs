@@ -443,20 +443,28 @@ pub fn apply_skill_set(payload: &mut Vec<u8>, edit: &SkillSetEdit) -> Result<(),
                 return Ok(()); // nothing to unlearn
             }
             // Learn: clone a donor element, else append the embedded template.
-            if element_count == 0 {
-                container_edit(
-                    payload,
-                    &array_path,
-                    ContainerEdit::ArrayInsertBytes(donor::donor_template()),
-                )?;
-                retarget_def(payload, &array_path, 0, &target_class)
-            } else {
-                let donor_idx = same_category_donor
-                    .or(any_donor)
-                    .unwrap_or(0);
-                container_edit(payload, &array_path, ContainerEdit::ArrayDuplicate(donor_idx))?;
-                // ArrayDuplicate inserts the copy right after the source.
-                retarget_def(payload, &array_path, donor_idx + 1, &target_class)
+            // Clone an existing SKILL effect (same category preferred) so the new
+            // element carries a real skill effect's shape. Only `Def` is
+            // retargeted, so cloning a non-skill effect (e.g. a lone
+            // status/temporary effect when no skill element exists) would build
+            // the skill from the wrong serialized effect — in that case append
+            // the captured donor template instead of duplicating an arbitrary
+            // element.
+            match same_category_donor.or(any_donor) {
+                Some(donor_idx) => {
+                    container_edit(payload, &array_path, ContainerEdit::ArrayDuplicate(donor_idx))?;
+                    // ArrayDuplicate inserts the copy right after the source.
+                    retarget_def(payload, &array_path, donor_idx + 1, &target_class)
+                }
+                None => {
+                    container_edit(
+                        payload,
+                        &array_path,
+                        ContainerEdit::ArrayInsertBytes(donor::donor_template()),
+                    )?;
+                    // ArrayInsertBytes appends at the end of the array.
+                    retarget_def(payload, &array_path, element_count, &target_class)
+                }
             }
         }
     }
