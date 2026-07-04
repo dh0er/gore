@@ -43,5 +43,34 @@
   "kindMixed": "misto",
   "sevHard": "grave",
   "sevSoft": "lieve",
-  "sevInfo": "info"
+  "sevInfo": "info",
+  "aboutVersion": "Version {version} ({sha})",
+  "@aboutVersion": {
+    "placeholders": {
+      "version": {
+        "type": "String"
+      },
+      "sha": {
+        "type": "String"
+      }
+    }
+  },
+  "about": "Informazioni",
+  "aboutSubtitle": "Gestore di mod per Gothic 1 Remake",
+  "aboutCopyright": "© 2026 collaboratori di goresave",
+  "aboutLicense": "Concesso in licenza secondo la licenza MIT.",
+  "appearanceTitle": "Aspetto",
+  "theme": "Tema",
+  "themeLight": "Chiaro",
+  "themeDark": "Scuro",
+  "themeSystem": "Sistema",
+  "uiScale": "Scala dell'interfaccia",
+  "resetZoomTooltip": "Reimposta lo zoom (Ctrl+0)",
+  "zoomTip": "Suggerimento: Ctrl + / Ctrl - cambia lo zoom ovunque nell'app.",
+  "lightMode": "Modalità chiara",
+  "darkMode": "Modalità scura",
+  "minimize": "Riduci a icona",
+  "restore": "Ripristina",
+  "maximize": "Ingrandisci",
+  "close": "Chiudi"
 }

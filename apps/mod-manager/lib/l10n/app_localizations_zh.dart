@@ -147,6 +147,65 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get sevInfo => '信息';
+
+  @override
+  String aboutVersion(String version, String sha) {
+    return 'Version $version ($sha)';
+  }
+
+  @override
+  String get about => '关于';
+
+  @override
+  String get aboutSubtitle => 'Gothic 1 Remake 模组管理器';
+
+  @override
+  String get aboutCopyright => '© 2026 goresave 贡献者';
+
+  @override
+  String get aboutLicense => '基于 MIT 许可证授权。';
+
+  @override
+  String get appearanceTitle => '外观';
+
+  @override
+  String get theme => '主题';
+
+  @override
+  String get themeLight => '浅色';
+
+  @override
+  String get themeDark => '深色';
+
+  @override
+  String get themeSystem => '跟随系统';
+
+  @override
+  String get uiScale => '界面缩放';
+
+  @override
+  String get resetZoomTooltip => '重置缩放（Ctrl+0）';
+
+  @override
+  String get zoomTip => '提示：在应用内任意位置按 Ctrl + / Ctrl - 均可调整缩放。';
+
+  @override
+  String get lightMode => '浅色模式';
+
+  @override
+  String get darkMode => '深色模式';
+
+  @override
+  String get minimize => '最小化';
+
+  @override
+  String get restore => '还原';
+
+  @override
+  String get maximize => '最大化';
+
+  @override
+  String get close => '关闭';
 }
 
 /// The translations for Chinese, using the Han script (`zh_Hans`).
@@ -292,4 +351,63 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get sevInfo => '信息';
+
+  @override
+  String aboutVersion(String version, String sha) {
+    return 'Version $version ($sha)';
+  }
+
+  @override
+  String get about => '关于';
+
+  @override
+  String get aboutSubtitle => 'Gothic 1 Remake 模组管理器';
+
+  @override
+  String get aboutCopyright => '© 2026 goresave 贡献者';
+
+  @override
+  String get aboutLicense => '基于 MIT 许可证授权。';
+
+  @override
+  String get appearanceTitle => '外观';
+
+  @override
+  String get theme => '主题';
+
+  @override
+  String get themeLight => '浅色';
+
+  @override
+  String get themeDark => '深色';
+
+  @override
+  String get themeSystem => '跟随系统';
+
+  @override
+  String get uiScale => '界面缩放';
+
+  @override
+  String get resetZoomTooltip => '重置缩放（Ctrl+0）';
+
+  @override
+  String get zoomTip => '提示：在应用内任意位置按 Ctrl + / Ctrl - 均可调整缩放。';
+
+  @override
+  String get lightMode => '浅色模式';
+
+  @override
+  String get darkMode => '深色模式';
+
+  @override
+  String get minimize => '最小化';
+
+  @override
+  String get restore => '还原';
+
+  @override
+  String get maximize => '最大化';
+
+  @override
+  String get close => '关闭';
 }

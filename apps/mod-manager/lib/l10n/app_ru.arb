@@ -43,5 +43,34 @@
   "kindMixed": "смешанный",
   "sevHard": "серьёзный",
   "sevSoft": "лёгкий",
-  "sevInfo": "инфо"
+  "sevInfo": "инфо",
+  "aboutVersion": "Version {version} ({sha})",
+  "@aboutVersion": {
+    "placeholders": {
+      "version": {
+        "type": "String"
+      },
+      "sha": {
+        "type": "String"
+      }
+    }
+  },
+  "about": "О программе",
+  "aboutSubtitle": "Менеджер модов Gothic 1 Remake",
+  "aboutCopyright": "© 2026 участники проекта goresave",
+  "aboutLicense": "Распространяется по лицензии MIT.",
+  "appearanceTitle": "Внешний вид",
+  "theme": "Тема",
+  "themeLight": "Светлая",
+  "themeDark": "Тёмная",
+  "themeSystem": "Системная",
+  "uiScale": "Масштаб интерфейса",
+  "resetZoomTooltip": "Сбросить масштаб (Ctrl+0)",
+  "zoomTip": "Совет: Ctrl + / Ctrl - меняет масштаб в любом месте приложения.",
+  "lightMode": "Светлая тема",
+  "darkMode": "Тёмная тема",
+  "minimize": "Свернуть",
+  "restore": "Восстановить",
+  "maximize": "Развернуть",
+  "close": "Закрыть"
 }

@@ -43,5 +43,34 @@
   "kindMixed": "混合",
   "sevHard": "严重",
   "sevSoft": "轻微",
-  "sevInfo": "信息"
+  "sevInfo": "信息",
+  "aboutVersion": "Version {version} ({sha})",
+  "@aboutVersion": {
+    "placeholders": {
+      "version": {
+        "type": "String"
+      },
+      "sha": {
+        "type": "String"
+      }
+    }
+  },
+  "about": "关于",
+  "aboutSubtitle": "Gothic 1 Remake 模组管理器",
+  "aboutCopyright": "© 2026 goresave 贡献者",
+  "aboutLicense": "基于 MIT 许可证授权。",
+  "appearanceTitle": "外观",
+  "theme": "主题",
+  "themeLight": "浅色",
+  "themeDark": "深色",
+  "themeSystem": "跟随系统",
+  "uiScale": "界面缩放",
+  "resetZoomTooltip": "重置缩放（Ctrl+0）",
+  "zoomTip": "提示：在应用内任意位置按 Ctrl + / Ctrl - 均可调整缩放。",
+  "lightMode": "浅色模式",
+  "darkMode": "深色模式",
+  "minimize": "最小化",
+  "restore": "还原",
+  "maximize": "最大化",
+  "close": "关闭"
 }

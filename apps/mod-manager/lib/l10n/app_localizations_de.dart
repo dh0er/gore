@@ -150,4 +150,64 @@ class AppLocalizationsDe extends AppLocalizations {
 
   @override
   String get sevInfo => 'Info';
+
+  @override
+  String aboutVersion(String version, String sha) {
+    return 'Version $version ($sha)';
+  }
+
+  @override
+  String get about => 'Über';
+
+  @override
+  String get aboutSubtitle => 'Gothic 1 Remake Mod-Manager';
+
+  @override
+  String get aboutCopyright => '© 2026 goresave-Mitwirkende';
+
+  @override
+  String get aboutLicense => 'Lizenziert unter der MIT-Lizenz.';
+
+  @override
+  String get appearanceTitle => 'Erscheinungsbild';
+
+  @override
+  String get theme => 'Design';
+
+  @override
+  String get themeLight => 'Hell';
+
+  @override
+  String get themeDark => 'Dunkel';
+
+  @override
+  String get themeSystem => 'System';
+
+  @override
+  String get uiScale => 'UI-Skalierung';
+
+  @override
+  String get resetZoomTooltip => 'Zoom zurücksetzen (Strg+0)';
+
+  @override
+  String get zoomTip =>
+      'Tipp: Strg + / Strg - ändert den Zoom überall in der App.';
+
+  @override
+  String get lightMode => 'Heller Modus';
+
+  @override
+  String get darkMode => 'Dunkler Modus';
+
+  @override
+  String get minimize => 'Minimieren';
+
+  @override
+  String get restore => 'Wiederherstellen';
+
+  @override
+  String get maximize => 'Maximieren';
+
+  @override
+  String get close => 'Schließen';
 }

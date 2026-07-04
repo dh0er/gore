@@ -43,5 +43,34 @@
   "kindMixed": "混合",
   "sevHard": "重大",
   "sevSoft": "軽微",
-  "sevInfo": "情報"
+  "sevInfo": "情報",
+  "aboutVersion": "Version {version} ({sha})",
+  "@aboutVersion": {
+    "placeholders": {
+      "version": {
+        "type": "String"
+      },
+      "sha": {
+        "type": "String"
+      }
+    }
+  },
+  "about": "このアプリについて",
+  "aboutSubtitle": "Gothic 1 Remake Mod マネージャー",
+  "aboutCopyright": "© 2026 goresave コントリビューター",
+  "aboutLicense": "MIT ライセンスの下で提供されています。",
+  "appearanceTitle": "外観",
+  "theme": "テーマ",
+  "themeLight": "ライト",
+  "themeDark": "ダーク",
+  "themeSystem": "システム",
+  "uiScale": "UI スケール",
+  "resetZoomTooltip": "ズームをリセット（Ctrl+0）",
+  "zoomTip": "ヒント: アプリ内のどこでも Ctrl + / Ctrl - でズームを変更できます。",
+  "lightMode": "ライトモード",
+  "darkMode": "ダークモード",
+  "minimize": "最小化",
+  "restore": "元のサイズに戻す",
+  "maximize": "最大化",
+  "close": "閉じる"
 }

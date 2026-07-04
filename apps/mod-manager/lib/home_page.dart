@@ -4,6 +4,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'app/domain/ui_settings.dart';
 import 'app/game_paths.dart';
+import 'app/ui/about_dialog.dart';
+import 'app/ui/window_chrome.dart';
 import 'conflicts/ui/conflict_panel.dart';
 import 'l10n/app_localizations.dart';
 import 'library/domain/conflicts_provider.dart';
@@ -42,12 +44,47 @@ class _HomePageState extends ConsumerState<HomePage> {
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
-    final scheme = Theme.of(context).colorScheme;
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final isDark = theme.brightness == Brightness.dark;
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(l10n.appTitle),
+        // The app bar doubles as the (frameless) title bar: the icon + name
+        // sit in a drag area, and the window buttons live at the far end.
+        title: WindowDragArea(
+          child: Row(
+            children: [
+              const SizedBox(width: 8),
+              Image.asset('assets/gore_manager_icon.png', height: 22),
+              const SizedBox(width: 10),
+              Text(l10n.appTitle),
+              const Expanded(child: SizedBox(height: 32)),
+            ],
+          ),
+        ),
+        titleSpacing: 0,
+        centerTitle: false,
         scrolledUnderElevation: 0,
+        actions: [
+          IconButton(
+            icon: Icon(isDark ? Icons.light_mode : Icons.dark_mode),
+            tooltip: isDark ? l10n.lightMode : l10n.darkMode,
+            onPressed: () => ref.read(themeModeProvider.notifier).setThemeMode(
+                  isDark ? ThemeMode.light : ThemeMode.dark,
+                ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.info_outline),
+            tooltip: l10n.about,
+            onPressed: () => showDialog<void>(
+              context: context,
+              builder: (_) => const GoreManagerAboutDialog(),
+            ),
+          ),
+          const WindowControls(),
+          const SizedBox(width: 8),
+        ],
       ),
       body: DefaultTabController(
         length: 2,

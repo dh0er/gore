@@ -150,6 +150,66 @@ class AppLocalizationsPt extends AppLocalizations {
 
   @override
   String get sevInfo => 'info';
+
+  @override
+  String aboutVersion(String version, String sha) {
+    return 'Version $version ($sha)';
+  }
+
+  @override
+  String get about => 'Sobre';
+
+  @override
+  String get aboutSubtitle => 'Gerenciador de mods do Gothic 1 Remake';
+
+  @override
+  String get aboutCopyright => '© 2026 colaboradores do goresave';
+
+  @override
+  String get aboutLicense => 'Licenciado sob a Licença MIT.';
+
+  @override
+  String get appearanceTitle => 'Aparência';
+
+  @override
+  String get theme => 'Tema';
+
+  @override
+  String get themeLight => 'Claro';
+
+  @override
+  String get themeDark => 'Escuro';
+
+  @override
+  String get themeSystem => 'Sistema';
+
+  @override
+  String get uiScale => 'Escala da interface';
+
+  @override
+  String get resetZoomTooltip => 'Redefinir zoom (Ctrl+0)';
+
+  @override
+  String get zoomTip =>
+      'Dica: Ctrl + / Ctrl - altera o zoom em qualquer parte do app.';
+
+  @override
+  String get lightMode => 'Modo claro';
+
+  @override
+  String get darkMode => 'Modo escuro';
+
+  @override
+  String get minimize => 'Minimizar';
+
+  @override
+  String get restore => 'Restaurar';
+
+  @override
+  String get maximize => 'Maximizar';
+
+  @override
+  String get close => 'Fechar';
 }
 
 /// The translations for Portuguese, as used in Brazil (`pt_BR`).
@@ -298,4 +358,64 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
 
   @override
   String get sevInfo => 'info';
+
+  @override
+  String aboutVersion(String version, String sha) {
+    return 'Version $version ($sha)';
+  }
+
+  @override
+  String get about => 'Sobre';
+
+  @override
+  String get aboutSubtitle => 'Gerenciador de mods do Gothic 1 Remake';
+
+  @override
+  String get aboutCopyright => '© 2026 colaboradores do goresave';
+
+  @override
+  String get aboutLicense => 'Licenciado sob a Licença MIT.';
+
+  @override
+  String get appearanceTitle => 'Aparência';
+
+  @override
+  String get theme => 'Tema';
+
+  @override
+  String get themeLight => 'Claro';
+
+  @override
+  String get themeDark => 'Escuro';
+
+  @override
+  String get themeSystem => 'Sistema';
+
+  @override
+  String get uiScale => 'Escala da interface';
+
+  @override
+  String get resetZoomTooltip => 'Redefinir zoom (Ctrl+0)';
+
+  @override
+  String get zoomTip =>
+      'Dica: Ctrl + / Ctrl - altera o zoom em qualquer parte do app.';
+
+  @override
+  String get lightMode => 'Modo claro';
+
+  @override
+  String get darkMode => 'Modo escuro';
+
+  @override
+  String get minimize => 'Minimizar';
+
+  @override
+  String get restore => 'Restaurar';
+
+  @override
+  String get maximize => 'Maximizar';
+
+  @override
+  String get close => 'Fechar';
 }

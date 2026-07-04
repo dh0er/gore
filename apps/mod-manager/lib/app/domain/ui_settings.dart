@@ -1,12 +1,20 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
 import 'package:path/path.dart' as p;
 
 class UiSettings {
-  const UiSettings({this.gameExePath, this.appLocale = 'en'});
+  const UiSettings({
+    this.gameExePath,
+    this.appLocale = 'en',
+    this.themeMode = ThemeMode.light,
+    this.uiScale = 1.0,
+    this.windowSize,
+    this.windowMaximized = false,
+  });
 
   factory UiSettings.fromJson(Map<String, Object?> json) {
     return UiSettings(
@@ -20,6 +28,21 @@ class UiSettings {
         final String code when code.trim().isNotEmpty => code.trim(),
         _ => 'en',
       },
+      themeMode: switch (json['themeMode']) {
+        'dark' => ThemeMode.dark,
+        'system' => ThemeMode.system,
+        _ => ThemeMode.light,
+      },
+      uiScale: switch (json['uiScale']) {
+        final num value => UiScaleNotifier.clampScale(value.toDouble()),
+        _ => 1.0,
+      },
+      windowSize: switch ((json['windowWidth'], json['windowHeight'])) {
+        (final num width, final num height) when width > 0 && height > 0 =>
+          Size(width.toDouble(), height.toDouble()),
+        _ => null,
+      },
+      windowMaximized: json['windowMaximized'] == true,
     );
   }
 
@@ -31,20 +54,49 @@ class UiSettings {
   /// MaterialApp locale.
   final String appLocale;
 
+  /// Selected theme mode (light/dark/system). Default light.
+  final ThemeMode themeMode;
+
+  /// Whole-UI zoom factor applied by [UiScaleRoot] (0.5–2.0). Default 1.0.
+  final double uiScale;
+
+  /// Last known window size in logical pixels; null until first persisted.
+  final Size? windowSize;
+  final bool windowMaximized;
+
   UiSettings copyWith({
     String? gameExePath,
     bool clearGameExePath = false,
     String? appLocale,
+    ThemeMode? themeMode,
+    double? uiScale,
+    Size? windowSize,
+    bool? windowMaximized,
   }) {
     return UiSettings(
       gameExePath: clearGameExePath ? null : gameExePath ?? this.gameExePath,
       appLocale: appLocale ?? this.appLocale,
+      themeMode: themeMode ?? this.themeMode,
+      uiScale: uiScale ?? this.uiScale,
+      windowSize: windowSize ?? this.windowSize,
+      windowMaximized: windowMaximized ?? this.windowMaximized,
     );
   }
 
   Map<String, Object?> toJson() => {
     if (gameExePath != null) 'gameExePath': gameExePath,
     'appLocale': appLocale,
+    'themeMode': switch (themeMode) {
+      ThemeMode.dark => 'dark',
+      ThemeMode.system => 'system',
+      ThemeMode.light => 'light',
+    },
+    'uiScale': uiScale,
+    if (windowSize case final size?) ...{
+      'windowWidth': size.width,
+      'windowHeight': size.height,
+    },
+    'windowMaximized': windowMaximized,
   };
 }
 
@@ -170,4 +222,49 @@ class LocaleNotifier extends StateNotifier<String> {
     state = code;
     _store.write(_store.read().copyWith(appLocale: code));
   }
+}
+
+/// Selected theme mode (light/dark/system). Persisted so the choice survives
+/// restarts. Defaults to [ThemeMode.light].
+final themeModeProvider =
+    StateNotifierProvider<ThemeModeNotifier, ThemeMode>((ref) {
+  return ThemeModeNotifier(ref.watch(uiSettingsStoreProvider));
+});
+
+class ThemeModeNotifier extends StateNotifier<ThemeMode> {
+  ThemeModeNotifier(this._store) : super(_store.read().themeMode);
+
+  final UiSettingsStore _store;
+
+  void setThemeMode(ThemeMode themeMode) {
+    state = themeMode;
+    _store.write(_store.read().copyWith(themeMode: themeMode));
+  }
+}
+
+/// Whole-UI zoom factor (0.5–2.0), applied by [UiScaleRoot]. Persisted so the
+/// choice survives restarts. Defaults to 1.0.
+final uiScaleProvider = StateNotifierProvider<UiScaleNotifier, double>((ref) {
+  return UiScaleNotifier(ref.watch(uiSettingsStoreProvider));
+});
+
+class UiScaleNotifier extends StateNotifier<double> {
+  UiScaleNotifier(this._store) : super(_store.read().uiScale);
+
+  final UiSettingsStore _store;
+
+  static double clampScale(double value) => value.clamp(0.5, 2.0);
+
+  // Snap to whole percent so repeated +/- steps don't accumulate float noise.
+  static double _snap(double value) => (value * 100).roundToDouble() / 100;
+
+  void set(double value) {
+    final next = _snap(clampScale(value));
+    state = next;
+    _store.write(_store.read().copyWith(uiScale: next));
+  }
+
+  void increase({double step = 0.05}) => set(state + step);
+  void decrease({double step = 0.05}) => set(state - step);
+  void reset() => set(1.0);
 }
