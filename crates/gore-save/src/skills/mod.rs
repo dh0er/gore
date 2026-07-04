@@ -209,12 +209,19 @@ pub fn list_skills(root: &properties::RootObject, actor: &str) -> Value {
     let mut skills: Vec<Value> = Vec::new();
 
     // Emit learned skills first (a save may hold a class not yet catalogued;
-    // still surface it as a raw entry so nothing is silently hidden).
+    // still surface it as a raw entry so nothing is silently hidden). Emit one
+    // row per base: the UI keys pending edits by base and `apply_skill_set`
+    // targets the first matching element, so a save with duplicate effects for
+    // the same skill must not produce multiple (divergent) rows.
+    let mut emitted_bases: std::collections::HashSet<&str> = std::collections::HashSet::new();
     for (base, tier) in &learned {
+        if !emitted_bases.insert(base.as_str()) {
+            continue;
+        }
         let def = catalog::find(base);
         let kind = def.map(|d| d.kind).unwrap_or(Kind::Ladder);
         let current = current_value(tier.as_deref());
-        let (label, category, has_untrained, options) = match def {
+        let (label, category, has_untrained, mut options) = match def {
             Some(d) => (
                 d.label.to_string(),
                 d.category.to_string(),
@@ -228,6 +235,22 @@ pub fn list_skills(root: &properties::RootObject, actor: &str) -> Value {
                 vec![json!({ "value": current, "label": tier_display(&current) })],
             ),
         };
+        // The dropdown requires the current value to be a selectable option. A
+        // ladder/circle class stored without its tier suffix maps to a `current`
+        // ("Learned") that the tier list does not contain; keep the row valid by
+        // surfacing that raw value as its own option rather than crashing the UI.
+        if !options.iter().any(|o| o["value"] == json!(current)) {
+            options.insert(
+                0,
+                json!({
+                    "value": current,
+                    "label": tier_display(&current),
+                    "roman": Value::Null,
+                    "suffix": Value::Null,
+                    "standalone": Value::Null,
+                }),
+            );
+        }
         skills.push(json!({
             "base": base,
             "label": label,
@@ -385,7 +408,9 @@ pub fn apply_skill_set(payload: &mut Vec<u8>, edit: &SkillSetEdit) -> Result<(),
         };
         any_donor.get_or_insert(idx);
         if b == edit.base {
-            existing = Some(idx);
+            // First match wins, matching list_skills' dedup (keep-first) so the
+            // row the UI shows and the element this edits are the same one.
+            existing.get_or_insert(idx);
         }
         if target_category.is_some() && catalog::find(&b).map(|d| d.category) == target_category {
             same_category_donor.get_or_insert(idx);
