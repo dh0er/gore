@@ -413,17 +413,7 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
     let rvo_slot = is_method && ret_ty
         .map(|t| matches!(t.split('<').next().unwrap_or(t).bytes().next(), Some(b'F') | Some(b'T')))
         .unwrap_or(false);
-    // NESTED-CALL ARG-DROP fix: when arity is untrusted (native call, no Binds -> trusted_arity=None),
-    // the old `mem::take` DRAINED the whole stack — annihilating an ENCLOSING call's already-pushed
-    // args when a nested FREE/STATIC call (e.g. `UQuestSubsystem::Get()`, a factory/getter) runs in
-    // the middle of the enclosing arg-push (proven: `Get().GetQuestByClass(TSubclassOf(...))` lost the
-    // TSubclassOf arg -> 0-arg call). For a NON-METHOD call the cache FunctionReference param count is
-    // reliable (no implicit-`this` undercount), so use it as a soft cap to take ONLY this call's own
-    // args and preserve deeper enclosing operands. METHOD calls keep take-all (their cache counts are
-    // unreliable due to the implicit `this`, and their receiver-on-top means deeper entries are rarely
-    // a separate enclosing frame). StaticClass is already special-cased (0 operands, no drain).
-    let soft_arity = trusted_arity.or_else(|| if !is_method { params.map(|p| p.len()) } else { None });
-    let need = soft_arity.map(|n| n + is_method as usize + rvo_slot as usize);
+    let need = trusted_arity.map(|n| n + is_method as usize + rvo_slot as usize);
     let mut a: Vec<Arg> = match need {
         Some(k) if stack.len() > k => {
             // Split off this call's own operands (top `k`); the deeper entries belong to an
@@ -1255,10 +1245,18 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                         Some(ns) => format!("{ns}::{f}"),
                         None => f.clone(),
                     };
-                    // NATIVE call by ptr: the cache param list undercounts, so trust ONLY the
-                    // Binds native arity (`na`) for the EDIT B-PRIME split; None falls back to
-                    // take-all (byte-identical to today when Binds is absent).
-                    build_call(&mut stack, &qualified, ctx.refs.is_method_by_ptr(ptr), ctx.super_ctor, ctx.refs.func_params_by_ptr(ptr), na, na, None, ctx.class_name, false, pending_ty.as_deref(), ctx.refs)
+                    // NATIVE call by ptr: prefer the Binds native arity (`na`) for RENDER arity,
+                    // but for the STACK SPLIT fall back to the cache FunctionReference param count
+                    // when Binds is absent, instead of take-all. Take-all (`mem::take`) DRAINED the
+                    // whole operand stack, so a nested native call (e.g. `Topic.GetOther()`,
+                    // `state.GetAI()` — 0-param getters) run in the middle of an enclosing call's
+                    // arg-push ANNIHILATED the enclosing args -> 0/under-arg calls (Remember(),
+                    // UnlockDocumentSegment(), AddTag(), Subdialog). This is rendering-neutral for
+                    // the call being built (the existing top-`w` trim selects the same args; an
+                    // implicit-`this` overcount steals one deeper entry that the trim then drops),
+                    // and only PRESERVES deeper enclosing operands that take-all destroyed.
+                    let trusted = na.or_else(|| ctx.refs.func_params_by_ptr(ptr).map(|p| p.len()));
+                    build_call(&mut stack, &qualified, ctx.refs.is_method_by_ptr(ptr), ctx.super_ctor, ctx.refs.func_params_by_ptr(ptr), na, trusted, None, ctx.class_name, false, pending_ty.as_deref(), ctx.refs)
                 };
             }
             "CallPtr" => {
