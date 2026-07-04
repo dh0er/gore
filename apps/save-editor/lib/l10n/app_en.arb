@@ -17,6 +17,7 @@
   "skillActionLearn": "learn",
   "skillActionUnlearn": "unlearn",
   "skillTierUntrained": "Untrained",
+  "skillTierBeginner": "Beginner",
   "skillTierTrained": "Trained",
   "skillTierMaster": "Master",
   "skillTierNovice": "Novice",

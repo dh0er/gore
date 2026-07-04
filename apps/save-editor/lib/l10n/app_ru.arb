@@ -17,6 +17,7 @@
   "skillActionLearn": "изучить",
   "skillActionUnlearn": "забыть",
   "skillTierUntrained": "I",
+  "skillTierBeginner": "Новичок",
   "skillTierTrained": "II",
   "skillTierMaster": "III",
   "skillTierNovice": "Новичок",

@@ -62,6 +62,9 @@ class AppLocalizationsDe extends AppLocalizations {
   String get skillTierUntrained => 'Ungelernt';
 
   @override
+  String get skillTierBeginner => 'Anfänger';
+
+  @override
   String get skillTierTrained => 'Trainiert';
 
   @override

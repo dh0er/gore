@@ -61,6 +61,9 @@ class AppLocalizationsJa extends AppLocalizations {
   String get skillTierUntrained => '未熟練';
 
   @override
+  String get skillTierBeginner => '初心者';
+
+  @override
   String get skillTierTrained => '熟練';
 
   @override

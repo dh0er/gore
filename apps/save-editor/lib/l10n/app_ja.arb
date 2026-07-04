@@ -17,6 +17,7 @@
   "skillActionLearn": "習得",
   "skillActionUnlearn": "習得解除",
   "skillTierUntrained": "未熟練",
+  "skillTierBeginner": "初心者",
   "skillTierTrained": "熟練",
   "skillTierMaster": "達人",
   "skillTierNovice": "見習い",

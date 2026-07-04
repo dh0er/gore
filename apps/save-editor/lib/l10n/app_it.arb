@@ -17,6 +17,7 @@
   "skillActionLearn": "apprendi",
   "skillActionUnlearn": "dimentica",
   "skillTierUntrained": "Livello I",
+  "skillTierBeginner": "Principiante",
   "skillTierTrained": "Livello II",
   "skillTierMaster": "Livello III",
   "skillTierNovice": "Novizio",

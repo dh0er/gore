@@ -62,6 +62,9 @@ class AppLocalizationsPt extends AppLocalizations {
   String get skillTierUntrained => 'Sem treino';
 
   @override
+  String get skillTierBeginner => 'Principiante';
+
+  @override
   String get skillTierTrained => 'Treinado';
 
   @override
@@ -1366,6 +1369,9 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
 
   @override
   String get skillTierUntrained => 'Não treinado';
+
+  @override
+  String get skillTierBeginner => 'Iniciante';
 
   @override
   String get skillTierTrained => 'Treinado';

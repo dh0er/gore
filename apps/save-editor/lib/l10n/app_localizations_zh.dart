@@ -60,6 +60,9 @@ class AppLocalizationsZh extends AppLocalizations {
   String get skillTierUntrained => '一级';
 
   @override
+  String get skillTierBeginner => '初學者';
+
+  @override
   String get skillTierTrained => '二级';
 
   @override
@@ -1321,6 +1324,9 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get skillTierUntrained => '未受训';
+
+  @override
+  String get skillTierBeginner => '初学者';
 
   @override
   String get skillTierTrained => '已受训';

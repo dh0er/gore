@@ -61,6 +61,9 @@ class AppLocalizationsPl extends AppLocalizations {
   String get skillTierUntrained => 'Stopień I';
 
   @override
+  String get skillTierBeginner => 'Początkujący';
+
+  @override
   String get skillTierTrained => 'Stopień II';
 
   @override

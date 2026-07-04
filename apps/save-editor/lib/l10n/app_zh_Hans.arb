@@ -17,6 +17,7 @@
   "skillActionLearn": "学习",
   "skillActionUnlearn": "遗忘",
   "skillTierUntrained": "未受训",
+  "skillTierBeginner": "初学者",
   "skillTierTrained": "已受训",
   "skillTierMaster": "大师",
   "skillTierNovice": "熟练",

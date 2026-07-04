@@ -234,10 +234,10 @@ class _SkillRow extends StatelessWidget {
           isExpanded: true,
           isDense: true,
           items: [
-            for (final o in skill.options)
+            for (var i = 0; i < skill.options.length; i++)
               DropdownMenuItem<String>(
-                value: o.value,
-                child: Text(_optionLabel(l10n, skill.base, o)),
+                value: skill.options[i].value,
+                child: Text(_optionLabel(l10n, skill, i)),
               ),
           ],
           onChanged: editable ? onChanged : null,
@@ -340,49 +340,38 @@ String _skillName(AppLocalizations l10n, Skill skill) {
   }
 }
 
-/// Localized tier-option label composed from the option's structured pieces,
-/// falling back to the core's English [SkillOption.label] where a token is not
-/// mapped.
-String _optionLabel(AppLocalizations l10n, String base, SkillOption o) {
-  if (o.standalone == 'notLearned') return l10n.skillNotLearned;
-  if (o.standalone == 'learn') return l10n.skillLearn;
-  final buffer = StringBuffer(_tierToken(l10n, o.value));
-  if (o.roman != null) buffer.write(' (${o.roman})');
-  buffer.write(_hint(l10n, base, o.value));
-  if (o.suffix == 'learn') buffer.write(' · ${l10n.skillActionLearn}');
-  if (o.suffix == 'unlearn') buffer.write(' · ${l10n.skillActionUnlearn}');
-  return buffer.toString();
-}
+/// Localized label for the option at [index] of [skill]'s dropdown. The scheme
+/// depends on the skill's shape, keyed off the option count / kind:
+/// - 3-state ladders (weapons, smithing, thievery): Beginner → Trained → Master
+///   by position (a ladder's options are always Untrained + two tiers, in
+///   order).
+/// - Magic Circle: Not learned → Circle 0 (Amateur) → Circle 1 … → Circle 6.
+/// - everything else (2-state: Orcish, hunting, on/off): Not learned → Learned,
+///   keyed by VALUE because a learned on/off skill lists its options in the
+///   reverse order (learned value first, Untrained second).
+String _optionLabel(AppLocalizations l10n, Skill skill, int index) {
+  final options = skill.options;
+  final value = options[index].value;
 
-/// Localized display for a tier value. Circle tiers are numeric ("Circle N").
-String _tierToken(AppLocalizations l10n, String value) {
-  switch (value) {
-    case 'Untrained':
-      return l10n.skillTierUntrained;
-    case 'Trained':
-      return l10n.skillTierTrained;
-    case 'Master':
-      return l10n.skillTierMaster;
-    case 'Skilled':
-      return l10n.skillTierNovice;
-    case 'Amateur':
-      return l10n.skillTierAmateur;
-    case 'Learned':
-      return l10n.skillTierLearned;
-    default:
-      final n = int.tryParse(value);
-      return n != null ? l10n.skillTierCircle(n) : value;
+  if (skill.kind == 'circle') {
+    if (value == 'Untrained') return l10n.skillNotLearned;
+    if (value == 'Amateur') return l10n.skillTierCircle(0);
+    final n = int.tryParse(value);
+    return n != null ? l10n.skillTierCircle(n) : value;
   }
-}
 
-/// Blacksmithing's per-tier hint ("1H weapons" / "2H weapons"), else empty.
-String _hint(AppLocalizations l10n, String base, String value) {
-  if (base != 'Crafting_Blacksmith') return '';
-  return switch (value) {
-    'Trained' => ' — ${l10n.skillHintBlacksmith1H}',
-    'Master' => ' — ${l10n.skillHintBlacksmith2H}',
-    _ => '',
-  };
+  // A ladder with two tiers above Untrained is the only 3-option shape; label by
+  // position so the tier order (Trained/Skilled → Master) maps consistently.
+  if (options.length == 3) {
+    return switch (index) {
+      0 => l10n.skillTierBeginner,
+      1 => l10n.skillTierTrained,
+      _ => l10n.skillTierMaster,
+    };
+  }
+
+  // 2-state on/off (and 2-tier ladders like Orcish): a plain learned/not split.
+  return value == 'Untrained' ? l10n.skillNotLearned : l10n.skillTierLearned;
 }
 
 /// Localized category header. Falls back to the raw category for anything not

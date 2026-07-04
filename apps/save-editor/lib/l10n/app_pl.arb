@@ -17,6 +17,7 @@
   "skillActionLearn": "naucz się",
   "skillActionUnlearn": "zapomnij",
   "skillTierUntrained": "Stopień I",
+  "skillTierBeginner": "Początkujący",
   "skillTierTrained": "Stopień II",
   "skillTierMaster": "Mistrz",
   "skillTierNovice": "Nowicjusz",

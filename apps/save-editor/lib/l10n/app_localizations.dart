@@ -218,6 +218,12 @@ abstract class AppLocalizations {
   /// **'Untrained'**
   String get skillTierUntrained;
 
+  /// No description provided for @skillTierBeginner.
+  ///
+  /// In en, this message translates to:
+  /// **'Beginner'**
+  String get skillTierBeginner;
+
   /// No description provided for @skillTierTrained.
   ///
   /// In en, this message translates to:

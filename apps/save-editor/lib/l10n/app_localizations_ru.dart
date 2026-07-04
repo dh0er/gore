@@ -61,6 +61,9 @@ class AppLocalizationsRu extends AppLocalizations {
   String get skillTierUntrained => 'I';
 
   @override
+  String get skillTierBeginner => 'Новичок';
+
+  @override
   String get skillTierTrained => 'II';
 
   @override
