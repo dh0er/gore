@@ -169,21 +169,25 @@ class _HeroSkillsSectionState extends ConsumerState<HeroSkillsSection> {
     }
 
     final byCategory = result.byCategory;
+    final categories = byCategory.entries.toList();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        for (final entry in byCategory.entries) ...[
+        for (var i = 0; i < categories.length; i++) ...[
+          // Extra breathing room between a section and the next category header
+          // (the first header needs none — the group title sits above it).
+          SizedBox(height: i == 0 ? 4 : 22),
           Padding(
-            padding: const EdgeInsets.only(top: 4, bottom: 2),
+            padding: const EdgeInsets.only(bottom: 4),
             child: Text(
-              _categoryLabel(l10n, entry.key),
+              _categoryLabel(l10n, categories[i].key),
               style: theme.textTheme.labelSmall?.copyWith(
                 color: theme.colorScheme.primary,
                 letterSpacing: 0.6,
               ),
             ),
           ),
-          for (final skill in entry.value)
+          for (final skill in categories[i].value)
             _SkillRow(
               skill: skill,
               editable: widget.editable,
@@ -217,7 +221,6 @@ class _SkillRow extends StatelessWidget {
     final theme = Theme.of(context);
     final l10n = AppLocalizations.of(context);
     final label = Text(_skillName(l10n, skill), style: theme.textTheme.labelLarge);
-    final notLearned = !skill.learned && value == 'Untrained';
 
     final dropdown = InputDecorator(
       decoration: const InputDecoration(
@@ -251,12 +254,7 @@ class _SkillRow extends StatelessWidget {
             return Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Row(
-                  children: [
-                    Expanded(child: label),
-                    if (notLearned) _NotLearnedChip(l10n: l10n),
-                  ],
-                ),
+                label,
                 const SizedBox(height: 6),
                 dropdown,
               ],
@@ -265,40 +263,11 @@ class _SkillRow extends StatelessWidget {
           return Row(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              SizedBox(
-                width: 170,
-                child: Row(
-                  children: [
-                    Flexible(child: label),
-                    if (notLearned) _NotLearnedChip(l10n: l10n),
-                  ],
-                ),
-              ),
+              SizedBox(width: 170, child: label),
               Expanded(child: dropdown),
             ],
           );
         },
-      ),
-    );
-  }
-}
-
-class _NotLearnedChip extends StatelessWidget {
-  const _NotLearnedChip({required this.l10n});
-
-  final AppLocalizations l10n;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Padding(
-      padding: const EdgeInsets.only(left: 6),
-      child: Text(
-        l10n.skillNotLearned.toUpperCase(),
-        style: theme.textTheme.labelSmall?.copyWith(
-          color: theme.colorScheme.onSurfaceVariant,
-          fontSize: 9,
-        ),
       ),
     );
   }

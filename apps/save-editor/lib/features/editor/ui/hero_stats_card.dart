@@ -348,20 +348,19 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
       // card, and the selected sidebar tile already names the group (no inner
       // card, no duplicate group title).
       final group = _entryToGroup(entry)!;
-      final attributes = byGroup[group] ?? const [];
-      // The "Talente" (thieving) pane also hosts the learned-skills editor,
-      // appended below any thieving attribute rows.
-      final skills =
-          entry == _SidebarEntry.thieving ? widget.skillsSection : null;
+      // The "Talente" (thieving) pane shows ONLY the learned-skills editor — the
+      // raw thieving attribute values (LockpickDurability/Precision,
+      // PickPocketing) are intentionally not surfaced here; they remain editable
+      // in the All-data browser. Every other group renders its attribute rows.
+      final isSkillsPane = entry == _SidebarEntry.thieving;
+      final attributes = isSkillsPane ? const [] : (byGroup[group] ?? const []);
+      final skills = isSkillsPane ? widget.skillsSection : null;
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           ?errorRow,
           for (final a in attributes) _row(a),
-          if (skills != null) ...[
-            if (attributes.isNotEmpty) const Divider(height: 24),
-            skills,
-          ],
+          ?skills,
         ],
       );
     }
