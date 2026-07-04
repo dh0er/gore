@@ -118,8 +118,19 @@ pub fn apply_loadout(
                             l.entry.id
                         )));
                     }
+                    // Verify the source exists NOW — before the deferred undeploy — so a
+                    // deleted/corrupt library entry fails the apply instead of tearing down the
+                    // working deployment and then failing during commit_plan's copy.
+                    let src = l.dir.join(rel);
+                    if !src.is_dir() {
+                        return Err(ModError::Other(format!(
+                            "ue4ss component source missing in {}: {}",
+                            l.entry.id,
+                            src.display()
+                        )));
+                    }
                     let dst = gp.ue4ss_mods.join(format!("gm{:03}_{}", l.idx, name));
-                    plan.ue4ss_dirs.push((l.dir.join(rel), dst));
+                    plan.ue4ss_dirs.push((src, dst));
                 }
                 ComponentInfo::TexturePatch { rel, .. } => {
                     // Cook + pack a Zen triplet; `meta.id` gives cross-mod uniqueness of the pak name.
@@ -129,6 +140,17 @@ pub fn apply_loadout(
                 ComponentInfo::Triplet { rel_base, .. } => {
                     if !crate::is_safe_rel_path(rel_base) {
                         return Err(ModError::Other(format!("unsafe triplet path: {rel_base:?}")));
+                    }
+                    // A mountable triplet needs at least its `.utoc`; require it up front (before the
+                    // deferred undeploy) so an incomplete/corrupt triplet fails here rather than
+                    // mid-copy after the working deployment is already gone.
+                    let utoc = l.dir.join(format!("{rel_base}.utoc"));
+                    if !utoc.is_file() {
+                        return Err(ModError::Other(format!(
+                            "triplet component missing its .utoc in {}: {}",
+                            l.entry.id,
+                            utoc.display()
+                        )));
                     }
                     let stem = slot_pak_stem(rel_base, l.idx);
                     for ext in ["utoc", "ucas", "pak"] {
@@ -144,6 +166,14 @@ pub fn apply_loadout(
                         return Err(ModError::Other(format!("unsafe loose pak path: {rel:?}")));
                     }
                     let src = l.dir.join(rel);
+                    // Fail before the deferred undeploy if the pak source is gone.
+                    if !src.is_file() {
+                        return Err(ModError::Other(format!(
+                            "loose pak source missing in {}: {}",
+                            l.entry.id,
+                            src.display()
+                        )));
+                    }
                     let base = Path::new(rel).file_stem().and_then(|s| s.to_str()).unwrap_or("pak");
                     let stem = slot_stem(base, l.idx);
                     let dst = mods_dir(&gp).join(format!("{stem}.pak"));
@@ -932,6 +962,31 @@ mod tests {
             "Gouda",
             "prior deployment content must remain after a failed re-apply"
         );
+    }
+
+    /// A missing ADDITIVE source (a loose pak whose file is gone) is caught during plan-building —
+    /// before the deferred undeploy — so the prior deployment is not torn down by a copy that would
+    /// have failed inside commit_plan.
+    #[test]
+    fn missing_additive_source_fails_before_undeploy() {
+        let g = FakeGame::new();
+        let a = g.add_loc_mod("mod-a", "Alpha", "itfo_cheese", "Gouda");
+        apply_loadout(&g.root, &g.lib, &loadout(&[(&a, true)])).unwrap();
+
+        // A mod whose LoosePak component points at a pak that was never written to disk.
+        let bad = g.add_mod(
+            "bad",
+            "Bad",
+            vec![ComponentInfo::LoosePak { rel: "ghost_P.pak".into(), targets: vec![] }],
+            |_dir| {}, // deliberately do NOT create the pak
+        );
+
+        apply_loadout(&g.root, &g.lib, &loadout(&[(&a, true), (&bad, true)]))
+            .expect_err("a missing additive source must fail the apply");
+
+        let rec = crate::read_record(&g.root).expect("prior record survives");
+        assert_eq!(rec.loadout, vec![LoadoutEntry { id: "mod-a".into(), enabled: true }]);
+        assert_eq!(read_loc(&fs::read(g.lcache()).unwrap(), "itfo_cheese"), "Gouda");
     }
 
     /// Applying over an active STUDIO (non-manager) deployment is refused with STUDIO_DEPLOY_ACTIVE
