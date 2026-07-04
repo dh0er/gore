@@ -170,6 +170,8 @@ void main() {
       await n.apply('C:/game');
       expect(n.state.studioActive, isFalse);
       expect(n.state.error, contains('disk full'));
+      // A failed apply must not leave a stale success report behind.
+      expect(n.state.lastReport, isNull);
     });
   });
 
@@ -192,6 +194,28 @@ void main() {
       );
       expect(n.state.status, isA<ManagerStatusNothingDeployed>());
       expect(n.state.studioActive, isFalse);
+    });
+
+    test('clears a prior apply success report', () async {
+      final fake = FakeGoreCoreFfiService(
+        responses: {
+          'mgr_apply': {
+            'ok': true,
+            'report': {'applied': ['A'], 'warnings': <String>[]},
+          },
+          'mgr_undeploy_all': {'ok': true, 'removed': 1},
+          'mgr_status': {
+            'ok': true,
+            'status': {'state': 'nothing_deployed'},
+          },
+        },
+      );
+      final n = _notifier(fake);
+      await n.apply('C:/game');
+      expect(n.state.lastReport?.applied, ['A']); // precondition
+      // Undeploying everything must drop the stale "Applied N mods" report.
+      await n.undeployAll('C:/game');
+      expect(n.state.lastReport, isNull);
     });
   });
 }

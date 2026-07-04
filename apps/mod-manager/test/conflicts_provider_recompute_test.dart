@@ -90,8 +90,8 @@ void main() {
     // (re-running analyze regardless of the key) and the test would prove
     // nothing about the key. With a listener, analyze only re-runs when the
     // watched key actually changes.
-    container.listen(libraryProvider, (_, __) {});
-    container.listen(conflictsProvider, (_, __) {});
+    container.listen(libraryProvider, (_, _) {});
+    container.listen(conflictsProvider, (_, _) {});
 
     // Let the initial library refresh + first analyze settle.
     await container.read(conflictsProvider.future);
@@ -122,8 +122,8 @@ void main() {
     ]);
     addTearDown(container.dispose);
 
-    container.listen(libraryProvider, (_, __) {});
-    container.listen(conflictsProvider, (_, __) {});
+    container.listen(libraryProvider, (_, _) {});
+    container.listen(conflictsProvider, (_, _) {});
 
     await container.read(conflictsProvider.future);
     await container.read(libraryProvider.notifier).refresh();

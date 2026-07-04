@@ -89,6 +89,9 @@ class StatusNotifier extends StateNotifier<StatusState> {
       busy: true,
       clearError: true,
       studioActive: false,
+      // Drop the previous apply's report up front: if this attempt fails, the
+      // banner must not keep showing a stale "Applied N mods" next to the error.
+      clearReport: true,
     );
     try {
       final report = await _mgr.apply(gameRoot);
@@ -120,7 +123,8 @@ class StatusNotifier extends StateNotifier<StatusState> {
     await _run(() async {
       await _mgr.undeployAll(gameRoot);
       final status = await _mgr.status(gameRoot);
-      state = state.copyWith(status: status, studioActive: false);
+      // Nothing is deployed anymore, so a prior "Applied N mods" report is stale.
+      state = state.copyWith(status: status, studioActive: false, clearReport: true);
     });
   }
 
