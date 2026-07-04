@@ -81,7 +81,14 @@ class _HeroSkillsSectionState extends ConsumerState<HeroSkillsSection> {
 
   Future<void> _load() async {
     final epoch = ++_epoch;
-    setState(() => _loading = true);
+    // Drop the previous result too, not just flip _loading: build only shows the
+    // spinner while `result == null`, so keeping stale skills here would let the
+    // user queue tier changes against outdated skill.current values during a
+    // reloadKey-triggered reload (e.g. after a save/refresh).
+    setState(() {
+      _loading = true;
+      _result = null;
+    });
     final result = await widget.notifier.loadSkills();
     if (!mounted || epoch != _epoch) return;
     setState(() {
