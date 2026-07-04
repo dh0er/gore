@@ -205,6 +205,20 @@ pub fn apply_loadout(
                         }
                         RawTarget::ScriptCache => gp.script_cache.clone(),
                     };
+                    // A rawfile replaces a WHOLE existing game file. If the resolved target isn't
+                    // present in this install (an incompatible mod — a bank/version this install
+                    // lacks), skip it with a warning HERE, before the deferred undeploy — otherwise
+                    // commit_plan fails while backing up the missing file, after the working
+                    // deployment is already gone (consistent with the lcache-absent skip above and
+                    // the additive-source checks).
+                    if !target.is_file() {
+                        warnings.push(format!(
+                            "{}: raw-file target {} not present in this install — skipping",
+                            l.entry.id,
+                            target.display()
+                        ));
+                        continue;
+                    }
                     let bytes = std::fs::read(&src)
                         .map_err(crate::io(&format!("reading raw file {}", src.display())))?;
                     // Later mod wins the base for this target.
@@ -986,6 +1000,31 @@ mod tests {
 
         let rec = crate::read_record(&g.root).expect("prior record survives");
         assert_eq!(rec.loadout, vec![LoadoutEntry { id: "mod-a".into(), enabled: true }]);
+        assert_eq!(read_loc(&fs::read(g.lcache()).unwrap(), "itfo_cheese"), "Gouda");
+    }
+
+    /// A rawfile whose live target isn't present in this install (an incompatible bank) is skipped
+    /// with a warning — NOT a hard error — and the rest of the apply still lands.
+    #[test]
+    fn rawfile_missing_target_is_skipped_with_warning() {
+        let g = FakeGame::new();
+        let base = g.add_loc_mod("mod-base", "Base", "itfo_cheese", "Gouda");
+        let raw = g.add_rawfile_mod(
+            "raw",
+            "Raw",
+            RawTarget::Bank { name: "Ghost.bank".into() },
+            b"whatever",
+        );
+
+        let report =
+            apply_loadout(&g.root, &g.lib, &loadout(&[(&base, true), (&raw, true)])).unwrap();
+        assert!(
+            report.warnings.iter().any(|w| w.contains("not present in this install")),
+            "expected a skip warning, got: {:?}",
+            report.warnings
+        );
+        // The absent bank was not created, and the base loc edit still applied.
+        assert!(!g.bank("Ghost.bank").exists());
         assert_eq!(read_loc(&fs::read(g.lcache()).unwrap(), "itfo_cheese"), "Gouda");
     }
 
