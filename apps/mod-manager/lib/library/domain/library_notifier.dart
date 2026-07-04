@@ -69,13 +69,7 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
   ///  * library ids missing from the loadout are appended at the end,
   ///    disabled, preserving the stored order for the rest.
   Future<void> refresh() async {
-    await _run(() async {
-      final (mods, loadout) = await _mgr.libraryList();
-      state = state.copyWith(
-        mods: mods,
-        loadout: _reconcile(mods, loadout),
-      );
-    });
+    await _run(_refreshInline);
   }
 
   /// Import a mod from [path] into the library, then refresh.
@@ -134,9 +128,21 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
 
   /// Refresh without its own busy/error framing — for use inside another
   /// [_run] block so the whole operation is one busy span.
+  ///
+  /// Reconciling only fixes the *in-memory* loadout; the on-disk loadout that
+  /// `mgr_apply`/`mgr_status` read is untouched. So when reconciliation
+  /// actually changed something (a stale entry dropped, a new library mod
+  /// appended), persist the result via `mgr_set_loadout` so the on-disk
+  /// loadout matches what the UI shows. The delta check makes this idempotent:
+  /// a loadout that already agrees with the library persists nothing, so the
+  /// follow-up refresh after a persist can't loop.
   Future<void> _refreshInline() async {
     final (mods, loadout) = await _mgr.libraryList();
-    state = state.copyWith(mods: mods, loadout: _reconcile(mods, loadout));
+    final reconciled = _reconcile(mods, loadout);
+    if (!_sameEntries(loadout.entries, reconciled.entries)) {
+      await _mgr.setLoadout(reconciled);
+    }
+    state = state.copyWith(mods: mods, loadout: reconciled);
   }
 
   /// Run [body] with the busy flag set and errors funneled into the state.
@@ -149,6 +155,19 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
     } finally {
       state = state.copyWith(busy: false);
     }
+  }
+
+  /// True when two loadout entry lists carry the same ids, enabled flags, and
+  /// order — the delta gate for persisting a reconciled loadout.
+  static bool _sameEntries(
+    List<LoadoutEntryView> a,
+    List<LoadoutEntryView> b,
+  ) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i].id != b[i].id || a[i].enabled != b[i].enabled) return false;
+    }
+    return true;
   }
 
   /// See [refresh] for the reconciliation contract.

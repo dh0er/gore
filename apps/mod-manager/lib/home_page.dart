@@ -43,6 +43,18 @@ class _HomePageState extends ConsumerState<HomePage> {
 
   @override
   Widget build(BuildContext context) {
+    // Choosing (or clearing) the game exe changes the root that deployment
+    // status is judged against. The startup mgr_status ran before any path was
+    // set, so without this the deployment chip + Apply gating stay stale until
+    // the user hits the overflow Refresh. Re-derive the root from the *new*
+    // path and refresh status on every change. ref.listen only fires on an
+    // actual value change, so this can't double-fire with the initState
+    // refresh.
+    ref.listen<String?>(gameExePathProvider, (previous, next) {
+      if (!mounted) return;
+      ref.read(statusProvider.notifier).refresh(gameRootFromExe(next));
+    });
+
     final l10n = AppLocalizations.of(context);
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
@@ -351,7 +363,11 @@ class _ModsTab extends ConsumerWidget {
 /// Apply is offered whenever the target (the enabled subset of the current
 /// loadout) differs from what is deployed — which includes the very first
 /// deploy. Concretely:
-///  * always disabled without a game path or while an FFI call is in flight;
+///  * always disabled without a game path or while an FFI call is in flight —
+///    including a library mutation (toggle/reorder persists the loadout via
+///    `mgr_set_loadout` asynchronously; applying before that settles would let
+///    `mgr_apply` read a stale on-disk loadout), so [LibraryState.busy] gates
+///    Apply too;
 ///  * enabled for [ManagerStatusChangesPending] / [ManagerStatusGameUpdated]
 ///    (deployed drifted from target);
 ///  * enabled for [ManagerStatusNothingDeployed] only when the loadout has at
@@ -366,7 +382,7 @@ bool canApply(
   bool gameRootSet,
   bool busy,
 ) {
-  if (!gameRootSet || busy) return false;
+  if (!gameRootSet || busy || library.busy) return false;
   return switch (status) {
     ManagerStatusChangesPending() => true,
     ManagerStatusGameUpdated() => true,

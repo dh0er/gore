@@ -101,5 +101,16 @@ void main() {
         isFalse,
       );
     });
+
+    test('library.busy -> DISABLED even when status is ChangesPending', () {
+      // A toggle/reorder sets library.busy while it persists the loadout via
+      // mgr_set_loadout; Apply must wait so mgr_apply can't read a stale
+      // on-disk loadout. status.busy is false here — only library.busy blocks.
+      final busyLibrary = _library([('mod-a', true)]).copyWith(busy: true);
+      expect(
+        canApply(_status('changes_pending'), busyLibrary, true, false),
+        isFalse,
+      );
+    });
   });
 }

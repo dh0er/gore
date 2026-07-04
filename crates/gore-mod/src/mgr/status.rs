@@ -65,8 +65,23 @@ pub fn status(game_root: &Path, target: &Loadout) -> crate::Result<ManagerStatus
         })
         .map(|(live, _)| live.clone())
         .collect();
+
+    // Additive-only deployments (foreign paks, texture triplets, UE4SS mod dirs) carry NO
+    // `deployed_hashes` entry — they're whole-file/dir copies into `~mods`/`ue4ss/Mods`, not
+    // in-place patches. Deleting one externally would otherwise leave `drifted` empty → InSync,
+    // wrongly disabling Apply while managed content is missing. So treat any recorded additive path
+    // that no longer exists on disk as drifted too (existence-only — these have no per-file hash).
+    for path in
+        record.managed_paks.iter().chain(record.texture_triplets.iter()).chain(record.ue4ss_mod_dirs.iter())
+    {
+        if !Path::new(path.as_str()).exists() {
+            drifted.push(path.clone());
+        }
+    }
+
     if !drifted.is_empty() {
         drifted.sort();
+        drifted.dedup();
         return Ok(ManagerStatus::GameUpdated { drifted });
     }
 
@@ -226,6 +241,83 @@ mod tests {
         assert_eq!(
             status(&game, &target).unwrap(),
             ManagerStatus::GameUpdated { drifted: expected }
+        );
+    }
+
+    /// An additive-only deployment (a managed pak, no `deployed_hashes`) whose recorded file was
+    /// deleted externally → GameUpdated listing that path — NOT InSync. Additive paths carry no
+    /// per-file hash, so existence is the only drift signal; without this check a missing managed
+    /// pak/ue4ss dir would leave `drifted` empty and Apply would stay disabled while files are gone.
+    #[test]
+    fn game_updated_when_additive_pak_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let game = tmp.path().join("game");
+        std::fs::create_dir_all(&game).unwrap();
+        // A managed pak we "deployed" that is NOT present on disk (deleted by the user / a verify).
+        let missing_pak = game.join("G1R/Content/Paks/~mods/zzz_gm000_foo_P.pak");
+        let deployed = vec![le("mod-a", true)];
+        let rec = DeployRecord {
+            mod_name: "manager".into(),
+            owner: "manager".into(),
+            loadout: deployed.clone(),
+            managed_paks: vec![missing_pak.display().to_string()],
+            ..Default::default()
+        };
+        write_record(&game, &rec);
+
+        // Loadout still matches the record, but the additive file is gone → drift wins.
+        let target = loadout(&[("mod-a", true)]);
+        assert_eq!(
+            status(&game, &target).unwrap(),
+            ManagerStatus::GameUpdated { drifted: vec![missing_pak.display().to_string()] }
+        );
+    }
+
+    /// A recorded UE4SS mod DIR that no longer exists is drift too (dirs use the same existence
+    /// check as additive files).
+    #[test]
+    fn game_updated_when_ue4ss_dir_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let game = tmp.path().join("game");
+        std::fs::create_dir_all(&game).unwrap();
+        let missing_dir = game.join("G1R/Binaries/Win64/ue4ss/Mods/gm000_Foo");
+        let rec = DeployRecord {
+            mod_name: "manager".into(),
+            owner: "manager".into(),
+            loadout: vec![le("mod-a", true)],
+            ue4ss_mod_dirs: vec![missing_dir.display().to_string()],
+            ..Default::default()
+        };
+        write_record(&game, &rec);
+        match status(&game, &loadout(&[("mod-a", true)])).unwrap() {
+            ManagerStatus::GameUpdated { drifted } => {
+                assert_eq!(drifted, vec![missing_dir.display().to_string()]);
+            }
+            other => panic!("expected GameUpdated for a missing ue4ss dir, got {other:?}"),
+        }
+    }
+
+    /// Additive paths that DO exist do not fire drift — InSync still wins when everything is present.
+    #[test]
+    fn no_drift_when_additive_paths_present() {
+        let tmp = tempfile::tempdir().unwrap();
+        let game = tmp.path().join("game");
+        let mods = game.join("G1R/Content/Paks/~mods");
+        std::fs::create_dir_all(&mods).unwrap();
+        let pak = mods.join("zzz_gm000_foo_P.pak");
+        std::fs::write(&pak, b"PAK").unwrap();
+        let deployed = vec![le("mod-a", true)];
+        let rec = DeployRecord {
+            mod_name: "manager".into(),
+            owner: "manager".into(),
+            loadout: deployed.clone(),
+            managed_paks: vec![pak.display().to_string()],
+            ..Default::default()
+        };
+        write_record(&game, &rec);
+        assert_eq!(
+            status(&game, &loadout(&[("mod-a", true)])).unwrap(),
+            ManagerStatus::InSync { loadout: deployed }
         );
     }
 

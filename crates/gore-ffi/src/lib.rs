@@ -578,16 +578,29 @@ fn mgr_library_list(payload: Value) -> Value {
     })
 }
 
-/// `{path, library_dir?}` → `{ok, entry:ModEntryMeta}` — import a source into the library.
+/// `{path, library_dir?, loadout_path?}` → `{ok, entry:ModEntryMeta}` — import a source into the
+/// library AND register it in the loadout (disabled) if not already present. Mirrors
+/// `gore mgr import`: without this, a GUI-imported mod is invisible to apply/status/analyze (which
+/// read the on-disk loadout, not the GUI's in-memory reconcile) until some other mutation.
 fn mgr_import(payload: Value) -> Value {
     let Some(path) = payload.get("path").and_then(Value::as_str) else {
         return err("BAD_REQUEST", "missing 'path'");
     };
     let lib = mgr_library_dir(&payload);
-    match gore_mod::mgr::import::import(&lib, std::path::Path::new(path)) {
-        Ok(entry) => json!({"ok": true, "entry": serde_json::to_value(&entry).unwrap_or(Value::Null)}),
-        Err(e) => err("IMPORT_FAILED", e.to_string()),
+    let entry = match gore_mod::mgr::import::import(&lib, std::path::Path::new(path)) {
+        Ok(entry) => entry,
+        Err(e) => return err("IMPORT_FAILED", e.to_string()),
+    };
+    // Register the new mod in the loadout (disabled) so enable/apply can find it. Skip if an entry
+    // with this id already exists (a re-import / update): keep its current enabled state + order.
+    let lo_path = mgr_loadout_path(&payload);
+    if let Ok(mut lo) = gore_mod::mgr::loadout::load(&lo_path) {
+        if !lo.entries.iter().any(|e| e.id == entry.id) {
+            lo.entries.push(gore_mod::mgr::LoadoutEntry { id: entry.id.clone(), enabled: false });
+            let _ = gore_mod::mgr::loadout::save(&lo_path, &lo);
+        }
     }
+    json!({"ok": true, "entry": serde_json::to_value(&entry).unwrap_or(Value::Null)})
 }
 
 /// `{id, library_dir?}` → `{ok, removed:bool}` — delete a library entry (absent id → removed:false).
@@ -845,7 +858,11 @@ mod tests {
 
         let imp = mgr_call(
             "mgr_import",
-            json!({"path": bdir.display().to_string(), "library_dir": lib.display().to_string()}),
+            json!({
+                "path": bdir.display().to_string(),
+                "library_dir": lib.display().to_string(),
+                "loadout_path": lo.display().to_string()
+            }),
         );
         assert_eq!(imp["ok"], true, "resp: {imp}");
         assert_eq!(imp["entry"]["name"], "Probe");
@@ -861,6 +878,75 @@ mod tests {
         assert_eq!(mods.len(), 1, "one imported mod: {list}");
         assert_eq!(mods[0]["id"], id);
         assert_eq!(mods[0]["name"], "Probe");
+
+        // BUG 3: the import must ALSO register a disabled loadout slot (mirror `gore mgr import`),
+        // so a GUI-imported mod is visible to apply/status/analyze (which read the on-disk loadout)
+        // without waiting for another mutation.
+        let entries = list["loadout"]["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 1, "import must add a loadout entry: {list}");
+        assert_eq!(entries[0]["id"], id);
+        assert_eq!(entries[0]["enabled"], false, "new mod is registered DISABLED");
+    }
+
+    /// BUG 3, focused: `mgr_import` appends exactly one disabled loadout slot for the new id, and a
+    /// RE-import (same source → same id) does NOT duplicate it (keeps the existing slot, incl. an
+    /// enabled state a later toggle may have set).
+    #[test]
+    fn mgr_import_registers_disabled_loadout_slot() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("library");
+        let lo = tmp.path().join("loadout.json");
+        let bdir = write_goremod_bundle(tmp.path(), "Probe");
+
+        let imp = mgr_call(
+            "mgr_import",
+            json!({
+                "path": bdir.display().to_string(),
+                "library_dir": lib.display().to_string(),
+                "loadout_path": lo.display().to_string()
+            }),
+        );
+        assert_eq!(imp["ok"], true, "resp: {imp}");
+        let id = imp["entry"]["id"].as_str().unwrap().to_string();
+
+        // Loadout now carries one disabled slot for the imported id.
+        let after_first = mgr_call(
+            "mgr_library_list",
+            json!({"library_dir": lib.display().to_string(), "loadout_path": lo.display().to_string()}),
+        );
+        let entries = after_first["loadout"]["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["id"], id);
+        assert_eq!(entries[0]["enabled"], false);
+
+        // Enable it, then re-import the SAME source: the slot must be preserved (still enabled, no
+        // duplicate) — re-import is an update, not a fresh registration.
+        mgr_call(
+            "mgr_set_loadout",
+            json!({
+                "loadout_path": lo.display().to_string(),
+                "loadout": {"format": 1, "entries": [{"id": id, "enabled": true}]}
+            }),
+        );
+        let reimp = mgr_call(
+            "mgr_import",
+            json!({
+                "path": bdir.display().to_string(),
+                "library_dir": lib.display().to_string(),
+                "loadout_path": lo.display().to_string()
+            }),
+        );
+        assert_eq!(reimp["ok"], true, "resp: {reimp}");
+        assert_eq!(reimp["entry"]["id"], id, "same source → same id");
+
+        let after_reimport = mgr_call(
+            "mgr_library_list",
+            json!({"library_dir": lib.display().to_string(), "loadout_path": lo.display().to_string()}),
+        );
+        let entries = after_reimport["loadout"]["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 1, "re-import must not duplicate the loadout slot: {after_reimport}");
+        assert_eq!(entries[0]["id"], id);
+        assert_eq!(entries[0]["enabled"], true, "re-import preserves the existing enabled state");
     }
 
     #[test]

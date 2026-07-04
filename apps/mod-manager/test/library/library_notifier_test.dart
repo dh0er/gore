@@ -43,6 +43,8 @@ void main() {
             loadout: [('mod-a', true)],
             mods: ['mod-a', 'mod-b'],
           ),
+          // Reconcile appends mod-b, so the notifier persists the result.
+          'mgr_set_loadout': {'ok': true},
         },
       );
       final n = await _settled(fake);
@@ -63,10 +65,63 @@ void main() {
             loadout: [('mod-a', true), ('mod-x', true)],
             mods: ['mod-a'],
           ),
+          // Reconcile drops the vanished mod-x, so the result is persisted.
+          'mgr_set_loadout': {'ok': true},
         },
       );
       final n = await _settled(fake);
       expect(n.state.loadout.entries.map((e) => e.id), ['mod-a']);
+    });
+
+    test('a reconcile delta is persisted back via mgr_set_loadout', () async {
+      // On-disk loadout has a stale entry (mod-x, gone from the library) and
+      // is missing a present library mod (mod-b). Reconciliation drops mod-x
+      // and appends mod-b disabled; that reconciled loadout must be written
+      // back so the on-disk loadout matches the UI.
+      final fake = FakeGoreCoreFfiService(
+        responses: {
+          'mgr_library_list': _libraryList(
+            loadout: [('mod-a', true), ('mod-x', true)],
+            mods: ['mod-a', 'mod-b'],
+          ),
+          'mgr_set_loadout': {'ok': true},
+        },
+      );
+      final n = await _settled(fake);
+
+      final setCall =
+          fake.calls.firstWhere((c) => c.command == 'mgr_set_loadout');
+      expect(setCall.payload, {
+        'loadout': {
+          'format': 1,
+          'entries': [
+            {'id': 'mod-a', 'enabled': true},
+            {'id': 'mod-b', 'enabled': false},
+          ],
+        },
+      });
+      // The in-memory loadout matches what was persisted.
+      expect(n.state.loadout.entries.map((e) => e.id), ['mod-a', 'mod-b']);
+    });
+
+    test('an already-consistent loadout is not re-persisted (no loop)',
+        () async {
+      // Library and loadout already agree: reconcile is a no-op, so nothing
+      // is written back and no set/refresh loop can start.
+      final fake = FakeGoreCoreFfiService(
+        responses: {
+          'mgr_library_list': _libraryList(
+            loadout: [('mod-a', true), ('mod-b', false)],
+          ),
+          'mgr_set_loadout': {'ok': true},
+        },
+      );
+      final n = await _settled(fake);
+      expect(
+        fake.calls.where((c) => c.command == 'mgr_set_loadout'),
+        isEmpty,
+      );
+      expect(n.state.loadout.entries.map((e) => e.id), ['mod-a', 'mod-b']);
     });
   });
 
@@ -168,6 +223,8 @@ void main() {
             loadout: [('mod-a', true)],
             mods: ['mod-a', 'mod-new'],
           ),
+          // The post-import refresh appends mod-new, so it is persisted.
+          'mgr_set_loadout': {'ok': true},
         },
       );
       final n = await _settled(fake);

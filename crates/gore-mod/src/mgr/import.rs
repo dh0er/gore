@@ -54,6 +54,12 @@ pub fn import(library_dir: &Path, source: &Path) -> crate::Result<ModEntryMeta> 
 
     materialize(&canon, &staging)?;
     wrap_root_ue4ss(&staging, &fallback_name)?;
+    // A goremod bundle shipped BELOW a wrapper dir (`Wrap/Sub/gore-mod.json`) is re-rooted so the
+    // staging (→ entry) root IS the bundle root. This keeps every stored `ComponentInfo.rel`
+    // bundle-root-relative (`audio`, not `Wrap/Sub/audio`), which matters because the manifests
+    // INSIDE (audio/scripts/manifest.json, texture PNGs) hold bundle-root-relative payload paths;
+    // apply then reads `<entry>/audio/0.wav` as authored instead of a nonexistent nested path.
+    reroot_nested_bundle(&staging)?;
 
     let (manifest, components) = detect(&staging)?;
     if components.is_empty() {
@@ -283,6 +289,53 @@ fn wrap_root_ue4ss(staging: &Path, name: &str) -> crate::Result<()> {
     // The wrapped dir becomes the UE4SS mod name — keep it a single safe component.
     let safe = if crate::is_safe_mod_name(name) { name.to_string() } else { slug(name) };
     std::fs::rename(&tmp, staging.join(&safe)).map_err(crate::io("naming mod dir"))?;
+    Ok(())
+}
+
+/// If a goremod bundle sits BELOW `staging` (its `gore-mod.json` is in a nested wrapper dir like
+/// `Wrap/Sub`), hoist that bundle subtree up so `staging` itself becomes the bundle root. After
+/// this, [`find_manifest_dir`] finds `gore-mod.json` at the root and every component `rel` is
+/// bundle-root-relative — which is what the payload manifests inside the bundle already assume.
+///
+/// No-op when there's no manifest, or the manifest is already at the root (the common flat case,
+/// and every foreign import, which has no `gore-mod.json`).
+fn reroot_nested_bundle(staging: &Path) -> crate::Result<()> {
+    let Some(bundle_dir) = find_manifest_dir(staging) else { return Ok(()) };
+    if bundle_dir == staging {
+        return Ok(()); // already rooted at the bundle
+    }
+    // Stash the nested bundle subtree at a fresh sibling under `staging` first (a valid rename:
+    // `.gore-reroot` is NOT inside `bundle_dir`, so this doesn't move a dir into itself). Then clear
+    // the old wrapper dirs and hoist the stashed bundle's children up to the root.
+    let stash = staging.join(".gore-reroot");
+    if stash.exists() {
+        std::fs::remove_dir_all(&stash).map_err(crate::io("clearing reroot stash"))?;
+    }
+    std::fs::rename(&bundle_dir, &stash).map_err(crate::io("stashing nested bundle"))?;
+
+    // Remove every remaining top-level entry (the emptied wrapper dirs and any stray sibling files
+    // shipped alongside the bundle folder) so only the hoisted bundle content remains.
+    for e in std::fs::read_dir(staging).map_err(crate::io("reading staging for reroot"))? {
+        let e = e.map_err(crate::io("reading staging entry"))?;
+        if e.file_name() == std::ffi::OsStr::new(".gore-reroot") {
+            continue;
+        }
+        let p = e.path();
+        let md = std::fs::symlink_metadata(&p).map_err(crate::io("stat reroot leftover"))?;
+        if md.is_dir() {
+            std::fs::remove_dir_all(&p).map_err(crate::io("removing wrapper dir"))?;
+        } else {
+            std::fs::remove_file(&p).map_err(crate::io("removing stray sibling"))?;
+        }
+    }
+
+    // Hoist the stashed bundle's children up to the staging root, then drop the empty stash.
+    for e in std::fs::read_dir(&stash).map_err(crate::io("reading reroot stash"))? {
+        let e = e.map_err(crate::io("reading stash entry"))?;
+        std::fs::rename(e.path(), staging.join(e.file_name()))
+            .map_err(crate::io("hoisting bundle content"))?;
+    }
+    std::fs::remove_dir(&stash).map_err(crate::io("removing reroot stash"))?;
     Ok(())
 }
 
@@ -744,10 +797,11 @@ mod tests {
     }
 
     /// [import 3] A zip whose bundle sits BELOW the root (nested folders, the usual way mods
-    /// are shipped) still imports; component rels carry the folder prefix so they resolve
-    /// against the entry dir.
+    /// are shipped) is RE-ROOTED at import: the stored entry's top level IS the bundle root, so
+    /// every component `rel` is bundle-root-relative (no `Wrap/Sub` prefix) — matching the payload
+    /// manifests inside, which hold bundle-root-relative paths. The wrapper dirs are dropped.
     #[test]
-    fn import_zip_nested_bundle_prefixes_rels() {
+    fn import_zip_nested_bundle_reroots() {
         let tmp = tempfile::tempdir().unwrap();
         let lib = tmp.path().join("lib");
         let bdir = mk_goremod_bundle(tmp.path());
@@ -757,8 +811,68 @@ mod tests {
         let meta = import(&lib, &zp).unwrap();
         assert_eq!(meta.kind, ModKind::Goremod);
         assert_eq!(meta.name, "Target Probe");
-        assert_goremod_components(&meta, "Wrap/Sub");
-        assert!(lib.join(&meta.id).join("Wrap/Sub/gore-mod.json").is_file());
+        // Re-rooted: rels are canonical (`loc/edits.json`, `scripts`, …), NOT `Wrap/Sub/...`.
+        assert_goremod_components(&meta, "");
+        let entry = lib.join(&meta.id);
+        assert!(entry.join("gore-mod.json").is_file(), "manifest hoisted to the entry root");
+        assert!(entry.join("loc").join("edits.json").is_file(), "payload hoisted to the root");
+        // The wrapper prefix is gone entirely.
+        assert!(!entry.join("Wrap").exists(), "wrapper dir must be dropped after re-root");
+    }
+
+    /// [import 3b] BUG 1 focus: a nested bundle carrying an AUDIO component re-roots so the stored
+    /// `AudioPatch.rel` is `audio` (bundle-root-relative) and apply can read the payload at
+    /// `<entry>/audio/manifest.json` + `<entry>/audio/0.wav` — the exact files the audio manifest
+    /// references by bundle-root path. Before the re-root fix the rel was `Wrap/Sub/audio` while the
+    /// manifest still said `audio/0.wav`, so apply read a nonexistent nested path.
+    #[test]
+    fn import_nested_bundle_with_audio_reroots_rel() {
+        use crate::{Component, ModManifest};
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("lib");
+
+        // Hand-build a minimal audio bundle: gore-mod.json + audio/manifest.json + audio/0.wav,
+        // all shipped under a `Wrap/Sub` wrapper (the nested shape find_manifest_dir supports).
+        let bundle_root = tmp.path().join("src/Wrap/Sub");
+        let audio = bundle_root.join("audio");
+        fs::create_dir_all(&audio).unwrap();
+        // Manifest maps bank→sample→wav_rel, where wav_rel is BUNDLE-ROOT-relative ("audio/0.wav").
+        let mut manifest: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
+        manifest
+            .entry("Voice.bank".into())
+            .or_default()
+            .insert("shout".into(), "audio/0.wav".into());
+        fs::write(audio.join("manifest.json"), serde_json::to_vec(&manifest).unwrap()).unwrap();
+        fs::write(audio.join("0.wav"), b"FAKE-WAV").unwrap();
+        // A gore-mod.json whose single component is an AudioPatch at `audio`. Built through the
+        // real `ModManifest` (its `mod` rename + the component's `type` tag) so it deserializes
+        // exactly like a shipped bundle's manifest.
+        let comp = Component::AudioPatch { path: "audio".into(), banks: vec!["Voice.bank".into()] };
+        let mm = ModMeta { name: "Nested Audio".into(), version: "1".into(), author: "t".into() };
+        let manifest = ModManifest { format: 1, mod_meta: mm, components: vec![comp] };
+        fs::write(bundle_root.join("gore-mod.json"), serde_json::to_vec(&manifest).unwrap()).unwrap();
+
+        // Import the wrapper root (`src`) so the bundle is nested two dirs deep.
+        let meta = import(&lib, &tmp.path().join("src")).unwrap();
+        assert_eq!(meta.kind, ModKind::Goremod);
+        assert_eq!(meta.name, "Nested Audio");
+
+        // The stored AudioPatch rel is bundle-root-relative (`audio`), not `Wrap/Sub/audio`.
+        let rels: Vec<&str> = meta
+            .components
+            .iter()
+            .filter_map(|c| match c {
+                ComponentInfo::AudioPatch { rel, .. } => Some(rel.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(rels, vec!["audio"], "audio rel must be re-rooted: {:?}", meta.components);
+
+        // And apply's read path resolves: <entry>/<rel>/manifest.json and the referenced wav exist.
+        let entry = lib.join(&meta.id);
+        assert!(entry.join("audio").join("manifest.json").is_file());
+        assert!(entry.join("audio").join("0.wav").is_file(), "payload readable at bundle-root rel");
+        assert!(!entry.join("Wrap").exists(), "wrapper dropped");
     }
 
     /// [import 4] Zip entries that would escape the staging dir (`..`) abort the import,
