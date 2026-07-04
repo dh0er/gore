@@ -41,8 +41,6 @@ pub enum ConflictKind {
     ScriptModule,
     /// Wholesale live-file replacement (`"lcache"` / `"bank:<name>"` / `"script_cache"`).
     RawFile,
-    /// Two UE4SS script mods deploying under the same `Mods/<name>` dir.
-    Ue4ssDirName,
 }
 
 /// How bad an overlap is.
@@ -87,9 +85,10 @@ pub fn analyze(mods: &[&ModEntryMeta], loadout: &Loadout) -> Vec<Conflict> {
                         note(&mut buckets, ConflictKind::Asset, norm_asset(t), Severity::Soft, &m.id);
                     }
                 }
-                ComponentInfo::Ue4ssLua { name, targets, opaque, .. } => {
-                    // Same dir name = the deploys overwrite each other, regardless of content.
-                    note(&mut buckets, ConflictKind::Ue4ssDirName, name.clone(), Severity::Hard, &m.id);
+                ComponentInfo::Ue4ssLua { targets, opaque, .. } => {
+                    // No dir-name conflict: manager apply deploys each mod to its OWN
+                    // `gm{idx:03}_{name}` dir, so two mods sharing a script name never overwrite
+                    // each other. Only their CDO targets (Class.Field) can genuinely clash.
                     // Opaque scripts have no trustworthy target list; they get an info badge
                     // below instead of participating in CDO overlap.
                     if !opaque {
@@ -427,15 +426,15 @@ mod tests {
         assert!(out.is_empty(), "different bank must not conflict: {out:?}");
     }
 
+    /// Two UE4SS mods sharing a script `name` must NOT conflict: apply deploys each to its own
+    /// `gm{idx:03}_{name}` dir, so there is no real dir-name clash (regression against a former
+    /// false hard conflict).
     #[test]
-    fn ue4ss_same_name_hard() {
+    fn ue4ss_same_name_no_conflict() {
         let a = meta("mod-a", vec![lua("CoolMod", &[], false)]);
         let b = meta("mod-b", vec![lua("CoolMod", &[], false)]);
         let out = analyze(&[&a, &b], &loadout_of(&[("mod-a", true), ("mod-b", true)]));
-        assert_eq!(
-            out,
-            vec![conflict(ConflictKind::Ue4ssDirName, "CoolMod", &["mod-a", "mod-b"], Severity::Hard)]
-        );
+        assert!(out.is_empty(), "same ue4ss name must not conflict: {out:?}");
     }
 
     /// Each enabled mod with any opaque UE4SS script gets exactly ONE single-mod info badge,
@@ -475,7 +474,8 @@ mod tests {
                 conflict(ConflictKind::Loc, "a_early|de", &["mod-a", "mod-b"], Severity::Soft),
                 conflict(ConflictKind::Loc, "z_late|de", &["mod-a", "mod-b"], Severity::Soft),
                 conflict(ConflictKind::RawFile, "lcache", &["mod-a", "mod-b"], Severity::Hard),
-                conflict(ConflictKind::Ue4ssDirName, "SharedDir", &["mod-a", "mod-b"], Severity::Hard),
+                // The shared-name `lua("SharedDir", …)` on both mods yields NO conflict (distinct
+                // deploy dirs), so it does not appear here.
             ]
         );
         // Library slice order must not matter.

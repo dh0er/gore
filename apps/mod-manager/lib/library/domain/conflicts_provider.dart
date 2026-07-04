@@ -6,11 +6,18 @@ import 'models.dart';
 
 /// Conflicts across the enabled mods of the current loadout.
 ///
-/// Re-runs whenever the library/loadout changes (it watches [libraryProvider]),
-/// so toggling or reordering a mod re-analyzes automatically.
+/// Re-runs when the loadout's ENTRIES change, so toggling or reordering a mod
+/// re-analyzes automatically.
 final conflictsProvider = FutureProvider<List<ConflictView>>((ref) {
-  // Re-analyze whenever the loadout changes.
-  ref.watch(libraryProvider);
+  // Key on the entries (id + enabled), NOT the whole LibraryState: a mutation
+  // flips LibraryState.busy at its start while it persists the new loadout via
+  // mgr_set_loadout asynchronously. Re-analyzing on that busy flip would read
+  // the still-stale on-disk loadout. The notifier only updates state.loadout
+  // AFTER the persist lands, so keying on the entries defers the analyze to a
+  // point where mgr_analyze reads the already-written loadout.
+  ref.watch(libraryProvider.select(
+    (s) => [for (final e in s.loadout.entries) '${e.id}:${e.enabled}'].join(','),
+  ));
   return ref.watch(mgrFfiProvider).analyze();
 });
 
