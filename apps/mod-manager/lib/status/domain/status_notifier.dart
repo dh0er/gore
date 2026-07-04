@@ -39,9 +39,10 @@ class StatusState {
     bool? studioActive,
     bool clearError = false,
     bool clearReport = false,
+    bool clearStatus = false,
   }) {
     return StatusState(
-      status: status ?? this.status,
+      status: clearStatus ? null : status ?? this.status,
       busy: busy ?? this.busy,
       error: clearError ? null : error ?? this.error,
       lastReport: clearReport ? null : lastReport ?? this.lastReport,
@@ -65,7 +66,9 @@ class StatusNotifier extends StateNotifier<StatusState> {
   /// the FFI.
   Future<void> refresh(String? gameRoot) async {
     if (gameRoot == null) {
-      state = state.copyWith(error: noGamePath);
+      // Drop any prior status too, so the chip can't keep showing a stale
+      // "In sync" while the banner asks the user to set the game path.
+      state = state.copyWith(error: noGamePath, clearStatus: true);
       return;
     }
     await _run(() async {
@@ -95,6 +98,15 @@ class StatusNotifier extends StateNotifier<StatusState> {
     } on MgrFfiException catch (e) {
       if (e.code == 'STUDIO_DEPLOY_ACTIVE') {
         state = state.copyWith(studioActive: true, error: e.message);
+        // The install really has a studio deploy — re-query so `status` reflects
+        // StudioDeployActive (drives the chip + disables Apply) instead of a
+        // stale e.g. changes_pending that would keep Apply enabled.
+        try {
+          final status = await _mgr.status(gameRoot);
+          state = state.copyWith(status: status);
+        } on MgrFfiException {
+          // Best-effort; the studioActive flag still gates Apply.
+        }
       } else {
         state = state.copyWith(error: e.message);
       }

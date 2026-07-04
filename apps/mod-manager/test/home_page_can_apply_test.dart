@@ -30,74 +30,87 @@ void main() {
     test('nothing_deployed + >=1 enabled mod + game path set -> ENABLED', () {
       // The regression: the first-ever deploy must be reachable.
       expect(
-        canApply(_status('nothing_deployed'), oneEnabled, true, false),
+        canApply(_status('nothing_deployed'), oneEnabled, true, false, false),
         isTrue,
       );
     });
 
     test('nothing_deployed + 0 enabled mods -> DISABLED', () {
       expect(
-        canApply(_status('nothing_deployed'), oneDisabled, true, false),
+        canApply(_status('nothing_deployed'), oneDisabled, true, false, false),
         isFalse,
       );
       expect(
-        canApply(_status('nothing_deployed'), empty, true, false),
+        canApply(_status('nothing_deployed'), empty, true, false, false),
         isFalse,
       );
     });
 
     test('in_sync -> DISABLED even with enabled mods', () {
-      expect(canApply(_status('in_sync'), oneEnabled, true, false), isFalse);
+      expect(
+        canApply(_status('in_sync'), oneEnabled, true, false, false),
+        isFalse,
+      );
     });
 
     test('changes_pending -> ENABLED', () {
       expect(
-        canApply(_status('changes_pending'), oneEnabled, true, false),
+        canApply(_status('changes_pending'), oneEnabled, true, false, false),
         isTrue,
       );
       // Target-vs-deployed drift doesn't hinge on the local enabled count.
       expect(
-        canApply(_status('changes_pending'), empty, true, false),
+        canApply(_status('changes_pending'), empty, true, false, false),
         isTrue,
       );
     });
 
     test('game_updated -> ENABLED', () {
       expect(
-        canApply(_status('game_updated'), oneEnabled, true, false),
+        canApply(_status('game_updated'), oneEnabled, true, false, false),
         isTrue,
       );
     });
 
     test('studio_deploy_active -> DISABLED (take-over path, not Apply)', () {
       expect(
-        canApply(_status('studio_deploy_active'), oneEnabled, true, false),
+        canApply(
+            _status('studio_deploy_active'), oneEnabled, true, false, false),
+        isFalse,
+      );
+    });
+
+    test('studioActive flag -> DISABLED even when status is ChangesPending', () {
+      // A prior apply was blocked by an active studio deploy; the status may not
+      // have caught up (e.g. still changes_pending), but Apply must stay off.
+      expect(
+        canApply(_status('changes_pending'), oneEnabled, true, false, true),
         isFalse,
       );
     });
 
     test('null status -> DISABLED', () {
-      expect(canApply(null, oneEnabled, true, false), isFalse);
+      expect(canApply(null, oneEnabled, true, false, false), isFalse);
     });
 
     test('no game path -> DISABLED regardless of status/loadout', () {
       expect(
-        canApply(_status('changes_pending'), oneEnabled, false, false),
+        canApply(_status('changes_pending'), oneEnabled, false, false, false),
         isFalse,
       );
       expect(
-        canApply(_status('nothing_deployed'), oneEnabled, false, false),
+        canApply(_status('nothing_deployed'), oneEnabled, false, false, false),
         isFalse,
       );
     });
 
     test('busy -> DISABLED regardless of status/loadout', () {
       expect(
-        canApply(_status('changes_pending'), oneEnabled, true, true),
+        canApply(_status('changes_pending'), oneEnabled, true, true, false),
         isFalse,
       );
       expect(
-        canApply(_status('nothing_deployed'), oneEnabled, true, true),
+        canApply(_status('nothing_deployed'), oneEnabled, true, true, false),
         isFalse,
       );
     });
@@ -108,7 +121,7 @@ void main() {
       // on-disk loadout. status.busy is false here — only library.busy blocks.
       final busyLibrary = _library([('mod-a', true)]).copyWith(busy: true);
       expect(
-        canApply(_status('changes_pending'), busyLibrary, true, false),
+        canApply(_status('changes_pending'), busyLibrary, true, false, false),
         isFalse,
       );
     });

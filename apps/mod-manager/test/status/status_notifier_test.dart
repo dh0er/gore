@@ -77,6 +77,25 @@ void main() {
       expect(n.state.studioActive, isFalse);
       expect(n.state.status, isA<ManagerStatusNothingDeployed>());
     });
+
+    test('a null-root refresh clears a previously shown status', () async {
+      final fake = FakeGoreCoreFfiService(
+        responses: {
+          'mgr_status': {
+            'ok': true,
+            'status': {'state': 'in_sync', 'loadout': []},
+          },
+        },
+      );
+      final n = _notifier(fake);
+      await n.refresh('C:/game');
+      expect(n.state.status, isA<ManagerStatusInSync>());
+      // Clearing/never-setting the path must drop the stale chip, not keep
+      // showing "In sync" while the banner asks for a game path.
+      await n.refresh(null);
+      expect(n.state.status, isNull);
+      expect(n.state.error, StatusNotifier.noGamePath);
+    });
   });
 
   group('StatusNotifier.apply', () {
@@ -111,7 +130,8 @@ void main() {
       expect(n.state.busy, isFalse);
     });
 
-    test('STUDIO_DEPLOY_ACTIVE sets the studioActive flag', () async {
+    test('STUDIO_DEPLOY_ACTIVE sets the flag and re-queries studio status',
+        () async {
       final fake = FakeGoreCoreFfiService(
         responses: {
           'mgr_apply': {
@@ -121,12 +141,19 @@ void main() {
               'message': 'undeploy the studio mod first',
             },
           },
+          // The blocked apply re-queries status so the chip + Apply gating
+          // reflect the studio deploy instead of a stale changes_pending.
+          'mgr_status': {
+            'ok': true,
+            'status': {'state': 'studio_deploy_active', 'mod_name': 'Solo'},
+          },
         },
       );
       final n = _notifier(fake);
       await n.apply('C:/game');
       expect(n.state.studioActive, isTrue);
       expect(n.state.error, contains('studio mod'));
+      expect(n.state.status, isA<ManagerStatusStudioDeployActive>());
       expect(n.state.busy, isFalse);
     });
 

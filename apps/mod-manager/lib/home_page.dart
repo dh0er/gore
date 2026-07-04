@@ -262,6 +262,7 @@ class _ModsTab extends ConsumerWidget {
       library,
       gameRoot != null,
       status.busy,
+      status.studioActive,
     );
 
     return Column(
@@ -388,6 +389,9 @@ class _ModsTab extends ConsumerWidget {
 ///  * enabled for [ManagerStatusNothingDeployed] only when the loadout has at
 ///    least one enabled mod (there is something to deploy) — this is what makes
 ///    the first-ever deploy, and the post-studio-take-over deploy, reachable;
+///  * disabled while [studioActive] — a prior apply was blocked by an active
+///    studio deployment; every apply fails until it's taken over, and the
+///    status may not have caught up yet (that path shows take-over, not Apply);
 ///  * disabled otherwise: [ManagerStatusInSync] (nothing changed),
 ///    [ManagerStatusStudioDeployActive] (that path shows take-over, not Apply),
 ///    an unknown/null status, or NothingDeployed with zero enabled mods.
@@ -396,8 +400,9 @@ bool canApply(
   LibraryState library,
   bool gameRootSet,
   bool busy,
+  bool studioActive,
 ) {
-  if (!gameRootSet || busy || library.busy) return false;
+  if (!gameRootSet || busy || library.busy || studioActive) return false;
   return switch (status) {
     ManagerStatusChangesPending() => true,
     ManagerStatusGameUpdated() => true,
