@@ -12,6 +12,7 @@ import 'package:goresave/features/editor/domain/npc_actors_page.dart';
 import 'package:goresave/features/editor/domain/npc_attributes.dart';
 import 'package:goresave/features/editor/domain/pending_edits.dart';
 import 'package:goresave/features/editor/domain/progression_models.dart';
+import 'package:goresave/features/editor/domain/skills_models.dart';
 import 'package:goresave/utils/default_paths.dart';
 import 'package:path/path.dart' as p;
 import 'package:state_notifier/state_notifier.dart';
@@ -1275,6 +1276,28 @@ class EditorNotifier extends StateNotifier<EditorState> {
       if (offset >= result.total || result.results.isEmpty) break;
     }
     return null;
+  }
+
+  /// Load the hero's skills (`private.skills.list`): every learned skill plus
+  /// the full learnable roster, with per-skill tier options. Returns a result
+  /// carrying an inline [SkillsResult.error] on failure instead of throwing.
+  Future<SkillsResult> loadSkills({String actor = 'Hero'}) async {
+    final path = state.selectedPath;
+    if (path == null) {
+      return const SkillsResult(error: 'No save selected.');
+    }
+    try {
+      final response = await _execute(
+        'private.skills.list',
+        payload: {'path': path, 'actor': actor},
+      );
+      if (response['ok'] != true) {
+        return SkillsResult(error: _errorMessage(response));
+      }
+      return SkillsResult.fromJson((response['data'] as Map).cast<String, Object?>());
+    } catch (error) {
+      return SkillsResult(error: 'Skills load failed: $error');
+    }
   }
 
   /// Run one progression section query. Returns the raw data map, or null

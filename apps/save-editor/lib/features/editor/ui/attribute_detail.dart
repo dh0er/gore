@@ -7,6 +7,7 @@ import 'package:goresave/features/editor/domain/pending_edits.dart';
 import 'package:goresave/features/editor/ui/actor_detail_header.dart';
 import 'package:goresave/features/editor/ui/hero_stats_card.dart';
 import 'package:goresave/features/editor/ui/npc_attributes_panel.dart';
+import 'package:goresave/features/editor/ui/skills_panel.dart';
 import 'package:goresave/l10n/app_localizations.dart';
 import 'package:goresave/loc/loc_catalog_provider.dart';
 import 'package:goresave/providers/data_providers.dart';
@@ -320,6 +321,14 @@ class _PrivatePanel extends StatelessWidget {
                 ? _legacyAttributesSection()
                 : null,
             transformCard: _transformSection(),
+            // The hero's learned skills live in the "Talente" group, rendered
+            // in the same row style and wired to the shared Save button via its
+            // own 'skills' pending-registry entry.
+            skillsSection: HeroSkillsSection(
+              notifier: notifier,
+              editable: editable,
+              reloadKey: inspection,
+            ),
           ),
         );
       }

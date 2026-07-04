@@ -32,6 +32,7 @@ class HeroStatsCard extends StatefulWidget {
     this.initialPending,
     this.fallback,
     this.transformCard,
+    this.skillsSection,
   });
 
   final Future<HeroAttributesResult> Function() load;
@@ -61,6 +62,12 @@ class HeroStatsCard extends StatefulWidget {
   /// When provided, a "Hero transform" entry is prepended to the sidebar and
   /// this widget is shown in the detail area for that entry.
   final Widget? transformCard;
+
+  /// When provided, the learned-skills editor is appended to the "Talente"
+  /// (thieving) group's detail — the hero's GameplayEffect skills rendered in
+  /// the same row style as attributes. Makes the Talente entry appear even when
+  /// the save has no thieving attribute rows.
+  final Widget? skillsSection;
 
   @override
   State<HeroStatsCard> createState() => _HeroStatsCardState();
@@ -276,6 +283,14 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
     for (final entry in _SidebarEntry.values) {
       if (entry == _SidebarEntry.transform) {
         if (widget.transformCard != null) sidebarEntries.add(entry);
+      } else if (entry == _SidebarEntry.thieving) {
+        // "Talente": show whenever there are thieving attributes OR a skills
+        // editor to host, so a hero with no thieving attribute rows still gets
+        // the skills entry.
+        if (byGroup[HeroAttributeGroup.thieving]?.isNotEmpty == true ||
+            widget.skillsSection != null) {
+          sidebarEntries.add(entry);
+        }
       } else {
         final group = _entryToGroup(entry);
         if (group != null && byGroup[group]?.isNotEmpty == true) {
@@ -322,9 +337,20 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
       // card, no duplicate group title).
       final group = _entryToGroup(entry)!;
       final attributes = byGroup[group] ?? const [];
+      // The "Talente" (thieving) pane also hosts the learned-skills editor,
+      // appended below any thieving attribute rows.
+      final skills =
+          entry == _SidebarEntry.thieving ? widget.skillsSection : null;
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [?errorRow, for (final a in attributes) _row(a)],
+        children: [
+          ?errorRow,
+          for (final a in attributes) _row(a),
+          if (skills != null) ...[
+            if (attributes.isNotEmpty) const Divider(height: 24),
+            skills,
+          ],
+        ],
       );
     }
 
@@ -368,7 +394,7 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
       _SidebarEntry.core => l10n.heroGroupMainStats,
       _SidebarEntry.combat => l10n.heroGroupCombatSkills,
       _SidebarEntry.resistances => l10n.heroGroupResistances,
-      _SidebarEntry.thieving => l10n.heroGroupThieving,
+      _SidebarEntry.thieving => l10n.heroGroupSkills,
       _SidebarEntry.advanced => l10n.heroGroupAdvanced,
     };
   }
@@ -379,7 +405,7 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
       _SidebarEntry.core => Icons.favorite_border,
       _SidebarEntry.combat => Icons.shield_outlined,
       _SidebarEntry.resistances => Icons.security_outlined,
-      _SidebarEntry.thieving => Icons.key_outlined,
+      _SidebarEntry.thieving => Icons.military_tech_outlined,
       _SidebarEntry.advanced => Icons.tune,
     };
   }

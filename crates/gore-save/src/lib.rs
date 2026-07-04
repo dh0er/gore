@@ -3,6 +3,7 @@ mod codec_calibration;
 pub mod factions;
 pub mod npc;
 pub mod properties;
+pub mod skills;
 
 use base64::{Engine as _, engine::general_purpose};
 use serde::{Deserialize, Serialize};
@@ -417,6 +418,12 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
             let codec_backend = Some(&kraken_backend as &dyn codec_backend::CodecBackend);
             query_progression(&path, &payload, codec_backend)
         }
+        "private.skills.list" => {
+            let path = required_path(&payload)?;
+            let kraken_backend = codec_backend::KrakenBackend::default();
+            let codec_backend = Some(&kraken_backend as &dyn codec_backend::CodecBackend);
+            skills_list_command(&path, &payload, codec_backend)
+        }
         "private.npc.list" => {
             let path = required_path(&payload)?;
             let kraken_backend = codec_backend::KrakenBackend::default();
@@ -425,8 +432,8 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
         }
         "private.characters.list" => {
             let path = required_path(&payload)?;
-            let ooz_backend = codec_backend::OozKrakenBackend::default();
-            let codec_backend = Some(&ooz_backend as &dyn codec_backend::CodecBackend);
+            let kraken_backend = codec_backend::KrakenBackend::default();
+            let codec_backend = Some(&kraken_backend as &dyn codec_backend::CodecBackend);
             characters_list_command(&path, &payload, codec_backend)
         }
         "private.npc.attributes" => {
@@ -2906,6 +2913,10 @@ fn inspect_private_payload(
                     // map; needs only a decodable typed parse (no inventory
                     // main_container gating).
                     "private.knowledge.addCharacter",
+                    // Hero skill edits (retarget / unlearn / learn a
+                    // GameplayEffect in the hero's ActiveEffects array); a
+                    // decodable typed parse is all it needs.
+                    "private.skills.set",
                 ]);
                 if any_unforgiven {
                     writable.push("private.factions.forgive");
@@ -3343,6 +3354,35 @@ fn search_typed_properties(
 /// "knowledge" (per-NPC dialog knowledge sets), "events" (per-character
 /// memorized event arrays). Uses the shared decode cache like the typed
 /// property search.
+/// `private.skills.list`: the hero's learned skills plus the full learnable
+/// roster, with per-skill tier options. Decodes through the same cached path as
+/// [`query_progression`]. Payload: `{ path, actor?: string (default "Hero") }`.
+fn skills_list_command(
+    path: &Path,
+    payload: &Value,
+    backend: Option<&dyn codec_backend::CodecBackend>,
+) -> Result<Value, CoreError> {
+    let backend = backend.ok_or_else(|| {
+        CoreError::Codec("skill queries require a working codec backend".to_string())
+    })?;
+    let actor = payload
+        .get("actor")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(skills::HERO);
+    let data = fs::read(path)?;
+    if !data.starts_with(b"GSAV") {
+        return Err(CoreError::UnsupportedEdit(
+            "skill queries are only available for GSAV files".to_string(),
+        ));
+    }
+    let parts = split_gsav(&data)?;
+    let stream = parse_compressed_stream(&data, 13 + parts.public_payload.len())?;
+    let decoded = decoded_private_payload_cached(path, &data, &stream, backend)?;
+    let root = properties::parse_private_root(&decoded)?;
+    Ok(skills::list_skills(&root, actor))
+}
+
 fn query_progression(
     path: &Path,
     payload: &Value,
@@ -3675,7 +3715,7 @@ fn npc_inventory_command(
 
 /// Property lookup inside a struct-valued map entry (tagged property list or
 /// InstancedStruct wrapper).
-fn struct_member<'a>(
+pub(crate) fn struct_member<'a>(
     value: &'a properties::PropertyValue,
     name: &str,
 ) -> Option<&'a properties::PropertyValue> {
@@ -3689,7 +3729,7 @@ fn struct_member<'a>(
     props.iter().find(|p| p.name == name).map(|p| &p.value)
 }
 
-fn map_key_string(key: &properties::PropertyValue) -> Option<&str> {
+pub(crate) fn map_key_string(key: &properties::PropertyValue) -> Option<&str> {
     match key {
         properties::PropertyValue::Str(s)
         | properties::PropertyValue::Name(s)
@@ -5000,6 +5040,13 @@ fn apply_private_edits(
                         .to_string();
                     Ok(PrivateEdit::KnowledgeAddCharacter(name))
                 }
+                // Value-addressed skill edit (resolves its target by skill base,
+                // never a stale index, and re-parses per edit), so a batch of
+                // them applies safely even when some are structural
+                // (learn/unlearn) — unlike the generic index-addressed array ops.
+                "private.skills.set" => {
+                    skills::SkillSetEdit::from_json(&edit.value).map(PrivateEdit::SkillSet)
+                }
                 other => Err(CoreError::UnsupportedEdit(format!(
                     "{other} is not writable in this build"
                 ))),
@@ -5186,6 +5233,7 @@ enum PrivateEdit {
     NpcRevive(PrivateNpcReviveEdit),
     KnowledgeAddCharacter(String),
     FactionsForgive(PrivateFactionsForgiveEdit),
+    SkillSet(skills::SkillSetEdit),
 }
 
 /// `private.factions.forgive` edit: `value = { guild: String }`. Forgives every
@@ -5939,6 +5987,7 @@ fn apply_private_edit_to_payload(
         PrivateEdit::TypedContainer(edit) => {
             apply_private_typed_container_edit_to_payload(payload, edit)
         }
+        PrivateEdit::SkillSet(edit) => skills::apply_skill_set(payload, edit),
         PrivateEdit::NpcRevive(edit) => npc::apply_revive(payload, &edit.id),
         PrivateEdit::KnowledgeAddCharacter(name) => {
             apply_private_knowledge_add_character_to_payload(payload, name)
