@@ -45,7 +45,27 @@ class _HeroSkillsSectionState extends ConsumerState<HeroSkillsSection> {
   @override
   void initState() {
     super.initState();
+    // Re-seed drafts from the registry's 'skills' entry so switching away (e.g.
+    // to an NPC) and back to the Player on the SAME inspection resumes from the
+    // queued skill edits the shared Save button will write — instead of showing
+    // on-disk values while the registry still holds (and applies) them.
+    _seedFromPending();
     _load();
+  }
+
+  /// Reconstruct [_pending] (base -> target tier) from the registry's queued
+  /// `private.skills.set` edits. Inverse of [_pushPending].
+  void _seedFromPending() {
+    final pending = widget.notifier.pendingEditFor('skills');
+    if (pending == null) return;
+    for (final edit in pending.edits) {
+      if (edit['path'] != 'private.skills.set') continue;
+      final value = edit['value'];
+      if (value is! Map) continue;
+      final base = value['base'];
+      final tier = value['tier'];
+      if (base is String && tier is String) _pending[base] = tier;
+    }
   }
 
   @override

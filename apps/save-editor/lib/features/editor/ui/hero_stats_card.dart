@@ -249,13 +249,21 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
               const SizedBox(height: 16),
               widget.transformCard!,
             ],
+            // Skills load independently of the typed attribute search, so keep
+            // them visible even when attributes fell back to the legacy editor.
+            if (widget.skillsSection != null) ...[
+              const SizedBox(height: 16),
+              widget.skillsSection!,
+            ],
           ],
         ),
       );
     }
 
-    if ((_loadFailed || _attributes.isEmpty) && widget.transformCard != null) {
-      // No stats and no fallback — just show transform (scrolling, see above).
+    if ((_loadFailed || _attributes.isEmpty) &&
+        (widget.transformCard != null || widget.skillsSection != null)) {
+      // No stats and no fallback — just show transform and/or skills (which
+      // load independently of the typed attribute search).
       return SingleChildScrollView(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -268,7 +276,11 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
                   style: TextStyle(color: theme.colorScheme.error),
                 ),
               ),
-            widget.transformCard!,
+            if (widget.transformCard != null) widget.transformCard!,
+            if (widget.skillsSection != null) ...[
+              if (widget.transformCard != null) const SizedBox(height: 16),
+              widget.skillsSection!,
+            ],
           ],
         ),
       );
