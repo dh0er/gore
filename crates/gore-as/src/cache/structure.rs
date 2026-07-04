@@ -465,7 +465,12 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
                         if a.len() > w { a.drain(..a.len() - w); }
                     }
                     maybe_reverse_args(&mut a, params, refs);
-                    return Some(format!("{out} = {f}({})", render_args(&a, params, refs)));
+                    // Include the receiver — this is a METHOD RVO struct-return (has_recv popped
+                    // `recv`); omitting it emitted `out = Iterator()` (495×) / `out =
+                    // GetActorLocation()` instead of `out = recv.Iterator()` -> "No matching
+                    // signatures". `this`-receivers render `this.Method()` (legal, matches the
+                    // normal method-render path below).
+                    return Some(format!("{out} = {}.{f}({})", recv.s, render_args(&a, params, refs)));
                 }
             }
         }
