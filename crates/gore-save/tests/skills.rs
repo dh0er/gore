@@ -79,15 +79,23 @@ fn skills_batch_learn_unlearn_retier_roundtrips() {
     let unlearn = ["Melee_OneHanded", "Melee_TwoHanded", "Melee_Fists"]
         .into_iter()
         .find(|b| skill(&before, b).is_some_and(|s| s["learned"] == json!(true)));
-    // Pick any roster (unlearned) skill to learn.
-    let learn = before["skills"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|s| s["learned"] == json!(false))
-        .map(|s| s["base"].as_str().unwrap().to_string());
+    // Pick any roster (unlearned) skill to learn, and a tier that is valid for
+    // it — the first non-Untrained option value (a binary skill's is "Learned",
+    // a ladder/hunting/circle skill's is a real tier). Hardcoding "Learned"
+    // would fail `SkillSetEdit` validation for a non-binary first roster entry.
+    let learn = before["skills"].as_array().unwrap().iter().find_map(|s| {
+        if s["learned"] != json!(false) {
+            return None;
+        }
+        let tier = s["options"]
+            .as_array()?
+            .iter()
+            .filter_map(|o| o["value"].as_str())
+            .find(|v| *v != "Untrained")?;
+        Some((s["base"].as_str().unwrap().to_string(), tier.to_string()))
+    });
 
-    let (Some(retier), Some(unlearn), Some(learn)) = (retier, unlearn, learn) else {
+    let (Some(retier), Some(unlearn), Some((learn, learn_tier))) = (retier, unlearn, learn) else {
         eprintln!("save lacks the skill mix this test needs; skipping asserts");
         return;
     };
@@ -103,7 +111,7 @@ fn skills_batch_learn_unlearn_retier_roundtrips() {
             "outputPath": out,
             "backup": false,
             "edits": [
-                { "path": "private.skills.set", "value": { "base": learn, "tier": "Learned" } },
+                { "path": "private.skills.set", "value": { "base": learn, "tier": learn_tier } },
                 { "path": "private.skills.set", "value": { "base": unlearn, "tier": "Untrained" } },
                 { "path": "private.skills.set", "value": { "base": retier, "tier": "Trained" } },
             ],
