@@ -596,10 +596,22 @@ fn mgr_remove(payload: Value) -> Value {
         return err("BAD_REQUEST", "missing 'id'");
     };
     let lib = mgr_library_dir(&payload);
-    match gore_mod::mgr::import::remove(&lib, id) {
-        Ok(removed) => json!({"ok": true, "removed": removed}),
-        Err(e) => err("BAD_REQUEST", e.to_string()),
+    let removed = match gore_mod::mgr::import::remove(&lib, id) {
+        Ok(removed) => removed,
+        Err(e) => return err("BAD_REQUEST", e.to_string()),
+    };
+    // Keep the persisted loadout in sync (mirror `gore mgr remove`): a removed mod must not
+    // linger as an enabled loadout entry, or a later `mgr_apply` — which reads the on-disk
+    // loadout, not the GUI's in-memory reconcile — fails loading the deleted mod's metadata.
+    let lo_path = mgr_loadout_path(&payload);
+    if let Ok(mut lo) = gore_mod::mgr::loadout::load(&lo_path) {
+        let before = lo.entries.len();
+        lo.entries.retain(|e| e.id != id);
+        if lo.entries.len() != before {
+            let _ = gore_mod::mgr::loadout::save(&lo_path, &lo);
+        }
     }
+    json!({"ok": true, "removed": removed})
 }
 
 /// `{loadout:Loadout, loadout_path?}` → `{ok}` — persist the loadout.
@@ -879,6 +891,44 @@ mod tests {
         assert_eq!(entries[0]["enabled"], true);
         assert_eq!(entries[1]["id"], "mod-b");
         assert_eq!(entries[1]["enabled"], false);
+    }
+
+    // Removing a mod must also drop it from the persisted loadout (mirror `gore mgr remove`), so a
+    // later mgr_apply reading the on-disk loadout does not fail on the deleted mod's metadata.
+    #[test]
+    fn mgr_remove_drops_loadout_entry() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("library");
+        let lo = tmp.path().join("loadout.json");
+        std::fs::create_dir_all(&lib).unwrap();
+        mgr_call(
+            "mgr_set_loadout",
+            json!({
+                "loadout_path": lo.display().to_string(),
+                "loadout": {"format": 1, "entries": [
+                    {"id": "mod-a", "enabled": true},
+                    {"id": "mod-b", "enabled": true}
+                ]}
+            }),
+        );
+
+        let rem = mgr_call(
+            "mgr_remove",
+            json!({
+                "id": "mod-a",
+                "library_dir": lib.display().to_string(),
+                "loadout_path": lo.display().to_string()
+            }),
+        );
+        assert_eq!(rem["ok"], true, "resp: {rem}");
+
+        let list = mgr_call(
+            "mgr_library_list",
+            json!({"library_dir": lib.display().to_string(), "loadout_path": lo.display().to_string()}),
+        );
+        let entries = list["loadout"]["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 1, "removed id must be gone from loadout: {list}");
+        assert_eq!(entries[0]["id"], "mod-b");
     }
 
     #[test]

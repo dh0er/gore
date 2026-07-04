@@ -27,6 +27,7 @@
   "refreshAction": "刷新",
   "conflictsTitle": "冲突 ({count})",
   "conflictWinner": "生效",
+  "noConflicts": "无冲突。",
   "componentsTitle": "组件",
   "targetsMore": "还有 {count} 项",
   "removeModAction": "移除",

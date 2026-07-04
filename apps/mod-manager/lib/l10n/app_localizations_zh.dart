@@ -92,6 +92,9 @@ class AppLocalizationsZh extends AppLocalizations {
   String get conflictWinner => '生效';
 
   @override
+  String get noConflicts => '无冲突。';
+
+  @override
   String get componentsTitle => '组件';
 
   @override
@@ -294,6 +297,9 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get conflictWinner => '生效';
+
+  @override
+  String get noConflicts => '无冲突。';
 
   @override
   String get componentsTitle => '组件';

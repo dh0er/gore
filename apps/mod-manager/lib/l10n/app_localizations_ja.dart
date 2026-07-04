@@ -93,6 +93,9 @@ class AppLocalizationsJa extends AppLocalizations {
   String get conflictWinner => '優先';
 
   @override
+  String get noConflicts => '競合はありません。';
+
+  @override
   String get componentsTitle => 'コンポーネント';
 
   @override

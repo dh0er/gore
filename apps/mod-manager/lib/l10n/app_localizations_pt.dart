@@ -94,6 +94,9 @@ class AppLocalizationsPt extends AppLocalizations {
   String get conflictWinner => 'vencedor';
 
   @override
+  String get noConflicts => 'Sem conflitos.';
+
+  @override
   String get componentsTitle => 'Componentes';
 
   @override
@@ -300,6 +303,9 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
 
   @override
   String get conflictWinner => 'vencedor';
+
+  @override
+  String get noConflicts => 'Sem conflitos.';
 
   @override
   String get componentsTitle => 'Componentes';

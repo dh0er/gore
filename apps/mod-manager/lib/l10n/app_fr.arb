@@ -27,6 +27,7 @@
   "refreshAction": "Actualiser",
   "conflictsTitle": "Conflits ({count})",
   "conflictWinner": "gagnant",
+  "noConflicts": "Aucun conflit.",
   "componentsTitle": "Composants",
   "targetsMore": "+{count} de plus",
   "removeModAction": "Retirer",

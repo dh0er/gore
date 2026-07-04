@@ -27,6 +27,7 @@
   "refreshAction": "更新",
   "conflictsTitle": "競合 ({count})",
   "conflictWinner": "優先",
+  "noConflicts": "競合はありません。",
   "componentsTitle": "コンポーネント",
   "targetsMore": "他 {count} 件",
   "removeModAction": "削除",

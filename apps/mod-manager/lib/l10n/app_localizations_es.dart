@@ -94,6 +94,9 @@ class AppLocalizationsEs extends AppLocalizations {
   String get conflictWinner => 'ganador';
 
   @override
+  String get noConflicts => 'Sin conflictos.';
+
+  @override
   String get componentsTitle => 'Componentes';
 
   @override

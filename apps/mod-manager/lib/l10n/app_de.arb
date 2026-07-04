@@ -27,6 +27,7 @@
   "refreshAction": "Aktualisieren",
   "conflictsTitle": "Konflikte ({count})",
   "conflictWinner": "Gewinner",
+  "noConflicts": "Keine Konflikte.",
   "componentsTitle": "Komponenten",
   "targetsMore": "+{count} weitere",
   "removeModAction": "Entfernen",

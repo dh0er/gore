@@ -39,7 +39,7 @@ class ConflictPanel extends ConsumerWidget {
           return Padding(
             padding: const EdgeInsets.all(16),
             child: Text(
-              l10n.statusInSync,
+              l10n.noConflicts,
               style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
               ),

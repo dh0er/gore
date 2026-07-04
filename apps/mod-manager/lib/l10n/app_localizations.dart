@@ -278,6 +278,12 @@ abstract class AppLocalizations {
   /// **'winner'**
   String get conflictWinner;
 
+  /// No description provided for @noConflicts.
+  ///
+  /// In en, this message translates to:
+  /// **'No conflicts.'**
+  String get noConflicts;
+
   /// No description provided for @componentsTitle.
   ///
   /// In en, this message translates to:

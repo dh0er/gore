@@ -27,6 +27,7 @@
   "refreshAction": "Обновить",
   "conflictsTitle": "Конфликты ({count})",
   "conflictWinner": "приоритет",
+  "noConflicts": "Нет конфликтов.",
   "componentsTitle": "Компоненты",
   "targetsMore": "+ещё {count}",
   "removeModAction": "Удалить",

@@ -27,6 +27,7 @@
   "refreshAction": "Odśwież",
   "conflictsTitle": "Konflikty ({count})",
   "conflictWinner": "zwycięzca",
+  "noConflicts": "Brak konfliktów.",
   "componentsTitle": "Składniki",
   "targetsMore": "+{count} więcej",
   "removeModAction": "Usuń",

@@ -94,6 +94,9 @@ class AppLocalizationsRu extends AppLocalizations {
   String get conflictWinner => 'приоритет';
 
   @override
+  String get noConflicts => 'Нет конфликтов.';
+
+  @override
   String get componentsTitle => 'Компоненты';
 
   @override
