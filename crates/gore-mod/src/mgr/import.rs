@@ -191,8 +191,12 @@ fn materialize(source: &Path, staging: &Path) -> crate::Result<()> {
         "utoc" | "ucas" | "pak" | "lcache" | "bank" | "cache" => {
             std::fs::copy(source, staging.join(file_name))
                 .map_err(crate::io(&format!("copying {}", source.display())))?;
-            // A container file only works as a set: pull the same-stem siblings along.
-            if ext == "utoc" || ext == "ucas" {
+            // A container file only works as a set: pull the same-stem siblings along. This runs
+            // for `.pak` too — importing the `.pak` member of an IoStore triplet (the common
+            // file-picker pick) must still materialize the `.utoc`/`.ucas`, or apply would deploy an
+            // incomplete, un-mountable container. A lone loose `_P.pak` simply has no siblings to
+            // pull, so it stays a loose pak.
+            if ext == "utoc" || ext == "ucas" || ext == "pak" {
                 for sib_ext in ["utoc", "ucas", "pak"] {
                     if sib_ext == ext {
                         continue;
@@ -917,6 +921,38 @@ mod tests {
             vec![ComponentInfo::LoosePak { rel: "foo_P.pak".into(), targets: vec![] }]
         );
         assert!(lib.join(&meta.id).join("foo_P.pak").is_file());
+    }
+
+    /// [import 5b] Importing the `.pak` MEMBER of an IoStore triplet (the common file-picker pick)
+    /// must pull its `.utoc`/`.ucas` siblings so the staged entry is the full triplet — otherwise
+    /// apply would deploy an incomplete, un-mountable container.
+    #[test]
+    fn import_pak_member_of_triplet_pulls_siblings() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("lib");
+        let dir = tmp.path().join("TripletSrc");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("zzz_foo_P.utoc"), b"junk").unwrap();
+        fs::write(dir.join("zzz_foo_P.ucas"), b"junk").unwrap();
+        fs::write(dir.join("zzz_foo_P.pak"), b"junk").unwrap();
+
+        // Pick the .pak, not the .utoc.
+        let meta = import(&lib, &dir.join("zzz_foo_P.pak")).unwrap();
+        assert_eq!(
+            meta.kind,
+            ModKind::ForeignTriplet,
+            "must detect the full triplet, not a loose pak: {:?}",
+            meta.components
+        );
+        assert_eq!(
+            meta.components,
+            vec![ComponentInfo::Triplet { rel_base: "zzz_foo_P".into(), targets: vec![] }]
+        );
+        // All three members were staged into the entry.
+        let entry = lib.join(&meta.id);
+        assert!(entry.join("zzz_foo_P.utoc").is_file());
+        assert!(entry.join("zzz_foo_P.ucas").is_file());
+        assert!(entry.join("zzz_foo_P.pak").is_file());
     }
 
     /// [import 6] A `.utoc` + sibling `.ucas` pair is ONE Triplet component (unparsable dummy

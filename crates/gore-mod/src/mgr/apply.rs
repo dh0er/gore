@@ -48,21 +48,25 @@ pub fn apply_loadout(
     library_dir: &Path,
     loadout: &Loadout,
 ) -> crate::Result<ApplyReport> {
+    // Absolutize like deploy()/undeploy() so every derived + persisted path is absolute. This MUST
+    // happen before reading the record: deploy/undeploy/status all key the record off `abs_root`, so
+    // reading it under the caller's raw (possibly symlinked/junction) `game_root` could miss an
+    // existing record — skipping the studio guard below and letting the later undeploy remove a
+    // studio deployment apply was supposed to refuse.
+    let abs_root = crate::abs_root(game_root);
+    let gp = crate::resolve_game_paths(&abs_root);
+
     // (1) Read the prior manager deployment (if any). A studio deployment is off-limits — replacing
     //     it would silently drop a hand-built mod. We KEEP `prev`: the plan below reads pristine
     //     bytes from its backups while that deployment is still live, and we only undeploy once the
     //     full (fallible) plan is built — so a bad/missing/undecodable mod fails the apply WITHOUT
     //     first wiping the working deployment (see the deferred undeploy before commit_plan).
-    let prev = crate::read_record(game_root);
+    let prev = crate::read_record(&abs_root);
     if let Some(p) = &prev {
         if p.owner != "manager" {
             return Err(ModError::Other(format!("STUDIO_DEPLOY_ACTIVE:{}", p.mod_name)));
         }
     }
-
-    // Absolutize like deploy()/undeploy() so every derived + persisted path is absolute.
-    let abs_root = crate::abs_root(game_root);
-    let gp = crate::resolve_game_paths(&abs_root);
 
     // (3) Load the enabled entries' metadata, remembering each one's 0-based slot among the
     //     ENABLED entries (drives per-mod `gm{idx:03}` naming / mount order).
