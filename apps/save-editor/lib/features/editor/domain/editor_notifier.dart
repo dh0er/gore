@@ -665,11 +665,25 @@ class EditorNotifier extends StateNotifier<EditorState> {
       'private.knowledge.addCharacter',
       'private.npc.revive',
     };
+    // A skill edit can learn/unlearn — splicing the hero's ActiveEffects array —
+    // and the core rejects a write that mixes it with an index-addressed edit
+    // (an All-Data edit whose path steps through `[i]`), since the splice shifts
+    // that index. Skill edits DO batch safely among themselves, so give all of
+    // them ONE write of their own, run LAST — after the fixed batch so any
+    // indexed peer resolves against the pre-splice layout first.
+    const skillPath = 'private.skills.set';
     final splicing = allEdits
         .where((k) => splicingPaths.contains(k.edit['path']))
         .toList();
+    final skillEdits = allEdits
+        .where((k) => k.edit['path'] == skillPath)
+        .toList();
     final fixedBatch = allEdits
-        .where((k) => !splicingPaths.contains(k.edit['path']))
+        .where(
+          (k) =>
+              !splicingPaths.contains(k.edit['path']) &&
+              k.edit['path'] != skillPath,
+        )
         .toList();
 
     // Build the worklist: ONE write for the fixed-size batch (if any) FIRST,
@@ -696,6 +710,14 @@ class EditorNotifier extends StateNotifier<EditorState> {
         ),
       for (final keyed in splicing)
         _SubWrite(edits: [keyed.edit], keys: {keyed.key}),
+      // All skill edits together, in their own trailing write: they batch safely
+      // among themselves but must not share a write with an index-addressed peer
+      // (see skillPath above).
+      if (skillEdits.isNotEmpty)
+        _SubWrite(
+          edits: [for (final keyed in skillEdits) keyed.edit],
+          keys: {for (final keyed in skillEdits) keyed.key},
+        ),
     ];
 
     final n = allEdits.length;
