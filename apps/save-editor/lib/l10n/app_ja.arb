@@ -11,6 +11,7 @@
   "tabAttribute": "属性",
   "heroGroupSkills": "スキル",
   "skillsNoneBody": "このキャラクターのスキルは見つかりませんでした。",
+  "skillsUnavailableBody": "このセーブデータではスキルを編集できません。主人公に変更できるエフェクトデータがありません。",
   "skillNotLearned": "未習得",
   "skillLearn": "習得する",
   "skillActionLearn": "習得",

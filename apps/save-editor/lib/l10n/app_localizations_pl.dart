@@ -42,6 +42,10 @@ class AppLocalizationsPl extends AppLocalizations {
   String get skillsNoneBody => 'Nie znaleziono umiejętności dla tej postaci.';
 
   @override
+  String get skillsUnavailableBody =>
+      'Umiejętności nie można edytować w tym zapisie — bohater nie ma danych efektów do zmiany.';
+
+  @override
   String get skillNotLearned => 'Nie nauczono';
 
   @override

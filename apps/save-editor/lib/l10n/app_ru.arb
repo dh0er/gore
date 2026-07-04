@@ -11,6 +11,7 @@
   "tabAttribute": "Атрибуты",
   "heroGroupSkills": "Навыки",
   "skillsNoneBody": "Для этого персонажа навыки не найдены.",
+  "skillsUnavailableBody": "Навыки нельзя изменить в этом сохранении — у героя нет данных эффектов для изменения.",
   "skillNotLearned": "Не изучен",
   "skillLearn": "Изучить",
   "skillActionLearn": "изучить",

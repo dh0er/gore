@@ -11,6 +11,7 @@
   "tabAttribute": "Attribute",
   "heroGroupSkills": "Talente",
   "skillsNoneBody": "Für diesen Charakter wurden keine Talente gefunden.",
+  "skillsUnavailableBody": "Talente lassen sich in diesem Spielstand nicht bearbeiten — der Held hat keine Effektdaten.",
   "skillNotLearned": "Nicht gelernt",
   "skillLearn": "Lernen",
   "skillActionLearn": "lernen",

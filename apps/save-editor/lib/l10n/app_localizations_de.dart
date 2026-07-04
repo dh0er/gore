@@ -43,6 +43,10 @@ class AppLocalizationsDe extends AppLocalizations {
       'Für diesen Charakter wurden keine Talente gefunden.';
 
   @override
+  String get skillsUnavailableBody =>
+      'Talente lassen sich in diesem Spielstand nicht bearbeiten — der Held hat keine Effektdaten.';
+
+  @override
   String get skillNotLearned => 'Nicht gelernt';
 
   @override

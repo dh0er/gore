@@ -142,8 +142,15 @@ class _HeroSkillsSectionState extends ConsumerState<HeroSkillsSection> {
     }
     // `found` is false when the hero has no ActiveEffects array to edit into —
     // `private.skills.set` would then fail, so never render the editable roster
-    // in that case (it lists every catalogued skill regardless of `found`).
-    if (result == null || !result.found || result.skills.isEmpty) {
+    // in that case (it lists every catalogued skill regardless of `found`). Use
+    // a distinct message: the roster is not missing, the edit target is.
+    if (result != null && !result.found) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Text(l10n.skillsUnavailableBody),
+      );
+    }
+    if (result == null || result.skills.isEmpty) {
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 8),
         child: Text(l10n.skillsNoneBody),

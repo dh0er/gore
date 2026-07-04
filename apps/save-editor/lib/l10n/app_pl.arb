@@ -11,6 +11,7 @@
   "tabAttribute": "Atrybuty",
   "heroGroupSkills": "Umiejętności",
   "skillsNoneBody": "Nie znaleziono umiejętności dla tej postaci.",
+  "skillsUnavailableBody": "Umiejętności nie można edytować w tym zapisie — bohater nie ma danych efektów do zmiany.",
   "skillNotLearned": "Nie nauczono",
   "skillLearn": "Naucz się",
   "skillActionLearn": "naucz się",

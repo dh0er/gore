@@ -11,6 +11,7 @@
   "tabAttribute": "属性",
   "heroGroupSkills": "技能",
   "skillsNoneBody": "未找到该角色的技能。",
+  "skillsUnavailableBody": "此存檔無法編輯技能——主角沒有可修改的效果資料。",
   "skillNotLearned": "未学习",
   "skillLearn": "学习",
   "skillActionLearn": "学习",

@@ -43,6 +43,10 @@ class AppLocalizationsPt extends AppLocalizations {
       'Não foram encontradas aptidões para esta personagem.';
 
   @override
+  String get skillsUnavailableBody =>
+      'As perícias não podem ser editadas neste save — o herói não tem dados de efeito para modificar.';
+
+  @override
   String get skillNotLearned => 'Não aprendida';
 
   @override
@@ -1343,6 +1347,10 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
   @override
   String get skillsNoneBody =>
       'Nenhuma habilidade encontrada para este personagem.';
+
+  @override
+  String get skillsUnavailableBody =>
+      'As habilidades não podem ser editadas neste save — o herói não tem dados de efeito para modificar.';
 
   @override
   String get skillNotLearned => 'Não aprendida';

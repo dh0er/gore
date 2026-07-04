@@ -11,6 +11,7 @@
   "tabAttribute": "Atributos",
   "heroGroupSkills": "Aptidões",
   "skillsNoneBody": "Não foram encontradas aptidões para esta personagem.",
+  "skillsUnavailableBody": "As perícias não podem ser editadas neste save — o herói não tem dados de efeito para modificar.",
   "skillNotLearned": "Não aprendida",
   "skillLearn": "Aprender",
   "skillActionLearn": "aprender",

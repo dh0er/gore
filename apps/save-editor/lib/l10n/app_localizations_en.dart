@@ -42,6 +42,10 @@ class AppLocalizationsEn extends AppLocalizations {
   String get skillsNoneBody => 'No skills found for this character.';
 
   @override
+  String get skillsUnavailableBody =>
+      'Skills can\'t be edited on this save — the hero has no effect data to modify.';
+
+  @override
   String get skillNotLearned => 'Not learned';
 
   @override

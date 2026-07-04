@@ -43,6 +43,10 @@ class AppLocalizationsIt extends AppLocalizations {
       'Nessuna abilità trovata per questo personaggio.';
 
   @override
+  String get skillsUnavailableBody =>
+      'Le abilità non possono essere modificate in questo salvataggio: l\'eroe non ha dati sugli effetti da modificare.';
+
+  @override
   String get skillNotLearned => 'Non appresa';
 
   @override

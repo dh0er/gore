@@ -5113,6 +5113,50 @@ fn apply_private_edits(
                 .to_string(),
         ));
     }
+    // A private.skills.set that learns or unlearns splices the hero's
+    // ActiveEffects array (duplicate/remove an element). It is value-addressed
+    // (resolves by skill base and re-parses), so multiple skill edits batch
+    // safely among themselves, and peers whose paths resolve by NAME/map-key
+    // (hero attributes, game time, …) re-resolve correctly after the splice.
+    // But a peer that resolves by an ARRAY INDEX — an arrayRemove/arrayDuplicate,
+    // or a typed edit whose path steps through `[i]` (e.g. an All-Data edit under
+    // `.../ActiveEffects/[i]/…`) — would resolve against the post-splice layout
+    // and hit the wrong element. (Inventory/knowledge/npc splices already stand
+    // alone above.) Reject that mix; the skill edit's structurality isn't known
+    // until apply time, so guard conservatively.
+    let has_skill_edit = edit_specs
+        .iter()
+        .any(|edit| matches!(edit, PrivateEdit::SkillSet(_)));
+    if has_skill_edit {
+        let has_index_addressed_peer = edit_specs.iter().any(|edit| match edit {
+            PrivateEdit::TypedContainer(container) => {
+                matches!(
+                    container.edit,
+                    properties::ContainerEdit::ArrayRemove(_)
+                        | properties::ContainerEdit::ArrayDuplicate(_)
+                ) || container
+                    .path
+                    .iter()
+                    .any(|seg| matches!(seg, properties::PathSeg::Index(_)))
+            }
+            PrivateEdit::TypedSetValue(set_value) => set_value
+                .path
+                .iter()
+                .any(|seg| matches!(seg, properties::PathSeg::Index(_))),
+            _ => false,
+        });
+        if has_index_addressed_peer {
+            return Err(CoreError::UnsupportedEdit(
+                "a write containing private.skills.set (which can add or remove an \
+                 element in the hero's ActiveEffects array) must not also contain an \
+                 index-addressed edit — an arrayRemove/arrayDuplicate, or a typed \
+                 edit whose path steps through an array index (e.g. under \
+                 ActiveEffects/[i]); the skill splice shifts the indices those edits \
+                 resolve against, so submit them as separate writes"
+                    .to_string(),
+            ));
+        }
+    }
     let mut private_payload = decompress_private_payload(data, &stream, backend)?;
     for edit in &edit_specs {
         apply_private_edit_to_payload(&mut private_payload, edit)?;

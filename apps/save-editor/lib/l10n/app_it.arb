@@ -11,6 +11,7 @@
   "tabAttribute": "Attributi",
   "heroGroupSkills": "Abilità",
   "skillsNoneBody": "Nessuna abilità trovata per questo personaggio.",
+  "skillsUnavailableBody": "Le abilità non possono essere modificate in questo salvataggio: l'eroe non ha dati sugli effetti da modificare.",
   "skillNotLearned": "Non appresa",
   "skillLearn": "Apprendi",
   "skillActionLearn": "apprendi",

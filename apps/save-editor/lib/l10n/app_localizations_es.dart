@@ -43,6 +43,10 @@ class AppLocalizationsEs extends AppLocalizations {
       'No se encontraron habilidades para este personaje.';
 
   @override
+  String get skillsUnavailableBody =>
+      'Las habilidades no se pueden editar en esta partida: el héroe no tiene datos de efectos que modificar.';
+
+  @override
   String get skillNotLearned => 'No aprendida';
 
   @override

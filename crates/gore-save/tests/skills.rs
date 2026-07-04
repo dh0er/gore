@@ -119,3 +119,83 @@ fn skills_batch_learn_unlearn_retier_roundtrips() {
     let _ = std::fs::remove_file(&out);
     eprintln!("roundtrip ok: learn {learn}, unlearn {unlearn}, retier {retier}->Trained");
 }
+
+/// A skill edit (which can splice the hero's ActiveEffects array) must be
+/// rejected when batched with an index-addressed typed edit, since the splice
+/// shifts the index that edit resolves against.
+#[test]
+fn skills_reject_batch_with_index_addressed_edit() {
+    let Ok(path) = std::env::var("GORE_SAVE") else {
+        eprintln!("GORE_SAVE not set; skipping");
+        return;
+    };
+    let resp: Value = serde_json::from_str(&gore_save::execute_json(
+        &json!({
+            "command": "write_save",
+            "payload": {
+                "path": path,
+                "backup": false,
+                "edits": [
+                    { "path": "private.skills.set", "value": { "base": "Sneak", "tier": "Learned" } },
+                    { "path": "private.typed.setValue", "value": {
+                        "path": ["ActiveEffectsByGlobalId", "{Hero}", "ActiveEffects", "[0]", "EffectSpec", "Level"],
+                        "value": 2.0
+                    } },
+                ],
+            }
+        })
+        .to_string(),
+    ))
+    .unwrap();
+    assert_eq!(resp["ok"], json!(false), "mixed skill + indexed edit must be rejected");
+    assert_eq!(resp["error"]["code"], json!("UNSUPPORTED_EDIT"), "resp: {resp}");
+}
+
+/// A skill edit batched with only NAME/map-key-addressed peers (a hero attribute
+/// setValue) is allowed — those re-resolve correctly after a splice.
+#[test]
+fn skills_allow_batch_with_named_edit() {
+    let Ok(path) = std::env::var("GORE_SAVE") else {
+        eprintln!("GORE_SAVE not set; skipping");
+        return;
+    };
+    // Resolve a real hero attribute path to keep the peer edit applyable.
+    let search: Value = serde_json::from_str(&gore_save::execute_json(
+        &json!({ "command": "search_typed_properties",
+                 "payload": { "path": path, "query": "AttributeSetsByClass", "limit": 1000 } })
+        .to_string(),
+    ))
+    .unwrap();
+    let attr = search["data"]["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["type"] == "FloatProperty" && r["editable"] == json!(true));
+    let Some(attr) = attr else {
+        eprintln!("no editable hero attribute found; skipping");
+        return;
+    };
+    let attr_path = attr["path"].clone();
+    let cur: f64 = attr["value"].as_str().and_then(|s| s.parse().ok()).unwrap_or(0.0);
+
+    let mut out = std::env::temp_dir();
+    out.push("gore_skills_named_batch.sav");
+    let out = out.to_string_lossy().to_string();
+
+    let resp: Value = serde_json::from_str(&gore_save::execute_json(
+        &json!({
+            "command": "write_save",
+            "payload": {
+                "path": path, "outputPath": out, "backup": false,
+                "edits": [
+                    { "path": "private.skills.set", "value": { "base": "Sneak", "tier": "Untrained" } },
+                    { "path": "private.typed.setValue", "value": { "path": attr_path, "value": cur } },
+                ],
+            }
+        })
+        .to_string(),
+    ))
+    .unwrap();
+    assert_eq!(resp["ok"], json!(true), "skill + named-path edit must be allowed: {resp}");
+    let _ = std::fs::remove_file(&out);
+}

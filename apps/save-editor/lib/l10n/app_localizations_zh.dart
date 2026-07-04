@@ -42,6 +42,9 @@ class AppLocalizationsZh extends AppLocalizations {
   String get skillsNoneBody => '未找到该角色的技能。';
 
   @override
+  String get skillsUnavailableBody => '此存檔無法編輯技能——主角沒有可修改的效果資料。';
+
+  @override
   String get skillNotLearned => '未学习';
 
   @override
@@ -1300,6 +1303,9 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get skillsNoneBody => '未找到该角色的技能。';
+
+  @override
+  String get skillsUnavailableBody => '此存档无法编辑技能——主角没有可修改的效果数据。';
 
   @override
   String get skillNotLearned => '未习得';

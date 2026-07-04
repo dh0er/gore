@@ -42,6 +42,10 @@ class AppLocalizationsJa extends AppLocalizations {
   String get skillsNoneBody => 'このキャラクターのスキルは見つかりませんでした。';
 
   @override
+  String get skillsUnavailableBody =>
+      'このセーブデータではスキルを編集できません。主人公に変更できるエフェクトデータがありません。';
+
+  @override
   String get skillNotLearned => '未習得';
 
   @override

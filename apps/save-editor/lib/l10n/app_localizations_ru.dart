@@ -42,6 +42,10 @@ class AppLocalizationsRu extends AppLocalizations {
   String get skillsNoneBody => 'Для этого персонажа навыки не найдены.';
 
   @override
+  String get skillsUnavailableBody =>
+      'Навыки нельзя изменить в этом сохранении — у героя нет данных эффектов для изменения.';
+
+  @override
   String get skillNotLearned => 'Не изучен';
 
   @override

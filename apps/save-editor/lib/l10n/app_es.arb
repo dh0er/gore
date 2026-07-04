@@ -11,6 +11,7 @@
   "tabAttribute": "Atributos",
   "heroGroupSkills": "Habilidades",
   "skillsNoneBody": "No se encontraron habilidades para este personaje.",
+  "skillsUnavailableBody": "Las habilidades no se pueden editar en esta partida: el héroe no tiene datos de efectos que modificar.",
   "skillNotLearned": "No aprendida",
   "skillLearn": "Aprender",
   "skillActionLearn": "aprender",

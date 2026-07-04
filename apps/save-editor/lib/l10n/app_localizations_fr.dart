@@ -42,6 +42,10 @@ class AppLocalizationsFr extends AppLocalizations {
   String get skillsNoneBody => 'Aucune compétence trouvée pour ce personnage.';
 
   @override
+  String get skillsUnavailableBody =>
+      'Les compétences ne peuvent pas être modifiées dans cette sauvegarde — le héros n\'a aucune donnée d\'effet à modifier.';
+
+  @override
   String get skillNotLearned => 'Non apprise';
 
   @override

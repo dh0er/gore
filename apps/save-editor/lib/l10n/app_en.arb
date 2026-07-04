@@ -11,6 +11,7 @@
   "tabAttribute": "Attributes",
   "heroGroupSkills": "Skills",
   "skillsNoneBody": "No skills found for this character.",
+  "skillsUnavailableBody": "Skills can't be edited on this save — the hero has no effect data to modify.",
   "skillNotLearned": "Not learned",
   "skillLearn": "Learn",
   "skillActionLearn": "learn",

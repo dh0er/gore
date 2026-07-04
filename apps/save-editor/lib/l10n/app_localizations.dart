@@ -182,6 +182,12 @@ abstract class AppLocalizations {
   /// **'No skills found for this character.'**
   String get skillsNoneBody;
 
+  /// No description provided for @skillsUnavailableBody.
+  ///
+  /// In en, this message translates to:
+  /// **'Skills can\'t be edited on this save — the hero has no effect data to modify.'**
+  String get skillsUnavailableBody;
+
   /// No description provided for @skillNotLearned.
   ///
   /// In en, this message translates to:
