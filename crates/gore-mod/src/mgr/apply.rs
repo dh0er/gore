@@ -2,15 +2,19 @@
 //!
 //! [`apply_loadout`] composes every enabled library mod's components into a single [`DeployPlan`]
 //! and commits it through the same crash-safe machinery the single-bundle deploy uses. It always
-//! starts from pristine: it undeploys whatever the manager had before, then rebuilds from scratch,
-//! so a toggle/reorder is realized by re-applying (never an incremental patch on top of old state).
+//! rebuilds from pristine, so a toggle/reorder is realized by re-applying (never an incremental
+//! patch on top of old state). Crucially it builds the ENTIRE (fallible) plan FIRST — reading each
+//! pristine base from the prior deployment's backups — and only undeploys+commits once that plan is
+//! complete, so a bad/missing/undecodable mod fails the apply without first wiping the working
+//! deployment.
 //!
 //! ## Rawfile-vs-patch ordering
 //! Within a single apply, each target game file is materialized in two conceptual layers:
 //!   1. **base** — if any enabled mod supplies a `RawFile` for that target (whole-file replacement),
 //!      its bytes become the BASE for that file. Loadout order decides the winner: a later mod's
 //!      rawfile replaces an earlier one's. If no mod supplies a rawfile, the base is the game's
-//!      pristine file (as restored by the pre-apply undeploy).
+//!      pristine file (read from the prior deployment's backup, or the live file when nothing was
+//!      deployed).
 //!   2. **patches** — every loc / audio / AngelScript edit from ALL enabled mods is then applied ON
 //!      TOP of that base. So a mod can ship a rawfile `.lcache` as the base and another mod's loc
 //!      patch still lands on top of it; the loc/audio/script merges (later-wins per key) are
@@ -44,15 +48,17 @@ pub fn apply_loadout(
     library_dir: &Path,
     loadout: &Loadout,
 ) -> crate::Result<ApplyReport> {
-    // (1) A studio deployment is off-limits — replacing it would silently drop a hand-built mod.
-    if let Some(prev) = crate::read_record(game_root) {
-        if prev.owner != "manager" {
-            return Err(ModError::Other(format!("STUDIO_DEPLOY_ACTIVE:{}", prev.mod_name)));
+    // (1) Read the prior manager deployment (if any). A studio deployment is off-limits — replacing
+    //     it would silently drop a hand-built mod. We KEEP `prev`: the plan below reads pristine
+    //     bytes from its backups while that deployment is still live, and we only undeploy once the
+    //     full (fallible) plan is built — so a bad/missing/undecodable mod fails the apply WITHOUT
+    //     first wiping the working deployment (see the deferred undeploy before commit_plan).
+    let prev = crate::read_record(game_root);
+    if let Some(p) = &prev {
+        if p.owner != "manager" {
+            return Err(ModError::Other(format!("STUDIO_DEPLOY_ACTIVE:{}", p.mod_name)));
         }
     }
-
-    // (2) Reset to pristine: undo whatever the manager had deployed. Tolerate "nothing deployed".
-    crate::undeploy(game_root)?;
 
     // Absolutize like deploy()/undeploy() so every derived + persisted path is absolute.
     let abs_root = crate::abs_root(game_root);
@@ -80,9 +86,10 @@ pub fn apply_loadout(
         loaded.push(Loaded { idx, entry, dir, meta });
     }
 
-    // (4) EMPTY enabled set: nothing to deploy. We already reset to pristine in (2); leave it that
-    //     way (do NOT commit an empty manager record).
+    // (4) EMPTY enabled set: nothing to deploy. Reset to pristine and leave it that way (do NOT
+    //     commit an empty manager record). This is the one branch that undeploys without a rebuild.
     if loaded.is_empty() {
+        crate::undeploy(game_root)?;
         return Ok(ApplyReport { applied: Vec::new(), warnings: Vec::new() });
     }
 
@@ -234,7 +241,9 @@ pub fn apply_loadout(
         if let Some(lcache) = gp.lcache.clone() {
             let base = match rawfile_bases.get(&lcache) {
                 Some(b) => b.clone(),
-                None => crate::read_pristine(&lcache, None)?.0,
+                // Read pristine from the PRIOR deployment's backup (via `prev`) — the live file is
+                // still the prior-modded one until the deferred undeploy below.
+                None => crate::read_pristine(&lcache, prev.as_ref())?.0,
             };
             let mut lc = gore_loc::loc::Lcache::decode(&base)?;
             for ((id, set), text) in &loc {
@@ -266,7 +275,8 @@ pub fn apply_loadout(
             let bank_path = gp.fmod_desktop.join(&bank);
             let base = match rawfile_bases.get(&bank_path) {
                 Some(b) => b.clone(),
-                None => crate::read_pristine(&bank_path, None)?.0,
+                // Pristine from the prior deployment's backup (live is still modded until undeploy).
+                None => crate::read_pristine(&bank_path, prev.as_ref())?.0,
             };
             let mut repl = Vec::with_capacity(samples.len());
             for (sample, wav_path) in samples {
@@ -319,10 +329,14 @@ pub fn apply_loadout(
 
     plan.writes = writes.into_iter().collect();
 
-    // (6) Commit as a manager-owned deployment. prev = None: the pre-apply undeploy already reset
-    //     the game to pristine and removed the old record, so there is no leftover to reconcile.
-    //     commit_plan rejects self-colliding dsts and mirrors the manager footprint into the
-    //     legacy record fields automatically.
+    // (6) The full plan is built — every fallible read/decode/cook above succeeded, so the prior
+    //     deployment is still intact if we got here. NOW reset to pristine and commit the new
+    //     manager deployment. Deferring the undeploy to this point is what makes a failed apply
+    //     non-destructive (a bad mod errors out above without wiping the working deploy). prev = None
+    //     to commit_plan: the undeploy just removed the old record + backups, so the post-undeploy
+    //     live is pristine and there is no leftover for commit_plan to reconcile. commit_plan rejects
+    //     self-colliding dsts and mirrors the manager footprint into the legacy record fields.
+    crate::undeploy(game_root)?;
     let record = DeployRecord {
         owner: "manager".into(),
         mod_name: "<manager>".into(),
@@ -876,6 +890,44 @@ mod tests {
         );
         assert_eq!(rec.managed_paks.len(), 1, "one managed pak recorded");
         assert!(rec.managed_paks[0].ends_with("zzz_gm000_alpha_P.pak"));
+    }
+
+    /// A re-apply that fails while BUILDING the plan (a mod with an undecodable payload) must not
+    /// touch the previously-applied manager deployment — the undeploy is deferred until the whole
+    /// plan is built, so the prior record + deployed content survive the failure.
+    #[test]
+    fn failed_apply_preserves_prior_deployment() {
+        let g = FakeGame::new();
+        let a = g.add_loc_mod("mod-a", "Alpha", "itfo_cheese", "Gouda");
+        // First apply succeeds: a manager deployment of [a] is live.
+        apply_loadout(&g.root, &g.lib, &loadout(&[(&a, true)])).unwrap();
+        assert_eq!(read_loc(&fs::read(g.lcache()).unwrap(), "itfo_cheese"), "Gouda");
+
+        // A mod whose loc payload is corrupt JSON: PASS 1 fails to parse it → apply errors before
+        // the deferred undeploy.
+        let bad = g.add_mod(
+            "bad",
+            "Bad",
+            vec![ComponentInfo::LocPatch { rel: "loc/edits.json".into(), targets: vec![] }],
+            |dir| {
+                fs::create_dir_all(dir.join("loc")).unwrap();
+                fs::write(dir.join("loc/edits.json"), b"{ not valid json").unwrap();
+            },
+        );
+
+        apply_loadout(&g.root, &g.lib, &loadout(&[(&a, true), (&bad, true)]))
+            .expect_err("a corrupt mod payload must fail the apply");
+
+        // Prior deployment intact: record still manager-owned with loadout [a], and the live
+        // .lcache still carries mod-a's edit (NOT reverted to pristine by an early undeploy).
+        let rec = crate::read_record(&g.root).expect("prior record must survive a failed apply");
+        assert_eq!(rec.owner, "manager");
+        assert_eq!(rec.loadout, vec![LoadoutEntry { id: "mod-a".into(), enabled: true }]);
+        assert_eq!(
+            read_loc(&fs::read(g.lcache()).unwrap(), "itfo_cheese"),
+            "Gouda",
+            "prior deployment content must remain after a failed re-apply"
+        );
     }
 
     /// Applying over an active STUDIO (non-manager) deployment is refused with STUDIO_DEPLOY_ACTIVE
