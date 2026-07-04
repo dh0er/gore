@@ -417,13 +417,14 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
     let mut a: Vec<Arg> = match need {
         Some(k) if stack.len() > k => {
             // Split off this call's own operands (top `k`); the deeper entries belong to an
-            // ENCLOSING call. BUT only PRESERVE deeper entries that are plausibly real enclosing
-            // args (typed locals/globals/PSF slots) — a stranded plain int/const literal left over
-            // from an unmodeled push is dead and, if preserved, pollutes the enclosing call's arg
-            // list and force-stubs it (regression). Drop such dead leading constants here, which is
-            // exactly what the old whole-stack `mem::take` did for them.
+            // ENCLOSING call. Drop STRANDED slot-sourced ints (SetV*+PshV4 temporaries) left over
+            // from an unmodeled push — preserving them pollutes the enclosing call's arg list and
+            // force-stubs it (regression). BUT keep PshC4/PshC8 LITERAL consts (cbits set): those
+            // are almost always real pending args of the enclosing/chained call — a float Distance,
+            // an int MinCount, a builder-chain weight/cooldown — that the enclosing call needs
+            // (proven: IsCloseToCharacter(a, b, 699.0) lost its 699.0 to this drop).
             let own = stack.split_off(stack.len() - k);
-            stack.retain(|x| !x.is_int);
+            stack.retain(|x| !x.is_int || x.cbits.is_some());
             own
         }
         _ => std::mem::take(stack),
@@ -485,6 +486,7 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
         // super-class constructor on `this` -> `super(args)` (before is_type_name, since the
         // super name is itself a type name).
         if super_ctor == Some(f) && recv.s == "this" {
+            maybe_reverse_args(&mut a, params, refs); // super calls are reverse-pushed too
             return Some(format!("super({})", render_args(&a, params, refs)));
         }
         // BUG (a) — SUPER-CALL: a NON-VIRTUAL (`CALL`) dispatch on `this` to a method owned by a
@@ -493,6 +495,7 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
         if non_virtual && recv.s == "this" {
             if let (Some(owner), Some(cur)) = (target_owner, cur_class) {
                 if owner != cur && refs.is_subclass(cur, owner) {
+                    maybe_reverse_args(&mut a, params, refs); // super calls are reverse-pushed too
                     return Some(format!("Super::{f}({})", render_args(&a, params, refs)));
                 }
             }
@@ -501,6 +504,14 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
         // implicit in AS source, emit nothing.
         if refs.is_type_name(f) {
             return None;
+        }
+        // implicit-conversion behaviours (opImplConv/opConv) have NO source form: the conversion
+        // re-fires implicitly from the assignment/argument target type. An explicit `.opImplConv()`
+        // makes AS enumerate all overloads with no target type -> "Multiple matching signatures".
+        // Render the receiver itself so it flows into the store and the compiler re-derives the
+        // conversion from the destination's declared type.
+        if matches!(f, "opImplConv" | "opConv") {
+            return Some(recv.s.clone());
         }
         // operator-overload methods -> source operators (cast the RHS to the operand type).
         if let Some(op) = assign_op(f) {
@@ -545,6 +556,11 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
         // register, e.g. a member opAssign) can't render as a free call — skip it rather than
         // emit `opAssign(...)`, which never resolves.
         if assign_op(f).is_some() || binop_method(f).is_some() {
+            return None;
+        }
+        // implicit-conversion behaviour with its receiver in the reference register (no stack
+        // receiver) — never a free call; drop it (the conversion re-fires from the target type).
+        if matches!(f, "opImplConv" | "opConv") {
             return None;
         }
         // trim leading phantom extras for a known free arity too.
@@ -957,9 +973,12 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 let off = ins.words.first().copied().unwrap_or(0) as i32;
                 let tid = ins.dwords.first().copied().unwrap_or(0) as i32;
                 let field = ctx.refs.member(tid, off).map(|s| s.to_string()).unwrap_or_else(|| format!("field_0x{off:x}"));
-                // field VALUE type from the class map (member_type gives the owner class).
-                let fty = ctx.fields.and_then(|m| m.get(&field)).cloned()
-                    .or_else(|| ctx.refs.member_type(tid, off).map(|s| s.to_string()));
+                // field VALUE type — ONLY from the enclosing class map. `member_type(tid,off)`
+                // returns the OWNER struct (PropertyReferences.OldTypeId = the CONTAINING type),
+                // NOT the field's value type; using it poisons foreign member reads (e.g.
+                // `HitResult.BoneName` typed as `FHitResult` instead of `FName`) -> false
+                // value-head mismatch -> spurious argtype stub. None = unknown = conservative match.
+                let fty = ctx.fields.and_then(|m| m.get(&field)).cloned();
                 if let Some(top) = stack.last_mut() {
                     top.s = format!("{}.{field}", top.s);
                     top.is_int = false; // now a member access, not a bare int slot
