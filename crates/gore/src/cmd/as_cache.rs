@@ -43,6 +43,13 @@ pub enum AsCmd {
         #[arg(long, default_value_t = 5)]
         max: usize,
     },
+    /// Dump StaticNames tail-table entries (the `n"..."` FName-literal pool indexed by
+    /// `__STATIC_NAME(Id)`). With no indices: count + first 10 entries.
+    StaticNames {
+        file: PathBuf,
+        /// Specific indices to print.
+        indices: Vec<i64>,
+    },
     /// Disassemble functions whose name contains <needle> to an asBC listing.
     Disasm {
         file: PathBuf,
@@ -208,6 +215,18 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                 n += 1;
             }
             eprintln!("({n} module(s))");
+        }
+        AsCmd::StaticNames { file, indices } => {
+            let bytes = std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?;
+            let refs = gore_as::cache::refs::RefResolver::build(&bytes).context("resolver")?;
+            println!("StaticNames count: {}", refs.static_name_count());
+            let show: Vec<i64> = if indices.is_empty() { (0..10).collect() } else { indices };
+            for i in show {
+                match refs.static_name(i) {
+                    Some(n) => println!("  [{i}] {n:?}"),
+                    None => println!("  [{i}] <out of range>"),
+                }
+            }
         }
         AsCmd::Disasm { file, needle, max } => {
             let bytes = std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?;

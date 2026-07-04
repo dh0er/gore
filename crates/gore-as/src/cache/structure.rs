@@ -351,16 +351,31 @@ struct Cmp {
 fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option<&str>, params: Option<&[DataType]>, native_arity: Option<usize>, trusted_arity: Option<usize>, target_owner: Option<&str>, cur_class: Option<&str>, non_virtual: bool, ret_ty: Option<&str>, refs: &RefResolver) -> Option<String> {
     if f.starts_with('$') || f.starts_with('~') || f == "__STATIC_NAME" {
         // EDIT C (the dominant FName form): `__STATIC_NAME` is the synthesized name-table accessor
-        // that produces an FName from a pushed name-table INDEX into the return register; a
-        // following `PshRPtr` re-pushes it as the ENCLOSING call's arg. Dropping it (return None)
-        // loses that arg → `this.GetCharacter()` (0-arg). Recover it as a renderable `FName(<idx>)`
-        // value so it FLOWS into `pending` and PshRPtr restores ARITY (`this.GetCharacter(FName(...))`).
-        // The literal is the name-table index, not the string (acceptable per spec: correct arity
-        // beats a dropped arg). Gate: exactly one int operand on top (the index).
+        // (`const FName& __STATIC_NAME(int Id)` per the exe's registered decl) that fetches
+        // `FAngelscriptManager::StaticNames[Id]` — populated at load from the cache's StaticNames
+        // tail table (table 5) — into the return register; a following `PshRPtr` re-pushes it as
+        // the ENCLOSING call's arg. Dropping it (return None) loses that arg → `this.GetCharacter()`
+        // (0-arg). Resolve the pushed Id through RefResolver::static_name and render the UE-AS
+        // FName literal `n"Name"` so it FLOWS into `pending` and PshRPtr restores both ARITY and
+        // VALUE (`this.GetCharacter(n"Hero")`). AS FName has NO int ctor, so the historical
+        // `FName(<idx>)` render never compiled ("No matching signatures to 'FName(const int)'");
+        // it remains only as the arity-preserving fallback for an unresolvable Id (non-constant
+        // operand or out-of-range index, e.g. a mini-cache with empty tail tables).
+        // Gate: exactly one int operand on top (the Id).
         if f == "__STATIC_NAME" {
             if let Some(top) = stack.last() {
                 if top.is_int && !top.s.is_empty() {
                     let idx = stack.pop().unwrap();
+                    // constant bits first (authoritative for PshC4), rendered text as fallback
+                    // (covers a tracked int slot whose rendered form is the decimal value).
+                    let id = match idx.cbits {
+                        Some(ConstBits::W4(b)) => Some(b as i32 as i64),
+                        Some(ConstBits::W8(b)) => Some(b as i64),
+                        None => idx.s.parse::<i64>().ok(),
+                    };
+                    if let Some(name) = id.and_then(|i| refs.static_name(i)) {
+                        return Some(format!("n\"{}\"", esc(name)));
+                    }
                     return Some(format!("FName({})", idx.s));
                 }
             }

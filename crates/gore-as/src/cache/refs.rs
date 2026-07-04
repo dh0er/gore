@@ -56,6 +56,11 @@ pub struct RefResolver {
     /// Native AngelScript API arities parsed from Binds.Cache (fallback arity for native calls
     /// whose param count isn't carried in the script FunctionReferences).
     native: Option<super::binds::NativeApi>,
+    /// StaticNames tail table (table 5): the `n"..."` FName-literal pool. The synthesized
+    /// accessor `const FName& __STATIC_NAME(int Id)` (decl string in the shipping exe) returns
+    /// `FAngelscriptManager::StaticNames[Id]`, which PrepareToFinalizePrecompiledModules
+    /// populates from THIS table — so the bytecode's int operand indexes it directly.
+    static_names: Vec<String>,
 }
 
 impl RefResolver {
@@ -142,9 +147,11 @@ impl RefResolver {
             }
             r.global_by_ptr.insert(key, name);
         }
-        // T6 StaticNames: TArray<SIA>
-        for _ in 0..c.read_count("StaticNames")? {
-            c.read_sia()?;
+        // T6 StaticNames: TArray<SIA> — the FName-literal pool `__STATIC_NAME(Id)` indexes.
+        let n_static = c.read_count("StaticNames")?;
+        r.static_names.reserve_exact(n_static);
+        for _ in 0..n_static {
+            r.static_names.push(c.read_sia()?);
         }
         // T7 PropertyReferences: int64 key + (Name, int32 OldTypeId)
         for _ in 0..c.read_count("PropertyReferences")? {
@@ -295,6 +302,15 @@ impl RefResolver {
             .get(&id)
             .map(|p| self.func_is_method.contains(p))
             .unwrap_or(false)
+    }
+    /// FName-literal text for a `__STATIC_NAME(Id)` index into the StaticNames tail table.
+    /// None if out of range (e.g. a mini-cache with empty tail tables).
+    pub fn static_name(&self, id: i64) -> Option<&str> {
+        usize::try_from(id).ok().and_then(|i| self.static_names.get(i)).map(|s| s.as_str())
+    }
+    /// Number of StaticNames entries (debug aid).
+    pub fn static_name_count(&self) -> usize {
+        self.static_names.len()
     }
     /// Member name from a containing type-id + byte offset.
     pub fn member(&self, type_id: i32, offset: i32) -> Option<&str> {
