@@ -29,6 +29,38 @@ fn force_stub_set() -> &'static HashSet<String> {
     })
 }
 
+/// Batch-23b (specs/const-safety.md §5): the minimal body-const-safe set — the only methods
+/// whose vanilla `const` qualifier (asTRAIT_CONST) is re-emitted. Each entry is individually
+/// in-game-verified (batch-21 all-const capture as the per-method oracle: its RECOVERED body
+/// produces no new diagnostics under a read-only `this`), and the set is closed under
+/// own-class `this`-callees and script overrides. Keys are exact `Class::Method` — never
+/// bare names (GetCrimeProcessingSubsystem/GetSortLayer exist on unrelated classes that must
+/// stay non-const). Do NOT const-qualify anything outside this set even if is_const_method()
+/// is true — that was batch-21 (+636 regression, JOURNAL LESSON #4).
+static CONST_SAFE: &[&str] = &[
+    "UGameplayAbility_CharacterAI_Gothic::GetCrimeProcessingSubsystem",
+    "UGameplayAbility_CharacterAI_Gothic::GetSensedLivingHostiles",
+    "UGameplayAbility_CharacterAI_Gothic::GetSensedLivingEnemies",
+    "UGameplayAbility_CharacterAI_Gothic::IsCharacterConsideredAThreat",
+    "UGameplayAbility_CharacterAI_Gothic::IsInSameTerritoryOrCombatRadiusAsOtherCharacter",
+    "UGameplayAbility_CharacterAI_Gothic::IsWeaponConsideredAThreat",
+    "UGameplayAbility_CharacterAI_Gothic::IsCharacterInCombatRadius",
+    "UGameplayAbility_CreatureAI::IsCharacterConsideredAThreat",
+    "UGameplayAbility_CreatureAI::IsWeaponConsideredAThreat",
+    "FAttackMoveData::GetCombatMove",
+    "FAttackMoveData::GetWeight",
+    "FItemPickupHandle::GetDroppedBy",
+    "FItemPickupHandle::GetReason",
+    "UCBT_Node::GetSortLayer",
+    "UCBT_Tree::GetSortLayer",
+    "UCBT_Decorator::GetSortLayer",
+];
+
+fn const_safe_set() -> &'static HashSet<&'static str> {
+    static S: OnceLock<HashSet<&'static str>> = OnceLock::new();
+    S.get_or_init(|| CONST_SAFE.iter().copied().collect())
+}
+
 use super::disasm::disassemble;
 use super::model::{Class, Func, Module};
 use super::refs::RefResolver;
@@ -472,14 +504,20 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
     if is_ctor {
         let _ = writeln!(s, "{ind}{}({params})", f.name); // constructors have no return type
     } else {
-        // Batch-21 Class A attempted to re-emit the vanilla `const` method qualifier
-        // (asTRAIT_CONST in FunctionTraits) so const-handle callers compile — but HARNESS-
-        // REGRESSED +636 (read-only errors 150 -> 2763): a `const` qualifier makes `this`
-        // read-only inside the body, and our RECOVERED bodies are not const-faithful (recovery
-        // artifacts call non-const members/methods on `this`). Vanilla compiles because its
-        // real bodies are const-clean; ours aren't. Emission disabled — the ~150 caller-side
-        // errors are the lesser residue; a body-const-safety scan could re-enable per-function.
-        let _ = writeln!(s, "{ind}{ret_sig} {}({params})", f.name);
+        // Vanilla `const` methods (asTRAIT_CONST in FunctionTraits) need their qualifier back
+        // so const-handle callers compile ("Non-const method call on read-only object
+        // reference") — but a blanket re-emit makes `this` read-only inside every RECOVERED
+        // body, which is not const-faithful (batch-21 HARNESS-REGRESSED +636, read-only errors
+        // 150 -> 2763). Batch-23b: emit the qualifier ONLY for the per-method body-const-
+        // safety-verified set (specs/const-safety.md); everything else stays non-const and
+        // keeps its caller-side residue.
+        let constq = if is_method && f.is_const_method() && const_safe_set().contains(qid.as_str())
+        {
+            " const"
+        } else {
+            ""
+        };
+        let _ = writeln!(s, "{ind}{ret_sig} {}({params}){constq}", f.name);
     }
     let _ = writeln!(s, "{ind}{{");
 
