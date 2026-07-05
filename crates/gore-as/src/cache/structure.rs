@@ -816,8 +816,9 @@ fn field_assign_rhs(rhs: &str, tyname: &str) -> String {
 }
 
 /// True if `tyname` is a UE enum type (`E<Upper>...`) — same shape `cast_to_typename` keys on.
+/// Tolerates a leading `const ` (a const-qualified enum is still an enum for cast purposes).
 fn is_enum_name(tyname: &str) -> bool {
-    let b = tyname.as_bytes();
+    let b = tyname.trim_start_matches("const ").as_bytes();
     b.len() >= 2 && b[0] == b'E' && b[1].is_ascii_uppercase()
 }
 
@@ -1110,11 +1111,19 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                     // decompiled const-`0` bool). Cast the RHS to bool. Guard: the RHS was NOT
                     // already transformed above (a bare slot), is resolved, and is not a KNOWN
                     // bool slot (which compiles bare and must not become the illegal `bool != 0`).
+                    // ENUM guards: uint8 ENUMS are also 1-byte writes. When the SOURCE slot is a
+                    // known enum (an enum param stored into a same-enum field:
+                    // `this.FocusCharacterType = PerceptionCharacterType` — the bool wrap made it
+                    // `(Param != 0)` -> "bool -> EPerceptionCharacterType&", 41 in-game errors),
+                    // or the FIELD's value type is a known enum (this-class fields map), the write
+                    // is enum->enum: keep it bare.
                     if n == "WRTV1"
                         && ref_reg_ty.as_deref() != Some("bool")
+                        && !ref_reg_ty.as_deref().map(is_enum_name).unwrap_or(false)
                         && rhs == raw
                         && rhs != UNRESOLVED
                         && ctx.slot_type(slot).as_deref() != Some("bool")
+                        && !ctx.slot_type(slot).as_deref().map(is_enum_name).unwrap_or(false)
                     {
                         rhs = format!("({rhs} != 0)");
                     }
