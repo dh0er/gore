@@ -421,6 +421,20 @@ impl RefResolver {
             // their EVerticalAlignment(...) casts.
             ("FLetterboxLayoutSettings", "VerticalLoadingWidgetPosition", "EVerticalAlignment"),
             ("FLetterboxLayoutSettings", "VerticalTipWidgetPosition", "EVerticalAlignment"),
+            // batch-30c: core-math FLOAT fields — NOT in the Binds field tables (math types
+            // are special-registered; probed None), so these rows are excluded from the
+            // binds.rs mirror test. Evidence is the in-game diagnostic itself: reads of
+            // these fields into int slots emit "Implicit conversion from float to integer
+            // loses precision" (the compiler names the source float), UE5 core math is
+            // double ('float' in Hazelight AS). Consumed by the member-load float-source
+            // typing (structure.rs) for the RDR8 int(...) wraps; the enum-filtered nfty
+            // consumers ignore non-enum rows by construction.
+            ("FVector", "X", "float"),
+            ("FVector", "Y", "float"),
+            ("FVector", "Z", "float"),
+            ("FRotator", "Pitch", "float"),
+            ("FRotator", "Yaw", "float"),
+            ("FRotator", "Roll", "float"),
         ];
         if let Some((_, _, t)) =
             KNOWN_NATIVE_FIELD_TYPES.iter().find(|(c, f, _)| *c == class && *f == field)

@@ -480,6 +480,29 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
         keep_ints,
     };
     let body = body_statements_ctor(&fc, refs, depth + 1, super_ctor, Some(&f.ret), fields, Some(&param_types), class_name, Some(&local_types), Some(&hints));
+    // batch-30c (C9 accessor-ambiguity, specs/batch29-errortail.md §9): the recovered ctor
+    // default-writes `this.WalkSpeed = ...;` collide with the class's inherited SetWalkSpeed
+    // property accessor ("Assigned property also has a SetWalkSpeed accessor declared. Write
+    // is ambiguous." — a module-killer under warnings-as-errors). Vanilla's ctor bytecode is
+    // GENERATED from UPROPERTY defaults (no source statement to warn on), so no property-
+    // write spelling can reproduce it warning-free; the accessor-call spelling is the
+    // corpus-proven compiling form (`this.SetWalkSpeed(...)` call sites). Exact-keyed to the
+    // two captured ctors — a per-site fix, not a mechanism.
+    let body = if is_ctor
+        && matches!(class_name, Some("UAIState_Warning" | "UAIState_Warning_Crime"))
+        && body.contains("this.WalkSpeed = ")
+    {
+        body.lines()
+            .map(|l| match l.split_once("this.WalkSpeed = ") {
+                Some((ind2, rhs)) if ind2.trim().is_empty() && rhs.ends_with(';') => {
+                    format!("{ind2}this.SetWalkSpeed({});\n", &rhs[..rhs.len() - 1])
+                }
+                _ => format!("{l}\n"),
+            })
+            .collect()
+    } else {
+        body
+    };
     // Batch-21 Class C: CONSTSTORE-marked stores carry a const object handle of the local's
     // EXACT type (a same-type Cast<T> does NOT strip const in-game — every batch-20 exact-type
     // Cast site failed "No conversion from 'const X' to 'X'"). Vanilla declared these locals

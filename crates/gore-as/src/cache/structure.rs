@@ -1162,6 +1162,18 @@ fn cast_arg(arg: &Arg, pt: &DataType, refs: &RefResolver) -> String {
         // bool param
         return format!("({} != 0)", arg.s);
     }
+    // batch-30c: an int-family SLOT feeding a SMALL-int parameter warns twice in-game
+    // ("signed to unsigned" + "truncates", warnings-as-errors) — the batch-28b small-int
+    // RETYPE residue (slots whose op profile failed its SetV-only gate, e.g. the
+    // SetMovementMode NewCustomMode args fed from reads). Explicit narrowing cast; a
+    // slot already retyped small renders a same-type no-op cast.
+    match pt.token {
+        0x45 => return format!("int8({})", arg.s),
+        0x46 => return format!("int16({})", arg.s),
+        0x4C => return format!("uint8({})", arg.s),
+        0x4D => return format!("uint16({})", arg.s),
+        _ => {}
+    }
     if pt.token == 5 {
         // object/enum identifier type: UE enums are `E<Upper>...`; cast int -> enum
         let base = pt.base_name(refs);
@@ -1299,6 +1311,18 @@ fn ty_family(t: &str) -> &str {
 /// implicit enum->int conversion, so an enum field-read / enum-returning call stored into an
 /// `int` local fails to compile. Only fires when the value is a known enum AND the dest is an
 /// int slot (so enum->enum and enum->enum-param copies stay bare).
+/// batch-30c: FLOAT-FAMILY-gated field VALUE type for a member load — cross-module script
+/// field maps first, then the in-crate native rows (FVector/FRotator components). Returns
+/// None for everything non-float so the callers' conservative fallbacks stay in charge
+/// (a broad precise-type flip would change bool/enum member renders that compile today).
+fn float_field_type(refs: &RefResolver, tid: i32, field: &str) -> Option<String> {
+    let cls = refs.type_by_id(tid)?;
+    refs.field_type_by_class(cls, field)
+        .or_else(|| refs.native_field_type(cls, field))
+        .filter(|t| matches!(*t, "float" | "float32" | "double"))
+        .map(|s| s.to_string())
+}
+
 fn enum_to_int(rhs: String, src_ty: Option<&str>, dst_is_int: bool) -> String {
     match src_ty {
         Some(t) if dst_is_int && is_enum_name(t) => format!("int({rhs})"),
@@ -1380,6 +1404,9 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<Strin
     let mut out = Vec::new();
     let mut cmp: Option<Cmp> = None;
     let mut cond: Option<(String, bool)> = None; // (bool value tested by a jump, is-bool-typed)
+    // batch-30c: true when a compare / register-load executed AFTER the newest call —
+    // order gate for the stale-cmp-vs-live-bool-pending decision at conditional jumps.
+    let mut test_after_call = true;
     let mut stack: Vec<Arg> = init; // pushed pointer/value expressions
     let mut value_reg: Option<String> = None;
     let mut obj_reg: Option<String> = None;
@@ -1640,7 +1667,14 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<Strin
                 // The class field-type map holds the real field VALUE type; member_type()
                 // resolves PropertyReferences OldTypeId which is the OWNER class, not the
                 // field type — so prefer the map and only fall back to member_type.
+                // batch-30c: before that owner-name fallback, try the FLOAT-FAMILY-gated
+                // precise sources (cross-module script field maps + the in-crate native
+                // float rows) so a float64 member read into an int slot takes the RDR8
+                // int(...) wrap instead of the bare precision-warning render. Gated to
+                // float names only: a broad flip (e.g. foreign bool fields going bare
+                // where the unknowable int(...) wrap compiles today) would regress.
                 ref_reg_ty = ctx.fields.and_then(|m| m.get(&field)).cloned()
+                    .or_else(|| float_field_type(ctx.refs, tid, &field))
                     .or_else(|| ctx.refs.member_type(tid, off).map(|s| s.to_string()));
                 ref_reg_nfty = ctx.refs.type_by_id(tid)
                     .and_then(|cls| ctx.refs.native_field_type(cls, &field))
@@ -1656,7 +1690,11 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<Strin
                 let off = ins.words.get(1).copied().unwrap_or(0) as i32;
                 let tid = ins.dwords.first().copied().unwrap_or(0) as i32;
                 let field = ctx.refs.member(tid, off).map(|s| s.to_string()).unwrap_or_else(|| format!("field_0x{off:x}"));
-                ref_reg_ty = ctx.refs.member_type(tid, off).map(|s| s.to_string()); // foreign object field
+                // batch-30c: float-family-gated precise resolution first (see LoadThisR) —
+                // e.g. `local = Start.Z;` (FVector, double) into an int slot must know the
+                // source is float so the RDR8 wrap fires.
+                ref_reg_ty = float_field_type(ctx.refs, tid, &field)
+                    .or_else(|| ctx.refs.member_type(tid, off).map(|s| s.to_string())); // foreign object field
                 ref_reg_nfty = ctx.refs.type_by_id(tid)
                     .and_then(|cls| ctx.refs.native_field_type(cls, &field))
                     .filter(|t| is_enum_name(t))
@@ -1681,6 +1719,11 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<Strin
                     // bare; RDR8 stays bare (no UE enum is 8 bytes).
                     let unknowable = match pending_ty.as_deref() {
                         None => true,
+                        // batch-30c: a template-`?` return (iterator Proceed/opIndex element)
+                        // read into an int-declared slot takes the wrap too — int(x) is
+                        // neutral for real ints, and the float32-element reads were the
+                        // NormalizeWeights precision-warning residue.
+                        Some("?") => true,
                         Some(t) => {
                             let t = t.trim_start_matches("const ");
                             matches!(t.bytes().next(), Some(b'U') | Some(b'A') | Some(b'F') | Some(b'T'))
@@ -1691,7 +1734,10 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<Strin
                         pending_ty.as_deref().map(|t| t.trim_start_matches("const ")),
                         Some("float" | "float32" | "double")
                     );
-                    let rhs = if dst_is_int && (unknowable || float_src) && n != "RDR8" {
+                    // batch-30c: RDR8 joins the wrap when the source is KNOWN float-family —
+                    // a float64 read into an int slot warns (module-killer); int64 reads
+                    // (the reason RDR8 was excluded) stay bare via !float_src.
+                    let rhs = if dst_is_int && (unknowable || float_src) && (n != "RDR8" || float_src) {
                         format!("int({p})")
                     } else {
                         enum_to_int(p, pending_ty.as_deref(), dst_is_int)
@@ -1732,7 +1778,10 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<Strin
                         ref_reg_ty.as_deref().map(|t| t.trim_start_matches("const ")),
                         Some("float" | "float32" | "double")
                     );
-                    let rhs = if dst_is_int && (unknowable || float_src) && n != "RDR8" {
+                    // batch-30c: RDR8 joins the wrap for KNOWN float-family members (the
+                    // float64 member -> int slot precision-warning residue: foreign script
+                    // config floats, FVector.Z/FRotator.Yaw); int64 member reads stay bare.
+                    let rhs = if dst_is_int && (unknowable || float_src) && (n != "RDR8" || float_src) {
                         format!("int({r})")
                     } else {
                         enum_to_int(r.clone(), ref_reg_ty.as_deref(), dst_is_int)
@@ -1836,6 +1885,20 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<Strin
                     && looks_int(&name(src))
                 {
                     format!("({} != 0)", name(src))
+                } else if ctx.slot_type(dst).is_none()
+                    && matches!(ctx.slot_type(src).as_deref(), Some("float" | "float32" | "double"))
+                {
+                    // batch-30c: a float-family-typed slot copied into an UNTYPED
+                    // (int-declared) slot is the batch-28 poison residue — the explicit
+                    // int(...) kills the precision warning (module-killer), mirroring the
+                    // member-RDR wraps; a genuinely-int destination truncates identically.
+                    format!("int({})", name(src))
+                } else if ctx.slot_type(dst).as_deref() == Some("float32")
+                    && matches!(ctx.slot_type(src).as_deref(), Some("float" | "double"))
+                {
+                    // batch-30c: float64 -> float32 slot copy warns too; float32(x) is the
+                    // batch-28 in-game-proven explicit-narrowing syntax.
+                    format!("float32({})", name(src))
                 } else {
                     name(src)
                 };
@@ -1889,9 +1952,11 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<Strin
             }
             // ---- comparisons ----
             "CMPi" | "CMPu" | "CMPf" | "CMPd" | "CMPi64" | "CMPu64" => {
+                test_after_call = true;
                 cmp = Some(Cmp { a: name(w(ins, 0)), b: name(w(ins, 1)), ..Default::default() });
             }
             "CMPIi" | "CMPIu" => {
+                test_after_call = true;
                 let c = ins.dwords.first().copied().unwrap_or(0) as i32;
                 let s = w(ins, 0);
                 // an enum compared to an int literal needs explicit int(enum) — AngelScript has
@@ -1904,6 +1969,7 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<Strin
             // CMPIf's dword immediate is an IEEE-754 float payload, not an int — render it as
             // a float literal so e.g. `x < 1.0f` doesn't become `x < 1065353216`.
             "CMPIf" => {
+                test_after_call = true;
                 let bits = ins.dwords.first().copied().unwrap_or(0);
                 cmp = Some(Cmp {
                     a: name(w(ins, 0)),
@@ -1911,7 +1977,10 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<Strin
                     ..Default::default()
                 });
             }
-            "CmpPtrNull" => cmp = Some(Cmp { a: name(w(ins, 0)), b: "nullptr".into(), ..Default::default() }),
+            "CmpPtrNull" => {
+                test_after_call = true;
+                cmp = Some(Cmp { a: name(w(ins, 0)), b: "nullptr".into(), ..Default::default() });
+            }
             // a test op turns the CMP register into a bool; it carries the real relational
             // operator (the jump only carries the true/false sense).
             "TZ" => { if let Some(c) = &mut cmp { c.op = Some("=="); } }
@@ -1922,6 +1991,7 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<Strin
             "TNP" => { if let Some(c) = &mut cmp { c.op = Some("<="); } }
             // ---- calls ----
             "CALL" | "CALLINTF" | "CALLBND" => {
+                test_after_call = false;
                 // Fix b2 — FLUSH a pending statement-position call result before this call starts,
                 // so a chained statement call (e.g. MakeRequirement then Add) isn't silently
                 // overwritten. Drops sentinel/unresolved pendings (see flush_b2 doc).
@@ -1966,6 +2036,15 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<Strin
                     let owner = ctx.refs.func_owner_by_id(id);
                     let ret_is_ref = ctx.refs.func_ret_by_id(id).map(|d| d.is_reference).unwrap_or(false);
                     pending_is_ref = ret_is_ref; // batch-29a: RDR may consume this call's result
+                    // batch-30c: a ref-returning call clobbers the VM value register — the
+                    // same register member loads fill — so a stale member `ref_reg` can no
+                    // longer be what a later RDR reads (the 29a gate-rest: GetResult()
+                    // discarded + a stale member read consumed in its place).
+                    if ret_is_ref {
+                        ref_reg = None;
+                        ref_reg_ty = None;
+                        ref_reg_nfty = None;
+                    }
                     // batch-24b shadow gate: a free SCRIPT global (no owner, global namespace)
                     // rendered inside a class method is shadowed by any same-named member in
                     // the class's (native or script) ancestry. Member-name existence (T3
@@ -1982,6 +2061,7 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<Strin
                 };
             }
             "CALLSYS" | "Thiscall1" => {
+                test_after_call = false;
                 // Fix b2 — flush a pending statement-position call result before this call begins
                 // (e.g. MakeRequirement's result must be emitted before `Add(...)` overwrites it).
                 flush_b2!();
@@ -2133,6 +2213,13 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<Strin
                     // generated-accessor qualification see the owning class of CALLSYS methods.
                     let ret_is_ref = ctx.refs.func_ret_by_ptr(ptr).map(|d| d.is_reference).unwrap_or(false);
                     pending_is_ref = ret_is_ref; // batch-29a: RDR may consume this call's result
+                    // batch-30c: mirror of the by-id arm — a ref-returning native call
+                    // clobbers the value register; invalidate a stale member ref_reg.
+                    if ret_is_ref {
+                        ref_reg = None;
+                        ref_reg_ty = None;
+                        ref_reg_nfty = None;
+                    }
                     build_call(&mut stack, &qualified, ctx.refs.is_method_by_ptr(ptr), ctx.super_ctor, ctx.refs.func_params_by_ptr(ptr), na, trusted, ctx.refs.func_owner_by_ptr(ptr), ctx.class_name, false, pending_ty.as_deref(), ret_is_ref, false, ctx.refs)
                 };
             }
@@ -2183,6 +2270,7 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<Strin
             }
             "LOADOBJ" => obj_reg = Some(name(w(ins, 0))),
             "CpyVtoR4" | "CpyVtoR8" => {
+                test_after_call = true;
                 // batch-21 Class C shape 3: a pending VOID call has no value to copy — the
                 // register content comes from the SLOT operand (e.g. a bool& out-param the call
                 // just wrote: `CalculateDistanceToTarget(.., local_3); return local_3;`).
@@ -2218,6 +2306,7 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<Strin
                 }
             }
             "CpyVtoR1" => {
+                test_after_call = true;
                 // a bool moved into the test register: feeds either RET or a conditional jump.
                 // A call result is already bool-typed; a slot holds the bool as an int —
                 // EXCEPT a slot DECLARED bool (a `bool` param / bool-typed local), which must
@@ -2443,6 +2532,21 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<Strin
                     if let Some(p) = pending.take() {
                         cond = Some((p, pending_ty.as_deref() == Some("bool")));
                     }
+                } else if pending.is_some()
+                    && pending_ty.as_deref() == Some("bool")
+                    && !test_after_call
+                {
+                    // batch-30c (C9, the Conversation IsVisible family): a BOOL-returning
+                    // call issued AFTER the recovered comparison clobbered the value
+                    // register — the jump tests the call's result, not the stale compare
+                    // (`....IsValid();` discarded + `if (local_9 != 1)` testing a compare
+                    // from several statements earlier). Prefer the live bool pending —
+                    // but ONLY when no compare/register-load executed after the call
+                    // (`test_after_call`): a CmpPtrNull/CpyVtoR between the call and the
+                    // jump re-fills the register, and that test stays authoritative.
+                    let p = pending.take().unwrap();
+                    cond = Some((p, true));
+                    cmp = None;
                 }
             }
             // ---- pure VM housekeeping / flow: ignore ----
