@@ -45,6 +45,11 @@ struct Arg {
     /// temporary. The nested-call retain keeps these (`GiveExperience(hero, local_23)` must not
     /// lose its `this.XP_...`-sourced Amount to an intervening `GetHero()`).
     keep: bool,
+    /// batch-25a (G2): ENUM value type of a NATIVE struct's field, from the ADDSi arm's
+    /// `native_field_type` lookup — carried ONLY so PopRPtr can hand it to the WRTV1 guard
+    /// (scoped option: it is deliberately NOT merged into `ty`, so call-arg/argtype gates
+    /// never see it).
+    nfty: Option<String>,
 }
 impl Arg {
     fn int(s: String) -> Arg {
@@ -1140,6 +1145,10 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
     let mut obj_reg: Option<String> = None;
     let mut ref_reg: Option<String> = None; // Idiom-B member address
     let mut ref_reg_ty: Option<String> = None; // field type name behind ref_reg (for casts)
+    // batch-25a (G2): ENUM value type of a native struct's field behind ref_reg, from the
+    // in-crate native-field table (`refs::native_field_type`). Consumed ONLY by the WRTV1
+    // guard so the render becomes `field = EEnum(slot)` instead of the bool-wrap.
+    let mut ref_reg_nfty: Option<String> = None;
     let mut set_consts: HashMap<i32, ConstBits> = HashMap::new(); // last SetV* constant per slot
     // Slots whose current value came from a MEMBER READ (RDR* after a member-ref load) — real
     // data values, kept by the nested-call retain (see Arg.keep). Invalidated on overwrite.
@@ -1324,10 +1333,23 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                         .and_then(|cls| ctx.refs.field_type_by_class(cls, &field))
                         .map(|s| s.to_string())
                 });
+                // batch-25a (G2): when the normal chain can't type the field (NATIVE struct
+                // owner), consult the in-crate native-field table — carried in the SEPARATE
+                // nfty channel so only the WRTV1 guard sees it (never the call-arg gates).
+                let nfty = if fty.is_none() {
+                    ctx.refs
+                        .type_by_id(tid)
+                        .and_then(|cls| ctx.refs.native_field_type(cls, &field))
+                        .filter(|t| is_enum_name(t))
+                        .map(|s| s.to_string())
+                } else {
+                    None
+                };
                 if let Some(top) = stack.last_mut() {
                     top.s = format!("{}.{field}", top.s);
                     top.is_int = false; // now a member access, not a bare int slot
                     top.ty = fty;
+                    top.nfty = nfty;
                 }
             }
             "RDSPtr" => {} // deref in place: no change to the rendered name
@@ -1341,6 +1363,10 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 // field type — so prefer the map and only fall back to member_type.
                 ref_reg_ty = ctx.fields.and_then(|m| m.get(&field)).cloned()
                     .or_else(|| ctx.refs.member_type(tid, off).map(|s| s.to_string()));
+                ref_reg_nfty = ctx.refs.type_by_id(tid)
+                    .and_then(|cls| ctx.refs.native_field_type(cls, &field))
+                    .filter(|t| is_enum_name(t))
+                    .map(|s| s.to_string());
                 // LoadThisR loads from slot 0. In a METHOD that is `this`; in a FREE (mixin)
                 // function slot 0 is parameter 0, so hardcoding `this.` emits an undeclared base
                 // -> "'field' is not a member of 'Unknown'". slot_name(0) renders both correctly.
@@ -1352,6 +1378,10 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 let tid = ins.dwords.first().copied().unwrap_or(0) as i32;
                 let field = ctx.refs.member(tid, off).map(|s| s.to_string()).unwrap_or_else(|| format!("field_0x{off:x}"));
                 ref_reg_ty = ctx.refs.member_type(tid, off).map(|s| s.to_string()); // foreign object field
+                ref_reg_nfty = ctx.refs.type_by_id(tid)
+                    .and_then(|cls| ctx.refs.native_field_type(cls, &field))
+                    .filter(|t| is_enum_name(t))
+                    .map(|s| s.to_string());
                 ref_reg = Some(format!("{obj}.{field}"));
             }
             _ if n.starts_with("RDR") => {
@@ -1406,6 +1436,27 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                         Some(t) if looks_int(&raw) => field_assign_rhs(&raw, t),
                         _ => raw.clone(),
                     };
+                    // batch-25a (G2, specs/batch23-cantconvert.md): a 1-byte write to a NATIVE
+                    // struct's field whose value type the in-crate native-field table resolves
+                    // to an ENUM is the enum ORDINAL store (`SetV1 w80, 0x2 ... WRTV1 w80`), not
+                    // a bool — render `field = EVerticalAlignment(local_80);` via the existing
+                    // enum machinery instead of letting the bool heuristic below produce
+                    // `(local_80 != 0)` ("bool -> E*&", 50 in-game errors, 14 fns). Guards
+                    // mirror the bool heuristic: untransformed bare int slot only, and never a
+                    // slot already KNOWN bool/enum (bare enum->enum / bool sources stay bare).
+                    if n == "WRTV1"
+                        && rhs == raw
+                        && rhs != UNRESOLVED
+                        && looks_int(&raw)
+                        && ctx.slot_type(slot).as_deref() != Some("bool")
+                        && !ctx.slot_type(slot).as_deref().map(is_enum_name).unwrap_or(false)
+                    {
+                        if let Some(ety) = ref_reg_nfty.as_deref() {
+                            if let Some(c) = cast_to_typename(&raw, ety) {
+                                rhs = c;
+                            }
+                        }
+                    }
                     // A 1-byte write (WRTV1) to a field whose type we could NOT resolve to bool
                     // (a foreign nested member -> ref_reg_ty is the owner/None) is almost always a
                     // bool UPROPERTY, whose auto-generated accessor is `bool&`: `field = intSlot`
@@ -1870,6 +1921,7 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 if let Some(top) = stack.pop() {
                     ref_reg = Some(top.s);
                     ref_reg_ty = top.ty;
+                    ref_reg_nfty = top.nfty; // batch-25a: native enum field type for WRTV1
                 }
             }
             // RefCpyV (wW_ARG): copy the top-of-stack handle into the destination slot named by

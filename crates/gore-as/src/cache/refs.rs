@@ -359,6 +359,38 @@ impl RefResolver {
     pub fn native_name_exists(&self, name: &str) -> bool {
         self.native.as_ref().is_some_and(|n| n.has_name(name))
     }
+    /// Enum VALUE type of a NATIVE struct's field, for the WRTV1 1-byte-write guard
+    /// (batch-25a, specs/batch23-cantconvert.md G2). The script cache cannot resolve these:
+    /// PropertyReferences.OldTypeId is the OWNER struct (verified: FWidgetAlignment.
+    /// VerticalAlignment -> "FWidgetAlignment"), and several of the enums are not even in the
+    /// T1 type table. The PRODUCTION source is this in-crate table — the emit runs without
+    /// Binds.Cache (no `GORE_AS_BINDS`, no sibling next to the input cache; the Binds-loaded
+    /// arity trim is a proven regression, batch-24b report), so a Binds-side parse alone would
+    /// never fire. Every entry is verified against the shipped Binds.Cache field decls
+    /// (`binds.rs` test `validate_field_types_against_real_binds_cache`) and keyed by the
+    /// exact (ADDSi type-id -> owner, member) pair observed at the failing WRTV1 sites.
+    /// The Binds field-type table (when loaded, dev runs) extends coverage as a fallback.
+    pub fn native_field_type(&self, class: &str, field: &str) -> Option<&str> {
+        const KNOWN_NATIVE_FIELD_TYPES: &[(&str, &str, &str)] = &[
+            ("FWidgetAlignment", "VerticalAlignment", "EVerticalAlignment"),
+            ("FWidgetAlignment", "HorizontalAlignment", "EHorizontalAlignment"),
+            ("FPerceivedAgent", "Relationship", "ERelationship"),
+            ("FPerceivedAgent", "Hostility", "ERelationshipHostility"),
+            ("FPerceivedAgent", "RelativeRank", "ERelationshipRelativeRank"),
+            ("FFXPerceptionSoundArea", "PerceptionLoudness", "EPerceptionNoiseLoudness"),
+            ("FALoadingScreenSettings", "Layout", "EAsyncLoadingScreenLayout"),
+            ("FALoadingScreenSettings", "PlaybackType", "EMoviePlaybackType"),
+            ("FTextAppearance", "Justification", "ETextJustify"),
+            ("FInteractionAnimTransition", "TransitionKind", "EInteractionInputKind"),
+            ("FWeatherSaveGame", "CurrentWeather", "EWeather"),
+        ];
+        if let Some((_, _, t)) =
+            KNOWN_NATIVE_FIELD_TYPES.iter().find(|(c, f, _)| *c == class && *f == field)
+        {
+            return Some(t);
+        }
+        self.native.as_ref().and_then(|n| n.field_type(class, field))
+    }
     /// Inject script-class METHOD names from the parsed modules (a shadowing member need not be
     /// referenced by any bytecode — e.g. `UCM_CastSpell_Base::CastSpell()` shadows the free
     /// `CastSpell(AI, int)` even if the method itself is never called).
