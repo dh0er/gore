@@ -288,6 +288,26 @@ impl Ctx<'_> {
                     }
                     _ => v,
                 };
+                // batch-25b (G4 RET shape, specs/batch23-nomatch.md): `return local_N;` where
+                // the slot's recovered type is a PROVABLY less-derived object type than the
+                // function's return type (a covariant-erased producer: `UCBT_Tree local` vs
+                // `UCBT_Tree_SelectAttackBase` return) fails "Can't implicitly convert".
+                // Wrap in the game's own null-safe downcast: `return Cast<RetTy>(local_N);`.
+                // Gate: bare local slot, BOTH heads known object types (U*/A*), and the
+                // return head provably derives from the slot head (script hierarchy, or the
+                // engine axioms in `provably_derived`) — never wrapped when unsure.
+                let v = match (self.ret_ty, v.strip_prefix("local_").and_then(|d| d.parse::<i32>().ok())) {
+                    (Some(rt), Some(slot)) => {
+                        let rh = rt.base_name(self.refs);
+                        match self.slot_type(slot) {
+                            Some(st) if provably_derived(&rh, &st, self.refs) => {
+                                format!("Cast<{rh}>({v})")
+                            }
+                            _ => v,
+                        }
+                    }
+                    _ => v,
+                };
                 format!("return {v};")
             }
             None => format!("return {RVODEF};"),
@@ -1055,6 +1075,42 @@ fn field_assign_rhs(rhs: &str, tyname: &str) -> String {
         | "float" | "float32" | "double" | "?" => rhs.to_string(),
         _ => UNRESOLVED.to_string(),
     }
+}
+
+/// batch-25b (G4): true when object type `dst` PROVABLY derives from (and differs from)
+/// object type `src` — the gate for the Cast-wrap on RET / RefCpyV dataflow. Sources of
+/// proof, in order:
+/// - the script-class hierarchy (walks script supers; super NAMES may be native classes,
+///   so e.g. `ALightningRayVisual -> ... -> AActor` resolves),
+/// - `src == UObject`: every U*/A* type derives UObject (engine axiom),
+/// - `src == AActor` and `dst` is `A*`-prefixed: the UE naming convention reserves the `A`
+///   prefix for AActor-derived classes.
+/// Native-only pairs with no recorded chain return false (never wrap when unsure) —
+/// documented residue: base-typed slots between two NATIVE classes stay unwrapped.
+/// Template heads (`TSubclassOf<...>`) and value types never qualify.
+fn provably_derived(dst: &str, src: &str, refs: &RefResolver) -> bool {
+    fn head(s: &str) -> &str {
+        s.split('<').next().unwrap_or(s).trim_start_matches("const ")
+    }
+    let (dst, src) = (head(dst), head(src));
+    let is_obj = |s: &str| {
+        let b = s.as_bytes();
+        matches!(b.first(), Some(b'U') | Some(b'A'))
+            && b.get(1).map(|c| c.is_ascii_uppercase()).unwrap_or(false)
+    };
+    if dst == src || !is_obj(dst) || !is_obj(src) {
+        return false;
+    }
+    if refs.is_subclass(dst, src) {
+        return true;
+    }
+    if src == "UObject" {
+        return true;
+    }
+    if src == "AActor" && dst.starts_with('A') {
+        return true;
+    }
+    false
 }
 
 /// True if `tyname` is a UE enum type (`E<Upper>...`) — same shape `cast_to_typename` keys on.
@@ -1943,7 +1999,25 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                         && (top.s.starts_with("local_") || top.s.starts_with("Cast<"));
                     if ok {
                         flush!();
-                        out.push(format!("{dst} = {};", top.s));
+                        // batch-25b (G4 assign shape): a slot-to-slot handle copy whose DEST
+                        // type provably derives from the SOURCE type (`AGothicCharacter
+                        // local_8 = UObject local_24;` — an iterator/temp producer erased the
+                        // covariant type) fails "Can't implicitly convert". Wrap the source in
+                        // the standard downcast. Same provably_derived gate as the RET shape;
+                        // unknown/unprovable pairs render bare (status quo).
+                        let dst_slot = w(ins, 0);
+                        let rhs = match (dst_slot > 0).then(|| ctx.slot_type(dst_slot)).flatten() {
+                            Some(dt) if top
+                                .ty
+                                .as_deref()
+                                .map(|st| provably_derived(&dt, st, ctx.refs))
+                                .unwrap_or(false) =>
+                            {
+                                format!("Cast<{dt}>({})", top.s)
+                            }
+                            _ => top.s.clone(),
+                        };
+                        out.push(format!("{dst} = {rhs};"));
                     }
                 }
             }
