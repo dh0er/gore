@@ -474,6 +474,11 @@ fn narrowing_cast_target(n: &str) -> Option<&'static str> {
         "fTOu" | "dTOu" => "uint",
         "fTOi64" | "dTOi64" => "int64",
         "fTOu64" | "dTOu64" => "uint64",
+        // batch-28 (specs/batch27-floatwarnings.md §3): float(=f64) -> float32 narrows too —
+        // the bare copy render was the whole C2 class ("Implicit conversion from float64 to
+        // float32 loses precision"). Vanilla compiled clean, so the source carried this cast;
+        // the dTOf in the bytecode IS that cast.
+        "dTOf" => "float32",
         _ => return None,
     })
 }

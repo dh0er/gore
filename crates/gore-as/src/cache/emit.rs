@@ -340,7 +340,18 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
     // mis-typed default/optional-arg slots — FName->UAIState_DailyRoutine, TSubclassOf<X>->X).
     // outref_overrides: PSF slots feeding float-family REFERENCE params (declaration-only, below).
     // float_args/keep_ints (batch-25g): numeric BY-VALUE arg slots — see structure::ArgSlotHints.
-    let (slot_overrides, outref_overrides, float_args, keep_ints) = infer_slot_types(f, refs);
+    let (slot_overrides, outref_overrides, float_args, keep_ints, int_refs) = infer_slot_types(f, refs);
+    // batch-28 (specs/batch27-floatwarnings.md §2): unified numeric-kind dataflow pass.
+    // Anti-seed imports: slots value-pushed into int-family params (keep_ints), PSF-bound to
+    // int-family reference params (int_refs), or bool&-bound (outref "bool") hold int/bool
+    // bits at that point — float evidence on the same slot is slot reuse -> poison.
+    let num_anti: HashSet<i32> = keep_ints
+        .iter()
+        .chain(int_refs.iter())
+        .copied()
+        .chain(outref_overrides.iter().filter(|(_, t)| t.as_str() == "bool").map(|(s, _)| *s))
+        .collect();
+    let numkinds = infer_float_flow(f, &fc, refs, fields, &float_args, &outref_overrides, &num_anti);
     for (slot, ty) in &slot_overrides {
         local_types.insert(*slot, ty.clone());
     }
@@ -351,6 +362,17 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
         if ty == "bool" {
             local_types.insert(*slot, ty.clone());
         }
+    }
+    // batch-28 (spec §2.4.2): the dataflow pass's float slots feed the body renderer FIRST —
+    // the pass beats infer_locals' width guesses below, while or_insert keeps the
+    // obj_locals/consumer/bool entries above authoritative. I64 entries are declaration-only.
+    for (slot, kd) in &numkinds {
+        let kw = match kd {
+            NumKind::F32 => "float32",
+            NumKind::F64 => "float",
+            NumKind::I64 => continue,
+        };
+        local_types.entry(*slot).or_insert_with(|| kw.to_string());
     }
     // batch-20 Class C (SetByCallerMagnitude): float-family slots (from the width-typed ops,
     // e.g. `dTOf w35`) must survive the nested-call stack-split retain (`!is_int` keeps them)
@@ -393,7 +415,13 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
     // batch-25g: hand the numeric value-arg slot sets to the body renderer (float-literal
     // SetV* rendering + the int retain keep flag).
     let hints = super::structure::ArgSlotHints {
-        float_slots: float_args.keys().copied().collect(),
+        // batch-28: the pass's float slots extend the SetV*-literal render set (C3 — the
+        // `int64 local = 0; local = 0.33;` asymmetry) and the S4 outref-literal bonus.
+        float_slots: float_args
+            .keys()
+            .copied()
+            .chain(numkinds.iter().filter(|(_, k)| !matches!(k, NumKind::I64)).map(|(s, _)| *s))
+            .collect(),
         keep_ints,
     };
     let body = body_statements_ctor(&fc, refs, depth + 1, super_ctor, Some(&f.ret), fields, Some(&param_types), class_name, Some(&local_types), Some(&hints));
@@ -443,6 +471,23 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
     // whole function stubbing on an undeclared identifier).
     let used = used_locals(&body);
     let mut locals = infer_locals(f, refs);
+    // batch-28: unified numeric-kind dataflow (C1/C2/C3/C4c/C4d) — overrides ONLY the
+    // width-guessed primitive keywords; farg/outref/member/callret overrides still apply
+    // after and keep their precedence. `Some("float")` IS overridable: that is exactly the
+    // dTOf/f-op dst mis-keyword (a 4-byte slot declared with the 8-byte keyword) -> float32.
+    for (slot, kd) in &numkinds {
+        let kw = match kd {
+            NumKind::F32 => "float32",
+            NumKind::F64 => "float",
+            NumKind::I64 => "int64",
+        };
+        match locals.get(slot).map(String::as_str) {
+            None | Some("int" | "int64" | "float" | "double") => {
+                locals.insert(*slot, kw.to_string());
+            }
+            _ => {} // opCast/object/ret-retype float32 entries win
+        }
+    }
     for &n in &used {
         locals.entry(n).or_insert_with(|| "int".to_string());
     }
@@ -901,10 +946,10 @@ fn ret_is_struct(ty: &str) -> bool {
 fn infer_slot_types(
     f: &Func,
     refs: &RefResolver,
-) -> (HashMap<i32, String>, HashMap<i32, String>, HashMap<i32, String>, HashSet<i32>) {
+) -> (HashMap<i32, String>, HashMap<i32, String>, HashMap<i32, String>, HashSet<i32>, HashSet<i32>) {
     let instrs = match disassemble(&f.bytecode) {
         Ok(i) => i,
-        Err(_) => return (HashMap::new(), HashMap::new(), HashMap::new(), HashSet::new()),
+        Err(_) => return (HashMap::new(), HashMap::new(), HashMap::new(), HashSet::new(), HashSet::new()),
     };
     let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32);
     let writes = |op: &str| {
@@ -937,7 +982,11 @@ fn infer_slot_types(
     // keep flag (no retype). Conflicts (differing float kws, or float+int for one slot) drop.
     let mut farg: HashMap<i32, Option<String>> = HashMap::new();
     let mut ikeep: HashSet<i32> = HashSet::new();
-    let mut pair = |ostack: &mut Vec<Option<(i32, bool)>>, params: Option<&[super::types::DataType]>, is_method: bool, ret_struct: bool, cand: &mut HashMap<i32, Option<String>>, outref: &mut HashMap<i32, Option<String>>, farg: &mut HashMap<i32, Option<String>>, ikeep: &mut HashSet<i32>| {
+    // batch-28: PSF slots bound to an INT-family reference param — int lvalues; anti-seeds
+    // for `infer_float_flow` (floating such a decl breaks the `int&` binding; the exact
+    // batch-9-class risk named in specs/batch27-floatwarnings.md §2.6).
+    let mut iref: HashSet<i32> = HashSet::new();
+    let mut pair = |ostack: &mut Vec<Option<(i32, bool)>>, params: Option<&[super::types::DataType]>, is_method: bool, ret_struct: bool, cand: &mut HashMap<i32, Option<String>>, outref: &mut HashMap<i32, Option<String>>, farg: &mut HashMap<i32, Option<String>>, ikeep: &mut HashSet<i32>, iref: &mut HashSet<i32>| {
         let Some(params) = params else { ostack.clear(); return; };
         // A method returning a struct BY VALUE (F/T/E) carries a hidden RVO out-slot pushed as the
         // last user arg (just before the receiver); count it so it is consumed, but exclude it from
@@ -993,6 +1042,13 @@ fn infer_slot_types(
                             _ => {}
                         }
                     }
+                    // batch-28: int-family reference binding — see `iref` above.
+                    if *is_psf
+                        && pt.is_reference
+                        && matches!(pt.token, 0x44 | 0x45 | 0x46 | 0x47 | 0x4B | 0x4C | 0x4D | 0x4E)
+                    {
+                        iref.insert(*s);
+                    }
                     // batch-25g: numeric BY-VALUE args (value-pushed, non-reference params).
                     if !*is_psf && !pt.is_reference {
                         match pt.token {
@@ -1036,7 +1092,7 @@ fn infer_slot_types(
             "CALL" | "CALLINTF" | "CALLBND" => {
                 let id = ins.dwords.first().copied().unwrap_or(0) as i32;
                 let rs = refs.func_ret_by_id(id).map(|d| !d.is_reference && ret_is_struct(&d.base_name(refs))).unwrap_or(false);
-                pair(&mut ostack, refs.func_params_by_id(id), refs.is_method_by_id(id), rs, &mut cand, &mut outref, &mut farg, &mut ikeep);
+                pair(&mut ostack, refs.func_params_by_id(id), refs.is_method_by_id(id), rs, &mut cand, &mut outref, &mut farg, &mut ikeep, &mut iref);
             }
             "CALLSYS" | "Thiscall1" => {
                 let ptr = ins.qwords.first().copied().unwrap_or(0) as i64;
@@ -1066,7 +1122,7 @@ fn infer_slot_types(
                     continue;
                 }
                 let rs = refs.func_ret_by_ptr(ptr).map(|d| !d.is_reference && ret_is_struct(&d.base_name(refs))).unwrap_or(false);
-                pair(&mut ostack, refs.func_params_by_ptr(ptr), refs.is_method_by_ptr(ptr), rs, &mut cand, &mut outref, &mut farg, &mut ikeep);
+                pair(&mut ostack, refs.func_params_by_ptr(ptr), refs.is_method_by_ptr(ptr), rs, &mut cand, &mut outref, &mut farg, &mut ikeep, &mut iref);
             }
             _ => {}
         }
@@ -1093,7 +1149,7 @@ fn infer_slot_types(
         float_args.remove(&s);
         ikeep.remove(&s);
     }
-    (obj, outref, float_args, ikeep)
+    (obj, outref, float_args, ikeep, iref)
 }
 
 /// Member-access-driven slot typing: a `LoadRObjR`/`LoadVObjR base, off, tid` reads field
@@ -1555,6 +1611,356 @@ fn usable_ret_type(ty: String, recv: Option<i32>, known: &HashMap<i32, String>) 
         return None;
     }
     Some(format!("{ty}<{}>", &r[lt + 1..gt]))
+}
+
+/// batch-28 (specs/batch27-floatwarnings.md §2.3): numeric kind of a slot, as proven by the
+/// unified dataflow pass. Keyword mapping: `F32 -> "float32"`, `F64 -> "float"` (the faithful
+/// vanilla keyword in this `floatIsFloat64` build), `I64 -> "int64"`. Conflict = removal
+/// (status-quo declaration).
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum NumKind {
+    F32,
+    F64,
+    I64,
+}
+
+/// Merge one piece of kind evidence into `slot` (returns true when anything changed).
+/// Float evidence REPLACES an I64 guess (SetV8 raw bits are float64 bits whenever the slot
+/// has float evidence); F32-vs-F64 is a REAL width conflict -> poison; float evidence landing
+/// on an anti-seeded (proven-int) slot -> poison.
+fn nk_apply(
+    kind: &mut HashMap<i32, NumKind>,
+    poison: &mut HashSet<i32>,
+    anti: &HashSet<i32>,
+    slot: i32,
+    k: NumKind,
+) -> bool {
+    if poison.contains(&slot) {
+        return false;
+    }
+    if !matches!(k, NumKind::I64) && anti.contains(&slot) {
+        kind.remove(&slot);
+        poison.insert(slot);
+        return true;
+    }
+    match kind.get(&slot).copied() {
+        None => {
+            kind.insert(slot, k);
+            true
+        }
+        Some(prev) if prev == k => false,
+        Some(NumKind::I64) => {
+            kind.insert(slot, k);
+            true
+        }
+        Some(_) if matches!(k, NumKind::I64) => false, // float evidence wins, I64 seed dropped
+        Some(_) => {
+            kind.remove(&slot);
+            poison.insert(slot);
+            true
+        }
+    }
+}
+
+/// batch-28: unified numeric-kind dataflow (spec §2.3). The VM never converts implicitly —
+/// every numeric conversion is an explicit `*TO*` opcode and `SetV*`/`CpyVtoV*`/`CpyRtoV*`/
+/// `RDR*`/`WRTV*` are TYPELESS width copies — so a slot's numeric kind is statically
+/// decidable from its op profile and float-ness propagates deterministically across the
+/// typeless copies. Root cause of the C1/C2/C3/C4c/C4d warning classes: the declaration side
+/// was blind to float evidence on op OPERANDS, float call returns through `CpyRtoV*`, float
+/// member reads through `RDR8`, and kind propagation across `CpyVtoV*`.
+///
+/// Seeds:
+///  (a) float-op OPERANDS: every word of f-ops -> F32, of d-ops -> F64 (same op lists as
+///      `structure::float_operand_slots`);
+///  (b) width-changing conversions, BOTH sides (fTOd/dTOf/iTOd/…/dTOi/…); the same-width
+///      float<->int casts fTOi/fTOu poison their slots (one offset changing kind
+///      mid-lifetime is undecidable — bail to status quo);
+///  (c) call results: CpyRtoV4 with last-call by-value ret token 0x50 -> F32, CpyRtoV8 with
+///      0x51|0x5E -> F64 (same `last`-tracking discipline as `infer_call_result_types`);
+///  (d) member reads/writes: Load*R + RDR4/8 (dst) / WRTV4/8 (src) when the field's VALUE
+///      type resolves via the own-class `fields` map or `field_type_by_class` — width-matched
+///      (native-struct fields stay unresolved; propagation may still type the slot);
+///  (e) by-value float param slots (via `build_param_off_map_rvo`; int-family by-value param
+///      offsets are anti-seeds);
+///  (f) imports: `float_args`/`outrefs` float keywords, CpyVtoR4/8 float-return payloads
+///      (mirrors the infer_locals ret-retype so propagation sees it);
+///  (g) I64 seeds (LOWEST priority — any float evidence wins): SetV8 dsts + int64-op operands.
+///
+/// Anti-seeds (poison on float contact): int arith/bitwise/inc/dec operands, the int sides of
+/// conversions, CMPi/CMPu(64)/CMPIi/CMPIu operands, NOT slots, TZ/TNZ-tested register
+/// payloads, plus the imported `anti` set (int-family value args / `int&` / `bool&` bindings).
+///
+/// Propagation to fixed point over CpyVtoV edges: 8-byte edges carry {F64, I64} (an F32
+/// endpoint is a width conflict -> poison both); 4-byte edges carry {F32} (an F64 endpoint ->
+/// poison both). A poisoned endpoint poisons its copy partner — the copy pair must agree, or
+/// the retype would CREATE a new float->int warning on the copy line (batch-9 class).
+///
+/// Output: POSITIVE, non-object slots only, conflicts removed. Decompile mode never calls
+/// this (emit-only context).
+fn infer_float_flow(
+    f: &Func,
+    fc: &FuncCode,
+    refs: &RefResolver,
+    fields: Option<&HashMap<String, String>>,
+    float_args: &HashMap<i32, String>,
+    outrefs: &HashMap<i32, String>,
+    anti_imports: &HashSet<i32>,
+) -> HashMap<i32, NumKind> {
+    let instrs = match disassemble(&f.bytecode) {
+        Ok(i) => i,
+        Err(_) => return HashMap::new(),
+    };
+    let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32).unwrap_or(0);
+    let w1 = |ins: &super::disasm::Instr| ins.words.get(1).map(|w| *w as i16 as i32).unwrap_or(0);
+    let mut anti: HashSet<i32> = anti_imports.clone();
+    let mut poison: HashSet<i32> = HashSet::new();
+    let mut seeds: Vec<(i32, NumKind)> = Vec::new();
+    let mut edges: Vec<(i32, i32, bool)> = Vec::new(); // (dst, src, is_8_byte)
+
+    // (e) by-value param slots: float tokens seed, int-family tokens anti-seed (params are
+    // never declared by us — they matter as propagation sources across CpyVtoV copies).
+    let (param_offs, _rvo) = super::decompile::build_param_off_map_rvo(fc, &instrs, refs);
+    for (off, idx) in &param_offs {
+        let Some(pt) = fc.param_types.get(*idx) else { continue };
+        if pt.is_reference {
+            continue; // the frame offset holds a pointer, not the value
+        }
+        match pt.token {
+            0x50 => seeds.push((*off, NumKind::F32)),
+            0x51 | 0x5E => seeds.push((*off, NumKind::F64)),
+            0x44 | 0x45 | 0x46 | 0x47 | 0x4B | 0x4C | 0x4D | 0x4E => {
+                anti.insert(*off);
+            }
+            _ => {}
+        }
+    }
+    // (f) imported float evidence from the arg-pairing walk (by-value float args + float
+    // out-refs; bool out-refs arrive through `anti_imports`).
+    for m in [float_args, outrefs] {
+        for (slot, kw) in m {
+            match kw.as_str() {
+                "float32" => seeds.push((*slot, NumKind::F32)),
+                "float" | "double" => seeds.push((*slot, NumKind::F64)),
+                _ => {}
+            }
+        }
+    }
+    // trackers: just-completed call's by-value return token (survives only SUSPEND, consumed
+    // by CpyRtoV*), pending member ref (tid, member-off, base-is-slot0; survives CHKREF-family
+    // checks), and the slot behind a CpyVtoR4 for the TZ/TNZ anti-seed.
+    let mut last_ret: Option<i32> = None;
+    let mut ref_field: Option<(i32, i32, bool)> = None;
+    let mut last_vreg4: Option<i32> = None;
+    for ins in &instrs {
+        let n = ins.op.name;
+        // ---- tracker consumers ----
+        match n {
+            "CpyRtoV4" => {
+                if last_ret == Some(0x50) {
+                    seeds.push((w0(ins), NumKind::F32));
+                }
+            }
+            "CpyRtoV8" => {
+                if matches!(last_ret, Some(0x51) | Some(0x5E)) {
+                    seeds.push((w0(ins), NumKind::F64));
+                }
+            }
+            "RDR4" | "RDR8" | "WRTV4" | "WRTV8" => {
+                if let Some((tid, moff, own)) = ref_field {
+                    let fty = refs.member(tid, moff).and_then(|name| {
+                        let own_ty = if own { fields.and_then(|m| m.get(name)) } else { None };
+                        own_ty.map(String::as_str).or_else(|| {
+                            refs.type_by_id(tid).and_then(|cls| refs.field_type_by_class(cls, name))
+                        })
+                    });
+                    let is8 = n.ends_with('8');
+                    match fty.map(|t| t.trim_start_matches("const ")) {
+                        Some("float" | "double") if is8 => seeds.push((w0(ins), NumKind::F64)),
+                        Some("float32") if !is8 => seeds.push((w0(ins), NumKind::F32)),
+                        _ => {} // unknown / width-mismatched field: no seed
+                    }
+                }
+            }
+            "TZ" | "TNZ" => {
+                if let Some(s) = last_vreg4 {
+                    anti.insert(s);
+                }
+            }
+            _ => {}
+        }
+        // ---- per-op seeds / anti-seeds / copy edges ----
+        match n {
+            // (a) float-op operand seeds — same op lists as structure::float_operand_slots.
+            "ADDf" | "SUBf" | "MULf" | "DIVf" | "MODf" | "NEGf" | "IncVf" | "DecVf" | "ADDIf"
+            | "SUBIf" | "MULIf" | "CMPf" | "CMPIf" => {
+                for &wd in &ins.words {
+                    seeds.push((wd as i16 as i32, NumKind::F32));
+                }
+            }
+            "ADDd" | "SUBd" | "MULd" | "DIVd" | "MODd" | "NEGd" | "CMPd" => {
+                for &wd in &ins.words {
+                    seeds.push((wd as i16 as i32, NumKind::F64));
+                }
+            }
+            // (b) width-changing conversions, both sides.
+            "fTOd" => {
+                seeds.push((w0(ins), NumKind::F64));
+                seeds.push((w1(ins), NumKind::F32));
+            }
+            "dTOf" => {
+                seeds.push((w0(ins), NumKind::F32));
+                seeds.push((w1(ins), NumKind::F64));
+            }
+            "iTOd" | "uTOd" | "i64TOd" | "u64TOd" => {
+                seeds.push((w0(ins), NumKind::F64));
+                anti.insert(w1(ins));
+            }
+            "iTOf" | "uTOf" | "i64TOf" | "u64TOf" => {
+                seeds.push((w0(ins), NumKind::F32));
+                anti.insert(w1(ins));
+            }
+            "dTOi" | "dTOu" | "dTOi64" | "dTOu64" => {
+                seeds.push((w1(ins), NumKind::F64));
+                anti.insert(w0(ins));
+            }
+            "fTOi64" | "fTOu64" => {
+                seeds.push((w1(ins), NumKind::F32));
+                anti.insert(w0(ins));
+            }
+            // same-width float<->int casts: one offset holds both kinds mid-lifetime — bail.
+            "fTOi" | "fTOu" => {
+                poison.insert(w0(ins));
+                poison.insert(w1(ins));
+            }
+            // int<->int conversions: both sides proven int.
+            "sbTOi" | "swTOi" | "ubTOi" | "uwTOi" | "iTOb" | "iTOw" | "i64TOi" | "iTOi64"
+            | "uTOi64" => {
+                anti.insert(w0(ins));
+                anti.insert(w1(ins));
+            }
+            // anti-seeds: genuine int arithmetic/bitwise/compare evidence.
+            "ADDi" | "SUBi" | "MULi" | "DIVi" | "MODi" | "IncVi" | "DecVi" | "NEGi" | "BAND"
+            | "BOR" | "BXOR" | "BSLL" | "BSRA" | "BSRL" | "BNOT" | "ADDIi" | "SUBIi" | "MULIi"
+            | "CMPi" | "CMPu" | "CMPIi" | "CMPIu" | "NOT" => {
+                for &wd in &ins.words {
+                    anti.insert(wd as i16 as i32);
+                }
+            }
+            // (g) int64 ops: I64 seeds (lowest priority) AND anti (poison on float contact).
+            "ADDi64" | "SUBi64" | "MULi64" | "DIVi64" | "MODi64" | "CMPi64" | "CMPu64" => {
+                for &wd in &ins.words {
+                    anti.insert(wd as i16 as i32);
+                    seeds.push((wd as i16 as i32, NumKind::I64));
+                }
+            }
+            "SetV8" => seeds.push((w0(ins), NumKind::I64)),
+            // (f) float return payloads (mirror of the infer_locals ret-retype).
+            "CpyVtoR4" => {
+                if f.ret.token == 0x50 {
+                    seeds.push((w0(ins), NumKind::F32));
+                }
+            }
+            "CpyVtoR8" => {
+                if matches!(f.ret.token, 0x51 | 0x5E) {
+                    seeds.push((w0(ins), NumKind::F64));
+                }
+            }
+            // typeless slot-to-slot copies: propagation edges.
+            "CpyVtoV4" => edges.push((w0(ins), w1(ins), false)),
+            "CpyVtoV8" => edges.push((w0(ins), w1(ins), true)),
+            _ => {}
+        }
+        // ---- tracker updates ----
+        last_ret = match n {
+            "CALL" | "CALLINTF" | "CALLBND" => {
+                let id = ins.dwords.first().copied().unwrap_or(0) as i32;
+                refs.func_ret_by_id(id).filter(|d| !d.is_reference).map(|d| d.token)
+            }
+            "CALLSYS" | "Thiscall1" => {
+                let ptr = ins.qwords.first().copied().unwrap_or(0) as i64;
+                if refs.func_by_ptr(ptr) == Some("$beh0") {
+                    None
+                } else {
+                    refs.func_ret_by_ptr(ptr).filter(|d| !d.is_reference).map(|d| d.token)
+                }
+            }
+            "SUSPEND" => last_ret,
+            _ => None,
+        };
+        ref_field = match n {
+            "LoadThisR" => Some((ins.dwords.first().copied().unwrap_or(0) as i32, w0(ins), true)),
+            "LoadRObjR" | "LoadVObjR" => {
+                Some((ins.dwords.first().copied().unwrap_or(0) as i32, w1(ins), false))
+            }
+            "CHKREF" | "ChkRefS" | "ChkNullV" | "SUSPEND" => ref_field,
+            _ => None,
+        };
+        last_vreg4 = match n {
+            "CpyVtoR4" => Some(w0(ins)),
+            "SUSPEND" => last_vreg4,
+            _ => None,
+        };
+    }
+    // ---- apply seeds (anti set complete), then propagate to fixed point ----
+    let mut kind: HashMap<i32, NumKind> = HashMap::new();
+    for (s, k) in seeds {
+        if poison.contains(&s) {
+            continue;
+        }
+        nk_apply(&mut kind, &mut poison, &anti, s, k);
+    }
+    for s in &poison {
+        kind.remove(s);
+    }
+    loop {
+        let mut changed = false;
+        for &(a, b, is8) in &edges {
+            let pa = poison.contains(&a);
+            let pb = poison.contains(&b);
+            if pa || pb {
+                if !(pa && pb) {
+                    kind.remove(&a);
+                    kind.remove(&b);
+                    poison.insert(a);
+                    poison.insert(b);
+                    changed = true;
+                }
+                continue;
+            }
+            let ka = kind.get(&a).copied();
+            let kb = kind.get(&b).copied();
+            // a kind whose width contradicts the copy width: conflict, poison both ends.
+            let bad = if is8 { NumKind::F32 } else { NumKind::F64 };
+            if ka == Some(bad) || kb == Some(bad) {
+                kind.remove(&a);
+                kind.remove(&b);
+                poison.insert(a);
+                poison.insert(b);
+                changed = true;
+                continue;
+            }
+            // domain per edge width: 8-byte edges carry {F64, I64}, 4-byte edges {F32}.
+            let dom = |k: Option<NumKind>| match (k, is8) {
+                (Some(NumKind::F64) | Some(NumKind::I64), true) => k,
+                (Some(NumKind::F32), false) => k,
+                _ => None,
+            };
+            if let Some(k) = dom(ka) {
+                changed |= nk_apply(&mut kind, &mut poison, &anti, b, k);
+            }
+            if let Some(k) = dom(kb) {
+                changed |= nk_apply(&mut kind, &mut poison, &anti, a, k);
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    // POSITIVE local slots only; obj_locals-typed slots are outside the numeric domain.
+    let obj: HashSet<i32> = f.obj_locals.iter().map(|(s, _)| *s).collect();
+    kind.retain(|s, _| *s > 0 && !obj.contains(s) && !poison.contains(s));
+    kind
 }
 
 /// §3.3 consumer-driven typing of out-of-range `argN` slots. Scans the body for the RHS of an
@@ -2218,7 +2624,10 @@ fn is_primitive(ty: &str) -> bool {
 /// A default initializer literal for a base type.
 fn default_for(ty: &str) -> String {
     match ty {
-        "float" | "double" | "float32" => "0.0".into(),
+        "float" | "double" => "0.0".into(),
+        // batch-28 rider: constant-exactness is silent for 0.0 either way, but the
+        // f-suffix is the faithful vanilla form for the 4-byte float.
+        "float32" => "0.0f".into(),
         "bool" => "false".into(),
         _ => "0".into(),
     }
