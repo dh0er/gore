@@ -236,7 +236,8 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
     }).collect();
     // consumer-side override: never-written arg slots get the type their callee expects (fixes
     // mis-typed default/optional-arg slots — FName->UAIState_DailyRoutine, TSubclassOf<X>->X).
-    let slot_overrides = infer_slot_types(f, refs);
+    // outref_overrides: PSF slots feeding float-family REFERENCE params (declaration-only, below).
+    let (slot_overrides, outref_overrides) = infer_slot_types(f, refs);
     for (slot, ty) in &slot_overrides {
         local_types.insert(*slot, ty.clone());
     }
@@ -315,6 +316,16 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
     // obj_locals / member-derived / iterator-derived object type is a stronger signal
     // (all non-primitive, so they are naturally never overridden here).
     for (slot, ty) in &callret_overrides {
+        if used.contains(slot) && locals.get(slot).map(|t| is_primitive(t)).unwrap_or(true) {
+            locals.insert(*slot, ty.clone());
+        }
+    }
+    // out-ref float params (batch19 class 3): the callee's `float32&`/`float&`/`double&`
+    // signature is authoritative for a PSF'd out-slot — the call cannot compile otherwise
+    // ("expected float32&, but got int"). DECLARATION-only (body renders the slot name
+    // unchanged), applied LAST over the width-guessed primitive; never clobbers an
+    // object/struct declaration (a mis-paired entry would be non-primitive-declared).
+    for (slot, ty) in &outref_overrides {
         if used.contains(slot) && locals.get(slot).map(|t| is_primitive(t)).unwrap_or(true) {
             locals.insert(*slot, ty.clone());
         }
@@ -639,10 +650,21 @@ fn ret_is_struct(ty: &str) -> bool {
     matches!(ty.split('<').next().unwrap_or(ty).bytes().next(), Some(b'F') | Some(b'T'))
 }
 
-fn infer_slot_types(f: &Func, refs: &RefResolver) -> HashMap<i32, String> {
+/// Returns (consumer-typed object-slot overrides, out-ref primitive DECLARATION overrides).
+///
+/// The second map (batch19 class 3): a slot whose ADDRESS (`PSF`) feeds a `float32&`/`float&`/
+/// `double&` reference parameter MUST be declared with exactly that float type — an
+/// `&out`/`&inout` primitive reference needs an lvalue of the exact type, and the width-guessed
+/// `int` declaration fails "Parameter 'data' expected float32&, but got int" (86 in-game errors,
+/// e.g. `AG1RGameState::GetWorldFloatData(world, name, data)`). Declaration-side only: the body
+/// already renders the slot NAME at the call site, and float-bits constants already render as
+/// float literals via the cbits/float-operand path. `bool&` out-params are NOT retyped: every
+/// int-slot render (SetV consts, `(x != 0)` wraps, NOT-patterns) would need a bool form —
+/// renderer-wide surgery documented as skipped in specs/batch19-classes.md.
+fn infer_slot_types(f: &Func, refs: &RefResolver) -> (HashMap<i32, String>, HashMap<i32, String>) {
     let instrs = match disassemble(&f.bytecode) {
         Ok(i) => i,
-        Err(_) => return HashMap::new(),
+        Err(_) => return (HashMap::new(), HashMap::new()),
     };
     let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32);
     let writes = |op: &str| {
@@ -663,9 +685,12 @@ fn infer_slot_types(f: &Func, refs: &RefResolver) -> HashMap<i32, String> {
             }
         }
     }
-    let mut ostack: Vec<Option<i32>> = Vec::new();
+    // operand-stack entries: (slot, pushed_via_PSF) — PSF-ness gates the out-ref pass (only an
+    // address push can be a primitive-reference arg; a PshV4 value push never is).
+    let mut ostack: Vec<Option<(i32, bool)>> = Vec::new();
     let mut cand: HashMap<i32, Option<String>> = HashMap::new(); // slot -> Some(type) | None(conflict)
-    let mut pair = |ostack: &mut Vec<Option<i32>>, params: Option<&[super::types::DataType]>, is_method: bool, ret_struct: bool, cand: &mut HashMap<i32, Option<String>>| {
+    let mut outref: HashMap<i32, Option<String>> = HashMap::new(); // PSF slot -> float-ref param type
+    let mut pair = |ostack: &mut Vec<Option<(i32, bool)>>, params: Option<&[super::types::DataType]>, is_method: bool, ret_struct: bool, cand: &mut HashMap<i32, Option<String>>, outref: &mut HashMap<i32, Option<String>>| {
         let Some(params) = params else { ostack.clear(); return; };
         // A method returning a struct BY VALUE (F/T/E) carries a hidden RVO out-slot pushed as the
         // last user arg (just before the receiver); count it so it is consumed, but exclude it from
@@ -700,13 +725,23 @@ fn infer_slot_types(f: &Func, refs: &RefResolver) -> HashMap<i32, String> {
         // AGothicCharacterState `Character` param -> wrong declaration, RVO probe miss, dropped
         // string arg — 400+ in-game errors).
         for (i, slot) in args.iter().rev().enumerate() {
-            if let Some(s) = slot {
+            if let Some((s, is_psf)) = slot {
                 if let Some(pt) = params.get(i) {
                     let ty = pt.base_name(refs);
                     match cand.get(s) {
                         None => { cand.insert(*s, Some(ty)); }
                         Some(Some(prev)) if *prev != ty => { cand.insert(*s, None); }
                         _ => {}
+                    }
+                    // out-ref float pass: a PSF'd (address-pushed) slot feeding a float-family
+                    // REFERENCE param must be declared with exactly that type (see fn doc).
+                    if *is_psf && pt.is_reference && matches!(pt.token, 0x50 | 0x51 | 0x5E) {
+                        let kw = super::types::token_keyword(pt.token).to_string();
+                        match outref.get(s) {
+                            None => { outref.insert(*s, Some(kw)); }
+                            Some(Some(prev)) if *prev != kw => { outref.insert(*s, None); }
+                            _ => {}
+                        }
                     }
                 }
             }
@@ -716,7 +751,7 @@ fn infer_slot_types(f: &Func, refs: &RefResolver) -> HashMap<i32, String> {
         match ins.op.name {
             "PshVPtr" | "PshV4" | "PshV8" | "PSF" => {
                 let s = w0(ins).unwrap_or(0);
-                ostack.push(if s > 0 { Some(s) } else { None });
+                ostack.push(if s > 0 { Some((s, ins.op.name == "PSF")) } else { None });
             }
             "PshC4" | "PshC8" | "PshNull" | "PGA" | "PshGPtr" | "PshG4" | "PshRPtr" | "STR"
             | "TYPEID" | "OBJTYPE" | "PshListElmnt" => ostack.push(None),
@@ -734,7 +769,7 @@ fn infer_slot_types(f: &Func, refs: &RefResolver) -> HashMap<i32, String> {
             "CALL" | "CALLINTF" | "CALLBND" => {
                 let id = ins.dwords.first().copied().unwrap_or(0) as i32;
                 let rs = refs.func_ret_by_id(id).map(|d| ret_is_struct(&d.base_name(refs))).unwrap_or(false);
-                pair(&mut ostack, refs.func_params_by_id(id), refs.is_method_by_id(id), rs, &mut cand);
+                pair(&mut ostack, refs.func_params_by_id(id), refs.is_method_by_id(id), rs, &mut cand, &mut outref);
             }
             "CALLSYS" | "Thiscall1" => {
                 let ptr = ins.qwords.first().copied().unwrap_or(0) as i64;
@@ -746,7 +781,7 @@ fn infer_slot_types(f: &Func, refs: &RefResolver) -> HashMap<i32, String> {
                 if refs.func_by_ptr(ptr) == Some("$beh0") {
                     let owner = refs.func_owner_by_ptr(ptr).map(|s| s.to_string());
                     // receiver = top operand; ctor args = the params below it.
-                    if let Some(Some(rslot)) = ostack.last().copied() {
+                    if let Some(Some((rslot, _))) = ostack.last().copied() {
                         if let Some(ty) = owner {
                             if !ty.is_empty() {
                                 match cand.get(&rslot) {
@@ -764,17 +799,23 @@ fn infer_slot_types(f: &Func, refs: &RefResolver) -> HashMap<i32, String> {
                     continue;
                 }
                 let rs = refs.func_ret_by_ptr(ptr).map(|d| ret_is_struct(&d.base_name(refs))).unwrap_or(false);
-                pair(&mut ostack, refs.func_params_by_ptr(ptr), refs.is_method_by_ptr(ptr), rs, &mut cand);
+                pair(&mut ostack, refs.func_params_by_ptr(ptr), refs.is_method_by_ptr(ptr), rs, &mut cand, &mut outref);
             }
             _ => {}
         }
     }
-    cand.into_iter()
+    let obj = cand.into_iter()
         .filter_map(|(slot, ty)| match ty {
             Some(t) if !written.contains(&slot) && !is_primitive(t.trim_end_matches('@')) && t != "void" && !t.is_empty() => Some((slot, t)),
             _ => None,
         })
-        .collect()
+        .collect();
+    // out-ref float slots ARE written (the callee's whole point is to write them; typically a
+    // `SetV4 slot, 0` init precedes) — no never-written filter. Conflicts already dropped.
+    let outref = outref.into_iter()
+        .filter_map(|(slot, ty)| ty.map(|t| (slot, t)))
+        .collect();
+    (obj, outref)
 }
 
 /// Member-access-driven slot typing: a `LoadRObjR`/`LoadVObjR base, off, tid` reads field

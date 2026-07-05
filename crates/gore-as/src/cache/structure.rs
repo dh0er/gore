@@ -513,7 +513,7 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
                     // GetActorLocation()` instead of `out = recv.Iterator()` -> "No matching
                     // signatures". `this`-receivers render `this.Method()` (legal, matches the
                     // normal method-render path below).
-                    return Some(format!("{out} = {}.{f}({})", recv.s, render_args(&a, params, refs)));
+                    return Some(format!("{out} = {}.{f}({})", wrap_uobject_recv(&recv, target_owner), render_args(&a, params, refs)));
                 }
             }
         }
@@ -577,7 +577,7 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
             }
         }
         maybe_reverse_args(&mut a, params, refs);
-        Some(format!("{}.{f}({})", recv.s, render_args(&a, params, refs)))
+        Some(format!("{}.{f}({})", wrap_uobject_recv(&recv, target_owner), render_args(&a, params, refs)))
     } else {
         if refs.is_type_name(f) {
             // EDIT C: a value-type factory call (FName/E*/T* — NOT U*/A*, which use ALLOC) whose
@@ -657,6 +657,30 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
         maybe_reverse_args(&mut a, params, refs);
         Some(format!("{f}({})", render_args(&a, params, refs)))
     }
+}
+
+/// Batch19 class 1 — UObject-typed method receivers: a receiver slot the cache records as
+/// plain `UObject` (a compiler temp for a `&&`-chain / IsValid arg, or a generic-getter result
+/// like `GetTypedOuter`) fails method lookup on every non-UObject method ("No matching
+/// signatures to 'UObject::GetCharacterState()'", 255 in-game errors). The CONSUMING method's
+/// owner class is known from the callee's T3 ObjectType — wrap the receiver in the standard
+/// UE-AS downcast idiom `Cast<Owner>(recv)` AT THE CALL SITE. Call-site wrapping (option (b))
+/// is chosen over retyping the DECLARATION (option (a)) because the slot is also written from
+/// producers (`RefCpyV` handle copies, generic getters) whose types we cannot prove compatible
+/// with the owner — a retyped declaration could break those assignments (upcast-breaking),
+/// while a local `Cast<>` can only affect the one call that is already broken. Gates: the
+/// recovered receiver type is EXACTLY `UObject` (never a subclass, never unknown), the owner
+/// is a real object class (U*/A*, excludes container/value owners like `TArray`), and the
+/// owner isn't `UObject` itself (genuine UObject methods resolve fine).
+fn wrap_uobject_recv(recv: &Arg, owner: Option<&str>) -> String {
+    if recv.ty.as_deref() == Some("UObject") && recv.s != "this" {
+        if let Some(o) = owner {
+            if o != "UObject" && matches!(o.bytes().next(), Some(b'U') | Some(b'A')) {
+                return format!("Cast<{o}>({})", recv.s);
+            }
+        }
+    }
+    recv.s.clone()
 }
 
 /// Count DEFINITE type mismatches when pairing args[i] with params[i] (mirrors `cast_arg`'s
@@ -1399,12 +1423,19 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                             // EDIT A/B-PRIME) — a whole-stack `mem::take` would also drain the
                             // ENCLOSING call's operands (the 4 EQuestState args of MakeRequirement),
                             // re-dropping them once Fix b1 keeps them on the stack.
-                            let args: Vec<Arg> = match params.map(|p| p.len()) {
+                            let mut args: Vec<Arg> = match params.map(|p| p.len()) {
                                 Some(k) if stack.len() > k => stack.split_off(stack.len() - k),
                                 _ => std::mem::take(&mut stack),
                             }
                                 .into_iter()
                                 .filter(|x| !x.s.is_empty() && x.s != UNRESOLVED).collect();
+                            // Ctor args are reverse-pushed like every other call's (top =
+                            // params[0]); rendering the collected (deepest-first) order emitted
+                            // them BACKWARDS — `FTimerDynamicDelegate(n"Fn", this)` against the
+                            // declared `(UObject Object, FName FunctionName)` ctor (43 in-game
+                            // "No matching signatures to 'FTimerDynamicDelegate(const FName,
+                            // <obj> const)'"). Same reverse-by-default scoring as every call arm.
+                            maybe_reverse_args(&mut args, params, ctx.refs);
                             // Gate (b): no arg is itself a PSF slot — that is a copy/convert ctor
                             // whose true source is an unrecovered pending call result; rendering it
                             // as `T(&slot)` would be wrong, so drop (prior behaviour).
@@ -1457,7 +1488,10 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                     // implicit-`this` overcount steals one deeper entry that the trim then drops),
                     // and only PRESERVES deeper enclosing operands that take-all destroyed.
                     let trusted = na.or_else(|| ctx.refs.func_params_by_ptr(ptr).map(|p| p.len()));
-                    build_call(&mut stack, &qualified, ctx.refs.is_method_by_ptr(ptr), ctx.super_ctor, ctx.refs.func_params_by_ptr(ptr), na, trusted, None, ctx.class_name, false, pending_ty.as_deref(), ctx.refs)
+                    // target_owner (T3 ObjectType) was only wired for CALL/CALLINTF; pass it for
+                    // native calls too so the UObject-receiver Cast wrap (batch19 class 1) and the
+                    // generated-accessor qualification see the owning class of CALLSYS methods.
+                    build_call(&mut stack, &qualified, ctx.refs.is_method_by_ptr(ptr), ctx.super_ctor, ctx.refs.func_params_by_ptr(ptr), na, trusted, ctx.refs.func_owner_by_ptr(ptr), ctx.class_name, false, pending_ty.as_deref(), ctx.refs)
                 };
             }
             "CallPtr" => {
