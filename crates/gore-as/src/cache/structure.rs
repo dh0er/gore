@@ -648,13 +648,18 @@ fn maybe_reverse_args(a: &mut Vec<Arg>, params: Option<&[DataType]>, refs: &RefR
     if a.len() < 2 || a.len() > params.len() {
         return;
     }
+    // Bytecode pushes call args in REVERSE source order for EVERY call type (proven across method,
+    // free, super, native calls — 7 opcode-level confirmations, 0 counterexamples). So the
+    // collected order is reverse-source and reversal is the PRIOR, not the exception. Keep the
+    // collected order only when reversing makes the type pairing strictly WORSE (the list is
+    // corrupted and reversal would misalign it further). This corrects the large class of
+    // type-symmetric multi-arg calls (both orders type-check, so the old strict-improvement gate
+    // left them in the wrong push order) — a byte-faithfulness win, and un-stubs the asymmetric
+    // ones. A genuinely source-ordered correct call is asymmetric (fwd=0 < rev) -> not touched.
     let fwd = arg_mismatch_count(a, params, refs);
-    if fwd == 0 {
-        return; // already matches -> leave untouched
-    }
     let mut rev = a.clone();
     rev.reverse();
-    if arg_mismatch_count(&rev, params, refs) < fwd {
+    if arg_mismatch_count(&rev, params, refs) <= fwd {
         a.reverse();
     }
 }
@@ -932,6 +937,12 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 let off = w(ins, 0);
                 if ctx.slot_type(off).as_deref() == Some("bool") {
                     stack.push(Arg::typed(name(off), Some("bool".to_string())));
+                } else if let Some(cb) = set_consts.get(&off).copied() {
+                    // The slot holds a tracked SetV constant (the SetV1/SetV4 -> PshV4 idiom for a
+                    // literal flag/amount, e.g. Say's `bUnskippable`). Carry its cbits so the
+                    // nested-call retain (`!is_int || cbits.is_some()`) keeps it as a REAL arg
+                    // instead of dropping it as a stranded temporary.
+                    stack.push(Arg::iconst(name(off), cb));
                 } else {
                     stack.push(Arg::int(name(off)));
                 }
