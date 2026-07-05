@@ -826,7 +826,7 @@ void main() {
   );
 
   test(
-    'saveAllPending runs an ActiveEffects Def edit AFTER the skill write',
+    'saveAllPending refuses an ActiveEffects Def edit queued with a skill edit',
     () async {
       final core = _RecordingCoreService();
       final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
@@ -854,7 +854,7 @@ void main() {
           ],
         ),
       );
-      // ...and a skill edit that resolves by base name.
+      // ...plus a skill edit (which may splice the array): cannot be sequenced.
       notifier.setPendingEdit(
         'skills',
         const PendingSaveEdit(
@@ -872,25 +872,13 @@ void main() {
       );
 
       final ok = await notifier.saveAllPending();
-      expect(ok, isTrue);
-
-      final writes = core.requests
-          .where((r) => r.command == 'write_save')
-          .toList();
-      // Two isolated writes: the Def edit is pulled out of the fixed batch.
-      expect(writes, hasLength(2));
-      final skillIndex = writes.indexWhere(
-        (w) => (w.payload['edits'] as List).any(
-          (e) => (e as Map)['path'] == 'private.skills.set',
-        ),
+      // Refused: no write at all, and an explanatory error is surfaced.
+      expect(ok, isFalse);
+      expect(
+        core.requests.where((r) => r.command == 'write_save'),
+        isEmpty,
       );
-      final defIndex = writes.indexWhere(
-        (w) => (w.payload['edits'] as List).any(
-          (e) => (e as Map)['path'] == 'private.typed.setValue',
-        ),
-      );
-      // The skill write resolves the true GE class BEFORE the Def edit changes it.
-      expect(skillIndex, lessThan(defIndex));
+      expect(notifier.state.error, contains('EffectSpec'));
     },
   );
 

@@ -679,23 +679,27 @@ class EditorNotifier extends StateNotifier<EditorState> {
         .where((k) => k.edit['path'] == skillPath)
         .toList();
     // A raw All-Data `private.typed.setValue` on an ActiveEffects `EffectSpec/Def`
-    // leaf retargets the GE class that `private.skills.set` resolves by base. Run
-    // in the pre-skill fixed batch it would change (or, via a later unlearn,
-    // remove) the very element a queued skill edit looks up, so that skill edit
-    // silently no-ops or clones against the wrong state. When a skill edit is
-    // also queued, isolate such Def edits into their own trailing writes AFTER
-    // the skill write so `private.skills.set` resolves against the true class
-    // first. With no skill edit pending there is no conflict — leave them in the
-    // fixed batch (unchanged behaviour).
-    bool isDefAfterSkills(_KeyedEdit k) =>
-        skillEdits.isNotEmpty && _isActiveEffectsDefEdit(k.edit);
-    final defAfterSkills = allEdits.where(isDefAfterSkills).toList();
+    // leaf and a Skills-panel edit both target the hero's effect array. They
+    // cannot be sequenced safely: a skill learn/unlearn SPLICES the array, so a
+    // Def edit ordered after it re-resolves its `[i]` against a shifted array and
+    // retargets the wrong effect — and ordered before it changes the GE class the
+    // skill edit resolves by base. Refuse the combination (like the two-tab
+    // conflict above) and let the user resolve it. With no skill edit queued the
+    // Def edit is a normal fixed-size in-place write, so it batches as usual.
+    if (skillEdits.isNotEmpty && allEdits.any((k) => _isActiveEffectsDefEdit(k.edit))) {
+      state = state.copyWith(
+        error:
+            'A Skills change and an All-data edit to the same hero effect '
+            '(ActiveEffects › EffectSpec › Def) are both queued. They cannot be '
+            'saved together — reset or revert one of them, then save again.',
+      );
+      return false;
+    }
     final fixedBatch = allEdits
         .where(
           (k) =>
               !splicingPaths.contains(k.edit['path']) &&
-              k.edit['path'] != skillPath &&
-              !isDefAfterSkills(k),
+              k.edit['path'] != skillPath,
         )
         .toList();
 
@@ -731,11 +735,6 @@ class EditorNotifier extends StateNotifier<EditorState> {
           edits: [for (final keyed in skillEdits) keyed.edit],
           keys: {for (final keyed in skillEdits) keyed.key},
         ),
-      // ActiveEffects Def retargets run LAST, each isolated: after the skill
-      // write (so private.skills.set resolved the true class) and never batched
-      // (index-addressed; a preceding skill splice can shift the array).
-      for (final keyed in defAfterSkills)
-        _SubWrite(edits: [keyed.edit], keys: {keyed.key}),
     ];
 
     final n = allEdits.length;
