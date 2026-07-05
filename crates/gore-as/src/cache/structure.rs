@@ -1710,7 +1710,18 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 // overwritten. Drops sentinel/unresolved pendings (see flush_b2 doc).
                 flush_b2!();
                 let id = ins.dwords.first().copied().unwrap_or(0) as i32;
-                let f = ctx.refs.func_by_id(id).unwrap_or("func?").to_string();
+                let orig = ctx.refs.func_by_id(id).unwrap_or("func?").to_string();
+                // batch-25f: a free fn whose declaration was collision-renamed (`Name_g<mi>`)
+                // must resolve to the renamed leaf at call sites in EVERY module — the
+                // emit-side text pass only rewrites the DECLARING module's source, so
+                // cross-module callers kept the now-nonexistent original name (14 in-game
+                // errors: GetCurrent/FetchContext/ApplyTo/GetTuning). Name-keyed lookups
+                // (native arity) keep the ORIGINAL name; only the render uses the rename.
+                let f = ctx
+                    .refs
+                    .renamed_free_fn_by_id(id)
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| orig.clone());
                 pending = if f == "StaticClass" {
                     // Fix b1 — StaticClass takes 0 operands; the stack holds the ENCLOSING call's
                     // already-pushed args. Do NOT clear it (clearing destroys those args).
@@ -1730,7 +1741,7 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                     // tail-table entry spuriously carries bIsObjectConst (2757 GetG1R stores compile
                     // CLEAN in the batch-19 capture). Never const-wrap script-call results.
                     pending_const = false;
-                    let na = ctx.refs.native_arity_by_id(id, &f);
+                    let na = ctx.refs.native_arity_by_id(id, &orig);
                     // SCRIPT call by id: the cache FunctionReference param count is authoritative
                     // (only NATIVE param lists undercount), so trust it for the EDIT B-PRIME split.
                     let trusted = ctx.refs.func_params_by_id(id).map(|p| p.len());

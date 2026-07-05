@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -227,6 +228,83 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             if let Some(api) = load_native_api(&file) {
                 refs.set_native_api(api);
             }
+            // batch-25f: publish the collision renames as an ID-based map in the resolver so
+            // CALL/CALLINTF render sites in EVERY module resolve the renamed leaf. emit_all_tree
+            // (below) recomputes the SAME colliding set for the per-file TEXT rename of decls; both
+            // use the identical `_g{mi}` scheme so decls and call sites cannot disagree. The
+            // security-hardened output (outdir canonicalize + per-entry symlink/`..` guards) now
+            // lives inside emit_all_tree.
+            // Cross-module free-function collisions: AngelScript compiles all loose .as into ONE
+            // global scope, so two modules each defining `Foo(<same params>)` (even with different
+            // return types) collide as "a function with the same name and parameters already
+            // exists". Find such names and rename each per-module — a function's decl and its
+            // intra-module free calls live in the same emitted file, so a file-local rename
+            // de-collides without breaking resolution (cross-module calls of these don't occur).
+            let mut sig_mods: HashMap<String, HashSet<usize>> = HashMap::new();
+            for (i, m) in mods.iter().enumerate() {
+                for f in &m.functions {
+                    // generated factory accessors are skipped at emit (not free-emitted) — never
+                    // rename them, or free CALLS to the native binding would be broken.
+                    if matches!(f.name.as_str(),
+                        "Spawn" | "Get" | "GetOrCreate" | "Create" | "GetG1R" | "StaticClass") {
+                        continue;
+                    }
+                    // precise signature (render, not base_name) so only GENUINE same-signature
+                    // collisions are flagged — a coarse match falsely flags distinct overloads and
+                    // would rename (and break) functions that are validly called cross-module.
+                    let ptys: Vec<String> = f.params.iter().map(|p| p.ty.render(&refs)).collect();
+                    sig_mods.entry(format!("{}({})", f.name, ptys.join(","))).or_default().insert(i);
+                }
+            }
+            // A name is safe to file-locally rename in a module only if EVERY emittable free
+            // function of that name in the module has a colliding signature. If the module also has
+            // a NON-colliding same-name overload, the name-based `rename_free_fn` would rewrite that
+            // overload's decl + calls too, breaking other modules that call it by its original name.
+            // In that mixed case leave the name un-renamed: the genuine collision then surfaces at
+            // generate as a "already exists" stub (rare, safe) instead of silently breaking a valid
+            // cross-module call to the non-colliding overload.
+            let colliding_sigs: HashSet<&str> = sig_mods
+                .iter()
+                .filter(|(_, modset)| modset.len() > 1)
+                .map(|(sig, _)| sig.as_str())
+                .collect();
+            let mut colliding_in: HashMap<usize, HashSet<String>> = HashMap::new();
+            for (i, m) in mods.iter().enumerate() {
+                let mut sigs_by_name: HashMap<&str, Vec<String>> = HashMap::new();
+                for f in &m.functions {
+                    if matches!(f.name.as_str(),
+                        "Spawn" | "Get" | "GetOrCreate" | "Create" | "GetG1R" | "StaticClass") {
+                        continue;
+                    }
+                    let ptys: Vec<String> = f.params.iter().map(|p| p.ty.render(&refs)).collect();
+                    sigs_by_name
+                        .entry(f.name.as_str())
+                        .or_default()
+                        .push(format!("{}({})", f.name, ptys.join(",")));
+                }
+                for (name, sigs) in sigs_by_name {
+                    if sigs.iter().any(|s| colliding_sigs.contains(s.as_str()))
+                        && sigs.iter().all(|s| colliding_sigs.contains(s.as_str()))
+                    {
+                        colliding_in.entry(i).or_default().insert(name.to_string());
+                    }
+                }
+            }
+            // batch-25f: publish the collision renames as an ID-based map in the resolver so
+            // CALL/CALLINTF render sites in EVERY module resolve the renamed leaf. The TEXT
+            // pass below still rewrites the DECLARING module (declaration line; already-
+            // renamed `Name_g<mi>(` call sites don't match its word boundary, `_` is a word
+            // char, so the two passes never double-rename). Suffixes come from the same
+            // `colliding_in` set with the same `_g{mi}` scheme — decls and call sites cannot
+            // disagree.
+            let mut rename_map: HashMap<String, HashMap<String, String>> = HashMap::new();
+            for (mi, names) in &colliding_in {
+                let e = rename_map.entry(mods[*mi].name.clone()).or_default();
+                for name in names {
+                    e.insert(name.clone(), format!("{name}_g{mi}"));
+                }
+            }
+            refs.set_free_fn_renames(&rename_map);
             let stats = gore_as::cache::emit_all::emit_all_tree(&mods, &refs, &outdir)
                 .with_context(|| format!("emitting to {}", outdir.display()))?;
             eprintln!("emitted {} modules to {} ({} contain a stubbed function)",

@@ -71,6 +71,14 @@ pub struct RefResolver {
     /// global sharing such a name is SHADOWED by member lookup inside classes and must be
     /// `::`-qualified.
     method_names: std::collections::HashSet<String>,
+    /// T3 FunctionReferences declaring-module name per NON-method function ptr (batch-25f):
+    /// keys the cross-module free-fn rename map, matching the parsed `Module::name` exactly.
+    func_module: HashMap<i64, String>,
+    /// batch-25f: per-function-ptr rename for cross-module free-fn collisions — the emit-side
+    /// collision scan renames each colliding declaration `Name -> Name_g<mi>` with a TEXT pass
+    /// over the DECLARING module only; this id-keyed map lets CALL/CALLINTF sites in EVERY
+    /// module resolve the renamed symbol.
+    free_fn_renames: HashMap<i64, String>,
 }
 
 impl RefResolver {
@@ -107,7 +115,7 @@ impl RefResolver {
         for _ in 0..c.read_count("FunctionReferences")? {
             let key = c.read_i64()?;
             let name = c.read_sia()?;
-            c.read_sia()?; // Module
+            let module = c.read_sia()?; // Module (declaring module name, batch-25f)
             let ns = c.read_sia()?; // Namespace
             c.skip(4)?; // bIsConst
             c.skip(4)?; // bIsImportedDecl
@@ -134,6 +142,11 @@ impl RefResolver {
             // rendered via its receiver. Record the namespace so the call site can prefix it.
             if !is_method && !ns.is_empty() {
                 r.func_ns.insert(key, ns);
+            }
+            // Declaring module of a free function (batch-25f rename-map key; methods are
+            // rendered via their receiver and never rename).
+            if !is_method && !module.is_empty() {
+                r.func_module.insert(key, module);
             }
             r.func_by_ptr.insert(key, name);
         }
@@ -396,6 +409,40 @@ impl RefResolver {
     /// `CastSpell(AI, int)` even if the method itself is never called).
     pub fn add_method_names<I: IntoIterator<Item = String>>(&mut self, names: I) {
         self.method_names.extend(names);
+    }
+    /// batch-25f: install the cross-module free-fn rename map. `by_module` is
+    /// `module name -> (original fn name -> renamed name)` — exactly the collision set the
+    /// emit-side scan feeds the per-module `rename_free_fn` TEXT pass, so declarations and
+    /// call sites can never disagree. Keyed here per FUNCTION PTR (id-based), never by bare
+    /// name — the mixed-overload hazard the text pass documents is inherited from its gate
+    /// (a module's name only enters the collision set when EVERY emittable same-name overload
+    /// collides).
+    pub fn set_free_fn_renames(&mut self, by_module: &HashMap<String, HashMap<String, String>>) {
+        let mut m: HashMap<i64, String> = HashMap::new();
+        if !by_module.is_empty() {
+            for (ptr, name) in &self.func_by_ptr {
+                if self.func_is_method.contains(ptr) {
+                    continue;
+                }
+                let renamed = self
+                    .func_module
+                    .get(ptr)
+                    .and_then(|module| by_module.get(module))
+                    .and_then(|names| names.get(name));
+                if let Some(new) = renamed {
+                    m.insert(*ptr, new.clone());
+                }
+            }
+        }
+        self.free_fn_renames = m;
+    }
+    /// Renamed leaf for a free function by CALL id, when its declaration was collision-renamed
+    /// (batch-25f). None = not renamed (the overwhelmingly common case).
+    pub fn renamed_free_fn_by_id(&self, id: i32) -> Option<&str> {
+        self.funcid_to_ptr
+            .get(&id)
+            .and_then(|p| self.free_fn_renames.get(p))
+            .map(|s| s.as_str())
     }
     /// True if `name` exists as a MEMBER anywhere: T3 method names (native or script, referenced
     /// by bytecode), injected script-class method declarations, or any Binds native signature
