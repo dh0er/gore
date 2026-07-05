@@ -55,12 +55,36 @@ pub(crate) fn build_param_off_map_rvo(
     // A by-value struct return ALWAYS carries the RVO out-pointer per the ABI, so prefer the
     // RVO map on ties; only fall back to the no-RVO map if it strictly explains MORE observed
     // offsets (i.e. the return type was mis-classified as by-value).
+    //
+    // batch-25c (specs/batch23-nomatch.md C2): the RVO map deliberately does NOT contain the
+    // hidden ret-slot offset as a key (it is not a parameter), so a function that references
+    // the ret slot but NOT its last parameter scored base=N+1 vs rvo=N -> the (wrong) no-RVO
+    // map won and every param reference shifted one over (`owner` rendered as
+    // `actorToSpawnClass` -> `TSubclassOf::GetActorLocation()`, 18 in-game errors; the
+    // GetSpawnPosition/Rotation family: 2 params, last unused, struct return). Credit the
+    // ret-slot offset to the RVO map's score — it IS explained by that layout.
+    // ENUM returns are token 5 (so returns_struct_by_value admits them) but return in the
+    // VALUE REGISTER — no hidden RVO slot exists (batch-24a ret_via_rvo() / the switch
+    // recovery's register_based test). Crediting the ret-slot offset for them is wrong twice
+    // over: the offset it would credit (-AS_PTR_SIZE for a method) is the BASE layout's
+    // param-0 slot, so the credit flips correct base maps to RVO and shifts every param
+    // reference (TryPerformActionNow/TryPerformMovementNow regressed to argtype stubs when
+    // the credit was unconditional).
+    let ret_is_enum = {
+        let n = f.ret.base_name(refs);
+        let b = n.as_bytes();
+        b.len() >= 2 && b[0] == b'E' && b[1].is_ascii_uppercase()
+    };
     let observed = observed_neg_offsets(instrs);
+    let rvo_off = if f.is_method { -AS_PTR_SIZE } else { 0 };
     let score = |m: &HashMap<i32, usize>| observed.iter().filter(|o| m.contains_key(o)).count();
-    if score(&base) > score(&rvo) {
+    let score_rvo = observed
+        .iter()
+        .filter(|o| rvo.contains_key(o) || (!ret_is_enum && **o == rvo_off))
+        .count();
+    if score(&base) > score_rvo {
         (base, None)
     } else {
-        let rvo_off = if f.is_method { -AS_PTR_SIZE } else { 0 };
         (rvo, Some(rvo_off))
     }
 }
