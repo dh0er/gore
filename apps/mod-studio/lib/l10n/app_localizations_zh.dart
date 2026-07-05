@@ -342,6 +342,10 @@ class AppLocalizationsZh extends AppLocalizations {
   String localizedTextExtractedCount(int idCount, int languageCount) {
     return '已提取 $idCount 个 ID，涵盖 $languageCount 种语言';
   }
+
+  @override
+  String get managerDeployActive =>
+      'mod-manager 的 loadout 已启用。请先在 gore-manager 中执行 undeploy。';
 }
 
 /// The translations for Chinese, using the Han script (`zh_Hans`).
@@ -654,4 +658,8 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   String localizedTextExtractedCount(int idCount, int languageCount) {
     return '已提取 $idCount 个 ID，涵盖 $languageCount 种语言';
   }
+
+  @override
+  String get managerDeployActive =>
+      'mod-manager 的 loadout 已启用。请先在 gore-manager 中执行 undeploy。';
 }

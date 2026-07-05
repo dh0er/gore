@@ -9,7 +9,10 @@ Gothic Remake.
   modding from the terminal: item values, text/dialogs, audio, textures,
   scripts. Start here if you want to mod.
 - **[`mod-studio`](apps/mod-studio)** — a no-code Windows GUI over the same
-  modding engine (everything except AngelScript).
+  modding engine (everything except AngelScript), for *authoring* one mod.
+- **[`mod-manager`](apps/mod-manager)** — a Windows GUI for installing and
+  managing *many* mods together (load order, conflict detection, one-click
+  apply); complements mod-studio (authoring).
 - **[`save-editor`](apps/save-editor)** — a Windows GUI for editing your save
   files (a separate job from modding — it never touches the game install).
 - **[`gorelib`](lua)** — a Lua SDK that ships into the game, for hand-writing
@@ -261,6 +264,37 @@ modding with live previews and `.goremod` project files. Auto-updates on launch
 - Edit **save files** — that's [save-editor](#save-editor-gui).
 - Hand-write custom Lua logic — use `gore scaffold` + the [gorelib SDK](#the-gorelib-lua-sdk).
 - Patch arbitrary game files outside the four supported domains.
+- Manage a *collection* of mods together — that's [mod-manager](#mod-manager-gui).
+
+---
+
+# mod-manager (GUI)
+
+A Windows app for running **many** mods at once. Where [mod-studio](#mod-studio-gui)
+*authors* a single mod, mod-manager owns the multi-mod story: build a library,
+order it, see what collides, and apply the whole enabled set to your install.
+Auto-updates on launch (WinSparkle). It consumes the mod bundles mod-studio (or
+`gore mod build`) produces, plus foreign mods it did not build.
+
+**It can:**
+- **Import** into a local library: built mod-bundle folders/zips (with a root
+  `gore-mod.json`), foreign mod zips/folders, loose `_P.pak` files, IoStore
+  triplets (`.utoc`/`.ucas`/`.pak`), UE4SS Lua mod folders, and raw game-file
+  replacements.
+- **Enable/disable** mods and **drag to reorder** the load order (later wins).
+- **Detect conflicts** across mods — localization, audio, texture/asset, item
+  overrides (CDO), scripts, and raw-file replacements — and show which mod wins.
+- **Apply** declaratively: full-recompute the modded state from a pristine base
+  and deploy the whole enabled set (backups first), or **undeploy all** to
+  restore.
+- **Take over** a mod-studio test-deploy so both tools do not fight over the
+  install.
+
+**It can not:**
+- *Author* a mod (edit item values, text, audio, textures) — that's
+  [mod-studio](#mod-studio-gui) or the [`gore` CLI](#modding-with-the-gore-cli).
+- Edit **save files** — that's [save-editor](#save-editor-gui).
+- Download mods (no Nexus API integration) — import files you already have.
 
 ---
 
@@ -345,7 +379,8 @@ gore/
 │  └─ gore-as/             AngelScript precompiled-cache decoder/emitter/splicer (surfaced via `gore as`)
 ├─ apps/
 │  ├─ save-editor/         Flutter (Windows) savegame editor — WinSparkle auto-update
-│  └─ mod-studio/          Flutter (Windows) no-code mod authoring GUI
+│  ├─ mod-studio/          Flutter (Windows) no-code mod authoring GUI
+│  └─ mod-manager/         Flutter (Windows) multi-mod library/load-order/apply GUI
 ├─ lua/                    gorelib UE4SS SDK (deployed into the game's Mods/shared)
 ├─ mods/                   first-party UE4SS mod folders
 │  ├─ example/             sample mod using gorelib
@@ -382,7 +417,7 @@ cargo test
 
 Products (apps and shippable artifacts) are driven by the top-level orchestrator.
 The registered projects are **`gore-save`** (save-editor), **`gore-mod`**
-(mod-studio), and **`gore`** (the CLI):
+(mod-studio), **`gore-manager`** (mod-manager), and **`gore`** (the CLI):
 
 ```sh
 python build.py <project> build      # debug build
@@ -405,6 +440,8 @@ workflow:
 - `save-editor` → `gore-save-v*` (publishes with `make_latest=true`; its updater
   polls `releases/latest`)
 - `mod-studio` → `gore-mod-v*` (updater reads a fixed `gore-mod-appcast` release)
+- `mod-manager` → `gore-manager-v*` (updater reads a fixed `gore-manager-appcast`
+  release)
 - the CLI → `gore-cli-v*`
 
 Internal libraries share one workspace version.

@@ -425,7 +425,7 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
         }
         "private.characters.list" => {
             let path = required_path(&payload)?;
-            let ooz_backend = codec_backend::OozKrakenBackend::default();
+            let ooz_backend = codec_backend::KrakenBackend::default();
             let codec_backend = Some(&ooz_backend as &dyn codec_backend::CodecBackend);
             characters_list_command(&path, &payload, codec_backend)
         }

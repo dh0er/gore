@@ -859,6 +859,7 @@ dependencies = [
 name = "gore"
 version = "0.1.0"
 dependencies = [
+ "aes",
  "anyhow",
  "assert_cmd",
  "clap",
@@ -910,6 +911,7 @@ dependencies = [
  "image",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -934,6 +936,7 @@ dependencies = [
 name = "gore-mod"
 version = "0.0.0"
 dependencies = [
+ "aes",
  "gore-as",
  "gore-fmod",
  "gore-loc",
@@ -944,6 +947,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror 2.0.18",
+ "zip",
 ]
 
 [[package]]

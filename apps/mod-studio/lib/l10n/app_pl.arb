@@ -95,5 +95,6 @@
   "modNameControlCharacters": "Nie może zawierać znaków sterujących",
   "modNamePathSeparators": "Nie może zawierać separatorów ścieżki",
   "modNameNotAFolderName": "Nieprawidłowa nazwa folderu",
-  "localizedTextExtractedCount": "Wyodrębniono {idCount} identyfikatorów w {languageCount} językach"
+  "localizedTextExtractedCount": "Wyodrębniono {idCount} identyfikatorów w {languageCount} językach",
+  "managerDeployActive": "Aktywny jest loadout mod-managera. Najpierw wykonaj undeploy w gore-manager."
 }

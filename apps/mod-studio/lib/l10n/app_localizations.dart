@@ -745,6 +745,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Extracted {idCount} ids across {languageCount} languages'**
   String localizedTextExtractedCount(int idCount, int languageCount);
+
+  /// No description provided for @managerDeployActive.
+  ///
+  /// In en, this message translates to:
+  /// **'A mod-manager loadout is active. Undeploy it in gore-manager first.'**
+  String get managerDeployActive;
 }
 
 class _AppLocalizationsDelegate

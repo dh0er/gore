@@ -19,3 +19,6 @@ gore-as = { path = "../gore-as" }
 image = "0.25"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"

@@ -90,6 +90,14 @@ fn dispatch(input: &str) -> Value {
         "mod_build" => mod_build(payload),
         "mod_deploy" => mod_deploy(payload),
         "mod_undeploy" => mod_undeploy(payload),
+        "mgr_library_list" => mgr_library_list(payload),
+        "mgr_import" => mgr_import(payload),
+        "mgr_remove" => mgr_remove(payload),
+        "mgr_set_loadout" => mgr_set_loadout(payload),
+        "mgr_analyze" => mgr_analyze(payload),
+        "mgr_apply" => mgr_apply(payload),
+        "mgr_status" => mgr_status(payload),
+        "mgr_undeploy_all" => mgr_undeploy_all(payload),
         "texture_index" => texture_index(payload),
         "texture_extract" => texture_extract(payload),
         "script_list_modules" => script_list_modules(payload),
@@ -529,6 +537,186 @@ fn mod_undeploy(payload: Value) -> Value {
     }
 }
 
+// ── mod-manager (`mgr_*`) commands ─────────────────────────────────────────────
+// Every mgr command accepts OPTIONAL `library_dir` / `loadout_path` string overrides so tests
+// (and callers wanting an isolated store) can point at temp dirs; when absent the shared
+// per-user layout from `gore_mod::mgr::paths` is used, so every gore tool sees one library.
+
+/// The library dir to use: `payload.library_dir` if given, else the shared default.
+fn mgr_library_dir(payload: &Value) -> PathBuf {
+    match payload.get("library_dir").and_then(Value::as_str) {
+        Some(p) => PathBuf::from(p),
+        None => gore_mod::mgr::paths::library_dir(),
+    }
+}
+
+/// The loadout file to use: `payload.loadout_path` if given, else the shared default.
+fn mgr_loadout_path(payload: &Value) -> PathBuf {
+    match payload.get("loadout_path").and_then(Value::as_str) {
+        Some(p) => PathBuf::from(p),
+        None => gore_mod::mgr::paths::loadout_path(),
+    }
+}
+
+/// `{library_dir?, loadout_path?}` → `{ok, mods:[ModEntryMeta], loadout:Loadout}`. Raw library +
+/// loadout, unreconciled (the UI reconciles ids against the library itself).
+fn mgr_library_list(payload: Value) -> Value {
+    let lib = mgr_library_dir(&payload);
+    let lo_path = mgr_loadout_path(&payload);
+    let mods = match gore_mod::mgr::import::list(&lib) {
+        Ok(m) => m,
+        Err(e) => return err("IO", e.to_string()),
+    };
+    let loadout = match gore_mod::mgr::loadout::load(&lo_path) {
+        Ok(l) => l,
+        Err(e) => return err("BAD_REQUEST", e.to_string()),
+    };
+    json!({
+        "ok": true,
+        "mods": serde_json::to_value(&mods).unwrap_or(Value::Null),
+        "loadout": serde_json::to_value(&loadout).unwrap_or(Value::Null),
+    })
+}
+
+/// `{path, library_dir?, loadout_path?}` → `{ok, entry:ModEntryMeta}` — import a source into the
+/// library AND register it in the loadout (disabled) if not already present. Mirrors
+/// `gore mgr import`: without this, a GUI-imported mod is invisible to apply/status/analyze (which
+/// read the on-disk loadout, not the GUI's in-memory reconcile) until some other mutation.
+fn mgr_import(payload: Value) -> Value {
+    let Some(path) = payload.get("path").and_then(Value::as_str) else {
+        return err("BAD_REQUEST", "missing 'path'");
+    };
+    let lib = mgr_library_dir(&payload);
+    let entry = match gore_mod::mgr::import::import(&lib, std::path::Path::new(path)) {
+        Ok(entry) => entry,
+        Err(e) => return err("IMPORT_FAILED", e.to_string()),
+    };
+    // Register the new mod in the loadout (disabled) so enable/apply can find it. Skip if an entry
+    // with this id already exists (a re-import / update): keep its current enabled state + order.
+    let lo_path = mgr_loadout_path(&payload);
+    if let Ok(mut lo) = gore_mod::mgr::loadout::load(&lo_path) {
+        if !lo.entries.iter().any(|e| e.id == entry.id) {
+            lo.entries.push(gore_mod::mgr::LoadoutEntry { id: entry.id.clone(), enabled: false });
+            let _ = gore_mod::mgr::loadout::save(&lo_path, &lo);
+        }
+    }
+    json!({"ok": true, "entry": serde_json::to_value(&entry).unwrap_or(Value::Null)})
+}
+
+/// `{id, library_dir?}` → `{ok, removed:bool}` — delete a library entry (absent id → removed:false).
+fn mgr_remove(payload: Value) -> Value {
+    let Some(id) = payload.get("id").and_then(Value::as_str) else {
+        return err("BAD_REQUEST", "missing 'id'");
+    };
+    let lib = mgr_library_dir(&payload);
+    let removed = match gore_mod::mgr::import::remove(&lib, id) {
+        Ok(removed) => removed,
+        Err(e) => return err("BAD_REQUEST", e.to_string()),
+    };
+    // Keep the persisted loadout in sync (mirror `gore mgr remove`): a removed mod must not
+    // linger as an enabled loadout entry, or a later `mgr_apply` — which reads the on-disk
+    // loadout, not the GUI's in-memory reconcile — fails loading the deleted mod's metadata.
+    let lo_path = mgr_loadout_path(&payload);
+    if let Ok(mut lo) = gore_mod::mgr::loadout::load(&lo_path) {
+        let before = lo.entries.len();
+        lo.entries.retain(|e| e.id != id);
+        if lo.entries.len() != before {
+            let _ = gore_mod::mgr::loadout::save(&lo_path, &lo);
+        }
+    }
+    json!({"ok": true, "removed": removed})
+}
+
+/// `{loadout:Loadout, loadout_path?}` → `{ok}` — persist the loadout.
+fn mgr_set_loadout(payload: Value) -> Value {
+    let loadout: gore_mod::mgr::Loadout = match payload.get("loadout").cloned() {
+        Some(v) => match serde_json::from_value(v) {
+            Ok(l) => l,
+            Err(e) => return err("BAD_REQUEST", format!("invalid loadout: {e}")),
+        },
+        None => return err("BAD_REQUEST", "missing 'loadout'"),
+    };
+    let lo_path = mgr_loadout_path(&payload);
+    match gore_mod::mgr::loadout::save(&lo_path, &loadout) {
+        Ok(()) => json!({"ok": true}),
+        Err(e) => err("IO", e.to_string()),
+    }
+}
+
+/// `{library_dir?, loadout_path?}` → `{ok, conflicts:[Conflict]}` — pure conflict analysis of the
+/// enabled loadout against the library.
+fn mgr_analyze(payload: Value) -> Value {
+    let lib = mgr_library_dir(&payload);
+    let lo_path = mgr_loadout_path(&payload);
+    let mods = match gore_mod::mgr::import::list(&lib) {
+        Ok(m) => m,
+        Err(e) => return err("ANALYZE_FAILED", e.to_string()),
+    };
+    let loadout = match gore_mod::mgr::loadout::load(&lo_path) {
+        Ok(l) => l,
+        Err(e) => return err("ANALYZE_FAILED", e.to_string()),
+    };
+    let refs: Vec<&gore_mod::mgr::ModEntryMeta> = mods.iter().collect();
+    let conflicts = gore_mod::mgr::analyze::analyze(&refs, &loadout);
+    json!({"ok": true, "conflicts": serde_json::to_value(&conflicts).unwrap_or(Value::Null)})
+}
+
+/// `{game_root, library_dir?, loadout_path?}` → `{ok, report:ApplyReport}` — realize the enabled
+/// loadout into one manager deployment. A studio deploy in the way maps to STUDIO_DEPLOY_ACTIVE.
+fn mgr_apply(payload: Value) -> Value {
+    let Some(game_root) = payload.get("game_root").and_then(Value::as_str) else {
+        return err("BAD_REQUEST", "missing 'game_root'");
+    };
+    let lib = mgr_library_dir(&payload);
+    let lo_path = mgr_loadout_path(&payload);
+    let loadout = match gore_mod::mgr::loadout::load(&lo_path) {
+        Ok(l) => l,
+        Err(e) => return err("APPLY_FAILED", e.to_string()),
+    };
+    match gore_mod::mgr::apply::apply_loadout(std::path::Path::new(game_root), &lib, &loadout) {
+        Ok(report) => json!({"ok": true, "report": serde_json::to_value(&report).unwrap_or(Value::Null)}),
+        Err(e) => {
+            let msg = e.to_string();
+            // The apply engine signals a blocking studio deployment as `STUDIO_DEPLOY_ACTIVE:<name>`;
+            // surface it as its own code carrying just the mod name so the UI can prompt accordingly.
+            match msg.strip_prefix("STUDIO_DEPLOY_ACTIVE:") {
+                Some(name) => err("STUDIO_DEPLOY_ACTIVE", name.to_string()),
+                None => err("APPLY_FAILED", msg),
+            }
+        }
+    }
+}
+
+/// `{game_root, library_dir?, loadout_path?}` → `{ok, status:ManagerStatus}` — diff deployed vs
+/// target loadout. `library_dir` lets status fingerprint each enabled mod's current content so a
+/// same-id re-import (update) is reported as changes-pending rather than in-sync.
+fn mgr_status(payload: Value) -> Value {
+    let Some(game_root) = payload.get("game_root").and_then(Value::as_str) else {
+        return err("BAD_REQUEST", "missing 'game_root'");
+    };
+    let lib = mgr_library_dir(&payload);
+    let lo_path = mgr_loadout_path(&payload);
+    let loadout = match gore_mod::mgr::loadout::load(&lo_path) {
+        Ok(l) => l,
+        Err(e) => return err("STATUS_FAILED", e.to_string()),
+    };
+    match gore_mod::mgr::status::status(std::path::Path::new(game_root), &lib, &loadout) {
+        Ok(status) => json!({"ok": true, "status": serde_json::to_value(&status).unwrap_or(Value::Null)}),
+        Err(e) => err("STATUS_FAILED", e.to_string()),
+    }
+}
+
+/// `{game_root}` → `{ok, removed:bool}` — undeploy whatever is active (manager or studio).
+fn mgr_undeploy_all(payload: Value) -> Value {
+    let Some(game_root) = payload.get("game_root").and_then(Value::as_str) else {
+        return err("BAD_REQUEST", "missing 'game_root'");
+    };
+    match gore_mod::mgr::apply::undeploy_all(std::path::Path::new(game_root)) {
+        Ok(removed) => json!({"ok": true, "removed": removed}),
+        Err(e) => err("UNDEPLOY_FAILED", e.to_string()),
+    }
+}
+
 fn validate(payload: Value) -> Value {
     let cfg: OverridesConfig = match payload
         .get("config")
@@ -611,5 +799,344 @@ mod tests {
         )).unwrap();
         assert_eq!(v["ok"], false);
         assert_eq!(v["error"]["code"], "BAD_REQUEST");
+    }
+
+    // ── mgr_* commands ─────────────────────────────────────────────────────────
+    // Round-tripped through `execute_json` (the real FFI seam), each against temp `library_dir`
+    // / `loadout_path` overrides so nothing touches the shared per-user store.
+
+    /// Run a command with a JSON `payload` value, returning the parsed response.
+    fn mgr_call(command: &str, payload: Value) -> Value {
+        let req = json!({"command": command, "payload": payload});
+        serde_json::from_str(&execute_json(&req.to_string())).unwrap()
+    }
+
+    /// Build a real goremod bundle (one item override → a UE4SS Lua component) under `root` and
+    /// return its dir, so `mgr_import` has a genuine bundle to ingest.
+    fn write_goremod_bundle(root: &std::path::Path, name: &str) -> PathBuf {
+        use gore_mod::{build_bundle, BuildSpec, ModMeta};
+        use gore_modgen::gen::{OverrideValue, SingleOverride};
+        let spec = BuildSpec {
+            meta: ModMeta { name: name.into(), version: "1.0".into(), author: "t".into() },
+            delay_ms: 0,
+            overrides: vec![SingleOverride {
+                class: "ItFo_Apple".into(),
+                field: "m_Value".into(),
+                module: "Angelscript".into(),
+                value: OverrideValue::Int(500),
+            }],
+            loc_edits: Default::default(),
+            audio: vec![],
+            texture: vec![],
+            scripts: vec![],
+        };
+        let bundle = build_bundle(&spec).unwrap();
+        let dir = root.join(name);
+        gore_mod::write_bundle(&dir, &bundle).unwrap();
+        dir
+    }
+
+    #[test]
+    fn mgr_library_list_empty_ok() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("library");
+        let lo = tmp.path().join("loadout.json");
+        let v = mgr_call(
+            "mgr_library_list",
+            json!({"library_dir": lib.display().to_string(), "loadout_path": lo.display().to_string()}),
+        );
+        assert_eq!(v["ok"], true, "resp: {v}");
+        assert_eq!(v["mods"].as_array().unwrap().len(), 0);
+        // A missing loadout file is the fresh default (format 1, no entries).
+        assert_eq!(v["loadout"]["format"], 1);
+        assert_eq!(v["loadout"]["entries"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn mgr_import_and_list_roundtrip() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("library");
+        let lo = tmp.path().join("loadout.json");
+        let bdir = write_goremod_bundle(tmp.path(), "Probe");
+
+        let imp = mgr_call(
+            "mgr_import",
+            json!({
+                "path": bdir.display().to_string(),
+                "library_dir": lib.display().to_string(),
+                "loadout_path": lo.display().to_string()
+            }),
+        );
+        assert_eq!(imp["ok"], true, "resp: {imp}");
+        assert_eq!(imp["entry"]["name"], "Probe");
+        assert_eq!(imp["entry"]["kind"], "goremod");
+        let id = imp["entry"]["id"].as_str().unwrap().to_string();
+
+        let list = mgr_call(
+            "mgr_library_list",
+            json!({"library_dir": lib.display().to_string(), "loadout_path": lo.display().to_string()}),
+        );
+        assert_eq!(list["ok"], true);
+        let mods = list["mods"].as_array().unwrap();
+        assert_eq!(mods.len(), 1, "one imported mod: {list}");
+        assert_eq!(mods[0]["id"], id);
+        assert_eq!(mods[0]["name"], "Probe");
+
+        // BUG 3: the import must ALSO register a disabled loadout slot (mirror `gore mgr import`),
+        // so a GUI-imported mod is visible to apply/status/analyze (which read the on-disk loadout)
+        // without waiting for another mutation.
+        let entries = list["loadout"]["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 1, "import must add a loadout entry: {list}");
+        assert_eq!(entries[0]["id"], id);
+        assert_eq!(entries[0]["enabled"], false, "new mod is registered DISABLED");
+    }
+
+    /// BUG 3, focused: `mgr_import` appends exactly one disabled loadout slot for the new id, and a
+    /// RE-import (same source → same id) does NOT duplicate it (keeps the existing slot, incl. an
+    /// enabled state a later toggle may have set).
+    #[test]
+    fn mgr_import_registers_disabled_loadout_slot() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("library");
+        let lo = tmp.path().join("loadout.json");
+        let bdir = write_goremod_bundle(tmp.path(), "Probe");
+
+        let imp = mgr_call(
+            "mgr_import",
+            json!({
+                "path": bdir.display().to_string(),
+                "library_dir": lib.display().to_string(),
+                "loadout_path": lo.display().to_string()
+            }),
+        );
+        assert_eq!(imp["ok"], true, "resp: {imp}");
+        let id = imp["entry"]["id"].as_str().unwrap().to_string();
+
+        // Loadout now carries one disabled slot for the imported id.
+        let after_first = mgr_call(
+            "mgr_library_list",
+            json!({"library_dir": lib.display().to_string(), "loadout_path": lo.display().to_string()}),
+        );
+        let entries = after_first["loadout"]["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["id"], id);
+        assert_eq!(entries[0]["enabled"], false);
+
+        // Enable it, then re-import the SAME source: the slot must be preserved (still enabled, no
+        // duplicate) — re-import is an update, not a fresh registration.
+        mgr_call(
+            "mgr_set_loadout",
+            json!({
+                "loadout_path": lo.display().to_string(),
+                "loadout": {"format": 1, "entries": [{"id": id, "enabled": true}]}
+            }),
+        );
+        let reimp = mgr_call(
+            "mgr_import",
+            json!({
+                "path": bdir.display().to_string(),
+                "library_dir": lib.display().to_string(),
+                "loadout_path": lo.display().to_string()
+            }),
+        );
+        assert_eq!(reimp["ok"], true, "resp: {reimp}");
+        assert_eq!(reimp["entry"]["id"], id, "same source → same id");
+
+        let after_reimport = mgr_call(
+            "mgr_library_list",
+            json!({"library_dir": lib.display().to_string(), "loadout_path": lo.display().to_string()}),
+        );
+        let entries = after_reimport["loadout"]["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 1, "re-import must not duplicate the loadout slot: {after_reimport}");
+        assert_eq!(entries[0]["id"], id);
+        assert_eq!(entries[0]["enabled"], true, "re-import preserves the existing enabled state");
+    }
+
+    #[test]
+    fn mgr_set_loadout_persists() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("library");
+        let lo = tmp.path().join("loadout.json");
+        let set = mgr_call(
+            "mgr_set_loadout",
+            json!({
+                "loadout_path": lo.display().to_string(),
+                "loadout": {"format": 1, "entries": [
+                    {"id": "mod-a", "enabled": true},
+                    {"id": "mod-b", "enabled": false}
+                ]}
+            }),
+        );
+        assert_eq!(set["ok"], true, "resp: {set}");
+
+        // library_list must read back exactly what was saved.
+        let list = mgr_call(
+            "mgr_library_list",
+            json!({"library_dir": lib.display().to_string(), "loadout_path": lo.display().to_string()}),
+        );
+        let entries = list["loadout"]["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0]["id"], "mod-a");
+        assert_eq!(entries[0]["enabled"], true);
+        assert_eq!(entries[1]["id"], "mod-b");
+        assert_eq!(entries[1]["enabled"], false);
+    }
+
+    // Removing a mod must also drop it from the persisted loadout (mirror `gore mgr remove`), so a
+    // later mgr_apply reading the on-disk loadout does not fail on the deleted mod's metadata.
+    #[test]
+    fn mgr_remove_drops_loadout_entry() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("library");
+        let lo = tmp.path().join("loadout.json");
+        std::fs::create_dir_all(&lib).unwrap();
+        mgr_call(
+            "mgr_set_loadout",
+            json!({
+                "loadout_path": lo.display().to_string(),
+                "loadout": {"format": 1, "entries": [
+                    {"id": "mod-a", "enabled": true},
+                    {"id": "mod-b", "enabled": true}
+                ]}
+            }),
+        );
+
+        let rem = mgr_call(
+            "mgr_remove",
+            json!({
+                "id": "mod-a",
+                "library_dir": lib.display().to_string(),
+                "loadout_path": lo.display().to_string()
+            }),
+        );
+        assert_eq!(rem["ok"], true, "resp: {rem}");
+
+        let list = mgr_call(
+            "mgr_library_list",
+            json!({"library_dir": lib.display().to_string(), "loadout_path": lo.display().to_string()}),
+        );
+        let entries = list["loadout"]["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 1, "removed id must be gone from loadout: {list}");
+        assert_eq!(entries[0]["id"], "mod-b");
+    }
+
+    #[test]
+    fn mgr_analyze_no_conflicts_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("library");
+        let lo = tmp.path().join("loadout.json");
+        let v = mgr_call(
+            "mgr_analyze",
+            json!({"library_dir": lib.display().to_string(), "loadout_path": lo.display().to_string()}),
+        );
+        assert_eq!(v["ok"], true, "resp: {v}");
+        assert_eq!(v["conflicts"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn mgr_status_nothing_deployed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let game = tmp.path().join("game");
+        std::fs::create_dir_all(&game).unwrap();
+        let lo = tmp.path().join("loadout.json");
+        let v = mgr_call(
+            "mgr_status",
+            json!({"game_root": game.display().to_string(), "loadout_path": lo.display().to_string()}),
+        );
+        assert_eq!(v["ok"], true, "resp: {v}");
+        assert_eq!(v["status"]["state"], "nothing_deployed");
+    }
+
+    /// After importing + enabling a mod and applying it, `mgr_status` against the SAME library
+    /// reports `in_sync` — the deploy record's per-mod fingerprints match the current library, so
+    /// the fingerprint gate the same-id-update fix added does not falsely fire. Uses a UE4SS mod
+    /// (apply only copies its dir — no .lcache/bank fixture needed).
+    #[test]
+    fn mgr_status_in_sync_after_apply() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("library");
+        let lo = tmp.path().join("loadout.json");
+        // Minimal game tree: apply only needs the ue4ss Mods dir for a UE4SS-only mod.
+        let game = tmp.path().join("game");
+        std::fs::create_dir_all(game.join("G1R/Binaries/Win64/ue4ss/Mods")).unwrap();
+
+        // Import a UE4SS bundle → it registers a disabled loadout slot.
+        let bdir = write_goremod_bundle(tmp.path(), "Probe");
+        let imp = mgr_call(
+            "mgr_import",
+            json!({
+                "path": bdir.display().to_string(),
+                "library_dir": lib.display().to_string(),
+                "loadout_path": lo.display().to_string()
+            }),
+        );
+        assert_eq!(imp["ok"], true, "resp: {imp}");
+        let id = imp["entry"]["id"].as_str().unwrap().to_string();
+
+        // Enable it: set the loadout to [{id, enabled:true}].
+        let set = mgr_call(
+            "mgr_set_loadout",
+            json!({
+                "loadout": {"format": 1, "entries": [{"id": id, "enabled": true}]},
+                "loadout_path": lo.display().to_string()
+            }),
+        );
+        assert_eq!(set["ok"], true, "resp: {set}");
+
+        // Apply → creates a manager deploy record (recording the mod's fingerprint).
+        let ap = mgr_call(
+            "mgr_apply",
+            json!({
+                "game_root": game.display().to_string(),
+                "library_dir": lib.display().to_string(),
+                "loadout_path": lo.display().to_string()
+            }),
+        );
+        assert_eq!(ap["ok"], true, "apply resp: {ap}");
+
+        // Status with the SAME library → in_sync (loadout matches AND fingerprint matches).
+        let st = mgr_call(
+            "mgr_status",
+            json!({
+                "game_root": game.display().to_string(),
+                "library_dir": lib.display().to_string(),
+                "loadout_path": lo.display().to_string()
+            }),
+        );
+        assert_eq!(st["ok"], true, "status resp: {st}");
+        assert_eq!(st["status"]["state"], "in_sync", "resp: {st}");
+    }
+
+    #[test]
+    fn mgr_apply_studio_active_maps_code() {
+        let tmp = tempfile::tempdir().unwrap();
+        let game = tmp.path().join("game");
+        std::fs::create_dir_all(&game).unwrap();
+        let lib = tmp.path().join("library");
+        let lo = tmp.path().join("loadout.json");
+
+        // Pre-seed a STUDIO deploy record (owner == "") straight to the record path so apply's
+        // studio guard trips. DeployRecord/record_path aren't public to this crate, so write the
+        // JSON file directly — the record lives at <game_root>/gore-mod.deployed.json. Include the
+        // fields DeployRecord does NOT default (`mod_name`, `ue4ss_mod_dir`, `backups`) so it
+        // deserializes; `owner: ""` marks it a studio (non-manager) deployment.
+        std::fs::write(
+            game.join("gore-mod.deployed.json"),
+            br#"{"mod_name":"SoloMod","ue4ss_mod_dir":null,"backups":[],"owner":""}"#,
+        )
+        .unwrap();
+
+        let v = mgr_call(
+            "mgr_apply",
+            json!({
+                "game_root": game.display().to_string(),
+                "library_dir": lib.display().to_string(),
+                "loadout_path": lo.display().to_string()
+            }),
+        );
+        assert_eq!(v["ok"], false, "resp: {v}");
+        assert_eq!(v["error"]["code"], "STUDIO_DEPLOY_ACTIVE");
+        // The message carries just the blocking studio mod's name.
+        assert_eq!(v["error"]["message"], "SoloMod");
     }
 }

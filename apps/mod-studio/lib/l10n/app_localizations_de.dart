@@ -349,4 +349,8 @@ class AppLocalizationsDe extends AppLocalizations {
   String localizedTextExtractedCount(int idCount, int languageCount) {
     return '$idCount IDs in $languageCount Sprachen extrahiert';
   }
+
+  @override
+  String get managerDeployActive =>
+      'Ein mod-manager-Loadout ist aktiv. Bitte zuerst in gore-manager undeployen.';
 }
