@@ -1370,6 +1370,12 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<Strin
     // `pending_ty` is the const-stripped base name (comparisons everywhere key on it), so the
     // constness travels in this parallel flag; the STOREOBJ arm uses it to Cast-strip.
     let mut pending_const: bool = false;
+    // batch-29a (C8): the last CALL* returns BY REFERENCE (ret DataType.is_reference from the
+    // cache) — the following RDRx dereferences the register the call just filled, so the RDR
+    // destination slot receives the call's VALUE. Set alongside `pending_ty` at every call
+    // producer (false for non-call producers: ALLOC/CallPtr), so a stale flag can never pair
+    // with a live `pending`; cleared by the flush macros with the rest of the pending state.
+    let mut pending_is_ref: bool = false;
     let mut ret_val: Option<String> = None;
     // Target type of the most recent TYPEID push — the implicit type operand of the following
     // `opCast` behaviour call (the lowered form of `Cast<T>(x)`). Resolved to a typename so the
@@ -1382,6 +1388,7 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<Strin
         () => {
             pending_ty = None;
             pending_const = false;
+            pending_is_ref = false;
             if let Some(p) = pending.take() {
                 out.push(format!("{p};"));
             }
@@ -1404,6 +1411,7 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<Strin
             }
             pending_ty = None;
             pending_const = false;
+            pending_is_ref = false;
         };
     }
 
@@ -1627,6 +1635,45 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<Strin
                 ref_reg = Some(format!("{obj}.{field}"));
             }
             _ if n.starts_with("RDR") => {
+                // batch-29a (C8, specs/batch29-errortail.md §8): a ref-RETURNING call immediately
+                // dereferenced — RDRx reads the register the call just filled, so the destination
+                // slot receives the call's VALUE (`local_1 = Task.GetResult();`). Without this the
+                // pending was flushed as a discarded statement (91 "Result of expression is
+                // unused" [W] module-killers) and the destination slot stayed garbage. Gates:
+                // `ref_reg` empty (member loads keep the path below byte-identical) and the
+                // call's ret DataType.is_reference (data-driven from the cache).
+                if ref_reg.is_none() && pending.is_some() && pending_is_ref {
+                    let p = pending.take().unwrap();
+                    let dst_slot = w(ins, 0);
+                    let dst_is_int = dst_slot > 0 && ctx.slot_type(dst_slot).is_none();
+                    // Mirror the member-RDR wraps below: an UNKNOWN/object-typed or float-family
+                    // ref-returned value read into an int-declared slot takes int(...) (warnings
+                    // are errors in-game); a known enum takes enum_to_int; known bool/int stay
+                    // bare; RDR8 stays bare (no UE enum is 8 bytes).
+                    let unknowable = match pending_ty.as_deref() {
+                        None => true,
+                        Some(t) => {
+                            let t = t.trim_start_matches("const ");
+                            matches!(t.bytes().next(), Some(b'U') | Some(b'A') | Some(b'F') | Some(b'T'))
+                                && t.as_bytes().get(1).map(|c| c.is_ascii_uppercase()).unwrap_or(false)
+                        }
+                    };
+                    let float_src = matches!(
+                        pending_ty.as_deref().map(|t| t.trim_start_matches("const ")),
+                        Some("float" | "float32" | "double")
+                    );
+                    let rhs = if dst_is_int && (unknowable || float_src) && n != "RDR8" {
+                        format!("int({p})")
+                    } else {
+                        enum_to_int(p, pending_ty.as_deref(), dst_is_int)
+                    };
+                    out.push(format!("{} = {rhs};", name(dst_slot)));
+                    member_read_slots.insert(dst_slot); // real data value, not a SetV temporary
+                    pending_ty = None;
+                    pending_const = false;
+                    pending_is_ref = false;
+                    continue;
+                }
                 flush!();
                 if let Some(r) = &ref_reg {
                     let dst_slot = w(ins, 0);
@@ -1868,6 +1915,7 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<Strin
                     // already-pushed args. Do NOT clear it (clearing destroys those args).
                     pending_ty = None;
                     pending_const = false;
+                    pending_is_ref = false;
                     // The class is the StaticClass func's NAMESPACE last-segment (objtype is
                     // NULL for StaticClass; the target class lives in the namespace), not the
                     // calling class — `local = UFoo::StaticClass()` from inside UBar must say UFoo.
@@ -1888,6 +1936,7 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<Strin
                     let trusted = ctx.refs.func_params_by_id(id).map(|p| p.len());
                     let owner = ctx.refs.func_owner_by_id(id);
                     let ret_is_ref = ctx.refs.func_ret_by_id(id).map(|d| d.is_reference).unwrap_or(false);
+                    pending_is_ref = ret_is_ref; // batch-29a: RDR may consume this call's result
                     // batch-24b shadow gate: a free SCRIPT global (no owner, global namespace)
                     // rendered inside a class method is shadowed by any same-named member in
                     // the class's (native or script) ancestry. Member-name existence (T3
@@ -2016,6 +2065,7 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<Strin
                     // present belong to an ENCLOSING call.
                     pending_ty = None;
                     pending_const = false;
+                    pending_is_ref = false;
                     let cls = ctx.refs.staticclass_class_by_ptr(ptr)
                         .or_else(|| ctx.refs.func_owner_by_ptr(ptr))
                         .or(ctx.class_name).unwrap_or("UObject");
@@ -2048,6 +2098,7 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<Strin
                     // native calls too so the UObject-receiver Cast wrap (batch19 class 1) and the
                     // generated-accessor qualification see the owning class of CALLSYS methods.
                     let ret_is_ref = ctx.refs.func_ret_by_ptr(ptr).map(|d| d.is_reference).unwrap_or(false);
+                    pending_is_ref = ret_is_ref; // batch-29a: RDR may consume this call's result
                     build_call(&mut stack, &qualified, ctx.refs.is_method_by_ptr(ptr), ctx.super_ctor, ctx.refs.func_params_by_ptr(ptr), na, trusted, ctx.refs.func_owner_by_ptr(ptr), ctx.class_name, false, pending_ty.as_deref(), ret_is_ref, false, ctx.refs)
                 };
             }
@@ -2055,6 +2106,7 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<Strin
                 let f = name(w(ins, 0));
                 pending_ty = None;
                 pending_const = false;
+                pending_is_ref = false;
                 pending = build_call(&mut stack, &f, false, ctx.super_ctor, None, None, None, None, ctx.class_name, false, None, false, false, ctx.refs);
             }
             // ---- object construction ----
@@ -2064,6 +2116,7 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<Strin
                 let args: Vec<String> = std::mem::take(&mut stack).into_iter().filter(|a| !a.s.is_empty()).map(|a| a.s).collect();
                 pending_ty = Some(ty.clone());
                 pending_const = false;
+                pending_is_ref = false;
                 pending = Some(format!("{ty}({})", args.join(", ")));
             }
             // ---- result capture ----
