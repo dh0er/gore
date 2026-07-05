@@ -290,9 +290,22 @@ impl RefResolver {
         // GASCharacterStateMixins free fn `ExchangeDailyRoutineToClass(AGothicCharacterState
         // Character, ...)` wraps exactly `Cast<AGothicNPCState>(Character)` — both directions
         // of the single-inheritance proof.
+        // batch-33a: AGothicCharacter derives ACharacter — evidence: vanilla-compiled
+        // bytecode reads ACharacter fields (CapsuleComponent/Mesh, ADDSi on the native
+        // tid) off Cast<AGothicCharacter> results corpus-wide (XardasSleeper Initialize,
+        // CreatureTeleport DoTeleport*), and the 30a-C6d GA_FallingRagdoll axiom in
+        // provably_derived encodes the same edge. ASpellProjectileVisual derives
+        // AProjectileVisual — evidence: ASpellBallVisual_AS (: ASpellProjectileVisual)
+        // method bodies access `this.m_CollisionComp` declared on native
+        // AProjectileVisual (ADDSi tid 0x400199b, GA_Spell_BallLightning family),
+        // vanilla-compiled => the chain passes through AProjectileVisual; single
+        // inheritance makes the link row sound (intermediates stay transparent to the
+        // walk — precedent: the UAIGroup_Combat_Base row).
         const KNOWN_NATIVE_HIERARCHY: &[(&str, &str)] = &[
             ("UAIGroup_Combat_Base", "UGothicAIGroup"),
             ("AGothicNPCState", "AGothicCharacterState"),
+            ("AGothicCharacter", "ACharacter"),
+            ("ASpellProjectileVisual", "AProjectileVisual"),
         ];
         if sub == sup {
             return true;

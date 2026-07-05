@@ -487,6 +487,22 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
         if member_widen_blocked(slot, ty) {
             continue;
         }
+        // batch-33a: 31d most-derived merge, mirrored onto the MEMBER pass — a field's
+        // DECLARING class that is a PROVABLE ANCESTOR of the cache's own obj_locals type
+        // must not widen it. The member access stays legal on the derived vanilla type
+        // (the bytecode proves it compiled), while widening loses derived-only methods:
+        // `Cast<ABallLightningVisual>` result copied into the vanilla-typed slot, then
+        // `local_2.m_CollisionComp` (declared on native AProjectileVisual) re-typed the
+        // slot to the base -> `AProjectileVisual::SetSpellLevel(int)` no-match (9 fns:
+        // BallLightning/Orc/FireBall_Orc/Heal spells, Explode/StormOfFire visuals,
+        // Xardas Initialize, both CreatureTeleport DoTeleport* via ACharacter's
+        // CapsuleComponent/Mesh). C6c (sole-call gate above) covered only call-stored
+        // slots; this covers the RefCpyV/copy-written rest.
+        if let Some(vanilla) = vanilla_obj_types.get(slot) {
+            if vanilla != ty && refs.is_subclass(vanilla, ty) {
+                continue;
+            }
+        }
         local_types.insert(*slot, ty.clone());
     }
     // iterator-instance subtypes (illegal-op-round2.md A1): the T1 entry for a `T*Iterator`
@@ -688,6 +704,13 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
         // batch-30a (C6c): same gate as the body map — a sole-call-written slot whose call
         // return type matches the vanilla obj_locals entry keeps the exact vanilla type.
         if used.contains(slot) && !member_widen_blocked(slot, ty) {
+            // batch-33a: declaration-side mirror of the most-derived member merge above —
+            // the vanilla obj_locals type wins over a field-declaring-class ANCESTOR.
+            if let Some(vanilla) = vanilla_obj_types.get(slot) {
+                if vanilla != ty && refs.is_subclass(vanilla, ty) {
+                    continue;
+                }
+            }
             locals.insert(*slot, ty.clone());
         }
     }
