@@ -115,6 +115,17 @@ pub struct Func {
     /// (slot offset, type-ptr) for object-typed locals.
     pub obj_locals: Vec<(i32, i64)>,
     pub is_ufunction: bool,
+    /// asSFunctionTraits bitfield (asTRAIT_CONST=4, asTRAIT_FINAL=32, generated=0x40000, ...).
+    pub traits: i32,
+}
+
+impl Func {
+    /// The vanilla method was declared `const` (asTRAIT_CONST). Dropping it on re-emit makes
+    /// every call through a `const` object handle fail with "Non-const method call on
+    /// read-only object reference", so the emitter must render it back.
+    pub fn is_const_method(&self) -> bool {
+        self.traits & 4 != 0
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -190,7 +201,7 @@ fn read_function(c: &mut Cursor) -> Result<Func, WireError> {
         pflags.push(c.read_i32()?);
     }
     c.skip_tarray_sia("ParameterDefaultArgs")?;
-    c.skip(4)?; // FunctionTraits
+    let traits = c.read_i32()?; // FunctionTraits (asSFunctionTraits bitfield)
     let bytecode = c.read_tarray_i32("ByteCode")?;
     c.skip_tarray_fixed(4, "ByteCodeReferences")?;
     c.skip(4)?; // VariableSpace
@@ -230,7 +241,7 @@ fn read_function(c: &mut Cursor) -> Result<Func, WireError> {
         });
     }
     let obj_locals = obj_pos.into_iter().zip(obj_types).collect();
-    Ok(Func { name, namespace, ret, params, bytecode, obj_locals, is_ufunction })
+    Ok(Func { name, namespace, ret, params, bytecode, obj_locals, is_ufunction, traits })
 }
 
 fn read_property(c: &mut Cursor) -> Result<Field, WireError> {

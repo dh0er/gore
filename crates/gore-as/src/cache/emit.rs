@@ -32,7 +32,7 @@ fn force_stub_set() -> &'static HashSet<String> {
 use super::disasm::disassemble;
 use super::model::{Class, Func, Module};
 use super::refs::RefResolver;
-use super::structure::{body_statements_ctor, RVODEF};
+use super::structure::{body_statements_ctor, CONSTSTORE, RVODEF};
 use super::types::token_keyword;
 use super::walk_modules::FuncCode;
 
@@ -179,8 +179,22 @@ fn emit_class(s: &mut String, c: &Class, refs: &RefResolver) {
     }
     let super_name = c.super_class.as_deref().filter(|s| !s.is_empty());
     // field name -> base type name, so the decompiler can cast `this.field = <int>` assignments.
-    let field_types: HashMap<String, String> =
+    let mut field_types: HashMap<String, String> =
         c.fields.iter().map(|f| (f.name.clone(), f.ty.base_name(refs))).collect();
+    // Batch-21 Class B residue: fold in INHERITED fields by walking the script hierarchy —
+    // the own-fields map left e.g. `this.RoleCategoryContainers.opIndex(<int>)` (field declared
+    // on the super class) untyped, so the container-subtype enum-key wrap never fired. Own
+    // fields win on a name collision (shadowing is illegal in AS anyway). Walk is cycle-bounded.
+    let mut cur = super_name.map(|s| s.to_string());
+    for _ in 0..64 {
+        let Some(sup) = cur else { break };
+        if let Some(fs) = refs.class_field_types(&sup) {
+            for (k, v) in fs {
+                field_types.entry(k.clone()).or_insert_with(|| v.clone());
+            }
+        }
+        cur = refs.class_super_of(&sup).map(|s| s.to_string());
+    }
     for ctor in &c.ctors {
         emit_function_ctor(s, ctor, refs, true, true, 1, super_name, Some(&field_types), Some(&c.name));
     }
@@ -281,6 +295,47 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
     // Consumes the iterator subtypes above for bare `TMap*` pair returns.
     let callret_overrides = infer_call_result_types(f, refs, &local_types);
     let body = body_statements_ctor(&fc, refs, depth + 1, super_ctor, Some(&f.ret), fields, Some(&param_types), class_name, Some(&local_types));
+    // Batch-21 Class C: CONSTSTORE-marked stores carry a const object handle of the local's
+    // EXACT type (a same-type Cast<T> does NOT strip const in-game — every batch-20 exact-type
+    // Cast site failed "No conversion from 'const X' to 'X'"). Vanilla declared these locals
+    // `const`; strip the marker and const-qualify the declaration below.
+    let (body, const_slots) = strip_const_store_markers(&body);
+    // CASCADE GATE: a const handle can't be COPIED into a non-const local / `__return` /
+    // member (handle assignment preserves const), so any slot consumed as a bare copy-RHS
+    // keeps its non-const declaration (the store keeps the status-quo error) unless the copy
+    // target is itself const-marked. Method calls / call args / `!= nullptr` / Cast<Derived>
+    // uses are const-safe: vanilla used the same value through a const local, and Class A
+    // restored the faithful const method qualifiers + const param renders.
+    let mut const_slots = const_slots;
+    loop {
+        let keep: HashSet<i32> = const_slots
+            .iter()
+            .copied()
+            .filter(|n| {
+                let needle = format!("= local_{n};");
+                !body.lines().any(|l| {
+                    let t = l.trim();
+                    if !t.ends_with(needle.as_str()) {
+                        return false;
+                    }
+                    let lhs = t[..t.len() - needle.len()].trim_end();
+                    let lhs_const = lhs
+                        .strip_prefix("local_")
+                        .and_then(|d| d.parse::<i32>().ok())
+                        .map(|m| const_slots.contains(&m))
+                        .unwrap_or(false);
+                    !lhs_const
+                }) && !body.contains(&format!("return local_{n};"))
+            })
+            .collect();
+        // fixed point: dropping a slot can invalidate a copy INTO it that justified keeping
+        // its source, so iterate until stable (bounded: the set only shrinks).
+        if keep.len() == const_slots.len() {
+            break;
+        }
+        const_slots = keep;
+    }
+    let const_slots = const_slots;
     // hoist every referenced local; infer_locals types what it can, the rest default to `int`
     // (a wrong type just becomes a compile error the in-game loop force-stubs, rather than the
     // whole function stubbing on an undeclared identifier).
@@ -417,7 +472,12 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
     if is_ctor {
         let _ = writeln!(s, "{ind}{}({params})", f.name); // constructors have no return type
     } else {
-        let _ = writeln!(s, "{ind}{ret_sig} {}({params})", f.name);
+        // Batch-21 Class A: vanilla `const` methods (asTRAIT_CONST in FunctionTraits) must
+        // render their qualifier back — callers hold `const` object handles (the param
+        // DataTypes carry bIsObjectConst), so a non-const re-declaration fails every call
+        // site with "Non-const method call on read-only object reference".
+        let constq = if is_method && f.is_const_method() { " const" } else { "" };
+        let _ = writeln!(s, "{ind}{ret_sig} {}({params}){constq}", f.name);
     }
     let _ = writeln!(s, "{ind}{{");
 
@@ -452,6 +512,11 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
             }
             if is_primitive(ty) {
                 let _ = writeln!(s, "{ind}    {ty} local_{slot} = {};", default_for(ty));
+            } else if const_slots.contains(slot) {
+                // batch-21 Class C: at least one store is a const handle of this exact type;
+                // `const` on the declaration matches the vanilla form (non-const stores into a
+                // const handle remain legal, so mixed-source slots are safe).
+                let _ = writeln!(s, "{ind}    const {ty} local_{slot};");
             } else {
                 let _ = writeln!(s, "{ind}    {ty} local_{slot};");
             }
@@ -567,6 +632,35 @@ fn render_params(f: &Func, refs: &RefResolver) -> String {
         })
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// Strip [`CONSTSTORE`] markers from a rendered body, returning the cleaned body plus the
+/// set of `local_N` slots whose store RHS was a const handle of the local's exact type —
+/// those declarations get a `const` qualifier (batch-21 Class C). A marked store whose LHS
+/// is not a plain `local_N` (e.g. `__return`) just loses the marker (status-quo behavior).
+fn strip_const_store_markers(body: &str) -> (String, HashSet<i32>) {
+    let mut slots = HashSet::new();
+    if !body.contains(CONSTSTORE) {
+        return (body.to_string(), slots);
+    }
+    let mut out = String::with_capacity(body.len());
+    for line in body.lines() {
+        if let Some(pos) = line.find(CONSTSTORE) {
+            let lhs = line[..pos].trim_start();
+            if let Some(n) = lhs
+                .strip_prefix("local_")
+                .and_then(|r| r.strip_suffix(" = "))
+                .and_then(|d| d.parse::<i32>().ok())
+            {
+                slots.insert(n);
+            }
+            out.extend(line.chars().filter(|c| *c != CONSTSTORE));
+        } else {
+            out.push_str(line);
+        }
+        out.push('\n');
+    }
+    (out, slots)
 }
 
 /// A body is "recoverable" only if it has NO recovery gaps: the decompiler emits a

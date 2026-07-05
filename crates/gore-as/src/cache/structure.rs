@@ -85,6 +85,10 @@ fn amm(code: &str) -> String {
 /// this does NOT stub the whole function: the emitter replaces it with a default-valued
 /// return so the recovered body survives (far more faithful than a bare stub).
 pub(crate) const RVODEF: &str = "\u{3}rvodef";
+/// Marks a store whose RHS is a CONST object handle of the destination local's EXACT type
+/// (batch-21 Class C). The emitter strips the marker and declares the destination local
+/// `const T` — the vanilla form; a same-type `Cast<T>` wrap does NOT strip const in-game.
+pub(crate) const CONSTSTORE: char = '\u{4}';
 
 /// Structured statement body for a function (no signature wrapper), indented at `depth`.
 /// Returns an error annotation string on disasm failure (never panics).
@@ -143,7 +147,9 @@ pub fn decompile(f: &FuncCode, refs: &RefResolver) -> String {
         .enumerate()
         .map(|(i, n)| if n.is_empty() { format!("arg{i}") } else { n.clone() })
         .collect();
-    let body = body_statements(f, refs, 1).replace(RVODEF, "/* unrecovered */ {}");
+    let body = body_statements(f, refs, 1)
+        .replace(RVODEF, "/* unrecovered */ {}")
+        .replace(CONSTSTORE, "");
     format!(
         "// {}\nfunction({})\n{{\n{}}}\n",
         f.func,
@@ -584,6 +590,7 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
             }
         }
         maybe_reverse_args(&mut a, params, refs);
+        cast_container_args(f, recv.ty.as_deref(), &mut a);
         Some(format!("{}.{f}({})", wrap_uobject_recv(&recv, target_owner), render_args(&a, params, refs)))
     } else {
         if refs.is_type_name(f) {
@@ -768,6 +775,62 @@ fn maybe_reverse_args(a: &mut Vec<Arg>, params: Option<&[DataType]>, refs: &RefR
     }
 }
 
+/// Batch-21 Class B: container methods (`TArray`/`TSet::Add`, `TMap::Add`/`opIndex`) take the
+/// receiver's template SUBTYPE(s) as parameters, but the native bind's stored param DataTypes
+/// are generic placeholders — so `cast_arg` can't see that an int arg feeds an enum/bool
+/// subtype (AngelScript has no implicit int->enum/int->bool): `TArray<EPhysicalSurface>
+/// local; local.Add(1);` fails "No matching signatures to 'TArray::Add(int)'" (54 in-game).
+/// Derive the expected types from the receiver's COMPOSED type name (`TMap<ECombatRole,
+/// float>` — locals via obj_locals, this-class members via the fields map) and wrap int args
+/// in place. Foreign-member receivers with unknown types stay untouched (status-quo error).
+fn cast_container_args(method: &str, recv_ty: Option<&str>, a: &mut [Arg]) {
+    let Some(t) = recv_ty else { return };
+    let t = t.trim_start_matches("const ");
+    let Some((head, rest)) = t.split_once('<') else { return };
+    let Some(inner) = rest.strip_suffix('>') else { return };
+    // top-level comma split (subtypes can nest: TMap<ECombatRole, TArray<int>>)
+    let mut subs: Vec<&str> = Vec::new();
+    let (mut depth, mut start) = (0usize, 0usize);
+    for (i, c) in inner.char_indices() {
+        match c {
+            '<' => depth += 1,
+            '>' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                subs.push(inner[start..i].trim());
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    subs.push(inner[start..].trim());
+    let expect: &[&str] = match (head, method, subs.len()) {
+        // single-value element methods (capture shapes: Add(int) 28x, Contains(int) 10x,
+        // AddUnique/Remove(int) 2x) — the arg is the element type T.
+        ("TArray" | "TSet", "Add" | "AddUnique" | "Remove" | "RemoveSingle" | "Contains", 1) => &subs[..1],
+        // Add(K, V) takes both subtypes positionally.
+        ("TMap", "Add", 2) => &subs[..2],
+        // key-first methods: only the K arg is wrapped (Find's 2nd arg is the V out-slot,
+        // FindOrAdd/opIndex/Contains/Remove take just the key).
+        ("TMap", "opIndex" | "Find" | "FindOrAdd" | "Contains" | "Remove", 2) => &subs[..1],
+        _ => return,
+    };
+    for (arg, want) in a.iter_mut().zip(expect) {
+        // The container natives take `const T&in`, so int-slot args arrive PSF-pushed
+        // (address of the slot: is_psf=true, is_int=false, ty=None — int locals aren't in
+        // the typed-locals map). A slot with a KNOWN non-int type (bool/float/object local)
+        // is a real typed value and must stay bare.
+        if !(arg.is_int || (arg.is_psf && arg.ty.is_none())) {
+            continue;
+        }
+        if let Some(c) = cast_to_typename(&arg.s, want) {
+            arg.s = c;
+            arg.is_int = false;
+            arg.cbits = None;
+            arg.ty = Some((*want).to_string());
+        }
+    }
+}
+
 /// Render args joined by ", ", casting each int arg to the callee's expected param type.
 fn render_args(a: &[Arg], params: Option<&[DataType]>, refs: &RefResolver) -> String {
     a.iter()
@@ -860,12 +923,19 @@ fn cast_arg(arg: &Arg, pt: &DataType, refs: &RefResolver) -> String {
 ///
 /// batch-20 Class B: when the call returns a CONST object handle (`src_const`) and the
 /// destination local is the SAME (non-const) type, the plain store fails "Can't implicitly
-/// convert from 'const UCharacterAIState' to 'UCharacterAIState'". `Cast<T>` strips the const:
-/// PROVEN in the batch-19 capture — `local_4 = Cast<AGothicCharacter>(Querier);` with
-/// `const UObject Querier` compiles clean (AIAgentConfig_Navigation_Human.as GetAIFromQuerier),
-/// same in PersonalRelationshipModifiers.as with `const AGothicCharacterState` params. Only the
-/// exact-type pair is wrapped (every capture site is 'const X' -> 'X'); a const UPCAST keeps the
-/// status-quo error rather than risking the known Cast<Base>(derived) in-game failure.
+/// convert from 'const UCharacterAIState' to 'UCharacterAIState'". `Cast<T>` strips the const
+/// when it actually CASTS: PROVEN in the batch-19 capture — `local_4 =
+/// Cast<AGothicCharacter>(Querier);` with `const UObject Querier` compiles clean
+/// (AIAgentConfig_Navigation_Human.as GetAIFromQuerier).
+///
+/// batch-21 Class C REVISION: the batch-20 EXACT-TYPE wrap `Cast<X>(const X)` does NOT strip
+/// const in-game — the batch-20 capture shows every exact-type Cast site still failing
+/// "No conversion from 'const X' to 'X'" (site counts match 1:1: UTerritoryConfig 12/12,
+/// UCharacterDefinition 9/9, UComboAttackConfig 5/5, ...). A same-type Cast is a no-op that
+/// keeps the const. The vanilla form is a CONST local declaration, so the exact-type arm now
+/// emits the store BARE prefixed with the [`CONSTSTORE`] marker; the emitter strips it and
+/// declares the destination local `const T` (assigning a later NON-const value to a const
+/// handle stays legal, so mixed-source slots are safe).
 fn downcast(rhs: String, src_ty: Option<String>, src_const: bool, dst_ty: Option<&String>, refs: &RefResolver) -> String {
     let is_obj = |s: &str| s.starts_with('U') || s.starts_with('A');
     match (src_ty, dst_ty) {
@@ -879,7 +949,7 @@ fn downcast(rhs: String, src_ty: Option<String>, src_const: bool, dst_ty: Option
                 format!("Cast<{d}>({rhs})")
             }
         }
-        (Some(s), Some(d)) if src_const && is_obj(&s) && s == *d => format!("Cast<{d}>({rhs})"),
+        (Some(s), Some(d)) if src_const && is_obj(&s) && s == *d => format!("{CONSTSTORE}{rhs}"),
         _ => rhs,
     }
 }
@@ -1158,12 +1228,20 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 let off = ins.words.first().copied().unwrap_or(0) as i32;
                 let tid = ins.dwords.first().copied().unwrap_or(0) as i32;
                 let field = ctx.refs.member(tid, off).map(|s| s.to_string()).unwrap_or_else(|| format!("field_0x{off:x}"));
-                // field VALUE type — ONLY from the enclosing class map. `member_type(tid,off)`
+                // field VALUE type — from the enclosing class map, else (batch-21 Class B) the
+                // injected per-class field maps keyed by the ADDSi type-id's class name, which
+                // resolve FOREIGN script-class/struct members correctly (`SaveState.WeatherModifiers`
+                // -> `TMap<EWeather, float32>`). `member_type(tid,off)` stays unused here: it
                 // returns the OWNER struct (PropertyReferences.OldTypeId = the CONTAINING type),
                 // NOT the field's value type; using it poisons foreign member reads (e.g.
                 // `HitResult.BoneName` typed as `FHitResult` instead of `FName`) -> false
                 // value-head mismatch -> spurious argtype stub. None = unknown = conservative match.
-                let fty = ctx.fields.and_then(|m| m.get(&field)).cloned();
+                let fty = ctx.fields.and_then(|m| m.get(&field)).cloned().or_else(|| {
+                    ctx.refs
+                        .type_by_id(tid)
+                        .and_then(|cls| ctx.refs.field_type_by_class(cls, &field))
+                        .map(|s| s.to_string())
+                });
                 if let Some(top) = stack.last_mut() {
                     top.s = format!("{}.{field}", top.s);
                     top.is_int = false; // now a member access, not a bare int slot
@@ -1215,7 +1293,16 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                                 && t.as_bytes().get(1).map(|c| c.is_ascii_uppercase()).unwrap_or(false)
                         }
                     };
-                    let rhs = if dst_is_int && unknowable && n != "RDR8" {
+                    // A KNOWN float-family member read into an int-declared slot keeps the
+                    // int(...) wrap: warnings are errors in the game compile, and the bare read
+                    // is "Implicit conversion from float to integer loses precision". (Before
+                    // batch-21's inherited-fields map these reads were mostly `None`-typed and
+                    // took the unknowable wrap; a KNOWN bool/int stays bare — proven clean.)
+                    let float_src = matches!(
+                        ref_reg_ty.as_deref().map(|t| t.trim_start_matches("const ")),
+                        Some("float" | "float32" | "double")
+                    );
+                    let rhs = if dst_is_int && (unknowable || float_src) && n != "RDR8" {
                         format!("int({r})")
                     } else {
                         enum_to_int(r.clone(), ref_reg_ty.as_deref(), dst_is_int)
@@ -1574,7 +1661,15 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 flush_store(&mut out, name(slot), rhs);
             }
             "CpyRtoV4" | "CpyRtoV8" => {
-                if let Some(p) = pending.take() {
+                // batch-21 Class C shape 3: a VOID call has no register value to copy —
+                // `local_N = VoidCall();` fails "No conversion from 'void' to 'int'". Emit the
+                // call as its own statement; the copied register value (stale, unmodeled) is
+                // unrecoverable, so the assignment is dropped (slot keeps its prior value).
+                if pending.is_some() && pending_ty.as_deref() == Some("void") {
+                    if let Some(p) = pending.take() {
+                        out.push(format!("{p};"));
+                    }
+                } else if let Some(p) = pending.take() {
                     // an enum-returning call stored into an int slot needs an explicit int(...)
                     let dst_slot = w(ins, 0);
                     let dst_is_int = dst_slot > 0 && ctx.slot_type(dst_slot).is_none();
@@ -1586,12 +1681,33 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
             }
             "LOADOBJ" => obj_reg = Some(name(w(ins, 0))),
             "CpyVtoR4" | "CpyVtoR8" => {
+                // batch-21 Class C shape 3: a pending VOID call has no value to copy — the
+                // register content comes from the SLOT operand (e.g. a bool& out-param the call
+                // just wrote: `CalculateDistanceToTarget(.., local_3); return local_3;`).
+                // Flush the call as its own statement and use the slot.
+                if pending.is_some() && pending_ty.as_deref() == Some("void") {
+                    flush!();
+                }
                 ret_val = pending.take().or_else(|| Some(name(w(ins, 0))));
             }
             "CpyVtoR1" => {
                 // a bool moved into the test register: feeds either RET or a conditional jump.
-                // A call result is already bool-typed; a slot holds the bool as an int.
-                let is_bool = pending.is_some() && pending_ty.as_deref() == Some("bool");
+                // A call result is already bool-typed; a slot holds the bool as an int —
+                // EXCEPT a slot DECLARED bool (a `bool` param / bool-typed local), which must
+                // render bare: `if (bIncludeDefeated != 0)` fails "No conversion from 'int'
+                // to 'bool'" (batch-21 Class C, 36 in-game errors).
+                //
+                // batch-21 Class C shape 3: a pending VOID call can never be the tested/returned
+                // VALUE — the register content genuinely comes from the SLOT operand (typically a
+                // bool& out-param the call just wrote: `CalculateDistanceToTarget(.., local_3);
+                // return local_3;`). Folding it in rendered `return VoidCall(...)` / `if
+                // (VoidCall(...) == 0)` ("No conversion from 'void' to ..."). Flush the call as
+                // its own statement and use the slot.
+                if pending.is_some() && pending_ty.as_deref() == Some("void") {
+                    flush!();
+                }
+                let is_bool = (pending.is_some() && pending_ty.as_deref() == Some("bool"))
+                    || (pending.is_none() && ctx.slot_type(w(ins, 0)).as_deref() == Some("bool"));
                 let v = pending.take().unwrap_or_else(|| name(w(ins, 0)));
                 cond = Some((v.clone(), is_bool));
                 ret_val = Some(v);
@@ -1604,7 +1720,13 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 // lives in `pending` (e.g. `CALL`/`ALLOC` then `RET`), and flush! would emit it
                 // as a standalone statement, leaving the return a default (RVODEF).
                 let mut v = if non_void {
-                    ret_val.take().or_else(|| obj_reg.take()).or_else(|| pending.take())
+                    // batch-21 Class C shape 3: a pending VOID call is never the return VALUE
+                    // (`return CalculateDistanceToTarget(...);` from a bool function fails
+                    // "No conversion from 'void' to 'bool'") — leave it for flush! below
+                    // (statement position) and fall back to scan-back / the typed default.
+                    ret_val.take().or_else(|| obj_reg.take()).or_else(|| {
+                        (pending_ty.as_deref() != Some("void")).then(|| pending.take()).flatten()
+                    })
                 } else {
                     None
                 };
@@ -1619,8 +1741,16 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                         // which is a syntax error (aborts the whole module's parse). The
                         // assignment RHS is the actual returned value.
                         let v = strip_return_assign(&v).to_string();
+                        // a slot DECLARED bool must return bare: `return (boolSlot != 0);`
+                        // is an int-compare on a bool ("No conversion from 'int' to 'bool'").
+                        let declared_bool = v
+                            .strip_prefix("local_")
+                            .and_then(|d| d.parse::<i32>().ok())
+                            .and_then(|n| ctx.slot_type(n))
+                            .as_deref()
+                            == Some("bool");
                         let v = match ctx.ret_ty {
-                            Some(rt) if looks_int(&v) => {
+                            Some(rt) if looks_int(&v) && !declared_bool => {
                                 let tn = if rt.token == 0x41 { "bool".to_string() } else { rt.base_name(ctx.refs) };
                                 cast_to_typename(&v, &tn).unwrap_or(v)
                             }

@@ -42,6 +42,10 @@ pub struct RefResolver {
     /// Script class -> its super class name (injected from the parsed modules after build).
     /// Lets call sites distinguish a legal upcast from an unrelated-object arg.
     class_super: HashMap<String, String>,
+    /// Script class -> (field name -> COMPOSED field type name), injected from the parsed
+    /// modules after build. Lets the emitter fold INHERITED fields into a class's field-type
+    /// map (batch-21 Class B: `this.<inherited TMap>.opIndex(int)` needed the enum key wrap).
+    class_fields: HashMap<String, HashMap<String, String>>,
     /// FunctionReferences parameter DataTypes (for arg-type-driven casts at call sites).
     func_params: HashMap<i64, Vec<DataType>>,
     /// FunctionReferences return DataType.
@@ -212,6 +216,36 @@ impl RefResolver {
     /// Inject the script-class hierarchy (class name -> super name) from parsed modules.
     pub fn set_class_hierarchy(&mut self, supers: HashMap<String, String>) {
         self.class_super = supers;
+    }
+    /// Inject per-class field-type maps (class -> field -> composed type) from parsed modules.
+    pub fn set_class_fields(&mut self, fields: HashMap<String, HashMap<String, String>>) {
+        self.class_fields = fields;
+    }
+    /// Field-type map of a single script class (own fields only; walk supers via
+    /// [`Self::class_super_of`] for the inherited view).
+    pub fn class_field_types(&self, class: &str) -> Option<&HashMap<String, String>> {
+        self.class_fields.get(class)
+    }
+    /// Direct super-class name of a script class (None for engine types / roots).
+    pub fn class_super_of(&self, class: &str) -> Option<&str> {
+        self.class_super.get(class).map(|s| s.as_str()).filter(|s| !s.is_empty())
+    }
+    /// Field VALUE type by containing class name + field name, resolved through the injected
+    /// per-class field maps (walking script supers, cycle-bounded). Correct for FOREIGN script
+    /// classes/structs — where `member_type` (PropertyReferences.OldTypeId) only names the
+    /// OWNER type, not the field's own type.
+    pub fn field_type_by_class(&self, class: &str, field: &str) -> Option<&str> {
+        let mut cur = class;
+        for _ in 0..64 {
+            if let Some(t) = self.class_fields.get(cur).and_then(|m| m.get(field)) {
+                return Some(t);
+            }
+            match self.class_super.get(cur) {
+                Some(s) if !s.is_empty() => cur = s,
+                _ => return None,
+            }
+        }
+        None
     }
     /// True if `name` is a class DEFINED in a script module (vs an engine/native type).
     pub fn is_script_class(&self, name: &str) -> bool {

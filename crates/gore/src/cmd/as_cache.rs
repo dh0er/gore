@@ -138,6 +138,23 @@ fn class_hierarchy(mods: &[gore_as::cache::model::Module]) -> std::collections::
     h
 }
 
+/// Per-class field-type maps (class -> field -> composed type name) from parsed modules, so the
+/// emitter can resolve INHERITED member types across module boundaries (batch-21 Class B).
+fn class_fields(
+    mods: &[gore_as::cache::model::Module],
+    refs: &gore_as::cache::refs::RefResolver,
+) -> HashMap<String, HashMap<String, String>> {
+    let mut out: HashMap<String, HashMap<String, String>> = HashMap::new();
+    for m in mods {
+        for c in &m.classes {
+            let fields: HashMap<String, String> =
+                c.fields.iter().map(|f| (f.name.clone(), f.ty.base_name(refs))).collect();
+            out.insert(c.name.clone(), fields);
+        }
+    }
+    out
+}
+
 pub fn run(cmd: AsCmd) -> Result<()> {
     match cmd {
         AsCmd::DecodeHeader { file } => {
@@ -171,6 +188,8 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             // decompile output matches emitted source (subclass casts, native-call trimming).
             let mods = gore_as::cache::model::parse_modules(&bytes).context("parse modules")?;
             refs.set_class_hierarchy(class_hierarchy(&mods));
+            let cf = class_fields(&mods, &refs);
+            refs.set_class_fields(cf);
             if let Some(api) = load_native_api(&file) {
                 refs.set_native_api(api);
             }
@@ -190,6 +209,8 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             let mut refs = gore_as::cache::refs::RefResolver::build(&bytes).context("resolver")?;
             let mods = gore_as::cache::model::parse_modules(&bytes).context("parse modules")?;
             refs.set_class_hierarchy(class_hierarchy(&mods));
+            let cf = class_fields(&mods, &refs);
+            refs.set_class_fields(cf);
             if let Some(api) = load_native_api(&file) {
                 refs.set_native_api(api);
             }
@@ -203,6 +224,8 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             let mut refs = gore_as::cache::refs::RefResolver::build(&bytes).context("resolver")?;
             let mods = gore_as::cache::model::parse_modules(&bytes).context("parse modules")?;
             refs.set_class_hierarchy(class_hierarchy(&mods));
+            let cf = class_fields(&mods, &refs);
+            refs.set_class_fields(cf);
             if let Some(api) = load_native_api(&file) {
                 refs.set_native_api(api);
             }
