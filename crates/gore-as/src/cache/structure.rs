@@ -1432,6 +1432,15 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<Strin
     // producer (false for non-call producers: ALLOC/CallPtr), so a stale flag can never pair
     // with a live `pending`; cleared by the flush macros with the rest of the pending state.
     let mut pending_is_ref: bool = false;
+    // batch-31b (N2b, spec batch31-nomatch-illegalop §1.2): `pending` holds the rendered
+    // `n"..."` FName literal of the `PshC4 <id> ; CALLSYS __STATIC_NAME ; PshRPtr` idiom —
+    // a PURE literal (no side effect can be reordered), so the PshRPtr push may be tagged
+    // `.carry()` and survive the D9 cast-diamond carryability gate (SendGlobalEvent /
+    // SpawnRay lost their pre-diamond FName args to the D9 bail). Set ONLY by the CALLSYS
+    // arm's __STATIC_NAME resolution; every other pending producer resets it, so a stale
+    // flag can never pair with a live non-literal `pending`. Deliberately NOT widened to
+    // other pendings (opIndex results etc. are side-effect-bearing — N4 territory).
+    let mut pending_is_static_name: bool = false;
     let mut ret_val: Option<String> = None;
     // Target type of the most recent TYPEID push — the implicit type operand of the following
     // `opCast` behaviour call (the lowered form of `Cast<T>(x)`). Resolved to a typename so the
@@ -1595,6 +1604,12 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<Strin
                         let lhs = lhs.to_string();
                         out.push(format!("{p};"));
                         stack.push(Arg::typed(lhs, pending_ty.take()));
+                    } else if pending_is_static_name {
+                        // batch-31b (N2b): the pending is the PURE `n"..."`/`FName(...)`
+                        // literal of the __STATIC_NAME idiom — no side effect can be
+                        // reordered by carrying it across a cast diamond, so it may pass
+                        // the D9 carryability gate like any plain const push.
+                        stack.push(Arg::typed(p, pending_ty.take()).carry());
                     } else {
                         stack.push(Arg::typed(p, pending_ty.take()));
                     }
@@ -2083,6 +2098,7 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<Strin
                         && ctx.refs.member_name_exists(&f);
                     build_call(&mut stack, &f, ctx.refs.is_method_by_id(id), ctx.super_ctor, ctx.refs.func_params_by_id(id), na, trusted, owner, ctx.class_name, n == "CALL", pending_ty.as_deref(), ret_is_ref, global_shadowed, ctx.refs)
                 };
+                pending_is_static_name = false;
             }
             "CALLSYS" | "Thiscall1" => {
                 test_after_call = false;
@@ -2246,12 +2262,17 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<Strin
                     }
                     build_call(&mut stack, &qualified, ctx.refs.is_method_by_ptr(ptr), ctx.super_ctor, ctx.refs.func_params_by_ptr(ptr), na, trusted, ctx.refs.func_owner_by_ptr(ptr), ctx.class_name, false, pending_ty.as_deref(), ret_is_ref, false, ctx.refs)
                 };
+                // batch-31b: tag a resolved static-name FName literal (see the flag's doc).
+                // build_call returns the literal only for the accessor name; a failed gate
+                // (non-constant Id operand) falls to the `$`-drop and returns None.
+                pending_is_static_name = f == "__STATIC_NAME" && pending.is_some();
             }
             "CallPtr" => {
                 let f = name(w(ins, 0));
                 pending_ty = None;
                 pending_const = false;
                 pending_is_ref = false;
+                pending_is_static_name = false;
                 pending = build_call(&mut stack, &f, false, ctx.super_ctor, None, None, None, None, ctx.class_name, false, None, false, false, ctx.refs);
             }
             // ---- object construction ----
@@ -2262,6 +2283,7 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<Strin
                 pending_ty = Some(ty.clone());
                 pending_const = false;
                 pending_is_ref = false;
+                pending_is_static_name = false;
                 pending = Some(format!("{ty}({})", args.join(", ")));
             }
             // ---- result capture ----
