@@ -630,8 +630,8 @@ fn used_locals(body: &str) -> HashSet<i32> {
 /// the type that call's parameter expects (e.g. an optional/default-arg slot the cache mis-typed —
 /// FName where UAIState_DailyRoutine is wanted, or TSubclassOf<X> where X is wanted). Returns an
 /// override `slot -> type` ONLY for never-written slots with a single consistent consumer object
-/// type, so it can never clobber a real producer type. Pairs args from the stack TOP (robust to the
-/// cache counting the implicit `this` in a method's param list).
+/// type, so it can never clobber a real producer type. Pairs args from the stack TOP against
+/// params[0] onward (args are reverse-pushed, so the top entry is the FIRST source arg).
 /// True if a return type name denotes a struct/template returned BY VALUE via a hidden RVO
 /// out-slot (`F*` engine struct, `T*` template value like TSubclassOf). Enums/primitives/objects
 /// return in a register, not an out-slot, so they are excluded.
@@ -688,11 +688,20 @@ fn infer_slot_types(f: &Func, refs: &RefResolver) -> HashMap<i32, String> {
         } else {
             &popped[..popped.len().saturating_sub(rvo)]
         };
-        // pair from the TOP: last arg <-> last param (so a leading `this` param, if the cache
-        // counts it, never shifts the user-arg pairing).
+        // pair from the TOP: bytecode pushes args in REVERSE source order for EVERY call type
+        // (proven — see structure.rs maybe_reverse_args), so the TOP entry is params[0], the one
+        // below params[1], ... FRONT-anchored pairing is also robust to trailing-default omission
+        // (provided args align to the FIRST params) and to a truncated model stack (missing
+        // entries are the DEEPEST = trailing args). The previous END-anchored pairing
+        // (top <-> params[last]) guarded against a phantom leading `this` in the cache's method
+        // param lists — scanning T3 shows that phantom does not exist (every params[0]==owner hit
+        // is a genuine operator overload), while end-anchoring REVERSED every multi-param pairing
+        // (LocText/HasListenedTo: the FText out-slot re-pushed as `Voiceline` paired with the
+        // AGothicCharacterState `Character` param -> wrong declaration, RVO probe miss, dropped
+        // string arg — 400+ in-game errors).
         for (i, slot) in args.iter().rev().enumerate() {
             if let Some(s) = slot {
-                if let Some(pt) = params.len().checked_sub(1 + i).and_then(|j| params.get(j)) {
+                if let Some(pt) = params.get(i) {
                     let ty = pt.base_name(refs);
                     match cand.get(s) {
                         None => { cand.insert(*s, Some(ty)); }
