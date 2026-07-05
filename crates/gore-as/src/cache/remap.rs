@@ -351,8 +351,8 @@ fn scan_surviving_regen_keys(
 }
 
 /// Where a ref operand lives within an instruction + which table it keys.
-#[derive(Clone, Copy)]
-enum RefKind {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RefKind {
     GlobalPtr,
     FuncPtr,
     TypePtr,
@@ -361,16 +361,19 @@ enum RefKind {
 }
 
 /// One ref operand site: the dword index within the instruction + its kind.
-struct RefSite {
+pub struct RefSite {
     /// First operand dword index within the instruction (the low dword for a qword).
-    dw_index: usize,
-    is_qword: bool,
-    kind: RefKind,
+    pub dw_index: usize,
+    pub is_qword: bool,
+    pub kind: RefKind,
 }
 
 /// Operand sites per opcode. Empty for non-ref ops. The authoritative classification from
 /// `findings/decompile-refs.md §3`. ALLOC carries TWO ref operands (type ptr + ctor func id).
-fn ref_sites(op: &str) -> Vec<RefSite> {
+/// Shared by the ref-remapper (key->key rewrite) and the bytediff oracle (key->identity N1
+/// canonicalization) so both use the SAME op->table map — the make-or-break for a build-portable
+/// bytecode compare (`specs/semantic-oracle.md §3.1`).
+pub fn ref_sites(op: &str) -> Vec<RefSite> {
     use RefKind::*;
     match op {
         // global ptr (QW @ dword 1)
@@ -902,4 +905,130 @@ pub fn remap_module_to_base(extracted_mini: &[u8], base: &[u8]) -> Result<(Vec<u
     out.extend_from_slice(&module_bytes);
     out.extend_from_slice(&[0u8; 28]); // 7 tables × int32 count 0
     Ok((out, total))
+}
+
+// ---------------------------------------------------------------------------------------------
+// PUBLIC N1 API for the bytediff oracle (`specs/semantic-oracle.md §3.1`): resolve a raw
+// bytecode ref operand to a build-PORTABLE identity string, reusing the exact `SymTables`
+// classification the remapper uses. Where `remap.rs` maps key->key (size-preserving splice),
+// bytediff needs key->identity (a strict subset: `SymTables` already builds the forward
+// `*_id_of_ptr` identity maps). No new RE.
+// ---------------------------------------------------------------------------------------------
+
+/// One cache's tail-table identity resolver for bytecode ref operands. Build once per cache;
+/// call [`Self::resolve_operand`] on each ref operand of each disassembled instruction.
+pub struct RefIdentity {
+    syms: SymTables,
+}
+
+/// A resolved ref operand: either a portable identity (name+module+ns+signature — comparable
+/// across builds) or, when the operand keys nothing in the tables (a primitive type-id, or a
+/// key genuinely absent from the tail tables), a raw fallback that still compares equal to an
+/// identical raw operand on the other side.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OperandId {
+    /// Portable identity resolved via the tail tables (the normal cross-referencing case).
+    Named { kind: RefKind, identity: String },
+    /// Primitive type-id (<= LAST_PRIMITIVE, not in T2) — resolves to itself. Compared by value.
+    Primitive(i32),
+    /// A key/id present as an operand but absent from this cache's tables (defensive: a null
+    /// sentinel, or a table gap). Compared by raw value so two identical raws still match.
+    RawPtr(i64),
+    RawId(i32),
+}
+
+impl OperandId {
+    /// Human-readable form for the SEMANTIC-DIFF report (e.g. `CALLSYS Story::GiveXP`).
+    /// The identity string embeds unit-separator chars; render them as `::`-ish for readability.
+    pub fn display(&self) -> String {
+        match self {
+            OperandId::Named { identity, .. } => identity.replace(SEP, " » "),
+            OperandId::Primitive(id) => format!("prim#{id}"),
+            OperandId::RawPtr(p) => format!("<unresolved-ptr {p:#x}>"),
+            OperandId::RawId(i) => format!("<unresolved-id {i}>"),
+        }
+    }
+}
+
+impl RefIdentity {
+    /// Build the identity resolver from a full cache's tail tables.
+    pub fn build(bytes: &[u8]) -> Result<Self, WireError> {
+        Ok(RefIdentity { syms: SymTables::build(bytes)? })
+    }
+
+    /// Resolve a QWORD ptr operand (global/func/type ptr) to a portable identity.
+    pub fn resolve_ptr(&self, kind: RefKind, key: i64) -> OperandId {
+        let map = match kind {
+            RefKind::GlobalPtr => &self.syms.global_id_of_ptr,
+            RefKind::FuncPtr => &self.syms.func_id_of_ptr,
+            RefKind::TypePtr => &self.syms.type_id_of_ptr,
+            // FuncId/TypeId are DW operands, not ptr — never routed here.
+            RefKind::FuncId | RefKind::TypeId => return OperandId::RawPtr(key),
+        };
+        match map.get(&key) {
+            Some(id) => OperandId::Named { kind, identity: id.clone() },
+            None => OperandId::RawPtr(key),
+        }
+    }
+
+    /// Resolve a DWORD id operand (func-id via T4->T3, type-id via T2->T1) to a portable
+    /// identity. A type-id absent from T2 is a PRIMITIVE (int/bool/float32/...) that resolves to
+    /// itself (verbatim copy of the remapper's primitive-passthrough rule, `ref-remap.md §2.5`).
+    pub fn resolve_id(&self, kind: RefKind, id: i32) -> OperandId {
+        match kind {
+            RefKind::FuncId => match self.syms.funcid_to_ptr.get(&id) {
+                Some(ptr) => match self.syms.func_id_of_ptr.get(ptr) {
+                    Some(ident) => OperandId::Named { kind, identity: ident.clone() },
+                    None => OperandId::RawPtr(*ptr),
+                },
+                // Not a real func-id in this cache: defensive, compare raw.
+                None => OperandId::RawId(id),
+            },
+            RefKind::TypeId => match self.syms.typeid_to_ptr.get(&id) {
+                Some(ptr) => match self.syms.type_id_of_ptr.get(ptr) {
+                    Some(ident) => OperandId::Named { kind, identity: ident.clone() },
+                    None => OperandId::RawPtr(*ptr),
+                },
+                // Absent from T2 => primitive type-id, resolves to itself.
+                None => OperandId::Primitive(id),
+            },
+            RefKind::GlobalPtr | RefKind::FuncPtr | RefKind::TypePtr => OperandId::RawId(id),
+        }
+    }
+}
+
+#[cfg(test)]
+mod bytediff_n1_tests {
+    use super::*;
+
+    /// N1: a CALLSYS func-ptr operand resolves to a portable identity string that embeds the
+    /// function name — the exact make-or-break for the bytediff oracle. Uses the richtest sample.
+    #[test]
+    fn n1_resolves_callsys_ptr_to_named_identity() {
+        let bytes = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../work/reversing/gore-as/samples/PrecompiledScript.richtest.Cache"
+        ))
+        .expect("read richtest sample");
+        let ident = RefIdentity::build(&bytes).expect("build RefIdentity");
+        // Find any T3 func ptr key and confirm resolve_ptr yields a Named identity containing
+        // the function's Name (the identity is module|ns|owner|name|is_method|params|ret).
+        let (&ptr, name) =
+            ident.syms.func_name_of_ptr.iter().next().expect("at least one func ref");
+        let resolved = ident.resolve_ptr(RefKind::FuncPtr, ptr);
+        match &resolved {
+            OperandId::Named { kind, identity } => {
+                assert_eq!(*kind, RefKind::FuncPtr);
+                assert!(
+                    identity.contains(name.as_str()),
+                    "identity {identity:?} should contain func name {name:?}"
+                );
+            }
+            other => panic!("expected Named identity, got {other:?}"),
+        }
+        // An unknown ptr resolves to a RawPtr (defensive), NOT a panic.
+        assert!(matches!(ident.resolve_ptr(RefKind::FuncPtr, 0x7fff_dead_beef), OperandId::RawPtr(_)));
+        // A primitive type-id (bool == not-in-T2, small id) resolves to itself.
+        assert!(matches!(ident.resolve_id(RefKind::TypeId, 0x41), OperandId::Primitive(0x41)));
+    }
 }

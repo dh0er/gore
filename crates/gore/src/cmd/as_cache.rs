@@ -104,6 +104,40 @@ pub enum AsCmd {
         #[arg(short, long)]
         out: PathBuf,
     },
+    /// Semantic byte-faithfulness oracle: diff a VANILLA cache against a REGEN (re-compilation of
+    /// our decompiled source) per function, after normalizing away build-noise (ref keys N1, jump
+    /// absolutes N3, constant encodings N4; opt-in slot-renumber N2). Classifies each aligned
+    /// function IDENTICAL / BENIGN-DIFF / SEMANTIC-DIFF. See specs/semantic-oracle.md.
+    Bytediff {
+        /// Vanilla reference cache (e.g. samples/cache_A.Cache).
+        vanilla: PathBuf,
+        /// Regen cache (re-compilation of our decompiled .as tree).
+        regen: PathBuf,
+        /// Only diff modules whose name contains this substring.
+        #[arg(long)]
+        module: Option<String>,
+        /// Only diff functions whose display name (module.Class::func) contains this substring.
+        #[arg(long)]
+        func: Option<String>,
+        /// Filter output to a verdict: identical|benign|semantic (repeatable).
+        #[arg(long = "verdict")]
+        verdicts: Vec<String>,
+        /// List which normalizers fired for BENIGN-DIFF functions (default: summary only).
+        #[arg(long)]
+        show_benign: bool,
+        /// Instruction window (±N) around each SEMANTIC divergence.
+        #[arg(long, default_value_t = 6)]
+        context: usize,
+        /// Enable the OPT-IN N2 slot-renumber normalizer (default OFF; see spec §3.2).
+        #[arg(long = "norm-slots")]
+        norm_slots: bool,
+        /// Write a machine-readable JSON scoreboard (per-verdict counts + alignment loss) here.
+        #[arg(long)]
+        json: Option<PathBuf>,
+        /// Exit non-zero if any SEMANTIC-DIFF is found (CI gate).
+        #[arg(long)]
+        fail_on_semantic: bool,
+    },
 }
 
 /// Build the script-class hierarchy (class name -> super class name) from parsed modules.
@@ -420,6 +454,167 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                 counts.global_ptr, counts.func_ptr, counts.type_ptr, counts.func_id, counts.type_id,
                 counts.embed_type_ptr, counts.embed_func_id
             );
+        }
+        AsCmd::Bytediff {
+            vanilla,
+            regen,
+            module,
+            func,
+            verdicts,
+            show_benign,
+            context,
+            norm_slots,
+            json,
+            fail_on_semantic,
+        } => {
+            use gore_as::cache::bytediff::{self, Filters, NormOpts, Verdict};
+            let v_bytes = std::fs::read(&vanilla)
+                .with_context(|| format!("reading vanilla {}", vanilla.display()))?;
+            let r_bytes = std::fs::read(&regen)
+                .with_context(|| format!("reading regen {}", regen.display()))?;
+
+            let mut opts = NormOpts::default();
+            opts.n2_slots = norm_slots;
+            let filters = Filters { module: module.clone(), func: func.clone() };
+
+            let report = bytediff::run(&v_bytes, &r_bytes, &opts, &filters, context)
+                .context("bytediff")?;
+
+            // Verdict filter for per-function output (empty = show all).
+            let want = |v: Verdict| -> bool {
+                if verdicts.is_empty() {
+                    return true;
+                }
+                verdicts.iter().any(|s| match s.as_str() {
+                    "identical" => v == Verdict::Identical,
+                    "benign" => v == Verdict::Benign,
+                    "semantic" => v == Verdict::Semantic,
+                    _ => false,
+                })
+            };
+
+            // Per-function lines. SEMANTIC always prints its window; BENIGN prints its fired
+            // normalizers only under --show-benign; IDENTICAL prints a one-liner when explicitly
+            // requested via --verdict identical (otherwise summarized to keep 162k-fn runs sane).
+            let show_identical_lines = verdicts.iter().any(|s| s == "identical");
+            for d in &report.diffs {
+                if !want(d.verdict) {
+                    continue;
+                }
+                match d.verdict {
+                    Verdict::Identical => {
+                        if show_identical_lines {
+                            println!("{}  IDENTICAL  (v={} ops, r={} ops)", d.name, d.v_ops, d.r_ops);
+                        }
+                    }
+                    Verdict::Benign => {
+                        let labels = d.fired.labels();
+                        if show_benign {
+                            println!(
+                                "{}  BENIGN-DIFF  [{}]  (v={} ops, r={} ops)",
+                                d.name, labels.join(" "), d.v_ops, d.r_ops
+                            );
+                        }
+                    }
+                    Verdict::Semantic => {
+                        println!(
+                            "{}  SEMANTIC-DIFF  (v={} ops, r={} ops)",
+                            d.name, d.v_ops, d.r_ops
+                        );
+                        if let Some(h) = &d.hint {
+                            println!("    hint: {h}");
+                        }
+                        if let Some(w) = &d.window {
+                            print!("{w}");
+                        }
+                    }
+                }
+            }
+
+            // Alignment loss (always reported — a dropped/added symbol is a severe defect).
+            for m in &report.only_in_vanilla_modules {
+                println!("ONLY-IN-VANILLA module: {m}");
+            }
+            for m in &report.only_in_regen_modules {
+                println!("ONLY-IN-REGEN module: {m}");
+            }
+            if func.is_none() {
+                for f in &report.only_in_vanilla_funcs {
+                    println!("ONLY-IN-VANILLA func: {f}");
+                }
+                for f in &report.only_in_regen_funcs {
+                    println!("ONLY-IN-REGEN func: {f}");
+                }
+            }
+
+            // Summary scoreboard.
+            let n_ident = report.count(Verdict::Identical);
+            let n_benign = report.count(Verdict::Benign);
+            let n_sem = report.count(Verdict::Semantic);
+            let aligned = report.diffs.len();
+            let b1 = if aligned > 0 {
+                100.0 * (n_ident + n_benign) as f64 / aligned as f64
+            } else {
+                100.0
+            };
+            eprintln!("---- bytediff scoreboard ----");
+            eprintln!("aligned functions : {aligned}");
+            eprintln!("  IDENTICAL       : {n_ident}");
+            eprintln!("  BENIGN-DIFF     : {n_benign}");
+            eprintln!("  SEMANTIC-DIFF   : {n_sem}");
+            eprintln!(
+                "alignment loss    : {} module(s) only-in-vanilla, {} only-in-regen, {} func(s) only-in-vanilla, {} only-in-regen",
+                report.only_in_vanilla_modules.len(),
+                report.only_in_regen_modules.len(),
+                report.only_in_vanilla_funcs.len(),
+                report.only_in_regen_funcs.len()
+            );
+            eprintln!("B1 byte-faithful  : {b1:.2}%  (IDENTICAL+BENIGN / aligned)");
+            // Per-normalizer fire counts across BENIGN functions.
+            let (mut c1, mut c2, mut c3, mut c4) = (0usize, 0usize, 0usize, 0usize);
+            for d in &report.diffs {
+                if d.verdict == Verdict::Benign {
+                    c1 += d.fired.n1_refs as usize;
+                    c2 += d.fired.n2_slots as usize;
+                    c3 += d.fired.n3_jumps as usize;
+                    c4 += d.fired.n4_consts as usize;
+                }
+            }
+            eprintln!("normalizer fires  : N1:refs={c1} N2:slots={c2} N3:jumps={c3} N4:consts={c4}");
+
+            if let Some(jpath) = &json {
+                let esc = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"");
+                let mut sem_list = String::from("[");
+                let mut first = true;
+                for d in &report.diffs {
+                    if d.verdict == Verdict::Semantic {
+                        if !first {
+                            sem_list.push(',');
+                        }
+                        first = false;
+                        let hint = d.hint.as_deref().unwrap_or("");
+                        sem_list.push_str(&format!(
+                            "{{\"name\":\"{}\",\"v_ops\":{},\"r_ops\":{},\"hint\":\"{}\"}}",
+                            esc(&d.name), d.v_ops, d.r_ops, esc(hint)
+                        ));
+                    }
+                }
+                sem_list.push(']');
+                let json_out = format!(
+                    "{{\n  \"aligned\": {aligned},\n  \"identical\": {n_ident},\n  \"benign\": {n_benign},\n  \"semantic\": {n_sem},\n  \"b1_byte_faithful_pct\": {b1:.4},\n  \"only_in_vanilla_modules\": {},\n  \"only_in_regen_modules\": {},\n  \"only_in_vanilla_funcs\": {},\n  \"only_in_regen_funcs\": {},\n  \"normalizer_fires\": {{\"n1_refs\": {c1}, \"n2_slots\": {c2}, \"n3_jumps\": {c3}, \"n4_consts\": {c4}}},\n  \"semantic_list\": {sem_list}\n}}\n",
+                    report.only_in_vanilla_modules.len(),
+                    report.only_in_regen_modules.len(),
+                    report.only_in_vanilla_funcs.len(),
+                    report.only_in_regen_funcs.len(),
+                );
+                std::fs::write(jpath, &json_out)
+                    .with_context(|| format!("writing json {}", jpath.display()))?;
+                eprintln!("wrote JSON scoreboard to {}", jpath.display());
+            }
+
+            if fail_on_semantic && report.any_semantic() {
+                anyhow::bail!("{n_sem} SEMANTIC-DIFF function(s) found (--fail-on-semantic)");
+            }
         }
     }
     Ok(())
