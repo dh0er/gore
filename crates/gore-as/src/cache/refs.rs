@@ -271,15 +271,31 @@ impl RefResolver {
     pub fn is_script_class(&self, name: &str) -> bool {
         self.class_super.contains_key(name)
     }
-    /// True if `sub` is `sup` or transitively derives from it (within the script hierarchy).
+    /// True if `sub` is `sup` or transitively derives from it (within the script hierarchy,
+    /// extended by the known-native links below).
     pub fn is_subclass(&self, sub: &str, sup: &str) -> bool {
+        // batch-30b (C4, specs/batch29-errortail.md §4): known NATIVE ancestor links the
+        // script hierarchy cannot see — the walk dead-ends at the first native super
+        // (UAIGroup_Combat : UAIGroup_Combat_Base [native] : ... : UGothicAIGroup), so the
+        // inheritance-aware member-candidate merge dropped the slot to UObject (8×
+        // "'X' is not a member of 'UObject'" in CalculateScore_Implementation). Precedent:
+        // KNOWN_NATIVE_ARITY. Evidence for the entry: the same function passes
+        // `UAIGroup_Combat::StaticClass()` into a `TSubclassOf<UGothicAIGroup>` (vanilla-
+        // compiled => UAIGroup_Combat derives UGothicAIGroup), and single inheritance places
+        // UGothicAIGroup at or above the direct super UAIGroup_Combat_Base.
+        const KNOWN_NATIVE_HIERARCHY: &[(&str, &str)] =
+            &[("UAIGroup_Combat_Base", "UGothicAIGroup")];
         if sub == sup {
             return true;
         }
         let mut cur = sub;
         for _ in 0..64 {
-            // bound the walk against cycles
-            match self.class_super.get(cur) {
+            // bound the walk against cycles; on a script-map dead end, follow a known
+            // native link before giving up.
+            let next = self.class_super.get(cur).map(String::as_str).or_else(|| {
+                KNOWN_NATIVE_HIERARCHY.iter().find(|(c, _)| *c == cur).map(|(_, p)| *p)
+            });
+            match next {
                 Some(s) if s == sup => return true,
                 Some(s) => cur = s,
                 None => return false,
@@ -396,6 +412,15 @@ impl RefResolver {
             ("FTextAppearance", "Justification", "ETextJustify"),
             ("FInteractionAnimTransition", "TransitionKind", "EInteractionInputKind"),
             ("FWeatherSaveGame", "CurrentWeather", "EWeather"),
+            // batch-30b (C9 G2 rows, specs/batch29-errortail.md §9): the two Letterbox
+            // enum fields rendered as bool stores (`= (local_80 != 0)`) — 5×
+            // "Can't implicitly convert from 'bool' to 'EVerticalAlignment&'" in the
+            // LoadingScreen SetupGeneralLoadingScreen family. Owner derived from the
+            // ADDSi tid at the WRTV1 sites (0x4002a20 -> FLetterboxLayoutSettings,
+            // offsets 0/1); the sibling FWidgetAlignment rows above already render
+            // their EVerticalAlignment(...) casts.
+            ("FLetterboxLayoutSettings", "VerticalLoadingWidgetPosition", "EVerticalAlignment"),
+            ("FLetterboxLayoutSettings", "VerticalTipWidgetPosition", "EVerticalAlignment"),
         ];
         if let Some((_, _, t)) =
             KNOWN_NATIVE_FIELD_TYPES.iter().find(|(c, f, _)| *c == class && *f == field)

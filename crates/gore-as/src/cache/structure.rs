@@ -3080,6 +3080,32 @@ impl Structurer<'_> {
             let _ = writeln!(out, "{ind}}}");
         }
         let _ = writeln!(out, "{ind}}}");
+        // batch-30b (C9 'Unreachable code', specs/batch29-errortail.md §9): when the JOIN is
+        // the shared bare RET row, a REAL `default:` region was emitted, and every region
+        // leaves by RETURNING (terminator RET, or JMP rendered as `return ...;` by the exit
+        // hook — never an appended `break;`), control cannot fall out of the switch. Emitting
+        // the RET row after it is dead code the compiler flags ("Unreachable code" [W],
+        // a module-killer under warnings-as-errors) — skip the row. Conservative gates:
+        // a trap DEF (no `default:` emitted) keeps the row (a non-matching selector falls
+        // through in the recompiled source), as does any external jump to the row (another
+        // path may rely on its emission).
+        if join_is_ret && switch_end == join_idx && join_idx < stop {
+            let every_region_returns = regions.iter().all(|r| {
+                !r.trap
+                    && !r.append_break
+                    && matches!(
+                        ctx.instrs[blocks[r.end - 1].instr_hi - 1].op.name,
+                        "JMP" | "RET"
+                    )
+            });
+            let has_real_default = regions.iter().any(|r| r.is_def && !r.trap);
+            let externally_referenced = blocks.iter().enumerate().any(|(bi2, bb)| {
+                (bi2 < i || bi2 >= switch_end) && bb.succs.contains(&join_off)
+            });
+            if every_region_returns && has_real_default && !externally_referenced {
+                return Some(join_idx + 1);
+            }
+        }
         Some(switch_end)
     }
 

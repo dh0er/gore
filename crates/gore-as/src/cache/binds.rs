@@ -574,6 +574,8 @@ mod tests {
             ("FTextAppearance", "Justification", "ETextJustify"),
             ("FInteractionAnimTransition", "TransitionKind", "EInteractionInputKind"),
             ("FWeatherSaveGame", "CurrentWeather", "EWeather"),
+            ("FLetterboxLayoutSettings", "VerticalLoadingWidgetPosition", "EVerticalAlignment"),
+            ("FLetterboxLayoutSettings", "VerticalTipWidgetPosition", "EVerticalAlignment"),
         ] {
             assert_eq!(
                 api.field_type(cls, field),
