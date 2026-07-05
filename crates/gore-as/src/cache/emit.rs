@@ -356,7 +356,28 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
     // `{ret} __r;` — invalid for a reference type — so those keep the by-value signature
     // (status quo).
     let ref_ret = f.ret.is_reference && f.ret.token == 5 && !f.ret.is_object_handle;
-    let ret_sig = if ref_ret && reason.is_none() && !body.contains(RVODEF) && !body.contains("__return") {
+    // A STUBBED ref-return FPerceptionHandler mixin must NOT degrade to a by-value signature:
+    // that poisons every CALLER ("Cannot pass a temporary value ... into non-const reference
+    // parameter" at each BindAssessmentToPerception site — one stubbed mixin cascades into
+    // dozens of caller stubs). Keep the `&` signature and return a typed non-temporary:
+    // `return OnSensedOther(<PerceptionParam>);` — semantically degenerate (like every stub)
+    // but signature-faithful, so callers compile.
+    let percep_stub_param = (ref_ret
+        && f.ret.base_name(refs) == "FPerceptionHandler")
+        .then(|| {
+            f.params.iter().enumerate().find_map(|(i, p)| {
+                (p.ty.base_name(refs) == "UCharacterPerceptionComponent").then(|| {
+                    if p.name.is_empty() { format!("arg{i}") } else { p.name.clone() }
+                })
+            })
+        })
+        .flatten();
+    let ret_sig = if ref_ret
+        && ((reason.is_none()
+            && !body.contains("__return")
+            && (!body.contains(RVODEF) || percep_stub_param.is_some()))
+            || (reason.is_some() && percep_stub_param.is_some()))
+    {
         format!("{}&", f.ret.render(refs))
     } else {
         ret.clone()
@@ -430,7 +451,12 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
             // default. Object/AActor handles have no default constructor, so `{ret} __r;` fails to
             // compile — return `nullptr` directly (this build's null-handle literal, matching
             // PshNull/CmpPtrNull). `render` strips `@`, so detect handles via the DataType flag.
-            if f.ret.is_object_handle {
+            if let Some(p) = &percep_stub_param {
+                // ref-return FPerceptionHandler mixin with an unrecovered return: a by-value `__r`
+                // default would force a by-value SIGNATURE and poison every caller (temporary into
+                // non-const ref). Return a typed non-temporary instead; ret_sig keeps the `&`.
+                s.push_str(&body.replace(RVODEF, &format!("OnSensedOther({p})")));
+            } else if f.ret.is_object_handle {
                 s.push_str(&body.replace(RVODEF, "nullptr"));
             } else {
                 let _ = writeln!(s, "{ind}    {ret} __r;");
@@ -446,7 +472,10 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
         // handle return defaults to `nullptr` (no default-constructor for engine object types;
         // `nullptr` is this build's null-handle literal — `null` parses as undeclared).
         if !is_ctor && ret != "void" {
-            if f.ret.is_object_handle {
+            if let Some(p) = &percep_stub_param {
+                // ref-return FPerceptionHandler mixin: signature-faithful stub (see ret_sig).
+                let _ = writeln!(s, "{ind}    return OnSensedOther({p});");
+            } else if f.ret.is_object_handle {
                 let _ = writeln!(s, "{ind}    return nullptr;");
             } else {
                 let _ = writeln!(s, "{ind}    {ret} __r; return __r;");
