@@ -60,6 +60,12 @@ struct Arg {
     /// `block_stmts` — safe to carry across a recognized Cast diamond; never set for
     /// pending-call-result pushes (`PshRPtr`) or synthetic pushes.
     carryable: bool,
+    /// batch-33d: the carried render is a CONTAINER READ (the batch-32c/33c pure-elem
+    /// pendings) whose re-evaluation at the join is only proven safe under the CLASSIC
+    /// D7-constrained (opCast+TYPEID) arms. RELAXED guarded-assignment arms may contain
+    /// arbitrary calls that could mutate the container, so such entries must not pass the
+    /// relaxed carry gate. Static-name FName literals stay `false` (pure literals).
+    reeval: bool,
 }
 impl Arg {
     fn int(s: String) -> Arg {
@@ -1725,7 +1731,11 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<Strin
                         // the D9 carryability gate like any plain const push.
                         // batch-32c widens this to pure local-container element reads
                         // (`local_12.opIndex(0)` — see pending_is_pure_elem).
-                        stack.push(Arg::typed(p, pending_ty.take()).carry());
+                        // batch-33d: container reads are tagged reeval — they may only
+                        // cross CLASSIC (opCast-arm) diamonds, never the relaxed ones.
+                        let mut a = Arg::typed(p, pending_ty.take()).carry();
+                        a.reeval = pending_is_pure_elem;
+                        stack.push(a);
                     } else {
                         stack.push(Arg::typed(p, pending_ty.take()));
                     }
@@ -3546,12 +3556,16 @@ impl Structurer<'_> {
         if !l.iter().all(|a| a.carryable) {
             return None;
         }
-        // D1 guard shape: `JZ` over a bare `CmpPtrNull` (`x == nullptr`, no T*-op, no expr).
-        if self.jump_op(i) != "JZ" {
+        // D1 guard shape: `JZ` over a bare `CmpPtrNull` (`x == nullptr`, no T*-op, no expr)
+        // — the classic Cast diamond. batch-33d: `JLowZ` (bool-register test, e.g. an
+        // `IsValid(...)`-guarded assignment diamond) is also accepted; such guards can never
+        // be the classic Cast shape, so they always take the RELAXED arm rules below.
+        let jop = self.jump_op(i);
+        if jop != "JZ" && jop != "JLowZ" {
             return None;
         }
         let c = cmp.as_ref()?;
-        if c.b != "nullptr" || c.op.is_some() || c.expr.is_some() {
+        if jop == "JZ" && (c.b != "nullptr" || c.op.is_some() || c.expr.is_some()) {
             return None;
         }
         // D2 then-arm entry: the fallthrough successor is the physically-next block.
@@ -3611,9 +3625,15 @@ impl Structurer<'_> {
                 }
             }
         }
-        // D7 then-arm content whitelist (stage-1 belt): only the lowered `Cast<T>` shape, with
-        // exactly one CALLSYS (resolving to `opCast`) and exactly one TYPEID.
+        // D7 then-arm content whitelist (stage-1 belt): the CLASSIC arm is exactly the
+        // lowered `Cast<T>` shape — one CALLSYS resolving to `opCast` plus one TYPEID.
+        // batch-33d: any other content no longer bails outright but falls to the RELAXED
+        // guarded-assignment rules below (SayVoicelineWithContext lost its Context/Loudness
+        // args and BroadcastPerceptionEventInRadius its Affected arg to the old bail: the
+        // guard is an `IsValid(...)`/null test and the then-arm a `local = <calls>;`
+        // assignment, not a Cast).
         let (mut ncast, mut ntypeid) = (0usize, 0usize);
+        let mut classic = jop == "JZ";
         for k in t.instr_lo..t.instr_hi {
             let ins = &ctx.instrs[k];
             match ins.op.name {
@@ -3622,15 +3642,74 @@ impl Structurer<'_> {
                 "CALLSYS" => {
                     let ptr = ins.qwords.first().copied().unwrap_or(0) as i64;
                     if ctx.refs.func_by_ptr(ptr) != Some("opCast") {
-                        return None;
+                        classic = false;
+                    } else {
+                        ncast += 1;
                     }
-                    ncast += 1;
                 }
-                _ => return None,
+                _ => classic = false,
             }
         }
-        if ncast != 1 || ntypeid != 1 {
-            return None;
+        if classic && (ncast != 1 || ntypeid != 1) {
+            classic = false;
+        }
+        if !classic {
+            // batch-33d RELAXED guarded-assignment diamond. The D10 dual-sim below remains
+            // the authoritative stack-semantics gate (arms provably net-zero, emission
+            // unchanged, carry returned verbatim); these rules close the REORDERING hole
+            // the classic D7 whitelist closed structurally — the carried renders are
+            // re-evaluated at the join, AFTER the arm's statements run:
+            //  (R1) every carried entry renders as a bare slot/param identifier or an
+            //       integer constant — no member chains (an arm call could mutate the
+            //       object behind `this.m_X`), no container reads (`reeval`, see Arg).
+            //  (R2) both arms contain only whitelisted ops, and every slot-writing op's
+            //       destination differs from every carried identifier — so the value a
+            //       carried name renders to at the join equals the value the bytecode
+            //       pushed before the guard.
+            let bare_ident = |s: &str| {
+                let b = s.as_bytes();
+                !s.is_empty()
+                    && (b[0].is_ascii_alphabetic() || b[0] == b'_')
+                    && b.iter().all(|c| c.is_ascii_alphanumeric() || *c == b'_')
+            };
+            let int_const = |a: &Arg| {
+                a.cbits.is_some()
+                    || (!a.s.is_empty()
+                        && a.s.trim_start_matches('-').bytes().all(|b| b.is_ascii_digit()))
+            };
+            for a in l {
+                if a.reeval || !(bare_ident(&a.s) || int_const(a)) {
+                    return None;
+                }
+            }
+            let carried: Vec<&str> = l.iter().map(|a| a.s.as_str()).collect();
+            for arm in std::iter::once(i + 1).chain(else_idx) {
+                let ab = &blocks[arm];
+                for k in ab.instr_lo..ab.instr_hi {
+                    let ins = &ctx.instrs[k];
+                    match ins.op.name {
+                        // non-writing ops: pushes, member-address/deref, register loads,
+                        // calls (their arg consumption is proven balanced by D10).
+                        "SUSPEND" | "JitEntry" | "JMP" | "PSF" | "PshVPtr" | "PshV4"
+                        | "PshV8" | "PshC4" | "PshC8" | "PshNull" | "PGA" | "PshGPtr"
+                        | "ADDSi" | "RDSPtr" | "TYPEID" | "CALL" | "CALLINTF" | "CALLBND"
+                        | "CALLSYS" | "Thiscall1" | "LoadThisR" | "LoadVObjR"
+                        | "LoadRObjR" => {}
+                        // slot-writing ops: legal unless the destination is carried.
+                        "STOREOBJ" | "FreeNullV8" | "ClrVPtr" | "FREE" | "RDR1" | "RDR2"
+                        | "RDR4" | "RDR8" | "CpyRtoV4" | "CpyRtoV8" | "SetV1" | "SetV4"
+                        | "SetV8" | "CpyVtoV4" | "CpyVtoV8" => {
+                            let dst = ctx.slot_name(s16(ins.words.first().copied().unwrap_or(0)));
+                            if carried.iter().any(|c| *c == dst) {
+                                return None;
+                            }
+                        }
+                        // anything else (register-indirect writes WRTV*/PopRPtr, arithmetic,
+                        // control flow) -> bail: destination untrackable.
+                        _ => return None,
+                    }
+                }
+            }
         }
         // D8 else-arm content whitelist: housekeeping only.
         if let Some(e) = else_idx {
