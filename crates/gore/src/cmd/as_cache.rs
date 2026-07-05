@@ -138,6 +138,17 @@ fn class_hierarchy(mods: &[gore_as::cache::model::Module]) -> std::collections::
     h
 }
 
+/// All script-class METHOD names from the parsed modules (batch-24b shadow-gate input): a
+/// class method shadows a same-named free global inside class scope even when the method is
+/// never referenced by any bytecode (so T3 alone can miss it).
+fn class_method_names(mods: &[gore_as::cache::model::Module]) -> Vec<String> {
+    mods.iter()
+        .flat_map(|m| m.classes.iter())
+        .flat_map(|c| c.methods.iter())
+        .map(|f| f.name.clone())
+        .collect()
+}
+
 /// Per-class field-type maps (class -> field -> composed type name) from parsed modules, so the
 /// emitter can resolve INHERITED member types across module boundaries (batch-21 Class B).
 fn class_fields(
@@ -190,6 +201,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             refs.set_class_hierarchy(class_hierarchy(&mods));
             let cf = class_fields(&mods, &refs);
             refs.set_class_fields(cf);
+            refs.add_method_names(class_method_names(&mods));
             if let Some(api) = load_native_api(&file) {
                 refs.set_native_api(api);
             }
@@ -211,6 +223,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             refs.set_class_hierarchy(class_hierarchy(&mods));
             let cf = class_fields(&mods, &refs);
             refs.set_class_fields(cf);
+            refs.add_method_names(class_method_names(&mods));
             if let Some(api) = load_native_api(&file) {
                 refs.set_native_api(api);
             }
@@ -226,6 +239,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             refs.set_class_hierarchy(class_hierarchy(&mods));
             let cf = class_fields(&mods, &refs);
             refs.set_class_fields(cf);
+            refs.add_method_names(class_method_names(&mods));
             if let Some(api) = load_native_api(&file) {
                 refs.set_native_api(api);
             }

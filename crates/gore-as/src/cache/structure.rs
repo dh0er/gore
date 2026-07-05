@@ -440,7 +440,7 @@ struct Cmp {
 /// methods (opAssign/opAdd/opEquals/...) render as the source operator. Returns None for
 /// compiler-generated behaviors ($behN construct/destruct) that have no source form.
 #[allow(clippy::too_many_arguments)]
-fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option<&str>, params: Option<&[DataType]>, native_arity: Option<usize>, trusted_arity: Option<usize>, target_owner: Option<&str>, cur_class: Option<&str>, non_virtual: bool, ret_ty: Option<&str>, ret_is_ref: bool, refs: &RefResolver) -> Option<String> {
+fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option<&str>, params: Option<&[DataType]>, native_arity: Option<usize>, trusted_arity: Option<usize>, target_owner: Option<&str>, cur_class: Option<&str>, non_virtual: bool, ret_ty: Option<&str>, ret_is_ref: bool, global_shadowed: bool, refs: &RefResolver) -> Option<String> {
     if f.starts_with('$') || f.starts_with('~') || f == "__STATIC_NAME" {
         // EDIT C (the dominant FName form): `__STATIC_NAME` is the synthesized name-table accessor
         // (`const FName& __STATIC_NAME(int Id)` per the exe's registered decl) that fetches
@@ -715,6 +715,16 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
                 return Some(format!("{owner}::{f}({})", render_args(&a, params, refs)));
             }
         }
+        // batch-24b: AngelScript member lookup SHADOWS globals — an unqualified call to a free
+        // SCRIPT global from inside a class whose (native) ancestry has a same-named member
+        // resolves to the member and fails (`WaitSeconds(this.AI, 2.0)` diagnosed against
+        // `UAbilityTaskCoroutine::WaitSeconds(float32)`, 33 sites; CastSpell/IsMoving/IsDead/
+        // CanMoveIntoDirection likewise). The global-scope qualifier `::f(...)` always legally
+        // names a genuine global (over-qualification is harmless), so gated call sites render
+        // qualified. Computed AFTER the early-returns above so name-based matches (behaviours,
+        // is_type_name ctors, owner-qualified Get/GetOrCreate/Create, operators) are untouched.
+        let f: std::borrow::Cow<str> =
+            if global_shadowed { format!("::{f}").into() } else { f.into() };
         // Free-call RVO struct-return (mirror of the method Fix-b3 arm): a free/static function
         // returning a struct BY VALUE pushes a hidden PSF out-slot. Recover `out = f(args)`
         // instead of leaking the out-slot as a leading arg (GotoPosition/Say/GiveItemTo/
@@ -1574,7 +1584,19 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                     let trusted = ctx.refs.func_params_by_id(id).map(|p| p.len());
                     let owner = ctx.refs.func_owner_by_id(id);
                     let ret_is_ref = ctx.refs.func_ret_by_id(id).map(|d| d.is_reference).unwrap_or(false);
-                    build_call(&mut stack, &f, ctx.refs.is_method_by_id(id), ctx.super_ctor, ctx.refs.func_params_by_id(id), na, trusted, owner, ctx.class_name, n == "CALL", pending_ty.as_deref(), ret_is_ref, ctx.refs)
+                    // batch-24b shadow gate: a free SCRIPT global (no owner, global namespace)
+                    // rendered inside a class method is shadowed by any same-named member in
+                    // the class's (native or script) ancestry. Member-name existence (T3
+                    // method names, script method decls, Binds when loaded) over-approximates
+                    // "such a member exists somewhere" — `::`-qualifying a non-shadowed global
+                    // resolves identically, so false positives are harmless; no name sources
+                    // -> false (status quo).
+                    let global_shadowed = !ctx.refs.is_method_by_id(id)
+                        && owner.is_none()
+                        && ctx.class_name.is_some()
+                        && ctx.refs.func_ns_by_id(id).map_or(true, |ns| ns.is_empty())
+                        && ctx.refs.member_name_exists(&f);
+                    build_call(&mut stack, &f, ctx.refs.is_method_by_id(id), ctx.super_ctor, ctx.refs.func_params_by_id(id), na, trusted, owner, ctx.class_name, n == "CALL", pending_ty.as_deref(), ret_is_ref, global_shadowed, ctx.refs)
                 };
             }
             "CALLSYS" | "Thiscall1" => {
@@ -1705,14 +1727,14 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                     // native calls too so the UObject-receiver Cast wrap (batch19 class 1) and the
                     // generated-accessor qualification see the owning class of CALLSYS methods.
                     let ret_is_ref = ctx.refs.func_ret_by_ptr(ptr).map(|d| d.is_reference).unwrap_or(false);
-                    build_call(&mut stack, &qualified, ctx.refs.is_method_by_ptr(ptr), ctx.super_ctor, ctx.refs.func_params_by_ptr(ptr), na, trusted, ctx.refs.func_owner_by_ptr(ptr), ctx.class_name, false, pending_ty.as_deref(), ret_is_ref, ctx.refs)
+                    build_call(&mut stack, &qualified, ctx.refs.is_method_by_ptr(ptr), ctx.super_ctor, ctx.refs.func_params_by_ptr(ptr), na, trusted, ctx.refs.func_owner_by_ptr(ptr), ctx.class_name, false, pending_ty.as_deref(), ret_is_ref, false, ctx.refs)
                 };
             }
             "CallPtr" => {
                 let f = name(w(ins, 0));
                 pending_ty = None;
                 pending_const = false;
-                pending = build_call(&mut stack, &f, false, ctx.super_ctor, None, None, None, None, ctx.class_name, false, None, false, ctx.refs);
+                pending = build_call(&mut stack, &f, false, ctx.super_ctor, None, None, None, None, ctx.class_name, false, None, false, false, ctx.refs);
             }
             // ---- object construction ----
             "ALLOC" => {

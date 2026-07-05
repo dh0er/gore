@@ -65,6 +65,12 @@ pub struct RefResolver {
     /// `FAngelscriptManager::StaticNames[Id]`, which PrepareToFinalizePrecompiledModules
     /// populates from THIS table — so the bytecode's int operand indexes it directly.
     static_names: Vec<String>,
+    /// Names that exist as a METHOD somewhere: T3 FunctionReferences flagged bIsMethod
+    /// (native or script methods actually referenced by bytecode) plus script-class method
+    /// declarations injected from the parsed modules. Batch-24b shadow gate: a free script
+    /// global sharing such a name is SHADOWED by member lookup inside classes and must be
+    /// `::`-qualified.
+    method_names: std::collections::HashSet<String>,
 }
 
 impl RefResolver {
@@ -115,6 +121,7 @@ impl RefResolver {
             let ret = DataType::read(&mut c)?; // ReturnType
             if is_method {
                 r.func_is_method.insert(key);
+                r.method_names.insert(name.clone());
             }
             // Always record params — even an empty list — so the call-site arg-count check
             // can stub a zero-param method that was decompiled with phantom args.
@@ -343,6 +350,27 @@ impl RefResolver {
             Some(&ptr) => self.native_arity_by_ptr(ptr, name),
             None => self.native.as_ref()?.arity_by_name(name),
         }
+    }
+    /// True if `name` exists ANYWHERE in the Binds.Cache native API (any class' member or any
+    /// global; ambiguous-arity overloads count). Binds absent -> false, so callers degrade to
+    /// the status quo. Batch-24b: over-approximates "some class in the (native) ancestry has a
+    /// same-named member that would SHADOW a script global" — safe, because `::`-qualifying a
+    /// non-shadowed global resolves identically.
+    pub fn native_name_exists(&self, name: &str) -> bool {
+        self.native.as_ref().is_some_and(|n| n.has_name(name))
+    }
+    /// Inject script-class METHOD names from the parsed modules (a shadowing member need not be
+    /// referenced by any bytecode — e.g. `UCM_CastSpell_Base::CastSpell()` shadows the free
+    /// `CastSpell(AI, int)` even if the method itself is never called).
+    pub fn add_method_names<I: IntoIterator<Item = String>>(&mut self, names: I) {
+        self.method_names.extend(names);
+    }
+    /// True if `name` exists as a MEMBER anywhere: T3 method names (native or script, referenced
+    /// by bytecode), injected script-class method declarations, or any Binds native signature
+    /// name. The production emit runs WITHOUT Binds (JOURNAL: binds-arity emit regressed), so the
+    /// cache-derived sets are the load-bearing sources; Binds adds coverage when loaded.
+    pub fn member_name_exists(&self, name: &str) -> bool {
+        self.method_names.contains(name) || self.native_name_exists(name)
     }
     pub fn global_by_ptr(&self, ptr: i64) -> Option<&str> {
         self.global_by_ptr.get(&ptr).map(|s| s.as_str())
