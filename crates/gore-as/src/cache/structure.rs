@@ -420,12 +420,18 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
     // (the same condition the Fix-b3 out-slot probe uses). This can only SHRINK the window vs the
     // old heuristic, never widen, so it cannot break a real by-value RVO recovery.
     fn tyhead(s: &str) -> &str { s.split('<').next().unwrap_or(s) }
-    let rvo_slot = is_method
-        && ret_ty.map(|t| matches!(tyhead(t).bytes().next(), Some(b'F') | Some(b'T'))).unwrap_or(false)
-        && stack.len() >= 2
+    let rvo_slot = ret_ty.map(|t| matches!(tyhead(t).bytes().next(), Some(b'F') | Some(b'T'))).unwrap_or(false)
         && {
-            let below = &stack[stack.len() - 2];
-            below.is_psf && below.ty.as_deref().map(tyhead) == ret_ty.map(tyhead)
+            // The hidden RVO out-slot sits BELOW the receiver for a method (top = receiver) and
+            // ON TOP for a free call (no receiver pushed). Same data-driven evidence gate as the
+            // Fix-b3 probe (is_psf + type-head == return head), so it only widens the window when
+            // the out-slot is genuinely present. (Free calls returning a struct by value push it:
+            // GotoPosition/Say/GiveItemTo/FInGameTime::Now.)
+            let idx = if is_method { 2 } else { 1 };
+            stack.len() >= idx && {
+                let slot = &stack[stack.len() - idx];
+                slot.is_psf && slot.ty.as_deref().map(tyhead) == ret_ty.map(tyhead)
+            }
         };
     let need = trusted_arity.map(|n| n + is_method as usize + rvo_slot as usize);
     let mut a: Vec<Arg> = match need {
@@ -576,6 +582,25 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
         // receiver) — never a free call; drop it (the conversion re-fires from the target type).
         if matches!(f, "opImplConv" | "opConv") {
             return None;
+        }
+        // Free-call RVO struct-return (mirror of the method Fix-b3 arm): a free/static function
+        // returning a struct BY VALUE pushes a hidden PSF out-slot. Recover `out = f(args)`
+        // instead of leaking the out-slot as a leading arg (GotoPosition/Say/GiveItemTo/
+        // FInGameTime::Now). Same data-driven gate as Fix-b3: a PSF arg whose type head equals the
+        // return-type head; a call without a genuine out-slot can't match.
+        if let Some(rh) = ret_ty.map(tyhead) {
+            if matches!(rh.bytes().next(), Some(b'F') | Some(b'T') | Some(b'E')) {
+                if let Some(pos) = a.iter().position(|x| x.is_psf
+                    && x.ty.as_deref().map(tyhead) == Some(rh)) {
+                    let out = a.remove(pos).s;
+                    if let Some(w) = arity {
+                        let w = w.min(a.len());
+                        if a.len() > w { a.drain(..a.len() - w); }
+                    }
+                    maybe_reverse_args(&mut a, params, refs);
+                    return Some(format!("{out} = {f}({})", render_args(&a, params, refs)));
+                }
+            }
         }
         // trim leading phantom extras for a known free arity too.
         if let Some(w) = arity {
