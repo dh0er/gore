@@ -379,12 +379,18 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
         // assignment to a declaration-with-initializer (in-place construction — the original
         // source form). Any other reference shape keeps the hoist (status quo).
         let (body, suppressed) = rewrite_ctor_only_locals(&body, &locals);
+        // FAbilityTaskExecutor's opAssign takes a NON-const reference, so assigning a by-value
+        // call result to a declared local ('local = DrawMeleeWeapon(AI);') fails "Cannot pass a
+        // temporary value into non-const reference parameter" (2841 in-game errors). The only
+        // legal form is declaration-with-initializer (copy-construction). Rewrite qualifying
+        // executor locals to decl-init at their assignment sites.
+        let (body, na_suppressed) = rewrite_no_assign_locals(&body, &locals);
         // Iterator locals have no default ctor either; declare them at their `Iterator()` call.
         let (body, iter_suppressed) = rewrite_iterator_decl_init(&body, &locals);
         // hoist local declarations; primitives must be initialized (AngelScript errors on
         // "may not be initialized"), objects/structs/handles default-construct themselves.
         for (slot, ty) in &locals {
-            if suppressed.contains(slot) || iter_suppressed.contains(slot) {
+            if suppressed.contains(slot) || na_suppressed.contains(slot) || iter_suppressed.contains(slot) {
                 continue; // declared at its (rewritten) assignment/Iterator() site instead
             }
             if is_primitive(ty) {
@@ -1332,6 +1338,93 @@ fn rewrite_ctor_only_locals(body: &str, locals: &BTreeMap<i32, String>) -> (Stri
                 k += 1;
                 let indent = &line[..line.len() - t.len()];
                 let rest = &t[ident.len()..]; // ` = TY(...);`
+                if k == 1 {
+                    let _ = writeln!(rewritten, "{indent}{ty} {ident}{rest}");
+                } else {
+                    let _ = writeln!(rewritten, "{indent}{ty} {ident}_{k}{rest}");
+                }
+            } else {
+                rewritten.push_str(line);
+                rewritten.push('\n');
+            }
+        }
+        out = rewritten;
+        suppressed.insert(*slot);
+    }
+    (out, suppressed)
+}
+
+/// Value types whose `opAssign` takes a NON-const reference: assigning a by-value call result
+/// (`local = DrawMeleeWeapon(AI);`) fails "Cannot pass a temporary value ... into non-const
+/// reference parameter"; only declaration-with-initializer (copy-construction) compiles.
+fn no_assign_type(ty: &str) -> bool {
+    matches!(ty, "FAbilityTaskExecutor")
+}
+
+/// Rewrite locals of a no-assign type (see [`no_assign_type`]) to declaration-with-initializer.
+/// The bytecode reuses one slot for several source-level locals, so each assignment gets a fresh
+/// declaration. Two safe shapes:
+/// - WRITE-ONLY (any number of assignments, no reads): every assignment becomes
+///   `TY local_N[_k] = ...;` with fresh names — nothing else references the slot, so sinking the
+///   declarations into blocks is scope-safe (mirrors the FStatID rewrite).
+/// - SINGLE assignment + reads, ALL references at the same indentation (one block): decl-init in
+///   place, name kept — later reads are lvalue uses (a non-const ref binds to an lvalue; only
+///   temporaries fail), and same-indent means the declaration dominates every read.
+/// Anything else (read before assign, cross-block reads, self-referential RHS) keeps the hoisted
+/// declaration — the status-quo compile error, never a new one.
+fn rewrite_no_assign_locals(body: &str, locals: &BTreeMap<i32, String>) -> (String, HashSet<i32>) {
+    let mut suppressed: HashSet<i32> = HashSet::new();
+    let mut out = body.to_string();
+    for (slot, ty) in locals {
+        if !no_assign_type(ty) {
+            continue;
+        }
+        let ident = format!("local_{slot}");
+        let assign_pat = format!("{ident} = ");
+        let mut assigns = 0usize;
+        let mut reads = 0usize;
+        let mut first_is_assign = false;
+        let mut first = true;
+        let mut indents: Vec<&str> = Vec::new();
+        let mut ok = true;
+        for line in out.lines() {
+            let c = count_ident(line, &ident);
+            if c == 0 {
+                continue;
+            }
+            let t = line.trim_start();
+            let is_assign = c == 1 && t.starts_with(&assign_pat) && t.ends_with(';');
+            if first {
+                first_is_assign = is_assign;
+                first = false;
+            }
+            if is_assign {
+                assigns += 1;
+            } else {
+                reads += c;
+                if c > 1 {
+                    ok = false; // multi-occurrence non-assign line (self-referential etc.) — bail
+                    break;
+                }
+            }
+            indents.push(&line[..line.len() - t.len()]);
+        }
+        if !ok || assigns == 0 || !first_is_assign {
+            continue;
+        }
+        let write_only = reads == 0;
+        let uniform_indent = indents.windows(2).all(|w| w[0] == w[1]);
+        if !write_only && !(assigns == 1 && uniform_indent) {
+            continue;
+        }
+        let mut k = 0usize;
+        let mut rewritten = String::with_capacity(out.len() + 64);
+        for line in out.lines() {
+            let t = line.trim_start();
+            if count_ident(line, &ident) == 1 && t.starts_with(&assign_pat) && t.ends_with(';') {
+                k += 1;
+                let indent = &line[..line.len() - t.len()];
+                let rest = &t[ident.len()..]; // ` = <expr>;`
                 if k == 1 {
                     let _ = writeln!(rewritten, "{indent}{ty} {ident}{rest}");
                 } else {
