@@ -680,8 +680,15 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
         let is_operator = assign_op(f).is_some() || binop_method(f).is_some();
         if let Some(rh) = ret_ty.map(head).filter(|_| !is_operator && !ret_is_ref) {
             if matches!(rh.bytes().next(), Some(b'F') | Some(b'T') | Some(b'E')) {
-                // the RVO out-slot = a PSF arg whose type head equals the return-type head
-                if let Some(pos) = a.iter().position(|x| x.is_psf
+                // the RVO out-slot = a PSF arg whose type head equals the return-type head.
+                // batch-29c (3a, specs/batch29-errortail.md): the ABI pushes
+                // [args..., dest, recv], so after the recv pop the dest is the LAST entry —
+                // probe with rposition. The bottom-up probe stole a same-headed struct ARG
+                // (FVector::RotateAngleAxis's Axis) and slid the real dest into the arg list
+                // (`local_54 = local_6.RotateAngleAxis(local_48, local_62);` with w48 the
+                // true dest). Single-PSF cases (the 495-site Iterator/GetActorLocation
+                // population) pick the same entry — no regression surface.
+                if let Some(pos) = a.iter().rposition(|x| x.is_psf
                     && x.ty.as_deref().map(head) == Some(rh)) {
                     let out = a.remove(pos).s;
                     if let Some(w) = arity {
@@ -2052,6 +2059,11 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<Strin
                             // "No matching signatures to 'FTimerDynamicDelegate(const FName,
                             // <obj> const)'"). Same reverse-by-default scoring as every call arm.
                             maybe_reverse_args(&mut args, params, ctx.refs);
+                            // (batch-29c note: the spec's §2.1 suggestion to drop a lone
+                            // `nullptr` ctor arg is deliberately NOT taken — the corpus has
+                            // thousands of clean `TSubclassOf<T>(nullptr)` sites outside the
+                            // error tail, so the null-handle ctor provably compiles and the
+                            // composed render below joins that population byte-faithfully.)
                             // Gate (b): no arg is itself a PSF slot — that is a copy/convert ctor
                             // whose true source is an unrecovered pending call result; rendering it
                             // as `T(&slot)` would be wrong, so drop (prior behaviour).

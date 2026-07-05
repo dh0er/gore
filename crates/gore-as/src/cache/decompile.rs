@@ -47,7 +47,7 @@ pub(crate) fn build_param_off_map_rvo(
     refs: &RefResolver,
 ) -> (HashMap<i32, usize>, Option<i32>) {
     let base = param_slot_map(&f.param_types, f.is_method, false, Some(refs));
-    if !returns_struct_by_value(&f.ret) {
+    if !returns_struct_by_value(&f.ret, refs) {
         return (base, None);
     }
     let rvo = param_slot_map(&f.param_types, f.is_method, true, Some(refs));
@@ -63,24 +63,17 @@ pub(crate) fn build_param_off_map_rvo(
     // `actorToSpawnClass` -> `TSubclassOf::GetActorLocation()`, 18 in-game errors; the
     // GetSpawnPosition/Rotation family: 2 params, last unused, struct return). Credit the
     // ret-slot offset to the RVO map's score — it IS explained by that layout.
-    // ENUM returns are token 5 (so returns_struct_by_value admits them) but return in the
-    // VALUE REGISTER — no hidden RVO slot exists (batch-24a ret_via_rvo() / the switch
-    // recovery's register_based test). Crediting the ret-slot offset for them is wrong twice
-    // over: the offset it would credit (-AS_PTR_SIZE for a method) is the BASE layout's
-    // param-0 slot, so the credit flips correct base maps to RVO and shifts every param
-    // reference (TryPerformActionNow/TryPerformMovementNow regressed to argtype stubs when
-    // the credit was unconditional).
-    let ret_is_enum = {
-        let n = f.ret.base_name(refs);
-        let b = n.as_bytes();
-        b.len() >= 2 && b[0] == b'E' && b[1].is_ascii_uppercase()
-    };
+    // ENUM returns are token 5 but return in the VALUE REGISTER — no hidden RVO slot exists
+    // (batch-24a ret_via_rvo() / the switch recovery's register_based test). Since batch-29c
+    // they are excluded inside `returns_struct_by_value` itself (A4: the phantom `__return`
+    // slot swallowed a real parameter), so only genuine F/T struct returns reach this scoring
+    // and the ret-slot credit is unconditional.
     let observed = observed_neg_offsets(instrs);
     let rvo_off = if f.is_method { -AS_PTR_SIZE } else { 0 };
     let score = |m: &HashMap<i32, usize>| observed.iter().filter(|o| m.contains_key(o)).count();
     let score_rvo = observed
         .iter()
-        .filter(|o| rvo.contains_key(o) || (!ret_is_enum && **o == rvo_off))
+        .filter(|o| rvo.contains_key(o) || **o == rvo_off)
         .count();
     if score(&base) > score_rvo {
         (base, None)

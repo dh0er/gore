@@ -353,6 +353,21 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
         .collect();
     let numkinds = infer_float_flow(f, &fc, refs, fields, &float_args, &outref_overrides, &num_anti);
     for (slot, ty) in &slot_overrides {
+        // batch-29c (C2, specs/batch29-errortail.md §2): never let an ARGLESS template head
+        // (the $beh0 construct OWNER / a copy-ctor param whose DataType carries no SubTypes —
+        // bare `TSubclassOf`) downgrade an already-composed body type from the authoritative
+        // obj_locals entry (`TSubclassOf<UGameplayAbility>`). The $beh0/value-ctor renders
+        // compose their type from THIS map, and the bare head emitted
+        // `local_170 = TSubclassOf(local_106);` ("Template 'TSubclassOf' expects 1 sub
+        // type(s)" + paired ctor no-match, 52 [E] lines). Mirror of the declaration-side
+        // gate below — the DECL already kept the composed name, only the body map regressed.
+        if !ty.contains('<') {
+            if let Some(prev) = local_types.get(slot) {
+                if prev.contains('<') && prev.split('<').next() == Some(ty.as_str()) {
+                    continue;
+                }
+            }
+        }
         local_types.insert(*slot, ty.clone());
     }
     // batch-20 Class C: unlike the float out-refs (declaration-only), a BOOL out-ref slot must

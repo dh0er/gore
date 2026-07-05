@@ -69,8 +69,18 @@ fn is_enum_name(name: &str) -> bool {
 /// out-pointer slot (one `AS_PTR_SIZE`) between `this` and the first real parameter.
 /// UObject/AActor handles (`is_object_handle`) return in the value register, NOT via an RVO
 /// slot, so they are excluded.
-pub fn returns_struct_by_value(ret: &DataType) -> bool {
-    ret.token == 5 && !ret.is_object_handle && !ret.is_reference
+///
+/// batch-29c (A4, specs/batch29-errortail.md §1.1): ENUMS are also token 5 but return in the
+/// VALUE REGISTER — no hidden RVO slot exists (the callee-side probes in structure.rs/emit.rs
+/// already exclude `E*` heads; this predicate was the last admitter). Counting an enum return
+/// as by-value-struct mapped a REAL param onto the phantom RVO slot (`ERelationship __return;
+/// ... UpdateCrimeSeverityTowardsPlayer(__return, AI);` — 11 [E] lines, 6 fns), so enum-named
+/// returns are excluded here, at the map-building choke point.
+pub fn returns_struct_by_value(ret: &DataType, refs: &RefResolver) -> bool {
+    ret.token == 5
+        && !ret.is_object_handle
+        && !ret.is_reference
+        && !is_enum_name(&ret.base_name(refs))
 }
 
 /// Build the AS_PTR_SIZE-aware map from a frame offset (signed dword slot, negative below the
