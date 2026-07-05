@@ -1622,8 +1622,19 @@ fn infer_oor_arg_types(
 /// classes.md Class A): a hoisted bare declaration fails ("No default constructor") AND the
 /// later whole-object assignment fails ("No appropriate opAssign"); the only legal form is
 /// declaration-with-initializer (in-place construction).
+///
+/// batch-25h: FAngelscriptGameThreadScopeWorldContext — the compiler-inserted RAII
+/// world-context scope guard (GetPlayerRelationshipForGlossary rendered a hoisted decl +
+/// else-branch ctor-assign; the type has no default ctor/opAssign). Routed through THIS
+/// decl-init rewrite (its write-only ctor-assign shape passes the existing gate; the
+/// declaration sinks into the assigning block, which is scope-safe because the gate proves
+/// the object is never read) rather than dropping the statement: the guard's side effect IS
+/// its lifetime — it sets the game-thread world context for every native call in the scope,
+/// so deleting it would silently change runtime native-call resolution at OTHER potential
+/// sites of the same type. Any future site with reads keeps the hoist (status-quo error,
+/// never a wrong rewrite).
 fn has_no_default_ctor(ty: &str) -> bool {
-    matches!(ty, "FStatID" | "FScopeCycleCounter")
+    matches!(ty, "FStatID" | "FScopeCycleCounter" | "FAngelscriptGameThreadScopeWorldContext")
 }
 
 /// Count identifier-boundary occurrences of `ident` in `line` (so `local_3` does not match
