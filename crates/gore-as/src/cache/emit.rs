@@ -472,12 +472,14 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
     if is_ctor {
         let _ = writeln!(s, "{ind}{}({params})", f.name); // constructors have no return type
     } else {
-        // Batch-21 Class A: vanilla `const` methods (asTRAIT_CONST in FunctionTraits) must
-        // render their qualifier back — callers hold `const` object handles (the param
-        // DataTypes carry bIsObjectConst), so a non-const re-declaration fails every call
-        // site with "Non-const method call on read-only object reference".
-        let constq = if is_method && f.is_const_method() { " const" } else { "" };
-        let _ = writeln!(s, "{ind}{ret_sig} {}({params}){constq}", f.name);
+        // Batch-21 Class A attempted to re-emit the vanilla `const` method qualifier
+        // (asTRAIT_CONST in FunctionTraits) so const-handle callers compile — but HARNESS-
+        // REGRESSED +636 (read-only errors 150 -> 2763): a `const` qualifier makes `this`
+        // read-only inside the body, and our RECOVERED bodies are not const-faithful (recovery
+        // artifacts call non-const members/methods on `this`). Vanilla compiles because its
+        // real bodies are const-clean; ours aren't. Emission disabled — the ~150 caller-side
+        // errors are the lesser residue; a body-const-safety scan could re-enable per-function.
+        let _ = writeln!(s, "{ind}{ret_sig} {}({params})", f.name);
     }
     let _ = writeln!(s, "{ind}{{");
 
