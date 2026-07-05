@@ -289,6 +289,18 @@ impl Ctx<'_> {
         }
     }
 
+    /// True when the return VALUE travels through the hidden RVO out-pointer slot (a genuine
+    /// by-value struct return) — so the value/object registers can never carry the payload
+    /// (batch-24a, specs/batch23-cantconvert.md G1). `rvo_off` alone is NOT sufficient: the
+    /// param-map heuristic also classifies ENUM returns (token 5) as RVO, yet enums return in
+    /// the value register — mirroring the switch recovery's `register_based` test, an enum
+    /// return stays register-based here too (else every enum function's CpyVtoR* return
+    /// capture would be discarded).
+    fn ret_via_rvo(&self) -> bool {
+        self.rvo_off.is_some()
+            && !self.ret_ty.map(|t| is_enum_name(&t.base_name(self.refs))).unwrap_or(true)
+    }
+
     /// Name for parameter slot `idx`: the stored name, else `arg{idx}` — which MUST match
     /// how `emit::render_params` declares unnamed params (also `arg{idx}`), so a body
     /// reference resolves to a declared parameter.
@@ -1748,7 +1760,15 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 if pending.is_some() && pending_ty.as_deref() == Some("void") {
                     flush!();
                 }
-                ret_val = pending.take().or_else(|| Some(name(w(ins, 0))));
+                // batch-24a (G1): in an RVO function the 4/8-byte value register NEVER carries
+                // the on-stack struct payload — it holds branch/loop condition values (e.g.
+                // `local_11 = int(iter.CanProceed)`), and a stale capture surviving to RET
+                // emitted `return local_11;` from an FVector function (138 int -> F*/T*
+                // cant-convert errors). The one legitimate ret_val source for RVO functions is
+                // the CopyScript-to-`__return` capture below.
+                if !ctx.ret_via_rvo() {
+                    ret_val = pending.take().or_else(|| Some(name(w(ins, 0))));
+                }
             }
             "CpyVtoR1" => {
                 // a bool moved into the test register: feeds either RET or a conditional jump.
@@ -1770,7 +1790,12 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                     || (pending.is_none() && ctx.slot_type(w(ins, 0)).as_deref() == Some("bool"));
                 let v = pending.take().unwrap_or_else(|| name(w(ins, 0)));
                 cond = Some((v.clone(), is_bool));
-                ret_val = Some(v);
+                // batch-24a (G1): `cond` handling unchanged (CpyVtoR1 still feeds branches),
+                // but a test-register bool is never an RVO struct payload — don't let it
+                // linger as a stale return-value candidate (see CpyVtoR4/R8 above).
+                if !ctx.ret_via_rvo() {
+                    ret_val = Some(v);
+                }
             }
             "RET" => {
                 let non_void = ctx.ret_ty.map(|t| t.token != 0x52).unwrap_or(false);
@@ -1779,7 +1804,24 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 // Capture the return value BEFORE flush!: a directly-returned call/ctor result
                 // lives in `pending` (e.g. `CALL`/`ALLOC` then `RET`), and flush! would emit it
                 // as a standalone statement, leaving the return a default (RVODEF).
-                let mut v = if non_void {
+                let mut v = if non_void && ctx.ret_via_rvo() {
+                    // batch-24a (G1): an RVO struct payload never travels through the
+                    // object/value registers — `ret_val` here can only be the CopyScript-to-
+                    // `__return` capture, or a pending CALLSYS opAssign that writes the RVO
+                    // slot ITSELF (`__return = <rhs>`; strip_return_assign folds it back to
+                    // `return <rhs>;` — the pre-fix text of those legitimate sites). No
+                    // obj_reg/other-pending fallback, no scan-back (both resurrect stale
+                    // branch-condition captures -> `return local_11;` from an FVector
+                    // function). None -> RVODEF; the emitter folds it to `return __return;`
+                    // when the body wrote the slot.
+                    ret_val.take().or_else(|| {
+                        pending
+                            .as_deref()
+                            .is_some_and(|p| p.starts_with("__return = "))
+                            .then(|| pending.take())
+                            .flatten()
+                    })
+                } else if non_void {
                     // batch-21 Class C shape 3: a pending VOID call is never the return VALUE
                     // (`return CalculateDistanceToTarget(...);` from a bool function fails
                     // "No conversion from 'void' to 'bool'") — leave it for flush! below
@@ -1791,7 +1833,7 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                     None
                 };
                 flush!();
-                if non_void && v.is_none() {
+                if non_void && v.is_none() && !ctx.ret_via_rvo() {
                     v = scan_back_retval(ctx, lo + k);
                 }
                 // value fix-ups (RVO-assign strip, declared-bool, int -> bool/enum cast) and
