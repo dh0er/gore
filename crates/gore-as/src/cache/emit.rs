@@ -340,7 +340,7 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
     // mis-typed default/optional-arg slots — FName->UAIState_DailyRoutine, TSubclassOf<X>->X).
     // outref_overrides: PSF slots feeding float-family REFERENCE params (declaration-only, below).
     // float_args/keep_ints (batch-25g): numeric BY-VALUE arg slots — see structure::ArgSlotHints.
-    let (slot_overrides, outref_overrides, float_args, keep_ints, int_refs) = infer_slot_types(f, refs);
+    let (slot_overrides, outref_overrides, float_args, keep_ints, int_refs, small_args) = infer_slot_types(f, refs);
     // batch-28 (specs/batch27-floatwarnings.md §2): unified numeric-kind dataflow pass.
     // Anti-seed imports: slots value-pushed into int-family params (keep_ints), PSF-bound to
     // int-family reference params (int_refs), or bool&-bound (outref "bool") hold int/bool
@@ -544,6 +544,15 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
     // constants now render as float literals — `float32 local_1 = 0.0; ... local_1 = 1.0f;`).
     // Primitive-only upgrade, before the authoritative out-ref pass below.
     for (slot, ty) in &float_args {
+        if used.contains(slot) && locals.get(slot).map(|t| is_primitive(t)).unwrap_or(true) {
+            locals.insert(*slot, ty.clone());
+        }
+    }
+    // batch-28b (spec §5.1): small-int by-value arg slots (uint8/int8/uint16/int16 params —
+    // FColor ctor args, FindLastChar/FindChar char params, SetMovementMode's NewCustomMode).
+    // Fully gated in infer_slot_types (SetV-only op profile + constant range fit);
+    // declaration-only, primitive-upgrade-only — the C4a/C4b truncate/signedness classes.
+    for (slot, ty) in &small_args {
         if used.contains(slot) && locals.get(slot).map(|t| is_primitive(t)).unwrap_or(true) {
             locals.insert(*slot, ty.clone());
         }
@@ -946,10 +955,12 @@ fn ret_is_struct(ty: &str) -> bool {
 fn infer_slot_types(
     f: &Func,
     refs: &RefResolver,
-) -> (HashMap<i32, String>, HashMap<i32, String>, HashMap<i32, String>, HashSet<i32>, HashSet<i32>) {
+) -> (HashMap<i32, String>, HashMap<i32, String>, HashMap<i32, String>, HashSet<i32>, HashSet<i32>, HashMap<i32, String>) {
     let instrs = match disassemble(&f.bytecode) {
         Ok(i) => i,
-        Err(_) => return (HashMap::new(), HashMap::new(), HashMap::new(), HashSet::new(), HashSet::new()),
+        Err(_) => {
+            return (HashMap::new(), HashMap::new(), HashMap::new(), HashSet::new(), HashSet::new(), HashMap::new())
+        }
     };
     let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32);
     let writes = |op: &str| {
@@ -986,7 +997,42 @@ fn infer_slot_types(
     // for `infer_float_flow` (floating such a decl breaks the `int&` binding; the exact
     // batch-9-class risk named in specs/batch27-floatwarnings.md §2.6).
     let mut iref: HashSet<i32> = HashSet::new();
-    let mut pair = |ostack: &mut Vec<Option<(i32, bool)>>, params: Option<&[super::types::DataType]>, is_method: bool, ret_struct: bool, cand: &mut HashMap<i32, Option<String>>, outref: &mut HashMap<i32, Option<String>>, farg: &mut HashMap<i32, Option<String>>, ikeep: &mut HashSet<i32>, iref: &mut HashSet<i32>| {
+    // batch-28b (spec §5.1): small-int BY-VALUE arg slots (token 0x45 int8 / 0x46 int16 /
+    // 0x4C uint8 / 0x4D uint16) — declaration retype candidates for the C4a/C4b truncate/
+    // signedness classes. Conflicts (differing small kws, or ANY full-width int pairing)
+    // resolve to None; the SetV-only op-profile + range gates apply below.
+    let mut sarg: HashMap<i32, Option<String>> = HashMap::new();
+    // shared numeric BY-VALUE channel (used by both ordinary-call pairing and the $beh0
+    // ctor-arg pairing): float params -> farg, int-family params -> ikeep (+ sarg small-ints).
+    let val_arg = |s: i32, pt: &super::types::DataType, farg: &mut HashMap<i32, Option<String>>, ikeep: &mut HashSet<i32>, sarg: &mut HashMap<i32, Option<String>>| {
+        match pt.token {
+            0x50 | 0x51 | 0x5E => {
+                let kw = super::types::token_keyword(pt.token).to_string();
+                match farg.get(&s) {
+                    None => { farg.insert(s, Some(kw)); }
+                    Some(Some(prev)) if *prev != kw => { farg.insert(s, None); }
+                    _ => {}
+                }
+            }
+            0x45 | 0x46 | 0x4C | 0x4D => {
+                ikeep.insert(s);
+                let kw = super::types::token_keyword(pt.token).to_string();
+                match sarg.get(&s) {
+                    None => { sarg.insert(s, Some(kw)); }
+                    Some(Some(prev)) if *prev != kw => { sarg.insert(s, None); }
+                    _ => {}
+                }
+            }
+            0x44 | 0x47 | 0x4B | 0x4E => {
+                ikeep.insert(s);
+                // a full-width int pairing disqualifies the small-int retype (the widened
+                // push may carry values outside the small range).
+                sarg.insert(s, None);
+            }
+            _ => {}
+        }
+    };
+    let pair = |ostack: &mut Vec<Option<(i32, bool)>>, params: Option<&[super::types::DataType]>, is_method: bool, ret_struct: bool, cand: &mut HashMap<i32, Option<String>>, outref: &mut HashMap<i32, Option<String>>, farg: &mut HashMap<i32, Option<String>>, ikeep: &mut HashSet<i32>, iref: &mut HashSet<i32>, sarg: &mut HashMap<i32, Option<String>>| {
         let Some(params) = params else { ostack.clear(); return; };
         // A method returning a struct BY VALUE (F/T/E) carries a hidden RVO out-slot pushed as the
         // last user arg (just before the receiver); count it so it is consumed, but exclude it from
@@ -1049,22 +1095,11 @@ fn infer_slot_types(
                     {
                         iref.insert(*s);
                     }
-                    // batch-25g: numeric BY-VALUE args (value-pushed, non-reference params).
+                    // batch-25g: numeric BY-VALUE args (value-pushed, non-reference params);
+                    // batch-28b routes them through the shared `val_arg` channel (farg/ikeep
+                    // + the small-int sarg candidates).
                     if !*is_psf && !pt.is_reference {
-                        match pt.token {
-                            0x50 | 0x51 | 0x5E => {
-                                let kw = super::types::token_keyword(pt.token).to_string();
-                                match farg.get(s) {
-                                    None => { farg.insert(*s, Some(kw)); }
-                                    Some(Some(prev)) if *prev != kw => { farg.insert(*s, None); }
-                                    _ => {}
-                                }
-                            }
-                            0x44 | 0x45 | 0x46 | 0x47 | 0x4B | 0x4C | 0x4D | 0x4E => {
-                                ikeep.insert(*s);
-                            }
-                            _ => {}
-                        }
+                        val_arg(*s, pt, farg, ikeep, sarg);
                     }
                 }
             }
@@ -1092,7 +1127,7 @@ fn infer_slot_types(
             "CALL" | "CALLINTF" | "CALLBND" => {
                 let id = ins.dwords.first().copied().unwrap_or(0) as i32;
                 let rs = refs.func_ret_by_id(id).map(|d| !d.is_reference && ret_is_struct(&d.base_name(refs))).unwrap_or(false);
-                pair(&mut ostack, refs.func_params_by_id(id), refs.is_method_by_id(id), rs, &mut cand, &mut outref, &mut farg, &mut ikeep, &mut iref);
+                pair(&mut ostack, refs.func_params_by_id(id), refs.is_method_by_id(id), rs, &mut cand, &mut outref, &mut farg, &mut ikeep, &mut iref, &mut sarg);
             }
             "CALLSYS" | "Thiscall1" => {
                 let ptr = ins.qwords.first().copied().unwrap_or(0) as i64;
@@ -1115,6 +1150,23 @@ fn infer_slot_types(
                             }
                         }
                     }
+                    // batch-28b (spec §5.1): pair the nargs ctor args (the entries BELOW the
+                    // receiver) against the behaviour's params for the NUMERIC channels only
+                    // (farg/ikeep/sarg — never `cand`, preserving the arm's receiver-
+                    // mistyping guard). Args are reverse-pushed like every call type, so the
+                    // entry nearest the receiver is params[0]. Feeds the FColor uint8 /
+                    // FRotator float ctor args (C4a/C4b + infer_float_flow seed (f)).
+                    if let Some(params) = refs.func_params_by_ptr(ptr) {
+                        let args_end = ostack.len().saturating_sub(1); // receiver on top
+                        let take = params.len().min(args_end);
+                        for (i, slot) in ostack[args_end - take..args_end].iter().rev().enumerate() {
+                            if let (Some((s, is_psf)), Some(pt)) = (slot, params.get(i)) {
+                                if !*is_psf && !pt.is_reference {
+                                    val_arg(*s, pt, &mut farg, &mut ikeep, &mut sarg);
+                                }
+                            }
+                        }
+                    }
                     // pop receiver + ctor args off the operand stack so they don't leak.
                     let nargs = refs.func_params_by_ptr(ptr).map(|p| p.len()).unwrap_or(0);
                     let drop_n = (1 + nargs).min(ostack.len());
@@ -1122,7 +1174,7 @@ fn infer_slot_types(
                     continue;
                 }
                 let rs = refs.func_ret_by_ptr(ptr).map(|d| !d.is_reference && ret_is_struct(&d.base_name(refs))).unwrap_or(false);
-                pair(&mut ostack, refs.func_params_by_ptr(ptr), refs.is_method_by_ptr(ptr), rs, &mut cand, &mut outref, &mut farg, &mut ikeep, &mut iref);
+                pair(&mut ostack, refs.func_params_by_ptr(ptr), refs.is_method_by_ptr(ptr), rs, &mut cand, &mut outref, &mut farg, &mut ikeep, &mut iref, &mut sarg);
             }
             _ => {}
         }
@@ -1148,8 +1200,51 @@ fn infer_slot_types(
     for s in both {
         float_args.remove(&s);
         ikeep.remove(&s);
+        sarg.remove(&s);
     }
-    (obj, outref, float_args, ikeep, iref)
+    // batch-28b gates (spec §5.1): a small-int retype candidate must (b) have an op profile
+    // of ONLY SetV1/SetV2/SetV4 constant writes + PshV4 value pushes — any arithmetic/
+    // bitwise/conversion/compare/PSF/copy participation disqualifies (e.g. FindLastChar's
+    // `int&` out-slot does SUBi math and must NOT retype) — and (c) every tracked SetV
+    // constant must fit the target range (a mis-scoped -1 into uint8 would turn a warning
+    // into an error). (SetV2: the FindLastChar/FindChar TCHAR consts are 2-byte writes —
+    // `SetV2 w16, 0x3a` — spec §5.1 cites them as SetV4; disasm-verified SetV2.)
+    // Conservative: an unrelated word operand that numerically collides with the slot also
+    // disqualifies.
+    let mut small_args: HashMap<i32, String> = sarg
+        .into_iter()
+        .filter_map(|(slot, ty)| ty.map(|t| (slot, t)))
+        .collect();
+    if !small_args.is_empty() {
+        let fits = |kw: &str, bits: u32| -> bool {
+            let v = bits as i32;
+            match kw {
+                "int8" => (-128..=127).contains(&v),
+                "int16" => (-32768..=32767).contains(&v),
+                "uint8" => (0..=255).contains(&v),
+                "uint16" => (0..=65535).contains(&v),
+                _ => false,
+            }
+        };
+        for ins in &instrs {
+            let n = ins.op.name;
+            for (wi, &wd) in ins.words.iter().enumerate() {
+                let s = wd as i16 as i32;
+                let Some(kw) = small_args.get(&s) else { continue };
+                let ok = match n {
+                    "SetV1" | "SetV2" | "SetV4" => {
+                        wi == 0 && fits(kw, ins.dwords.first().copied().unwrap_or(0))
+                    }
+                    "PshV4" => true,
+                    _ => false,
+                };
+                if !ok {
+                    small_args.remove(&s);
+                }
+            }
+        }
+    }
+    (obj, outref, float_args, ikeep, iref, small_args)
 }
 
 /// Member-access-driven slot typing: a `LoadRObjR`/`LoadVObjR base, off, tid` reads field
