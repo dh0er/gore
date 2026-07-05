@@ -50,6 +50,12 @@ struct Arg {
     /// (scoped option: it is deliberately NOT merged into `ty`, so call-arg/argtype gates
     /// never see it).
     nfty: Option<String>,
+    /// batch-32d: base value type of a CONST object-handle NATIVE field
+    /// (`refs::native_field_const_object`) — carried ONLY so the RefCpyV arm can emit the
+    /// CONSTSTORE marker when such a member read is copied into a same-typed local
+    /// (`const UItemDefinition` -> `UItemDefinition` implconv, CharacterAI_Gothic:3002).
+    /// Like `nfty`, deliberately NOT merged into `ty`.
+    nf_const: Option<String>,
     /// batch-27 (Cast-diamond carry): pushed by a plain slot/const/global push opcode in
     /// `block_stmts` — safe to carry across a recognized Cast diamond; never set for
     /// pending-call-result pushes (`PshRPtr`) or synthetic pushes.
@@ -1789,6 +1795,12 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<Strin
                     top.is_int = false; // now a member access, not a bare int slot
                     top.ty = fty;
                     top.nfty = nfty;
+                    // batch-32d: const object-handle native field (always assigned so a
+                    // stale flag from an earlier chain link can never leak forward).
+                    top.nf_const = ctx.refs
+                        .type_by_id(tid)
+                        .and_then(|cls| ctx.refs.native_field_const_object(cls, &field))
+                        .map(|s| s.to_string());
                 }
             }
             "RDSPtr" => {} // deref in place: no change to the rendered name
@@ -2680,7 +2692,21 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<Strin
                             }
                             _ => top.s.clone(),
                         };
-                        out.push(format!("{dst} = {rhs};"));
+                        // batch-32d: the copied source is a CONST object-handle native field
+                        // of the destination's EXACT declared type (`const UItemDefinition`
+                        // member read into `UItemDefinition local_20;` — a same-type Cast
+                        // does NOT strip const in-game, batch-21 Class C). Emit the
+                        // CONSTSTORE marker so the emitter declares the destination
+                        // `const T` — the downcast() exact-type rule, mirrored for the
+                        // RefCpyV member-read shape (CharacterAI_Gothic:3002).
+                        if top.nf_const.is_some()
+                            && top.nf_const.as_deref()
+                                == (dst_slot > 0).then(|| ctx.slot_type(dst_slot)).flatten().as_deref()
+                        {
+                            out.push(format!("{dst} = {CONSTSTORE}{rhs};"));
+                        } else {
+                            out.push(format!("{dst} = {rhs};"));
+                        }
                     }
                 }
             }

@@ -452,6 +452,26 @@ impl RefResolver {
         }
         self.native.as_ref().and_then(|n| n.field_type(class, field))
     }
+    /// batch-32d: CONST object-handle fields of NATIVE structs — the live compiler treats a
+    /// read of these as `const U*`, so a plain store into a same-typed local fails "Can't
+    /// implicitly convert from 'const UItemDefinition' to 'UItemDefinition'" (and a same-type
+    /// `Cast<>` provably does NOT strip const in-game, batch-21 Class C). The script cache
+    /// carries no constness for foreign fields (PropertyReferences = Name + OWNER OldTypeId),
+    /// so this in-crate row is the production source, keyed by the ADDSi (owner, member) pair
+    /// observed at the failing RefCpyV site (CharacterAI_Gothic
+    /// SelectBestItemActionFromInventory :3002). Returns the field's BASE value type; the
+    /// consumer (RefCpyV arm) compares it against the destination's declared type and emits
+    /// the CONSTSTORE marker so the decl gains the `const` qualifier. Deliberately separate
+    /// from KNOWN_NATIVE_FIELD_TYPES: those rows mirror the Binds field DECLS (validated by
+    /// the binds.rs test) and feed enum/float-filtered consumers.
+    pub fn native_field_const_object(&self, class: &str, field: &str) -> Option<&'static str> {
+        const KNOWN_NATIVE_CONST_OBJECT_FIELDS: &[(&str, &str, &str)] =
+            &[("FItemActionHandler", "ItemDefinition", "UItemDefinition")];
+        KNOWN_NATIVE_CONST_OBJECT_FIELDS
+            .iter()
+            .find(|(c, f, _)| *c == class && *f == field)
+            .map(|(_, _, t)| *t)
+    }
     /// Inject script-class METHOD names from the parsed modules (a shadowing member need not be
     /// referenced by any bytecode — e.g. `UCM_CastSpell_Base::CastSpell()` shadows the free
     /// `CastSpell(AI, int)` even if the method itself is never called).
