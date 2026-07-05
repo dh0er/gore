@@ -251,7 +251,7 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
     // head (`TArrayConstIterator local_N;`) — a template-arity error that makes the local
     // `Unknown`. Derive `<T>` from the `Iterator()` call's container receiver; applied AFTER
     // the member pass so the composed type wins over the bare member-derived head.
-    let iter_overrides = infer_iterator_types(f, &fc, refs, fields, &local_types);
+    let (iter_overrides, iter_flips) = infer_iterator_types(f, &fc, refs, fields, &local_types);
     for (slot, ty) in &iter_overrides {
         local_types.insert(*slot, ty.clone());
     }
@@ -309,6 +309,21 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
     for (slot, ty) in &iter_overrides {
         if used.contains(slot) && !locals.get(slot).is_some_and(|t| t.contains('<')) {
             locals.insert(*slot, ty.clone());
+        }
+    }
+    // Const->mutable DECLARATION flip for iterator out-slots whose receiver is provably
+    // non-const in the emitted source (a plain local / this-field — locals are never declared
+    // const by this emitter): the re-compiled `.Iterator()` overload then returns the MUTABLE
+    // iterator, so a Const-headed declaration fails "Can't implicitly convert from
+    // 'TArrayIterator<T>' to 'TArrayConstIterator<T>'" (100+ in-game errors; 0 reverse).
+    // DECLARATION-only: the structurer's local_types keeps the cache's Const head, which its
+    // RVO out-slot probe must match against the native's recorded return type to recover
+    // `local = recv.Iterator()` at all.
+    for slot in iter_flips.keys() {
+        if let Some(t) = locals.get_mut(slot) {
+            if t.contains("ConstIterator") {
+                *t = t.replacen("ConstIterator", "Iterator", 1);
+            }
         }
     }
     // call-result types (A3): only upgrade a width-guessed PRIMITIVE declaration — an
@@ -604,6 +619,15 @@ fn ret_is_struct(ty: &str) -> bool {
     matches!(ty.split('<').next().unwrap_or(ty).bytes().next(), Some(b'F') | Some(b'T'))
 }
 
+/// True if a call with return DataType `d` uses a hidden RVO out-slot: a struct/template head
+/// returned BY VALUE. A by-REFERENCE struct return (`FMemoryFilter& CausedBy(...)` builder
+/// chains) comes back in the register (`PshRPtr`), NOT via an out-slot — counting one there
+/// over-consumes the operand stack and mis-pairs an enclosing call's pending arg with this
+/// call's params (proven: `AfterTime`'s pending FInGameTime arg typed FName via `CausedBy`).
+fn ret_has_rvo_slot(d: &super::types::DataType, refs: &RefResolver) -> bool {
+    !d.is_reference && ret_is_struct(&d.base_name(refs))
+}
+
 fn infer_slot_types(f: &Func, refs: &RefResolver) -> HashMap<i32, String> {
     let instrs = match disassemble(&f.bytecode) {
         Ok(i) => i,
@@ -636,20 +660,33 @@ fn infer_slot_types(f: &Func, refs: &RefResolver) -> HashMap<i32, String> {
         // last user arg (just before the receiver); count it so it is consumed, but exclude it from
         // pairing (it is NOT params[last] — pairing it would shift every real arg one param over and
         // mis-type the slot, e.g. the TSubclassOf out param landing on an EQuestState param).
-        let rvo = (ret_struct && is_method) as usize;
-        let total = if is_method { params.len() + 1 + rvo } else { params.len() };
+        // A FREE/static struct-returning call pushes the same hidden out-slot ON TOP (no receiver
+        // follows it — proven by `FInGameTime::Now`: `PshGPtr __WorldContext ; PSF <out> ; CALLSYS`,
+        // FunctionReferences params=[const UObject], ret=FInGameTime). Not modelling it paired the
+        // PSF'd out-slot with the hidden WorldContext param -> slot mis-typed `UObject`, clobbering
+        // the correct obj_locals type (FInGameTime) and blinding build_call's free-RVO probe
+        // ("Can't implicitly convert from 'UObject' to 'FInGameTime'" ×144 in-game).
+        let rvo = ret_struct as usize;
+        let total = if is_method { params.len() + 1 + rvo } else { params.len() + rvo };
         let take = total.min(ostack.len());
         let popped = ostack.split_off(ostack.len() - take);
         // method: top popped entry is the receiver -> drop it (plus the RVO out-slot just below it);
-        // the rest are the user args.
+        // free call: top popped entry is the RVO out-slot itself. The rest are the user args.
         let args = if is_method && !popped.is_empty() {
             &popped[..popped.len().saturating_sub(1 + rvo)]
-        } else { &popped[..] };
-        // pair from the TOP: last arg <-> last param (so a leading `this` param, if the cache
-        // counts it, never shifts the user-arg pairing).
+        } else {
+            &popped[..popped.len().saturating_sub(rvo)]
+        };
+        // pair from the TOP: args are pushed in REVERSE source order for EVERY call type (see
+        // maybe_reverse_args — 7 opcode-level confirmations, 0 counterexamples), so the TOP
+        // popped entry is the FIRST param. The old top<->LAST-param mapping mis-attributed
+        // every multi-arg call (proven: `HasCharacterKnowledgeOfText(FName, const FText)` typed
+        // its FText arg slot FName); it survived only when a second consumer created a lucky
+        // conflict. Pairing top<->params[0] also stays aligned when the stack held FEWER
+        // entries than the full frame (the popped suffix = the TOP pushes = the first params).
         for (i, slot) in args.iter().rev().enumerate() {
             if let Some(s) = slot {
-                if let Some(pt) = params.len().checked_sub(1 + i).and_then(|j| params.get(j)) {
+                if let Some(pt) = params.get(i) {
                     let ty = pt.base_name(refs);
                     match cand.get(s) {
                         None => { cand.insert(*s, Some(ty)); }
@@ -681,7 +718,7 @@ fn infer_slot_types(f: &Func, refs: &RefResolver) -> HashMap<i32, String> {
             }
             "CALL" | "CALLINTF" | "CALLBND" => {
                 let id = ins.dwords.first().copied().unwrap_or(0) as i32;
-                let rs = refs.func_ret_by_id(id).map(|d| ret_is_struct(&d.base_name(refs))).unwrap_or(false);
+                let rs = refs.func_ret_by_id(id).map(|d| ret_has_rvo_slot(d, refs)).unwrap_or(false);
                 pair(&mut ostack, refs.func_params_by_id(id), refs.is_method_by_id(id), rs, &mut cand);
             }
             "CALLSYS" | "Thiscall1" => {
@@ -711,7 +748,7 @@ fn infer_slot_types(f: &Func, refs: &RefResolver) -> HashMap<i32, String> {
                     ostack.truncate(ostack.len() - drop_n);
                     continue;
                 }
-                let rs = refs.func_ret_by_ptr(ptr).map(|d| ret_is_struct(&d.base_name(refs))).unwrap_or(false);
+                let rs = refs.func_ret_by_ptr(ptr).map(|d| ret_has_rvo_slot(d, refs)).unwrap_or(false);
                 pair(&mut ostack, refs.func_params_by_ptr(ptr), refs.is_method_by_ptr(ptr), rs, &mut cand);
             }
             _ => {}
@@ -866,10 +903,10 @@ fn infer_iterator_types(
     refs: &RefResolver,
     fields: Option<&HashMap<String, String>>,
     known: &HashMap<i32, String>,
-) -> HashMap<i32, String> {
+) -> (HashMap<i32, String>, HashMap<i32, bool>) {
     let instrs = match disassemble(&fc.bytecode) {
         Ok(i) => i,
-        Err(_) => return HashMap::new(),
+        Err(_) => return (HashMap::new(), HashMap::new()),
     };
     // frame offset -> param index, for container receivers that are parameters.
     let (param_off_map, _rvo_off) = super::decompile::build_param_off_map_rvo(fc, &instrs, refs);
@@ -914,12 +951,15 @@ fn infer_iterator_types(
     }
     let mut stack: Vec<Ent> = Vec::new();
     let mut cand: HashMap<i32, Option<String>> = HashMap::new();
+    // slot -> "the DECLARED head must be the MUTABLE Iterator variant" (see recv_mutable).
+    let mut flips: HashMap<i32, bool> = HashMap::new();
     // per-call consumption, mirroring `infer_slot_types::pair`: params + receiver + RVO
-    // out-slot for methods; unknown param info -> clear (conservative: drop pending slots).
+    // out-slot (methods AND free calls — a free by-value struct return pushes it on top);
+    // unknown param info -> clear (conservative: drop pending slots).
     let consume = |stack: &mut Vec<Ent>, params: Option<usize>, is_method: bool, ret_struct: bool| {
         let Some(n) = params else { stack.clear(); return; };
-        let rvo = (ret_struct && is_method) as usize;
-        let total = if is_method { n + 1 + rvo } else { n };
+        let rvo = ret_struct as usize;
+        let total = if is_method { n + 1 + rvo } else { n + rvo };
         stack.truncate(stack.len() - total.min(stack.len()));
     };
     for ins in &instrs {
@@ -949,7 +989,7 @@ fn infer_iterator_types(
             }
             "CALL" | "CALLINTF" | "CALLBND" => {
                 let id = ins.dwords.first().copied().unwrap_or(0) as i32;
-                let rs = refs.func_ret_by_id(id).map(|d| ret_is_struct(&d.base_name(refs))).unwrap_or(false);
+                let rs = refs.func_ret_by_id(id).map(|d| ret_has_rvo_slot(d, refs)).unwrap_or(false);
                 consume(&mut stack, refs.func_params_by_id(id).map(|p| p.len()), refs.is_method_by_id(id), rs);
             }
             "CALLSYS" | "Thiscall1" => {
@@ -970,17 +1010,41 @@ fn infer_iterator_types(
                         Ent::Member(c) => c.clone(),
                         Ent::Other => None,
                     };
+                    // Receiver mutability in the RE-COMPILED source: `.Iterator()` overload
+                    // resolution there follows the EMITTED receiver's constness, not the
+                    // original source's. A local slot is never declared const by this emitter,
+                    // and a this-class UPROPERTY field is non-const -> the mutable Iterator.
+                    // A const parameter keeps the Const variant; unknown receivers stay
+                    // untouched (conservative). AND-merged per slot: one non-mutable site
+                    // vetoes the flip.
+                    let recv_mutable = match recv {
+                        Ent::Slot { slot, .. } if *slot > 0 => true,
+                        Ent::Slot { slot, .. } if *slot < 0 => param_off_map
+                            .get(slot)
+                            .and_then(|idx| fc.param_types.get(*idx))
+                            .map(|d| !d.is_read_only && !d.is_object_const)
+                            .unwrap_or(false),
+                        Ent::Member(Some(_)) => true,
+                        _ => false,
+                    };
                     if let Ent::Slot { slot: out_slot, psf: true } = *out {
                         record_iterator_candidate(refs, known, &mut cand, out_slot, ptr, container);
+                        if out_slot > 0 {
+                            flips
+                                .entry(out_slot)
+                                .and_modify(|m| *m &= recv_mutable)
+                                .or_insert(recv_mutable);
+                        }
                     }
                 }
-                let rs = refs.func_ret_by_ptr(ptr).map(|d| ret_is_struct(&d.base_name(refs))).unwrap_or(false);
+                let rs = refs.func_ret_by_ptr(ptr).map(|d| ret_has_rvo_slot(d, refs)).unwrap_or(false);
                 consume(&mut stack, refs.func_params_by_ptr(ptr).map(|p| p.len()), refs.is_method_by_ptr(ptr), rs);
             }
             _ => {}
         }
     }
-    cand.into_iter().filter_map(|(s, t)| t.map(|t| (s, t))).collect()
+    let flips = flips.into_iter().filter(|&(_, m)| m).map(|(s, _)| (s, true)).collect();
+    (cand.into_iter().filter_map(|(s, t)| t.map(|t| (s, t))).collect(), flips)
 }
 
 /// Compose + record one iterator out-slot candidate (see [`infer_iterator_types`]).
@@ -1080,8 +1144,9 @@ fn infer_call_result_types(
     // per-call operand-stack consumption, mirroring `infer_slot_types`.
     let consume = |stack: &mut Vec<Option<i32>>, params: Option<usize>, is_method: bool, ret_struct: bool| {
         let Some(n) = params else { stack.clear(); return; };
-        let rvo = (ret_struct && is_method) as usize;
-        let total = if is_method { n + 1 + rvo } else { n };
+        // hidden RVO out-slot: methods AND free calls (free: pushed on top — see infer_slot_types).
+        let rvo = ret_struct as usize;
+        let total = if is_method { n + 1 + rvo } else { n + rvo };
         stack.truncate(stack.len() - total.min(stack.len()));
     };
     // rendered return type + receiver slot of the just-completed call (None once anything
@@ -1112,8 +1177,8 @@ fn infer_call_result_types(
                 let id = ins.dwords.first().copied().unwrap_or(0) as i32;
                 let is_m = refs.is_method_by_id(id);
                 let recv = if is_m { ostack.last().copied().flatten() } else { None };
+                let rs = refs.func_ret_by_id(id).map(|d| ret_has_rvo_slot(d, refs)).unwrap_or(false);
                 let ret = refs.func_ret_by_id(id).map(|d| d.base_name(refs));
-                let rs = ret.as_deref().map(ret_is_struct).unwrap_or(false);
                 consume(&mut ostack, refs.func_params_by_id(id).map(|p| p.len()), is_m, rs);
                 last = ret.map(|t| (t, recv));
             }
@@ -1129,8 +1194,8 @@ fn infer_call_result_types(
                 }
                 let is_m = refs.is_method_by_ptr(ptr);
                 let recv = if is_m { ostack.last().copied().flatten() } else { None };
+                let rs = refs.func_ret_by_ptr(ptr).map(|d| ret_has_rvo_slot(d, refs)).unwrap_or(false);
                 let ret = refs.func_ret_by_ptr(ptr).map(|d| d.base_name(refs));
-                let rs = ret.as_deref().map(ret_is_struct).unwrap_or(false);
                 consume(&mut ostack, refs.func_params_by_ptr(ptr).map(|p| p.len()), is_m, rs);
                 last = ret.map(|t| (t, recv));
             }
