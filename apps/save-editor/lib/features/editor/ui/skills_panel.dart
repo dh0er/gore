@@ -176,14 +176,18 @@ class _SkillsSectionState extends ConsumerState<SkillsSection> {
         ),
       );
     }
-    // `found` is false when the hero has no ActiveEffects array to edit into —
+    // `found` is false when the actor has no ActiveEffects array to edit into —
     // `private.skills.set` would then fail, so never render the editable roster
-    // in that case (it lists every catalogued skill regardless of `found`). Use
-    // a distinct message: the roster is not missing, the edit target is.
+    // in that case (it lists every catalogued skill regardless of `found`).
+    // Hero: a distinct message (the roster is not missing, the edit target is).
+    // NPC (no roster): plain "no skills found" — the hero-specific
+    // edit-target message would be wrong for a monster.
     if (result != null && !result.found) {
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 8),
-        child: Text(l10n.skillsUnavailableBody),
+        child: Text(
+          widget.showRoster ? l10n.skillsUnavailableBody : l10n.skillsNoneBody,
+        ),
       );
     }
     if (result == null) {
