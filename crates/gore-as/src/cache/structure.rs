@@ -1557,6 +1557,30 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<Strin
                 // else: this PSF is the destination local for the following ALLOC; don't push.
             }
             "PshRPtr" => {
+                // batch-31a (N9, batch29-3f residue): a VOID call leaves the value register
+                // untouched — its pending render can never be what PshRPtr pushes. Consuming
+                // it as an arg passed a void call EXPRESSION into the enclosing call
+                // ("No matching signatures to 'TMap::Add(AGothicCharacter&, void)'" —
+                // AICombatRoleSystem:534 / FXDefinitions_Human:69). Flush the void call as
+                // its own statement (flush_b2 keeps the drop-discipline for sentinel/
+                // unresolved pendings) and fall through to the register path: ref_reg may
+                // hold the REAL operand; an empty register pushes UNRESOLVED (statement-level
+                // drop beats silent arg theft, per spec batch31-nomatch-illegalop §1.11).
+                // The recovered operand is pushed UNTYPED: `ref_reg_ty` for a foreign member
+                // load is member_type's OWNER type (the documented ADDSi poison), and letting
+                // it reach cast_arg's value-head guard false-flags the genuinely-recovered
+                // operand (AICombatRoleSystem: `TargetRoleGroup.RoleType` typed
+                // FCombatRoleGroup vs the TMap's ECombatRole value -> spurious argtype stub).
+                // None = unknown = conservative match, same rule the ADDSi arm documents.
+                if pending.is_some() && pending_ty.as_deref() == Some("void") {
+                    flush_b2!();
+                    let s = match value_reg.take() {
+                        Some(v) => v,
+                        None => ref_reg.clone().unwrap_or_else(|| UNRESOLVED.into()),
+                    };
+                    stack.push(Arg::typed(s, None));
+                    continue;
+                }
                 // The value register holds a just-completed call's return value; PshRPtr pushes it
                 // back onto the operand stack as the NEXT call's argument (e.g. the receiver/arg of
                 // a chained call). Prefer that live call result over the stale member-ref register.
@@ -3357,11 +3381,20 @@ impl Structurer<'_> {
                 return None;
             }
         }
-        // D11 stage-1 consumer gate: the join's FIRST call-class instruction must be a
-        // CALLSYS/Thiscall1 whose callee has a TRUSTED arity (Binds native arity, or the cache
-        // FunctionReference param count — the same fallback the CALLSYS arm's split uses), so
-        // the split path, not take-all, consumes the carry. No call at all in the join -> bail
-        // (no proven consumer in stage 1).
+        // D11 consumer gate: the join's FIRST call-class instruction must have a TRUSTED
+        // arity, so the split path, not take-all, consumes the carry.
+        //   - stage 1 (batch-27): CALLSYS/Thiscall1 — Binds native arity, or the cache
+        //     FunctionReference param count (the same fallback the CALLSYS arm's split uses).
+        //   - stage 2 (batch-31a, spec batch31-nomatch-illegalop §1.1 N2a): CALL/CALLINTF/
+        //     CALLBND — script functions always carry a FunctionReference param list, so the
+        //     by-id count has the same trust level as the CALLSYS by-ptr fallback (it is what
+        //     the CALL arm's EDIT B-PRIME split already uses). Note the join's first call need
+        //     NOT itself be the carry's consumer (Proof D — ANotifySpellCategoryActor::
+        //     OnBeginOverlap: the carried entry sits at the stack BOTTOM and a LATER CALLSYS
+        //     in the same join consumes it); trusting the first call's split arithmetic is
+        //     what keeps the carried entry in place for that later consumer.
+        //   - CallPtr keeps the bail (no id, no trusted arity). No call at all -> bail
+        //     (no proven consumer).
         let jb = &blocks[j];
         let mut consumer = false;
         for k in jb.instr_lo..jb.instr_hi {
@@ -3377,7 +3410,15 @@ impl Structurer<'_> {
                     consumer = true;
                     break;
                 }
-                "CALL" | "CALLINTF" | "CALLBND" | "CallPtr" => return None,
+                "CALL" | "CALLINTF" | "CALLBND" => {
+                    let id = ins.dwords.first().copied().unwrap_or(0) as i32;
+                    if ctx.refs.func_params_by_id(id).is_none() {
+                        return None;
+                    }
+                    consumer = true;
+                    break;
+                }
+                "CallPtr" => return None,
                 _ => {}
             }
         }
@@ -3395,6 +3436,9 @@ impl Structurer<'_> {
         //       statements gain args, never create/destroy statements — a spurious
         //       consumption by a non-call opcode, or a statement dropped as unresolved).
         // False negatives cost nothing: status-quo drop-at-boundary.
+        // batch-31a note: with stage-2 CALL/CALLINTF consumers the WITH-init run may now
+        // RESOLVE a sentinel the empty-init run HAS (a previously-missing arg recovered by
+        // the carry) — that direction stays legal; only a NEW sentinel bails.
         let has_amm = |v: &[String]| v.iter().any(|s| s.contains('\u{2}'));
         let (j0, _, _) = block_stmts_in(ctx, jb.instr_lo, jb.instr_hi, Vec::new());
         let (j1, _, _) = block_stmts_in(ctx, jb.instr_lo, jb.instr_hi, l.to_vec());
