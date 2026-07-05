@@ -1521,7 +1521,13 @@ fn rewrite_iterator_decl_init(body: &str, locals: &BTreeMap<i32, String>) -> (St
             let t = line.trim_start();
             if !done && count_ident(line, &ident) == 1 && t.starts_with(&pat) && t.ends_with(';') {
                 let indent = &line[..line.len() - t.len()];
-                let _ = writeln!(rewritten, "{indent}{ty} {t}");
+                // `auto`, not the inferred iterator type: the cache's recorded return type does
+                // not reliably distinguish Const vs mutable Iterator overloads (the receiver's
+                // constness decides in-source), so a spelled-out head fails "Can't implicitly
+                // convert TXIterator<T> <-> TXConstIterator<T>" whenever we guess wrong (72
+                // in-game errors; the batch-9 const-flip regression was the same coin's other
+                // face). AngelScript's auto infers the exact overload the compiler resolves.
+                let _ = writeln!(rewritten, "{indent}auto {t}");
                 done = true;
             } else {
                 rewritten.push_str(line);
