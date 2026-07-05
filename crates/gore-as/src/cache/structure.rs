@@ -21,7 +21,7 @@ use super::walk_modules::FuncCode;
 
 /// A pushed call argument: its rendered text plus whether it originated from an integer
 /// value (a constant or `int` slot), so it can be cast to the callee's expected `bool`/enum.
-#[derive(Clone, Default)]
+#[derive(Clone, Default, PartialEq)]
 struct Arg {
     s: String,
     is_int: bool,
@@ -50,6 +50,10 @@ struct Arg {
     /// (scoped option: it is deliberately NOT merged into `ty`, so call-arg/argtype gates
     /// never see it).
     nfty: Option<String>,
+    /// batch-27 (Cast-diamond carry): pushed by a plain slot/const/global push opcode in
+    /// `block_stmts` — safe to carry across a recognized Cast diamond; never set for
+    /// pending-call-result pushes (`PshRPtr`) or synthetic pushes.
+    carryable: bool,
 }
 impl Arg {
     fn int(s: String) -> Arg {
@@ -72,6 +76,13 @@ impl Arg {
     /// A synthesized implicit `__WorldContext` marker (see `is_ctx`).
     fn ctx() -> Arg {
         Arg { is_ctx: true, ..Default::default() }
+    }
+    /// Tag this arg as originating from a plain push opcode (see `carryable`). Applied at the
+    /// `block_stmts` push SITES, deliberately not inside the constructors — `build_call` also
+    /// constructs Args, which must never be carried.
+    fn carry(mut self) -> Arg {
+        self.carryable = true;
+        self
     }
 }
 
@@ -142,7 +153,7 @@ pub fn body_statements_ctor(f: &FuncCode, refs: &RefResolver, depth: usize, supe
     let idx_of: HashMap<usize, usize> =
         g.blocks.iter().enumerate().map(|(i, b)| (b.start_dw, i)).collect();
     let mut body = String::new();
-    let mut st = Structurer { ctx: &ctx, g: &g, idx_of: &idx_of, exit_join: None, exit_join_is_ret: false, exit_ret_rows_ok: false, exit_scan_floor: 0 };
+    let mut st = Structurer { ctx: &ctx, g: &g, idx_of: &idx_of, exit_join: None, exit_join_is_ret: false, exit_ret_rows_ok: false, exit_scan_floor: 0, carry: None };
     st.emit_range(0, g.blocks.len(), depth, &mut body);
     body
 }
@@ -439,7 +450,7 @@ fn narrowing_cast_target(n: &str) -> Option<&'static str> {
 
 /// The raw bits of a `SetV*` constant written to a slot — so a later store into a float/
 /// double field can reinterpret them as the real IEEE-754 value instead of an int literal.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 enum ConstBits {
     W4(u32),
     W8(u64),
@@ -1293,10 +1304,19 @@ fn esc(s: &str) -> String {
 /// Decompile one block's instruction range into statements; also return the
 /// pending comparison (operands of the last CMP*) for condition recovery.
 fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
+    let (out, cmp, _) = block_stmts_in(ctx, lo, hi, Vec::new());
+    (out, cmp)
+}
+
+/// [`block_stmts`] with an explicit INITIAL operand stack and the block's LEFTOVER stack in
+/// the return (batch-27 Cast-diamond carry): the carried entries occupy the DEEPEST positions,
+/// below everything the block pushes — exactly the runtime layout — and the leftover is
+/// returned verbatim after the final flush (the UNRESOLVED retain applies to statements only).
+fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<String>, Option<Cmp>, Vec<Arg>) {
     let mut out = Vec::new();
     let mut cmp: Option<Cmp> = None;
     let mut cond: Option<(String, bool)> = None; // (bool value tested by a jump, is-bool-typed)
-    let mut stack: Vec<Arg> = Vec::new(); // pushed pointer/value expressions
+    let mut stack: Vec<Arg> = init; // pushed pointer/value expressions
     let mut value_reg: Option<String> = None;
     let mut obj_reg: Option<String> = None;
     let mut ref_reg: Option<String> = None; // Idiom-B member address
@@ -1382,13 +1402,15 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
         }
         match n {
             // ---- pushes ----
+            // (plain slot/const/global pushes are tagged `.carry()` — safe to carry across a
+            // recognized Cast diamond; see `Arg::carryable`.)
             "PshC4" => {
                 let b = ins.dwords.first().copied().unwrap_or(0);
-                stack.push(Arg::iconst((b as i32).to_string(), ConstBits::W4(b)));
+                stack.push(Arg::iconst((b as i32).to_string(), ConstBits::W4(b)).carry());
             }
             "PshC8" => {
                 let b = ins.qwords.first().copied().unwrap_or(0);
-                stack.push(Arg::iconst((b as i64).to_string(), ConstBits::W8(b)));
+                stack.push(Arg::iconst((b as i64).to_string(), ConstBits::W8(b)).carry());
             }
             "PshV4" | "PshV8" => {
                 // A bool slot pushed as an arg must render BARE (`WasCancelled`), not as
@@ -1398,40 +1420,40 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 // enum/int slots stay int so their enum/`!= 0` casts still fire.
                 let off = w(ins, 0);
                 if ctx.slot_type(off).as_deref() == Some("bool") {
-                    stack.push(Arg::typed(name(off), Some("bool".to_string())));
+                    stack.push(Arg::typed(name(off), Some("bool".to_string())).carry());
                 } else if matches!(ctx.slot_type(off).as_deref(), Some("float" | "float32" | "double")) {
                     // batch-20 Class C: a float-family slot pushed by value is a REAL arg (e.g.
                     // SetByCallerMagnitude's Magnitude pushed before a chained GetSpec()); typed
                     // (is_int=false) it survives the nested-call stack-split retain and renders
                     // bare. Left as Arg::int it was dropped as a stranded temporary (17 in-game
                     // errors: "No matching signatures to 'SetByCallerMagnitude(FGameplayTag)'").
-                    stack.push(Arg::typed(name(off), ctx.slot_type(off)));
+                    stack.push(Arg::typed(name(off), ctx.slot_type(off)).carry());
                 } else if let Some(cb) = set_consts.get(&off).copied() {
                     // The slot holds a tracked SetV constant (the SetV1/SetV4 -> PshV4 idiom for a
                     // literal flag/amount, e.g. Say's `bUnskippable`). Carry its cbits so the
                     // nested-call retain (`!is_int || cbits.is_some()`) keeps it as a REAL arg
                     // instead of dropping it as a stranded temporary.
-                    stack.push(Arg::iconst(name(off), cb));
+                    stack.push(Arg::iconst(name(off), cb).carry());
                 } else if member_read_slots.contains(&off) {
                     // Member-read value (this.XP_... amount) — a real arg the retain must keep.
-                    stack.push(Arg { s: name(off), is_int: true, keep: true, ..Default::default() });
+                    stack.push(Arg { s: name(off), is_int: true, keep: true, ..Default::default() }.carry());
                 } else if ctx.keep_ints.is_some_and(|s| s.contains(&off)) {
                     // batch-25g (spec family G kin): the emit-side pairing proved every value
                     // push of this slot feeds a KNOWN int-family parameter — a real arg
                     // (Math::Min's second operand below a nested call), not a stranded SetV
                     // temporary; the nested-call retain must keep it.
-                    stack.push(Arg { s: name(off), is_int: true, keep: true, ..Default::default() });
+                    stack.push(Arg { s: name(off), is_int: true, keep: true, ..Default::default() }.carry());
                 } else {
-                    stack.push(Arg::int(name(off)));
+                    stack.push(Arg::int(name(off)).carry());
                 }
             }
-            "PshVPtr" => stack.push(Arg::typed(name(w(ins, 0)), ctx.slot_type(w(ins, 0)))),
+            "PshVPtr" => stack.push(Arg::typed(name(w(ins, 0)), ctx.slot_type(w(ins, 0))).carry()),
             "PSF" => {
                 // &local, unless it's the destination of a following ALLOC
                 if insns.get(k + 1).map(|i| i.op.name) != Some("ALLOC") {
                     // &local at the AS source level is implicit (param decides &in/&out) — no `&`.
                     // Tag is_psf so a following `$beh0` construct can recover `slot = T(args)`.
-                    stack.push(Arg::psf(name(w(ins, 0)), ctx.slot_type(w(ins, 0))));
+                    stack.push(Arg::psf(name(w(ins, 0)), ctx.slot_type(w(ins, 0))).carry());
                 }
                 // else: this PSF is the destination local for the following ALLOC; don't push.
             }
@@ -1452,12 +1474,12 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
             "PGA" | "PshGPtr" | "PshG4" => {
                 let ptr = ins.qwords.first().copied().unwrap_or(0) as i64;
                 if ctx.refs.global_is_string(ptr) {
-                    stack.push(Arg::obj(format!("\"{}\"", esc(ctx.refs.global_by_ptr(ptr).unwrap_or("")))));
+                    stack.push(Arg::obj(format!("\"{}\"", esc(ctx.refs.global_by_ptr(ptr).unwrap_or("")))).carry());
                 } else {
                     let nm = ctx.refs.global_by_ptr(ptr).unwrap_or("global?");
                     if let Some(cls) = nm.strip_prefix("__StaticType_") {
                         // generator class-pointer global -> the real UClass accessor
-                        stack.push(Arg::obj(format!("{cls}::StaticClass()")));
+                        stack.push(Arg::obj(format!("{cls}::StaticClass()")).carry());
                     } else if nm.starts_with("__") {
                         // other implicit generator global (e.g. __WorldContext) — not a
                         // source-level identifier. Push a MARKER (not dropped): the native's arity
@@ -1465,15 +1487,15 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                         // split take one entry too deep and steal a neighbouring call's arg
                         // (GetNPCState family). The marker keeps stack arithmetic honest;
                         // build_call strips it from the rendered args + lowers arity by 1.
-                        stack.push(Arg::ctx());
+                        stack.push(Arg::ctx().carry());
                     } else if let Some(ns) = ctx.refs.global_ns(ptr) {
-                        stack.push(Arg::obj(format!("{ns}::{nm}"))); // e.g. `FColor::Red`
+                        stack.push(Arg::obj(format!("{ns}::{nm}")).carry()); // e.g. `FColor::Red`
                     } else {
-                        stack.push(Arg::obj(nm.to_string()));
+                        stack.push(Arg::obj(nm.to_string()).carry());
                     }
                 }
             }
-            "PshNull" => stack.push(Arg::obj("nullptr".into())),
+            "PshNull" => stack.push(Arg::obj("nullptr".into()).carry()),
             "VAR" => stack.push(Arg::int(name(w(ins, 0)))),
             "FuncPtr" => stack.push(Arg::obj("funcptr".into())),
             // ---- member access (Idiom A: rewrite top of stack in place) ----
@@ -2290,7 +2312,7 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
             }
         }
     }
-    (out, cmp)
+    (out, cmp, stack)
 }
 
 /// Condition rendered for the branch being TAKEN, given the CMP operands + jump op.
@@ -2373,6 +2395,11 @@ struct Structurer<'a> {
     /// Instruction-index floor for the synthesized-return value scan (the current case
     /// region's first instruction — a value must not leak in from a preceding region).
     exit_scan_floor: usize,
+    /// batch-27: (join block index, operand stack surviving a recognized Cast diamond).
+    /// Created at the end of the is_cond arm ONLY when [`Self::diamond_join`] proves the
+    /// construct is exactly the null-check Cast diamond; consumed exactly once (`take()`)
+    /// by the very next loop iteration of `emit_range`.
+    carry: Option<(usize, Vec<Arg>)>,
 }
 
 impl Structurer<'_> {
@@ -2396,6 +2423,16 @@ impl Structurer<'_> {
             let b = &self.g.blocks[i];
             let mut next;
 
+            // batch-27: operand stack carried across a recognized Cast diamond — consumed by
+            // the join block (always the immediately-next emitted block; see carry creation
+            // below). take() unconditionally: if this block is emitted by an arm that cannot
+            // accept an initial stack (switch / loop heads), the carry is dropped -> status-quo
+            // behavior.
+            let init: Vec<Arg> = match self.carry.take() {
+                Some((t, s)) if t == i => s,
+                _ => Vec::new(),
+            };
+
             if let Some(after) = self.try_emit_switch(i, stop, depth, out) {
                 // recovered compiler switch idiom (guards + JMPP dispatch); the whole
                 // construct was emitted, continue after its JOIN.
@@ -2416,7 +2453,7 @@ impl Structurer<'_> {
                 let _ = writeln!(out, "{ind}}}");
                 next = latch + 1;
             } else if self.is_cond(i) {
-                let (stmts, cmp) = block_stmts(self.ctx, b.instr_lo, b.instr_hi);
+                let (stmts, cmp, leftover) = block_stmts_in(self.ctx, b.instr_lo, b.instr_hi, init);
                 for s in &stmts {
                     let _ = writeln!(out, "{ind}{s}");
                 }
@@ -2453,8 +2490,17 @@ impl Structurer<'_> {
                         }
                     }
                 }
+                // batch-27: a guard block's leftover operand stack survives into the JOIN
+                // block's initial stack — ONLY when the construct is provably the null-check
+                // Cast diamond (see diamond_join). Everything else keeps drop-at-boundary.
+                if !leftover.is_empty() {
+                    if let Some(j) = self.diamond_join(i, next, &leftover, &cmp) {
+                        self.carry = Some((j, leftover));
+                    }
+                }
             } else {
-                let (stmts, _) = block_stmts(self.ctx, b.instr_lo, b.instr_hi);
+                // (linear fallthrough-carry is out of scope — the plain arm's leftover is dropped.)
+                let (stmts, _, _) = block_stmts_in(self.ctx, b.instr_lo, b.instr_hi, init);
                 for s in &stmts {
                     let _ = writeln!(out, "{ind}{s}");
                 }
@@ -2880,6 +2926,188 @@ impl Structurer<'_> {
         ) && self.g.blocks[bi].succs.len() == 2
             // forward only (backward = loop latch, handled elsewhere)
             && self.g.blocks[bi].succs.iter().all(|&s| s > self.g.blocks[bi].start_dw)
+    }
+
+    /// batch-27 (Cast-diamond carry, design `specs/batch26-castdiamond.md` §2.3): decide
+    /// whether cond block `i` — whose `block_stmts_in` left `l` on the operand stack — is the
+    /// GUARD of exactly the null-check Cast diamond
+    /// `if (x != nullptr) { y = Cast<T>(x); } else { <housekeeping> }`, so `l` may be carried
+    /// into the JOIN block's initial stack. Returns the join's block index, or None on ANY
+    /// deviation (bail-by-default: a false negative costs nothing — status-quo drop).
+    ///
+    /// Stage 1 gates (D1-D11): JZ-on-CmpPtrNull guard; then-arm = exactly one block
+    /// whitelisted to the lowered `Cast<T>` shape (TYPEID/PSF/PshVPtr/CALLSYS-opCast/JMP);
+    /// else-arm absent or one housekeeping block; join sole-entry and == the `next` the
+    /// is_cond arm just computed; every carried entry pushed by a plain push opcode
+    /// (`carryable`); dual simulation proves the arms' emission + net stack effect are
+    /// independent of the carried entries; the join's first call is a CALLSYS/Thiscall1 with
+    /// TRUSTED arity (split path, never take-all). Stage 2 (own harness batch) relaxes the
+    /// consumer gate to CALL/CALLINTF script consumers.
+    fn diamond_join(&self, i: usize, next: usize, l: &[Arg], cmp: &Option<Cmp>) -> Option<usize> {
+        let ctx = self.ctx;
+        let blocks = &self.g.blocks;
+        let b = &blocks[i];
+        // D9 carryability: every carried entry originates from a plain slot/const/global push
+        // (never a pending-call-result PshRPtr — carrying one would reorder side effects).
+        if !l.iter().all(|a| a.carryable) {
+            return None;
+        }
+        // D1 guard shape: `JZ` over a bare `CmpPtrNull` (`x == nullptr`, no T*-op, no expr).
+        if self.jump_op(i) != "JZ" {
+            return None;
+        }
+        let c = cmp.as_ref()?;
+        if c.b != "nullptr" || c.op.is_some() || c.expr.is_some() {
+            return None;
+        }
+        // D2 then-arm entry: the fallthrough successor is the physically-next block.
+        let fall = *b.succs.get(1)?;
+        if self.idx_of.get(&fall).copied() != Some(i + 1) {
+            return None;
+        }
+        // D3 then-arm exit: a single block, JMP-terminated, sole successor = the join.
+        let t = blocks.get(i + 1)?;
+        if ctx.instrs[t.instr_hi - 1].op.name != "JMP" || t.succs.len() != 1 {
+            return None;
+        }
+        let join_off = t.succs[0];
+        // D4 else-arm: absent (guard's taken edge goes straight to the join), or exactly one
+        // non-cond block (fallthrough or JMP) whose sole successor is the join.
+        let taken = *b.succs.first()?;
+        let else_idx = if taken == join_off {
+            None
+        } else {
+            if self.idx_of.get(&taken).copied() != Some(i + 2) {
+                return None;
+            }
+            let e = blocks.get(i + 2)?;
+            if is_cond_op(ctx.instrs[e.instr_hi - 1].op.name) || e.succs.as_slice() != [join_off] {
+                return None;
+            }
+            Some(i + 2)
+        };
+        // D5 join index: must be exactly the `next` the is_cond arm just emitted (creation and
+        // consumption are then adjacent iterations of the same emit_range loop, or — via the
+        // sole-entry proof below — the next emission of block j in an enclosing range).
+        let j = *self.idx_of.get(&join_off)?;
+        if j != next {
+            return None;
+        }
+        // D6 sole-entry edges (precedent: try_emit_switch's outside-entry scan): the only edge
+        // into the then-arm (and else-arm, if present) comes from the guard; the only edges
+        // into the join come from the diamond's arm set.
+        let then_off = t.start_dw;
+        let else_off = else_idx.map(|e| blocks[e].start_dw);
+        for (bi, bb) in blocks.iter().enumerate() {
+            for &s in &bb.succs {
+                if s == then_off && bi != i {
+                    return None;
+                }
+                if Some(s) == else_off && bi != i {
+                    return None;
+                }
+                if s == join_off {
+                    let legal = match else_idx {
+                        None => bi == i || bi == i + 1,
+                        Some(e) => bi == i + 1 || bi == e,
+                    };
+                    if !legal {
+                        return None;
+                    }
+                }
+            }
+        }
+        // D7 then-arm content whitelist (stage-1 belt): only the lowered `Cast<T>` shape, with
+        // exactly one CALLSYS (resolving to `opCast`) and exactly one TYPEID.
+        let (mut ncast, mut ntypeid) = (0usize, 0usize);
+        for k in t.instr_lo..t.instr_hi {
+            let ins = &ctx.instrs[k];
+            match ins.op.name {
+                "SUSPEND" | "JitEntry" | "PSF" | "PshVPtr" | "JMP" => {}
+                "TYPEID" => ntypeid += 1,
+                "CALLSYS" => {
+                    let ptr = ins.qwords.first().copied().unwrap_or(0) as i64;
+                    if ctx.refs.func_by_ptr(ptr) != Some("opCast") {
+                        return None;
+                    }
+                    ncast += 1;
+                }
+                _ => return None,
+            }
+        }
+        if ncast != 1 || ntypeid != 1 {
+            return None;
+        }
+        // D8 else-arm content whitelist: housekeeping only.
+        if let Some(e) = else_idx {
+            let eb = &blocks[e];
+            for k in eb.instr_lo..eb.instr_hi {
+                if !matches!(
+                    ctx.instrs[k].op.name,
+                    "SUSPEND" | "JitEntry" | "ClrVPtr" | "FREE" | "FreeNullV8" | "JMP"
+                ) {
+                    return None;
+                }
+            }
+        }
+        // D10 dual-simulation safety gate (authoritative — subsumes D7/D8 semantically, both
+        // kept for belt-and-suspenders): each arm must be stack-net-zero on its own, emit the
+        // IDENTICAL statements with and without the carried entries, and return the carried
+        // entries verbatim. Then on BOTH runtime paths the stack at the join equals `l`, and
+        // the arm's actual emission (done with an empty init) is unchanged.
+        for arm in std::iter::once(i + 1).chain(else_idx) {
+            let ab = &blocks[arm];
+            let (s0, _, r0) = block_stmts_in(ctx, ab.instr_lo, ab.instr_hi, Vec::new());
+            let (s1, _, r1) = block_stmts_in(ctx, ab.instr_lo, ab.instr_hi, l.to_vec());
+            if !r0.is_empty() || s1 != s0 || r1.as_slice() != l {
+                return None;
+            }
+        }
+        // D11 stage-1 consumer gate: the join's FIRST call-class instruction must be a
+        // CALLSYS/Thiscall1 whose callee has a TRUSTED arity (Binds native arity, or the cache
+        // FunctionReference param count — the same fallback the CALLSYS arm's split uses), so
+        // the split path, not take-all, consumes the carry. No call at all in the join -> bail
+        // (no proven consumer in stage 1).
+        let jb = &blocks[j];
+        let mut consumer = false;
+        for k in jb.instr_lo..jb.instr_hi {
+            let ins = &ctx.instrs[k];
+            match ins.op.name {
+                "CALLSYS" | "Thiscall1" => {
+                    let ptr = ins.qwords.first().copied().unwrap_or(0) as i64;
+                    let f = ctx.refs.func_by_ptr(ptr).unwrap_or("");
+                    let na = ctx.refs.native_arity_by_ptr(ptr, f);
+                    if na.or_else(|| ctx.refs.func_params_by_ptr(ptr).map(|p| p.len())).is_none() {
+                        return None;
+                    }
+                    consumer = true;
+                    break;
+                }
+                "CALL" | "CALLINTF" | "CALLBND" | "CallPtr" => return None,
+                _ => {}
+            }
+        }
+        if !consumer {
+            return None;
+        }
+        // D12 (batch-27 addition beyond the spec, raw-gate belt): consumer simulation.
+        // Pre-run the JOIN block with and without the carried entries (pure function — the
+        // real emission is exactly the with-init run). Bail when carrying
+        //   (a) introduces an ARGMISMATCH sentinel the empty-init run does not have (the
+        //       carried window is misaligned for this consumer — e.g. the big-operand-window
+        //       MagicScript::GetSingleActorTargetFromCamera* family — and emitting it would
+        //       force-stub the WHOLE function), or
+        //   (b) changes the join's statement COUNT (the carry must only let existing
+        //       statements gain args, never create/destroy statements — a spurious
+        //       consumption by a non-call opcode, or a statement dropped as unresolved).
+        // False negatives cost nothing: status-quo drop-at-boundary.
+        let has_amm = |v: &[String]| v.iter().any(|s| s.contains('\u{2}'));
+        let (j0, _, _) = block_stmts_in(ctx, jb.instr_lo, jb.instr_hi, Vec::new());
+        let (j1, _, _) = block_stmts_in(ctx, jb.instr_lo, jb.instr_hi, l.to_vec());
+        if j1.len() != j0.len() || (has_amm(&j1) && !has_amm(&j0)) {
+            return None;
+        }
+        Some(j)
     }
 
     /// If block `i` begins a bottom-test loop within [.., stop), return the latch block
