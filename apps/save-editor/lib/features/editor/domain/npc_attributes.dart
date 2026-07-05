@@ -1,3 +1,5 @@
+import 'hero_attributes.dart' show heroHiddenAttributeIds;
+
 /// One pending `private.typed.setValue` edit produced by the NPC attribute
 /// editor. Mirrors [TypedValueEdit] in hero_attributes.dart but kept local so
 /// the NPC panel has no dependency on the player-only hero types.
@@ -61,6 +63,9 @@ class NpcAttributesResult {
       attributes: raw
           .whereType<Map>()
           .map((m) => NpcAttributeRow.fromJson(m.cast<String, Object?>()))
+          // Hide the per-weapon critical values from the curated view (same as
+          // the player); they stay editable in the All-data browser.
+          .where((row) => !heroHiddenAttributeIds.contains(row.key))
           .toList(growable: false),
     );
   }

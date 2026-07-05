@@ -36,6 +36,168 @@ class AppLocalizationsRu extends AppLocalizations {
   String get tabAttribute => 'Атрибуты';
 
   @override
+  String get heroGroupSkills => 'Навыки';
+
+  @override
+  String get skillsNoneBody => 'Для этого персонажа навыки не найдены.';
+
+  @override
+  String get skillsUnavailableBody =>
+      'Навыки нельзя изменить в этом сохранении — у героя нет данных эффектов для изменения.';
+
+  @override
+  String get skillNotLearned => 'Не изучен';
+
+  @override
+  String get skillLearn => 'Изучить';
+
+  @override
+  String get skillActionLearn => 'изучить';
+
+  @override
+  String get skillActionUnlearn => 'забыть';
+
+  @override
+  String get skillTierUntrained => 'I';
+
+  @override
+  String get skillTierBeginner => 'Новичок';
+
+  @override
+  String get skillTierTrained => 'II';
+
+  @override
+  String get skillTierMaster => 'III';
+
+  @override
+  String get skillTierNovice => 'Новичок';
+
+  @override
+  String get skillTierAmateur => 'Любитель (Круг 0)';
+
+  @override
+  String get skillTierLearned => 'Изучен';
+
+  @override
+  String skillTierCircle(int n) {
+    return 'Круг $n';
+  }
+
+  @override
+  String get skillHintBlacksmith1H => 'Одноручное оружие';
+
+  @override
+  String get skillHintBlacksmith2H => 'Двуручное оружие';
+
+  @override
+  String get skillCategoryCombat => 'Бой';
+
+  @override
+  String get skillCategoryCrafting => 'Ремесло';
+
+  @override
+  String get skillCategoryHunting => 'Охота';
+
+  @override
+  String get skillCategoryLanguage => 'Язык';
+
+  @override
+  String get skillCategoryMagic => 'Магия';
+
+  @override
+  String get skillCategoryMovement => 'Передвижение';
+
+  @override
+  String get skillCategoryThievery => 'Воровство';
+
+  @override
+  String get skillNameOneHanded => 'Одноручное оружие';
+
+  @override
+  String get skillNameTwoHanded => 'Двуручное оружие';
+
+  @override
+  String get skillNameFists => 'Кулаки';
+
+  @override
+  String get skillNameBow => 'Лук';
+
+  @override
+  String get skillNameCrossbow => 'Арбалет';
+
+  @override
+  String get skillNameLockpicking => 'Взлом замков';
+
+  @override
+  String get skillNamePickpocketing => 'Карманные кражи';
+
+  @override
+  String get skillNameTakeOrgans => 'Извлечение органов';
+
+  @override
+  String get skillNameBreakTeeth => 'Выламывание зубов';
+
+  @override
+  String get skillNameTakeClaws => 'Извлечение когтей';
+
+  @override
+  String get skillNameSkinFur => 'Снятие меха';
+
+  @override
+  String get skillNameSkin => 'Снятие шкуры';
+
+  @override
+  String get skillNameTakeFins => 'Извлечение плавников';
+
+  @override
+  String get skillNameTakeStingers => 'Извлечение жал';
+
+  @override
+  String get skillNameTakeSecretion => 'Сбор секрета';
+
+  @override
+  String get skillNameTakeSkullPlates => 'Извлечение черепных пластин';
+
+  @override
+  String get skillNameSkinSwampshark => 'Разделка болотной акулы';
+
+  @override
+  String get skillNameTakeMinecrawlerPlates => 'Извлечение пластин ползуна';
+
+  @override
+  String get skillNameTakeScutes => 'Извлечение чешуек';
+
+  @override
+  String get skillNameTakeUluMulu => 'Сбор трофеев улу-мулу';
+
+  @override
+  String get skillNameAcrobatics => 'Акробатика';
+
+  @override
+  String get skillNameWallClimbing => 'Лазание по стенам';
+
+  @override
+  String get skillNameRiding => 'Верховая езда';
+
+  @override
+  String get skillNameSneaking => 'Скрытность';
+
+  @override
+  String get skillNameAlchemy => 'Алхимия';
+
+  @override
+  String get skillNameRuneInscription => 'Начертание рун';
+
+  @override
+  String get skillNameBlacksmithing => 'Кузнечное дело';
+
+  @override
+  String get skillNameMagicCircle => 'Круг магии';
+
+  @override
+  String get skillNameOrcish => 'Язык орков';
+
+  @override
   String get tabInventory => 'Инвентарь';
 
   @override

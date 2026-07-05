@@ -36,6 +36,169 @@ class AppLocalizationsPl extends AppLocalizations {
   String get tabAttribute => 'Atrybuty';
 
   @override
+  String get heroGroupSkills => 'Umiejętności';
+
+  @override
+  String get skillsNoneBody => 'Nie znaleziono umiejętności dla tej postaci.';
+
+  @override
+  String get skillsUnavailableBody =>
+      'Umiejętności nie można edytować w tym zapisie — bohater nie ma danych efektów do zmiany.';
+
+  @override
+  String get skillNotLearned => 'Nie nauczono';
+
+  @override
+  String get skillLearn => 'Naucz się';
+
+  @override
+  String get skillActionLearn => 'naucz się';
+
+  @override
+  String get skillActionUnlearn => 'zapomnij';
+
+  @override
+  String get skillTierUntrained => 'Stopień I';
+
+  @override
+  String get skillTierBeginner => 'Początkujący';
+
+  @override
+  String get skillTierTrained => 'Stopień II';
+
+  @override
+  String get skillTierMaster => 'Mistrz';
+
+  @override
+  String get skillTierNovice => 'Nowicjusz';
+
+  @override
+  String get skillTierAmateur => 'Amator (Krąg 0)';
+
+  @override
+  String get skillTierLearned => 'Nauczono';
+
+  @override
+  String skillTierCircle(int n) {
+    return 'Krąg $n';
+  }
+
+  @override
+  String get skillHintBlacksmith1H => 'Broń jednoręczna';
+
+  @override
+  String get skillHintBlacksmith2H => 'Broń dwuręczna';
+
+  @override
+  String get skillCategoryCombat => 'Walka';
+
+  @override
+  String get skillCategoryCrafting => 'Rzemiosło';
+
+  @override
+  String get skillCategoryHunting => 'Łowiectwo';
+
+  @override
+  String get skillCategoryLanguage => 'Język';
+
+  @override
+  String get skillCategoryMagic => 'Magia';
+
+  @override
+  String get skillCategoryMovement => 'Ruch';
+
+  @override
+  String get skillCategoryThievery => 'Złodziejstwo';
+
+  @override
+  String get skillNameOneHanded => 'Broń jednoręczna';
+
+  @override
+  String get skillNameTwoHanded => 'Broń dwuręczna';
+
+  @override
+  String get skillNameFists => 'Pięści';
+
+  @override
+  String get skillNameBow => 'Łuk';
+
+  @override
+  String get skillNameCrossbow => 'Kusza';
+
+  @override
+  String get skillNameLockpicking => 'Otwieranie zamków';
+
+  @override
+  String get skillNamePickpocketing => 'Kradzież kieszonkowa';
+
+  @override
+  String get skillNameTakeOrgans => 'Pobieranie organów';
+
+  @override
+  String get skillNameBreakTeeth => 'Wyrywanie zębów';
+
+  @override
+  String get skillNameTakeClaws => 'Pobieranie pazurów';
+
+  @override
+  String get skillNameSkinFur => 'Zdejmowanie futra';
+
+  @override
+  String get skillNameSkin => 'Zdejmowanie skóry';
+
+  @override
+  String get skillNameTakeFins => 'Pobieranie płetw';
+
+  @override
+  String get skillNameTakeStingers => 'Pobieranie żądeł';
+
+  @override
+  String get skillNameTakeSecretion => 'Pobieranie wydzieliny';
+
+  @override
+  String get skillNameTakeSkullPlates => 'Pobieranie płyt czaszkowych';
+
+  @override
+  String get skillNameSkinSwampshark => 'Zdejmowanie skóry bagiennego rekina';
+
+  @override
+  String get skillNameTakeMinecrawlerPlates =>
+      'Pobieranie płyt kopalnianego pełzacza';
+
+  @override
+  String get skillNameTakeScutes => 'Pobieranie łusek';
+
+  @override
+  String get skillNameTakeUluMulu => 'Pobieranie trofeów Ulu-Mulu';
+
+  @override
+  String get skillNameAcrobatics => 'Akrobatyka';
+
+  @override
+  String get skillNameWallClimbing => 'Wspinaczka po ścianach';
+
+  @override
+  String get skillNameRiding => 'Jazda konna';
+
+  @override
+  String get skillNameSneaking => 'Skradanie się';
+
+  @override
+  String get skillNameAlchemy => 'Alchemia';
+
+  @override
+  String get skillNameRuneInscription => 'Tworzenie run';
+
+  @override
+  String get skillNameBlacksmithing => 'Kowalstwo';
+
+  @override
+  String get skillNameMagicCircle => 'Krąg magii';
+
+  @override
+  String get skillNameOrcish => 'Język orków';
+
+  @override
   String get tabInventory => 'Ekwipunek';
 
   @override

@@ -170,6 +170,324 @@ abstract class AppLocalizations {
   /// **'Attributes'**
   String get tabAttribute;
 
+  /// No description provided for @heroGroupSkills.
+  ///
+  /// In en, this message translates to:
+  /// **'Skills'**
+  String get heroGroupSkills;
+
+  /// No description provided for @skillsNoneBody.
+  ///
+  /// In en, this message translates to:
+  /// **'No skills found for this character.'**
+  String get skillsNoneBody;
+
+  /// No description provided for @skillsUnavailableBody.
+  ///
+  /// In en, this message translates to:
+  /// **'Skills can\'t be edited on this save — the hero has no effect data to modify.'**
+  String get skillsUnavailableBody;
+
+  /// No description provided for @skillNotLearned.
+  ///
+  /// In en, this message translates to:
+  /// **'Not learned'**
+  String get skillNotLearned;
+
+  /// No description provided for @skillLearn.
+  ///
+  /// In en, this message translates to:
+  /// **'Learn'**
+  String get skillLearn;
+
+  /// No description provided for @skillActionLearn.
+  ///
+  /// In en, this message translates to:
+  /// **'learn'**
+  String get skillActionLearn;
+
+  /// No description provided for @skillActionUnlearn.
+  ///
+  /// In en, this message translates to:
+  /// **'unlearn'**
+  String get skillActionUnlearn;
+
+  /// No description provided for @skillTierUntrained.
+  ///
+  /// In en, this message translates to:
+  /// **'Untrained'**
+  String get skillTierUntrained;
+
+  /// No description provided for @skillTierBeginner.
+  ///
+  /// In en, this message translates to:
+  /// **'Beginner'**
+  String get skillTierBeginner;
+
+  /// No description provided for @skillTierTrained.
+  ///
+  /// In en, this message translates to:
+  /// **'Trained'**
+  String get skillTierTrained;
+
+  /// No description provided for @skillTierMaster.
+  ///
+  /// In en, this message translates to:
+  /// **'Master'**
+  String get skillTierMaster;
+
+  /// No description provided for @skillTierNovice.
+  ///
+  /// In en, this message translates to:
+  /// **'Novice'**
+  String get skillTierNovice;
+
+  /// No description provided for @skillTierAmateur.
+  ///
+  /// In en, this message translates to:
+  /// **'Amateur (Circle 0)'**
+  String get skillTierAmateur;
+
+  /// No description provided for @skillTierLearned.
+  ///
+  /// In en, this message translates to:
+  /// **'Learned'**
+  String get skillTierLearned;
+
+  /// No description provided for @skillTierCircle.
+  ///
+  /// In en, this message translates to:
+  /// **'Circle {n}'**
+  String skillTierCircle(int n);
+
+  /// No description provided for @skillHintBlacksmith1H.
+  ///
+  /// In en, this message translates to:
+  /// **'1H weapons'**
+  String get skillHintBlacksmith1H;
+
+  /// No description provided for @skillHintBlacksmith2H.
+  ///
+  /// In en, this message translates to:
+  /// **'2H weapons'**
+  String get skillHintBlacksmith2H;
+
+  /// No description provided for @skillCategoryCombat.
+  ///
+  /// In en, this message translates to:
+  /// **'Combat'**
+  String get skillCategoryCombat;
+
+  /// No description provided for @skillCategoryCrafting.
+  ///
+  /// In en, this message translates to:
+  /// **'Crafting'**
+  String get skillCategoryCrafting;
+
+  /// No description provided for @skillCategoryHunting.
+  ///
+  /// In en, this message translates to:
+  /// **'Hunting'**
+  String get skillCategoryHunting;
+
+  /// No description provided for @skillCategoryLanguage.
+  ///
+  /// In en, this message translates to:
+  /// **'Language'**
+  String get skillCategoryLanguage;
+
+  /// No description provided for @skillCategoryMagic.
+  ///
+  /// In en, this message translates to:
+  /// **'Magic'**
+  String get skillCategoryMagic;
+
+  /// No description provided for @skillCategoryMovement.
+  ///
+  /// In en, this message translates to:
+  /// **'Movement'**
+  String get skillCategoryMovement;
+
+  /// No description provided for @skillCategoryThievery.
+  ///
+  /// In en, this message translates to:
+  /// **'Thievery'**
+  String get skillCategoryThievery;
+
+  /// No description provided for @skillNameOneHanded.
+  ///
+  /// In en, this message translates to:
+  /// **'One-Handed'**
+  String get skillNameOneHanded;
+
+  /// No description provided for @skillNameTwoHanded.
+  ///
+  /// In en, this message translates to:
+  /// **'Two-Handed'**
+  String get skillNameTwoHanded;
+
+  /// No description provided for @skillNameFists.
+  ///
+  /// In en, this message translates to:
+  /// **'Fists'**
+  String get skillNameFists;
+
+  /// No description provided for @skillNameBow.
+  ///
+  /// In en, this message translates to:
+  /// **'Bow'**
+  String get skillNameBow;
+
+  /// No description provided for @skillNameCrossbow.
+  ///
+  /// In en, this message translates to:
+  /// **'Crossbow'**
+  String get skillNameCrossbow;
+
+  /// No description provided for @skillNameLockpicking.
+  ///
+  /// In en, this message translates to:
+  /// **'Lockpicking'**
+  String get skillNameLockpicking;
+
+  /// No description provided for @skillNamePickpocketing.
+  ///
+  /// In en, this message translates to:
+  /// **'Pickpocketing'**
+  String get skillNamePickpocketing;
+
+  /// No description provided for @skillNameTakeOrgans.
+  ///
+  /// In en, this message translates to:
+  /// **'Take Organs'**
+  String get skillNameTakeOrgans;
+
+  /// No description provided for @skillNameBreakTeeth.
+  ///
+  /// In en, this message translates to:
+  /// **'Break Teeth'**
+  String get skillNameBreakTeeth;
+
+  /// No description provided for @skillNameTakeClaws.
+  ///
+  /// In en, this message translates to:
+  /// **'Take Claws'**
+  String get skillNameTakeClaws;
+
+  /// No description provided for @skillNameSkinFur.
+  ///
+  /// In en, this message translates to:
+  /// **'Skin Fur'**
+  String get skillNameSkinFur;
+
+  /// No description provided for @skillNameSkin.
+  ///
+  /// In en, this message translates to:
+  /// **'Skin'**
+  String get skillNameSkin;
+
+  /// No description provided for @skillNameTakeFins.
+  ///
+  /// In en, this message translates to:
+  /// **'Take Fins'**
+  String get skillNameTakeFins;
+
+  /// No description provided for @skillNameTakeStingers.
+  ///
+  /// In en, this message translates to:
+  /// **'Take Stingers'**
+  String get skillNameTakeStingers;
+
+  /// No description provided for @skillNameTakeSecretion.
+  ///
+  /// In en, this message translates to:
+  /// **'Take Secretion'**
+  String get skillNameTakeSecretion;
+
+  /// No description provided for @skillNameTakeSkullPlates.
+  ///
+  /// In en, this message translates to:
+  /// **'Take Skull Plates'**
+  String get skillNameTakeSkullPlates;
+
+  /// No description provided for @skillNameSkinSwampshark.
+  ///
+  /// In en, this message translates to:
+  /// **'Skin Swampshark'**
+  String get skillNameSkinSwampshark;
+
+  /// No description provided for @skillNameTakeMinecrawlerPlates.
+  ///
+  /// In en, this message translates to:
+  /// **'Take Minecrawler Plates'**
+  String get skillNameTakeMinecrawlerPlates;
+
+  /// No description provided for @skillNameTakeScutes.
+  ///
+  /// In en, this message translates to:
+  /// **'Take Scutes'**
+  String get skillNameTakeScutes;
+
+  /// No description provided for @skillNameTakeUluMulu.
+  ///
+  /// In en, this message translates to:
+  /// **'Take Ulu-Mulu Trophies'**
+  String get skillNameTakeUluMulu;
+
+  /// No description provided for @skillNameAcrobatics.
+  ///
+  /// In en, this message translates to:
+  /// **'Acrobatics'**
+  String get skillNameAcrobatics;
+
+  /// No description provided for @skillNameWallClimbing.
+  ///
+  /// In en, this message translates to:
+  /// **'Wall Climbing'**
+  String get skillNameWallClimbing;
+
+  /// No description provided for @skillNameRiding.
+  ///
+  /// In en, this message translates to:
+  /// **'Riding'**
+  String get skillNameRiding;
+
+  /// No description provided for @skillNameSneaking.
+  ///
+  /// In en, this message translates to:
+  /// **'Sneaking'**
+  String get skillNameSneaking;
+
+  /// No description provided for @skillNameAlchemy.
+  ///
+  /// In en, this message translates to:
+  /// **'Alchemy'**
+  String get skillNameAlchemy;
+
+  /// No description provided for @skillNameRuneInscription.
+  ///
+  /// In en, this message translates to:
+  /// **'Rune Inscription'**
+  String get skillNameRuneInscription;
+
+  /// No description provided for @skillNameBlacksmithing.
+  ///
+  /// In en, this message translates to:
+  /// **'Blacksmithing'**
+  String get skillNameBlacksmithing;
+
+  /// No description provided for @skillNameMagicCircle.
+  ///
+  /// In en, this message translates to:
+  /// **'Magic Circle'**
+  String get skillNameMagicCircle;
+
+  /// No description provided for @skillNameOrcish.
+  ///
+  /// In en, this message translates to:
+  /// **'Orcish Language'**
+  String get skillNameOrcish;
+
   /// No description provided for @tabInventory.
   ///
   /// In en, this message translates to:

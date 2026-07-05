@@ -12,6 +12,7 @@ import 'package:goresave/features/editor/domain/npc_actors_page.dart';
 import 'package:goresave/features/editor/domain/npc_attributes.dart';
 import 'package:goresave/features/editor/domain/pending_edits.dart';
 import 'package:goresave/features/editor/domain/progression_models.dart';
+import 'package:goresave/features/editor/domain/skills_models.dart';
 import 'package:goresave/utils/default_paths.dart';
 import 'package:path/path.dart' as p;
 import 'package:state_notifier/state_notifier.dart';
@@ -664,11 +665,50 @@ class EditorNotifier extends StateNotifier<EditorState> {
       'private.knowledge.addCharacter',
       'private.npc.revive',
     };
+    // A skill edit can learn/unlearn — splicing the hero's ActiveEffects array —
+    // and the core rejects a write that mixes it with an index-addressed edit
+    // (an All-Data edit whose path steps through `[i]`), since the splice shifts
+    // that index. Skill edits DO batch safely among themselves, so give all of
+    // them ONE write of their own, run LAST — after the fixed batch so any
+    // indexed peer resolves against the pre-splice layout first.
+    const skillPath = 'private.skills.set';
     final splicing = allEdits
         .where((k) => splicingPaths.contains(k.edit['path']))
         .toList();
+    final skillEdits = allEdits
+        .where((k) => k.edit['path'] == skillPath)
+        .toList();
+    // A raw All-Data `private.typed.setValue` on an ActiveEffects `EffectSpec/Def`
+    // leaf and a Skills-panel edit for the SAME actor both target that actor's
+    // effect array. They cannot be sequenced safely: a skill learn/unlearn
+    // SPLICES the array, so a Def edit ordered after it re-resolves its `[i]`
+    // against a shifted array and retargets the wrong effect — and ordered before
+    // it changes the GE class the skill edit resolves by base. Refuse only that
+    // same-actor collision (like the two-tab conflict above); a hero skill edit
+    // paired with an NPC's Def edit (or vice-versa) touches different arrays and
+    // is safe. With no skill edit for the Def's actor the Def edit is a normal
+    // fixed-size in-place write and batches as usual.
+    final skillActors = <String>{
+      for (final k in skillEdits) ?_skillEditActor(k.edit),
+    };
+    if (allEdits.any((k) {
+      final actor = _activeEffectsDefActor(k.edit);
+      return actor != null && skillActors.contains(actor);
+    })) {
+      state = state.copyWith(
+        error:
+            'A Skills change and an All-data edit to the same actor’s effect '
+            '(ActiveEffects › EffectSpec › Def) are both queued. They cannot be '
+            'saved together — reset or revert one of them, then save again.',
+      );
+      return false;
+    }
     final fixedBatch = allEdits
-        .where((k) => !splicingPaths.contains(k.edit['path']))
+        .where(
+          (k) =>
+              !splicingPaths.contains(k.edit['path']) &&
+              k.edit['path'] != skillPath,
+        )
         .toList();
 
     // Build the worklist: ONE write for the fixed-size batch (if any) FIRST,
@@ -695,6 +735,14 @@ class EditorNotifier extends StateNotifier<EditorState> {
         ),
       for (final keyed in splicing)
         _SubWrite(edits: [keyed.edit], keys: {keyed.key}),
+      // All skill edits together, in their own trailing write: they batch safely
+      // among themselves but must not share a write with an index-addressed peer
+      // (see skillPath above).
+      if (skillEdits.isNotEmpty)
+        _SubWrite(
+          edits: [for (final keyed in skillEdits) keyed.edit],
+          keys: {for (final keyed in skillEdits) keyed.key},
+        ),
     ];
 
     final n = allEdits.length;
@@ -1277,6 +1325,28 @@ class EditorNotifier extends StateNotifier<EditorState> {
     return null;
   }
 
+  /// Load the hero's skills (`private.skills.list`): every learned skill plus
+  /// the full learnable roster, with per-skill tier options. Returns a result
+  /// carrying an inline [SkillsResult.error] on failure instead of throwing.
+  Future<SkillsResult> loadSkills({String actor = 'Hero'}) async {
+    final path = state.selectedPath;
+    if (path == null) {
+      return const SkillsResult(error: 'No save selected.');
+    }
+    try {
+      final response = await _execute(
+        'private.skills.list',
+        payload: {'path': path, 'actor': actor},
+      );
+      if (response['ok'] != true) {
+        return SkillsResult(error: _errorMessage(response));
+      }
+      return SkillsResult.fromJson((response['data'] as Map).cast<String, Object?>());
+    } catch (error) {
+      return SkillsResult(error: 'Skills load failed: $error');
+    }
+  }
+
   /// Run one progression section query. Returns the raw data map, or null
   /// with [onError] called, so each typed loader below can build its own page
   /// object with an inline error.
@@ -1832,6 +1902,44 @@ class _KeyedEdit {
 
   final String key;
   final Map<String, Object?> edit;
+}
+
+/// The actor a `private.skills.set` edit targets (`Hero` or an NPC GlobalId),
+/// or `null` if [edit] is not a skill edit. A skill edit that omits `actor`
+/// defaults to `Hero` — the core does the same, so the same-actor conflict guard
+/// must too, or a hero skill edit with no explicit actor would slip past it.
+String? _skillEditActor(Map<String, Object?> edit) {
+  if (edit['path'] != 'private.skills.set') return null;
+  final value = edit['value'];
+  if (value is! Map) return null;
+  return (value['actor'] as String?) ?? 'Hero';
+}
+
+/// The actor whose ActiveEffects a raw `private.typed.setValue` on an
+/// `EffectSpec/Def` leaf targets, or `null` when [edit] is not such an edit.
+///
+/// A Def edit's path is `ActiveEffectsByGlobalId/{actor}/ActiveEffects/[i]/
+/// EffectSpec/Def`; the `{actor}` segment is returned unwrapped so it matches
+/// the `actor` a `private.skills.set` carries. A skill edit and a Def edit for
+/// the SAME actor collide (a splice shifts that actor's indices); different
+/// actors touch independent arrays and are safe to save together.
+String? _activeEffectsDefActor(Map<String, Object?> edit) {
+  if (edit['path'] != 'private.typed.setValue') return null;
+  final value = edit['value'];
+  if (value is! Map) return null;
+  final path = value['path'];
+  if (path is! List) return null;
+  final segs = path.whereType<String>().toList();
+  final n = segs.length;
+  if (n < 2 || segs[n - 1] != 'Def' || segs[n - 2] != 'EffectSpec') {
+    return null;
+  }
+  final i = segs.indexOf('ActiveEffectsByGlobalId');
+  if (i < 0 || i + 1 >= segs.length) return null;
+  final key = segs[i + 1];
+  return (key.startsWith('{') && key.endsWith('}'))
+      ? key.substring(1, key.length - 1)
+      : key;
 }
 
 /// One write_save unit in [EditorNotifier.saveAllPending]'s worklist: the edits

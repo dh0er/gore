@@ -825,6 +825,211 @@ void main() {
     },
   );
 
+  test(
+    'saveAllPending refuses an ActiveEffects Def edit queued with a skill edit',
+    () async {
+      final core = _RecordingCoreService();
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+      // A raw All-Data setValue retargeting an ActiveEffects EffectSpec/Def...
+      notifier.setPendingEdit(
+        'typed:def',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.typed.setValue',
+              'value': {
+                'path': [
+                  'ActiveEffectsByGlobalId',
+                  '{Hero}',
+                  'ActiveEffects',
+                  '[0]',
+                  'EffectSpec',
+                  'Def',
+                ],
+                'value': '/Script/Angelscript.Default__GE_Skill_Sneak',
+              },
+            },
+          ],
+        ),
+      );
+      // ...plus a skill edit (which may splice the array): cannot be sequenced.
+      notifier.setPendingEdit(
+        'skills',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.skills.set',
+              'value': {
+                'actor': 'Hero',
+                'base': 'Melee_OneHanded',
+                'tier': 'Master',
+              },
+            },
+          ],
+        ),
+      );
+
+      final ok = await notifier.saveAllPending();
+      // Refused: no write at all, and an explanatory error is surfaced.
+      expect(ok, isFalse);
+      expect(
+        core.requests.where((r) => r.command == 'write_save'),
+        isEmpty,
+      );
+      expect(notifier.state.error, contains('EffectSpec'));
+    },
+  );
+
+  test(
+    'saveAllPending allows a hero skill edit with an NPC ActiveEffects Def edit',
+    () async {
+      final core = _RecordingCoreService();
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+      // A Def edit on a DIFFERENT actor's ActiveEffects array...
+      notifier.setPendingEdit(
+        'typed:npcdef',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.typed.setValue',
+              'value': {
+                'path': [
+                  'ActiveEffectsByGlobalId',
+                  '{Lizard-1}',
+                  'ActiveEffects',
+                  '[0]',
+                  'EffectSpec',
+                  'Def',
+                ],
+                'value': '/Script/Angelscript.Default__GE_Skill_Sneak',
+              },
+            },
+          ],
+        ),
+      );
+      // ...and a HERO skill edit: separate arrays, so no conflict.
+      notifier.setPendingEdit(
+        'skills',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.skills.set',
+              'value': {
+                'actor': 'Hero',
+                'base': 'Melee_OneHanded',
+                'tier': 'Master',
+              },
+            },
+          ],
+        ),
+      );
+
+      final ok = await notifier.saveAllPending();
+      expect(ok, isTrue);
+      // Both saved: the NPC Def edit in the fixed batch, the hero skill trailing.
+      final writes = core.requests
+          .where((r) => r.command == 'write_save')
+          .toList();
+      expect(writes, hasLength(2));
+    },
+  );
+
+  test(
+    'saveAllPending treats an actor-less skill edit as Hero for the Def conflict',
+    () async {
+      final core = _RecordingCoreService();
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+      // A hero ActiveEffects Def edit...
+      notifier.setPendingEdit(
+        'typed:def',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.typed.setValue',
+              'value': {
+                'path': [
+                  'ActiveEffectsByGlobalId',
+                  '{Hero}',
+                  'ActiveEffects',
+                  '[0]',
+                  'EffectSpec',
+                  'Def',
+                ],
+                'value': '/Script/Angelscript.Default__GE_Skill_Sneak',
+              },
+            },
+          ],
+        ),
+      );
+      // ...and a skill edit that OMITS actor (the core defaults it to Hero).
+      notifier.setPendingEdit(
+        'skills',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.skills.set',
+              'value': {'base': 'Melee_OneHanded', 'tier': 'Master'},
+            },
+          ],
+        ),
+      );
+
+      final ok = await notifier.saveAllPending();
+      // Still a same-actor (Hero) collision → refused.
+      expect(ok, isFalse);
+      expect(
+        core.requests.where((r) => r.command == 'write_save'),
+        isEmpty,
+      );
+    },
+  );
+
+  test(
+    'saveAllPending keeps an ActiveEffects Def edit in the batch without a skill edit',
+    () async {
+      final core = _RecordingCoreService();
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+      // No skill edit is queued, so there is no conflict: the Def edit stays in
+      // the single fixed-batch write (unchanged behaviour).
+      notifier.setPendingEdit(
+        'typed:def',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.typed.setValue',
+              'value': {
+                'path': [
+                  'ActiveEffectsByGlobalId',
+                  '{Hero}',
+                  'ActiveEffects',
+                  '[0]',
+                  'EffectSpec',
+                  'Def',
+                ],
+                'value': '/Script/Angelscript.Default__GE_Skill_Sneak',
+              },
+            },
+          ],
+        ),
+      );
+
+      await notifier.saveAllPending();
+
+      final writes = core.requests
+          .where((r) => r.command == 'write_save')
+          .toList();
+      expect(writes, hasLength(1));
+    },
+  );
+
   // ---------------------------------------------------------------------------
   // Bug #1: a fresh inspection must reset the selected actor to the player so a
   // stale NPC GlobalId from the previous save can't drive the actor-aware tabs.

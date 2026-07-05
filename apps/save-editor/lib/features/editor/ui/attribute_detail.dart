@@ -7,6 +7,7 @@ import 'package:goresave/features/editor/domain/pending_edits.dart';
 import 'package:goresave/features/editor/ui/actor_detail_header.dart';
 import 'package:goresave/features/editor/ui/hero_stats_card.dart';
 import 'package:goresave/features/editor/ui/npc_attributes_panel.dart';
+import 'package:goresave/features/editor/ui/skills_panel.dart';
 import 'package:goresave/l10n/app_localizations.dart';
 import 'package:goresave/loc/loc_catalog_provider.dart';
 import 'package:goresave/providers/data_providers.dart';
@@ -173,6 +174,18 @@ class AttributeDetail extends ConsumerWidget {
                   editable: editable,
                   // Status row lives at the top of the core ("Hauptwerte") group.
                   status: statusConfig,
+                  // This NPC's learned skills, in a "Talente" group. Own
+                  // per-NPC pending key so they never collide with the hero's
+                  // or another NPC's skill edits; roster hidden (only the NPC's
+                  // actual skills matter).
+                  skillsSection: SkillsSection(
+                    notifier: notifier,
+                    editable: editable,
+                    reloadKey: (inspection, npcId),
+                    actor: npcId,
+                    pendingKey: 'skills:$npcId',
+                    showRoster: false,
+                  ),
                   // Resume from this NPC's queued attribute drafts on revisit:
                   // reverse the stored typed.setValue edits back into the panel's
                   // NpcTypedEdit drafts. Without this, returning to a previously
@@ -320,6 +333,14 @@ class _PrivatePanel extends StatelessWidget {
                 ? _legacyAttributesSection()
                 : null,
             transformCard: _transformSection(),
+            // The hero's learned skills live in the "Talente" group, rendered
+            // in the same row style and wired to the shared Save button via its
+            // own 'skills' pending-registry entry.
+            skillsSection: SkillsSection(
+              notifier: notifier,
+              editable: editable,
+              reloadKey: inspection,
+            ),
           ),
         );
       }

@@ -36,6 +36,168 @@ class AppLocalizationsJa extends AppLocalizations {
   String get tabAttribute => '属性';
 
   @override
+  String get heroGroupSkills => 'スキル';
+
+  @override
+  String get skillsNoneBody => 'このキャラクターのスキルは見つかりませんでした。';
+
+  @override
+  String get skillsUnavailableBody =>
+      'このセーブデータではスキルを編集できません。主人公に変更できるエフェクトデータがありません。';
+
+  @override
+  String get skillNotLearned => '未習得';
+
+  @override
+  String get skillLearn => '習得する';
+
+  @override
+  String get skillActionLearn => '習得';
+
+  @override
+  String get skillActionUnlearn => '習得解除';
+
+  @override
+  String get skillTierUntrained => '未熟練';
+
+  @override
+  String get skillTierBeginner => '初心者';
+
+  @override
+  String get skillTierTrained => '熟練';
+
+  @override
+  String get skillTierMaster => '達人';
+
+  @override
+  String get skillTierNovice => '見習い';
+
+  @override
+  String get skillTierAmateur => '素人（第0サークル）';
+
+  @override
+  String get skillTierLearned => '習得済み';
+
+  @override
+  String skillTierCircle(int n) {
+    return '第$nサークル';
+  }
+
+  @override
+  String get skillHintBlacksmith1H => '片手武器';
+
+  @override
+  String get skillHintBlacksmith2H => '両手武器';
+
+  @override
+  String get skillCategoryCombat => '戦闘';
+
+  @override
+  String get skillCategoryCrafting => '製作';
+
+  @override
+  String get skillCategoryHunting => '狩猟';
+
+  @override
+  String get skillCategoryLanguage => '言語';
+
+  @override
+  String get skillCategoryMagic => '魔法';
+
+  @override
+  String get skillCategoryMovement => '移動';
+
+  @override
+  String get skillCategoryThievery => '盗み';
+
+  @override
+  String get skillNameOneHanded => '片手武器';
+
+  @override
+  String get skillNameTwoHanded => '両手武器';
+
+  @override
+  String get skillNameFists => '格闘';
+
+  @override
+  String get skillNameBow => '弓';
+
+  @override
+  String get skillNameCrossbow => 'クロスボウ';
+
+  @override
+  String get skillNameLockpicking => '鍵開け';
+
+  @override
+  String get skillNamePickpocketing => 'スリ';
+
+  @override
+  String get skillNameTakeOrgans => '臓器の摘出';
+
+  @override
+  String get skillNameBreakTeeth => '牙の採取';
+
+  @override
+  String get skillNameTakeClaws => '爪の採取';
+
+  @override
+  String get skillNameSkinFur => '毛皮の剥ぎ取り';
+
+  @override
+  String get skillNameSkin => '皮の剥ぎ取り';
+
+  @override
+  String get skillNameTakeFins => 'ヒレの採取';
+
+  @override
+  String get skillNameTakeStingers => '毒針の採取';
+
+  @override
+  String get skillNameTakeSecretion => '分泌液の採取';
+
+  @override
+  String get skillNameTakeSkullPlates => '頭蓋骨板の採取';
+
+  @override
+  String get skillNameSkinSwampshark => 'スワンプシャークの解体';
+
+  @override
+  String get skillNameTakeMinecrawlerPlates => 'マインクロウラー甲板の採取';
+
+  @override
+  String get skillNameTakeScutes => '鱗甲板の採取';
+
+  @override
+  String get skillNameTakeUluMulu => 'ウル・ムルの戦利品の採取';
+
+  @override
+  String get skillNameAcrobatics => 'アクロバット';
+
+  @override
+  String get skillNameWallClimbing => '壁登り';
+
+  @override
+  String get skillNameRiding => '騎乗';
+
+  @override
+  String get skillNameSneaking => '忍び歩き';
+
+  @override
+  String get skillNameAlchemy => '錬金術';
+
+  @override
+  String get skillNameRuneInscription => 'ルーン刻印';
+
+  @override
+  String get skillNameBlacksmithing => '鍛冶';
+
+  @override
+  String get skillNameMagicCircle => '魔法サークル';
+
+  @override
+  String get skillNameOrcish => 'オーク語';
+
+  @override
   String get tabInventory => 'インベントリ';
 
   @override
