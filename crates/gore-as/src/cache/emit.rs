@@ -372,7 +372,14 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
         .iter()
         .chain(int_refs.iter())
         .copied()
-        .chain(outref_overrides.iter().filter(|(_, t)| t.as_str() == "bool").map(|(s, _)| *s))
+        // non-float out-ref bindings hold non-float data at the call — bool (batch-28) and
+        // the batch-31c enum/struct out-slots alike; float evidence on them is slot reuse.
+        .chain(
+            outref_overrides
+                .iter()
+                .filter(|(_, t)| !matches!(t.as_str(), "float" | "float32" | "double"))
+                .map(|(s, _)| *s),
+        )
         .collect();
     let numkinds = infer_float_flow(f, &fc, refs, fields, &float_args, &outref_overrides, &num_anti);
     for (slot, ty) in &slot_overrides {
@@ -399,6 +406,12 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
     for (slot, ty) in &outref_overrides {
         if ty == "bool" {
             local_types.insert(*slot, ty.clone());
+        } else if !matches!(ty.as_str(), "float" | "float32" | "double") {
+            // batch-31c (N3 Fix 2 / N8): enum/struct out-slots reach the body renderer too —
+            // the SetV/CpyVtoV enum wraps and the typed pushes need the slot's type
+            // (`EInventoryTypes local_7 = local_8;` must wrap the int copy). or_insert:
+            // an obj_locals/consumer entry stays authoritative.
+            local_types.entry(*slot).or_insert_with(|| ty.clone());
         }
     }
     // batch-28 (spec §2.4.2): the dataflow pass's float slots feed the body renderer FIRST —
@@ -1151,6 +1164,16 @@ fn infer_slot_types(
                 // push may carry values outside the small range).
                 sarg.insert(s, None);
             }
+            // batch-31c (N1, spec batch31-nomatch-illegalop §1.4): a slot VALUE-pushed into a
+            // known ENUM by-value param is a REAL argument, not a stranded SetV temporary —
+            // it earns the retain keep flag exactly like the int-family pairs (enum slots are
+            // not in the typed-locals map, so their pushes are Arg::int and died in the
+            // nested-call split: TargetCharacterOfInterest lost its FocusPriority to an
+            // intervening GetCharacterOfInterest()). Keep-only — the render-side wrap is the
+            // EXISTING cast_arg enum wrap, which fires once the arg survives.
+            5 if super::structure::is_enum_name(&pt.base_name(refs)) => {
+                ikeep.insert(s);
+            }
             _ => {}
         }
     };
@@ -1191,6 +1214,28 @@ fn infer_slot_types(
         for (i, slot) in args.iter().rev().enumerate() {
             if let Some((s, is_psf)) = slot {
                 if let Some(pt) = params.get(i) {
+                    // batch-31c (N1): PARAM slots (negative frame offsets) join the model, but
+                    // ONLY for the keep channel — their declarations are fixed by the
+                    // signature (never retyped; farg/sarg/cand/outref stay locals-only), and
+                    // enum-typed params pushed by value are exactly the Proof-A/B purge
+                    // victims (FocusPriority w65534). Float-family params are excluded: the
+                    // signature already types them (typed pushes survive the retain), and
+                    // routing them into ikeep would anti-seed a float slot. PSF pushes of the
+                    // same slot are naturally NEUTRAL here (the gate is value-push-only).
+                    if *s < 0 {
+                        if !*is_psf && !pt.is_reference {
+                            match pt.token {
+                                0x44 | 0x45 | 0x46 | 0x47 | 0x4B | 0x4C | 0x4D | 0x4E => {
+                                    ikeep.insert(*s);
+                                }
+                                5 if super::structure::is_enum_name(&pt.base_name(refs)) => {
+                                    ikeep.insert(*s);
+                                }
+                                _ => {}
+                            }
+                        }
+                        continue;
+                    }
                     let ty = pt.base_name(refs);
                     match cand.get(s) {
                         None => { cand.insert(*s, Some(ty)); }
@@ -1208,6 +1253,33 @@ fn infer_slot_types(
                             None => { outref.insert(*s, Some(kw)); }
                             Some(Some(prev)) if *prev != kw => { outref.insert(*s, None); }
                             _ => {}
+                        }
+                    }
+                    // batch-31c (N3 Fix 2 + N8, spec batch31-nomatch-illegalop §1.5/§1.9):
+                    // out-param slot typing — a PSF'd slot feeding a NON-const identifier-
+                    // typed reference param (`EInventoryTypes&out`, `FVector2D&out`) adopts
+                    // the callee's param type; the call cannot compile otherwise, and the
+                    // slot is an untyped scratch today (declared `int`, poisoning every
+                    // downstream use: GetFirstItemWithType / GetCameraShotMode /
+                    // PointCorrection's 9-line FVector2D cascade). Enum + F-struct heads
+                    // only; const refs are READS (&in) and prove nothing about the slot.
+                    // Same conflict-drop map as the float/bool out-refs.
+                    if *is_psf
+                        && pt.is_reference
+                        && pt.token == 5
+                        && !pt.is_object_const
+                        && !pt.is_read_only
+                        && !pt.is_object_handle
+                    {
+                        let ty = pt.base_name(refs);
+                        let f_struct = ty.starts_with('F')
+                            && ty.as_bytes().get(1).is_some_and(|c| c.is_ascii_uppercase());
+                        if super::structure::is_enum_name(&ty) || f_struct {
+                            match outref.get(s) {
+                                None => { outref.insert(*s, Some(ty)); }
+                                Some(Some(prev)) if *prev != ty => { outref.insert(*s, None); }
+                                _ => {}
+                            }
                         }
                     }
                     // batch-28: int-family reference binding — see `iref` above.
@@ -1231,7 +1303,10 @@ fn infer_slot_types(
         match ins.op.name {
             "PshVPtr" | "PshV4" | "PshV8" | "PSF" => {
                 let s = w0(ins).unwrap_or(0);
-                ostack.push(if s > 0 { Some((s, ins.op.name == "PSF")) } else { None });
+                // batch-31c (N1): param slots (negative offsets) enter the model too — the
+                // pair() body routes them into the keep-only channel. Slot 0 (`this`) stays
+                // opaque.
+                ostack.push(if s != 0 { Some((s, ins.op.name == "PSF")) } else { None });
             }
             "PshC4" | "PshC8" | "PshNull" | "PGA" | "PshGPtr" | "PshG4" | "PshRPtr" | "STR"
             | "TYPEID" | "OBJTYPE" | "PshListElmnt" => ostack.push(None),
@@ -1262,7 +1337,9 @@ fn infer_slot_types(
                     let owner = refs.func_owner_by_ptr(ptr).map(|s| s.to_string());
                     // receiver = top operand; ctor args = the params below it.
                     if let Some(Some((rslot, _))) = ostack.last().copied() {
-                        if let Some(ty) = owner {
+                        // batch-31c: param slots (negative) never enter `cand` — their
+                        // declarations are fixed by the signature.
+                        if let Some(ty) = owner.filter(|_| rslot > 0) {
                             if !ty.is_empty() {
                                 match cand.get(&rslot) {
                                     None => { cand.insert(rslot, Some(ty)); }
@@ -1283,7 +1360,9 @@ fn infer_slot_types(
                         let take = params.len().min(args_end);
                         for (i, slot) in ostack[args_end - take..args_end].iter().rev().enumerate() {
                             if let (Some((s, is_psf)), Some(pt)) = (slot, params.get(i)) {
-                                if !*is_psf && !pt.is_reference {
+                                // batch-31c: locals only — negative (param) slots must not
+                                // reach the farg/sarg retype maps.
+                                if *s > 0 && !*is_psf && !pt.is_reference {
                                     val_arg(*s, pt, &mut farg, &mut ikeep, &mut sarg);
                                 }
                             }

@@ -1135,6 +1135,19 @@ fn cast_arg(arg: &Arg, pt: &DataType, refs: &RefResolver) -> String {
                 }
             }
         }
+        // batch-31c (N3 Fix 1, spec batch31-nomatch-illegalop §1.5): enum-as-int at enum
+        // params of ANY refness — a PSF'd UNTYPED slot (int locals are not in the typed-
+        // locals map) feeding an enum param takes the same E(x) wrap the by-value int path
+        // below applies. `const E&in` accepts the temporary; a Fix-2-typed `E&out` slot
+        // arrives with ty=Some so this gate never fires for it (arg gate identical to
+        // cast_container_args, structure.rs batch-25e). Damage.as SendGameplayEvent ×4 /
+        // CreateRelativeMemoriesToCrime ×3.
+        if pt.token == 5 && arg.is_psf && arg.ty.is_none() {
+            let base = pt.base_name(refs);
+            if is_enum_name(&base) {
+                return format!("{base}({})", arg.s);
+            }
+        }
         // a KNOWN-enum arg feeding an INT-family param needs the explicit int(...) cast
         // (AngelScript has no implicit enum->int): `SetLevel(int)` fed an ERelationship
         // fails "Can't implicitly convert from 'ERelationship' to 'int'" (~150 in-game).
@@ -1288,7 +1301,7 @@ fn provably_derived(dst: &str, src: &str, refs: &RefResolver) -> bool {
 
 /// True if `tyname` is a UE enum type (`E<Upper>...`) — same shape `cast_to_typename` keys on.
 /// Tolerates a leading `const ` (a const-qualified enum is still an enum for cast purposes).
-fn is_enum_name(tyname: &str) -> bool {
+pub(crate) fn is_enum_name(tyname: &str) -> bool {
     let b = tyname.trim_start_matches("const ").as_bytes();
     b.len() >= 2 && b[0] == b'E' && b[1].is_ascii_uppercase()
 }
@@ -1908,6 +1921,11 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<Strin
                 set_consts.insert(w(ins, 0), ConstBits::W4(bits));
                 let rhs = if ctx.float_slots.contains(&w(ins, 0)) {
                     fmt_float(ConstBits::W4(bits), false)
+                } else if ctx.slot_type(w(ins, 0)).as_deref().is_some_and(is_enum_name) {
+                    // batch-31c (N3 Fix 2): an ENUM-typed slot (out-param slot typing)
+                    // written a raw ordinal needs the explicit conversion — AS has no
+                    // implicit int->enum (`EInventoryTypes local_7 = 0;` fails).
+                    format!("{}({})", ctx.slot_type(w(ins, 0)).unwrap(), bits as i32)
                 } else {
                     (bits as i32).to_string()
                 };
@@ -1938,6 +1956,14 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<Strin
                     // batch-30c: float64 -> float32 slot copy warns too; float32(x) is the
                     // batch-28 in-game-proven explicit-narrowing syntax.
                     format!("float32({})", name(src))
+                } else if ctx.slot_type(dst).as_deref().is_some_and(is_enum_name)
+                    && ctx.slot_type(src).is_none()
+                    && looks_int(&name(src))
+                {
+                    // batch-31c (N3 Fix 2): ENUM-typed dst (out-param slot typing) written
+                    // from an int slot — mirror of the bool wrap above (no implicit
+                    // int->enum in AS): `local_7 = EInventoryTypes(local_8);`.
+                    format!("{}({})", ctx.slot_type(dst).unwrap(), name(src))
                 } else {
                     name(src)
                 };

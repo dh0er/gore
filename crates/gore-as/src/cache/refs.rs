@@ -529,9 +529,9 @@ impl RefResolver {
     /// subtypes are taken VERBATIM from the live compiler's `Candidates are:` lines in
     /// capture.batch24-0705 (authoritative), keyed by the exact ADDSi-tid owners probed at
     /// the failing sites (all three UHit*CollisionComponent variants carry their own
-    /// property-reference key). FWeatherSaveGame.DailyWeathers (named by the spec) is
-    /// deliberately ABSENT: batch-24 shows zero errors for it, so no candidate lines exist
-    /// to seed it from — never guess subtypes.
+    /// property-reference key). FWeatherSaveGame.DailyWeathers joined in batch-31c (N3
+    /// Fix 3): capture.batch30-0705 OnDayElapsed(413:48) provides the candidate line
+    /// `bool TArray::Contains(const EWeather&in Value) const` — same never-guess rule.
     pub fn known_native_field_subtype(&self, class: &str, field: &str) -> Option<&'static str> {
         const KNOWN_NATIVE_FIELD_SUBTYPES: &[(&str, &str, &str)] = &[
             (
@@ -555,6 +555,7 @@ impl RefResolver {
                 "TMap<EPhysicalSurface, TSoftObjectPtr<UNiagaraSystem>>",
             ),
             ("FWeatherSaveGame", "WeatherModifiers", "TMap<EWeather, float32>"),
+            ("FWeatherSaveGame", "DailyWeathers", "TArray<EWeather>"),
         ];
         KNOWN_NATIVE_FIELD_SUBTYPES
             .iter()
