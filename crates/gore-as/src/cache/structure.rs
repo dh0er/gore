@@ -1875,6 +1875,23 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                     // vanished, leaving the slot uninitialised (then read downstream as garbage /
                     // passed to a call). Recover it as `slot = T(args);` so the value FLOWS.
                     if let Some(recv) = stack.last().cloned() {
+                        // G1c-b (batch-26 stage 2): 1-arg copy-construct whose receiver is the
+                        // hidden RVO return slot (PshVPtr-pushed -> is_psf false):
+                        // `$beh0(__return, src)` == `return src;`. The PSF gate below can never
+                        // match it (return slot is not PSF'd), so it fell to the generic `$`-drop
+                        // and the function returned the RVODEF default (`return __r;` — compiles,
+                        // loses the value). Mirrors the CopyScript dst=="__return" capture.
+                        if recv.s == "__return" && !recv.is_psf
+                            && ctx.refs.func_params_by_ptr(ptr).map(|p| p.len()) == Some(1)
+                            && stack.len() >= 2
+                        {
+                            let src = stack[stack.len() - 2].clone();
+                            if !src.s.is_empty() && src.s != UNRESOLVED && !src.s.starts_with('\u{2}') {
+                                stack.truncate(stack.len() - 2);
+                                ret_val = Some(src.s);
+                                continue;
+                            }
+                        }
                         // Gate (a): receiver is a PSF'd slot with a known VALUE/struct/template
                         // type (F*/T*/E*). Never a `$`/`?` placeholder, never an object (U*/A*):
                         // object construction uses ALLOC, not this in-place behaviour.
