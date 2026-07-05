@@ -636,23 +636,15 @@ fn infer_slot_types(f: &Func, refs: &RefResolver) -> HashMap<i32, String> {
         // last user arg (just before the receiver); count it so it is consumed, but exclude it from
         // pairing (it is NOT params[last] — pairing it would shift every real arg one param over and
         // mis-type the slot, e.g. the TSubclassOf out param landing on an EQuestState param).
-        // A FREE/static struct-returning call pushes the same hidden out-slot ON TOP (no receiver
-        // follows it — proven by FInGameTime::Now: `PshGPtr __WorldContext ; PSF <out> ; CALLSYS`,
-        // params=[const UObject], ret=FInGameTime). Not counting it paired the PSF'd out-slot with
-        // the hidden WorldContext param -> slot mis-typed UObject, clobbering the correct
-        // obj_locals type (FInGameTime) and blinding build_call's free-RVO probe ("Can't
-        // implicitly convert from 'UObject' to 'FInGameTime'" x144 in-game).
-        let rvo = ret_struct as usize;
-        let total = if is_method { params.len() + 1 + rvo } else { params.len() + rvo };
+        let rvo = (ret_struct && is_method) as usize;
+        let total = if is_method { params.len() + 1 + rvo } else { params.len() };
         let take = total.min(ostack.len());
         let popped = ostack.split_off(ostack.len() - take);
-        // method: top popped entry is the receiver -> drop it (plus the RVO out-slot just below);
-        // free call: top popped entry is the RVO out-slot itself. The rest are the user args.
+        // method: top popped entry is the receiver -> drop it (plus the RVO out-slot just below it);
+        // the rest are the user args.
         let args = if is_method && !popped.is_empty() {
             &popped[..popped.len().saturating_sub(1 + rvo)]
-        } else {
-            &popped[..popped.len().saturating_sub(rvo)]
-        };
+        } else { &popped[..] };
         // pair from the TOP: last arg <-> last param (so a leading `this` param, if the cache
         // counts it, never shifts the user-arg pairing).
         for (i, slot) in args.iter().rev().enumerate() {
