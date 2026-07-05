@@ -140,6 +140,12 @@ pub fn emit_module(m: &Module, refs: &RefResolver) -> String {
         .collect();
 
     for c in &m.classes {
+        // batch-24c: a compiler-generated delegate/event wrapper class re-emits as its ORIGINAL
+        // one-line declaration (the verbatim class can never compile — see the detector's doc).
+        if let Some(decl) = delegate_wrapper_decl(c, refs) {
+            s.push_str(&decl);
+            continue;
+        }
         emit_class(&mut s, c, refs);
     }
 
@@ -184,6 +190,56 @@ fn is_generated_spawn(f: &Func, refs: &RefResolver) -> bool {
         return true;
     }
     false
+}
+
+/// Batch-24c (specs/batch23-waitseconds.md Class 2 Shape A): the Hazelight compiler
+/// AUTO-GENERATES a wrapper class for every `delegate` / `event` declaration — an `_Inner`
+/// field typed `_FScriptDelegate` (single-cast) / `_FMulticastScriptDelegate` (multicast)
+/// plus Execute*/Broadcast/Bind/Add methods built on the compiler intrinsics
+/// (`__DelegateSignature`, `__Evt_PushArgument*`, `__Evt_ExecuteDelegate`). The cache stores
+/// the GENERATED class; re-emitting it verbatim can never compile (the intrinsics and the
+/// generated copy/assign forms have no source form: 17 cannot-pass + 12 cant-convert errors
+/// + 12 copyctor raw stubs across 12 wrapper classes). Detect the wrapper structurally and
+/// return the original one-line declaration — the byte-faithful form, from which the
+/// compiler regenerates the identical wrapper:
+///
+/// ```angelscript
+/// event void FPlayerBeginOverlapFireGolemArenaEvent(AActor Actor);
+/// delegate void FSoulHarvestVisualDelegate(ASoulHarvestCharacter_Visual CurrentInstance);
+/// ```
+///
+/// (decl syntax per the vendored fork docs, hazelight-docs/page_scripting_delegates_.html).
+/// Gates (belt-and-braces against a hand-written lookalike): no super class, EXACTLY one
+/// field named `_Inner` of the internal delegate type, and the signature-carrier method
+/// present — `Broadcast` (event) / `Execute` or `ExecuteIfBound` (delegate), whose params
+/// (names cache-preserved) and return type form the declared signature.
+fn delegate_wrapper_decl(c: &Class, refs: &RefResolver) -> Option<String> {
+    if c.super_class.as_deref().is_some_and(|s| !s.is_empty()) {
+        return None;
+    }
+    let [field] = c.fields.as_slice() else {
+        return None;
+    };
+    if field.name != "_Inner" {
+        return None;
+    }
+    let (kw, carrier) = match field.ty.base_name(refs).as_str() {
+        "_FMulticastScriptDelegate" => {
+            ("event", c.methods.iter().find(|f| f.name == "Broadcast")?)
+        }
+        "_FScriptDelegate" => (
+            "delegate",
+            // prefer `Execute` (carries a RetVal delegate's return type); `ExecuteIfBound`
+            // as the fallback carrier (void-returning delegates always have it).
+            c.methods
+                .iter()
+                .find(|f| f.name == "Execute")
+                .or_else(|| c.methods.iter().find(|f| f.name == "ExecuteIfBound"))?,
+        ),
+        _ => return None,
+    };
+    let ret = carrier.ret.render(refs).trim_start_matches("const ").to_string();
+    Some(format!("{kw} {ret} {}({});\n\n", c.name, render_params(carrier, refs)))
 }
 
 fn emit_class(s: &mut String, c: &Class, refs: &RefResolver) {
