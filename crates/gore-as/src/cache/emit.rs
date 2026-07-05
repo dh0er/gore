@@ -1218,6 +1218,16 @@ fn infer_slot_types(
                 // push may carry values outside the small range).
                 sarg.insert(s, None);
             }
+            // batch-33b (N1 residue): a slot VALUE-pushed into a BOOL by-value param is a
+            // real argument exactly like the int-family/enum cases above — bool slots are
+            // untyped ints in the model, so the push died in the nested-call split
+            // (UCM_RollToSide lost Math::RandBool()'s bFlipSide to five intervening
+            // GetNavAgentLocation/opSub/GetUnsafeNormal calls -> RollToEvade 2-arg
+            // no-match). Keep-only: the render-side `(local_N != 0)` wrap is the existing
+            // bool-param cast_arg path, which fires once the arg survives.
+            0x41 => {
+                ikeep.insert(s);
+            }
             // batch-31c (N1, spec batch31-nomatch-illegalop §1.4): a slot VALUE-pushed into a
             // known ENUM by-value param is a REAL argument, not a stranded SetV temporary —
             // it earns the retain keep flag exactly like the int-family pairs (enum slots are
@@ -1279,7 +1289,8 @@ fn infer_slot_types(
                     if *s < 0 {
                         if !*is_psf && !pt.is_reference {
                             match pt.token {
-                                0x44 | 0x45 | 0x46 | 0x47 | 0x4B | 0x4C | 0x4D | 0x4E => {
+                                // 0x41: batch-33b — bool params join the keep set (see val_arg).
+                                0x41 | 0x44 | 0x45 | 0x46 | 0x47 | 0x4B | 0x4C | 0x4D | 0x4E => {
                                     ikeep.insert(*s);
                                 }
                                 5 if super::structure::is_enum_name(&pt.base_name(refs)) => {
