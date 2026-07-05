@@ -176,6 +176,36 @@ fn strip_return_assign(v: &str) -> &str {
     v
 }
 
+/// batch-27b: if `v` is a top-level assignment expression `lhs = rhs` with a PLAIN slot /
+/// member-path lhs (the batch-26 operator/RVO fold shapes: `local_4 = this.GetDisplayName()`,
+/// `local_18 = (a + b)`), return the lhs. The in-game compiler rejects an assignment
+/// expression consumed as a call argument ("[E] No matching signatures to
+/// 'FString::Append(local_4 = FString)'", capture.batch26-0705 CombatMoves.as), so the
+/// `PshRPtr` arm flushes such a pending as its own statement and pushes the (now-written)
+/// lhs slot instead. Comparisons never match (`==`/`!=`/`<=`/`>=` are not ` = `); anything
+/// with a non-identifier lhs (literal, string, expression) returns None.
+fn assign_lhs(v: &str) -> Option<&str> {
+    let b = v.as_bytes();
+    let mut depth = 0i32;
+    for i in 0..b.len().saturating_sub(2) {
+        match b[i] {
+            b'(' | b'[' => depth += 1,
+            b')' | b']' => depth -= 1,
+            // a quote before the top-level ` = ` -> lhs would contain a string literal; the
+            // depth counter does not model quoting, so never match past one.
+            b'"' => return None,
+            b' ' if depth == 0 && b[i + 1] == b'=' && b[i + 2] == b' ' => {
+                let lhs = v[..i].trim();
+                let plain = !lhs.is_empty()
+                    && lhs.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'.');
+                return plain.then_some(lhs);
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 /// Decompile a function to a self-contained `function(...) { ... }` (readable, not recompilable).
 pub fn decompile(f: &FuncCode, refs: &RefResolver) -> String {
     let params: Vec<String> = f
@@ -1462,7 +1492,19 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<Strin
                 // back onto the operand stack as the NEXT call's argument (e.g. the receiver/arg of
                 // a chained call). Prefer that live call result over the stale member-ref register.
                 if let Some(p) = pending.take() {
-                    stack.push(Arg::typed(p, pending_ty.take()));
+                    // batch-27b: an ASSIGNMENT-shaped pending (batch-26 operator/RVO fold,
+                    // `local_4 = this.GetDisplayName()`) must not flow into an arg/receiver
+                    // position — the fork rejects assignment expressions as call arguments.
+                    // Emit it as its own statement first and push the written lhs slot: the
+                    // assignment completes before the consuming call on both renders, so the
+                    // dataflow is identical.
+                    if let Some(lhs) = assign_lhs(&p) {
+                        let lhs = lhs.to_string();
+                        out.push(format!("{p};"));
+                        stack.push(Arg::typed(lhs, pending_ty.take()));
+                    } else {
+                        stack.push(Arg::typed(p, pending_ty.take()));
+                    }
                 } else {
                     let (s, ty) = match value_reg.take() {
                         Some(v) => (v, None),
