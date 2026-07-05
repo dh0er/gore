@@ -2578,6 +2578,15 @@ impl Structurer<'_> {
             if r.is_def {
                 let _ = writeln!(out, "{ind}default:");
             }
+            // batch-24d: the in-game compiler rejects "Variables cannot be declared in
+            // switch cases, except inside statement blocks". Declarations are INTRODUCED
+            // into case bodies only later, by the emit-side decl-init rewrites (auto
+            // iterator decls, executor decl-inits, __na temp-splits) — the structurer
+            // cannot know which cases will end up carrying one, so brace EVERY case body
+            // unconditionally (a statement block is always-legal AS; stacked case/default
+            // labels stay outside the braces, the body and its trailing break;/return
+            // exits go inside).
+            let _ = writeln!(out, "{ind}{{");
             self.exit_join = Some(join_off);
             self.exit_join_is_ret = join_is_ret;
             self.exit_ret_rows_ok = register_based;
@@ -2587,6 +2596,7 @@ impl Structurer<'_> {
             if r.append_break {
                 let _ = writeln!(out, "{ind}    break;");
             }
+            let _ = writeln!(out, "{ind}}}");
         }
         let _ = writeln!(out, "{ind}}}");
         Some(switch_end)
