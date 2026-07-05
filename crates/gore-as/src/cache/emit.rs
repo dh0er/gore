@@ -1857,6 +1857,40 @@ fn infer_locals(f: &Func, refs: &RefResolver) -> BTreeMap<i32, String> {
             }
         }
     }
+    // Float return-payload retype: a slot copied into the value register (`CpyVtoR8`/
+    // `CpyVtoR4`) in a function returning the matching-width float family IS the float
+    // return value, so its `SetV*`-guessed int/int64 declaration must become the return
+    // type keyword (structure.rs `float_operand_slots` renders those constants as float
+    // literals — `local_4 = -55.0;` needs `float local_4;`, not `int64`). Never overrides
+    // object-typed slots (rank 0).
+    {
+        let copy_op = match f.ret.token {
+            0x51 | 0x5E => Some("CpyVtoR8"),
+            0x50 => Some("CpyVtoR4"),
+            _ => None,
+        };
+        if let Some(op) = copy_op {
+            let kw = token_keyword(f.ret.token).to_string();
+            for ins in &instrs {
+                if ins.op.name != op {
+                    continue;
+                }
+                let Some(dst) = ins.words.first().map(|w| *w as i16 as i32) else { continue };
+                if dst <= 0 {
+                    continue;
+                }
+                match locals.get(&dst) {
+                    None => {
+                        locals.insert(dst, kw.clone());
+                    }
+                    Some(prev) if matches!(prev.as_str(), "int" | "int64" | "float" | "double") => {
+                        locals.insert(dst, kw.clone());
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
     let _ = token_keyword; // keep import used if obj path elided
     locals
 }

@@ -108,7 +108,7 @@ pub fn body_statements_ctor(f: &FuncCode, refs: &RefResolver, depth: usize, supe
         Err(e) => return format!("{}// disasm error: {e}\n", "    ".repeat(depth)),
     };
     let g = cfg::build(&instrs);
-    let float_slots = float_operand_slots(&instrs);
+    let float_slots = float_operand_slots(&instrs, ret_ty);
     // AS_PTR_SIZE-aware frame-offset -> param-index map (2-dword handles/refs + hidden RVO slot),
     // self-correcting on observed offsets. Built once per function; consulted by slot_name/slot_type.
     let (param_off_map, rvo_off) = super::decompile::build_param_off_map_rvo(f, &instrs, refs);
@@ -116,7 +116,7 @@ pub fn body_statements_ctor(f: &FuncCode, refs: &RefResolver, depth: usize, supe
     let idx_of: HashMap<usize, usize> =
         g.blocks.iter().enumerate().map(|(i, b)| (b.start_dw, i)).collect();
     let mut body = String::new();
-    let mut st = Structurer { ctx: &ctx, g: &g, idx_of: &idx_of };
+    let mut st = Structurer { ctx: &ctx, g: &g, idx_of: &idx_of, exit_join: None, exit_join_is_ret: false, exit_ret_rows_ok: false, exit_scan_floor: 0 };
     st.emit_range(0, g.blocks.len(), depth, &mut body);
     body
 }
@@ -180,7 +180,11 @@ struct Ctx<'a> {
 
 /// Collect slots used as an operand of a float/double arithmetic or compare op. Every word
 /// operand of those ops is a float/double value, so a constant feeding such a slot is float.
-fn float_operand_slots(instrs: &[Instr]) -> std::collections::HashSet<i32> {
+/// Additionally, a slot copied into the VALUE REGISTER (`CpyVtoR4`/`CpyVtoR8`) in a function
+/// whose return type is the matching-width float family IS the float return payload, so its
+/// `SetV*` constants are IEEE-754 bits too (e.g. the per-case `SetV8 w4, 0xc04b...` returns
+/// in `GetScanSweepAngleDeg` are -55.0, not -4590434657685733376).
+fn float_operand_slots(instrs: &[Instr], ret_ty: Option<&DataType>) -> std::collections::HashSet<i32> {
     let is_float_op = |n: &str| {
         matches!(n,
             "ADDf" | "SUBf" | "MULf" | "DIVf" | "MODf" | "NEGf" | "IncVf" | "DecVf"
@@ -188,9 +192,22 @@ fn float_operand_slots(instrs: &[Instr]) -> std::collections::HashSet<i32> {
             | "ADDd" | "SUBd" | "MULd" | "DIVd" | "MODd" | "NEGd" | "CMPd")
     };
     let mut slots = std::collections::HashSet::new();
+    let ret_tok = ret_ty.map(|t| t.token);
     for ins in instrs {
         if is_float_op(ins.op.name) {
             for &wd in &ins.words {
+                slots.insert(wd as i16 as i32);
+            }
+        }
+        // return-register copies in a float-returning function (width-matched: 0x51 `float`
+        // and 0x5E `double` are 8-byte in this fork, 0x50 `float32` is 4-byte).
+        let ret_float_copy = match ins.op.name {
+            "CpyVtoR8" => matches!(ret_tok, Some(0x51) | Some(0x5E)),
+            "CpyVtoR4" => ret_tok == Some(0x50),
+            _ => false,
+        };
+        if ret_float_copy {
+            if let Some(&wd) = ins.words.first() {
                 slots.insert(wd as i16 as i32);
             }
         }
@@ -241,6 +258,37 @@ impl Ctx<'_> {
         }
     }
 
+    /// Render a `return` statement from an optional recovered value, applying the same
+    /// fix-ups as the `RET` arm (RVO `return slot = v` stripping, declared-bool bareness,
+    /// int -> bool/enum return casts, RVODEF default for an unrecovered non-void value).
+    /// Shared by the `RET` opcode arm and the switch-recovery `JMP -> RET-row` return exits.
+    fn return_stmt(&self, v: Option<String>) -> String {
+        let non_void = self.ret_ty.map(|t| t.token != 0x52).unwrap_or(false);
+        if !non_void {
+            return "return;".into();
+        }
+        match v {
+            Some(v) => {
+                let v = strip_return_assign(&v).to_string();
+                let declared_bool = v
+                    .strip_prefix("local_")
+                    .and_then(|d| d.parse::<i32>().ok())
+                    .and_then(|n| self.slot_type(n))
+                    .as_deref()
+                    == Some("bool");
+                let v = match self.ret_ty {
+                    Some(rt) if looks_int(&v) && !declared_bool => {
+                        let tn = if rt.token == 0x41 { "bool".to_string() } else { rt.base_name(self.refs) };
+                        cast_to_typename(&v, &tn).unwrap_or(v)
+                    }
+                    _ => v,
+                };
+                format!("return {v};")
+            }
+            None => format!("return {RVODEF};"),
+        }
+    }
+
     /// Name for parameter slot `idx`: the stored name, else `arg{idx}` — which MUST match
     /// how `emit::render_params` declares unnamed params (also `arg{idx}`), so a body
     /// reference resolves to a declared parameter.
@@ -262,7 +310,14 @@ fn s16(w: u16) -> i32 {
 /// backwards for the nearest `CpyVtoR*`/`LOADOBJ` that filled the return register in a
 /// dominating block, stopping at a previous RET so we never cross into an unrelated value.
 fn scan_back_retval(ctx: &Ctx, before: usize) -> Option<String> {
-    for i in (0..before).rev() {
+    scan_back_retval_floor(ctx, before, 0)
+}
+
+/// [`scan_back_retval`] bounded below by `floor` (instruction index): used by the switch
+/// recovery's synthesized `return`s so a case's value never leaks in from a PRECEDING case
+/// region (the linear scan would otherwise cross the region boundary).
+fn scan_back_retval_floor(ctx: &Ctx, before: usize, floor: usize) -> Option<String> {
+    for i in (floor..before).rev() {
         let ins = &ctx.instrs[i];
         match ins.op.name {
             "CpyVtoR4" | "CpyVtoR8" | "CpyVtoR1" | "LOADOBJ" => {
@@ -273,6 +328,11 @@ fn scan_back_retval(ctx: &Ctx, before: usize) -> Option<String> {
         }
     }
     None
+}
+
+/// Conditional-jump opcode (mirrors `cfg::is_cond_jump`, which is private to that module).
+fn is_cond_op(n: &str) -> bool {
+    matches!(n, "JZ" | "JNZ" | "JS" | "JNS" | "JP" | "JNP" | "JLowZ" | "JLowNZ")
 }
 
 /// Resolve a Cast/TYPEID operand to a target typename. AngelScript bytecode typeids carry
@@ -1734,35 +1794,10 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 if non_void && v.is_none() {
                     v = scan_back_retval(ctx, lo + k);
                 }
-                match v {
-                    Some(v) => {
-                        // RVO: a non-trivial return is built by writing the hidden return slot
-                        // then returning it -> the decompiler renders `return slot = <value>;`,
-                        // which is a syntax error (aborts the whole module's parse). The
-                        // assignment RHS is the actual returned value.
-                        let v = strip_return_assign(&v).to_string();
-                        // a slot DECLARED bool must return bare: `return (boolSlot != 0);`
-                        // is an int-compare on a bool ("No conversion from 'int' to 'bool'").
-                        let declared_bool = v
-                            .strip_prefix("local_")
-                            .and_then(|d| d.parse::<i32>().ok())
-                            .and_then(|n| ctx.slot_type(n))
-                            .as_deref()
-                            == Some("bool");
-                        let v = match ctx.ret_ty {
-                            Some(rt) if looks_int(&v) && !declared_bool => {
-                                let tn = if rt.token == 0x41 { "bool".to_string() } else { rt.base_name(ctx.refs) };
-                                cast_to_typename(&v, &tn).unwrap_or(v)
-                            }
-                            _ => v,
-                        };
-                        out.push(format!("return {v};"));
-                    }
-                    // non-void with no recovered value: keep the recovered body, return a
-                    // default (the emitter fills RVODEF with a type-correct default value).
-                    None if non_void => out.push(format!("return {RVODEF};")),
-                    None => out.push("return;".into()),
-                }
+                // value fix-ups (RVO-assign strip, declared-bool, int -> bool/enum cast) and
+                // the RVODEF default all live in the shared helper (also used by the switch
+                // recovery's `JMP -> RET-row` return exits).
+                out.push(ctx.return_stmt(v));
             }
             // Idiom-A member store: an ADDSi chain builds `this.a.b` on the stack top, then
             // PopRPtr moves that address into the reference register for the following WRTV.
@@ -1992,6 +2027,17 @@ struct Structurer<'a> {
     ctx: &'a Ctx<'a>,
     g: &'a Cfg,
     idx_of: &'a HashMap<usize, usize>,
+    /// Switch-region exit context (set only while emitting a recovered `switch` case region):
+    /// the JOIN offset a `JMP` renders as `break;` for, whether JOIN is the function's bare
+    /// `RET` row (then a `JMP` there renders as a synthesized `return ...;` instead), and
+    /// whether `JMP`s to OTHER bare-RET rows may render as returns (register-based-return
+    /// functions only — an RVO-struct return can't be synthesized from the value register).
+    exit_join: Option<usize>,
+    exit_join_is_ret: bool,
+    exit_ret_rows_ok: bool,
+    /// Instruction-index floor for the synthesized-return value scan (the current case
+    /// region's first instruction — a value must not leak in from a preceding region).
+    exit_scan_floor: usize,
 }
 
 impl Structurer<'_> {
@@ -2015,7 +2061,11 @@ impl Structurer<'_> {
             let b = &self.g.blocks[i];
             let mut next;
 
-            if let Some((body_end, cond)) = self.top_test_while(i, stop) {
+            if let Some(after) = self.try_emit_switch(i, stop, depth, out) {
+                // recovered compiler switch idiom (guards + JMPP dispatch); the whole
+                // construct was emitted, continue after its JOIN.
+                next = after;
+            } else if let Some((body_end, cond)) = self.top_test_while(i, stop) {
                 // top-test loop: `header: <cmp> Jcc exit; body; JMP header`
                 let _ = writeln!(out, "{ind}while ({cond})");
                 let _ = writeln!(out, "{ind}{{");
@@ -2073,6 +2123,9 @@ impl Structurer<'_> {
                 for s in &stmts {
                     let _ = writeln!(out, "{ind}{s}");
                 }
+                if let Some(x) = self.region_exit_stmt(i) {
+                    let _ = writeln!(out, "{ind}{x}");
+                }
                 next = i + 1;
             }
 
@@ -2090,7 +2143,389 @@ impl Structurer<'_> {
             for s in &stmts {
                 let _ = writeln!(out, "{ind}{s}");
             }
+            if let Some(x) = self.region_exit_stmt(bi) {
+                let _ = writeln!(out, "{ind}{x}");
+            }
         }
+    }
+
+    /// Inside a recovered switch's case region: if block `bi` ends with an unconditional
+    /// `JMP` that LEAVES the region, render the source-level exit statement — `break;` to
+    /// the JOIN, or a synthesized `return ...;` when the jump goes to a bare `RET` row
+    /// (the compiled form of `return <expr>;` from inside a case). Returns None outside
+    /// switch emission or for any other terminator (statu quo: the JMP is just a block end).
+    fn region_exit_stmt(&self, bi: usize) -> Option<String> {
+        let join = self.exit_join?;
+        let b = &self.g.blocks[bi];
+        if self.ctx.instrs[b.instr_hi - 1].op.name != "JMP" {
+            return None;
+        }
+        let t = *b.succs.first()?;
+        if t == join {
+            return Some(if self.exit_join_is_ret {
+                self.ctx.return_stmt(scan_back_retval_floor(self.ctx, b.instr_hi - 1, self.exit_scan_floor))
+            } else {
+                "break;".into()
+            });
+        }
+        if self.exit_ret_rows_ok && self.is_bare_ret_off(t) {
+            return Some(self.ctx.return_stmt(scan_back_retval_floor(self.ctx, b.instr_hi - 1, self.exit_scan_floor)));
+        }
+        None
+    }
+
+    /// The block at dword offset `off` is a bare `RET` row (exactly one instruction).
+    fn is_bare_ret_off(&self, off: usize) -> bool {
+        self.idx_of.get(&off).is_some_and(|&bi| {
+            let b = &self.g.blocks[bi];
+            b.instr_hi - b.instr_lo == 1 && self.ctx.instrs[b.instr_lo].op.name == "RET"
+        })
+    }
+
+    /// Detect and emit the Hazelight compiler's `switch` lowering rooted at block `i`
+    /// (see `work/reversing/gore-as/specs/illegal-op-round2.md` Part B). The 5-part idiom:
+    ///
+    /// ```text
+    /// [ ...stmts ; CMPIi wV,hi ; JP DEF ]      block i    (range guard, hi = lo+N-1)
+    /// [ CMPIi wV,lo ; JS DEF ]                 block i+1  (range guard)
+    /// [ SUBIi wS,wV,lo ; JMPP wS,N-1 ]         block i+2  (normalize + dispatch)
+    /// [ N dispatch rows: JMP tK trampolines; the LAST row may be the final case inlined ]
+    /// case regions in offset order ... [ DEF region ] JOIN
+    /// ```
+    ///
+    /// DEF handling: `ThrowException`-only DEF = compiler trap for a default-less switch ->
+    /// emit NO default clause (recompiling regenerates the trap); DEF == JOIN -> no default;
+    /// DEF sharing a case entry -> stacked `default:` label; else a real `default:` region.
+    /// Shared case targets render stacked `case a: case b:` labels; empty cases (entry ==
+    /// a JMP-to-JOIN thunk) render `break;` only.
+    ///
+    /// Returns the next block index after the construct, or None on ANY deviation from the
+    /// idiom — the caller then falls through to the existing arms and the `// JMPP` marker
+    /// keeps the function safely stubbed (never wrong control flow).
+    fn try_emit_switch(&mut self, i: usize, stop: usize, depth: usize, out: &mut String) -> Option<usize> {
+        let ctx = self.ctx;
+        let g = self.g;
+        let blocks = &g.blocks;
+        if stop > blocks.len() || i + 3 > stop || i + 2 >= blocks.len() {
+            return None;
+        }
+        // cheap pre-probe before anything costly
+        if self.jump_op(i) != "JP" || self.jump_op(i + 1) != "JS" || self.jump_op(i + 2) != "JMPP" {
+            return None;
+        }
+        // A bottom-test loop headed at this very block would be LOST if the switch were
+        // emitted in its place (the latch back-edge has no rendering); bail to the loop
+        // arm — its linear body hits the JMPP marker and the function stays stubbed.
+        if self.loop_latch(i, stop).is_some() {
+            return None;
+        }
+        let b0 = &blocks[i];
+        let b1 = &blocks[i + 1];
+        let b2 = &blocks[i + 2];
+        if b0.instr_hi - b0.instr_lo < 2 || b1.instr_hi - b1.instr_lo != 2 || b2.instr_hi - b2.instr_lo != 2 {
+            return None;
+        }
+        let g_hi = &ctx.instrs[b0.instr_hi - 2];
+        let g_lo = &ctx.instrs[b1.instr_lo];
+        let sub = &ctx.instrs[b2.instr_lo];
+        let jmpp = &ctx.instrs[b2.instr_hi - 1];
+        if g_hi.op.name != "CMPIi" || g_lo.op.name != "CMPIi" || sub.op.name != "SUBIi" {
+            return None;
+        }
+        let wv = s16(g_hi.words.first().copied()?);
+        let hi_c = g_hi.dwords.first().copied()? as i32;
+        let lo_c = g_lo.dwords.first().copied()? as i32;
+        if s16(g_lo.words.first().copied()?) != wv {
+            return None;
+        }
+        // SUBIi wS, wV, lo — selector normalization (emitted even for lo == 0); wS is dead
+        // once the switch is recovered, and never rendered (blocks i+1/i+2 emit no stmts).
+        let ws = s16(sub.words.first().copied()?);
+        if s16(sub.words.get(1).copied()?) != wv || sub.dwords.first().copied()? as i32 != lo_c {
+            return None;
+        }
+        if s16(jmpp.words.first().copied()?) != ws {
+            return None;
+        }
+        let n = jmpp.dwords.first().copied()? as usize + 1;
+        if n < 2 || hi_c != lo_c + n as i32 - 1 {
+            return None;
+        }
+        // guard edges: both guards jump to the same DEF; fallthroughs chain b0 -> b1 -> b2
+        if b0.succs.len() != 2 || b1.succs.len() != 2 {
+            return None;
+        }
+        let def_off = b0.succs[0];
+        if b0.succs[1] != b1.start_dw || b1.succs[0] != def_off || b1.succs[1] != b2.start_dw {
+            return None;
+        }
+        if b2.succs.len() != n {
+            return None; // cfg.rs could not verify the dispatch-row shape
+        }
+        // dispatch rows -> case entry offsets (row N-1 may BE the last case body, inlined)
+        let mut targets: Vec<usize> = Vec::with_capacity(n);
+        let mut inline_last = false;
+        for (k, &row) in b2.succs.iter().enumerate() {
+            if row != jmpp.offset_dw + 2 + 2 * k {
+                return None;
+            }
+            let rb = &blocks[*self.idx_of.get(&row)?];
+            if rb.instr_hi - rb.instr_lo == 1 && ctx.instrs[rb.instr_lo].op.name == "JMP" {
+                targets.push(*rb.succs.first()?);
+            } else if k == n - 1 {
+                targets.push(row);
+                inline_last = true;
+            } else {
+                return None;
+            }
+        }
+        // region boundaries: unique case entries + DEF, ascending; the first must start
+        // immediately after the dispatch rows (no unreachable gap)
+        let mut bounds: Vec<usize> = targets.clone();
+        bounds.push(def_off);
+        bounds.sort_unstable();
+        bounds.dedup();
+        let first_body = if inline_last { b2.succs[n - 1] } else { b2.succs[n - 1] + 2 };
+        if bounds[0] != first_body {
+            return None;
+        }
+        let first_region_idx = i + 3 + n - usize::from(inline_last);
+        if self.idx_of.get(&bounds[0]).copied() != Some(first_region_idx) {
+            return None;
+        }
+        // JOIN inference: every region between consecutive boundaries must END by leaving —
+        // JMP to a common exit beyond the last boundary (the JOIN), JMP to a bare RET row
+        // (a per-case `return`), a RET of its own, or a fallthrough into the JOIN itself.
+        let t_last = *bounds.last()?;
+        // register-based return (value/object register): a struct-by-value return travels
+        // through the hidden RVO slot instead, so `JMP -> RET row` can't be synthesized.
+        // Decided from the return TYPE, not `rvo_off`: the param-map heuristic misclassifies
+        // ENUM returns as RVO (token 5, see spec A4), yet enums return in the value register
+        // — `ctx.rvo_off` would wrongly bail every enum-returning switch (GetNodeStatus,
+        // the UCBT_*::Tick family).
+        let register_based = match ctx.ret_ty {
+            None => true,
+            Some(t) => {
+                t.token != 5
+                    || t.is_object_handle
+                    || t.is_reference
+                    || is_enum_name(&t.base_name(ctx.refs))
+            }
+        };
+        let non_void = ctx.ret_ty.map(|t| t.token != 0x52).unwrap_or(false);
+        let mut join_cands: Vec<usize> = Vec::new();
+        let mut ret_rows: Vec<usize> = Vec::new();
+        let mut fall_pend: Vec<usize> = Vec::new();
+        for w in bounds.windows(2) {
+            let last_bi = self.idx_of.get(&w[1]).copied()? - 1;
+            let lb = &blocks[last_bi];
+            match ctx.instrs[lb.instr_hi - 1].op.name {
+                "JMP" => {
+                    let x = lb.succs.first().copied()?;
+                    if self.is_bare_ret_off(x) {
+                        if !register_based {
+                            return None;
+                        }
+                        ret_rows.push(x);
+                    } else if x >= t_last {
+                        join_cands.push(x);
+                    } else {
+                        return None; // cross/backward jump — not a shared exit
+                    }
+                }
+                "RET" => {}
+                name if is_cond_op(name) => return None,
+                _ => fall_pend.push(w[1]), // falls into next boundary: legal only into JOIN
+            }
+        }
+        join_cands.sort_unstable();
+        join_cands.dedup();
+        ret_rows.sort_unstable();
+        ret_rows.dedup();
+        let join_off = match (join_cands.as_slice(), ret_rows.as_slice()) {
+            ([j], _) => *j,
+            // every region returns: the shared bare RET row is the join/epilogue
+            ([], [r]) => *r,
+            _ => return None,
+        };
+        if fall_pend.iter().any(|&nb| nb != join_off) {
+            return None;
+        }
+        if join_off < t_last || targets.contains(&join_off) {
+            return None;
+        }
+        let join_is_ret = self.is_bare_ret_off(join_off);
+        if join_is_ret && !register_based {
+            return None; // per-case RVO-struct returns are not recoverable from the register
+        }
+        let join_idx = self.idx_of.get(&join_off).copied()?;
+        // the construct may extend past `stop` only through its JOIN (e.g. the switch is
+        // the tail of an if-branch and its breaks target the post-if continuation)
+        let switch_end = join_idx.min(stop);
+        if switch_end <= first_region_idx {
+            return None;
+        }
+        // ---- regions: enumerate + validate (any anomaly bails BEFORE any emission) ----
+        struct Region {
+            off: usize,
+            start: usize,
+            end: usize,
+            is_def: bool,
+            trap: bool,
+            append_break: bool,
+        }
+        let mut regions: Vec<Region> = Vec::new();
+        for (k, &b) in bounds.iter().enumerate() {
+            if b == join_off {
+                continue; // DEF == JOIN: no default clause, nothing to emit
+            }
+            let start = self.idx_of.get(&b).copied()?;
+            let end = match bounds.get(k + 1) {
+                Some(nb) => self.idx_of.get(nb).copied()?.min(switch_end),
+                None => switch_end,
+            };
+            if start >= end || start < first_region_idx || end > switch_end {
+                return None;
+            }
+            let end_off = blocks[end].start_dw;
+            let mut trap_ops = true;
+            let mut has_cond_join = false;
+            for bi2 in start..end {
+                let bb = &blocks[bi2];
+                let tname = ctx.instrs[bb.instr_hi - 1].op.name;
+                for k2 in bb.instr_lo..bb.instr_hi {
+                    if !matches!(ctx.instrs[k2].op.name, "ThrowException" | "SUSPEND" | "JitEntry") {
+                        trap_ops = false;
+                    }
+                }
+                let last_of_region = bi2 + 1 == end;
+                let uncond = tname == "JMP";
+                for &s in &bb.succs {
+                    if s >= b && s < end_off {
+                        continue; // in-region (incl. internal loops' back edges)
+                    }
+                    if s == join_off {
+                        if uncond || (last_of_region && end == join_idx) {
+                            continue; // break/return exit, or the last region falling into JOIN
+                        }
+                        // conditional TAKEN edge to the JOIN (`if (x) <skip rest of case>`):
+                        // the is_cond arm renders it as the inverted `if (!x) { rest }`,
+                        // which is correct ONLY when the region abuts the JOIN so both
+                        // paths hit the appended `break;` (never in RETURN mode — the
+                        // skipped path's register value would be unrecoverable).
+                        if is_cond_op(tname)
+                            && !join_is_ret
+                            && end == join_idx
+                            && bb.succs.first() == Some(&s)
+                        {
+                            has_cond_join = true;
+                            continue;
+                        }
+                    }
+                    if uncond && register_based && self.is_bare_ret_off(s) {
+                        continue; // per-case `return` exit
+                    }
+                    return None; // escapes the region (incl. cond jumps to an exit)
+                }
+                // a return-exit must have a recoverable value INSIDE this region
+                if uncond && non_void {
+                    if let Some(&s) = bb.succs.first() {
+                        let ret_exit = (s == join_off && join_is_ret)
+                            || (s != join_off && !(s >= b && s < end_off) && self.is_bare_ret_off(s));
+                        if ret_exit
+                            && scan_back_retval_floor(ctx, bb.instr_hi - 1, blocks[start].instr_lo).is_none()
+                        {
+                            return None;
+                        }
+                    }
+                }
+            }
+            // region's last block must actually LEAVE the construct. `has_cond_join`
+            // means SOME path skips to the appended `break;` after the region body, so
+            // one must be appended even when the body's own last statement already exits.
+            let lb = &blocks[end - 1];
+            let lt = ctx.instrs[lb.instr_hi - 1].op.name;
+            let append_break;
+            if lt == "JMP" {
+                let x = lb.succs.first().copied()?;
+                let exits = x == join_off
+                    || (register_based && !(x >= b && x < end_off) && self.is_bare_ret_off(x));
+                if !exits {
+                    return None;
+                }
+                append_break = has_cond_join; // the exit hook renders break;/return at the JMP
+            } else if lt == "RET" {
+                append_break = has_cond_join;
+            } else if is_cond_op(lt) {
+                return None;
+            } else {
+                // plain fallthrough: only into a physically adjacent JOIN
+                if end != join_idx {
+                    return None;
+                }
+                append_break = true;
+            }
+            let is_def = b == def_off;
+            let trap = trap_ops && end - start == 1;
+            if trap && (!is_def || targets.contains(&b)) {
+                return None; // a case entry can never be the compiler trap
+            }
+            regions.push(Region { off: b, start, end, is_def, trap, append_break });
+        }
+        // no OUTSIDE block may enter the construct anywhere but its head
+        let span_lo = b0.start_dw;
+        let span_hi = blocks[switch_end].start_dw;
+        for (bi2, bb) in blocks.iter().enumerate() {
+            if bi2 >= i && bi2 < switch_end {
+                continue;
+            }
+            for &s in &bb.succs {
+                if s > span_lo && s < span_hi {
+                    return None;
+                }
+            }
+        }
+        // ---- emission (validated: no bail past this point) ----
+        let ind = "    ".repeat(depth);
+        let (stmts, _) = block_stmts(ctx, b0.instr_lo, b0.instr_hi);
+        for s in &stmts {
+            let _ = writeln!(out, "{ind}{s}");
+        }
+        let sel_raw = ctx.slot_name(wv);
+        // an enum selector needs the explicit int() (mirrors the CMPIi arm: AS has no
+        // implicit enum<->int, and the case labels are int literals)
+        let sel = if ctx.slot_type(wv).as_deref().map(is_enum_name).unwrap_or(false) {
+            format!("int({sel_raw})")
+        } else {
+            sel_raw
+        };
+        let _ = writeln!(out, "{ind}switch ({sel})");
+        let _ = writeln!(out, "{ind}{{");
+        let saved = (self.exit_join, self.exit_join_is_ret, self.exit_ret_rows_ok, self.exit_scan_floor);
+        for r in &regions {
+            if r.trap {
+                continue; // trap DEF = source had NO default; recompiling regenerates it
+            }
+            for (k, &tg) in targets.iter().enumerate() {
+                if tg == r.off {
+                    let _ = writeln!(out, "{ind}case {}:", lo_c + k as i32);
+                }
+            }
+            if r.is_def {
+                let _ = writeln!(out, "{ind}default:");
+            }
+            self.exit_join = Some(join_off);
+            self.exit_join_is_ret = join_is_ret;
+            self.exit_ret_rows_ok = register_based;
+            self.exit_scan_floor = blocks[r.start].instr_lo;
+            self.emit_range(r.start, r.end, depth + 1, out);
+            (self.exit_join, self.exit_join_is_ret, self.exit_ret_rows_ok, self.exit_scan_floor) = saved;
+            if r.append_break {
+                let _ = writeln!(out, "{ind}    break;");
+            }
+        }
+        let _ = writeln!(out, "{ind}}}");
+        Some(switch_end)
     }
 
     fn is_cond(&self, bi: usize) -> bool {
