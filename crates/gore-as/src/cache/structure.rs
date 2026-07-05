@@ -623,7 +623,7 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
                     // GetActorLocation()` instead of `out = recv.Iterator()` -> "No matching
                     // signatures". `this`-receivers render `this.Method()` (legal, matches the
                     // normal method-render path below).
-                    return Some(format!("{out} = {}.{f}({})", wrap_uobject_recv(&recv, target_owner), render_args(&a, params, refs)));
+                    return Some(format!("{out} = {}.{f}({})", wrap_uobject_recv(&recv, target_owner, refs), render_args(&a, params, refs)));
                 }
             }
         }
@@ -688,7 +688,7 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
         }
         maybe_reverse_args(&mut a, params, refs);
         cast_container_args(f, recv.ty.as_deref(), &mut a);
-        Some(format!("{}.{f}({})", wrap_uobject_recv(&recv, target_owner), render_args(&a, params, refs)))
+        Some(format!("{}.{f}({})", wrap_uobject_recv(&recv, target_owner, refs), render_args(&a, params, refs)))
     } else {
         if refs.is_type_name(f) {
             // EDIT C: a value-type factory call (FName/E*/T* — NOT U*/A*, which use ALLOC) whose
@@ -791,19 +791,53 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
 /// is chosen over retyping the DECLARATION (option (a)) because the slot is also written from
 /// producers (`RefCpyV` handle copies, generic getters) whose types we cannot prove compatible
 /// with the owner — a retyped declaration could break those assignments (upcast-breaking),
-/// while a local `Cast<>` can only affect the one call that is already broken. Gates: the
-/// recovered receiver type is EXACTLY `UObject` (never a subclass, never unknown), the owner
-/// is a real object class (U*/A*, excludes container/value owners like `TArray`), and the
-/// owner isn't `UObject` itself (genuine UObject methods resolve fine).
-fn wrap_uobject_recv(recv: &Arg, owner: Option<&str>) -> String {
-    if recv.ty.as_deref() == Some("UObject") && recv.s != "this" {
-        if let Some(o) = owner {
-            if o != "UObject" && matches!(o.bytes().next(), Some(b'U') | Some(b'A')) {
-                return format!("Cast<{o}>({})", recv.s);
-            }
+/// while a local `Cast<>` can only affect the one call that is already broken.
+///
+/// batch-25d (specs/batch23-nomatch.md D): the original gate `recv.ty == "UObject"` EXACTLY
+/// was too narrow — the same disease presents on the other engine BASE types the cache
+/// records for iterator/temp producers (`AActor local_28; local_28.GetCharacterState();`,
+/// 26 in-game errors: GetCharacterState x12, GetInventory x3, GetAvatar x3, GetAI x2, ...).
+/// The receiver gate is widened to a short EXPLICIT base-class list (never arbitrary types),
+/// with a matching skip for calls the receiver ALREADY satisfies: the owner being the
+/// receiver type itself, one of its known ENGINE ancestors (methods genuinely on AActor must
+/// not wrap an ACharacter receiver — the spec's `owner != AActor` caution, generalized), or
+/// a script-hierarchy-proven ancestor. Owner must still be a real object class (U*/A*).
+fn wrap_uobject_recv(recv: &Arg, owner: Option<&str>, refs: &RefResolver) -> String {
+    /// The explicit base-receiver list (spec batch23-nomatch.md §4) — do NOT widen to
+    /// arbitrary recovered types.
+    const BASE_RECV: &[&str] = &[
+        "UObject",
+        "AActor",
+        "APawn",
+        "ACharacter",
+        "UActorComponent",
+        "UAbilitySystemComponent",
+    ];
+    /// Known ENGINE ancestors of each listed base (UObject < AActor < APawn < ACharacter;
+    /// UObject < UActorComponent < UAbilitySystemComponent).
+    fn engine_ancestors(t: &str) -> &'static [&'static str] {
+        match t {
+            "AActor" => &["UObject"],
+            "APawn" => &["AActor", "UObject"],
+            "ACharacter" => &["APawn", "AActor", "UObject"],
+            "UActorComponent" => &["UObject"],
+            "UAbilitySystemComponent" => &["UActorComponent", "UObject"],
+            _ => &[],
         }
     }
-    recv.s.clone()
+    let Some(rt) = recv.ty.as_deref() else { return recv.s.clone() };
+    if recv.s == "this" || !BASE_RECV.contains(&rt) {
+        return recv.s.clone();
+    }
+    let Some(o) = owner else { return recv.s.clone() };
+    if o == rt
+        || !matches!(o.bytes().next(), Some(b'U') | Some(b'A'))
+        || engine_ancestors(rt).contains(&o)
+        || refs.is_subclass(rt, o)
+    {
+        return recv.s.clone();
+    }
+    format!("Cast<{o}>({})", recv.s)
 }
 
 /// Count DEFINITE type mismatches when pairing args[i] with params[i] (mirrors `cast_arg`'s
