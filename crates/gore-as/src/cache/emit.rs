@@ -368,6 +368,27 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
     // batch-30a (C6c): snapshot the cache's own (vanilla) object-local types before any
     // override mutates the map — the member-override gate below compares against these.
     let vanilla_obj_types = local_types.clone();
+    // batch-34: member-access-derived declaring class per slot (the field's OWNER type is a
+    // TYPE LOWER-BOUND: the slot's real type must have that member). Computed BEFORE the
+    // call-arg (`slot_overrides`) pass so that pass cannot widen a slot below a type that
+    // provably has an accessed member. `member_widen_below` below turns it into a guard.
+    let member_overrides = infer_slot_types_from_members(f, refs, fields, class_name);
+    // A candidate `cand` for `slot` widens BELOW a member lower-bound iff the slot has member
+    // evidence `lb` that the VANILLA type provably satisfies (`is_subclass(vanilla, lb)`) while
+    // `cand` does NOT provably satisfy it (`!is_subclass(cand, lb)`). Comparing against the
+    // vanilla type (which compiled every member access in the real source) sidesteps the gaps
+    // in KNOWN_NATIVE_HIERARCHY — e.g. ACharacter's native chain up to AActor is absent, so a
+    // direct `is_subclass(ACharacter, AActor)` can't see the widen, but `is_subclass(vanilla=
+    // AGothicCharacter, lb=ACharacter)` holds and `is_subclass(cand=AActor, ACharacter)` does
+    // not, correctly rejecting the AActor widen (AInvulnerableVisual::SetUpCollisions,
+    // ARagdollFallingActor::Initialize, UGA_Death_Meatbug — `.CapsuleComponent` off AActor).
+    let member_widen_below = |slot: &i32, cand: &String| {
+        let Some(lb) = member_overrides.get(slot) else { return false };
+        let Some(vanilla) = vanilla_obj_types.get(slot) else { return false };
+        cand != lb
+            && refs.is_subclass(vanilla, lb)
+            && !refs.is_subclass(cand, lb)
+    };
     // consumer-side override: never-written arg slots get the type their callee expects (fixes
     // mis-typed default/optional-arg slots — FName->UAIState_DailyRoutine, TSubclassOf<X>->X).
     // outref_overrides: PSF slots feeding float-family REFERENCE params (declaration-only, below).
@@ -422,6 +443,16 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
                 continue;
             }
         }
+        // batch-34: member-access lower-bound. A call-arg candidate (e.g. `AActor` from an
+        // `IgnoreActorWhenMoving(AActor, bool)`/`SetOwner(AActor)` param) must not widen a slot
+        // below a type that provably has a member the body reads off it — the batch-31d guard
+        // above only fires when the widen target is an is_subclass-visible ANCESTOR of vanilla,
+        // but the native chain ACharacter->..->AActor is absent from KNOWN_NATIVE_HIERARCHY, so
+        // AActor slips past it. Anchoring on the member's declaring class vs the vanilla type
+        // closes that gap (the `.CapsuleComponent`-on-AActor regressions).
+        if member_widen_below(slot, ty) {
+            continue;
+        }
         local_types.insert(*slot, ty.clone());
     }
     // batch-20 Class C: unlike the float out-refs (declaration-only), a BOOL out-ref slot must
@@ -466,9 +497,9 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
     for (slot, ty) in &float_args {
         local_types.entry(*slot).or_insert_with(|| ty.clone());
     }
-    // member-access-derived types: the field's declaring class is the strongest signal for a
-    // slot used as a member-access base; apply AFTER (overriding) the call-arg guess.
-    let member_overrides = infer_slot_types_from_members(f, refs, fields, class_name);
+    // member-access-derived types (`member_overrides`, computed above as the type lower-bound):
+    // the field's declaring class is the strongest signal for a slot used as a member-access
+    // base; apply AFTER (overriding) the call-arg guess.
     // batch-30a (C6c, specs/batch29-errortail.md §6c): when a slot's ONLY object write is a
     // STOREOBJ of a single call's result AND that call's return type equals the cache's own
     // obj_locals type, the vanilla static type is authoritative — a member-derived candidate
@@ -695,6 +726,12 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
                 if vanilla != ty && refs.is_subclass(vanilla, ty) {
                     continue;
                 }
+            }
+            // batch-34: declaration-side mirror of the member-access lower-bound guard — a
+            // call-arg candidate must not widen the declaration below a member's declaring
+            // class (keeps `AGothicCharacter local_N;` where the body reads `.CapsuleComponent`).
+            if member_widen_below(slot, ty) {
+                continue;
             }
             locals.insert(*slot, ty.clone());
         }
