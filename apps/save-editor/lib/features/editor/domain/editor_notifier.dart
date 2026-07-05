@@ -679,17 +679,25 @@ class EditorNotifier extends StateNotifier<EditorState> {
         .where((k) => k.edit['path'] == skillPath)
         .toList();
     // A raw All-Data `private.typed.setValue` on an ActiveEffects `EffectSpec/Def`
-    // leaf and a Skills-panel edit both target the hero's effect array. They
-    // cannot be sequenced safely: a skill learn/unlearn SPLICES the array, so a
-    // Def edit ordered after it re-resolves its `[i]` against a shifted array and
-    // retargets the wrong effect — and ordered before it changes the GE class the
-    // skill edit resolves by base. Refuse the combination (like the two-tab
-    // conflict above) and let the user resolve it. With no skill edit queued the
-    // Def edit is a normal fixed-size in-place write, so it batches as usual.
-    if (skillEdits.isNotEmpty && allEdits.any((k) => _isActiveEffectsDefEdit(k.edit))) {
+    // leaf and a Skills-panel edit for the SAME actor both target that actor's
+    // effect array. They cannot be sequenced safely: a skill learn/unlearn
+    // SPLICES the array, so a Def edit ordered after it re-resolves its `[i]`
+    // against a shifted array and retargets the wrong effect — and ordered before
+    // it changes the GE class the skill edit resolves by base. Refuse only that
+    // same-actor collision (like the two-tab conflict above); a hero skill edit
+    // paired with an NPC's Def edit (or vice-versa) touches different arrays and
+    // is safe. With no skill edit for the Def's actor the Def edit is a normal
+    // fixed-size in-place write and batches as usual.
+    final skillActors = <String>{
+      for (final k in skillEdits) ?_skillEditActor(k.edit),
+    };
+    if (allEdits.any((k) {
+      final actor = _activeEffectsDefActor(k.edit);
+      return actor != null && skillActors.contains(actor);
+    })) {
       state = state.copyWith(
         error:
-            'A Skills change and an All-data edit to the same hero effect '
+            'A Skills change and an All-data edit to the same actor’s effect '
             '(ActiveEffects › EffectSpec › Def) are both queued. They cannot be '
             'saved together — reset or revert one of them, then save again.',
       );
@@ -1896,23 +1904,39 @@ class _KeyedEdit {
   final Map<String, Object?> edit;
 }
 
-/// True when [edit] is a raw `private.typed.setValue` whose target leaf is an
-/// ActiveEffects `EffectSpec/Def` (a GE-class retarget) — the same element a
-/// `private.skills.set` resolves by base, so the two conflict when both are
-/// queued in one Save. Used by [EditorNotifier.saveAllPending] to order such
-/// edits after the skill write.
-bool _isActiveEffectsDefEdit(Map<String, Object?> edit) {
-  if (edit['path'] != 'private.typed.setValue') return false;
+/// The actor a `private.skills.set` edit targets (`Hero` or an NPC GlobalId),
+/// or `null` if [edit] is not a skill edit.
+String? _skillEditActor(Map<String, Object?> edit) {
+  if (edit['path'] != 'private.skills.set') return null;
   final value = edit['value'];
-  if (value is! Map) return false;
+  return value is Map ? value['actor'] as String? : null;
+}
+
+/// The actor whose ActiveEffects a raw `private.typed.setValue` on an
+/// `EffectSpec/Def` leaf targets, or `null` when [edit] is not such an edit.
+///
+/// A Def edit's path is `ActiveEffectsByGlobalId/{actor}/ActiveEffects/[i]/
+/// EffectSpec/Def`; the `{actor}` segment is returned unwrapped so it matches
+/// the `actor` a `private.skills.set` carries. A skill edit and a Def edit for
+/// the SAME actor collide (a splice shifts that actor's indices); different
+/// actors touch independent arrays and are safe to save together.
+String? _activeEffectsDefActor(Map<String, Object?> edit) {
+  if (edit['path'] != 'private.typed.setValue') return null;
+  final value = edit['value'];
+  if (value is! Map) return null;
   final path = value['path'];
-  if (path is! List) return false;
+  if (path is! List) return null;
   final segs = path.whereType<String>().toList();
   final n = segs.length;
   if (n < 2 || segs[n - 1] != 'Def' || segs[n - 2] != 'EffectSpec') {
-    return false;
+    return null;
   }
-  return segs.contains('ActiveEffects');
+  final i = segs.indexOf('ActiveEffectsByGlobalId');
+  if (i < 0 || i + 1 >= segs.length) return null;
+  final key = segs[i + 1];
+  return (key.startsWith('{') && key.endsWith('}'))
+      ? key.substring(1, key.length - 1)
+      : key;
 }
 
 /// One write_save unit in [EditorNotifier.saveAllPending]'s worklist: the edits

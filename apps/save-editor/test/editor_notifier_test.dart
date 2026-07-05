@@ -883,6 +883,62 @@ void main() {
   );
 
   test(
+    'saveAllPending allows a hero skill edit with an NPC ActiveEffects Def edit',
+    () async {
+      final core = _RecordingCoreService();
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+      // A Def edit on a DIFFERENT actor's ActiveEffects array...
+      notifier.setPendingEdit(
+        'typed:npcdef',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.typed.setValue',
+              'value': {
+                'path': [
+                  'ActiveEffectsByGlobalId',
+                  '{Lizard-1}',
+                  'ActiveEffects',
+                  '[0]',
+                  'EffectSpec',
+                  'Def',
+                ],
+                'value': '/Script/Angelscript.Default__GE_Skill_Sneak',
+              },
+            },
+          ],
+        ),
+      );
+      // ...and a HERO skill edit: separate arrays, so no conflict.
+      notifier.setPendingEdit(
+        'skills',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.skills.set',
+              'value': {
+                'actor': 'Hero',
+                'base': 'Melee_OneHanded',
+                'tier': 'Master',
+              },
+            },
+          ],
+        ),
+      );
+
+      final ok = await notifier.saveAllPending();
+      expect(ok, isTrue);
+      // Both saved: the NPC Def edit in the fixed batch, the hero skill trailing.
+      final writes = core.requests
+          .where((r) => r.command == 'write_save')
+          .toList();
+      expect(writes, hasLength(2));
+    },
+  );
+
+  test(
     'saveAllPending keeps an ActiveEffects Def edit in the batch without a skill edit',
     () async {
       final core = _RecordingCoreService();
