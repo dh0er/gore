@@ -1352,6 +1352,16 @@ fn infer_slot_types(
                     *top = None;
                 }
             }
+            // batch-32c (spec batch31 §1.8 site-2 root cause, corrected by disasm): PopRPtr
+            // POPS the top stack entry into the reference register (the member-read idiom
+            // `PshVPtr w0 ; ADDSi ; RDSPtr ; ADDSi ; PopRPtr ; RDR4`). Unmodeled, it left a
+            // ghost entry that shifted every later pairing one param deeper —
+            // SetTimerDelegate's bool bMaxOncePerFrame slot paired against the float32
+            // InitialStartDelay -> `float32 local_8` decl -> bare render where the bool wrap
+            // `(local_8 != 0)` was needed (2 in-game no-match).
+            "PopRPtr" => {
+                ostack.pop();
+            }
             "CALL" | "CALLINTF" | "CALLBND" => {
                 let id = ins.dwords.first().copied().unwrap_or(0) as i32;
                 let rs = refs.func_ret_by_id(id).map(|d| !d.is_reference && ret_is_struct(&d.base_name(refs))).unwrap_or(false);
@@ -1402,6 +1412,19 @@ fn infer_slot_types(
                     // pop receiver + ctor args off the operand stack so they don't leak.
                     let nargs = refs.func_params_by_ptr(ptr).map(|p| p.len()).unwrap_or(0);
                     let drop_n = (1 + nargs).min(ostack.len());
+                    ostack.truncate(ostack.len() - drop_n);
+                    continue;
+                }
+                // batch-32c (site-3b root cause): the `opCast` behaviour consumes exactly
+                // THREE pushes (`TYPEID ; PSF <dst> ; PshVPtr <src> ; CALLSYS opCast`) and
+                // pushes nothing. Routing it through pair() desynced the model at every Cast
+                // diamond (unknown params -> ostack.clear() wiped the enclosing call's
+                // pending args; known params mis-popped) — the bool&-out pairing for
+                // GetFloatAttributeFromAbilitySystemComponent's `local_33` never happened
+                // (declared int, "expected bool&, but got int"). Mirror of the $beh0
+                // special-case above; structure.rs has its own dedicated opCast arm.
+                if refs.func_by_ptr(ptr) == Some("opCast") {
+                    let drop_n = 3.min(ostack.len());
                     ostack.truncate(ostack.len() - drop_n);
                     continue;
                 }

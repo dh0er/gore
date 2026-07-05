@@ -1390,6 +1390,26 @@ fn cast_to_typename(rhs: &str, tyname: &str) -> Option<String> {
     None
 }
 
+/// batch-32c (D9 pure-element carry): true for a side-effect-free container element read
+/// rendered from a LOCAL receiver — `local_N.opIndex(<simple>)` with a parenthesis-free,
+/// quote-free arg (constants / bare locals / plain member chains). Only such pendings may
+/// be tagged carryable across a cast diamond (see `pending_is_pure_elem`): a local
+/// container cannot be mutated by the diamond's D7-constrained arms (opCast+TYPEID) or the
+/// pure pre-join getters of the proven population, so re-evaluating the read at the join
+/// observes the same element.
+fn is_pure_elem_read(s: &str) -> bool {
+    let Some(rest) = s.strip_prefix("local_") else { return false };
+    let Some((idx, call)) = rest.split_once('.') else { return false };
+    if idx.is_empty() || !idx.bytes().all(|b| b.is_ascii_digit()) {
+        return false;
+    }
+    let Some(args) = call.strip_prefix("opIndex(").and_then(|c| c.strip_suffix(')')) else {
+        return false;
+    };
+    args.bytes()
+        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b',' | b' ' | b'-'))
+}
+
 /// True if a rendered operand is an integer slot/constant (safe to cast to bool/enum).
 /// Excludes already-typed operands (params, fields, calls) so we never double-cast.
 fn looks_int(s: &str) -> bool {
@@ -1496,6 +1516,16 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<Strin
     // flag can never pair with a live non-literal `pending`. Deliberately NOT widened to
     // other pendings (opIndex results etc. are side-effect-bearing — N4 territory).
     let mut pending_is_static_name: bool = false;
+    // batch-32c (N4 site-1, spec batch31-nomatch-illegalop §1.8 corrected by disasm): the
+    // pending is a side-effect-free container ELEMENT READ from a LOCAL receiver
+    // (`local_12.opIndex(0)` — TArray opIndex Thiscall1). Its PshRPtr push may be tagged
+    // `.carry()`: re-evaluating the read at the diamond join cannot observe a different
+    // value (D7 restricts the arms to opCast+TYPEID, and the pre-join calls of the proven
+    // population are pure getters that cannot mutate a local container). Without the tag D9
+    // bailed and BOTH leftover args died (IgnoreActorWhenMoving rendered 0-arg ×2). Same
+    // lifecycle as pending_is_static_name: set only by the CALLSYS/Thiscall1 arm, reset by
+    // every other pending producer.
+    let mut pending_is_pure_elem: bool = false;
     let mut ret_val: Option<String> = None;
     // Target type of the most recent TYPEID push — the implicit type operand of the following
     // `opCast` behaviour call (the lowered form of `Cast<T>(x)`). Resolved to a typename so the
@@ -1659,11 +1689,13 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<Strin
                         let lhs = lhs.to_string();
                         out.push(format!("{p};"));
                         stack.push(Arg::typed(lhs, pending_ty.take()));
-                    } else if pending_is_static_name {
+                    } else if pending_is_static_name || pending_is_pure_elem {
                         // batch-31b (N2b): the pending is the PURE `n"..."`/`FName(...)`
                         // literal of the __STATIC_NAME idiom — no side effect can be
                         // reordered by carrying it across a cast diamond, so it may pass
                         // the D9 carryability gate like any plain const push.
+                        // batch-32c widens this to pure local-container element reads
+                        // (`local_12.opIndex(0)` — see pending_is_pure_elem).
                         stack.push(Arg::typed(p, pending_ty.take()).carry());
                     } else {
                         stack.push(Arg::typed(p, pending_ty.take()));
@@ -2193,6 +2225,7 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<Strin
                     build_call(&mut stack, &f, ctx.refs.is_method_by_id(id), ctx.super_ctor, ctx.refs.func_params_by_id(id), na, trusted, owner, ctx.class_name, n == "CALL", pending_ty.as_deref(), ret_is_ref, global_shadowed, ctx.refs)
                 };
                 pending_is_static_name = false;
+                pending_is_pure_elem = false;
             }
             "CALLSYS" | "Thiscall1" => {
                 test_after_call = false;
@@ -2386,6 +2419,9 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<Strin
                 // build_call returns the literal only for the accessor name; a failed gate
                 // (non-constant Id operand) falls to the `$`-drop and returns None.
                 pending_is_static_name = f == "__STATIC_NAME" && pending.is_some();
+                // batch-32c: tag a pure local-container element read (see the flag's doc).
+                pending_is_pure_elem =
+                    f == "opIndex" && pending.as_deref().map(is_pure_elem_read).unwrap_or(false);
             }
             "CallPtr" => {
                 let f = name(w(ins, 0));
@@ -2393,6 +2429,7 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<Strin
                 pending_const = false;
                 pending_is_ref = false;
                 pending_is_static_name = false;
+                pending_is_pure_elem = false;
                 pending = build_call(&mut stack, &f, false, ctx.super_ctor, None, None, None, None, ctx.class_name, false, None, false, false, ctx.refs);
             }
             // ---- object construction ----
@@ -2403,6 +2440,7 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<Strin
                 pending_ty = Some(ty.clone());
                 pending_const = false;
                 pending_is_ref = false;
+                pending_is_pure_elem = false;
                 pending_is_static_name = false;
                 pending = Some(format!("{ty}({})", args.join(", ")));
             }
