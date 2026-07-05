@@ -779,6 +779,19 @@ fn cast_arg(arg: &Arg, pt: &DataType, refs: &RefResolver) -> String {
                 }
             }
         }
+        // a KNOWN-enum arg feeding an INT-family param needs the explicit int(...) cast
+        // (AngelScript has no implicit enum->int): `SetLevel(int)` fed an ERelationship
+        // fails "Can't implicitly convert from 'ERelationship' to 'int'" (~150 in-game).
+        if pt.token != 5 {
+            if let Some(at) = &arg.ty {
+                if is_enum_name(at)
+                    && matches!(pt.base_name(refs).as_str(),
+                        "int" | "int8" | "int16" | "int64" | "uint" | "uint8" | "uint16" | "uint64")
+                {
+                    return format!("int({})", arg.s);
+                }
+            }
+        }
         return arg.s.clone();
     }
     // an integer constant feeding a float/double param carries IEEE-754 bits, not an int.
@@ -1130,7 +1143,27 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 if let Some(r) = &ref_reg {
                     let dst_slot = w(ins, 0);
                     let dst_is_int = dst_slot > 0 && ctx.slot_type(dst_slot).is_none();
-                    let rhs = enum_to_int(r.clone(), ref_reg_ty.as_deref(), dst_is_int);
+                    // Known-enum source -> int(...) (enum_to_int). Source of UNKNOWN value type
+                    // (a FOREIGN member: the cache stores no value type for foreign fields —
+                    // PropertyReferences.OldTypeId is the OWNER — and the fields map covers only
+                    // this-class) -> wrap too: `local = int(agent.Relationship)` — the hidden
+                    // foreign ENUM reads (~150 in-game "Can't implicitly convert E* to int")
+                    // compile, and int(x) is neutral for every other type an RDR1/2/4 can read
+                    // into an int-defaulted slot (int/bool/float are explicit-int-constructible).
+                    // RDR8 keeps the old path (no UE enum is 8 bytes; int64/double reads stay bare).
+                    let unknowable = match ref_reg_ty.as_deref() {
+                        None => true,
+                        Some(t) => {
+                            let t = t.trim_start_matches("const ");
+                            matches!(t.bytes().next(), Some(b'U') | Some(b'A') | Some(b'F') | Some(b'T'))
+                                && t.as_bytes().get(1).map(|c| c.is_ascii_uppercase()).unwrap_or(false)
+                        }
+                    };
+                    let rhs = if dst_is_int && unknowable && n != "RDR8" {
+                        format!("int({r})")
+                    } else {
+                        enum_to_int(r.clone(), ref_reg_ty.as_deref(), dst_is_int)
+                    };
                     out.push(format!("{} = {rhs};", name(dst_slot)));
                     member_read_slots.insert(dst_slot); // real data value, not a SetV temporary
                 }
