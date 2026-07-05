@@ -1266,6 +1266,20 @@ fn is_enum_name(tyname: &str) -> bool {
     b.len() >= 2 && b[0] == b'E' && b[1].is_ascii_uppercase()
 }
 
+/// Coarse type family for the batch-29b `CpyVtoR4/R8` fold gate: the value register can only
+/// carry the function's return payload when the pending call's return family matches the
+/// function's. `bool` / int-family / float-family buckets; everything else keys on its
+/// template-stripped head name (`TMap<A,B>` == `TMap`), so same-head folds keep the status quo.
+fn ty_family(t: &str) -> &str {
+    let t = t.trim_start_matches("const ");
+    match t {
+        "bool" => "bool",
+        "int" | "int8" | "int16" | "int64" | "uint" | "uint8" | "uint16" | "uint64" => "int",
+        "float" | "float32" | "double" => "float",
+        _ => t.split('<').next().unwrap_or(t),
+    }
+}
+
 /// Wrap an enum-typed RHS being stored into an INT slot as `int(expr)`. AngelScript has no
 /// implicit enum->int conversion, so an enum field-read / enum-returning call stored into an
 /// `int` local fails to compile. Only fires when the value is a known enum AND the dest is an
@@ -2153,7 +2167,24 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<Strin
                 // register content comes from the SLOT operand (e.g. a bool& out-param the call
                 // just wrote: `CalculateDistanceToTarget(.., local_3); return local_3;`).
                 // Flush the call as its own statement and use the slot.
-                if pending.is_some() && pending_ty.as_deref() == Some("void") {
+                //
+                // batch-29b (C6e, specs/batch29-errortail.md §5): the same slot-over-pending
+                // discipline for two more provably-wrong folds. (1) An ASSIGNMENT-shaped
+                // pending (batch-26 operator/RVO-dest fold) is a STATEMENT — the register
+                // holds the SLOT operand's value, not the assignment expression. (2) A call
+                // whose return-type FAMILY mismatches the enclosing function's return type
+                // can't be the return payload either — the proven class is a BOOL
+                // `TMap::Find(key, out)` folded into a FLOAT return whose true payload is
+                // the out-param slot (`return this.Severities.Find(ERelationship(local_5),
+                // local_2);` — 3 "No conversion from 'bool' to 'float'" errors). Flush and
+                // use the slot; unknown types on either side keep the status-quo fold.
+                let foldable = pending.as_deref().map(|p| assign_lhs(p).is_none()).unwrap_or(true)
+                    && match (pending_ty.as_deref(), ctx.ret_ty.map(|t| t.base_name(ctx.refs))) {
+                        (Some("void"), _) => false,
+                        (Some(pt), Some(rt)) => ty_family(pt) == ty_family(&rt),
+                        _ => true, // either side unknown -> status quo (fold)
+                    };
+                if pending.is_some() && !foldable {
                     flush!();
                 }
                 // batch-24a (G1): in an RVO function the 4/8-byte value register NEVER carries
@@ -2179,7 +2210,20 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<Strin
                 // return local_3;`). Folding it in rendered `return VoidCall(...)` / `if
                 // (VoidCall(...) == 0)` ("No conversion from 'void' to ..."). Flush the call as
                 // its own statement and use the slot.
-                if pending.is_some() && pending_ty.as_deref() == Some("void") {
+                //
+                // batch-29b (C5, specs/batch29-errortail.md §5): folding `pending` is only
+                // valid when the pending expression IS the tested bool (a bool-returning call
+                // immediately consumed — the `if (X.IsValid())` population). An ASSIGNMENT-
+                // shaped pending (batch-26 operator/RVO-dest fold: `local_4 =
+                // this.GetSensedLivingEnemies(...)`) is a STATEMENT whose value the register
+                // does NOT hold — CpyVtoR1 copies the NAMED SLOT operand (bytecode proof:
+                // CheckAnyHostilesOrEnemiesSensed tests w65532, a bool param), and the folded
+                // render `if (x = call() == 0)` is unparseable (18 parse [E]s, 4 module
+                // killers) AND tests the wrong value. A non-bool pending can't be the 1-byte
+                // test value either. Flush both as their own statement and test the slot.
+                let foldable = pending_ty.as_deref() == Some("bool")
+                    && pending.as_deref().map(|p| assign_lhs(p).is_none()).unwrap_or(false);
+                if pending.is_some() && !foldable {
                     flush!();
                 }
                 let is_bool = (pending.is_some() && pending_ty.as_deref() == Some("bool"))
