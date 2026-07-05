@@ -283,8 +283,17 @@ impl RefResolver {
         // `UAIGroup_Combat::StaticClass()` into a `TSubclassOf<UGothicAIGroup>` (vanilla-
         // compiled => UAIGroup_Combat derives UGothicAIGroup), and single inheritance places
         // UGothicAIGroup at or above the direct super UAIGroup_Combat_Base.
-        const KNOWN_NATIVE_HIERARCHY: &[(&str, &str)] =
-            &[("UAIGroup_Combat_Base", "UGothicAIGroup")];
+        // batch-31d (N7, spec batch31-nomatch-illegalop §1.7): AGothicNPCState derives
+        // AGothicCharacterState — evidence: the vanilla-compiled corpus passes
+        // `GetAllNPCStates()` elements (TArray<AGothicNPCState>) into script params typed
+        // AGothicCharacterState (the OldCamp guard CALL 0x2436d), and the
+        // GASCharacterStateMixins free fn `ExchangeDailyRoutineToClass(AGothicCharacterState
+        // Character, ...)` wraps exactly `Cast<AGothicNPCState>(Character)` — both directions
+        // of the single-inheritance proof.
+        const KNOWN_NATIVE_HIERARCHY: &[(&str, &str)] = &[
+            ("UAIGroup_Combat_Base", "UGothicAIGroup"),
+            ("AGothicNPCState", "AGothicCharacterState"),
+        ];
         if sub == sup {
             return true;
         }

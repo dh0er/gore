@@ -398,6 +398,21 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
                 }
             }
         }
+        // batch-31d (N7, spec batch31-nomatch-illegalop §1.7): most-derived merge — a
+        // param-derived candidate that is a PROVABLE ANCESTOR of the cache's own obj_locals
+        // type must not widen it. The vanilla static type compiled every use in the vanilla
+        // source (member access on the ancestor stays legal on the derived type), while the
+        // widened type loses derived-only natives: the OldCamp `GetAllNPCStates()` loop
+        // element (obj_locals AGothicNPCState) paired with a guard CALL's
+        // AGothicCharacterState param -> `local_24.RemoveFromWorld()` on the BASE type,
+        // 5× "No matching signatures" (the FreeMine twins, guard-free, kept NPCState and
+        // compile). Hierarchy comparability via is_subclass (script-super walk +
+        // KNOWN_NATIVE_HIERARCHY).
+        if let Some(vanilla) = vanilla_obj_types.get(slot) {
+            if vanilla != ty && refs.is_subclass(vanilla, ty) {
+                continue;
+            }
+        }
         local_types.insert(*slot, ty.clone());
     }
     // batch-20 Class C: unlike the float out-refs (declaration-only), a BOOL out-ref slot must
@@ -647,6 +662,13 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
                             continue;
                         }
                     }
+                }
+            }
+            // batch-31d (N7): declaration-side mirror of the most-derived merge above — the
+            // vanilla obj_locals type wins over a param-derived ANCESTOR candidate.
+            if let Some(vanilla) = vanilla_obj_types.get(slot) {
+                if vanilla != ty && refs.is_subclass(vanilla, ty) {
+                    continue;
                 }
             }
             locals.insert(*slot, ty.clone());
@@ -1859,9 +1881,34 @@ fn infer_call_result_types(
     // rendered return type + receiver slot of the just-completed call (None once anything
     // non-benign executes, so a later CpyRtoV can't adopt a stale type).
     let mut last: Option<(String, Option<i32>)> = None;
+    // batch-31d (N8, spec batch31-nomatch-illegalop §1.9): value type of the LAST ADDSi
+    // member access, surviving a following PopRPtr — the `PshVPtr base ; ADDSi off,tid ;
+    // [ADDSi ...] ; PopRPtr ; CpyRtoV8 dst` idiom is a MEMBER READ into the register, and
+    // the dst slot (PointCorrection's w24 = `CalculatedPosition.Position`, FVector2D) was
+    // width-declared `int`, poisoning 9 error lines (5 no-match + 2 no-conversion-to-math
+    // + 2 implconv). The ADDSi tid resolves the field's value type independent of the base
+    // slot (script owners only — field_type_by_class; native owners yield None). NOTE: the
+    // spec's §1.9 "&out scratch" premise is disasm-REFUTED (w24 is never PSF'd; it feeds
+    // BY-VALUE FVector2D params) — this tracker is the corrected lever, same declaration-
+    // only, primitive-upgrade-only safety posture as the A3 call-result case.
+    let mut member_ty: Option<String> = None; // last ADDSi's field value type
+    let mut member_reg: Option<String> = None; // ... after PopRPtr loaded the register
     let mut ostack: Vec<Option<i32>> = Vec::new();
     let mut cand: HashMap<i32, Option<String>> = HashMap::new();
     for ins in &instrs {
+        // PopRPtr moves the member pointer into the register (member_ty -> member_reg, the
+        // form a following CpyRtoV may consume); everything except ADDSi/PopRPtr/SUSPEND/
+        // CpyRtoV kills both trackers.
+        match ins.op.name {
+            "ADDSi" | "SUSPEND" | "CpyRtoV4" | "CpyRtoV8" => {}
+            "PopRPtr" => {
+                member_reg = member_ty.take();
+            }
+            _ => {
+                member_ty = None;
+                member_reg = None;
+            }
+        }
         match ins.op.name {
             "PshVPtr" | "PSF" => {
                 let s = w0(ins);
@@ -1878,6 +1925,13 @@ fn infer_call_result_types(
                 if let Some(top) = ostack.last_mut() {
                     *top = None;
                 }
+                let off = w0(ins);
+                let tid = ins.dwords.first().copied().unwrap_or(0) as i32;
+                member_ty = refs.member(tid, off).and_then(|field| {
+                    refs.type_by_id(tid)
+                        .and_then(|cls| refs.field_type_by_class(cls, field))
+                        .map(|s| s.to_string())
+                });
                 last = None;
             }
             "CALL" | "CALLINTF" | "CALLBND" => {
@@ -1907,7 +1961,11 @@ fn infer_call_result_types(
                 last = ret.map(|t| (t, recv));
             }
             "CpyRtoV4" | "CpyRtoV8" => {
-                if let Some((ty, recv)) = last.take() {
+                // A3 call-result case first; else the batch-31d member-read case (the
+                // PopRPtr'd ADDSi chain) — identical candidate/conflict discipline, and
+                // usable_ret_type keeps primitives/enums/bare templates out either way.
+                let src_ty = last.take().or_else(|| member_reg.take().map(|t| (t, None)));
+                if let Some((ty, recv)) = src_ty {
                     let d = w0(ins);
                     if d > 0 && !obj.contains(&d) && !disq.contains(&d) {
                         if let Some(ty) = usable_ret_type(ty, recv, known) {
