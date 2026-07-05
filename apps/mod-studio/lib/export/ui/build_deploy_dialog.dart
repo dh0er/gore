@@ -10,6 +10,7 @@ import '../../audio/domain/audio_replacements_notifier.dart';
 import '../../core/mod_ffi.dart';
 import '../../core/providers.dart';
 import '../../editor/domain/overrides_notifier.dart';
+import '../../l10n/app_localizations.dart';
 import '../../loc/domain/loc_edits_notifier.dart';
 import '../../project/project_controller.dart';
 import '../../scripts/domain/script_mods_notifier.dart';
@@ -43,7 +44,13 @@ class _BuildDeployDialogState extends ConsumerState<BuildDeployDialog> {
       await action();
     } catch (e) {
       if (mounted) setState(() => _error = true);
-      _set('$e');
+      final msg = '$e';
+      // gore-mod's deploy owner-guard carries a stable marker; surface it in the user's
+      // language instead of the raw FFI error. Every other error stays raw — it holds the
+      // actionable detail.
+      _set(mounted && msg.contains('manager loadout active')
+          ? AppLocalizations.of(context).managerDeployActive
+          : msg);
     } finally {
       if (mounted) setState(() => _busy = false);
     }

@@ -142,6 +142,11 @@ enum Commands {
         #[command(subcommand)]
         action: cmd::texture::TextureAction,
     },
+    /// Multi-mod manager: library + loadout + conflicts + composed deploy
+    Mgr {
+        #[command(subcommand)]
+        action: cmd::mgr::MgrAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -319,6 +324,7 @@ fn main() {
             ModAction::Undeploy { game } => cmd::modcmd::undeploy(game),
         },
         Commands::Texture { action } => cmd::texture::run(action),
+        Commands::Mgr { action } => cmd::mgr::run(action),
     };
     if let Err(e) = result {
         eprintln!("error: {e:#}");

@@ -26,8 +26,8 @@ Release steps (additive; pass at least one, or --all):
     --dry-run     print every action, change nothing
 
 Tags are per-project prefixed: gore-save-vX.Y.Z, gore-mod-vX.Y.Z,
-gore-cli-vX.Y.Z (the gore CLI keeps the gore-cli- tag prefix). The Release
-workflow matches the prefix and builds only that project.
+gore-manager-vX.Y.Z, gore-cli-vX.Y.Z (the gore CLI keeps the gore-cli- tag
+prefix). The Release workflow matches the prefix and builds only that project.
 
 Examples:
     python build.py all test
@@ -79,7 +79,7 @@ ISCC = _resolve_tool(
 # Project registry                                                            #
 # --------------------------------------------------------------------------- #
 # Each project declares its kind plus the paths the recipes need. Only the
-# three shippable products live here; internal libraries (gore-reflect,
+# shippable products live here; internal libraries (gore-reflect,
 # gore-save, gore-ffi, gore-as, ...) are plain workspace crates with no release
 # entry. A project may carry releasable=False so `all` skips it for
 # release/dist and `release <project>` rejects it.
@@ -112,6 +112,20 @@ PROJECTS: dict[str, dict] = {
         "dist_zip": "gore-mod-{version}-windows-x64",
         "releasable": True,
     },
+    "gore-manager": {  # mod manager (Flutter, WinSparkle)
+        "kind": "flutter",
+        "dir": "apps/mod-manager",
+        "pubspec": "pubspec.yaml",
+        "tag_prefix": "gore-manager",
+        "changelog": "CHANGELOG.md",
+        "installer": "installer/setup.iss",
+        "installer_name": "GoreManagerSetup",
+        "exe": "gore_manager.exe",  # CMake BINARY_NAME
+        "core_crate": "gore-ffi",  # shares the mod-studio FFI crate
+        "core_dll": "gore_ffi",  # dll gore_ffi.dll (cargo underscores it)
+        "dist_zip": "gore-manager-{version}-windows-x64",
+        "releasable": True,
+    },
     "gore": {  # the unified CLI (was gore-cli)
         "kind": "rust-bin",
         "dir": "crates/gore",
@@ -128,7 +142,7 @@ PROJECTS: dict[str, dict] = {
     },
 }
 
-RELEASE_ORDER = ["gore", "gore-save", "gore-mod"]  # for `all`
+RELEASE_ORDER = ["gore", "gore-save", "gore-mod", "gore-manager"]  # for `all`
 
 
 def env() -> dict[str, str]:

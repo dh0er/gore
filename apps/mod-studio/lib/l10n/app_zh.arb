@@ -95,5 +95,6 @@
   "modNameControlCharacters": "不得包含控制字符",
   "modNamePathSeparators": "不得包含路径分隔符",
   "modNameNotAFolderName": "不是有效的文件夹名称",
-  "localizedTextExtractedCount": "已提取 {idCount} 个 ID，涵盖 {languageCount} 种语言"
+  "localizedTextExtractedCount": "已提取 {idCount} 个 ID，涵盖 {languageCount} 种语言",
+  "managerDeployActive": "mod-manager 的 loadout 已启用。请先在 gore-manager 中执行 undeploy。"
 }

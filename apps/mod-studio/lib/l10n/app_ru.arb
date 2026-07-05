@@ -95,5 +95,6 @@
   "modNameControlCharacters": "Не должно содержать управляющих символов",
   "modNamePathSeparators": "Не должно содержать разделителей пути",
   "modNameNotAFolderName": "Недопустимое имя папки",
-  "localizedTextExtractedCount": "Извлечено {idCount} идентификаторов на {languageCount} языках"
+  "localizedTextExtractedCount": "Извлечено {idCount} идентификаторов на {languageCount} языках",
+  "managerDeployActive": "Активен loadout mod-manager. Сначала выполните undeploy в gore-manager."
 }
