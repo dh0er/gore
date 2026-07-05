@@ -652,6 +652,47 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
                 }
             }
         }
+        // G1c (batch-26): CALLSYS value-operator with an RVO destination slot. The fork's
+        // Binds register FVector-family operators as returning the struct BY VALUE, so the
+        // caller pushes a hidden PSF dest directly BELOW the receiver: [args..., dest, recv].
+        // The is_operator exclusion above (protecting ref-returning opAssign) let the generic
+        // arity trim eat the REAL rhs and substitute the dest -> discarded `(a / dest);`
+        // statements (458 in-game "Result of expression is unused") and silently-wrong
+        // compound assigns (`x += dead_temp`). Gate on the SAME data-driven rvo_slot probe
+        // that already widened the split window: a ref-returning operator pushes no dest and
+        // can never match (ret_is_ref + F/T-head are inside rvo_slot).
+        if is_operator && rvo_slot
+            && a.last()
+                .map(|x| x.is_psf && x.ty.as_deref().map(head) == ret_ty.map(head))
+                .unwrap_or(false)
+        {
+            let dest = a.pop().unwrap();
+            if let Some(w) = arity {
+                let w = w.min(a.len());
+                if a.len() > w { a.drain(..a.len() - w); }
+            }
+            match (assign_op(f), binop_method(f), a.first()) {
+                (Some(op), _, Some(rhs)) => {
+                    // compound/plain assign: the result lives in the RECEIVER; `dest` is the
+                    // dead return-value temp. Mirror the existing arm's copyctor stub gate.
+                    if op == "=" && recv.s == "this" {
+                        return Some(amm("copyctor"));
+                    }
+                    let r = params.and_then(|p| p.first()).map(|pt| cast_arg(rhs, pt, refs))
+                        .unwrap_or_else(|| rhs.s.clone());
+                    return Some(format!("{} {op} {}", recv.s, r));
+                }
+                (None, Some(op), Some(rhs)) => {
+                    // pure binop: the DEST receives the result.
+                    let r = params.and_then(|p| p.first()).map(|pt| cast_arg(rhs, pt, refs))
+                        .unwrap_or_else(|| rhs.s.clone());
+                    return Some(format!("{} = ({} {op} {})", dest.s, recv.s, r));
+                }
+                // rhs unrecovered (short/take-all stack): restore and fall through to the
+                // existing arms -> status-quo render, zero regression.
+                _ => a.push(dest),
+            }
+        }
         // trim phantom extras: keep only the last `w` user args (the cache arity may include the
         // now-popped `this`, so cap below the popped count, never above).
         if let Some(w) = arity {
