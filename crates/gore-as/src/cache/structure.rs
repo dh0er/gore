@@ -21,7 +21,7 @@ use super::walk_modules::FuncCode;
 
 /// A pushed call argument: its rendered text plus whether it originated from an integer
 /// value (a constant or `int` slot), so it can be cast to the callee's expected `bool`/enum.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 struct Arg {
     s: String,
     is_int: bool,
@@ -35,24 +35,33 @@ struct Arg {
     /// is the ADDRESS of a slot, used as an out / RVO / in-place-ctor receiver. Lets the CALLSYS
     /// handler recover `slot = T(args)` from a `$beh0` construct behaviour instead of dropping it.
     is_psf: bool,
+    /// True for a synthesized implicit-context marker (`__WorldContext` generator global): it
+    /// occupies a stack slot so the split arithmetic matches the native's real frame (whose arity
+    /// counts the hidden `WorldContextObject`), but it is NOT a source-level arg — build_call
+    /// strips it after collection and reduces the render arity accordingly.
+    is_ctx: bool,
 }
 impl Arg {
     fn int(s: String) -> Arg {
-        Arg { s, is_int: true, ty: None, cbits: None, is_psf: false }
+        Arg { s, is_int: true, ..Default::default() }
     }
     fn iconst(s: String, cbits: ConstBits) -> Arg {
-        Arg { s, is_int: true, ty: None, cbits: Some(cbits), is_psf: false }
+        Arg { s, is_int: true, cbits: Some(cbits), ..Default::default() }
     }
     fn obj(s: String) -> Arg {
-        Arg { s, is_int: false, ty: None, cbits: None, is_psf: false }
+        Arg { s, ..Default::default() }
     }
     fn typed(s: String, ty: Option<String>) -> Arg {
-        Arg { s, is_int: false, ty, cbits: None, is_psf: false }
+        Arg { s, ty, ..Default::default() }
     }
     /// A `PSF`-pushed slot address (out / RVO / in-place-ctor receiver), carrying the slot's
     /// recovered type so the construct can render `slot = <ty>(args)`.
     fn psf(s: String, ty: Option<String>) -> Arg {
-        Arg { s, is_int: false, ty, cbits: None, is_psf: true }
+        Arg { s, ty, is_psf: true, ..Default::default() }
+    }
+    /// A synthesized implicit `__WorldContext` marker (see `is_ctx`).
+    fn ctx() -> Arg {
+        Arg { is_ctx: true, ..Default::default() }
     }
 }
 
@@ -434,7 +443,7 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
             }
         };
     let need = trusted_arity.map(|n| n + is_method as usize + rvo_slot as usize);
-    let mut a: Vec<Arg> = match need {
+    let collected: Vec<Arg> = match need {
         Some(k) if stack.len() > k => {
             // Split off this call's own operands (top `k`); the deeper entries belong to an
             // ENCLOSING call. Drop STRANDED slot-sourced ints (SetV*+PshV4 temporaries) left over
@@ -448,13 +457,21 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
             own
         }
         _ => std::mem::take(stack),
-    }
-        .into_iter()
-        .filter(|x| !x.s.is_empty() && x.s != UNRESOLVED)
+    };
+    // Implicit `__WorldContext` markers occupied a stack slot so the split arithmetic matched the
+    // native's real frame (whose declared arity counts the hidden WorldContextObject param). They
+    // are NOT source args — the UE-AngelScript compiler auto-injects the world context — so strip
+    // them from the rendered args and lower the effective arity by the count removed. Without this,
+    // dropping them at push time made the split one entry too deep and stole a neighbouring call's
+    // arg (GetNPCState-shifts-args family).
+    let ctx_count = collected.iter().filter(|x| x.is_ctx).count();
+    let mut a: Vec<Arg> = collected.into_iter()
+        .filter(|x| !x.is_ctx && !x.s.is_empty() && x.s != UNRESOLVED)
         .collect();
     // Effective arity: the in-game compile validates against the shipped Binds.Cache, so its native
     // arity is authoritative — prefer it over the script FunctionReferences param count. Falls back.
-    let arity = native_arity.or_else(|| params.map(|p| p.len()));
+    // Subtract any stripped implicit-context markers (they inflate both the frame and the arity).
+    let arity = native_arity.or_else(|| params.map(|p| p.len())).map(|n| n.saturating_sub(ctx_count));
     // Receiver: a METHOD call always pushes its receiver as the top entry (the cache param count is
     // unreliable here — it often COUNTS the implicit `this`), so detect by the bIsMethod flag.
     let has_recv = is_method && !a.is_empty();
@@ -1007,7 +1024,12 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                         stack.push(Arg::obj(format!("{cls}::StaticClass()")));
                     } else if nm.starts_with("__") {
                         // other implicit generator global (e.g. __WorldContext) — not a
-                        // source-level identifier and not a real arg; drop it.
+                        // source-level identifier. Push a MARKER (not dropped): the native's arity
+                        // counts the hidden WorldContextObject param, so dropping it makes the
+                        // split take one entry too deep and steal a neighbouring call's arg
+                        // (GetNPCState family). The marker keeps stack arithmetic honest;
+                        // build_call strips it from the rendered args + lowers arity by 1.
+                        stack.push(Arg::ctx());
                     } else if let Some(ns) = ctx.refs.global_ns(ptr) {
                         stack.push(Arg::obj(format!("{ns}::{nm}"))); // e.g. `FColor::Red`
                     } else {
