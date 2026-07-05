@@ -1637,6 +1637,66 @@ fn has_no_default_ctor(ty: &str) -> bool {
     matches!(ty, "FStatID" | "FScopeCycleCounter" | "FAngelscriptGameThreadScopeWorldContext")
 }
 
+/// batch-25i: net brace delta of an emitted body line. The structurer/emitter only produce
+/// STRUCTURAL braces as standalone lines (`{ind}{{` / `{ind}}}`), so counting is keyed on the
+/// trimmed content being exactly `{`/`}` — statement lines whose string literals contain
+/// braces (`"Value {0}"`) trim to longer text and never miscount.
+fn brace_net(line: &str) -> i32 {
+    match line.trim() {
+        "{" => 1,
+        "}" => -1,
+        _ => 0,
+    }
+}
+
+/// batch-25i: the innermost brace-block span containing line `i`: returns `(start, end)` line
+/// indices of the opening/closing brace lines (exclusive bounds for content). When `i` sits at
+/// function top level, returns `(0, lines.len())` — the whole body.
+fn block_span(lines: &[&str], i: usize) -> (usize, usize) {
+    let mut start = 0usize;
+    let mut bal = 0i32;
+    for j in (0..i).rev() {
+        bal += brace_net(lines[j]);
+        if bal > 0 {
+            start = j;
+            break;
+        }
+    }
+    let mut end = lines.len();
+    bal = 0;
+    for (j, l) in lines.iter().enumerate().skip(i + 1) {
+        bal += brace_net(l);
+        if bal < 0 {
+            end = j;
+            break;
+        }
+    }
+    (start, end)
+}
+
+/// batch-25i: identifier-boundary rename of `ident` -> `new` in one line (same boundary rule
+/// as [`count_ident`]; byte-copies non-matches so UTF-8 string literals survive intact).
+fn rename_ident(line: &str, ident: &str, new: &str) -> String {
+    let (b, ib) = (line.as_bytes(), ident.as_bytes());
+    let is_id = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    let mut out: Vec<u8> = Vec::with_capacity(b.len() + 8);
+    let mut i = 0usize;
+    while i < b.len() {
+        if i + ib.len() <= b.len()
+            && &b[i..i + ib.len()] == ib
+            && (i == 0 || !is_id(b[i - 1]))
+            && (i + ib.len() == b.len() || !is_id(b[i + ib.len()]))
+        {
+            out.extend_from_slice(new.as_bytes());
+            i += ib.len();
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).unwrap_or_else(|_| line.to_string())
+}
+
 /// Count identifier-boundary occurrences of `ident` in `line` (so `local_3` does not match
 /// inside `local_32` or `local_3_2`).
 fn count_ident(line: &str, ident: &str) -> usize {
@@ -1735,9 +1795,12 @@ fn no_assign_type(ty: &str) -> bool {
 /// - WRITE-ONLY (any number of assignments, no reads): every assignment becomes
 ///   `TY local_N[_k] = ...;` with fresh names — nothing else references the slot, so sinking the
 ///   declarations into blocks is scope-safe (mirrors the FStatID rewrite).
-/// - SINGLE assignment + reads, ALL references at the same indentation (one block): decl-init in
-///   place, name kept — later reads are lvalue uses (a non-const ref binds to an lvalue; only
-///   temporaries fail), and same-indent means the declaration dominates every read.
+/// - SINGLE assignment + reads, ALL reads inside the assignment's innermost brace block and
+///   after it (batch-25i: was "same indentation", which wrongly accepted equal-depth lines in
+///   DIFFERENT blocks — e.g. two braced switch cases — leaving later references undeclared
+///   once the decl-init became block-scoped): decl-init in place, name kept — later reads are
+///   lvalue uses (a non-const ref binds to an lvalue; only temporaries fail), and block-span
+///   containment means the declaration dominates every read.
 /// Anything else (read before assign, cross-block reads, self-referential RHS) keeps the hoisted
 /// declaration — the status-quo compile error, never a new one.
 fn rewrite_no_assign_locals(body: &str, locals: &BTreeMap<i32, String>) -> (String, HashSet<i32>) {
@@ -1749,13 +1812,15 @@ fn rewrite_no_assign_locals(body: &str, locals: &BTreeMap<i32, String>) -> (Stri
         }
         let ident = format!("local_{slot}");
         let assign_pat = format!("{ident} = ");
+        let lines: Vec<&str> = out.lines().collect();
         let mut assigns = 0usize;
         let mut reads = 0usize;
         let mut first_is_assign = false;
         let mut first = true;
-        let mut indents: Vec<&str> = Vec::new();
+        let mut assign_line: Option<usize> = None; // line index of the (first) assignment
+        let mut read_lines: Vec<usize> = Vec::new();
         let mut ok = true;
-        for line in out.lines() {
+        for (i, line) in lines.iter().enumerate() {
             let c = count_ident(line, &ident);
             if c == 0 {
                 continue;
@@ -1768,21 +1833,29 @@ fn rewrite_no_assign_locals(body: &str, locals: &BTreeMap<i32, String>) -> (Stri
             }
             if is_assign {
                 assigns += 1;
+                assign_line.get_or_insert(i);
             } else {
                 reads += c;
+                read_lines.push(i);
                 if c > 1 {
                     ok = false; // multi-occurrence non-assign line (self-referential etc.) — bail
                     break;
                 }
             }
-            indents.push(&line[..line.len() - t.len()]);
         }
         if !ok || assigns == 0 || !first_is_assign {
             continue;
         }
         let write_only = reads == 0;
-        let uniform_indent = indents.windows(2).all(|w| w[0] == w[1]);
-        if !write_only && !(assigns == 1 && uniform_indent) {
+        // batch-25i scope gate for the single-assign+reads shape: every read must sit INSIDE
+        // the assignment's innermost brace block (and after it — guaranteed by first_is_assign
+        // plus line order), so the block-scoped decl-init dominates every read.
+        let in_block = || {
+            let Some(a) = assign_line else { return false };
+            let (_, end) = block_span(&lines, a);
+            read_lines.iter().all(|&r| r > a && r < end)
+        };
+        if !write_only && !(assigns == 1 && in_block()) {
             continue;
         }
         let mut k = 0usize;
@@ -1865,11 +1938,21 @@ fn rewrite_no_assign_residual_assigns(
 /// Iterator locals (`TArrayIterator<T>`, `TSetIterator<T>`, `TMapIterator<T>`, ... incl. Const
 /// variants) have NO default constructor, so a bare hoisted `TArrayIterator<T> local_N;` fails
 /// "No default constructor". The only legal form is declaration-with-initializer from the
-/// `Iterator()` call that produces it: `TArrayIterator<T> local_N = container.Iterator();`. Unlike
-/// the ctor-only (FStatID) case an iterator IS read afterwards (in its loop), so the gate is only
-/// that the local's FIRST mention in the body is a single-`ident` assignment `local_N = ...;` —
-/// then decl-init at that site is valid and nothing reads it before. Returns the rewritten body +
-/// the set of slots whose hoisted declaration must be suppressed.
+/// `Iterator()` call that produces it: `auto local_N = container.Iterator();`. Unlike the
+/// ctor-only (FStatID) case an iterator IS read afterwards (in its loop).
+///
+/// batch-25i (scope-aware rework): batch-24d braces every switch case body, so an in-place
+/// decl-init inside a braced case is BLOCK-SCOPED — the old first-mention-only rewrite left
+/// any reference in a LATER case/block undeclared (APuzzleStoneTorch_Manager::InitPuzzleState:
+/// case 0/1 declared `auto local_8`, case 3 still referenced `local_8` -> "'local_8' is not
+/// declared", the single batch-24 regression). References are now grouped by the innermost
+/// brace block of each assignment: every group must START with a `local_N = ...;` assignment
+/// and contain only references inside that assignment's block span. Group 1 keeps the name;
+/// each later group decl-inits a FRESH name (`local_N_2`, ...) and renames its in-block
+/// references — the compiler-reused slot becomes one source-level local per block, all
+/// initialized (the original per-case iterators). ANY reference that doesn't fit this shape
+/// (read before assign, a bare read outside every assign's block) keeps the hoisted
+/// declaration — the status-quo error, never a broken reference.
 fn rewrite_iterator_decl_init(body: &str, locals: &BTreeMap<i32, String>) -> (String, HashSet<i32>) {
     let is_iter = |ty: &str| {
         let h = ty.split('<').next().unwrap_or(ty);
@@ -1884,43 +1967,77 @@ fn rewrite_iterator_decl_init(body: &str, locals: &BTreeMap<i32, String>) -> (St
         }
         let ident = format!("local_{slot}");
         let pat = format!("{ident} = ");
-        // The FIRST line mentioning the ident must be a single-occurrence assignment `local_N = …;`.
-        let mut first_ok = false;
-        for line in out.lines() {
-            if count_ident(line, &ident) == 0 {
-                continue;
-            }
-            let t = line.trim_start();
-            first_ok = count_ident(line, &ident) == 1 && t.starts_with(&pat) && t.ends_with(';');
-            break;
-        }
-        if !first_ok {
+        let lines: Vec<&str> = out.lines().collect();
+        let refs: Vec<usize> = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| count_ident(l, &ident) > 0)
+            .map(|(i, _)| i)
+            .collect();
+        if refs.is_empty() {
             continue;
         }
-        // Rewrite ONLY that first assignment to a decl-init; leave later reads untouched.
-        let mut done = false;
-        let mut rewritten = String::with_capacity(out.len() + 32);
-        for line in out.lines() {
-            let t = line.trim_start();
-            if !done && count_ident(line, &ident) == 1 && t.starts_with(&pat) && t.ends_with(';') {
+        // Group references: each group starts at an assignment line and swallows every
+        // following reference inside that assignment's innermost block span.
+        let mut groups: Vec<(usize, Vec<usize>)> = Vec::new(); // (assign line, later refs)
+        let mut ok = true;
+        let mut k = 0usize;
+        while k < refs.len() {
+            let i = refs[k];
+            let t = lines[i].trim_start();
+            let is_assign =
+                count_ident(lines[i], &ident) == 1 && t.starts_with(&pat) && t.ends_with(';');
+            if !is_assign {
+                ok = false; // read before any in-block assignment — keep the hoist
+                break;
+            }
+            let (_, end) = block_span(&lines, i);
+            let mut members: Vec<usize> = Vec::new();
+            k += 1;
+            while k < refs.len() && refs[k] < end {
+                members.push(refs[k]);
+                k += 1;
+            }
+            groups.push((i, members));
+        }
+        if !ok || groups.is_empty() {
+            continue;
+        }
+        // Render. `auto`, not the inferred iterator type: the cache's recorded return type
+        // does not reliably distinguish Const vs mutable Iterator overloads (the receiver's
+        // constness decides in-source), so a spelled-out head fails "Can't implicitly convert
+        // TXIterator<T> <-> TXConstIterator<T>" whenever we guess wrong (72 in-game errors;
+        // the batch-9 const-flip regression was the same coin's other face). AngelScript's
+        // auto infers the exact overload the compiler resolves.
+        let mut new_names: HashMap<usize, String> = HashMap::new(); // line -> name for renames
+        let mut decl_lines: HashSet<usize> = HashSet::new();
+        for (g, (assign, members)) in groups.iter().enumerate() {
+            decl_lines.insert(*assign);
+            if g > 0 {
+                let fresh = format!("{ident}_{}", g + 1);
+                new_names.insert(*assign, fresh.clone());
+                for m in members {
+                    new_names.insert(*m, fresh.clone());
+                }
+            }
+        }
+        let mut rewritten = String::with_capacity(out.len() + 64);
+        for (i, line) in lines.iter().enumerate() {
+            let line: String = match new_names.get(&i) {
+                Some(new) => rename_ident(line, &ident, new),
+                None => (*line).to_string(),
+            };
+            if decl_lines.contains(&i) {
+                let t = line.trim_start();
                 let indent = &line[..line.len() - t.len()];
-                // `auto`, not the inferred iterator type: the cache's recorded return type does
-                // not reliably distinguish Const vs mutable Iterator overloads (the receiver's
-                // constness decides in-source), so a spelled-out head fails "Can't implicitly
-                // convert TXIterator<T> <-> TXConstIterator<T>" whenever we guess wrong (72
-                // in-game errors; the batch-9 const-flip regression was the same coin's other
-                // face). AngelScript's auto infers the exact overload the compiler resolves.
                 let _ = writeln!(rewritten, "{indent}auto {t}");
-                done = true;
             } else {
-                rewritten.push_str(line);
+                rewritten.push_str(&line);
                 rewritten.push('\n');
             }
         }
-        if done {
-            out = rewritten;
-            suppressed.insert(*slot);
-        }
+        out = rewritten;
+        suppressed.insert(*slot);
     }
     (out, suppressed)
 }
