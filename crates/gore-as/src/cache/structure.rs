@@ -1422,6 +1422,17 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                         .type_by_id(tid)
                         .and_then(|cls| ctx.refs.field_type_by_class(cls, &field))
                         .map(|s| s.to_string())
+                })
+                // batch-25e (E): composed CONTAINER types of KNOWN native-class fields — the
+                // receiver's `TMap<K, V>` must reach cast_container_args or the int keys of
+                // Add/FindOrAdd/Find on e.g. `m_CustomCollisionResponse` never get their enum
+                // wrap (native owners store no field value type in the script cache).
+                // Table-driven (refs::known_native_field_subtype), capture-candidate-verified.
+                .or_else(|| {
+                    ctx.refs
+                        .type_by_id(tid)
+                        .and_then(|cls| ctx.refs.known_native_field_subtype(cls, &field))
+                        .map(|s| s.to_string())
                 });
                 // batch-25a (G2): when the normal chain can't type the field (NATIVE struct
                 // owner), consult the in-crate native-field table — carried in the SEPARATE

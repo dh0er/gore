@@ -435,6 +435,47 @@ impl RefResolver {
     pub fn static_name_count(&self) -> usize {
         self.static_names.len()
     }
+    /// Composed CONTAINER type of a NATIVE class's field (batch-25e,
+    /// specs/batch23-nomatch.md E; precedent: KNOWN_NATIVE_ARITY). The script cache stores no
+    /// value types for native-class fields, so `cast_container_args` could never derive the
+    /// key/value enums for e.g. `this.m_CollisionComp.m_CustomCollisionResponse.Add(1, 1)`
+    /// (25 in-game errors: TMap::Add/FindOrAdd/Find with bare int keys). Every entry's
+    /// subtypes are taken VERBATIM from the live compiler's `Candidates are:` lines in
+    /// capture.batch24-0705 (authoritative), keyed by the exact ADDSi-tid owners probed at
+    /// the failing sites (all three UHit*CollisionComponent variants carry their own
+    /// property-reference key). FWeatherSaveGame.DailyWeathers (named by the spec) is
+    /// deliberately ABSENT: batch-24 shows zero errors for it, so no candidate lines exist
+    /// to seed it from — never guess subtypes.
+    pub fn known_native_field_subtype(&self, class: &str, field: &str) -> Option<&'static str> {
+        const KNOWN_NATIVE_FIELD_SUBTYPES: &[(&str, &str, &str)] = &[
+            (
+                "UHitBoxCollisionComponent",
+                "m_CustomCollisionResponse",
+                "TMap<ECollisionChannel, ECollisionResponse>",
+            ),
+            (
+                "UHitCapsuleCollisionComponent",
+                "m_CustomCollisionResponse",
+                "TMap<ECollisionChannel, ECollisionResponse>",
+            ),
+            (
+                "UHitConeCollisionComponent",
+                "m_CustomCollisionResponse",
+                "TMap<ECollisionChannel, ECollisionResponse>",
+            ),
+            (
+                "FFXParticleSystem",
+                "NiagaraSystemPathBySurfaceType",
+                "TMap<EPhysicalSurface, TSoftObjectPtr<UNiagaraSystem>>",
+            ),
+            ("FWeatherSaveGame", "WeatherModifiers", "TMap<EWeather, float32>"),
+        ];
+        KNOWN_NATIVE_FIELD_SUBTYPES
+            .iter()
+            .find(|(c, f, _)| *c == class && *f == field)
+            .map(|(_, _, t)| *t)
+    }
+
     /// Member name from a containing type-id + byte offset.
     pub fn member(&self, type_id: i32, offset: i32) -> Option<&str> {
         let key = ((type_id as i64) << 1) | ((offset as i64) << 33) | 1;
