@@ -95,10 +95,25 @@ pub(crate) const RVODEF: &str = "\u{3}rvodef";
 /// `const T` — the vanilla form; a same-type `Cast<T>` wrap does NOT strip const in-game.
 pub(crate) const CONSTSTORE: char = '\u{4}';
 
+/// batch-25g: call-argument slot hints derived on the emit side by pairing value-pushed
+/// slots with the callee's declared parameter types (`infer_slot_types`' stack model):
+/// - `float_slots`: slots pushed into a FLOAT-FAMILY by-value parameter — their `SetV*`
+///   constants are IEEE-754 bits (the SavePuzzleState switch cases wrote `local_1 =
+///   1073741824;` = 2.0f) and extend the float-literal render set;
+/// - `keep_ints`: slots pushed into an INT-FAMILY by-value parameter — REAL args a nested
+///   call's stack-split retain must not purge (`Math::Min(a, <nested call>)` lost `a`,
+///   spec batch23-nomatch.md family G; the float member of the same purge family was the
+///   SaveWorldFloatData payload).
+#[derive(Default)]
+pub struct ArgSlotHints {
+    pub float_slots: std::collections::HashSet<i32>,
+    pub keep_ints: std::collections::HashSet<i32>,
+}
+
 /// Structured statement body for a function (no signature wrapper), indented at `depth`.
 /// Returns an error annotation string on disasm failure (never panics).
 pub fn body_statements(f: &FuncCode, refs: &RefResolver, depth: usize) -> String {
-    body_statements_ctor(f, refs, depth, None, None, None, None, None, None)
+    body_statements_ctor(f, refs, depth, None, None, None, None, None, None, None)
 }
 
 /// Like [`body_statements`], but with class context for type-aware casts:
@@ -107,17 +122,23 @@ pub fn body_statements(f: &FuncCode, refs: &RefResolver, depth: usize) -> String
 /// - `fields`: the owning class's field name -> base type name, so a `this.field = <int>`
 ///   assignment casts the RHS to a `bool`/enum field.
 #[allow(clippy::too_many_arguments)]
-pub fn body_statements_ctor(f: &FuncCode, refs: &RefResolver, depth: usize, super_ctor: Option<&str>, ret_ty: Option<&DataType>, fields: Option<&HashMap<String, String>>, param_types: Option<&[String]>, class_name: Option<&str>, local_types: Option<&HashMap<i32, String>>) -> String {
+pub fn body_statements_ctor(f: &FuncCode, refs: &RefResolver, depth: usize, super_ctor: Option<&str>, ret_ty: Option<&DataType>, fields: Option<&HashMap<String, String>>, param_types: Option<&[String]>, class_name: Option<&str>, local_types: Option<&HashMap<i32, String>>, hints: Option<&ArgSlotHints>) -> String {
     let instrs = match disassemble(&f.bytecode) {
         Ok(i) => i,
         Err(e) => return format!("{}// disasm error: {e}\n", "    ".repeat(depth)),
     };
     let g = cfg::build(&instrs);
-    let float_slots = float_operand_slots(&instrs, ret_ty);
+    let mut float_slots = float_operand_slots(&instrs, ret_ty);
+    // batch-25g: slots pushed into a float-family by-value parameter carry IEEE-754 bits in
+    // their SetV* constants too (evidence = the callee's declared signature).
+    if let Some(h) = hints {
+        float_slots.extend(h.float_slots.iter().copied());
+    }
     // AS_PTR_SIZE-aware frame-offset -> param-index map (2-dword handles/refs + hidden RVO slot),
     // self-correcting on observed offsets. Built once per function; consulted by slot_name/slot_type.
     let (param_off_map, rvo_off) = super::decompile::build_param_off_map_rvo(f, &instrs, refs);
-    let ctx = Ctx { f, refs, instrs: &instrs, super_ctor, ret_ty, fields, param_types, class_name, local_types, float_slots, param_off_map, rvo_off };
+    let keep_ints = hints.map(|h| &h.keep_ints);
+    let ctx = Ctx { f, refs, instrs: &instrs, super_ctor, ret_ty, fields, param_types, class_name, local_types, float_slots, param_off_map, rvo_off, keep_ints };
     let idx_of: HashMap<usize, usize> =
         g.blocks.iter().enumerate().map(|(i, b)| (b.start_dw, i)).collect();
     let mut body = String::new();
@@ -181,6 +202,10 @@ struct Ctx<'a> {
     /// Frame offset of the hidden RVO out-pointer slot for a by-value-struct return, if any.
     /// A `CopyScript` writing this slot is the function's `return <src>`.
     rvo_off: Option<i32>,
+    /// batch-25g: slots value-pushed into a KNOWN int-family by-value parameter (see
+    /// [`ArgSlotHints::keep_ints`]) — pushed with `keep` so the nested-call stack-split
+    /// retain spares them.
+    keep_ints: Option<&'a std::collections::HashSet<i32>>,
 }
 
 /// Collect slots used as an operand of a float/double arithmetic or compare op. Every word
@@ -1348,6 +1373,12 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                     stack.push(Arg::iconst(name(off), cb));
                 } else if member_read_slots.contains(&off) {
                     // Member-read value (this.XP_... amount) — a real arg the retain must keep.
+                    stack.push(Arg { s: name(off), is_int: true, keep: true, ..Default::default() });
+                } else if ctx.keep_ints.is_some_and(|s| s.contains(&off)) {
+                    // batch-25g (spec family G kin): the emit-side pairing proved every value
+                    // push of this slot feeds a KNOWN int-family parameter — a real arg
+                    // (Math::Min's second operand below a nested call), not a stranded SetV
+                    // temporary; the nested-call retain must keep it.
                     stack.push(Arg { s: name(off), is_int: true, keep: true, ..Default::default() });
                 } else {
                     stack.push(Arg::int(name(off)));

@@ -339,7 +339,8 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
     // consumer-side override: never-written arg slots get the type their callee expects (fixes
     // mis-typed default/optional-arg slots — FName->UAIState_DailyRoutine, TSubclassOf<X>->X).
     // outref_overrides: PSF slots feeding float-family REFERENCE params (declaration-only, below).
-    let (slot_overrides, outref_overrides) = infer_slot_types(f, refs);
+    // float_args/keep_ints (batch-25g): numeric BY-VALUE arg slots — see structure::ArgSlotHints.
+    let (slot_overrides, outref_overrides, float_args, keep_ints) = infer_slot_types(f, refs);
     for (slot, ty) in &slot_overrides {
         local_types.insert(*slot, ty.clone());
     }
@@ -360,6 +361,13 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
         if matches!(ty.as_str(), "float" | "float32" | "double") {
             local_types.entry(slot).or_insert(ty);
         }
+    }
+    // batch-25g: slots value-pushed into a float-family BY-VALUE parameter are float-typed
+    // in the VM (the compiler converts before the push) — same body-typing treatment as the
+    // width-op floats above: bare typed pushes that survive the nested-call retain
+    // (SaveWorldFloatData's payload was purged as a stranded int under a nested GetWorld()).
+    for (slot, ty) in &float_args {
+        local_types.entry(*slot).or_insert_with(|| ty.clone());
     }
     // member-access-derived types: the field's declaring class is the strongest signal for a
     // slot used as a member-access base; apply AFTER (overriding) the call-arg guess.
@@ -382,7 +390,13 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
     // type for the DECLARATION only (never fed to the structurer -> body render unchanged).
     // Consumes the iterator subtypes above for bare `TMap*` pair returns.
     let callret_overrides = infer_call_result_types(f, refs, &local_types);
-    let body = body_statements_ctor(&fc, refs, depth + 1, super_ctor, Some(&f.ret), fields, Some(&param_types), class_name, Some(&local_types));
+    // batch-25g: hand the numeric value-arg slot sets to the body renderer (float-literal
+    // SetV* rendering + the int retain keep flag).
+    let hints = super::structure::ArgSlotHints {
+        float_slots: float_args.keys().copied().collect(),
+        keep_ints,
+    };
+    let body = body_statements_ctor(&fc, refs, depth + 1, super_ctor, Some(&f.ret), fields, Some(&param_types), class_name, Some(&local_types), Some(&hints));
     // Batch-21 Class C: CONSTSTORE-marked stores carry a const object handle of the local's
     // EXACT type (a same-type Cast<T> does NOT strip const in-game — every batch-20 exact-type
     // Cast site failed "No conversion from 'const X' to 'X'"). Vanilla declared these locals
@@ -477,6 +491,14 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
     // obj_locals / member-derived / iterator-derived object type is a stronger signal
     // (all non-primitive, so they are naturally never overridden here).
     for (slot, ty) in &callret_overrides {
+        if used.contains(slot) && locals.get(slot).map(|t| is_primitive(t)).unwrap_or(true) {
+            locals.insert(*slot, ty.clone());
+        }
+    }
+    // batch-25g: float value-arg slots declare with the callee's float keyword (their SetV*
+    // constants now render as float literals — `float32 local_1 = 0.0; ... local_1 = 1.0f;`).
+    // Primitive-only upgrade, before the authoritative out-ref pass below.
+    for (slot, ty) in &float_args {
         if used.contains(slot) && locals.get(slot).map(|t| is_primitive(t)).unwrap_or(true) {
             locals.insert(*slot, ty.clone());
         }
@@ -876,10 +898,13 @@ fn ret_is_struct(ty: &str) -> bool {
 /// float literals via the cbits/float-operand path. `bool&` out-params are NOT retyped: every
 /// int-slot render (SetV consts, `(x != 0)` wraps, NOT-patterns) would need a bool form —
 /// renderer-wide surgery documented as skipped in specs/batch19-classes.md.
-fn infer_slot_types(f: &Func, refs: &RefResolver) -> (HashMap<i32, String>, HashMap<i32, String>) {
+fn infer_slot_types(
+    f: &Func,
+    refs: &RefResolver,
+) -> (HashMap<i32, String>, HashMap<i32, String>, HashMap<i32, String>, HashSet<i32>) {
     let instrs = match disassemble(&f.bytecode) {
         Ok(i) => i,
-        Err(_) => return (HashMap::new(), HashMap::new()),
+        Err(_) => return (HashMap::new(), HashMap::new(), HashMap::new(), HashSet::new()),
     };
     let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32);
     let writes = |op: &str| {
@@ -905,7 +930,14 @@ fn infer_slot_types(f: &Func, refs: &RefResolver) -> (HashMap<i32, String>, Hash
     let mut ostack: Vec<Option<(i32, bool)>> = Vec::new();
     let mut cand: HashMap<i32, Option<String>> = HashMap::new(); // slot -> Some(type) | None(conflict)
     let mut outref: HashMap<i32, Option<String>> = HashMap::new(); // PSF slot -> float-ref param type
-    let mut pair = |ostack: &mut Vec<Option<(i32, bool)>>, params: Option<&[super::types::DataType]>, is_method: bool, ret_struct: bool, cand: &mut HashMap<i32, Option<String>>, outref: &mut HashMap<i32, Option<String>>| {
+    // batch-25g: numeric BY-VALUE argument slots (see structure::ArgSlotHints). A slot
+    // VALUE-pushed (never PSF) into a float-family param is float-typed in the VM — the
+    // compiler inserts the int->float conversion BEFORE the push, so any direct PshV4 into a
+    // float param proves the slot holds float bits. Int-family pairs only earn the retain
+    // keep flag (no retype). Conflicts (differing float kws, or float+int for one slot) drop.
+    let mut farg: HashMap<i32, Option<String>> = HashMap::new();
+    let mut ikeep: HashSet<i32> = HashSet::new();
+    let mut pair = |ostack: &mut Vec<Option<(i32, bool)>>, params: Option<&[super::types::DataType]>, is_method: bool, ret_struct: bool, cand: &mut HashMap<i32, Option<String>>, outref: &mut HashMap<i32, Option<String>>, farg: &mut HashMap<i32, Option<String>>, ikeep: &mut HashSet<i32>| {
         let Some(params) = params else { ostack.clear(); return; };
         // A method returning a struct BY VALUE (F/T/E) carries a hidden RVO out-slot pushed as the
         // last user arg (just before the receiver); count it so it is consumed, but exclude it from
@@ -961,6 +993,23 @@ fn infer_slot_types(f: &Func, refs: &RefResolver) -> (HashMap<i32, String>, Hash
                             _ => {}
                         }
                     }
+                    // batch-25g: numeric BY-VALUE args (value-pushed, non-reference params).
+                    if !*is_psf && !pt.is_reference {
+                        match pt.token {
+                            0x50 | 0x51 | 0x5E => {
+                                let kw = super::types::token_keyword(pt.token).to_string();
+                                match farg.get(s) {
+                                    None => { farg.insert(*s, Some(kw)); }
+                                    Some(Some(prev)) if *prev != kw => { farg.insert(*s, None); }
+                                    _ => {}
+                                }
+                            }
+                            0x44 | 0x45 | 0x46 | 0x47 | 0x4B | 0x4C | 0x4D | 0x4E => {
+                                ikeep.insert(*s);
+                            }
+                            _ => {}
+                        }
+                    }
                 }
             }
         }
@@ -987,7 +1036,7 @@ fn infer_slot_types(f: &Func, refs: &RefResolver) -> (HashMap<i32, String>, Hash
             "CALL" | "CALLINTF" | "CALLBND" => {
                 let id = ins.dwords.first().copied().unwrap_or(0) as i32;
                 let rs = refs.func_ret_by_id(id).map(|d| !d.is_reference && ret_is_struct(&d.base_name(refs))).unwrap_or(false);
-                pair(&mut ostack, refs.func_params_by_id(id), refs.is_method_by_id(id), rs, &mut cand, &mut outref);
+                pair(&mut ostack, refs.func_params_by_id(id), refs.is_method_by_id(id), rs, &mut cand, &mut outref, &mut farg, &mut ikeep);
             }
             "CALLSYS" | "Thiscall1" => {
                 let ptr = ins.qwords.first().copied().unwrap_or(0) as i64;
@@ -1017,7 +1066,7 @@ fn infer_slot_types(f: &Func, refs: &RefResolver) -> (HashMap<i32, String>, Hash
                     continue;
                 }
                 let rs = refs.func_ret_by_ptr(ptr).map(|d| !d.is_reference && ret_is_struct(&d.base_name(refs))).unwrap_or(false);
-                pair(&mut ostack, refs.func_params_by_ptr(ptr), refs.is_method_by_ptr(ptr), rs, &mut cand, &mut outref);
+                pair(&mut ostack, refs.func_params_by_ptr(ptr), refs.is_method_by_ptr(ptr), rs, &mut cand, &mut outref, &mut farg, &mut ikeep);
             }
             _ => {}
         }
@@ -1033,7 +1082,18 @@ fn infer_slot_types(f: &Func, refs: &RefResolver) -> (HashMap<i32, String>, Hash
     let outref = outref.into_iter()
         .filter_map(|(slot, ty)| ty.map(|t| (slot, t)))
         .collect();
-    (obj, outref)
+    // batch-25g: resolve the numeric value-arg candidates. A slot paired with BOTH an
+    // int-family and a float-family param is ambiguous slot reuse — drop it from both sets.
+    let mut float_args: HashMap<i32, String> = farg
+        .into_iter()
+        .filter_map(|(slot, ty)| ty.map(|t| (slot, t)))
+        .collect();
+    let both: Vec<i32> = float_args.keys().copied().filter(|s| ikeep.contains(s)).collect();
+    for s in both {
+        float_args.remove(&s);
+        ikeep.remove(&s);
+    }
+    (obj, outref, float_args, ikeep)
 }
 
 /// Member-access-driven slot typing: a `LoadRObjR`/`LoadVObjR base, off, tid` reads field
