@@ -54,6 +54,12 @@ static CONST_SAFE: &[&str] = &[
     "UCBT_Node::GetSortLayer",
     "UCBT_Tree::GetSortLayer",
     "UCBT_Decorator::GetSortLayer",
+    // batch-30a (C7, specs/batch29-errortail.md §7): the documented const-safety.md §5
+    // UNSAFE residue. Its body artifact `local_38 = this;` (const `this` copied into a
+    // non-const local) is const-LEGAL now that FAttackInfo is emitted as a `struct`
+    // (asOBJ_VALUE): the copy is a value read through the generated const&in opAssign,
+    // not a const-handle escape. Un-stubs the two AddAttack callers' read-only errors.
+    "FAttackInfo::GetAttackMoveData",
 ];
 
 fn const_safe_set() -> &'static HashSet<&'static str> {
@@ -243,12 +249,26 @@ fn delegate_wrapper_decl(c: &Class, refs: &RefResolver) -> Option<String> {
 }
 
 fn emit_class(s: &mut String, c: &Class, refs: &RefResolver) {
+    // batch-30a (C6b, specs/batch29-errortail.md §6): the cache Class record's asOBJ_*
+    // Flags discriminate script VALUE types (asOBJ_VALUE, 0x2 — vanilla `struct`) from
+    // reference types (asOBJ_REF, 0x1 — vanilla `class`). Emitting the 46 value types as
+    // `class` gave them Hazelight REFERENCE semantics: `const T` params became const
+    // HANDLES, so ctor bodies value-assigning from them failed ("Can't implicitly convert
+    // from 'const FVoiceReactionData' to 'FVoiceReactionData'") and const& arguments could
+    // not bind ("Cannot pass a reference of type 'FCrimeSeverityStackValues const&' into
+    // non-const reference parameter"). The corpus proves the discriminator: every compiling
+    // `ctor(const F* &inout P) { this.X = P; }` site uses a NATIVE struct; the only failing
+    // ones use script types flagged asOBJ_VALUE. `struct` restores value semantics (the
+    // compiler generates the const&in opAssign, matching the native-struct behaviour) and
+    // is the byte-faithful vanilla keyword. Value types here never carry a super class,
+    // and delegate/event wrappers (also VALUE-flagged) take the one-liner path above.
+    let kw = if c.flags & 0x2 != 0 { "struct" } else { "class" };
     match &c.super_class {
         Some(sup) if !sup.is_empty() => {
-            let _ = writeln!(s, "class {} : {}", c.name, sup);
+            let _ = writeln!(s, "{kw} {} : {}", c.name, sup);
         }
         _ => {
-            let _ = writeln!(s, "class {}", c.name);
+            let _ = writeln!(s, "{kw} {}", c.name);
         }
     }
     let _ = writeln!(s, "{{");
@@ -336,6 +356,9 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
         let ty = super::types::DataType { token: 5, type_info: *tinfo, is_object_handle: true, ..Default::default() }.base_name(refs);
         (*slot, ty)
     }).collect();
+    // batch-30a (C6c): snapshot the cache's own (vanilla) object-local types before any
+    // override mutates the map — the member-override gate below compares against these.
+    let vanilla_obj_types = local_types.clone();
     // consumer-side override: never-written arg slots get the type their callee expects (fixes
     // mis-typed default/optional-arg slots — FName->UAIState_DailyRoutine, TSubclassOf<X>->X).
     // outref_overrides: PSF slots feeding float-family REFERENCE params (declaration-only, below).
@@ -409,7 +432,24 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
     // member-access-derived types: the field's declaring class is the strongest signal for a
     // slot used as a member-access base; apply AFTER (overriding) the call-arg guess.
     let member_overrides = infer_slot_types_from_members(f, refs, fields, class_name);
+    // batch-30a (C6c, specs/batch29-errortail.md §6c): when a slot's ONLY object write is a
+    // STOREOBJ of a single call's result AND that call's return type equals the cache's own
+    // obj_locals type, the vanilla static type is authoritative — a member-derived candidate
+    // (the field's DECLARING class, e.g. StateTag's UAbilityTask_StateBasedAction) must not
+    // widen it. The member access stays legal (the declaring class is an ancestor of the
+    // vanilla type in the real hierarchy — the bytecode proves it compiled), and the exact
+    // type keeps `return local;` exact and kills the bogus `Cast<DeclaringClass>` render
+    // (3× `UAbilityTask_StateBasedAction& -> UAbilityTask_InteractWith`, NativeAICommands).
+    let sole_call_store = infer_sole_call_store_types(f, refs);
+    let member_widen_blocked = |slot: &i32, ty: &String| {
+        sole_call_store
+            .get(slot)
+            .is_some_and(|ct| vanilla_obj_types.get(slot) == Some(ct) && ct != ty)
+    };
     for (slot, ty) in &member_overrides {
+        if member_widen_blocked(slot, ty) {
+            continue;
+        }
         local_types.insert(*slot, ty.clone());
     }
     // iterator-instance subtypes (illegal-op-round2.md A1): the T1 entry for a `T*Iterator`
@@ -452,6 +492,48 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
     // uses are const-safe: vanilla used the same value through a const local, and Class A
     // restored the faithful const method qualifiers + const param renders.
     let mut const_slots = const_slots;
+    // batch-30a (C6a, specs/batch29-errortail.md §6a): propagate const FORWARD through
+    // same-type handle copies BEFORE the shrink loop. `local_M = local_N;` with N
+    // const-marked previously DROPPED N (copy into a non-const local), keeping the
+    // status-quo error at the const-returning call store (`const UComboAttackConfig ->
+    // UComboAttackConfig`, GetNextAttackConfig chains). Vanilla-faithfulness argument: the
+    // bytecode stores a const handle into N and RefCpyV-copies N into M with no cast, so
+    // vanilla's declarations for BOTH slots were const — const-marking M reproduces the
+    // vanilla dataflow exactly. Gated to OBJECT handles of the identical recorded type
+    // (a const VALUE-type declaration would reject the assignment itself); the shrink loop
+    // below still drops the whole chain if any link leaks into `__return`/members.
+    if !const_slots.is_empty() {
+        let obj_ty = |n: &i32| {
+            local_types
+                .get(n)
+                .filter(|t| t.starts_with('U') || t.starts_with('A'))
+        };
+        loop {
+            let mut grew = false;
+            for l in body.lines() {
+                let t = l.trim();
+                let Some(rest) = t.strip_suffix(';') else { continue };
+                let Some((lhs, rhs)) = rest.split_once(" = ") else { continue };
+                let (Some(m), Some(n)) = (
+                    lhs.strip_prefix("local_").and_then(|d| d.parse::<i32>().ok()),
+                    rhs.strip_prefix("local_").and_then(|d| d.parse::<i32>().ok()),
+                ) else {
+                    continue;
+                };
+                if const_slots.contains(&n)
+                    && !const_slots.contains(&m)
+                    && obj_ty(&m).is_some()
+                    && obj_ty(&m) == obj_ty(&n)
+                {
+                    const_slots.insert(m);
+                    grew = true;
+                }
+            }
+            if !grew {
+                break;
+            }
+        }
+    }
     loop {
         let keep: HashSet<i32> = const_slots
             .iter()
@@ -536,7 +618,9 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
     }
     // member-derived declaring-class types override the cache's wrong/general slot type
     for (slot, ty) in &member_overrides {
-        if used.contains(slot) {
+        // batch-30a (C6c): same gate as the body map — a sole-call-written slot whose call
+        // return type matches the vanilla obj_locals entry keeps the exact vanilla type.
+        if used.contains(slot) && !member_widen_blocked(slot, ty) {
             locals.insert(*slot, ty.clone());
         }
     }
@@ -1584,6 +1668,55 @@ fn record_iterator_candidate(
 /// `TMap*` iterator pair) is only adopted after composing `<...>` from the receiver iterator's
 /// inferred instantiation (`known`, which includes the A1 pass results) — else skipped.
 /// Conflicting candidates for one slot drop (regression-free).
+/// batch-30a (C6c): slots whose ONLY object write is a `STOREOBJ` DIRECTLY following a
+/// call, mapped to that call's returned object base type. Conservative: any second
+/// object write to the slot (another STOREOBJ, or a `RefCpyV` copy) disqualifies it,
+/// as does a STOREOBJ whose producing call/return type is unknown. Consumed by the
+/// member-override gate in `emit_function` (vanilla obj_locals type wins over a
+/// member-derived WIDENING when the cache and the sole producing call agree).
+fn infer_sole_call_store_types(f: &Func, refs: &RefResolver) -> HashMap<i32, String> {
+    let instrs = match disassemble(&f.bytecode) {
+        Ok(i) => i,
+        Err(_) => return HashMap::new(),
+    };
+    let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32).unwrap_or(0);
+    let mut cand: HashMap<i32, Option<String>> = HashMap::new();
+    for (i, ins) in instrs.iter().enumerate() {
+        let dst = match ins.op.name {
+            "STOREOBJ" | "RefCpyV" => w0(ins),
+            _ => continue,
+        };
+        if dst <= 0 {
+            continue;
+        }
+        // the producing call's object return type — only for a STOREOBJ right after it.
+        let ret = (ins.op.name == "STOREOBJ")
+            .then(|| i.checked_sub(1).and_then(|j| instrs.get(j)))
+            .flatten()
+            .and_then(|prev| match prev.op.name {
+                "CALL" | "CALLINTF" | "CALLBND" => {
+                    let id = prev.dwords.first().copied().unwrap_or(0) as i32;
+                    refs.func_ret_by_id(id).filter(|d| d.token == 5).map(|d| d.base_name(refs))
+                }
+                "CALLSYS" | "Thiscall1" => {
+                    let ptr = prev.qwords.first().copied().unwrap_or(0) as i64;
+                    refs.func_ret_by_ptr(ptr).filter(|d| d.token == 5).map(|d| d.base_name(refs))
+                }
+                _ => None,
+            });
+        match (cand.get(&dst), ret) {
+            (None, Some(t)) => {
+                cand.insert(dst, Some(t));
+            }
+            // second write / unknown producer -> disqualify (keep a tombstone).
+            _ => {
+                cand.insert(dst, None);
+            }
+        }
+    }
+    cand.into_iter().filter_map(|(s, t)| t.map(|t| (s, t))).collect()
+}
+
 fn infer_call_result_types(
     f: &Func,
     refs: &RefResolver,

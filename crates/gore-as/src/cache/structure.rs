@@ -1263,6 +1263,14 @@ fn provably_derived(dst: &str, src: &str, refs: &RefResolver) -> bool {
     if src == "AActor" && dst.starts_with('A') {
         return true;
     }
+    // batch-30a (C6d, specs/batch29-errortail.md §6d): same convention one level down — a
+    // dataflow that assigns an ACharacter-typed value into an `A*`-typed slot only exists
+    // in the bytecode because vanilla compiled it, i.e. the destination class IS
+    // ACharacter-derived; the wrap direction (Cast<Derived>) is the safe one.
+    // (GA_FallingRagdoll RefCpyV residue: `ACharacter& -> AGothicCharacter`.)
+    if src == "ACharacter" && dst.starts_with('A') {
+        return true;
+    }
     false
 }
 

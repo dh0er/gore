@@ -152,6 +152,8 @@ pub struct Class {
     pub fields: Vec<Field>,
     pub methods: Vec<Func>,
     pub ctors: Vec<Func>,
+    /// asCObjectType flags (asOBJ_* bitfield) from the cache Class record.
+    pub flags: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -282,7 +284,7 @@ fn read_property(c: &mut Cursor) -> Result<Field, WireError> {
 fn read_class(c: &mut Cursor) -> Result<Class, WireError> {
     let name = c.read_sia()?;
     c.read_sia()?; // Namespace
-    c.skip(4)?; // Flags
+    let flags = c.read_i32()? as u32; // asCObjectType Flags (asOBJ_* bitfield)
     let nprops = c.read_count("Class.Properties")?;
     let mut fields = Vec::with_capacity(nprops);
     for _ in 0..nprops {
@@ -319,7 +321,7 @@ fn read_class(c: &mut Cursor) -> Result<Class, WireError> {
         c.skip_tarray_sia("Class.MetaValues")?;
         c.read_sia()?; // ComposeOntoClassName
     }
-    Ok(Class { name, super_class, fields, methods, ctors })
+    Ok(Class { name, super_class, fields, methods, ctors, flags })
 }
 
 fn read_enum(c: &mut Cursor) -> Result<EnumDef, WireError> {
