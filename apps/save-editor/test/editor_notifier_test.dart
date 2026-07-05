@@ -939,6 +939,58 @@ void main() {
   );
 
   test(
+    'saveAllPending treats an actor-less skill edit as Hero for the Def conflict',
+    () async {
+      final core = _RecordingCoreService();
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+      // A hero ActiveEffects Def edit...
+      notifier.setPendingEdit(
+        'typed:def',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.typed.setValue',
+              'value': {
+                'path': [
+                  'ActiveEffectsByGlobalId',
+                  '{Hero}',
+                  'ActiveEffects',
+                  '[0]',
+                  'EffectSpec',
+                  'Def',
+                ],
+                'value': '/Script/Angelscript.Default__GE_Skill_Sneak',
+              },
+            },
+          ],
+        ),
+      );
+      // ...and a skill edit that OMITS actor (the core defaults it to Hero).
+      notifier.setPendingEdit(
+        'skills',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.skills.set',
+              'value': {'base': 'Melee_OneHanded', 'tier': 'Master'},
+            },
+          ],
+        ),
+      );
+
+      final ok = await notifier.saveAllPending();
+      // Still a same-actor (Hero) collision → refused.
+      expect(ok, isFalse);
+      expect(
+        core.requests.where((r) => r.command == 'write_save'),
+        isEmpty,
+      );
+    },
+  );
+
+  test(
     'saveAllPending keeps an ActiveEffects Def edit in the batch without a skill edit',
     () async {
       final core = _RecordingCoreService();

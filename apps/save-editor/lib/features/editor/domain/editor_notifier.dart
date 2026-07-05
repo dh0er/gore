@@ -1905,11 +1905,14 @@ class _KeyedEdit {
 }
 
 /// The actor a `private.skills.set` edit targets (`Hero` or an NPC GlobalId),
-/// or `null` if [edit] is not a skill edit.
+/// or `null` if [edit] is not a skill edit. A skill edit that omits `actor`
+/// defaults to `Hero` — the core does the same, so the same-actor conflict guard
+/// must too, or a hero skill edit with no explicit actor would slip past it.
 String? _skillEditActor(Map<String, Object?> edit) {
   if (edit['path'] != 'private.skills.set') return null;
   final value = edit['value'];
-  return value is Map ? value['actor'] as String? : null;
+  if (value is! Map) return null;
+  return (value['actor'] as String?) ?? 'Hero';
 }
 
 /// The actor whose ActiveEffects a raw `private.typed.setValue` on an
