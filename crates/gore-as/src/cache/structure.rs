@@ -404,6 +404,18 @@ impl Ctx<'_> {
             && !self.ret_ty.map(|t| is_enum_name(&t.base_name(self.refs))).unwrap_or(true)
     }
 
+    /// True when the function returns a value BY REFERENCE (`T& f()`): the return payload is a
+    /// live lvalue (a member-container element like `this.RoleGroups[i]`), not an RVO struct
+    /// copy or a register scalar. batch-35a: a ref-returning function whose RET row is a shared
+    /// bare `RET wN` fed by an opIndex/member chain built in EACH predecessor block loses that
+    /// chain at the block boundary (block_stmts flushes a live pending as a bare statement, and
+    /// the bare-RET scan-back then defaults to a garbage int slot -> "Not a valid reference").
+    /// Used to opt those predecessor blocks into rendering their trailing ref-pending as
+    /// `return <chain>;` (the cross-block reference carry).
+    fn ret_is_ref(&self) -> bool {
+        self.ret_ty.map(|t| t.token != 0x52 && t.is_reference).unwrap_or(false)
+    }
+
     /// Name for parameter slot `idx`: the stored name, else `arg{idx}` — which MUST match
     /// how `emit::render_params` declares unnamed params (also `arg{idx}`), so a body
     /// reference resolves to a declared parameter.
@@ -1494,7 +1506,7 @@ fn esc(s: &str) -> String {
 /// Decompile one block's instruction range into statements; also return the
 /// pending comparison (operands of the last CMP*) for condition recovery.
 fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
-    let (out, cmp, _) = block_stmts_in(ctx, lo, hi, Vec::new());
+    let (out, cmp, _) = block_stmts_in(ctx, lo, hi, Vec::new(), false);
     (out, cmp)
 }
 
@@ -1502,7 +1514,14 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
 /// the return (batch-27 Cast-diamond carry): the carried entries occupy the DEEPEST positions,
 /// below everything the block pushes — exactly the runtime layout — and the leftover is
 /// returned verbatim after the final flush (the UNRESOLVED retain applies to statements only).
-fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<String>, Option<Cmp>, Vec<Arg>) {
+///
+/// batch-35a (cross-block reference carry): when `ret_ref_tail` is set (this block flows to a
+/// ref-returning function's shared bare `RET` row and ends with a live by-reference pending),
+/// the FINAL flush renders that pending as `return <chain>;` instead of a discarded bare
+/// statement — the reference lvalue survives the block boundary the RET-row scan-back cannot
+/// cross. Only the by-reference pending (`pending_is_ref`) qualifies; any other trailing
+/// pending flushes as a bare statement exactly as before.
+fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail: bool) -> (Vec<String>, Option<Cmp>, Vec<Arg>) {
     let mut out = Vec::new();
     let mut cmp: Option<Cmp> = None;
     let mut cond: Option<(String, bool)> = None; // (bool value tested by a jump, is-bool-typed)
@@ -2879,6 +2898,21 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<Strin
             }
         }
     }
+    // batch-35a (cross-block reference carry): this block flows to a ref-returning function's
+    // shared bare RET row and its trailing pending is a live by-reference lvalue chain
+    // (`this.RoleCategoryContainers.opIndex(...).RoleGroups.opIndex(...)` -> FCombatRoleGroup&).
+    // Render it as the return value the RET row cannot recover by scan-back (the reference is
+    // not a slot). Gated to a genuine ref pending that carries no sentinel/unresolved marker
+    // (those must never become a return) — everything else flushes as a bare statement below.
+    if ret_ref_tail
+        && pending_is_ref
+        && pending
+            .as_deref()
+            .is_some_and(|p| !p.contains('\u{2}') && !p.contains(UNRESOLVED))
+    {
+        let chain = pending.take().unwrap();
+        out.push(format!("return {chain};"));
+    }
     flush!();
     out.retain(|s| !s.contains(UNRESOLVED)); // drop statements with an unresolved value
     // no binary comparison but a bool value was tested -> use it as the branch condition so
@@ -3031,7 +3065,7 @@ impl Structurer<'_> {
                 let _ = writeln!(out, "{ind}}}");
                 next = latch + 1;
             } else if self.is_cond(i) {
-                let (stmts, cmp, leftover) = block_stmts_in(self.ctx, b.instr_lo, b.instr_hi, init);
+                let (stmts, cmp, leftover) = block_stmts_in(self.ctx, b.instr_lo, b.instr_hi, init, false);
                 for s in &stmts {
                     let _ = writeln!(out, "{ind}{s}");
                 }
@@ -3076,9 +3110,17 @@ impl Structurer<'_> {
                         self.carry = Some((j, leftover));
                     }
                 }
+            } else if self.suppress_ref_ret_row(i) {
+                // batch-35a: the shared bare `RET wN` row of a ref-returning function whose
+                // EVERY predecessor block already rendered its own `return <chain>;` (the
+                // cross-block reference carry). Its scan-back value is a garbage int slot
+                // ("Not a valid reference"); emit nothing (both arms returned) rather than a
+                // wrong `return local_1;`. Same shape as the switch RET-row dead-code skip.
+                next = i + 1;
             } else {
                 // (linear fallthrough-carry is out of scope — the plain arm's leftover is dropped.)
-                let (stmts, _, _) = block_stmts_in(self.ctx, b.instr_lo, b.instr_hi, init);
+                let ret_ref_tail = self.ctx.ret_is_ref() && self.flows_to_bare_ret(i);
+                let (stmts, _, _) = block_stmts_in(self.ctx, b.instr_lo, b.instr_hi, init, ret_ref_tail);
                 for s in &stmts {
                     let _ = writeln!(out, "{ind}{s}");
                 }
@@ -3115,7 +3157,7 @@ impl Structurer<'_> {
                 Some(j) if bi <= j => std::mem::take(&mut carry),
                 _ => Vec::new(),
             };
-            let (stmts, cmp, leftover) = block_stmts_in(self.ctx, b.instr_lo, b.instr_hi, init);
+            let (stmts, cmp, leftover) = block_stmts_in(self.ctx, b.instr_lo, b.instr_hi, init, false);
             for s in &stmts {
                 let _ = writeln!(out, "{ind}{s}");
             }
@@ -3171,6 +3213,77 @@ impl Structurer<'_> {
             let b = &self.g.blocks[bi];
             b.instr_hi - b.instr_lo == 1 && self.ctx.instrs[b.instr_lo].op.name == "RET"
         })
+    }
+
+    /// batch-35a (cross-block reference carry): block `bi` reaches the function's shared bare
+    /// `RET` row via its SOLE successor — either an unconditional `JMP` to it, or a fallthrough
+    /// into it (a block ending in a value-producing call, e.g. the trailing opIndex chain of a
+    /// ref-returning `FindRoleGroup` predecessor). Requires exactly one successor (no
+    /// conditional fork) and that the block does NOT already end in `RET` (the RET arm handles
+    /// its own block). Used only when `ctx.ret_is_ref()`; the block's trailing by-reference
+    /// pending then renders as `return <chain>;` (see `block_stmts_in`'s `ret_ref_tail`).
+    fn flows_to_bare_ret(&self, bi: usize) -> bool {
+        let b = &self.g.blocks[bi];
+        if self.ctx.instrs[b.instr_hi - 1].op.name == "RET" {
+            return false;
+        }
+        b.succs.len() == 1 && self.is_bare_ret_off(b.succs[0]) && self.block_tail_is_ref_call(bi)
+    }
+
+    /// batch-35a: the block's last value-producing instruction is a call whose cache return
+    /// DataType `is_reference` — i.e. the block ends by leaving a by-reference lvalue in the
+    /// register (`... .RoleGroups.opIndex(i)` -> FCombatRoleGroup&), the exact producer the
+    /// reference carry turns into `return <chain>;`. Trailing pure housekeeping (JMP, PopPtr,
+    /// FreeNullV8, ...) is skipped. A block NOT ending in a ref-returning call (a value store,
+    /// a void call, a bare fallthrough) fails — so a legitimate register-value return through
+    /// the shared bare RET row is never suppressed. Bails (false) on any non-call tail.
+    fn block_tail_is_ref_call(&self, bi: usize) -> bool {
+        let b = &self.g.blocks[bi];
+        for j in (b.instr_lo..b.instr_hi).rev() {
+            let ins = &self.ctx.instrs[j];
+            match ins.op.name {
+                // pure control/stack housekeeping that can trail a value-producing call
+                "JMP" | "PopPtr" | "PshRPtr" | "SwapPtr" | "ClrHi" | "ClrVPtr" | "FreeNullV8"
+                | "FREE" | "CHKREF" | "ChkRefS" | "ChkNullV" | "ChkNullS" | "SUSPEND"
+                | "SaveReturnValue" | "ResolveObjectPtr" => continue,
+                "CALLSYS" | "Thiscall1" => {
+                    let ptr = ins.qwords.first().copied().unwrap_or(0) as i64;
+                    return self.ctx.refs.func_ret_by_ptr(ptr).map(|d| d.is_reference).unwrap_or(false);
+                }
+                "CALL" | "CALLINTF" | "CALLBND" => {
+                    let id = ins.dwords.first().copied().unwrap_or(0) as i32;
+                    return self.ctx.refs.func_ret_by_id(id).map(|d| d.is_reference).unwrap_or(false);
+                }
+                _ => return false,
+            }
+        }
+        false
+    }
+
+    /// batch-35a: block `bi` is the shared bare `RET` row of a ref-returning function whose
+    /// EVERY predecessor is a `flows_to_bare_ret` block — i.e. each predecessor renders its own
+    /// `return <chain>;` via the reference carry, so this row's own `return <scan-back>;` (a
+    /// garbage int slot -> "Not a valid reference") is dead. Emit nothing. Gated hard: at least
+    /// one predecessor must exist, the function must return by reference, and NO predecessor may
+    /// be a normal fall-in that DIDN'T get the carry (that would drop a legitimate return).
+    fn suppress_ref_ret_row(&self, bi: usize) -> bool {
+        if !self.ctx.ret_is_ref() {
+            return false;
+        }
+        let off = self.g.blocks[bi].start_dw;
+        if !self.is_bare_ret_off(off) {
+            return false;
+        }
+        let mut preds = 0usize;
+        for (pi, pb) in self.g.blocks.iter().enumerate() {
+            if pb.succs.contains(&off) {
+                preds += 1;
+                if !self.flows_to_bare_ret(pi) {
+                    return false;
+                }
+            }
+        }
+        preds > 0
     }
 
     /// Detect and emit the Hazelight compiler's `switch` lowering rooted at block `i`
@@ -3768,8 +3881,8 @@ impl Structurer<'_> {
         // the arm's actual emission (done with an empty init) is unchanged.
         for arm in std::iter::once(i + 1).chain(else_idx) {
             let ab = &blocks[arm];
-            let (s0, _, r0) = block_stmts_in(ctx, ab.instr_lo, ab.instr_hi, Vec::new());
-            let (s1, _, r1) = block_stmts_in(ctx, ab.instr_lo, ab.instr_hi, l.to_vec());
+            let (s0, _, r0) = block_stmts_in(ctx, ab.instr_lo, ab.instr_hi, Vec::new(), false);
+            let (s1, _, r1) = block_stmts_in(ctx, ab.instr_lo, ab.instr_hi, l.to_vec(), false);
             if !r0.is_empty() || s1 != s0 || r1.as_slice() != l {
                 return None;
             }
@@ -3833,8 +3946,8 @@ impl Structurer<'_> {
         // RESOLVE a sentinel the empty-init run HAS (a previously-missing arg recovered by
         // the carry) — that direction stays legal; only a NEW sentinel bails.
         let has_amm = |v: &[String]| v.iter().any(|s| s.contains('\u{2}'));
-        let (j0, _, _) = block_stmts_in(ctx, jb.instr_lo, jb.instr_hi, Vec::new());
-        let (j1, _, _) = block_stmts_in(ctx, jb.instr_lo, jb.instr_hi, l.to_vec());
+        let (j0, _, _) = block_stmts_in(ctx, jb.instr_lo, jb.instr_hi, Vec::new(), false);
+        let (j1, _, _) = block_stmts_in(ctx, jb.instr_lo, jb.instr_hi, l.to_vec(), false);
         if j1.len() != j0.len() || (has_amm(&j1) && !has_amm(&j0)) {
             return None;
         }
