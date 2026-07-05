@@ -1556,20 +1556,31 @@ fn infer_slot_types_from_members(
                     }
                 }
                 // A5: `LoadRObjR/LoadVObjR ; CpyRtoV8 wD` — type the copy DESTINATION with the
-                // field's value type (current-class fields only; the owner check guards
-                // against cross-class field-name collisions).
+                // field's value type. batch-32a: resolved through the cross-module class-fields
+                // index (batch-30c `field_type_by_class`, keyed by the tid's OWNER class — no
+                // cross-class field-name collision is possible), because every proven A5 owner
+                // is a FOREIGN class the old this-class-only gate could never match (T7
+                // OldTypeId names the owner; batch-29 §1.2). Own-class sites resolve through
+                // the same index; the `fields` param stays as fallback for a driver without
+                // the injected index. The body renderer emits the matching `dst = obj.field;`
+                // assignment ONLY when this typing landed (slot_type == value type) — see the
+                // structure.rs CpyRtoV8 arm.
                 if let Some(next) = instrs.get(i + 1) {
                     if next.op.name == "CpyRtoV8" {
                         let dst = next.words.first().map(|w| *w as i16 as i32).unwrap_or(0);
-                        if dst > 0
-                            && class_name.is_some()
-                            && refs.type_by_id(tid) == class_name
-                        {
-                            let vty = refs
-                                .member(tid, off)
-                                .and_then(|name| fields.and_then(|m| m.get(name)));
+                        if dst > 0 {
+                            let vty = refs.member(tid, off).and_then(|fname| {
+                                refs.type_by_id(tid)
+                                    .and_then(|cls| refs.field_type_by_class(cls, fname))
+                                    .map(|s| s.to_string())
+                                    .or_else(|| {
+                                        (refs.type_by_id(tid) == class_name)
+                                            .then(|| fields.and_then(|m| m.get(fname)).cloned())
+                                            .flatten()
+                                    })
+                            });
                             if let Some(vty) = vty {
-                                record(&mut cand, dst, vty.clone());
+                                record(&mut cand, dst, vty);
                             }
                         }
                     }

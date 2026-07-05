@@ -2361,6 +2361,44 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<Strin
                     let dst_is_int = dst_slot > 0 && ctx.slot_type(dst_slot).is_none();
                     let rhs = enum_to_int(p, pending_ty.as_deref(), dst_is_int);
                     out.push(format!("{} = {rhs};", name(dst_slot)));
+                } else if n == "CpyRtoV8" && ref_reg.is_some() {
+                    // batch-32a (A5, specs/batch29-errortail.md §1.2 / illegal-op-round2.md A5):
+                    // `LoadRObjR/LoadVObjR ; CpyRtoV8 wD` captures the member ADDRESS the load
+                    // just put in the register into a slot — an alias the body then uses as the
+                    // member's value (`local_52.opIndex(i).RoleType`, RebalanceRoles: 22
+                    // "Illegal operation on 'int'"). Emit `dst = obj.field;`. Two hard gates:
+                    // (1) the PREVIOUS instruction must be the member load — a stale `ref_reg`
+                    //     surviving across calls/compares must not resurrect here (CMPd;TZ;
+                    //     CpyRtoV4 copies TEST results, and only CALL arms clear ref_reg);
+                    // (2) the emit-side typing half must have adopted the field's VALUE type
+                    //     for the destination (final slot_type == the cross-module-resolved
+                    //     value type) — untypeable/conflicted sites keep the status-quo DROP
+                    //     instead of assigning an object expression into an `int` decl.
+                    // Value semantics are a deep copy where the bytecode held a reference —
+                    // the documented A5 caveat (uses in the proven cluster are reads/element
+                    // refs); decompile mode (no local_types) fails gate (2) and is unchanged.
+                    let prev_load = k
+                        .checked_sub(1)
+                        .map(|j| &insns[j])
+                        .filter(|p| matches!(p.op.name, "LoadRObjR" | "LoadVObjR"));
+                    if let Some(pl) = prev_load {
+                        let off = pl.words.get(1).copied().unwrap_or(0) as i32;
+                        let tid = pl.dwords.first().copied().unwrap_or(0) as i32;
+                        let vty = ctx.refs.member(tid, off).and_then(|fname| {
+                            ctx.refs
+                                .type_by_id(tid)
+                                .and_then(|cls| ctx.refs.field_type_by_class(cls, fname))
+                        });
+                        let dst_slot = w(ins, 0);
+                        if let Some(vty) = vty {
+                            if ctx.slot_type(dst_slot).as_deref() == Some(vty) {
+                                if let Some(r) = &ref_reg {
+                                    out.push(format!("{} = {r};", name(dst_slot)));
+                                    member_read_slots.insert(dst_slot); // real data value, not a SetV temporary
+                                }
+                            }
+                        }
+                    }
                 }
                 pending_ty = None;
                 pending_const = false;
