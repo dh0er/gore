@@ -101,8 +101,8 @@ void main() {
   testWidgets('sidebar shows only non-empty groups', (tester) async {
     final attributes = [
       _attribute('MaxHealth', '/Script/G1R.AttributeSet_Health', 64),
-      _attribute('Critical_OneHand', '/Script/G1R.AttributeSet_Critical', 3),
-      // No thieving, no resistances.
+      _attribute('Resistance_Fire', '/Script/G1R.AttributeSet_Resistance', 3),
+      // No thieving, no advanced.
     ];
 
     await tester.pumpWidget(
@@ -117,9 +117,8 @@ void main() {
     // Sidebar entries present for non-empty groups (may also appear in the
     // detail card header, so use findsWidgets not findsOneWidget).
     expect(find.text('Main stats'), findsWidgets);
-    expect(find.text('Combat skills'), findsWidgets);
+    expect(find.text('Resistances'), findsWidgets);
     // Entries absent for empty groups.
-    expect(find.text('Resistances'), findsNothing);
     expect(find.text('Thieving'), findsNothing);
     expect(find.text('Advanced'), findsNothing);
     // No outer 'Hero stats' wrapper title.
@@ -155,7 +154,7 @@ void main() {
       (tester) async {
     final attributes = [
       _attribute('MaxHealth', '/Script/G1R.AttributeSet_Health', 64),
-      _attribute('Critical_OneHand', '/Script/G1R.AttributeSet_Critical', 3),
+      _attribute('Resistance_Fire', '/Script/G1R.AttributeSet_Resistance', 3),
     ];
 
     await tester.pumpWidget(
@@ -169,18 +168,18 @@ void main() {
 
     // Default selection is Main stats — its row is shown.
     expect(find.widgetWithText(TextField, 'MaxHealth base'), findsOneWidget);
-    // Combat skills row is not shown yet.
+    // Resistances row is not shown yet.
     expect(
-      find.widgetWithText(TextField, 'Critical_OneHand base'),
+      find.widgetWithText(TextField, 'Resistance_Fire base'),
       findsNothing,
     );
 
-    // Switch to Combat skills.
-    await tester.tap(find.text('Combat skills'));
+    // Switch to Resistances.
+    await tester.tap(find.text('Resistances'));
     await tester.pumpAndSettle();
 
     expect(
-      find.widgetWithText(TextField, 'Critical_OneHand base'),
+      find.widgetWithText(TextField, 'Resistance_Fire base'),
       findsOneWidget,
     );
     expect(find.widgetWithText(TextField, 'MaxHealth base'), findsNothing);
@@ -268,7 +267,7 @@ void main() {
     String? lastError;
     final attributes = [
       _attribute('MaxHealth', '/Script/G1R.AttributeSet_Health', 64),
-      _attribute('Critical_OneHand', '/Script/G1R.AttributeSet_Critical', 3),
+      _attribute('Resistance_Fire', '/Script/G1R.AttributeSet_Resistance', 3),
     ];
 
     await tester.pumpWidget(
@@ -296,11 +295,11 @@ void main() {
     expect(lastEdits!.length, 1);
     expect(lastEdits!.single.path.last, 'BaseValue');
 
-    // Switch to Combat skills and edit there.
-    await tester.tap(find.text('Combat skills'));
+    // Switch to Resistances and edit there.
+    await tester.tap(find.text('Resistances'));
     await tester.pumpAndSettle();
     await tester.enterText(
-      find.widgetWithText(TextField, 'Critical_OneHand base'),
+      find.widgetWithText(TextField, 'Resistance_Fire base'),
       '10',
     );
     await tester.pump();
@@ -308,7 +307,7 @@ void main() {
     // Both edits must be present.
     expect(lastEdits, hasLength(2));
     final ids = lastEdits!.map((e) => e.path[e.path.length - 2]).toSet();
-    expect(ids, containsAll(['{MaxHealth}', '{Critical_OneHand}']));
+    expect(ids, containsAll(['{MaxHealth}', '{Resistance_Fire}']));
   });
 
   testWidgets('onPendingChanged fires with empty+error on invalid field',
@@ -384,7 +383,7 @@ void main() {
     List<TypedValueEdit>? lastEdits;
     final attributes = [
       _attribute('MaxHealth', '/Script/G1R.AttributeSet_Health', 64),
-      _attribute('Critical_OneHand', '/Script/G1R.AttributeSet_Critical', 3),
+      _attribute('Resistance_Fire', '/Script/G1R.AttributeSet_Resistance', 3),
     ];
 
     await tester.pumpWidget(
@@ -405,8 +404,8 @@ void main() {
     await tester.pump();
     expect(lastEdits, hasLength(1));
 
-    // Switch to Combat skills.
-    await tester.tap(find.text('Combat skills'));
+    // Switch to Resistances.
+    await tester.tap(find.text('Resistances'));
     await tester.pumpAndSettle();
 
     // The MaxHealth field is gone from the tree now.
@@ -679,8 +678,8 @@ void main() {
               attributes: [
                 _attribute('MaxHealth', '/Script/G1R.AttributeSet_Health', 64),
                 _attribute(
-                  'Critical_OneHand',
-                  '/Script/G1R.AttributeSet_Critical',
+                  'Resistance_Fire',
+                  '/Script/G1R.AttributeSet_Resistance',
                   3,
                 ),
               ],
@@ -692,11 +691,11 @@ void main() {
     await tester.pumpWidget(buildCard());
     await tester.pumpAndSettle();
 
-    // Navigate to Combat skills.
-    await tester.tap(find.text('Combat skills'));
+    // Navigate to Resistances.
+    await tester.tap(find.text('Resistances'));
     await tester.pumpAndSettle();
     expect(
-      find.widgetWithText(TextField, 'Critical_OneHand base'),
+      find.widgetWithText(TextField, 'Resistance_Fire base'),
       findsOneWidget,
     );
 
@@ -705,9 +704,9 @@ void main() {
     await tester.pumpWidget(buildCard());
     await tester.pumpAndSettle();
 
-    // Still on Combat skills, not snapped back to Main stats.
+    // Still on Resistances, not snapped back to Main stats.
     expect(
-      find.widgetWithText(TextField, 'Critical_OneHand base'),
+      find.widgetWithText(TextField, 'Resistance_Fire base'),
       findsOneWidget,
     );
     expect(find.widgetWithText(TextField, 'MaxHealth base'), findsNothing);

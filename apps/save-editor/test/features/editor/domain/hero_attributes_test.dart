@@ -83,7 +83,9 @@ void main() {
   test('assigns known ids to their groups and unknown ids to advanced', () {
     expect(heroAttributeGroup('MaxHealth'), HeroAttributeGroup.core);
     expect(heroAttributeGroup('SkillPoints'), HeroAttributeGroup.core);
-    expect(heroAttributeGroup('Critical_OneHand'), HeroAttributeGroup.combat);
+    // The per-weapon crit values are hidden from the curated view now; the
+    // classifier still buckets any leftover into advanced.
+    expect(heroAttributeGroup('Critical_OneHand'), HeroAttributeGroup.advanced);
     expect(heroAttributeGroup('Resistance_Fire'), HeroAttributeGroup.resistances);
     expect(heroAttributeGroup('PickPocketing'), HeroAttributeGroup.thieving);
     expect(heroAttributeGroup('Swampweed'), HeroAttributeGroup.advanced);

@@ -52,12 +52,22 @@ const heroCoreAttributeOrder = [
   'MagicianLevel',
 ];
 
-const heroCombatAttributes = [
+// The per-weapon critical-hit values used to have their own "Kampffertigkeiten"
+// group; they are now hidden from the curated attribute view entirely (see
+// [heroHiddenAttributeIds]) — still editable via the All-data browser. This
+// list stays empty so the combat group machinery keeps compiling but never
+// surfaces.
+const heroCombatAttributes = <String>[];
+
+/// Attribute ids hidden from the curated hero/NPC attribute view (the game
+/// derives these from the learned skills, so editing them by hand is
+/// misleading). They remain reachable in the All-data property browser.
+const heroHiddenAttributeIds = <String>{
   'Critical_Fists',
   'Critical_OneHand',
   'Critical_TwoHand',
   'Critical_Orc',
-];
+};
 
 const heroResistanceAttributes = [
   'Resistance_Blunt',
@@ -131,6 +141,7 @@ List<HeroAttribute> parseHeroAttributes(List<TypedPropertyHit> hits) {
     final idSegment = path[path.length - 2];
     if (!idSegment.startsWith('{') || !idSegment.endsWith('}')) continue;
     final id = idSegment.substring(1, idSegment.length - 1);
+    if (heroHiddenAttributeIds.contains(id)) continue;
     final setIndex = path.indexOf('AttributeSetsByClass');
     var setClass = '';
     if (setIndex >= 0 && setIndex + 1 < path.length) {
