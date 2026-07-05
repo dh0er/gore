@@ -3072,7 +3072,7 @@ impl Structurer<'_> {
                 // block's initial stack — ONLY when the construct is provably the null-check
                 // Cast diamond (see diamond_join). Everything else keeps drop-at-boundary.
                 if !leftover.is_empty() {
-                    if let Some(j) = self.diamond_join(i, next, &leftover, &cmp) {
+                    if let Some(j) = self.diamond_join(i, Some(next), &leftover, &cmp) {
                         self.carry = Some((j, leftover));
                     }
                 }
@@ -3094,16 +3094,48 @@ impl Structurer<'_> {
 
     /// Emit a linear run of blocks [i, end) as statements (loop body); the last block's
     /// trailing comparison/jump is dropped when `skip_term_cond`.
+    ///
+    /// batch-33e: the diamond carry works here too. Loop bodies flatten their diamonds
+    /// (arms emitted sequentially), so a guard block's leftover operand stack used to die
+    /// at every block boundary — an arg pushed BEFORE an in-loop Cast diamond never reached
+    /// its consumer in the join (ANotifySpellCategoryActor::EndPlay rendered
+    /// `RemoveTag()` 0-arg inside its m_Targets iterator loop). The SAME diamond_join proof
+    /// applies unchanged: D10's dual-sim guarantees each arm emits identical statements
+    /// with the carry as initial stack and returns it verbatim — so threading the carry
+    /// through the flattened arm blocks up to the join is exactly the runtime stack on
+    /// BOTH paths. `next` is None (no emission adjacency in linear mode); instead the
+    /// join must lie inside this linear range.
     fn emit_linear(&mut self, i: usize, end: usize, depth: usize, out: &mut String, _skip: bool) {
         let ind = "    ".repeat(depth);
+        let mut carry: Vec<Arg> = Vec::new();
+        let mut carry_until: Option<usize> = None;
         for bi in i..end {
             let b = &self.g.blocks[bi];
-            let (stmts, _) = block_stmts(self.ctx, b.instr_lo, b.instr_hi);
+            let init = match carry_until {
+                Some(j) if bi <= j => std::mem::take(&mut carry),
+                _ => Vec::new(),
+            };
+            let (stmts, cmp, leftover) = block_stmts_in(self.ctx, b.instr_lo, b.instr_hi, init);
             for s in &stmts {
                 let _ = writeln!(out, "{ind}{s}");
             }
             if let Some(x) = self.region_exit_stmt(bi) {
                 let _ = writeln!(out, "{ind}{x}");
+            }
+            match carry_until {
+                // still strictly inside the proven diamond: D10 returned the carry verbatim.
+                Some(j) if bi < j => carry = leftover,
+                _ => {
+                    carry_until = None;
+                    if !leftover.is_empty() {
+                        if let Some(j) = self.diamond_join(bi, None, &leftover, &cmp) {
+                            if j > bi && j < end {
+                                carry = leftover;
+                                carry_until = Some(j);
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -3547,7 +3579,7 @@ impl Structurer<'_> {
     /// independent of the carried entries; the join's first call is a CALLSYS/Thiscall1 with
     /// TRUSTED arity (split path, never take-all). Stage 2 (own harness batch) relaxes the
     /// consumer gate to CALL/CALLINTF script consumers.
-    fn diamond_join(&self, i: usize, next: usize, l: &[Arg], cmp: &Option<Cmp>) -> Option<usize> {
+    fn diamond_join(&self, i: usize, next: Option<usize>, l: &[Arg], cmp: &Option<Cmp>) -> Option<usize> {
         let ctx = self.ctx;
         let blocks = &self.g.blocks;
         let b = &blocks[i];
@@ -3597,9 +3629,15 @@ impl Structurer<'_> {
         // D5 join index: must be exactly the `next` the is_cond arm just emitted (creation and
         // consumption are then adjacent iterations of the same emit_range loop, or — via the
         // sole-entry proof below — the next emission of block j in an enclosing range).
+        // batch-33e: `next` is None when called from emit_linear (loop bodies) — there the
+        // caller checks the join lies inside the linear range instead; every other proof
+        // (topology D2-D4/D6, dual-sim D10, consumer D11/D12) is graph/simulation-based and
+        // emission-mode-independent.
         let j = *self.idx_of.get(&join_off)?;
-        if j != next {
-            return None;
+        if let Some(nx) = next {
+            if j != nx {
+                return None;
+            }
         }
         // D6 sole-entry edges (precedent: try_emit_switch's outside-entry scan): the only edge
         // into the then-arm (and else-arm, if present) comes from the guard; the only edges
