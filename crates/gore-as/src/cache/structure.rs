@@ -1404,16 +1404,39 @@ fn cast_to_typename(rhs: &str, tyname: &str) -> Option<String> {
 /// pure pre-join getters of the proven population, so re-evaluating the read at the join
 /// observes the same element.
 fn is_pure_elem_read(s: &str) -> bool {
-    let Some(rest) = s.strip_prefix("local_") else { return false };
-    let Some((idx, call)) = rest.split_once('.') else { return false };
-    if idx.is_empty() || !idx.bytes().all(|b| b.is_ascii_digit()) {
-        return false;
-    }
-    let Some(args) = call.strip_prefix("opIndex(").and_then(|c| c.strip_suffix(')')) else {
+    let Some((recv, call)) = s.split_once(".opIndex(") else { return false };
+    let Some(args) = call.strip_suffix(')') else { return false };
+    // batch-33c: receiver widened from bare locals to `this.`-rooted plain member chains
+    // (`this.m_MinionsDieHandles.opIndex(local_6)` — MCQueen OnMinionDie's dropped
+    // UDelegateHandleContainer arg). The purity argument is unchanged: the D7-constrained
+    // diamond arms (opCast+TYPEID only) cannot mutate ANY container, member or local —
+    // the LOCAL restriction was belt, not load-bearing. Receivers with calls/indexing/
+    // quotes stay rejected by the charset.
+    let recv_ok = if let Some(rest) = recv.strip_prefix("local_") {
+        !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit())
+    } else if let Some(rest) = recv.strip_prefix("this.") {
+        !rest.is_empty()
+            && rest.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.'))
+    } else {
+        false
+    };
+    recv_ok
+        && args
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b',' | b' ' | b'-'))
+}
+
+/// batch-33c (D9 pure-read carry, iterator getters): true for a rendered 0-arg
+/// `GetKey()`/`GetValue()` on a plain identifier-chain receiver (`Entry.GetKey()` — the
+/// UGE_Ex_Damage::GetDamageByMagicCircle param iterator, whose FGameplayTag DamageTag arg
+/// died at the D9 bail). Owner-gated at the tagging site to TMap(Const)Iterator, whose
+/// getters are pure reads: re-evaluating at the diamond join cannot observe a different
+/// value (the D7-constrained arms cannot advance an iterator).
+fn is_pure_iter_get(s: &str) -> bool {
+    let Some(recv) = s.strip_suffix(".GetKey()").or_else(|| s.strip_suffix(".GetValue()")) else {
         return false;
     };
-    args.bytes()
-        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b',' | b' ' | b'-'))
+    !recv.is_empty() && recv.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.'))
 }
 
 /// True if a rendered operand is an integer slot/constant (safe to cast to bool/enum).
@@ -2432,8 +2455,16 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<Strin
                 // (non-constant Id operand) falls to the `$`-drop and returns None.
                 pending_is_static_name = f == "__STATIC_NAME" && pending.is_some();
                 // batch-32c: tag a pure local-container element read (see the flag's doc).
-                pending_is_pure_elem =
-                    f == "opIndex" && pending.as_deref().map(is_pure_elem_read).unwrap_or(false);
+                // batch-33c: + TMap(Const)Iterator's pure GetKey/GetValue getters (owner-
+                // gated by-ptr; see is_pure_iter_get).
+                pending_is_pure_elem = (f == "opIndex"
+                    && pending.as_deref().map(is_pure_elem_read).unwrap_or(false))
+                    || (matches!(f.as_str(), "GetKey" | "GetValue")
+                        && matches!(
+                            ctx.refs.func_owner_by_ptr(ptr),
+                            Some("TMapIterator" | "TMapConstIterator")
+                        )
+                        && pending.as_deref().map(is_pure_iter_get).unwrap_or(false));
             }
             "CallPtr" => {
                 let f = name(w(ins, 0));
