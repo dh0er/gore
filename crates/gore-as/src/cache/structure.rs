@@ -651,13 +651,39 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
     // dropping them at push time made the split one entry too deep and stole a neighbouring call's
     // arg (GetNPCState-shifts-args family).
     let ctx_count = collected.iter().filter(|x| x.is_ctx).count();
+    // batch-32b (N5, specs/batch31-nomatch-illegalop.md §1.6): the hidden WorldContextObject
+    // param must be stripped from the PARAM LIST too, not just from the args — passing the
+    // full T3 list shifted EVERY positional param consumer (maybe_reverse_args scored
+    // ShowTopSubtitle's Duration against the WCO UObject (invisible) while the reversed
+    // correct order put FText there (+1) and kept the wrong push order; cast_arg/render_args
+    // paired the same shifted types). The WCO's PARAM POSITION varies by binding: free
+    // natives push the marker LAST (= source param 0, leading — ShowTopSubtitle/SpawnAIAgent
+    // disasm), script-struct method natives push it FIRST (= trailing param —
+    // FInGameDate::IsLessThanXDaysAgo, FInGameTime::Now: `PshGPtr __WorldContext` before the
+    // real args). Classify by stack position: a marker within the top-of-frame overhead
+    // (receiver + RVO slot) is a LEADING param; anything deeper is TRAILING. A naive
+    // front-strip mis-paired the conversation IsValid/IsLessThanXDaysAgo family (int arg
+    // scored against the trailing WCO's UObject -> NEW argint stubs).
+    let overhead = is_method as usize + rvo_slot as usize;
+    let ctx_lead = collected
+        .iter()
+        .enumerate()
+        .filter(|(j, x)| x.is_ctx && collected.len() - 1 - j <= overhead)
+        .count();
+    let ctx_trail = ctx_count - ctx_lead;
     let mut a: Vec<Arg> = collected.into_iter()
         .filter(|x| !x.is_ctx && !x.s.is_empty() && x.s != UNRESOLVED)
         .collect();
+    let params = params.map(|p| {
+        let lead = ctx_lead.min(p.len());
+        let trail = ctx_trail.min(p.len() - lead);
+        &p[lead..p.len() - trail]
+    });
     // Effective arity: the in-game compile validates against the shipped Binds.Cache, so its native
     // arity is authoritative — prefer it over the script FunctionReferences param count. Falls back.
-    // Subtract any stripped implicit-context markers (they inflate both the frame and the arity).
-    let arity = native_arity.or_else(|| params.map(|p| p.len())).map(|n| n.saturating_sub(ctx_count));
+    // Subtract any stripped implicit-context markers (they inflate both the frame and the arity;
+    // the params fallback is already ctx-stripped above).
+    let arity = native_arity.map(|n| n.saturating_sub(ctx_count)).or_else(|| params.map(|p| p.len()));
     // Receiver: a METHOD call always pushes its receiver as the top entry (the cache param count is
     // unreliable here — it often COUNTS the implicit `this`), so detect by the bIsMethod flag.
     let has_recv = is_method && !a.is_empty();
@@ -878,7 +904,15 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
         // same-typed by-ref struct arg.
         if let Some(rh) = ret_ty.map(tyhead).filter(|_| !ret_is_ref) {
             if matches!(rh.bytes().next(), Some(b'F') | Some(b'T') | Some(b'E')) {
-                if let Some(pos) = a.iter().position(|x| x.is_psf
+                // batch-32b (N5): the free-call ABI pushes [args..., dest] — the RVO dest is
+                // the TOP entry (build_call's own rvo_slot probe: idx=1 for free calls), so
+                // probe with rposition, mirroring the batch-29c method-arm fix (line ~691).
+                // The bottom-up probe stole a PSF'd struct ARG of the same head: ApplyFormat's
+                // FString SPECIFIER became the dest while the real dest slid into the args
+                // (`local_36 = ApplyFormat(local_44, local_14); local_40.Append(local_44);`
+                // — 6 GA_Falling errors + 1 by-accident int-overload mis-bind). Single-PSF
+                // sites (string-literal Specifier, CombatSituations ×8) pick the same entry.
+                if let Some(pos) = a.iter().rposition(|x| x.is_psf
                     && x.ty.as_deref().map(tyhead) == Some(rh)) {
                     let out = a.remove(pos).s;
                     if let Some(w) = arity {
@@ -1425,6 +1459,14 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<Strin
     let mut obj_reg: Option<String> = None;
     let mut ref_reg: Option<String> = None; // Idiom-B member address
     let mut ref_reg_ty: Option<String> = None; // field type name behind ref_reg (for casts)
+    // batch-32b (N5, TMap::Find reversal): the field's PRECISE value type behind ref_reg,
+    // resolved through the this-class fields map / cross-module class-fields index ONLY —
+    // never the member_type OWNER-type fallback (`CrimeEntry.Directness` typed FCrimeEntry
+    // instead of ECrimeDirectness false-flagged the reversed order in arg_mismatch_count,
+    // suppressing the correct `Find(Key, out)` flip). Consumed ONLY by the PshRPtr arg-push
+    // (arg typing for scoring/cast pairing); the RDR/WRTV wrap logic keeps reading
+    // `ref_reg_ty` so member-store renders are unchanged. None = unknown = status quo.
+    let mut ref_reg_vty: Option<String> = None;
     // batch-25a (G2): ENUM value type of a native struct's field behind ref_reg, from the
     // in-crate native-field table (`refs::native_field_type`). Consumed ONLY by the WRTV1
     // guard so the render becomes `field = EEnum(slot)` instead of the bool-wrap.
@@ -1629,7 +1671,14 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<Strin
                 } else {
                     let (s, ty) = match value_reg.take() {
                         Some(v) => (v, None),
-                        None => (ref_reg.clone().unwrap_or_else(|| UNRESOLVED.into()), ref_reg_ty.clone()),
+                        // batch-32b: prefer the poison-free precise field value type for the
+                        // ARG TYPING (ref_reg_ty may be member_type's OWNER type, which
+                        // false-flags reversal scoring / cast pairing); fall back to the old
+                        // channel so unresolvable fields keep the status-quo behavior.
+                        None => (
+                            ref_reg.clone().unwrap_or_else(|| UNRESOLVED.into()),
+                            ref_reg_vty.clone().or_else(|| ref_reg_ty.clone()),
+                        ),
                     };
                     stack.push(Arg::typed(s, ty));
                 }
@@ -1732,6 +1781,13 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<Strin
                     .and_then(|cls| ctx.refs.native_field_type(cls, &field))
                     .filter(|t| is_enum_name(t))
                     .map(|s| s.to_string());
+                // batch-32b: precise value type (poison-free sources only — see decl comment).
+                ref_reg_vty = ctx.fields.and_then(|m| m.get(&field)).cloned().or_else(|| {
+                    ctx.refs
+                        .type_by_id(tid)
+                        .and_then(|cls| ctx.refs.field_type_by_class(cls, &field))
+                        .map(|s| s.to_string())
+                });
                 // LoadThisR loads from slot 0. In a METHOD that is `this`; in a FREE (mixin)
                 // function slot 0 is parameter 0, so hardcoding `this.` emits an undeclared base
                 // -> "'field' is not a member of 'Unknown'". slot_name(0) renders both correctly.
@@ -1750,6 +1806,11 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<Strin
                 ref_reg_nfty = ctx.refs.type_by_id(tid)
                     .and_then(|cls| ctx.refs.native_field_type(cls, &field))
                     .filter(|t| is_enum_name(t))
+                    .map(|s| s.to_string());
+                // batch-32b: precise value type (poison-free sources only — see decl comment).
+                ref_reg_vty = ctx.refs
+                    .type_by_id(tid)
+                    .and_then(|cls| ctx.refs.field_type_by_class(cls, &field))
                     .map(|s| s.to_string());
                 ref_reg = Some(format!("{obj}.{field}"));
             }
@@ -2109,6 +2170,7 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<Strin
                         ref_reg = None;
                         ref_reg_ty = None;
                         ref_reg_nfty = None;
+                        ref_reg_vty = None;
                     }
                     // batch-24b shadow gate: a free SCRIPT global (no owner, global namespace)
                     // rendered inside a class method is shadowed by any same-named member in
@@ -2117,10 +2179,16 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<Strin
                     // "such a member exists somewhere" — `::`-qualifying a non-shadowed global
                     // resolves identically, so false positives are harmless; no name sources
                     // -> false (status quo).
+                    // batch-32b (N6): the namespaced-fn exclusion is GONE — the emitter never
+                    // writes namespace blocks, so a vanilla-namespaced script fn (e.g.
+                    // FPerceptionCharacterType::GetName) is a bare GLOBAL in our tree and is
+                    // shadowed inside class bodies exactly like an unnamespaced one; `::f`
+                    // resolves it. The old gate left `GetName(EPerceptionCharacterType(...))`
+                    // resolving against the inherited `UObject::GetName()` (EventResponses ×2,
+                    // + the universal-UObject-member rows in member_name_exists).
                     let global_shadowed = !ctx.refs.is_method_by_id(id)
                         && owner.is_none()
                         && ctx.class_name.is_some()
-                        && ctx.refs.func_ns_by_id(id).map_or(true, |ns| ns.is_empty())
                         && ctx.refs.member_name_exists(&f);
                     build_call(&mut stack, &f, ctx.refs.is_method_by_id(id), ctx.super_ctor, ctx.refs.func_params_by_id(id), na, trusted, owner, ctx.class_name, n == "CALL", pending_ty.as_deref(), ret_is_ref, global_shadowed, ctx.refs)
                 };
@@ -2310,6 +2378,7 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<Strin
                         ref_reg = None;
                         ref_reg_ty = None;
                         ref_reg_nfty = None;
+                        ref_reg_vty = None;
                     }
                     build_call(&mut stack, &qualified, ctx.refs.is_method_by_ptr(ptr), ctx.super_ctor, ctx.refs.func_params_by_ptr(ptr), na, trusted, ctx.refs.func_owner_by_ptr(ptr), ctx.class_name, false, pending_ty.as_deref(), ret_is_ref, false, ctx.refs)
                 };
@@ -2533,6 +2602,7 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<Strin
                     ref_reg = Some(top.s);
                     ref_reg_ty = top.ty;
                     ref_reg_nfty = top.nfty; // batch-25a: native enum field type for WRTV1
+                    ref_reg_vty = None; // batch-32b: the popped entry's ty is already precise
                 }
             }
             // RefCpyV (wW_ARG): copy the top-of-stack handle into the destination slot named by

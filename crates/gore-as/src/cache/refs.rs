@@ -496,8 +496,18 @@ impl RefResolver {
     /// by bytecode), injected script-class method declarations, or any Binds native signature
     /// name. The production emit runs WITHOUT Binds (JOURNAL: binds-arity emit regressed), so the
     /// cache-derived sets are the load-bearing sources; Binds adds coverage when loaded.
+    /// batch-32b (N6, spec batch31-nomatch-illegalop §1.10): universal UObject members shadow a
+    /// same-named free script global inside EVERY class body (all script classes derive UObject),
+    /// but are invisible to the cache-derived sets unless some bytecode call references them as a
+    /// T3 method — `GetName(EPerceptionCharacterType)` resolved against the inherited
+    /// `FName UObject::GetName() const` instead of the free script fn (EventResponses ×2).
+    /// Static list; `::`-over-qualification of a non-shadowed global stays harmless.
     pub fn member_name_exists(&self, name: &str) -> bool {
-        self.method_names.contains(name) || self.native_name_exists(name)
+        const UNIVERSAL_UOBJECT_MEMBERS: [&str; 5] =
+            ["GetName", "GetClass", "GetOuter", "GetWorld", "GetFName"];
+        self.method_names.contains(name)
+            || UNIVERSAL_UOBJECT_MEMBERS.contains(&name)
+            || self.native_name_exists(name)
     }
     pub fn global_by_ptr(&self, ptr: i64) -> Option<&str> {
         self.global_by_ptr.get(&ptr).map(|s| s.as_str())
