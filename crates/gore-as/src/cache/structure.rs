@@ -40,6 +40,11 @@ struct Arg {
     /// counts the hidden `WorldContextObject`), but it is NOT a source-level arg — build_call
     /// strips it after collection and reduces the render arity accordingly.
     is_ctx: bool,
+    /// True for an int-slot arg whose value provably came from a MEMBER READ (RDR* after a
+    /// member-ref load) — a real data value (an XP amount, a config int), not a stranded SetV
+    /// temporary. The nested-call retain keeps these (`GiveExperience(hero, local_23)` must not
+    /// lose its `this.XP_...`-sourced Amount to an intervening `GetHero()`).
+    keep: bool,
 }
 impl Arg {
     fn int(s: String) -> Arg {
@@ -453,7 +458,7 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
             // an int MinCount, a builder-chain weight/cooldown — that the enclosing call needs
             // (proven: IsCloseToCharacter(a, b, 699.0) lost its 699.0 to this drop).
             let own = stack.split_off(stack.len() - k);
-            stack.retain(|x| !x.is_int || x.cbits.is_some());
+            stack.retain(|x| !x.is_int || x.cbits.is_some() || x.keep);
             own
         }
         _ => std::mem::take(stack),
@@ -928,6 +933,9 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
     let mut ref_reg: Option<String> = None; // Idiom-B member address
     let mut ref_reg_ty: Option<String> = None; // field type name behind ref_reg (for casts)
     let mut set_consts: HashMap<i32, ConstBits> = HashMap::new(); // last SetV* constant per slot
+    // Slots whose current value came from a MEMBER READ (RDR* after a member-ref load) — real
+    // data values, kept by the nested-call retain (see Arg.keep). Invalidated on overwrite.
+    let mut member_read_slots: std::collections::HashSet<i32> = std::collections::HashSet::new();
     let mut pending: Option<String> = None; // unconsumed call/ctor result
     let mut pending_ty: Option<String> = None; // recovered type of `pending` (call return type)
     let mut ret_val: Option<String> = None;
@@ -983,6 +991,14 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
         if overwrites_slot {
             if let Some(&wd) = ins.words.first() {
                 set_consts.remove(&(wd as i16 as i32));
+                member_read_slots.remove(&(wd as i16 as i32)); // (RDR* re-inserts in its arm)
+            }
+        }
+        // SetV* is excluded from overwrites_slot (it REGISTERS a const) but still replaces a
+        // member-read value with a temporary — invalidate the keep flag.
+        if matches!(n, "SetV4" | "SetV8" | "SetV1") {
+            if let Some(&wd) = ins.words.first() {
+                member_read_slots.remove(&(wd as i16 as i32));
             }
         }
         match n {
@@ -1010,6 +1026,9 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                     // nested-call retain (`!is_int || cbits.is_some()`) keeps it as a REAL arg
                     // instead of dropping it as a stranded temporary.
                     stack.push(Arg::iconst(name(off), cb));
+                } else if member_read_slots.contains(&off) {
+                    // Member-read value (this.XP_... amount) — a real arg the retain must keep.
+                    stack.push(Arg { s: name(off), is_int: true, keep: true, ..Default::default() });
                 } else {
                     stack.push(Arg::int(name(off)));
                 }
@@ -1113,6 +1132,7 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                     let dst_is_int = dst_slot > 0 && ctx.slot_type(dst_slot).is_none();
                     let rhs = enum_to_int(r.clone(), ref_reg_ty.as_deref(), dst_is_int);
                     out.push(format!("{} = {rhs};", name(dst_slot)));
+                    member_read_slots.insert(dst_slot); // real data value, not a SetV temporary
                 }
             }
             _ if n.starts_with("WRTV") => {
