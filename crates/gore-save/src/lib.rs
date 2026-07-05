@@ -2872,6 +2872,15 @@ fn inspect_private_payload(
             );
             let typed_parse = summarize_typed_parse_result(&payload, typed_result.as_ref());
             let typed_ok = typed_parse["status"] == "ok";
+            // `private.skills.set` needs the hero's ActiveEffects array as its edit
+            // target; apply_skill_set rejects the write otherwise. Gate the
+            // advertised capability on it so a guaranteed-to-fail op is never
+            // offered (e.g. a fresh save whose hero has no effects yet).
+            let hero_has_effects = typed_result
+                .as_ref()
+                .and_then(|r| r.as_ref().ok())
+                .map(|r| skills::actor_has_active_effects(r, "Hero"))
+                .unwrap_or(false);
             let progression = summarize_private_progression_overview(
                 typed_result
                     .as_ref()
@@ -2913,11 +2922,13 @@ fn inspect_private_payload(
                     // map; needs only a decodable typed parse (no inventory
                     // main_container gating).
                     "private.knowledge.addCharacter",
-                    // Hero skill edits (retarget / unlearn / learn a
-                    // GameplayEffect in the hero's ActiveEffects array); a
-                    // decodable typed parse is all it needs.
-                    "private.skills.set",
                 ]);
+                // Hero skill edits (retarget / unlearn / learn a GameplayEffect
+                // in the hero's ActiveEffects array) — only when that target
+                // array exists, else apply_skill_set would reject the write.
+                if hero_has_effects {
+                    writable.push("private.skills.set");
+                }
                 if any_unforgiven {
                     writable.push("private.factions.forgive");
                 }

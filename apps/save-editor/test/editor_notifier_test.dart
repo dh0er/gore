@@ -825,6 +825,115 @@ void main() {
     },
   );
 
+  test(
+    'saveAllPending runs an ActiveEffects Def edit AFTER the skill write',
+    () async {
+      final core = _RecordingCoreService();
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+      // A raw All-Data setValue retargeting an ActiveEffects EffectSpec/Def...
+      notifier.setPendingEdit(
+        'typed:def',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.typed.setValue',
+              'value': {
+                'path': [
+                  'ActiveEffectsByGlobalId',
+                  '{Hero}',
+                  'ActiveEffects',
+                  '[0]',
+                  'EffectSpec',
+                  'Def',
+                ],
+                'value': '/Script/Angelscript.Default__GE_Skill_Sneak',
+              },
+            },
+          ],
+        ),
+      );
+      // ...and a skill edit that resolves by base name.
+      notifier.setPendingEdit(
+        'skills',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.skills.set',
+              'value': {
+                'actor': 'Hero',
+                'base': 'Melee_OneHanded',
+                'tier': 'Master',
+              },
+            },
+          ],
+        ),
+      );
+
+      final ok = await notifier.saveAllPending();
+      expect(ok, isTrue);
+
+      final writes = core.requests
+          .where((r) => r.command == 'write_save')
+          .toList();
+      // Two isolated writes: the Def edit is pulled out of the fixed batch.
+      expect(writes, hasLength(2));
+      final skillIndex = writes.indexWhere(
+        (w) => (w.payload['edits'] as List).any(
+          (e) => (e as Map)['path'] == 'private.skills.set',
+        ),
+      );
+      final defIndex = writes.indexWhere(
+        (w) => (w.payload['edits'] as List).any(
+          (e) => (e as Map)['path'] == 'private.typed.setValue',
+        ),
+      );
+      // The skill write resolves the true GE class BEFORE the Def edit changes it.
+      expect(skillIndex, lessThan(defIndex));
+    },
+  );
+
+  test(
+    'saveAllPending keeps an ActiveEffects Def edit in the batch without a skill edit',
+    () async {
+      final core = _RecordingCoreService();
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+      // No skill edit is queued, so there is no conflict: the Def edit stays in
+      // the single fixed-batch write (unchanged behaviour).
+      notifier.setPendingEdit(
+        'typed:def',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.typed.setValue',
+              'value': {
+                'path': [
+                  'ActiveEffectsByGlobalId',
+                  '{Hero}',
+                  'ActiveEffects',
+                  '[0]',
+                  'EffectSpec',
+                  'Def',
+                ],
+                'value': '/Script/Angelscript.Default__GE_Skill_Sneak',
+              },
+            },
+          ],
+        ),
+      );
+
+      await notifier.saveAllPending();
+
+      final writes = core.requests
+          .where((r) => r.command == 'write_save')
+          .toList();
+      expect(writes, hasLength(1));
+    },
+  );
+
   // ---------------------------------------------------------------------------
   // Bug #1: a fresh inspection must reset the selected actor to the player so a
   // stale NPC GlobalId from the previous save can't drive the actor-aware tabs.

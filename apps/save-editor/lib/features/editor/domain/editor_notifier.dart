@@ -678,11 +678,24 @@ class EditorNotifier extends StateNotifier<EditorState> {
     final skillEdits = allEdits
         .where((k) => k.edit['path'] == skillPath)
         .toList();
+    // A raw All-Data `private.typed.setValue` on an ActiveEffects `EffectSpec/Def`
+    // leaf retargets the GE class that `private.skills.set` resolves by base. Run
+    // in the pre-skill fixed batch it would change (or, via a later unlearn,
+    // remove) the very element a queued skill edit looks up, so that skill edit
+    // silently no-ops or clones against the wrong state. When a skill edit is
+    // also queued, isolate such Def edits into their own trailing writes AFTER
+    // the skill write so `private.skills.set` resolves against the true class
+    // first. With no skill edit pending there is no conflict — leave them in the
+    // fixed batch (unchanged behaviour).
+    bool isDefAfterSkills(_KeyedEdit k) =>
+        skillEdits.isNotEmpty && _isActiveEffectsDefEdit(k.edit);
+    final defAfterSkills = allEdits.where(isDefAfterSkills).toList();
     final fixedBatch = allEdits
         .where(
           (k) =>
               !splicingPaths.contains(k.edit['path']) &&
-              k.edit['path'] != skillPath,
+              k.edit['path'] != skillPath &&
+              !isDefAfterSkills(k),
         )
         .toList();
 
@@ -718,6 +731,11 @@ class EditorNotifier extends StateNotifier<EditorState> {
           edits: [for (final keyed in skillEdits) keyed.edit],
           keys: {for (final keyed in skillEdits) keyed.key},
         ),
+      // ActiveEffects Def retargets run LAST, each isolated: after the skill
+      // write (so private.skills.set resolved the true class) and never batched
+      // (index-addressed; a preceding skill splice can shift the array).
+      for (final keyed in defAfterSkills)
+        _SubWrite(edits: [keyed.edit], keys: {keyed.key}),
     ];
 
     final n = allEdits.length;
@@ -1877,6 +1895,25 @@ class _KeyedEdit {
 
   final String key;
   final Map<String, Object?> edit;
+}
+
+/// True when [edit] is a raw `private.typed.setValue` whose target leaf is an
+/// ActiveEffects `EffectSpec/Def` (a GE-class retarget) — the same element a
+/// `private.skills.set` resolves by base, so the two conflict when both are
+/// queued in one Save. Used by [EditorNotifier.saveAllPending] to order such
+/// edits after the skill write.
+bool _isActiveEffectsDefEdit(Map<String, Object?> edit) {
+  if (edit['path'] != 'private.typed.setValue') return false;
+  final value = edit['value'];
+  if (value is! Map) return false;
+  final path = value['path'];
+  if (path is! List) return false;
+  final segs = path.whereType<String>().toList();
+  final n = segs.length;
+  if (n < 2 || segs[n - 1] != 'Def' || segs[n - 2] != 'EffectSpec') {
+    return false;
+  }
+  return segs.contains('ActiveEffects');
 }
 
 /// One write_save unit in [EditorNotifier.saveAllPending]'s worklist: the edits

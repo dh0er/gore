@@ -78,6 +78,14 @@ fn locate_active_effects<'a>(
     }
 }
 
+/// Whether `actor` has an `ActiveEffects` array to edit into. `private.skills.set`
+/// (learn/unlearn/retier) requires this target; callers gate the advertised
+/// capability on it so a write that would fail with `UnsupportedEdit` is never
+/// offered. `actor` is normally [`HERO`].
+pub fn actor_has_active_effects(root: &properties::RootObject, actor: &str) -> bool {
+    locate_active_effects(root, actor).is_some()
+}
+
 /// The current tier value for a learned skill. A suffix-less class (binary
 /// skill) has no tier, so its "learned" value is the sentinel `Learned`.
 fn current_value(tier: Option<&str>) -> String {
