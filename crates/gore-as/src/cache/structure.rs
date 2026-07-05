@@ -1010,7 +1010,10 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 // field type — so prefer the map and only fall back to member_type.
                 ref_reg_ty = ctx.fields.and_then(|m| m.get(&field)).cloned()
                     .or_else(|| ctx.refs.member_type(tid, off).map(|s| s.to_string()));
-                ref_reg = Some(format!("this.{field}"));
+                // LoadThisR loads from slot 0. In a METHOD that is `this`; in a FREE (mixin)
+                // function slot 0 is parameter 0, so hardcoding `this.` emits an undeclared base
+                // -> "'field' is not a member of 'Unknown'". slot_name(0) renders both correctly.
+                ref_reg = Some(format!("{}.{field}", name(0)));
             }
             "LoadRObjR" | "LoadVObjR" => {
                 let obj = name(w(ins, 0));
