@@ -600,6 +600,30 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
         if matches!(f, "opImplConv" | "opConv") {
             return None;
         }
+        // GENERATED per-component static accessors (`UMyComponent::Get(Actor[, FName])`,
+        // GetOrCreate, Create): their DECLARATIONS are intentionally skipped from the emit
+        // (signature collisions), so a bare call `Get(local_2, NAME_None)` never resolves
+        // ("No matching signatures ... Did you mean 'Sit'?", 362 in-game errors). The real
+        // UE-AngelScript form is the class-qualified static: `UMyComponent::Get(local_2)`.
+        // Gate: exact generated-getter name, an owning class on the callee (the generated fns
+        // carry their component class as ObjectType), and >= 1 collected arg (the actor) —
+        // 0-param statics like UQuestSubsystem::Get are native CALLSYS, not this path.
+        // (0-arg form = the generated per-subsystem `Get()` accessor — same skip class, same
+        // qualified-static fix: `UMySubsystem::Get()` is the native Hazelight subsystem idiom.)
+        if matches!(f, "Get" | "GetOrCreate" | "Create") {
+            // Owner: the callee's ObjectType when recorded; else the RETURN type — a generated
+            // accessor returns exactly the component class it is generated on, so the return
+            // head is the qualifying class (`UPyrolaserOriginPointComponent Get(AActor, FName)`).
+            let owner = target_owner
+                .filter(|o| o.starts_with('U'))
+                .or_else(|| ret_ty
+                    .map(|t| t.split('<').next().unwrap_or(t))
+                    .filter(|t| t.starts_with('U') && refs.is_type_name(t)));
+            if let Some(owner) = owner {
+                maybe_reverse_args(&mut a, params, refs);
+                return Some(format!("{owner}::{f}({})", render_args(&a, params, refs)));
+            }
+        }
         // Free-call RVO struct-return (mirror of the method Fix-b3 arm): a free/static function
         // returning a struct BY VALUE pushes a hidden PSF out-slot. Recover `out = f(args)`
         // instead of leaking the out-slot as a leading arg (GotoPosition/Say/GiveItemTo/
