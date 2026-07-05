@@ -816,9 +816,8 @@ fn field_assign_rhs(rhs: &str, tyname: &str) -> String {
 }
 
 /// True if `tyname` is a UE enum type (`E<Upper>...`) — same shape `cast_to_typename` keys on.
-/// Tolerates a leading `const ` (a const-qualified enum is still an enum for cast purposes).
 fn is_enum_name(tyname: &str) -> bool {
-    let b = tyname.trim_start_matches("const ").as_bytes();
+    let b = tyname.as_bytes();
     b.len() >= 2 && b[0] == b'E' && b[1].is_ascii_uppercase()
 }
 
@@ -1087,31 +1086,7 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 if let Some(r) = &ref_reg {
                     let dst_slot = w(ins, 0);
                     let dst_is_int = dst_slot > 0 && ctx.slot_type(dst_slot).is_none();
-                    // Known-enum source -> int(...) (existing). Source of UNKNOWN value type ->
-                    // wrap too: the cache carries NO value type for a foreign field
-                    // (PropertyReferences.OldTypeId = the OWNER — proven: SurfaceType->
-                    // UPhysicalMaterial, Relationship->FPerceivedAgent — and an ADDSi chain's
-                    // fty lookup covers only this-class fields), so `ref_reg_ty` being absent
-                    // or owner-shaped (U*/A*/F*/T* head) hides every foreign ENUM field read
-                    // (`local = Perception.Affected.Relationship`, ~164 enum->int in-game
-                    // errors). `int(x)` is compile-neutral for every other primitive an RDR
-                    // can produce here: int/float are explicit-constructible and bool->int is
-                    // legal in UE-AS (0 'bool to int' errors across the whole capture).
-                    // RDR8 stays on the old path: no UE enum is 8 bytes (double/int64/handle
-                    // reads keep their bare, already-compiling render).
-                    let unknowable = match ref_reg_ty.as_deref() {
-                        None => true,
-                        Some(t) => {
-                            let t = t.trim_start_matches("const ");
-                            matches!(t.bytes().next(), Some(b'U') | Some(b'A') | Some(b'F') | Some(b'T'))
-                                && t.as_bytes().get(1).map(|c| c.is_ascii_uppercase()).unwrap_or(false)
-                        }
-                    };
-                    let rhs = if dst_is_int && unknowable && n != "RDR8" {
-                        format!("int({r})")
-                    } else {
-                        enum_to_int(r.clone(), ref_reg_ty.as_deref(), dst_is_int)
-                    };
+                    let rhs = enum_to_int(r.clone(), ref_reg_ty.as_deref(), dst_is_int);
                     out.push(format!("{} = {rhs};", name(dst_slot)));
                 }
             }
@@ -1135,21 +1110,11 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                     // decompiled const-`0` bool). Cast the RHS to bool. Guard: the RHS was NOT
                     // already transformed above (a bare slot), is resolved, and is not a KNOWN
                     // bool slot (which compiles bare and must not become the illegal `bool != 0`).
-                    // ENUM guards: uint8 ENUMS are also 1-byte writes. When the SOURCE slot is a
-                    // known enum (an enum param stored into a same-enum field:
-                    // `this.FocusCharacterType = PerceptionCharacterType` — the bool wrap made it
-                    // `(Param != 0)` -> "bool -> EPerceptionCharacterType&", 41+ in-game errors),
-                    // or the FIELD's value type is a known enum (this-class fields map), the write
-                    // is enum->enum: keep it bare. (A foreign enum field written from an INT const
-                    // remains unfixable here — the cache carries no value type for foreign fields
-                    // and the enum's NAME is required for the cast; see cant-convert-cleanup.md.)
                     if n == "WRTV1"
                         && ref_reg_ty.as_deref() != Some("bool")
-                        && !ref_reg_ty.as_deref().map(is_enum_name).unwrap_or(false)
                         && rhs == raw
                         && rhs != UNRESOLVED
                         && ctx.slot_type(slot).as_deref() != Some("bool")
-                        && !ctx.slot_type(slot).as_deref().map(is_enum_name).unwrap_or(false)
                     {
                         rhs = format!("({rhs} != 0)");
                     }
