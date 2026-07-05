@@ -281,6 +281,20 @@ impl RefResolver {
     /// Best-known native arity for a call by function ptr: prefer the exact (owning class,
     /// name) match, else the unambiguous by-name arity. None if no native data / ambiguous.
     pub fn native_arity_by_ptr(&self, ptr: i64, name: &str) -> Option<usize> {
+        // batch-20 Class C: natives whose tail-table FunctionReferences param list UNDERCOUNTS
+        // the live game API (proven by the in-game error candidates). Keyed (owner, name); the
+        // live-compiler signature is authoritative, so this overrides even a Binds arity.
+        // FGameplayEffectSpec::SetByCallerMagnitude(FGameplayTag DataTag, float32 Magnitude):
+        // the cache lists only DataTag, so the float Magnitude was dropped (17 in-game errors).
+        const KNOWN_NATIVE_ARITY: &[(&str, &str, usize)] =
+            &[("FGameplayEffectSpec", "SetByCallerMagnitude", 2)];
+        if let Some(cls) = self.func_owner.get(&ptr) {
+            if let Some((_, _, a)) =
+                KNOWN_NATIVE_ARITY.iter().find(|(c, n, _)| c == cls && n == &name)
+            {
+                return Some(*a);
+            }
+        }
         let n = self.native.as_ref()?;
         if let Some(cls) = self.func_owner.get(&ptr) {
             if let Some(a) = n.arity(cls, name) {

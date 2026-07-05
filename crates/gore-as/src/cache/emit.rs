@@ -241,6 +241,24 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
     for (slot, ty) in &slot_overrides {
         local_types.insert(*slot, ty.clone());
     }
+    // batch-20 Class C: unlike the float out-refs (declaration-only), a BOOL out-ref slot must
+    // also be known to the BODY renderer — its `local_N = local_M;` int-copy needs the
+    // `(... != 0)` wrap (no implicit int->bool in AS) and its pushes must render bare.
+    for (slot, ty) in &outref_overrides {
+        if ty == "bool" {
+            local_types.insert(*slot, ty.clone());
+        }
+    }
+    // batch-20 Class C (SetByCallerMagnitude): float-family slots (from the width-typed ops,
+    // e.g. `dTOf w35`) must survive the nested-call stack-split retain (`!is_int` keeps them)
+    // and render bare — an untyped `PshV4` push is dropped as a stranded int temporary, which
+    // ate the float Magnitude arg pushed before a chained `GetSpec()` call (17 in-game errors).
+    // Never overrides an object/consumer-derived type (entry API).
+    for (slot, ty) in infer_locals(f, refs) {
+        if matches!(ty.as_str(), "float" | "float32" | "double") {
+            local_types.entry(slot).or_insert(ty);
+        }
+    }
     // member-access-derived types: the field's declaring class is the strongest signal for a
     // slot used as a member-access base; apply AFTER (overriding) the call-arg guess.
     let member_overrides = infer_slot_types_from_members(f, refs, fields, class_name);
@@ -417,6 +435,13 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
         // legal form is declaration-with-initializer (copy-construction). Rewrite qualifying
         // executor locals to decl-init at their assignment sites.
         let (body, na_suppressed) = rewrite_no_assign_locals(&body, &locals);
+        // Batch-20 Class A residue: executor locals whose reference shape failed the decl-init
+        // gates above (multi-assign with reads, read-before-assign, cross-block reads) still
+        // carry `local_N = <call>;` assignments — temporary into non-const opAssign. Split each
+        // into `TY __na_tK = <call>; local_N = __na_tK;` — the lvalue assign compiles (proven
+        // in-game: `__return = local_16;` never errored in the batch-19 capture) and the temp
+        // lives/dies on adjacent lines of the same block, so it is scope-safe by construction.
+        let body = rewrite_no_assign_residual_assigns(&body, &locals, &ret);
         // Iterator locals have no default ctor either; declare them at their `Iterator()` call.
         let (body, iter_suppressed) = rewrite_iterator_decl_init(&body, &locals);
         // hoist local declarations; primitives must be initialized (AngelScript errors on
@@ -735,7 +760,10 @@ fn infer_slot_types(f: &Func, refs: &RefResolver) -> (HashMap<i32, String>, Hash
                     }
                     // out-ref float pass: a PSF'd (address-pushed) slot feeding a float-family
                     // REFERENCE param must be declared with exactly that type (see fn doc).
-                    if *is_psf && pt.is_reference && matches!(pt.token, 0x50 | 0x51 | 0x5E) {
+                    // batch-20 Class C: bool& out params too (GetFloatAttributeFromAbility-
+                    // SystemComponent's `bool& bSuccessfullyFoundAttribute` — the slot was
+                    // declared int, and an int lvalue can't bind to bool&; 34 in-game errors).
+                    if *is_psf && pt.is_reference && matches!(pt.token, 0x41 | 0x50 | 0x51 | 0x5E) {
                         let kw = super::types::token_keyword(pt.token).to_string();
                         match outref.get(s) {
                             None => { outref.insert(*s, Some(kw)); }
@@ -768,7 +796,7 @@ fn infer_slot_types(f: &Func, refs: &RefResolver) -> (HashMap<i32, String>, Hash
             }
             "CALL" | "CALLINTF" | "CALLBND" => {
                 let id = ins.dwords.first().copied().unwrap_or(0) as i32;
-                let rs = refs.func_ret_by_id(id).map(|d| ret_is_struct(&d.base_name(refs))).unwrap_or(false);
+                let rs = refs.func_ret_by_id(id).map(|d| !d.is_reference && ret_is_struct(&d.base_name(refs))).unwrap_or(false);
                 pair(&mut ostack, refs.func_params_by_id(id), refs.is_method_by_id(id), rs, &mut cand, &mut outref);
             }
             "CALLSYS" | "Thiscall1" => {
@@ -798,7 +826,7 @@ fn infer_slot_types(f: &Func, refs: &RefResolver) -> (HashMap<i32, String>, Hash
                     ostack.truncate(ostack.len() - drop_n);
                     continue;
                 }
-                let rs = refs.func_ret_by_ptr(ptr).map(|d| ret_is_struct(&d.base_name(refs))).unwrap_or(false);
+                let rs = refs.func_ret_by_ptr(ptr).map(|d| !d.is_reference && ret_is_struct(&d.base_name(refs))).unwrap_or(false);
                 pair(&mut ostack, refs.func_params_by_ptr(ptr), refs.is_method_by_ptr(ptr), rs, &mut cand, &mut outref);
             }
             _ => {}
@@ -1042,7 +1070,7 @@ fn infer_iterator_types(
             }
             "CALL" | "CALLINTF" | "CALLBND" => {
                 let id = ins.dwords.first().copied().unwrap_or(0) as i32;
-                let rs = refs.func_ret_by_id(id).map(|d| ret_is_struct(&d.base_name(refs))).unwrap_or(false);
+                let rs = refs.func_ret_by_id(id).map(|d| !d.is_reference && ret_is_struct(&d.base_name(refs))).unwrap_or(false);
                 consume(&mut stack, refs.func_params_by_id(id).map(|p| p.len()), refs.is_method_by_id(id), rs);
             }
             "CALLSYS" | "Thiscall1" => {
@@ -1067,7 +1095,7 @@ fn infer_iterator_types(
                         record_iterator_candidate(refs, known, &mut cand, out_slot, ptr, container);
                     }
                 }
-                let rs = refs.func_ret_by_ptr(ptr).map(|d| ret_is_struct(&d.base_name(refs))).unwrap_or(false);
+                let rs = refs.func_ret_by_ptr(ptr).map(|d| !d.is_reference && ret_is_struct(&d.base_name(refs))).unwrap_or(false);
                 consume(&mut stack, refs.func_params_by_ptr(ptr).map(|p| p.len()), refs.is_method_by_ptr(ptr), rs);
             }
             _ => {}
@@ -1206,7 +1234,7 @@ fn infer_call_result_types(
                 let is_m = refs.is_method_by_id(id);
                 let recv = if is_m { ostack.last().copied().flatten() } else { None };
                 let ret = refs.func_ret_by_id(id).map(|d| d.base_name(refs));
-                let rs = ret.as_deref().map(ret_is_struct).unwrap_or(false);
+                let rs = refs.func_ret_by_id(id).map(|d| !d.is_reference && ret_is_struct(&d.base_name(refs))).unwrap_or(false);
                 consume(&mut ostack, refs.func_params_by_id(id).map(|p| p.len()), is_m, rs);
                 last = ret.map(|t| (t, recv));
             }
@@ -1223,7 +1251,7 @@ fn infer_call_result_types(
                 let is_m = refs.is_method_by_ptr(ptr);
                 let recv = if is_m { ostack.last().copied().flatten() } else { None };
                 let ret = refs.func_ret_by_ptr(ptr).map(|d| d.base_name(refs));
-                let rs = ret.as_deref().map(ret_is_struct).unwrap_or(false);
+                let rs = refs.func_ret_by_ptr(ptr).map(|d| !d.is_reference && ret_is_struct(&d.base_name(refs))).unwrap_or(false);
                 consume(&mut ostack, refs.func_params_by_ptr(ptr).map(|p| p.len()), is_m, rs);
                 last = ret.map(|t| (t, recv));
             }
@@ -1518,6 +1546,59 @@ fn rewrite_no_assign_locals(body: &str, locals: &BTreeMap<i32, String>) -> (Stri
         suppressed.insert(*slot);
     }
     (out, suppressed)
+}
+
+/// Residual pass behind [`rewrite_no_assign_locals`]: any REMAINING `local_N = <call>;` (or
+/// `__return = <call>;`) statement whose LHS is a no-assign type still assigns a temporary into
+/// the non-const `opAssign(TY&)` and fails in-game. Split the statement in place:
+///
+/// ```text
+/// FAbilityTaskExecutor __na_tK = <call>;   // copy-construction from the temporary — legal
+/// local_N = __na_tK;                       // opAssign from an LVALUE — legal (capture-proven)
+/// ```
+///
+/// The temp is declared and consumed on adjacent lines of the same block, so no scope/dominance
+/// analysis is needed (unlike the decl-init rewrites above, which rename or sink declarations).
+/// Only call-like RHS (ends in `)`) is split; a bare lvalue RHS (`__return = local_16;`) already
+/// compiles. Lines rewritten by the decl-init passes start with the type name, not `local_N =`,
+/// so the two passes never overlap.
+fn rewrite_no_assign_residual_assigns(
+    body: &str,
+    locals: &BTreeMap<i32, String>,
+    ret_ty: &str,
+) -> String {
+    // LHS ident → its declared type, for every no-assign-typed assignable name in this body.
+    let is_candidate = |ident: &str| -> Option<&str> {
+        if ident == "__return" {
+            return no_assign_type(ret_ty).then_some(ret_ty);
+        }
+        let slot: i32 = ident.strip_prefix("local_")?.parse().ok()?;
+        let ty = locals.get(&slot)?;
+        no_assign_type(ty).then_some(ty.as_str())
+    };
+    let mut k = 0usize;
+    let mut out = String::with_capacity(body.len() + 64);
+    for line in body.lines() {
+        let t = line.trim_start();
+        let split = t
+            .split_once(" = ")
+            .and_then(|(lhs, rhs)| Some((is_candidate(lhs)?, lhs, rhs)))
+            .filter(|(_, _, rhs)| rhs.ends_with(");"));
+        match split {
+            Some((ty, lhs, rhs)) => {
+                k += 1;
+                let indent = &line[..line.len() - t.len()];
+                let rhs = &rhs[..rhs.len() - 1]; // strip trailing `;`
+                let _ = writeln!(out, "{indent}{ty} __na_t{k} = {rhs};");
+                let _ = writeln!(out, "{indent}{lhs} = __na_t{k};");
+            }
+            None => {
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+    }
+    out
 }
 
 /// Iterator locals (`TArrayIterator<T>`, `TSetIterator<T>`, `TMapIterator<T>`, ... incl. Const

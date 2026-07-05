@@ -362,7 +362,7 @@ struct Cmp {
 /// methods (opAssign/opAdd/opEquals/...) render as the source operator. Returns None for
 /// compiler-generated behaviors ($behN construct/destruct) that have no source form.
 #[allow(clippy::too_many_arguments)]
-fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option<&str>, params: Option<&[DataType]>, native_arity: Option<usize>, trusted_arity: Option<usize>, target_owner: Option<&str>, cur_class: Option<&str>, non_virtual: bool, ret_ty: Option<&str>, refs: &RefResolver) -> Option<String> {
+fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option<&str>, params: Option<&[DataType]>, native_arity: Option<usize>, trusted_arity: Option<usize>, target_owner: Option<&str>, cur_class: Option<&str>, non_virtual: bool, ret_ty: Option<&str>, ret_is_ref: bool, refs: &RefResolver) -> Option<String> {
     if f.starts_with('$') || f.starts_with('~') || f == "__STATIC_NAME" {
         // EDIT C (the dominant FName form): `__STATIC_NAME` is the synthesized name-table accessor
         // (`const FName& __STATIC_NAME(int Id)` per the exe's registered decl) that fetches
@@ -433,8 +433,15 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
     // entry directly below the receiver is a PSF slot whose type head equals the return-type head
     // (the same condition the Fix-b3 out-slot probe uses). This can only SHRINK the window vs the
     // old heuristic, never widen, so it cannot break a real by-value RVO recovery.
+    // batch-20 Class D: a method returning BY REFERENCE (`FString& Append(...)` — fluent
+    // builders) has NO hidden RVO out-slot, but `ret_ty` is the base-name string with the
+    // refness erased — the probes below misread a genuine PSF'd struct ARG of the same type
+    // (Append's `const FString&in` fed by a ToString RVO local) as the out-slot, stealing the
+    // arg (`.Append()`) and prefixing a bogus `out =` (48 in-game errors). `ret_is_ref` carries
+    // the T3 DataType's bIsReference; every RVO probe is gated on it.
     fn tyhead(s: &str) -> &str { s.split('<').next().unwrap_or(s) }
-    let rvo_slot = ret_ty.map(|t| matches!(tyhead(t).bytes().next(), Some(b'F') | Some(b'T'))).unwrap_or(false)
+    let rvo_slot = !ret_is_ref
+        && ret_ty.map(|t| matches!(tyhead(t).bytes().next(), Some(b'F') | Some(b'T'))).unwrap_or(false)
         && {
             // The hidden RVO out-slot sits BELOW the receiver for a method (top = receiver) and
             // ON TOP for a free call (no receiver pushed). Same data-driven evidence gate as the
@@ -497,7 +504,7 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
         // value), which would falsely match the out-slot probe and rewrite `states = opAssign()`.
         fn head(s: &str) -> &str { s.split('<').next().unwrap_or(s) }
         let is_operator = assign_op(f).is_some() || binop_method(f).is_some();
-        if let Some(rh) = ret_ty.map(head).filter(|_| !is_operator) {
+        if let Some(rh) = ret_ty.map(head).filter(|_| !is_operator && !ret_is_ref) {
             if matches!(rh.bytes().next(), Some(b'F') | Some(b'T') | Some(b'E')) {
                 // the RVO out-slot = a PSF arg whose type head equals the return-type head
                 if let Some(pos) = a.iter().position(|x| x.is_psf
@@ -633,8 +640,10 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
         // returning a struct BY VALUE pushes a hidden PSF out-slot. Recover `out = f(args)`
         // instead of leaking the out-slot as a leading arg (GotoPosition/Say/GiveItemTo/
         // FInGameTime::Now). Same data-driven gate as Fix-b3: a PSF arg whose type head equals the
-        // return-type head; a call without a genuine out-slot can't match.
-        if let Some(rh) = ret_ty.map(tyhead) {
+        // return-type head; a call without a genuine out-slot can't match. Gated on !ret_is_ref
+        // (batch-20 Class D): a BY-REFERENCE return has no out-slot, and the probe would steal a
+        // same-typed by-ref struct arg.
+        if let Some(rh) = ret_ty.map(tyhead).filter(|_| !ret_is_ref) {
             if matches!(rh.bytes().next(), Some(b'F') | Some(b'T') | Some(b'E')) {
                 if let Some(pos) = a.iter().position(|x| x.is_psf
                     && x.ty.as_deref().map(tyhead) == Some(rh)) {
@@ -848,7 +857,16 @@ fn cast_arg(arg: &Arg, pt: &DataType, refs: &RefResolver) -> String {
 /// different (derived) type — the cache erases the covariant return type of template getters
 /// like `GetTypedOuter<T>`/`SpawnedStorage<T>` to the base, so AS rejects the implicit
 /// downcast. Only applies between UObject/AActor types (`U*`/`A*`).
-fn downcast(rhs: String, src_ty: Option<String>, dst_ty: Option<&String>, refs: &RefResolver) -> String {
+///
+/// batch-20 Class B: when the call returns a CONST object handle (`src_const`) and the
+/// destination local is the SAME (non-const) type, the plain store fails "Can't implicitly
+/// convert from 'const UCharacterAIState' to 'UCharacterAIState'". `Cast<T>` strips the const:
+/// PROVEN in the batch-19 capture — `local_4 = Cast<AGothicCharacter>(Querier);` with
+/// `const UObject Querier` compiles clean (AIAgentConfig_Navigation_Human.as GetAIFromQuerier),
+/// same in PersonalRelationshipModifiers.as with `const AGothicCharacterState` params. Only the
+/// exact-type pair is wrapped (every capture site is 'const X' -> 'X'); a const UPCAST keeps the
+/// status-quo error rather than risking the known Cast<Base>(derived) in-game failure.
+fn downcast(rhs: String, src_ty: Option<String>, src_const: bool, dst_ty: Option<&String>, refs: &RefResolver) -> String {
     let is_obj = |s: &str| s.starts_with('U') || s.starts_with('A');
     match (src_ty, dst_ty) {
         (Some(s), Some(d)) if is_obj(&s) && is_obj(d) && s != *d => {
@@ -861,6 +879,7 @@ fn downcast(rhs: String, src_ty: Option<String>, dst_ty: Option<&String>, refs: 
                 format!("Cast<{d}>({rhs})")
             }
         }
+        (Some(s), Some(d)) if src_const && is_obj(&s) && s == *d => format!("Cast<{d}>({rhs})"),
         _ => rhs,
     }
 }
@@ -975,6 +994,10 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
     let mut member_read_slots: std::collections::HashSet<i32> = std::collections::HashSet::new();
     let mut pending: Option<String> = None; // unconsumed call/ctor result
     let mut pending_ty: Option<String> = None; // recovered type of `pending` (call return type)
+    // batch-20 Class B: the call returns a CONST object handle (`const UCharacterAIState`).
+    // `pending_ty` is the const-stripped base name (comparisons everywhere key on it), so the
+    // constness travels in this parallel flag; the STOREOBJ arm uses it to Cast-strip.
+    let mut pending_const: bool = false;
     let mut ret_val: Option<String> = None;
     // Target type of the most recent TYPEID push — the implicit type operand of the following
     // `opCast` behaviour call (the lowered form of `Cast<T>(x)`). Resolved to a typename so the
@@ -986,6 +1009,7 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
     macro_rules! flush {
         () => {
             pending_ty = None;
+            pending_const = false;
             if let Some(p) = pending.take() {
                 out.push(format!("{p};"));
             }
@@ -1007,6 +1031,7 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 }
             }
             pending_ty = None;
+            pending_const = false;
         };
     }
 
@@ -1057,6 +1082,13 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 let off = w(ins, 0);
                 if ctx.slot_type(off).as_deref() == Some("bool") {
                     stack.push(Arg::typed(name(off), Some("bool".to_string())));
+                } else if matches!(ctx.slot_type(off).as_deref(), Some("float" | "float32" | "double")) {
+                    // batch-20 Class C: a float-family slot pushed by value is a REAL arg (e.g.
+                    // SetByCallerMagnitude's Magnitude pushed before a chained GetSpec()); typed
+                    // (is_int=false) it survives the nested-call stack-split retain and renders
+                    // bare. Left as Arg::int it was dropped as a stranded temporary (17 in-game
+                    // errors: "No matching signatures to 'SetByCallerMagnitude(FGameplayTag)'").
+                    stack.push(Arg::typed(name(off), ctx.slot_type(off)));
                 } else if let Some(cb) = set_consts.get(&off).copied() {
                     // The slot holds a tracked SetV constant (the SetV1/SetV4 -> PshV4 idiom for a
                     // literal flag/amount, e.g. Say's `bUnskippable`). Carry its cbits so the
@@ -1257,7 +1289,19 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
             }
             "CpyVtoV4" | "CpyVtoV8" => {
                 flush!();
-                out.push(format!("{} = {};", name(w(ins, 0)), name(w(ins, 1))));
+                let (dst, src) = (w(ins, 0), w(ins, 1));
+                // batch-20 Class C: a slot declared `bool` (bool& out-ref retype) written from an
+                // int-family slot needs the explicit wrap — AS has no implicit int->bool. A
+                // genuine bool source stays bare (`bool != 0` doesn't compile either).
+                let rhs = if ctx.slot_type(dst).as_deref() == Some("bool")
+                    && ctx.slot_type(src).is_none()
+                    && looks_int(&name(src))
+                {
+                    format!("({} != 0)", name(src))
+                } else {
+                    name(src)
+                };
+                out.push(format!("{} = {rhs};", name(dst)));
             }
             _ if bin_op(n).is_some() && ins.words.len() >= 3 => {
                 flush!();
@@ -1350,6 +1394,7 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                     // Fix b1 — StaticClass takes 0 operands; the stack holds the ENCLOSING call's
                     // already-pushed args. Do NOT clear it (clearing destroys those args).
                     pending_ty = None;
+                    pending_const = false;
                     // The class is the StaticClass func's NAMESPACE last-segment (objtype is
                     // NULL for StaticClass; the target class lives in the namespace), not the
                     // calling class — `local = UFoo::StaticClass()` from inside UBar must say UFoo.
@@ -1359,12 +1404,18 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                     Some(format!("{cls}::StaticClass()"))
                 } else {
                     pending_ty = ctx.refs.func_ret_by_id(id).map(|d| d.base_name(ctx.refs));
+                    // CALL-by-id = SCRIPT function: its authoritative signature is the module-region
+                    // one WE emit (GetG1R renders `UStoryG1R GetG1R()`, no const), while the
+                    // tail-table entry spuriously carries bIsObjectConst (2757 GetG1R stores compile
+                    // CLEAN in the batch-19 capture). Never const-wrap script-call results.
+                    pending_const = false;
                     let na = ctx.refs.native_arity_by_id(id, &f);
                     // SCRIPT call by id: the cache FunctionReference param count is authoritative
                     // (only NATIVE param lists undercount), so trust it for the EDIT B-PRIME split.
                     let trusted = ctx.refs.func_params_by_id(id).map(|p| p.len());
                     let owner = ctx.refs.func_owner_by_id(id);
-                    build_call(&mut stack, &f, ctx.refs.is_method_by_id(id), ctx.super_ctor, ctx.refs.func_params_by_id(id), na, trusted, owner, ctx.class_name, n == "CALL", pending_ty.as_deref(), ctx.refs)
+                    let ret_is_ref = ctx.refs.func_ret_by_id(id).map(|d| d.is_reference).unwrap_or(false);
+                    build_call(&mut stack, &f, ctx.refs.is_method_by_id(id), ctx.super_ctor, ctx.refs.func_params_by_id(id), na, trusted, owner, ctx.class_name, n == "CALL", pending_ty.as_deref(), ret_is_ref, ctx.refs)
                 };
             }
             "CALLSYS" | "Thiscall1" => {
@@ -1462,12 +1513,15 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                     // Fix b1 — do NOT clear the stack; StaticClass takes 0 operands and the entries
                     // present belong to an ENCLOSING call.
                     pending_ty = None;
+                    pending_const = false;
                     let cls = ctx.refs.staticclass_class_by_ptr(ptr)
                         .or_else(|| ctx.refs.func_owner_by_ptr(ptr))
                         .or(ctx.class_name).unwrap_or("UObject");
                     Some(format!("{cls}::StaticClass()"))
                 } else {
                     pending_ty = ctx.refs.func_ret_by_ptr(ptr).map(|d| d.base_name(ctx.refs));
+                    pending_const = ctx.refs.func_ret_by_ptr(ptr)
+                        .is_some_and(|d| d.is_object_handle && d.is_object_const);
                     let na = ctx.refs.native_arity_by_ptr(ptr, &f);
                     // A free/static native function in a namespace (Gameplay, Math, System, ...)
                     // must be called qualified `Namespace::func(...)` or the global lookup fails
@@ -1491,13 +1545,15 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                     // target_owner (T3 ObjectType) was only wired for CALL/CALLINTF; pass it for
                     // native calls too so the UObject-receiver Cast wrap (batch19 class 1) and the
                     // generated-accessor qualification see the owning class of CALLSYS methods.
-                    build_call(&mut stack, &qualified, ctx.refs.is_method_by_ptr(ptr), ctx.super_ctor, ctx.refs.func_params_by_ptr(ptr), na, trusted, ctx.refs.func_owner_by_ptr(ptr), ctx.class_name, false, pending_ty.as_deref(), ctx.refs)
+                    let ret_is_ref = ctx.refs.func_ret_by_ptr(ptr).map(|d| d.is_reference).unwrap_or(false);
+                    build_call(&mut stack, &qualified, ctx.refs.is_method_by_ptr(ptr), ctx.super_ctor, ctx.refs.func_params_by_ptr(ptr), na, trusted, ctx.refs.func_owner_by_ptr(ptr), ctx.class_name, false, pending_ty.as_deref(), ret_is_ref, ctx.refs)
                 };
             }
             "CallPtr" => {
                 let f = name(w(ins, 0));
                 pending_ty = None;
-                pending = build_call(&mut stack, &f, false, ctx.super_ctor, None, None, None, None, ctx.class_name, false, None, ctx.refs);
+                pending_const = false;
+                pending = build_call(&mut stack, &f, false, ctx.super_ctor, None, None, None, None, ctx.class_name, false, None, false, ctx.refs);
             }
             // ---- object construction ----
             "ALLOC" => {
@@ -1505,13 +1561,14 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                 let ty = ctx.refs.type_by_ptr(tptr).unwrap_or("Object").to_string();
                 let args: Vec<String> = std::mem::take(&mut stack).into_iter().filter(|a| !a.s.is_empty()).map(|a| a.s).collect();
                 pending_ty = Some(ty.clone());
+                pending_const = false;
                 pending = Some(format!("{ty}({})", args.join(", ")));
             }
             // ---- result capture ----
             "STOREOBJ" => {
                 let slot = w(ins, 0);
                 let rhs = match pending.take() {
-                    Some(p) => Some(downcast(p, pending_ty.take(), ctx.local_types.and_then(|m| m.get(&slot)), ctx.refs)),
+                    Some(p) => Some(downcast(p, pending_ty.take(), std::mem::take(&mut pending_const), ctx.local_types.and_then(|m| m.get(&slot)), ctx.refs)),
                     None => obj_reg.take(),
                 };
                 flush_store(&mut out, name(slot), rhs);
@@ -1525,6 +1582,7 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
                     out.push(format!("{} = {rhs};", name(dst_slot)));
                 }
                 pending_ty = None;
+                pending_const = false;
             }
             "LOADOBJ" => obj_reg = Some(name(w(ins, 0))),
             "CpyVtoR4" | "CpyVtoR8" => {
