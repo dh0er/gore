@@ -60,6 +60,15 @@ static CONST_SAFE: &[&str] = &[
     // (asOBJ_VALUE): the copy is a value read through the generated const&in opAssign,
     // not a const-handle escape. Un-stubs the two AddAttack callers' read-only errors.
     "FAttackInfo::GetAttackMoveData",
+    // batch-31e: the capture.batch30-0705 OnItemPickedUp regression (3907:40 "Non-const
+    // method call on read-only object reference") is `ItemPickupHandle.GetClass()` on the
+    // `const FItemPickupHandle&inout` PARAM — surfaced by 30a's struct emission of
+    // FItemPickupHandle (value semantics enforce receiver constness), NOT by C6a const
+    // propagation (the module emits zero const locals; the receiver's constness is the
+    // vanilla signature's). Vanilla compiled this exact call on the const param, so
+    // vanilla's GetClass was const; the recovered body (`return this._Class;`, a pure
+    // field read) is trivially body-const-safe, satisfying the §5 oracle discipline.
+    "FItemPickupHandle::GetClass",
 ];
 
 fn const_safe_set() -> &'static HashSet<&'static str> {

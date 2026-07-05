@@ -2252,6 +2252,31 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>) -> (Vec<Strin
                     Some(format!("{cls}::StaticClass()"))
                 } else {
                     pending_ty = ctx.refs.func_ret_by_ptr(ptr).map(|d| d.base_name(ctx.refs));
+                    // batch-31e (capture.batch30-0705 ForceRemoveDamage regression): the T3
+                    // entry for `TSubclassOf::GetDefaultObject` records the call-site
+                    // SPECIALIZED return (UElectrifiedArena_GornSleeper), but our render
+                    // collapses the TSubclassOf receiver onto the raw `T::StaticClass()`
+                    // expression, which the LIVE compiler resolves to the UClass overload
+                    // returning UObject ("Can't implicitly convert from 'UObject' to
+                    // 'UElectrifiedArena_GornSleeper'"). Render with the SOURCE-level type:
+                    // with the specialized pending_ty the STOREOBJ downcast saw src == dst
+                    // (30a's exact-type merge keeps the vanilla obj_locals type) and skipped
+                    // the load-bearing Cast — batch-29 only compiled here by accident (a
+                    // member MIS-typing to UWeaponDefinition forced a Cast). Gated to the
+                    // exact broken shape — an untyped receiver whose rendered expression IS
+                    // a `T::StaticClass()` call (statically UClass in-game). Receivers
+                    // recovered as TSubclassOf<T> (or unrecovered foreign members, which
+                    // resolve the typed overload in-game) keep the specialized type; a wider
+                    // untyped-receiver gate added a benign-but-unfaithful Cast on 9 clean
+                    // sites (incl. the CombatMoves sentinel) — rejected as non-minimal.
+                    if f == "GetDefaultObject"
+                        && ctx.refs.func_owner_by_ptr(ptr) == Some("TSubclassOf")
+                        && stack.last().is_some_and(|r| {
+                            r.ty.is_none() && r.s.ends_with("::StaticClass()")
+                        })
+                    {
+                        pending_ty = Some("UObject".to_string());
+                    }
                     pending_const = ctx.refs.func_ret_by_ptr(ptr)
                         .is_some_and(|d| d.is_object_handle && d.is_object_const);
                     let na = ctx.refs.native_arity_by_ptr(ptr, &f);
