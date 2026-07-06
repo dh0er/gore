@@ -3764,7 +3764,35 @@ impl Structurer<'_> {
                 // `break_off` = the test's forward exit. Gate 2 already proved (in the detector)
                 // that the body fully structures under this scope; on ANY deviation the detector
                 // returned None and this arm never fired (the status-quo bottom-test stands).
-                self.emit_linear(i, i + 1, depth, out, true);
+                //
+                // batch-44d: emit the entry block's setup statements WITH the incoming operand-stack
+                // carry (`init`) — the Cast-diamond carry from a preceding block. A setup call whose
+                // args were pushed BEFORE a Cast diamond (e.g. `BrushComponent.GetOverlappingActors(
+                // out, filter)` — out/filter PSF'd in an earlier block, carried across the
+                // null-check diamond into this entry/join block) needs that carry, else the call
+                // renders 0-arg ("No matching signatures"). `emit_linear` starts with an EMPTY stack
+                // and dropped those args; `block_stmts_in` with `init` restores them.
+                let (mut stmts, _, _) = block_stmts_in(self.ctx, b.instr_lo, b.instr_hi, init, false);
+                // batch-44d: the entry block's trailing `<coll>.Iterator()` result is dropped by
+                // build_call (the TMap/TSet Iterator lowers with NO PSF out-slot → a bare statement).
+                // The iterator local has NO default constructor, so the hoisted `TMapIterator
+                // local_It;` + `local_It.CanProceed` fails to compile. Capture the trailing
+                // `Iterator()` into the iterator slot so `rewrite_iterator_decl_init` turns it into
+                // `auto local_It = coll.Iterator();`.
+                if let Some(it_slot) = self.foreach_iter_slot(test_idx) {
+                    let it_name = self.ctx.slot_name(it_slot);
+                    if let Some(last) = stmts.iter_mut().rev().find(|s| !s.trim().is_empty()) {
+                        let t = last.trim();
+                        if (t.ends_with(".Iterator();") || t.ends_with(".Iterator()"))
+                            && assign_lhs(t).is_none()
+                        {
+                            *last = format!("{it_name} = {t}");
+                        }
+                    }
+                }
+                for s in &stmts {
+                    let _ = writeln!(out, "{ind}{s}");
+                }
                 let _ = writeln!(out, "{ind}while ({cond})");
                 let _ = writeln!(out, "{ind}{{");
                 let test_off = self.g.blocks[test_idx].start_dw;
@@ -5170,6 +5198,25 @@ impl Structurer<'_> {
             "JLowNZ" => expr,
             _ => format!("!({expr})"),
         })
+    }
+
+    /// batch-44d: the iterator SLOT of a test-first foreach — the `wIt` operand of the test
+    /// block's `LoadVObjR wIt, ?, CanProceed`. Used to capture the entry block's `Iterator()`
+    /// result into a decl-init (`auto local_It = coll.Iterator();`) — the iterator local has NO
+    /// default constructor, so a bare hoisted `TMapIterator local_It;` fails to compile.
+    fn foreach_iter_slot(&self, test_idx: usize) -> Option<i32> {
+        let b = &self.g.blocks[test_idx];
+        for j in b.instr_lo..b.instr_hi {
+            let ins = &self.ctx.instrs[j];
+            if ins.op.name == "LoadVObjR" {
+                let off = ins.words.get(1).copied().unwrap_or(0) as i32;
+                let tid = ins.dwords.first().copied().unwrap_or(0) as i32;
+                if self.ctx.refs.member(tid, off) == Some("CanProceed") {
+                    return Some(ins.words.first().copied().map(s16).unwrap_or(0));
+                }
+            }
+        }
+        None
     }
 
     /// batch-44b (E2, specs/loop-body-cfg-ext.md §2.2): detect a TEST-FIRST `foreach` whose ENTRY
