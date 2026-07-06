@@ -1,6 +1,6 @@
-# gore
+# GORE
 
-**gore** (Go-thic Re-make) is a modding and save-editing toolsuite for the
+**GORE** (Go-thic Re-make) is a modding and save-editing toolsuite for the
 Gothic Remake.
 
 ## What's in the repo
@@ -9,7 +9,8 @@ Gothic Remake.
   modding from the terminal: item values, text/dialogs, audio, textures,
   scripts. Start here if you want to mod.
 - **[`mod-studio`](apps/mod-studio)** — a no-code Windows GUI over the same
-  modding engine (everything except AngelScript), for *authoring* one mod.
+  modding engine (incl. experimental AngelScript editing), for *authoring* one
+  mod.
 - **[`mod-manager`](apps/mod-manager)** — a Windows GUI for installing and
   managing *many* mods together (load order, conflict detection, one-click
   apply); complements mod-studio (authoring).
@@ -48,7 +49,7 @@ Each domain produces a mod a different way:
 | Textures | additive UE5 IoStore Zen triplet | the game's `~mods/` folder |
 | Scripts | edited precompiled AngelScript cache | the script cache (experimental) |
 
-You can ship each on its own, or combine the first four into one deployable
+You can ship each on its own, or combine them into one deployable
 **bundle** (see [Bundling & deploying](#bundling--deploying)).
 
 ## Item & stat values (overrides)
@@ -167,8 +168,9 @@ containers are what currently load reliably in-game.)
 
 The game's compiled AngelScript lives in a precompiled cache
 (`PrecompiledScript_Shipping.Cache`). `gore as` can read it and splice edited
-modules back in. This is reverse-engineering-stage tooling, not yet part of the
-deployable bundle.
+modules back in. This is reverse-engineering-stage tooling; a compiled module
+can also be folded into a deployable bundle (see
+[Bundling & deploying](#bundling--deploying)).
 
 ```sh
 gore as info       PrecompiledScript_Shipping.Cache         # module count + splice point
@@ -194,8 +196,8 @@ to the input cache (or `GORE_AS_BINDS`).
 
 ## Bundling & deploying
 
-Combine overrides + text + audio + textures into one mod, then deploy/undeploy it
-against your install. Write a build spec (`spec.json`):
+Combine overrides + text + audio + textures + scripts into one mod, then
+deploy/undeploy it against your install. Write a build spec (`spec.json`):
 
 ```json
 {
@@ -203,7 +205,8 @@ against your install. Write a build spec (`spec.json`):
   "overrides": [ { "class": "ItFo_Apple", "field": "m_Value", "value_int": 500 } ],
   "loc_edits": { "some_text_id": { "german": "…" } },
   "audio":   [ { "bank": "SFX.bank", "sample": "Foo", "wav_path": "foo.wav" } ],
-  "texture": [ { "asset": "/Game/UI/.../T_Foo", "image_path": "foo.png" } ]
+  "texture": [ { "asset": "/Game/UI/.../T_Foo", "image_path": "foo.png" } ],
+  "scripts": [ { "op": "add", "module_name": "MyModule", "mini_cache": "MyModule.cache" } ]
 }
 ```
 
@@ -213,7 +216,7 @@ gore mod deploy  --bundle build/MyMod --game "$GAME"   # overrides→Mods, loc/a
 gore mod undeploy --game "$GAME"                       # restore everything
 ```
 
-This is the same engine [`mod-studio`](#mod-studio-gui) drives. Other helpers:
+This is the same engine [`mod-studio`](#gore-mod-studio) drives. Other helpers:
 
 ```sh
 gore scaffold MyMod -o "$GAME/.../Mods"   # empty hand-written gorelib mod skeleton
@@ -228,7 +231,8 @@ Every subcommand of the `gore` binary:
 | Command | Action(s) | Purpose |
 |---------|-----------|---------|
 | `gen` | — | Compile `overrides.toml` → a UE4SS Lua override mod. |
-| `mod` | `build` · `deploy` · `undeploy` | Build/deploy/undeploy a unified bundle (overrides + loc + audio + textures). |
+| `mod` | `build` · `deploy` · `undeploy` | Build/deploy/undeploy a unified bundle (overrides + loc + audio + textures + scripts). |
+| `mgr` | `import` · `list` · `enable` · `disable` · `order` · `analyze` · `apply` · `status` · `reset` · `remove` | Multi-mod manager: library, load order, conflict analysis, composed deploy (the CLI behind mod-manager). |
 | `loc` | `extract` · `status` · `export` · `import` | Read/edit localized text & dialogs in the encrypted `.lcache`. |
 | `audio` | `list` · `extract` · `replace` · `restore` · `export-patch` · `apply-patch` | Read/replace FMOD `.bank` audio (PCM injection, `*.gore-bak`). |
 | `texture` | `list` · `extract` · `replace` · `pack` · `deploy` · `index` · `undeploy` | Extract/replace IoStore textures → Zen triplet in `~mods`. |
@@ -243,11 +247,13 @@ Every subcommand of the `gore` binary:
 
 ---
 
-# mod-studio (GUI)
+# GORE Mod Studio
 
 A no-code Windows app over the same bundle engine as the CLI — point-and-click
 modding with live previews and `.goremod` project files. Auto-updates on launch
-(WinSparkle).
+(WinSparkle). The install bundles the [`gore` CLI](#modding-with-the-gore-cli)
+(`gore.exe`) alongside, for the power tools the GUI does not surface (AngelScript
+`disasm`/`decompile`, `catalog`/`dump`/`stubs`, multi-mod `mgr`).
 
 **It can:**
 - Edit **item/stat values** by browsing the categorized item catalog and editing
@@ -255,22 +261,23 @@ modding with live previews and `.goremod` project files. Auto-updates on launch
 - Edit **localized text & dialogs**.
 - Replace **audio** — browse a bank's samples, preview, and swap in your own.
 - Replace **textures** — pick an asset, preview, drop in a PNG.
+- Edit **AngelScript** — stage a module, compile, and splice it into the game's
+  script cache (experimental).
 - **Build a bundle** and **deploy/undeploy** it to your game install
-  (overrides + loc + audio + textures, with backups), or **export a standalone
-  Lua override mod** to share.
+  (overrides + loc + audio + textures + scripts, with backups), or **export a
+  standalone Lua override mod** to share.
 
 **It can not:**
-- Edit **AngelScript** — scripts are CLI-only (`gore as`).
-- Edit **save files** — that's [save-editor](#save-editor-gui).
+- Edit **save files** — that's [save-editor](#gore-save-editor).
 - Hand-write custom Lua logic — use `gore scaffold` + the [gorelib SDK](#the-gorelib-lua-sdk).
-- Patch arbitrary game files outside the four supported domains.
-- Manage a *collection* of mods together — that's [mod-manager](#mod-manager-gui).
+- Patch arbitrary game files outside the five supported domains.
+- Manage a *collection* of mods together — that's [mod-manager](#gore-mod-manager).
 
 ---
 
-# mod-manager (GUI)
+# GORE Mod Manager
 
-A Windows app for running **many** mods at once. Where [mod-studio](#mod-studio-gui)
+A Windows app for running **many** mods at once. Where [mod-studio](#gore-mod-studio)
 *authors* a single mod, mod-manager owns the multi-mod story: build a library,
 order it, see what collides, and apply the whole enabled set to your install.
 Auto-updates on launch (WinSparkle). It consumes the mod bundles mod-studio (or
@@ -292,13 +299,13 @@ Auto-updates on launch (WinSparkle). It consumes the mod bundles mod-studio (or
 
 **It can not:**
 - *Author* a mod (edit item values, text, audio, textures) — that's
-  [mod-studio](#mod-studio-gui) or the [`gore` CLI](#modding-with-the-gore-cli).
-- Edit **save files** — that's [save-editor](#save-editor-gui).
+  [mod-studio](#gore-mod-studio) or the [`gore` CLI](#modding-with-the-gore-cli).
+- Edit **save files** — that's [save-editor](#gore-save-editor).
 - Download mods (no Nexus API integration) — import files you already have.
 
 ---
 
-# save-editor (GUI)
+# GORE Save Editor
 
 A Windows app (`goresave`) for editing your **save games**, backup-first. This is
 *not* modding — it changes your saved progress, never the game install.
@@ -317,7 +324,7 @@ work across versions.
 
 **It can not:**
 - Mod the game (no overrides, audio, textures, or scripts) — use the
-  [`gore` CLI](#modding-with-the-gore-cli) or [mod-studio](#mod-studio-gui).
+  [`gore` CLI](#modding-with-the-gore-cli) or [mod-studio](#gore-mod-studio).
 - Touch the game install in any way.
 - Guarantee experimental raw edits are safe — keep your own copy of important
   saves.
