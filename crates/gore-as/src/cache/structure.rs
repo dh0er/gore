@@ -1781,6 +1781,17 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
     // const decl (batch-41 cascade risk); a direct null-compare of the const param has no
     // conversion. Consumed + cleared by the very next `CmpPtrNull`.
     let mut guard_param_alias: HashMap<i32, String> = HashMap::new();
+    // batch-46a (FIX-5): slot NAME -> value-type name, recorded when a 0-param `$beh0` CONSTRUCT
+    // behaviour default-initialises a PSF'd temp slot of a value type (`PSF t; CALLSYS $beh0`,
+    // owner e.g. `FGameplayTag`). The construct's own arm skips it (the PSF slot carries no `.ty`,
+    // so the `is_value` gate is false) and it falls through the generic `$`-drop — but the temp is
+    // then copy-assigned into a member (`PSF t; PshVPtr this; ADDSi <field>; CALLSYS $beh0(1-param)`
+    // = the FGameplayTag default-init triad). Recorded here so the Idiom-S copy-assign arm can
+    // recover `this.<field> = T();` (a default-constructed value) instead of dropping the whole
+    // triad to an empty ctor body. Keyed on the CONSTRUCT owner type so the copy-assign only fires
+    // when the source temp was default-built of the SAME value type. Cleared when the slot is
+    // overwritten by any non-construct producer.
+    let mut default_ctor_temp: HashMap<String, String> = HashMap::new();
     let mut pending: Option<String> = None; // unconsumed call/ctor result
     let mut pending_ty: Option<String> = None; // recovered type of `pending` (call return type)
     // batch-20 Class B: the call returns a CONST object handle (`const UCharacterAIState`).
@@ -2719,6 +2730,27 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                     continue;
                 }
                 if f == "$beh0" {
+                    // batch-46a (FIX-5, GameplayTag default-init triad): a 0-param `$beh0` CONSTRUCT
+                    // on a PSF'd temp slot of a VALUE type (owner F*/T*/E*) default-initialises that
+                    // temp (`PSF t; CALLSYS $beh0(0-param)`). The temp carries no `.ty` (a bare PSF
+                    // slot), so the value-construct arm below skips it and it falls through the
+                    // generic `$`-drop. RECORD `slot -> owner_type` here so the following 1-param
+                    // copy-assign into a member (`… ADDSi <field>; CALLSYS $beh0(1-param)`) can
+                    // recover `this.<field> = T();` from an otherwise-empty ctor body. Recording
+                    // only (no `continue`) — the existing arms proceed exactly as before, so this is
+                    // additive and cannot alter any current render. Gate: 0-param, PSF receiver, a
+                    // value-type owner (never U*/A* objects, which use ALLOC not this behaviour).
+                    if ctx.refs.func_params_by_ptr(ptr).map(|p| p.len()) == Some(0) {
+                        if let Some(top) = stack.last() {
+                            if top.is_psf {
+                                if let Some(owner) = ctx.refs.func_owner_by_ptr(ptr) {
+                                    if matches!(owner.bytes().next(), Some(b'F') | Some(b'T') | Some(b'E')) {
+                                        default_ctor_temp.insert(top.s.clone(), owner.to_string());
+                                    }
+                                }
+                            }
+                        }
+                    }
                     // `$beh0` is the AngelScript value-type / struct in-place CONSTRUCT behaviour:
                     // `PSF <slot> ; <args...> ; CALLSYS $beh0` constructs the value AT the PSF'd
                     // slot (the receiver, top of stack). build_call drops every `$`-prefixed
@@ -2841,6 +2873,30 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                             && stack.len() >= 2
                         {
                             let rhs = stack[stack.len() - 2].clone();
+                            // batch-46a (FIX-5): GameplayTag default-init triad. The 1-param `$beh0`
+                            // COPY-ASSIGN (`this.<field> = t`) whose source `t` is a PSF temp that a
+                            // preceding 0-param `$beh0` default-CONSTRUCTED (recorded in
+                            // `default_ctor_temp`). The generic Idiom-S `rhs_ok` rejects a PSF source,
+                            // so the whole triad dropped -> empty ctor. Recover `this.<field> = T();`
+                            // (a default-constructed value). SAFETY: fire ONLY when (a) the source
+                            // slot was default-constructed of a value type, and (b) that type EQUALS
+                            // this copy-assign's owner (the field's value type) — so the render is
+                            // provably `<field's own type>()`, never a fabricated value. Any mismatch
+                            // or unrecorded slot falls through to the normal `rhs_ok` bail. `T()` is a
+                            // pure default ctor (no args), so it cannot introduce a wrong value.
+                            if rhs.is_psf {
+                                if let Some(ctor_ty) = default_ctor_temp.get(&rhs.s) {
+                                    let assign_owner = ctx.refs.func_owner_by_ptr(ptr);
+                                    if assign_owner == Some(ctor_ty.as_str()) {
+                                        let ty = ctor_ty.clone();
+                                        default_ctor_temp.remove(&rhs.s); // consume the record
+                                        stack.truncate(stack.len() - 2); // consume recv + temp
+                                        flush!();
+                                        out.push(format!("{} = {ty}();", recv.s));
+                                        continue;
+                                    }
+                                }
+                            }
                             let rhs_ok = !rhs.is_psf
                                 && !rhs.s.is_empty()
                                 && rhs.s != UNRESOLVED
