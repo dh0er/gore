@@ -3573,6 +3573,60 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                         }
                         consumed
                     };
+                    // batch-50a (opIndex-swap read-into-temp, specs/final-tail-triage.md §3.11
+                    // ShuffleItemArray): a Fisher-Yates swap `temp = arr[i]; arr[i] = arr[j];
+                    // arr[j] = temp;` lowers the SAVE-TO-TEMP as
+                    // `PshV4 i; PshVPtr arr; Thiscall1 opIndex; PshRPtr; RDSPtr; RefCpyV wTemp`
+                    // — the opIndex getter result copied into a plain local. Today the call-expr
+                    // source drops (the `ok` whitelist accepts a `(`-bearing source ONLY into the
+                    // return out-slot, batch-43 `call_src_to_out`), leaving `local_Temp` UNDECLARED;
+                    // the later `arr[j] = local_Temp;` REFCPY store then reads an uninitialised slot
+                    // and the whole swap corrupts. FIX-7's `getter_into_cmp`/batch-49c's
+                    // `getter_into_null_cmp` only fire when the dest feeds a CmpPtr/CmpPtrNull; this
+                    // adds the case where the dest is later consumed as the SOURCE HANDLE of a
+                    // REFCPY store (`PshVPtr <dst>` whose enclosing statement stores it back). Gate
+                    // HARD: source is a RESOLVED opIndex element read (`.opIndex(` … ends ')', no
+                    // sentinel/unresolved), and a bounded forward scan finds the FIRST consumer of
+                    // this slot to be a `PshVPtr <dst>` that is NOT a member-access base (next op is
+                    // NOT ADDSi — that would be the param-alias shape) and NOT re-defined before —
+                    // i.e. the slot is pushed as a bare handle (a REFCPY store source or call arg),
+                    // never compared or member-dotted. Safe: the opIndex read is a pure element read
+                    // (batch-32c `is_pure_elem_read` purity class) whose SOLE later use is the
+                    // store-back; materialising `local_Temp = arr[i];` cannot reorder a side effect
+                    // past a use it did not have before (the copy was DROPPED). Additive — recovers
+                    // the vanilla store only when the swap-temp shape is proven.
+                    let src_is_opindex_read = top.s.contains(".opIndex(")
+                        && top.s.ends_with(')')
+                        && !top.s.contains('\u{2}')
+                        && !top.s.contains('\u{1}')
+                        && top.s != UNRESOLVED
+                        && !top.s.starts_with('~');
+                    let getter_into_store_rhs = src_is_opindex_read && {
+                        let mut consumed = false;
+                        for j in (k + 1)..insns.len() {
+                            let nx = &insns[j];
+                            // first consumer is a bare-handle push of this slot (NOT a member base:
+                            // next op must not be ADDSi) -> the swap-back store source. Materialise.
+                            if nx.op.name == "PshVPtr"
+                                && w(nx, 0) == dst_slot0
+                                && !insns.get(j + 1).is_some_and(|a| a.op.name == "ADDSi")
+                            {
+                                consumed = true;
+                                break;
+                            }
+                            // re-defined before any consumer -> alias-shadow, not this copy; bail.
+                            if matches!(
+                                nx.op.name,
+                                "RefCpyV" | "CpyRtoV4" | "CpyRtoV8" | "RDR4" | "RDR8"
+                                    | "SetV4" | "SetV8" | "SetV1" | "STOREOBJ" | "FreeNullV8"
+                                    | "ClrVPtr"
+                            ) && w(nx, 0) == dst_slot0
+                            {
+                                break;
+                            }
+                        }
+                        consumed
+                    };
                     let ok = !top.s.is_empty()
                         && top.s != dst
                         && !const_ret_getter
@@ -3583,7 +3637,8 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                             || getter_into_cmp
                             || getter_into_null_cmp
                             || param_into_cmp
-                            || param_into_later_use);
+                            || param_into_later_use
+                            || getter_into_store_rhs);
                     if ok {
                         flush!();
                         // batch-25b (G4 assign shape): a slot-to-slot handle copy whose DEST
@@ -3675,6 +3730,23 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                     let member_src = src.s.contains('.')
                         && !src.s.contains('(')
                         && src.nf_const.is_none();
+                    // batch-50a (opIndex-swap middle store, specs/final-tail-triage.md §3.11
+                    // ShuffleItemArray): the Fisher-Yates `arr[i] = arr[j];` store has a getter
+                    // call-expr SOURCE `arr[j]` (an opIndex element READ) and a member-lvalue DEST
+                    // `arr[i]` (an opIndex element WRITE). Today the source drops (`member_src`
+                    // rejects `(`-bearing exprs; it is neither `local_`/`Cast<`/nullptr/param), so
+                    // the middle swap store vanishes and only `arr[j] = temp;` survives — a broken
+                    // half-swap. Accept a RESOLVED opIndex element read as the source (a pure
+                    // element read, `is_pure_elem_read` purity class): `arr[i] = arr[j];` is a legal
+                    // handle assignment and the read has no side effect that dropping/keeping it
+                    // reorders. Gate HARD: `.opIndex(` present, ends ')', no sentinel/unresolved —
+                    // so the RHS is a proven element read, never a mutating call.
+                    let src_is_opindex_elem = src.s.contains(".opIndex(")
+                        && src.s.ends_with(')')
+                        && !src.s.contains('\u{2}')
+                        && !src.s.contains('\u{1}')
+                        && src.s != UNRESOLVED
+                        && !src.s.starts_with('~');
                     let src_ok = !src.s.is_empty()
                         && src.s != UNRESOLVED
                         && !src.s.contains('\u{2}')
@@ -3682,6 +3754,7 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                             || src.s.starts_with("Cast<")
                             || src.s == "nullptr"
                             || member_src
+                            || src_is_opindex_elem
                             || ctx.param_src_ok(&src.s));
                     // batch-41d (CLASS 1b): the source slot holds a CONST object handle (a
                     // const-returning call result / const member read). Storing it into a
