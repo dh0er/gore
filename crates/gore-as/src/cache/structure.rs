@@ -165,7 +165,7 @@ pub fn body_statements_ctor(f: &FuncCode, refs: &RefResolver, depth: usize, supe
     let idx_of: HashMap<usize, usize> =
         g.blocks.iter().enumerate().map(|(i, b)| (b.start_dw, i)).collect();
     let mut body = String::new();
-    let mut st = Structurer { ctx: &ctx, g: &g, idx_of: &idx_of, exit_join: None, exit_join_is_ret: false, exit_ret_rows_ok: false, exit_scan_floor: 0, carry: None };
+    let mut st = Structurer { ctx: &ctx, g: &g, idx_of: &idx_of, exit_join: None, exit_join_is_ret: false, exit_ret_rows_ok: false, exit_scan_floor: 0, carry: None, loop_scope: None };
     st.emit_range(0, g.blocks.len(), depth, &mut body);
     body
 }
@@ -3012,6 +3012,18 @@ struct Structurer<'a> {
     /// construct is exactly the null-check Cast diamond; consumed exactly once (`take()`)
     /// by the very next loop iteration of `emit_range`.
     carry: Option<(usize, Vec<Arg>)>,
+    /// batch-36: active loop-exit context, set only while emitting a loop body via `emit_range`.
+    /// `continue_off` = the loop-continue dword offset (where a `continue;` lands: the latch
+    /// block start for a bottom-test loop). `break_off` = the loop-exit dword offset (where
+    /// `break;` lands: the latch's non-back-edge successor). Saved/restored around the recursive
+    /// body emission; nested loops push/pop so break/continue always bind to the innermost loop.
+    loop_scope: Option<LoopScope>,
+}
+
+#[derive(Clone, Copy)]
+struct LoopScope {
+    continue_off: usize,
+    break_off: usize,
 }
 
 impl Structurer<'_> {
@@ -3061,9 +3073,47 @@ impl Structurer<'_> {
                 let cond = branch_cond(&lcmp, self.jump_op(latch));
                 let _ = writeln!(out, "{ind}while ({cond})");
                 let _ = writeln!(out, "{ind}{{");
-                self.emit_linear(i, latch + 1, depth + 1, out, true);
+                // batch-36 (Stage A): the loop body is blocks [i, latch) — block `i` (the loop
+                // header the latch back-edges to) holds the first body statements + often the
+                // first inner guard; the latch itself supplies the `while (cond)` test and is
+                // excluded (stop = latch). `continue_off` = latch start (a `continue;` re-tests);
+                // `break_off` = the latch's non-back-edge successor (the loop exit). Only recurse
+                // when the body has a genuine inner branch (Gate 1) AND every branch resolves to a
+                // recognized if/switch/break/continue/return shape (Gate 2); otherwise keep the
+                // exact status-quo `emit_linear` call byte-for-byte.
+                let latch_off = self.g.blocks[latch].start_dw;
+                let break_off = self.g.blocks[latch].succs.iter().copied().find(|&s| s > latch_off);
+                if let Some(break_off) = break_off {
+                    let ls = LoopScope { continue_off: latch_off, break_off };
+                    if self.body_has_inner_branch(i, latch, ls)
+                        && self.loop_body_recoverable(i, latch, ls)
+                    {
+                        let saved = self.loop_scope;
+                        self.loop_scope = Some(ls);
+                        self.emit_range(i, latch, depth + 1, out);
+                        self.loop_scope = saved;
+                    } else {
+                        self.emit_linear(i, latch + 1, depth + 1, out, true);
+                    }
+                } else {
+                    self.emit_linear(i, latch + 1, depth + 1, out, true);
+                }
                 let _ = writeln!(out, "{ind}}}");
                 next = latch + 1;
+            } else if let Some((cond, brk)) = self.loop_break_continue(i) {
+                // batch-36 (Stage A): inside a recursed loop body, a conditional jump whose taken
+                // target is the loop break/continue offset — render `if (cond) { break;/continue; }`
+                // and fall through to the remainder. `cond` is oriented so the keyword fires on the
+                // TAKEN edge; the fall edge (block i+1) continues the body.
+                let (stmts, _, _) = block_stmts_in(self.ctx, b.instr_lo, b.instr_hi, init, false);
+                for s in &stmts {
+                    let _ = writeln!(out, "{ind}{s}");
+                }
+                let _ = writeln!(out, "{ind}if ({cond})");
+                let _ = writeln!(out, "{ind}{{");
+                let _ = writeln!(out, "{ind}    {brk}");
+                let _ = writeln!(out, "{ind}}}");
+                next = i + 1;
             } else if self.is_cond(i) {
                 let (stmts, cmp, leftover) = block_stmts_in(self.ctx, b.instr_lo, b.instr_hi, init, false);
                 for s in &stmts {
@@ -3086,7 +3136,19 @@ impl Structurer<'_> {
                 let _ = writeln!(out, "{ind}}}");
                 next = then_end;
                 if let Some(ei) = else_idx {
-                    if ei >= then_end && ei > 0 && self.jump_op(ei - 1) == "JMP" {
+                    // batch-36: inside a recursed loop body, a guard whose THEN branch exits the
+                    // loop (its last block `JMP`s to the break/continue offset or to a bare-RET
+                    // row = a `return`) has NO else — the taken target (`ei`) is the loop-body
+                    // CONTINUATION, not an else clause. Emitting `else { <continuation> }` would
+                    // wrongly nest the rest of the body. Only skip when in loop scope AND the
+                    // then-block's JMP is such an exit; the non-loop diamond path is unchanged.
+                    let then_exits_loop = self.loop_scope.is_some_and(|ls| {
+                        ei > 0 && self.jump_op(ei - 1) == "JMP" &&
+                        self.g.blocks[ei - 1].succs.first().is_some_and(|&t| {
+                            t == ls.break_off || t == ls.continue_off || self.is_bare_ret_off(t)
+                        })
+                    });
+                    if ei >= then_end && ei > 0 && self.jump_op(ei - 1) == "JMP" && !then_exits_loop {
                         let after_idx = self.g.blocks[ei - 1]
                             .succs
                             .first()
@@ -3124,7 +3186,14 @@ impl Structurer<'_> {
                 for s in &stmts {
                     let _ = writeln!(out, "{ind}{s}");
                 }
+                // Precedence: a switch case region (`exit_join`) is always the tighter scope when
+                // set (its join is nearer than the enclosing loop's continue/break), so consult it
+                // first; only fall to the loop-exit hook when no switch exit applies. batch-36:
+                // `loop_exit_stmt` renders a bare `JMP` to the loop break/continue offset (or to a
+                // bare-RET row inside the body) as `break;`/`continue;`/`return ...;`.
                 if let Some(x) = self.region_exit_stmt(i) {
+                    let _ = writeln!(out, "{ind}{x}");
+                } else if let Some(x) = self.loop_exit_stmt(i) {
                     let _ = writeln!(out, "{ind}{x}");
                 }
                 next = i + 1;
@@ -3213,6 +3282,225 @@ impl Structurer<'_> {
             let b = &self.g.blocks[bi];
             b.instr_hi - b.instr_lo == 1 && self.ctx.instrs[b.instr_lo].op.name == "RET"
         })
+    }
+
+    /// batch-36 (Stage A) — mirrors [`Self::region_exit_stmt`] for the loop body. Inside a
+    /// recursed loop body (`loop_scope` set), a block ending in a bare unconditional `JMP` to
+    /// the loop `break_off`/`continue_off` renders `break;`/`continue;`; a `JMP` to a bare `RET`
+    /// row (a `return <expr>;` from inside the loop, e.g. GetFreeArm) renders the synthesized
+    /// return. Returns None outside loop emission or for any other terminator (status quo: the
+    /// JMP is just a block end that the diamond machinery / plain arm drops).
+    fn loop_exit_stmt(&self, bi: usize) -> Option<String> {
+        let ls = self.loop_scope?;
+        let b = &self.g.blocks[bi];
+        if self.ctx.instrs[b.instr_hi - 1].op.name != "JMP" {
+            return None;
+        }
+        let t = *b.succs.first()?;
+        if t == ls.break_off {
+            return Some("break;".into());
+        }
+        if t == ls.continue_off {
+            return Some("continue;".into());
+        }
+        // an in-body `return <expr>;` compiled as a JMP to the function's shared bare RET row —
+        // recover the returned value from the block's trailing register write (scan floored to
+        // this block so no value leaks in from a preceding block).
+        if self.is_bare_ret_off(t) {
+            return Some(self.ctx.return_stmt(scan_back_retval_floor(self.ctx, b.instr_hi - 1, b.instr_lo)));
+        }
+        None
+    }
+
+    /// batch-36 (Stage A) — a conditional jump inside a recursed loop body whose TAKEN target is
+    /// the loop break/continue offset. Returns `(cond, keyword)` where `cond` fires the keyword on
+    /// the taken edge and the fall edge (block `bi+1`) continues the body — rendered as
+    /// `if (cond) { break;/continue; }`. `None` when not inside a loop, not a 2-succ conditional,
+    /// or the taken target is not exactly the break/continue offset (a genuine inner diamond is
+    /// left to the `is_cond` arm). The fall successor MUST be the physically next block so the
+    /// remaining body flows straight on.
+    fn loop_break_continue(&self, bi: usize) -> Option<(String, &'static str)> {
+        let ls = self.loop_scope?;
+        let b = &self.g.blocks[bi];
+        let jop = self.jump_op(bi);
+        if !matches!(jop, "JZ" | "JNZ" | "JS" | "JNS" | "JP" | "JNP" | "JLowZ" | "JLowNZ") {
+            return None;
+        }
+        if b.succs.len() != 2 {
+            return None;
+        }
+        let taken = *b.succs.first()?;
+        let fall = *b.succs.get(1)?;
+        // the fall edge must be the immediately-following block (straight-line body remainder)
+        if self.idx_of.get(&fall).copied() != Some(bi + 1) {
+            return None;
+        }
+        let kw = if taken == ls.break_off {
+            "break;"
+        } else if taken == ls.continue_off {
+            "continue;"
+        } else {
+            return None;
+        };
+        let cmp = block_stmts(self.ctx, b.instr_lo, b.instr_hi).1;
+        // the keyword fires on the TAKEN edge, so the rendered condition is the jump's own sense
+        // (not negated — negation is for the fall-through-then pattern of `is_cond`).
+        let cond = branch_cond(&cmp, jop);
+        Some((cond, kw))
+    }
+
+    /// batch-36 Gate 1 — true iff the loop body `[lo, hi)` (block indices) contains a GENUINE
+    /// inner conditional: a 2-successor conditional jump (not the latch) that either forks
+    /// forward inside the body (a real `if`) or exits to break/continue/return. A body with no
+    /// such branch is straight-line (or a diamond-carry body) and keeps the exact status-quo
+    /// `emit_linear` call byte-for-byte — this preserves the clean loops and the diamond-carry
+    /// loops. Cheap linear scan.
+    fn body_has_inner_branch(&self, lo: usize, hi: usize, ls: LoopScope) -> bool {
+        for bi in lo..hi {
+            let b = &self.g.blocks[bi];
+            let jop = self.jump_op(bi);
+            if !matches!(jop, "JZ" | "JNZ" | "JS" | "JNS" | "JP" | "JNP" | "JLowZ" | "JLowNZ") {
+                continue;
+            }
+            if b.succs.len() != 2 {
+                continue;
+            }
+            // an inner forward diamond (both succs strictly inside the body), OR a conditional
+            // exit to break/continue/an in-body return
+            let forward_inner = b.succs.iter().all(|&s| {
+                self.idx_of.get(&s).is_some_and(|&si| si > bi && si <= hi)
+            });
+            let exits = b.succs.iter().any(|&s| {
+                s == ls.break_off || s == ls.continue_off || self.is_bare_ret_off(s)
+            });
+            if forward_inner || exits {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// batch-36 Gate 2 — non-emitting dry run over the loop body `[lo, hi)`: assert that EVERY
+    /// block's terminator resolves to a recognized shape so the recursive emit can never produce
+    /// wrong control flow. On ANY anomaly return false ⇒ the loop falls back to the exact
+    /// status-quo `emit_linear` (a dropped-but-compiling body, never a wrong one). Recognized
+    /// per block:
+    ///   * plain fallthrough (no jump) to the next in-body block;
+    ///   * `RET` of its own;
+    ///   * an unconditional `JMP` to break/continue/an in-body bare-RET row (an exit keyword or
+    ///     return), or to a forward in-body block (an `if`/`else` skip);
+    ///   * a 2-succ conditional whose BOTH targets are in-body-forward (a diamond) OR whose taken
+    ///     is break/continue/return and whose fall is the next in-body block (a guard);
+    ///   * a recognized nested switch or nested loop (dry-run detection).
+    /// Any edge that leaves `[header, break_off]` other than via continue/break/return, an
+    /// irreducible edge, a `JMPP` we cannot map, or a conditional we cannot classify ⇒ false.
+    fn loop_body_recoverable(&mut self, lo: usize, hi: usize, ls: LoopScope) -> bool {
+        let header_off = self.g.blocks[lo].start_dw;
+        let mut bi = lo;
+        while bi < hi {
+            // a nested switch consumes its own multi-block region — trust its self-validating
+            // dry run and skip past it (it internally bounds itself by `hi`).
+            if let Some(end) = self.switch_span(bi, hi) {
+                if end <= bi || end > hi {
+                    return false;
+                }
+                bi = end;
+                continue;
+            }
+            // a nested loop: its latch back-edges to an in-body header; recurse the recognizer
+            // over its own body, then skip past its latch.
+            if let Some(inner) = self.loop_latch(bi, hi) {
+                let inner_off = self.g.blocks[inner].start_dw;
+                let inner_break = self.g.blocks[inner].succs.iter().copied().find(|&s| s > inner_off);
+                match inner_break {
+                    Some(ib) => {
+                        let inner_ls = LoopScope { continue_off: inner_off, break_off: ib };
+                        // the inner loop's exit must stay inside our body or be our own exit.
+                        let ib_in_body = self.idx_of.get(&ib).copied().is_some_and(|x| x >= lo && x <= hi);
+                        if !self.loop_edge_ok(ib, lo, hi, ls) && !ib_in_body {
+                            return false;
+                        }
+                        if !self.loop_body_recoverable(bi, inner, inner_ls) {
+                            return false;
+                        }
+                        bi = inner + 1;
+                        continue;
+                    }
+                    None => return false,
+                }
+            }
+            let succs = self.g.blocks[bi].succs.clone();
+            let jop = self.jump_op(bi);
+            match jop {
+                "RET" => {}
+                "JMP" => {
+                    let t = match succs.first() {
+                        Some(&t) => t,
+                        None => return false,
+                    };
+                    if !self.loop_edge_ok(t, lo, hi, ls) {
+                        return false;
+                    }
+                }
+                "JMPP" => return false, // a nested JMPP not recognized as a switch — cannot map
+                j if matches!(j, "JZ" | "JNZ" | "JS" | "JNS" | "JP" | "JNP" | "JLowZ" | "JLowNZ") => {
+                    if succs.len() != 2 {
+                        return false;
+                    }
+                    let taken = succs[0];
+                    let fall = succs[1];
+                    // a backward conditional inside the body that is NOT the recognized inner
+                    // loop latch (handled above) is irreducible — bail.
+                    if taken <= header_off && taken != ls.continue_off {
+                        return false;
+                    }
+                    // fall must always continue in-body (the physically next block)
+                    if self.idx_of.get(&fall).copied() != Some(bi + 1) {
+                        return false;
+                    }
+                    // taken: an in-body forward diamond, an exit keyword, or an in-body return
+                    let taken_ok = self.loop_edge_ok(taken, lo, hi, ls)
+                        || self.idx_of.get(&taken).copied().is_some_and(|ti| ti > bi && ti <= hi);
+                    if !taken_ok {
+                        return false;
+                    }
+                }
+                _ => {
+                    // plain fallthrough terminator: the single successor (if any) must continue
+                    // in-body (into the next block or the latch/continue).
+                    if let Some(&s) = succs.first() {
+                        if succs.len() != 1 || !self.loop_edge_ok(s, lo, hi, ls) {
+                            return false;
+                        }
+                    }
+                }
+            }
+            bi += 1;
+        }
+        true
+    }
+
+    /// An in-body edge target `s` is legal iff it lands on a block inside `[lo, hi]`, OR is a
+    /// recognized exit (loop break/continue offset, or an in-body `return` via a bare-RET row).
+    fn loop_edge_ok(&self, s: usize, lo: usize, hi: usize, ls: LoopScope) -> bool {
+        if s == ls.break_off || s == ls.continue_off || self.is_bare_ret_off(s) {
+            return true;
+        }
+        self.idx_of.get(&s).copied().is_some_and(|si| si >= lo && si <= hi)
+    }
+
+    /// batch-36 — non-emitting probe: if a recognized compiler `switch` idiom starts at block
+    /// `bi` and is fully self-validating within `[bi, cap)`, return the block index just past its
+    /// JOIN; otherwise None. Used by [`Self::loop_body_recoverable`] to skip a nested switch
+    /// during the dry run. Implemented by a throwaway emit into a scratch buffer under the
+    /// current `loop_scope` (the same context the real emit will use), reusing the exact
+    /// `try_emit_switch` validation so the dry run and the real run agree.
+    fn switch_span(&mut self, bi: usize, cap: usize) -> Option<usize> {
+        let saved_carry = self.carry.take();
+        let mut scratch = String::new();
+        let r = self.try_emit_switch(bi, cap, 0, &mut scratch);
+        self.carry = saved_carry; // discard any carry the dry run produced
+        r
     }
 
     /// batch-35a (cross-block reference carry): block `bi` reaches the function's shared bare
