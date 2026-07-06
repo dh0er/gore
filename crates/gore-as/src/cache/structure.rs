@@ -555,6 +555,36 @@ impl Ctx<'_> {
         }
         format!("arg{idx}")
     }
+
+    /// batch-45a (FIX-1): true when `name` is EXACTLY a declared parameter (by rendered name)
+    /// whose type is a NON-CONST object handle or reference — the only source a REFCPY
+    /// object-store may accept beyond `local_`/`Cast<`/`nullptr`. A REFCPY copies a handle, so
+    /// the param must be an object handle or a reference (`this.m_Target = NewTarget;`); a const
+    /// param (`is_read_only`/`is_object_const`) is EXCLUDED (copying it into a non-const member
+    /// fails generate-mode "Can't implicitly convert 'const T' to 'T'" — the batch-41d cascade
+    /// class, and the documented AddFitnessMultiplier-style const-param bail). Matches against the
+    /// same names `param_or_arg` renders, so a body `src.s` resolves back to its param slot. `this`
+    /// is not a param name, so it never matches here (its back-link store stays bailed).
+    fn param_src_ok(&self, name: &str) -> bool {
+        // Locate the param by its rendered name (stored name, or the `arg{idx}` fallback that
+        // `param_or_arg` emits for an unnamed param).
+        let idx = self.f.param_names.iter().position(|n| !n.is_empty() && n == name)
+            .or_else(|| {
+                name.strip_prefix("arg")
+                    .and_then(|d| d.parse::<usize>().ok())
+                    .filter(|&i| i < self.f.param_types.len()
+                        && self.f.param_names.get(i).map(|n| n.is_empty()).unwrap_or(false))
+            });
+        let Some(idx) = idx else { return false };
+        let ty = match self.f.param_types.get(idx) {
+            Some(t) => t,
+            None => return false,
+        };
+        // Object handle OR reference (a REFCPY targets handles/refs), and NON-const.
+        (ty.is_object_handle || ty.is_reference)
+            && !ty.is_read_only
+            && !ty.is_object_const
+    }
 }
 
 fn s16(w: u16) -> i32 {
@@ -3238,21 +3268,29 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                 if let (Some(dst), Some(src)) = (&dst, &src) {
                     // GATE:
                     //  dst is a MEMBER lvalue: contains '.', not empty/UNRESOLVED/sentinel, and NOT
-                    //  a bare slot (a bare local_N dst would be a RefCpyV, not a REFCPY member store).
-                    //  src is a PROVEN handle: `local_N` (a STOREOBJ/allocated slot), a `Cast<…>`, or
-                    //  `nullptr` (the S3 clear via PshNull). NEVER a member/param/temp whose const-ness
-                    //  or aliasing we can't prove (mirrors the RefCpyV arm's original caution — copying
-                    //  a const param/member handle into a non-const dest fails "Can't implicitly
-                    //  convert"), so those bail to the drop.
+                    //  a BARE slot (a bare local_N dst would be a RefCpyV, not a REFCPY member
+                    //  store). batch-45a (FIX-1) permits a dotted `local_N.field` STRUCT-TEMP field
+                    //  dest (e.g. `local_2.EventTag = SourceActor;` — a config/FGameplayEventData
+                    //  field init before a SendGameplayEvent/validator call); only a bare `local_N`
+                    //  with no `.` (which the '.'-contains test already excludes) is rejected.
+                    //  src is a PROVEN handle: `local_N` (a STOREOBJ/allocated slot), a `Cast<…>`,
+                    //  `nullptr` (the S3 clear via PshNull), or — batch-45a (FIX-1) — a NON-CONST
+                    //  object/ref PARAMETER (`this.m_Target = NewTarget;`, `SetParentNode(Value)`).
+                    //  NEVER a member/temp/`this`/const-param whose const-ness or aliasing we can't
+                    //  prove (mirrors the RefCpyV arm's original caution — copying a const
+                    //  param/member handle into a non-const dest fails "Can't implicitly convert";
+                    //  `this` back-links stay bailed, `param_src_ok` never matches `this`).
                     let dst_ok = dst.s.contains('.')
                         && !dst.s.is_empty()
                         && dst.s != UNRESOLVED
-                        && !dst.s.contains('\u{2}')
-                        && !dst.s.starts_with("local_");
+                        && !dst.s.contains('\u{2}');
                     let src_ok = !src.s.is_empty()
                         && src.s != UNRESOLVED
                         && !src.s.contains('\u{2}')
-                        && (src.s.starts_with("local_") || src.s.starts_with("Cast<") || src.s == "nullptr");
+                        && (src.s.starts_with("local_")
+                            || src.s.starts_with("Cast<")
+                            || src.s == "nullptr"
+                            || ctx.param_src_ok(&src.s));
                     // batch-41d (CLASS 1b): the source slot holds a CONST object handle (a
                     // const-returning call result / const member read). Storing it into a
                     // (non-const) member is a "Can't implicitly convert from 'const T' to 'T'"
