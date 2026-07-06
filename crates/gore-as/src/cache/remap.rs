@@ -69,12 +69,77 @@ pub enum RemapError {
 /// Field separator for composing a stable symbol identity string (unlikely in any name).
 const SEP: char = '\u{1f}';
 
+/// Field separator INSIDE a namespace field's `::`-qualified segments (regen drops leading
+/// `Ns::` segments — see [`ns_drift_ok`]).
+const NS_SEP: &str = "::";
+
+/// A symbol identity in three parallel forms. `full` is the display/exact-match string
+/// (namespaces embedded); `ns_stripped` is the same string with every namespace field replaced
+/// by empty (the structural skeleton — module/name/subtypes/signature only); `namespaces` lists
+/// the namespace-field values in traversal order. GAP-A (batch-38): our emitter never writes
+/// `namespace X { }` blocks, so a vanilla symbol carries a namespace where the regen has none (or
+/// a `::`-suffix of it); the binding is unchanged (module+name+subtypes+signature pin the symbol).
+/// Two identities match (see [`Ident::oracle_eq`]) when their skeletons are equal AND every
+/// namespace-field pair is a benign drift (equal / one-empty / one a `::`-suffix of the other),
+/// which collapses the ~26.8k drift diffs while KEEPING the ~39 real `Foo::Bar` vs `Baz::Bar`
+/// namespace-collisions SEMANTIC (both-nonempty-non-suffix → not a match).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Ident {
+    full: String,
+    ns_stripped: String,
+    namespaces: Vec<String>,
+}
+
+impl Ident {
+    /// Oracle equality with benign namespace-drift tolerance (GAP-A). Exact-string-equal always
+    /// matches (self-identity, and the common no-drift case). Otherwise require identical
+    /// structural skeletons AND every namespace-field pair to be a benign drift.
+    fn oracle_eq(&self, other: &Ident) -> bool {
+        if self.full == other.full {
+            return true;
+        }
+        if self.ns_stripped != other.ns_stripped
+            || self.namespaces.len() != other.namespaces.len()
+        {
+            return false;
+        }
+        self.namespaces
+            .iter()
+            .zip(&other.namespaces)
+            .all(|(a, b)| ns_drift_ok(a, b))
+    }
+}
+
+/// True if two namespace-field values differ only by the benign drift our emitter introduces:
+/// they are equal, one is empty (the pure-global drop), or one is a `::`-suffix of the other
+/// (the enclosing `namespace G1R { }` block dropped, e.g. `G1R::UStoryG1R` vs `UStoryG1R`).
+/// A `Foo::Bar` vs `Baz::Bar` pair (both non-empty, neither a `::`-suffix of the other) is a
+/// REAL namespace-collision and returns false → stays SEMANTIC (the 39-collision guard, spec §1.1).
+fn ns_drift_ok(a: &str, b: &str) -> bool {
+    if a == b || a.is_empty() || b.is_empty() {
+        return true;
+    }
+    is_ns_suffix(a, b) || is_ns_suffix(b, a)
+}
+
+/// True if `short` equals `long` with ≥1 leading `Seg::` namespace segment removed (i.e. `short`
+/// is a proper `::`-delimited suffix of `long`). `"UStoryG1R"` is a suffix of `"G1R::UStoryG1R"`;
+/// `"Bar"` is NOT a suffix of `"BazBar"` (segment-boundary required, not a raw substring).
+fn is_ns_suffix(long: &str, short: &str) -> bool {
+    long.len() > short.len()
+        && long.ends_with(short)
+        && long[..long.len() - short.len()].ends_with(NS_SEP)
+}
+
 /// Symbol identity → key inverse maps for one cache's tail tables, plus the forward key→name
 /// maps needed to compose function/global identities and to report unresolved refs.
 struct SymTables {
     /// T1: type ptr key -> identity ; identity -> ptr key.
     type_id_of_ptr: HashMap<i64, String>,
     type_ptr_of_id: HashMap<String, Vec<i64>>,
+    /// T1: type ptr key -> the oracle [`Ident`] (full + ns-stripped skeleton + namespace list).
+    /// PARALLEL to `type_id_of_ptr` (whose full string the remapper's key→key splice keeps).
+    type_ident_of_ptr: HashMap<i64, Ident>,
     /// T2: type-id (i32, raw operand) -> type ptr.
     typeid_to_ptr: HashMap<i32, i64>,
     /// inverse of T2: type ptr -> type-id (raw i32 operand).
@@ -82,6 +147,8 @@ struct SymTables {
     /// T3: func ptr key -> identity ; identity -> ptr key.
     func_id_of_ptr: HashMap<i64, String>,
     func_ptr_of_id: HashMap<String, Vec<i64>>,
+    /// T3: func ptr key -> the oracle [`Ident`] (parallel to `func_id_of_ptr`).
+    func_ident_of_ptr: HashMap<i64, Ident>,
     /// forward Name (for error messages) per func ptr.
     func_name_of_ptr: HashMap<i64, String>,
     type_name_of_ptr: HashMap<i64, String>,
@@ -92,6 +159,8 @@ struct SymTables {
     /// T5: global ptr key -> identity ; identity -> ptr key.
     global_id_of_ptr: HashMap<i64, String>,
     global_ptr_of_id: HashMap<String, Vec<i64>>,
+    /// T5: global ptr key -> the oracle [`Ident`] (parallel to `global_id_of_ptr`).
+    global_ident_of_ptr: HashMap<i64, Ident>,
     /// EVERY int64 ptr-key that appears as a key in this cache's tail tables: T1 type ptrs,
     /// T3 func ptrs, T5 global ptrs, and the ptr values in T2/T4 (id->ptr). Used by the
     /// post-condition scan to assert no regen ptr-key survives in a remapped module's bytes.
@@ -104,7 +173,11 @@ struct SymTables {
 /// resolved TYPE IDENTITY of its `type_info` ptr (the build-specific ptr resolved to a portable
 /// identity that includes the type's name + template subtypes — so `TSubclassOf<AFoo>` and
 /// `TSubclassOf<ABar>` are distinguished, which matters for conversion-operator overloads).
-fn datatype_identity(c: &mut Cursor, type_id_of_ptr: &HashMap<i64, String>) -> Result<String, WireError> {
+///
+/// Returns the oracle [`Ident`] triple: the nested type's namespace fields (which drift, GAP-A)
+/// are carried through into both the stripped skeleton and the namespace list, so a func/global
+/// identity that embeds this DataType composes correctly for [`Ident::oracle_eq`].
+fn datatype_identity(c: &mut Cursor, type_ident_of_ptr: &HashMap<i64, Ident>) -> Result<Ident, WireError> {
     // 6 bools, i64 type_info, i32 token (mirror DataType::read order).
     let b0 = c.read_bool4()?;
     let b1 = c.read_bool4()?;
@@ -115,14 +188,19 @@ fn datatype_identity(c: &mut Cursor, type_id_of_ptr: &HashMap<i64, String>) -> R
     let type_info = c.read_i64()?;
     let token = c.read_i32()?;
     let tident = if token == 5 {
-        type_id_of_ptr.get(&type_info).cloned().unwrap_or_default()
+        type_ident_of_ptr.get(&type_info).cloned().unwrap_or_default()
     } else {
-        String::new()
+        Ident::default()
     };
-    Ok(format!(
-        "{}{}{}{}{}{}:{token}:{tident}",
+    let prefix = format!(
+        "{}{}{}{}{}{}:{token}:",
         b0 as u8, b1 as u8, b2 as u8, b3 as u8, b4 as u8, b5 as u8
-    ))
+    );
+    Ok(Ident {
+        full: format!("{prefix}{}", tident.full),
+        ns_stripped: format!("{prefix}{}", tident.ns_stripped),
+        namespaces: tident.namespaces,
+    })
 }
 
 impl SymTables {
@@ -135,6 +213,7 @@ impl SymTables {
         let mut all_ptr_keys: HashSet<i64> = HashSet::new();
         let mut type_id_of_ptr = HashMap::new();
         let mut type_ptr_of_id: HashMap<String, Vec<i64>> = HashMap::new();
+        let mut type_ident_of_ptr: HashMap<i64, Ident> = HashMap::new();
         let mut type_name_of_ptr = HashMap::new();
 
         // T1 TypeReferences: i64 key + (Name, Module, Namespace, TArray<DataType> SubTypes).
@@ -171,7 +250,10 @@ impl SymTables {
             type_name_of_ptr.insert(key, name.clone());
             raw_types.push(RawType { key, name, module, namespace, subs });
         }
-        // PASS 2: compose identities using resolved subtype names.
+        // PASS 2: compose identities using resolved subtype names. Subtype names are the bare
+        // T1 Name (no module/namespace), so a subtype contributes NO namespace field — the only
+        // namespace in a type identity is the type's OWN (field index 1). The oracle skeleton
+        // drops it; the namespace list carries it (GAP-A).
         for rt in &raw_types {
             let mut sub_ident = String::new();
             for (token, sub_ptr) in &rt.subs {
@@ -185,6 +267,15 @@ impl SymTables {
             let identity = format!(
                 "{}{SEP}{}{SEP}{}{SEP}{}:{sub_ident}",
                 rt.module, rt.namespace, rt.name, rt.subs.len()
+            );
+            // ns-stripped skeleton: identical but with the namespace field blanked.
+            let ns_stripped = format!(
+                "{}{SEP}{SEP}{}{SEP}{}:{sub_ident}",
+                rt.module, rt.name, rt.subs.len()
+            );
+            type_ident_of_ptr.insert(
+                rt.key,
+                Ident { full: identity.clone(), ns_stripped, namespaces: vec![rt.namespace.clone()] },
             );
             type_id_of_ptr.insert(rt.key, identity.clone());
             type_ptr_of_id.entry(identity).or_default().push(rt.key);
@@ -205,6 +296,7 @@ impl SymTables {
         // TArray<DataType> params, DataType ret).
         let mut func_id_of_ptr = HashMap::new();
         let mut func_ptr_of_id: HashMap<String, Vec<i64>> = HashMap::new();
+        let mut func_ident_of_ptr: HashMap<i64, Ident> = HashMap::new();
         let mut func_name_of_ptr = HashMap::new();
         for _ in 0..c.read_count("FunctionReferences")? {
             let key = c.read_i64()?;
@@ -218,19 +310,38 @@ impl SymTables {
             let objtype = c.read_i64()?;
             // Use the owner's FULL type identity (name + template subtypes), not just its name,
             // so e.g. `TSubclassOf<AFoo>::opImplConv` and `TSubclassOf<ABar>::opImplConv` (which
-            // share the bare owner name `TSubclassOf`) are distinguished.
-            let owner = type_id_of_ptr.get(&objtype).cloned().unwrap_or_default();
+            // share the bare owner name `TSubclassOf`) are distinguished. The owner + each param +
+            // ret are type identities that carry their OWN (drifting) namespace fields, so compose
+            // all three oracle forms in lockstep (GAP-A: a func's own ns is field index 1, then the
+            // owner's ns, then each param's, then ret's — traversal order preserved in the list).
+            let owner = type_ident_of_ptr.get(&objtype).cloned().unwrap_or_default();
             let nparams = c.read_count("FuncRef.Params")?;
-            let mut params = String::new();
+            let mut params_full = String::new();
+            let mut params_stripped = String::new();
+            let mut param_ns: Vec<String> = Vec::new();
             for _ in 0..nparams {
-                params.push_str(&datatype_identity(&mut c, &type_id_of_ptr)?);
-                params.push(',');
+                let p = datatype_identity(&mut c, &type_ident_of_ptr)?;
+                params_full.push_str(&p.full);
+                params_full.push(',');
+                params_stripped.push_str(&p.ns_stripped);
+                params_stripped.push(',');
+                param_ns.extend(p.namespaces);
             }
-            let ret = datatype_identity(&mut c, &type_id_of_ptr)?;
+            let ret = datatype_identity(&mut c, &type_ident_of_ptr)?;
             let identity = format!(
-                "{module}{SEP}{namespace}{SEP}{owner}{SEP}{name}{SEP}{}{SEP}{params}{SEP}{ret}",
-                is_method as u8
+                "{module}{SEP}{namespace}{SEP}{}{SEP}{name}{SEP}{}{SEP}{params_full}{SEP}{}",
+                owner.full, is_method as u8, ret.full
             );
+            let ns_stripped = format!(
+                "{module}{SEP}{SEP}{}{SEP}{name}{SEP}{}{SEP}{params_stripped}{SEP}{}",
+                owner.ns_stripped, is_method as u8, ret.ns_stripped
+            );
+            let mut namespaces = Vec::with_capacity(2 + param_ns.len() + ret.namespaces.len());
+            namespaces.push(namespace.clone()); // the func's own namespace (field index 1)
+            namespaces.extend(owner.namespaces.iter().cloned());
+            namespaces.extend(param_ns);
+            namespaces.extend(ret.namespaces.iter().cloned());
+            func_ident_of_ptr.insert(key, Ident { full: identity.clone(), ns_stripped, namespaces });
             func_id_of_ptr.insert(key, identity.clone());
             func_ptr_of_id.entry(identity).or_default().push(key);
             func_name_of_ptr.insert(key, name);
@@ -250,6 +361,7 @@ impl SymTables {
         // T5 GlobalReferences: i64 key + (Name, Module, Namespace, i32 bIsString).
         let mut global_id_of_ptr = HashMap::new();
         let mut global_ptr_of_id: HashMap<String, Vec<i64>> = HashMap::new();
+        let mut global_ident_of_ptr: HashMap<i64, Ident> = HashMap::new();
         let mut global_name_of_ptr = HashMap::new();
         for _ in 0..c.read_count("GlobalReferences")? {
             let key = c.read_i64()?;
@@ -259,6 +371,12 @@ impl SymTables {
             let namespace = c.read_sia()?;
             let is_string = c.read_bool4()?;
             let identity = format!("{module}{SEP}{namespace}{SEP}{name}{SEP}{}", is_string as u8);
+            // ns-stripped skeleton: namespace field (index 1) blanked (GAP-A).
+            let ns_stripped = format!("{module}{SEP}{SEP}{name}{SEP}{}", is_string as u8);
+            global_ident_of_ptr.insert(
+                key,
+                Ident { full: identity.clone(), ns_stripped, namespaces: vec![namespace.clone()] },
+            );
             global_id_of_ptr.insert(key, identity.clone());
             global_ptr_of_id.entry(identity).or_default().push(key);
             global_name_of_ptr.insert(key, name);
@@ -269,10 +387,12 @@ impl SymTables {
         Ok(SymTables {
             type_id_of_ptr,
             type_ptr_of_id,
+            type_ident_of_ptr,
             typeid_to_ptr,
             ptr_to_typeid,
             func_id_of_ptr,
             func_ptr_of_id,
+            func_ident_of_ptr,
             func_name_of_ptr,
             type_name_of_ptr,
             global_name_of_ptr,
@@ -280,6 +400,7 @@ impl SymTables {
             ptr_to_funcid,
             global_id_of_ptr,
             global_ptr_of_id,
+            global_ident_of_ptr,
             all_ptr_keys,
         })
     }
@@ -925,10 +1046,16 @@ pub struct RefIdentity {
 /// across builds) or, when the operand keys nothing in the tables (a primitive type-id, or a
 /// key genuinely absent from the tail tables), a raw fallback that still compares equal to an
 /// identical raw operand on the other side.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Equality is CUSTOM ([`PartialEq`] below): two `Named` operands compare via
+/// [`Ident::oracle_eq`], which tolerates benign namespace-drift (GAP-A). This relation is NOT
+/// transitive (`Foo::X` ~ `X` ~ `Baz::X`, yet `Foo::X` ≁ `Baz::X`), so `OperandId` is
+/// deliberately NOT `Eq`; the oracle only ever compares operand PAIRS, never keys a map/set by
+/// one, so a full equivalence relation is not required.
+#[derive(Debug, Clone)]
 pub enum OperandId {
     /// Portable identity resolved via the tail tables (the normal cross-referencing case).
-    Named { kind: RefKind, identity: String },
+    Named { kind: RefKind, ident: Ident },
     /// Primitive type-id (<= LAST_PRIMITIVE, not in T2) — resolves to itself. Compared by value.
     Primitive(i32),
     /// A key/id present as an operand but absent from this cache's tables (defensive: a null
@@ -937,15 +1064,44 @@ pub enum OperandId {
     RawId(i32),
 }
 
+impl PartialEq for OperandId {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (OperandId::Named { kind: ka, ident: ia }, OperandId::Named { kind: kb, ident: ib }) => {
+                ka == kb && ia.oracle_eq(ib)
+            }
+            (OperandId::Primitive(a), OperandId::Primitive(b)) => a == b,
+            (OperandId::RawPtr(a), OperandId::RawPtr(b)) => a == b,
+            (OperandId::RawId(a), OperandId::RawId(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
 impl OperandId {
     /// Human-readable form for the SEMANTIC-DIFF report (e.g. `CALLSYS Story::GiveXP`).
     /// The identity string embeds unit-separator chars; render them as `::`-ish for readability.
     pub fn display(&self) -> String {
         match self {
-            OperandId::Named { identity, .. } => identity.replace(SEP, " » "),
+            OperandId::Named { ident, .. } => ident.full.replace(SEP, " » "),
             OperandId::Primitive(id) => format!("prim#{id}"),
             OperandId::RawPtr(p) => format!("<unresolved-ptr {p:#x}>"),
             OperandId::RawId(i) => format!("<unresolved-id {i}>"),
+        }
+    }
+
+    /// True if this is a large runtime object type-id resolved as [`OperandId::Primitive`] (an
+    /// `asCTypeInfo` id NOT in T2 that has the AngelScript object-mask bits set). Such an id is
+    /// build-specific and drifts across recompiles; GAP-C (batch-38) treats a lone diff of one as
+    /// benign when it feeds an `opCast`/`Cast` whose callee identity matches on both sides.
+    /// Genuine primitive type-ids (bool/int/float — fixed engine constants, mask bits clear)
+    /// return false and keep comparing by raw value.
+    pub fn is_runtime_object_typeid(&self) -> bool {
+        match self {
+            // asTYPEID_MASK_OBJECT = 0x1C00_0000 (APPOBJECT|SCRIPTOBJECT|TEMPLATE). A primitive
+            // (void/bool/int*/float/double) has none of these set; a runtime class type-id does.
+            OperandId::Primitive(id) => (*id as u32) & 0x1C00_0000 != 0,
+            _ => false,
         }
     }
 }
@@ -959,14 +1115,14 @@ impl RefIdentity {
     /// Resolve a QWORD ptr operand (global/func/type ptr) to a portable identity.
     pub fn resolve_ptr(&self, kind: RefKind, key: i64) -> OperandId {
         let map = match kind {
-            RefKind::GlobalPtr => &self.syms.global_id_of_ptr,
-            RefKind::FuncPtr => &self.syms.func_id_of_ptr,
-            RefKind::TypePtr => &self.syms.type_id_of_ptr,
+            RefKind::GlobalPtr => &self.syms.global_ident_of_ptr,
+            RefKind::FuncPtr => &self.syms.func_ident_of_ptr,
+            RefKind::TypePtr => &self.syms.type_ident_of_ptr,
             // FuncId/TypeId are DW operands, not ptr — never routed here.
             RefKind::FuncId | RefKind::TypeId => return OperandId::RawPtr(key),
         };
         match map.get(&key) {
-            Some(id) => OperandId::Named { kind, identity: id.clone() },
+            Some(ident) => OperandId::Named { kind, ident: ident.clone() },
             None => OperandId::RawPtr(key),
         }
     }
@@ -977,16 +1133,16 @@ impl RefIdentity {
     pub fn resolve_id(&self, kind: RefKind, id: i32) -> OperandId {
         match kind {
             RefKind::FuncId => match self.syms.funcid_to_ptr.get(&id) {
-                Some(ptr) => match self.syms.func_id_of_ptr.get(ptr) {
-                    Some(ident) => OperandId::Named { kind, identity: ident.clone() },
+                Some(ptr) => match self.syms.func_ident_of_ptr.get(ptr) {
+                    Some(ident) => OperandId::Named { kind, ident: ident.clone() },
                     None => OperandId::RawPtr(*ptr),
                 },
                 // Not a real func-id in this cache: defensive, compare raw.
                 None => OperandId::RawId(id),
             },
             RefKind::TypeId => match self.syms.typeid_to_ptr.get(&id) {
-                Some(ptr) => match self.syms.type_id_of_ptr.get(ptr) {
-                    Some(ident) => OperandId::Named { kind, identity: ident.clone() },
+                Some(ptr) => match self.syms.type_ident_of_ptr.get(ptr) {
+                    Some(ident) => OperandId::Named { kind, ident: ident.clone() },
                     None => OperandId::RawPtr(*ptr),
                 },
                 // Absent from T2 => primitive type-id, resolves to itself.
@@ -1017,11 +1173,19 @@ mod bytediff_n1_tests {
             ident.syms.func_name_of_ptr.iter().next().expect("at least one func ref");
         let resolved = ident.resolve_ptr(RefKind::FuncPtr, ptr);
         match &resolved {
-            OperandId::Named { kind, identity } => {
+            OperandId::Named { kind, ident } => {
                 assert_eq!(*kind, RefKind::FuncPtr);
                 assert!(
-                    identity.contains(name.as_str()),
-                    "identity {identity:?} should contain func name {name:?}"
+                    ident.full.contains(name.as_str()),
+                    "identity {:?} should contain func name {name:?}",
+                    ident.full
+                );
+                // The ns-stripped skeleton must have the SAME structure (same SEP-field count)
+                // as the full identity — it only blanks namespace fields, never adds/drops SEPs.
+                assert_eq!(
+                    ident.full.matches(SEP).count(),
+                    ident.ns_stripped.matches(SEP).count(),
+                    "ns-stripped skeleton must preserve SEP structure"
                 );
             }
             other => panic!("expected Named identity, got {other:?}"),
@@ -1030,5 +1194,124 @@ mod bytediff_n1_tests {
         assert!(matches!(ident.resolve_ptr(RefKind::FuncPtr, 0x7fff_dead_beef), OperandId::RawPtr(_)));
         // A primitive type-id (bool == not-in-T2, small id) resolves to itself.
         assert!(matches!(ident.resolve_id(RefKind::TypeId, 0x41), OperandId::Primitive(0x41)));
+    }
+
+    // ---- GAP-A namespace-drift unit tests (batch-38) ----
+
+    fn ident(full: &str, ns_stripped: &str, namespaces: &[&str]) -> Ident {
+        Ident {
+            full: full.to_string(),
+            ns_stripped: ns_stripped.to_string(),
+            namespaces: namespaces.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    /// GAP-A: a vanilla symbol WITH a namespace and a regen symbol with an EMPTY namespace but
+    /// otherwise identical module/name/subtypes = MATCH (benign drift). Direction-symmetric.
+    #[test]
+    fn gap_a_empty_namespace_matches() {
+        let sep = SEP;
+        // T5 global `__StaticType_X`: vanilla ns=`G1R::GenericVoiceline`, regen ns=``.
+        let van = ident(
+            &format!("Story.G1R{sep}G1R::GenericVoiceline{sep}__StaticType_X{sep}0"),
+            &format!("Story.G1R{sep}{sep}__StaticType_X{sep}0"),
+            &["G1R::GenericVoiceline"],
+        );
+        let reg = ident(
+            &format!("Story.G1R{sep}{sep}__StaticType_X{sep}0"),
+            &format!("Story.G1R{sep}{sep}__StaticType_X{sep}0"),
+            &[""],
+        );
+        assert!(van.oracle_eq(&reg), "empty-vs-nonempty namespace must match");
+        assert!(reg.oracle_eq(&van), "match is symmetric");
+        // As full OperandId operands (same kind) they compare equal too.
+        let a = OperandId::Named { kind: RefKind::GlobalPtr, ident: van };
+        let b = OperandId::Named { kind: RefKind::GlobalPtr, ident: reg };
+        assert_eq!(a, b);
+    }
+
+    /// GAP-A drift: the enclosing `namespace G1R { }` block is dropped, leaving a `::`-suffix
+    /// (`G1R::UStoryG1R` vs `UStoryG1R`) — benign.
+    #[test]
+    fn gap_a_namespace_suffix_matches() {
+        let sep = SEP;
+        let van = ident(
+            &format!("Story.G1R{sep}G1R::UStoryG1R{sep}{sep}Get{sep}0"),
+            &format!("Story.G1R{sep}{sep}{sep}Get{sep}0"),
+            &["G1R::UStoryG1R"],
+        );
+        let reg = ident(
+            &format!("Story.G1R{sep}UStoryG1R{sep}{sep}Get{sep}0"),
+            &format!("Story.G1R{sep}{sep}{sep}Get{sep}0"),
+            &["UStoryG1R"],
+        );
+        assert!(van.oracle_eq(&reg), "namespace `::`-suffix drift must match");
+    }
+
+    /// GAP-A GUARD: two genuinely different symbols distinguished ONLY by namespace
+    /// (`Foo::Bar` vs `Baz::Bar`, both non-empty, neither a `::`-suffix of the other) must STAY
+    /// distinct (SEMANTIC) — a real collision the fix must not collapse.
+    #[test]
+    fn gap_a_real_collision_kept_semantic() {
+        let sep = SEP;
+        let foo = ident(
+            &format!("M{sep}Foo{sep}Bar{sep}0"),
+            &format!("M{sep}{sep}Bar{sep}0"),
+            &["Foo"],
+        );
+        let baz = ident(
+            &format!("M{sep}Baz{sep}Bar{sep}0"),
+            &format!("M{sep}{sep}Bar{sep}0"),
+            &["Baz"],
+        );
+        assert!(!foo.oracle_eq(&baz), "Foo::Bar vs Baz::Bar is a real collision, must NOT match");
+        assert!(!baz.oracle_eq(&foo));
+        let a = OperandId::Named { kind: RefKind::GlobalPtr, ident: foo };
+        let b = OperandId::Named { kind: RefKind::GlobalPtr, ident: baz };
+        assert_ne!(a, b);
+    }
+
+    /// GAP-A GUARD: a difference in a NON-namespace field (the name itself) is never collapsed,
+    /// even when the namespace fields would match — the skeleton differs.
+    #[test]
+    fn gap_a_different_name_kept_semantic() {
+        let sep = SEP;
+        let a = ident(
+            &format!("M{sep}G1R{sep}Alpha{sep}0"),
+            &format!("M{sep}{sep}Alpha{sep}0"),
+            &["G1R"],
+        );
+        let b = ident(
+            &format!("M{sep}{sep}Beta{sep}0"),
+            &format!("M{sep}{sep}Beta{sep}0"),
+            &[""],
+        );
+        assert!(!a.oracle_eq(&b), "different name (skeleton differs) must not match");
+    }
+
+    /// `is_ns_suffix` requires a `::` segment boundary, not a raw substring.
+    #[test]
+    fn ns_suffix_requires_segment_boundary() {
+        assert!(is_ns_suffix("G1R::UStoryG1R", "UStoryG1R"));
+        assert!(is_ns_suffix("A::B::C", "C"));
+        assert!(is_ns_suffix("A::B::C", "B::C"));
+        assert!(!is_ns_suffix("BazBar", "Bar")); // no `::` boundary
+        assert!(!is_ns_suffix("Bar", "Bar")); // not proper (equal length)
+        assert!(!is_ns_suffix("Foo::Bar", "Baz")); // not a suffix
+    }
+
+    /// GAP-C: the object-mask discriminator separates genuine primitive type-ids (mask clear,
+    /// compared by raw value) from large runtime `asCTypeInfo` ids (mask set, opCast-gated).
+    #[test]
+    fn gap_c_runtime_object_typeid_discriminator() {
+        // 0x48003464 (1207972964) has asTYPEID_SCRIPTOBJECT (0x08000000) set → runtime.
+        assert!(OperandId::Primitive(1207972964).is_runtime_object_typeid());
+        assert!(OperandId::Primitive(1207972931).is_runtime_object_typeid());
+        // Genuine primitives: mask bits clear.
+        assert!(!OperandId::Primitive(0x41).is_runtime_object_typeid());
+        assert!(!OperandId::Primitive(0).is_runtime_object_typeid());
+        assert!(!OperandId::Primitive(10).is_runtime_object_typeid());
+        // Non-primitive variants are never runtime type-ids.
+        assert!(!OperandId::RawId(1207972964).is_runtime_object_typeid());
     }
 }

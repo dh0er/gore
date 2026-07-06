@@ -34,6 +34,57 @@ fn is_jump_op(name: &str) -> bool {
     )
 }
 
+/// Read a qword (2 dwords LE) directly from a decoded instruction's collected qword operands.
+/// (The disassembler already collected the QW into `ins.qwords`; the first one is the ref ptr.)
+fn instr_first_qword(ins: &Instr) -> Option<u64> {
+    ins.qwords.first().copied()
+}
+
+/// Bare callee NAME of a call instruction, resolved via the side's `RefResolver`. `CALLSYS`
+/// carries a func-PTR (QW @ dword 1); `CALL`/`CALLBND`/`CALLINTF` carry a func-ID (DW @ dword 1).
+/// Returns `None` for a non-call op or an unresolved callee. Used by the batch-38 lookahead gates
+/// (GAP-B `__STATIC_NAME`, GAP-C `opCast`) to identify a specific native callee WITHOUT string-
+/// parsing the composed identity.
+fn callee_name<'a>(ins: &Instr, side: &'a Side) -> Option<&'a str> {
+    match ins.op.name {
+        "CALLSYS" | "FuncPtr" | "Thiscall1" => {
+            side.refs.func_by_ptr(instr_first_qword(ins)? as i64)
+        }
+        "CALL" | "CALLBND" | "CALLINTF" => {
+            side.refs.func_by_id(*ins.dwords.first()? as i32)
+        }
+        _ => None,
+    }
+}
+
+/// GAP-B gate: the instruction AFTER `pos` is a `CALLSYS` whose callee is the synthesized
+/// `__STATIC_NAME(int)` FName-pool accessor — i.e. the `PshC4` at `pos` pushed a StaticNames
+/// pool INDEX, not an integer value.
+fn next_is_static_name(instrs: &[Instr], pos: usize, side: &Side) -> bool {
+    instrs
+        .get(pos + 1)
+        .and_then(|nx| callee_name(nx, side))
+        .is_some_and(|n| n == "__STATIC_NAME")
+}
+
+/// GAP-C gate: the `TYPEID`/`Cast` at `pos` feeds an `opCast`/`Cast` call. Scan a SHORT forward
+/// window; the pushed type-id is consumed by the next call, which must be `opCast` (the pattern is
+/// `TYPEID; PSF; PshVPtr; CALLSYS opCast`). Stop at the first call op — if it is NOT `opCast`, the
+/// type-id feeds something else and the gate does NOT fire (stays a value-compared Primitive).
+fn feeds_matching_opcast(instrs: &[Instr], pos: usize, side: &Side) -> bool {
+    // Window kept tight (the opCast is 1–3 ops after the TYPEID in every observed case).
+    const WINDOW: usize = 4;
+    for k in 1..=WINDOW {
+        let Some(nx) = instrs.get(pos + k) else { return false };
+        let is_call = matches!(nx.op.name, "CALLSYS" | "CALL" | "CALLBND" | "CALLINTF");
+        if is_call {
+            // The FIRST call after the TYPEID must be the opCast that consumes it.
+            return callee_name(nx, side) == Some("opCast");
+        }
+    }
+    false
+}
+
 /// A single normalized operand token. Equality of two `Operand`s (across caches) means the
 /// operands are semantically the same after the relevant normalizer.
 #[derive(Debug, Clone, PartialEq)]
@@ -53,6 +104,13 @@ enum Operand {
     Ref(OperandId),
     /// A resolved STR / __STATIC_NAME string literal, compared by text (N4).
     StaticName(Option<String>),
+    /// A `TYPEID`/`Cast` operand that is a LARGE runtime object type-id feeding an `opCast`/`Cast`
+    /// whose callee identity matches on both sides (GAP-C, batch-38). The raw id is a
+    /// build-specific `asCTypeInfo` id that drifts across recompiles; the cast target is pinned by
+    /// the adjacent (matched) opCast signature, so two such operands compare EQUAL regardless of
+    /// the raw id. Only produced after the runtime-object-typeid + feeds-matching-opCast gate;
+    /// a genuine primitive type-id stays a value-compared `Ref(Primitive)`.
+    OpCastTypeId,
     /// A raw dword/qword the classifier does not model as slot/const/ref/jump — compared verbatim
     /// (conservative: an unmodeled operand difference stays SEMANTIC).
     RawDw(u32),
@@ -128,7 +186,7 @@ fn normalize(
     let off_to_idx = offset_index_map(instrs);
     let mut out = Vec::with_capacity(instrs.len());
 
-    for ins in instrs {
+    for (pos, ins) in instrs.iter().enumerate() {
         let name = ins.op.name;
         // Ref-operand dword indices (relative to the instruction start) → identity, via the
         // SHARED ref_sites classification (N1). Collect into a per-dword-index lookup so the
@@ -155,7 +213,7 @@ fn normalize(
             }
         }
 
-        let operands = normalize_operands(name, ins, &ref_at_dw, &off_to_idx, side, opts);
+        let operands = normalize_operands(name, ins, &ref_at_dw, &off_to_idx, side, opts, instrs, pos);
         out.push(NormInstr { op: name, operands });
     }
 
@@ -170,6 +228,7 @@ fn normalize(
 /// Roles are decided by (opcode, BcType). The positional layout mirrors `disasm::disassemble`:
 /// words in source order, then dwords, then qwords. We map each positional operand to the dword
 /// index it occupies so N1 ref substitutions (keyed by dword index) apply.
+#[allow(clippy::too_many_arguments)]
 fn normalize_operands(
     name: &str,
     ins: &Instr,
@@ -177,6 +236,8 @@ fn normalize_operands(
     off_to_idx: &HashMap<usize, usize>,
     side: &Side,
     opts: &NormOpts,
+    instrs: &[Instr],
+    pos: usize,
 ) -> Vec<Operand> {
     let mut out = Vec::new();
 
@@ -189,10 +250,20 @@ fn normalize_operands(
     //     or a plain raw dword. The dword operand's absolute dword index tells us which. ---
     // Determine the dword-index of each positional dword operand from the BcType.
     let dword_indices = dword_operand_indices(ins.op.fmt);
-    for (pos, &dw_idx) in dword_indices.iter().enumerate() {
-        let raw = *ins.dwords.get(pos).unwrap_or(&0);
+    for (dop, &dw_idx) in dword_indices.iter().enumerate() {
+        let raw = *ins.dwords.get(dop).unwrap_or(&0);
         // N1 ref (func-id / type-id) at this dword index?
         if let Some(id) = ref_at_dw.get(&dw_idx) {
+            // GAP-C (batch-38): a `TYPEID`/`Cast` operand that is a LARGE runtime object type-id
+            // (an `asCTypeInfo` id not in T2, mask bits set) is build-specific and drifts. When it
+            // feeds an `opCast`/`Cast` whose callee identity matches on both sides (verified at the
+            // opCast op's own index), the cast TARGET is pinned by that signature, so collapse the
+            // drifting id to a single canonical token. A genuine primitive type-id stays a
+            // value-compared Ref(Primitive).
+            if id.is_runtime_object_typeid() && feeds_matching_opcast(instrs, pos, side) {
+                out.push(Operand::OpCastTypeId);
+                continue;
+            }
             out.push(Operand::Ref(id.clone()));
             continue;
         }
@@ -203,8 +274,18 @@ fn normalize_operands(
             out.push(Operand::JumpIndex(off_to_idx.get(&target_off).copied()));
             continue;
         }
+        // GAP-B (batch-38): a `PshC4 <idx>` immediately followed by `CALLSYS __STATIC_NAME` is an
+        // FName-literal pool index, NOT an integer value. The StaticNames pool is rebuilt per-cache
+        // (different size), so the same name lands at a different slot — resolve the index to TEXT
+        // and compare by string (mirror the `STR` handling below). The tight next-instruction gate
+        // keeps a real integer literal (not feeding __STATIC_NAME) comparing by value.
+        if opts.n4_consts && name == "PshC4" && next_is_static_name(instrs, pos, side) {
+            let s = side.refs.static_name(raw as i32 as i64).map(|s| s.to_string());
+            out.push(Operand::StaticName(s));
+            continue;
+        }
         // N4 constant?
-        match const_dword_role(name, pos) {
+        match const_dword_role(name, dop) {
             DwordRole::Int(width) => {
                 out.push(Operand::IntConst { value: raw as i32 as i64, width });
             }
@@ -214,8 +295,8 @@ fn normalize_operands(
 
     // --- Qword operands: ref ptr (N1), 64-bit const (N4 float/int), or raw. ---
     let qword_indices = qword_operand_indices(ins.op.fmt);
-    for (pos, &dw_idx) in qword_indices.iter().enumerate() {
-        let raw = *ins.qwords.get(pos).unwrap_or(&0);
+    for (qop, &dw_idx) in qword_indices.iter().enumerate() {
+        let raw = *ins.qwords.get(qop).unwrap_or(&0);
         if let Some(id) = ref_at_dw.get(&dw_idx) {
             out.push(Operand::Ref(id.clone()));
             continue;
@@ -679,6 +760,7 @@ fn render_operand(op: &Operand) -> String {
         Operand::Ref(id) => id.display(),
         Operand::StaticName(Some(s)) => format!("n\"{s}\""),
         Operand::StaticName(None) => "n<?>".to_string(),
+        Operand::OpCastTypeId => "opcast-typeid".to_string(),
         Operand::RawDw(d) => format!("0x{d:x}"),
         Operand::RawQw(q) => format!("0x{q:x}"),
     }
@@ -727,6 +809,13 @@ fn which_normalizers_fired(
                         && (v_raw[i].words != r_raw[i].words || v_raw[i].dwords != r_raw[i].dwords)
                     {
                         fired.n4_consts = true;
+                    }
+                }
+                (Operand::OpCastTypeId, Operand::OpCastTypeId) => {
+                    // GAP-C: a large runtime opCast type-id collapsed by N1 (a ref-identity
+                    // refinement). Credit N1 when the raw type-id dword actually differed.
+                    if opts.n1_refs && v_raw[i].dwords != r_raw[i].dwords {
+                        fired.n1_refs = true;
                     }
                 }
                 (Operand::Slot(a), Operand::Slot(b)) if a == b => {
@@ -1127,5 +1216,143 @@ mod tests {
         assert_eq!(na[1].operands, nb[1].operands);
         assert_eq!(na[0].operands[0], Operand::Slot(0));
         assert_eq!(na[1].operands[0], Operand::Slot(1));
+    }
+
+    // ---- GAP-B / GAP-C gate tests (batch-38) ----
+
+    /// GAP-B negative gate: a bare `PshC4 <n>` NOT followed by a `CALLSYS __STATIC_NAME` is a
+    /// plain integer literal — it must stay `IntConst` (compared by value), never resolve through
+    /// the StaticNames pool. (The positive path — a real `__STATIC_NAME` callee — is covered by the
+    /// `#[ignore]`d real-cache regression `gap_b_static_name_index_benign`.)
+    #[test]
+    fn gap_b_lone_pshc4_stays_int_const() {
+        let side = side();
+        let opts = NormOpts::default();
+        // PshC4 4369 followed by TZ (opcode 18, NOT __STATIC_NAME) — a real integer literal.
+        let mut code = Vec::new();
+        code.extend(dw_arg(2, 4369)); // PshC4 4369
+        code.extend(no_arg(18)); // TZ
+        let n = norm(&code, &side, &opts);
+        assert_eq!(
+            n[0].operands[0],
+            Operand::IntConst { value: 4369, width: 4 },
+            "PshC4 not feeding __STATIC_NAME must stay an integer literal"
+        );
+    }
+
+    /// GAP-C negative gate: a `TYPEID <large>` whose value is a large runtime object type-id but
+    /// which does NOT feed an `opCast` (no matching call follows) must stay a value-compared
+    /// `Ref(Primitive)`, so two different large ids still differ (SEMANTIC). This proves the gate
+    /// requires the opCast, not merely a large id.
+    #[test]
+    fn gap_c_typeid_without_opcast_stays_primitive() {
+        let side = side();
+        let opts = NormOpts::default();
+        // TYPEID (opcode 76, DW_ARG) with a large runtime id, followed only by RET — no opCast.
+        let big_a = 1207972964u32 as i32;
+        let big_b = 1207972931u32 as i32;
+        let mut a = Vec::new();
+        a.extend(dw_arg(76, big_a)); // TYPEID <big_a>
+        a.push(10); // RET
+        let mut b = Vec::new();
+        b.extend(dw_arg(76, big_b)); // TYPEID <big_b>
+        b.push(10); // RET
+        let na = norm(&a, &side, &opts);
+        let nb = norm(&b, &side, &opts);
+        // Both resolve to Ref(Primitive(<id>)) (large id absent from richtest T2), compared by
+        // value → the two DIFFER (no opcast gate fired).
+        assert_ne!(
+            na[0].operands, nb[0].operands,
+            "a large TYPEID not feeding opCast must NOT be collapsed"
+        );
+        assert!(
+            matches!(na[0].operands[0], Operand::Ref(_)),
+            "unfed large TYPEID stays a value-compared Ref, got {:?}",
+            na[0].operands[0]
+        );
+    }
+
+    // ---- Real-cache GAP-A/B/C regression flips (batch-38) ----
+    // These read the large (gitignored, ~120 MB) vanilla + regen samples, so they are `#[ignore]`d
+    // to keep routine `cargo test` fast/portable. Run on demand:
+    //   cargo test --release -p gore-as --lib -- --ignored gap_
+    // Each asserts a KNOWN member of the gap-class flips SEMANTIC→(IDENTICAL|BENIGN), while a
+    // KNOWN real bug STAYS semantic.
+
+    fn real_pair() -> Option<(Vec<u8>, Vec<u8>)> {
+        let base = format!("{}/../../work/reversing/gore-as/samples", env!("CARGO_MANIFEST_DIR"));
+        let v = std::fs::read(format!("{base}/cache_A.Cache")).ok()?;
+        let r = std::fs::read(format!("{base}/regen_batch36.Cache")).ok()?;
+        Some((v, r))
+    }
+
+    fn verdict_of(v: &[u8], r: &[u8], func: &str) -> Vec<(String, Verdict)> {
+        // Match the measurement configuration: N2 slot-renumber ON (the `--norm-slots` scoreboard),
+        // so a pure first-use slot renumber (a separate benign class) doesn't mask the gap flip.
+        let mut opts = NormOpts::default();
+        opts.n2_slots = true;
+        let filters = Filters { module: None, func: Some(func.to_string()) };
+        let rep = run(v, r, &opts, &filters, 3).expect("run");
+        rep.diffs.iter().map(|d| (d.name.clone(), d.verdict)).collect()
+    }
+
+    /// GAP-A: the `GenericVoiclines::StaticClass` family (vanilla ns `G1R::GenericVoiceline`,
+    /// regen empty) collapses SEMANTIC→BENIGN.
+    #[test]
+    #[ignore = "reads large gitignored sample caches; run with --ignored"]
+    fn gap_a_namespace_drift_benign() {
+        let Some((v, r)) = real_pair() else { return };
+        let vs = verdict_of(&v, &r, "GenericVoiclines::StaticClass");
+        assert!(!vs.is_empty(), "expected StaticClass functions");
+        assert!(
+            vs.iter().all(|(_, verd)| *verd != Verdict::Semantic),
+            "GAP-A StaticClass ns-drift must be benign, got {vs:?}"
+        );
+    }
+
+    /// GAP-B: the `GetHero` topic-getter (PshC4 pool-index → __STATIC_NAME) collapses to BENIGN.
+    #[test]
+    #[ignore = "reads large gitignored sample caches; run with --ignored"]
+    fn gap_b_static_name_index_benign() {
+        let Some((v, r)) = real_pair() else { return };
+        let vs = verdict_of(&v, &r, "::GetHero");
+        assert!(!vs.is_empty(), "expected GetHero functions");
+        assert!(
+            vs.iter().all(|(_, verd)| *verd != Verdict::Semantic),
+            "GAP-B __STATIC_NAME index-drift must be benign, got a SEMANTIC in {vs:?}"
+        );
+    }
+
+    /// GAP-C: `AIAgentConfig_Biter::Spawn` (lone opCast TYPEID drift) collapses to BENIGN.
+    #[test]
+    #[ignore = "reads large gitignored sample caches; run with --ignored"]
+    fn gap_c_opcast_typeid_benign() {
+        let Some((v, r)) = real_pair() else { return };
+        let vs = verdict_of(&v, &r, "AIAgentConfig_Biter::Spawn");
+        assert!(vs.iter().any(|(n, _)| n.contains("Spawn")), "expected Spawn, got {vs:?}");
+        assert!(
+            vs.iter().filter(|(n, _)| n.contains("AIAgentConfig_Biter::Spawn")).all(|(_, verd)| *verd != Verdict::Semantic),
+            "GAP-C opCast type-id drift must be benign, got {vs:?}"
+        );
+    }
+
+    /// REGRESSION GUARD: a KNOWN real bug (op-count divergence) must STAY semantic after the
+    /// refinements — the metric-honesty fix must not hide a behavioral bug.
+    #[test]
+    #[ignore = "reads large gitignored sample caches; run with --ignored"]
+    fn real_bug_stays_semantic() {
+        let Some((v, r)) = real_pair() else { return };
+        // op-count divergence (v=20, r=30) — a genuine dropped/added-logic defect.
+        let vs = verdict_of(&v, &r, "LoadOrCreateDataGame_Implementation");
+        assert!(
+            vs.iter().any(|(_, verd)| *verd == Verdict::Semantic),
+            "LoadOrCreateDataGame must stay SEMANTIC, got {vs:?}"
+        );
+        // dropped-logic force-stub (UCBT_CompleteSequence::Tick, v=104 r=2).
+        let vs2 = verdict_of(&v, &r, "UCBT_CompleteSequence::Tick");
+        assert!(
+            vs2.iter().any(|(_, verd)| *verd == Verdict::Semantic),
+            "UCBT_CompleteSequence::Tick must stay SEMANTIC, got {vs2:?}"
+        );
     }
 }
