@@ -3068,6 +3068,29 @@ impl Structurer<'_> {
                 self.emit_range(i + 1, body_end, depth + 1, out);
                 let _ = writeln!(out, "{ind}}}");
                 next = body_end;
+            } else if let Some((latch, cond, cont_off, brk_off)) =
+                self.uncond_latch_loop_recoverable(i, stop)
+            {
+                // batch-36 Stage C: mid-test loop with an UNCONDITIONAL-JMP latch, clean top-test
+                // form, AND a FULLY recoverable body (Gate 2 passed inside the detector). The
+                // header block `i` holds the `while (cond)` test (excluded); the body is
+                // [i+1, latch) (the latch JMPs back to `i`, also excluded). `continue_off` =
+                // header offset; `break_off` = the exit-test target.
+                //
+                // SAFETY: unlike loop_latch (where the loop is ALWAYS already detected), a
+                // NEWLY-detected uncond-JMP loop only wins when its body fully structures — if
+                // Gate 2 bails, `uncond_latch_loop_recoverable` returns None and this block falls
+                // through to the `is_cond` arm, keeping the EXACT status-quo emission (the header
+                // as an `if`). A newly-detected loop never emits a linearized/lossy body.
+                let _ = writeln!(out, "{ind}while ({cond})");
+                let _ = writeln!(out, "{ind}{{");
+                let ls = LoopScope { continue_off: cont_off, break_off: brk_off };
+                let saved = self.loop_scope;
+                self.loop_scope = Some(ls);
+                self.emit_range(i + 1, latch, depth + 1, out);
+                self.loop_scope = saved;
+                let _ = writeln!(out, "{ind}}}");
+                next = latch + 1;
             } else if let Some(latch) = self.loop_latch(i, stop) {
                 let lcmp = block_stmts(self.ctx, self.g.blocks[latch].instr_lo, self.g.blocks[latch].instr_hi).1;
                 let cond = branch_cond(&lcmp, self.jump_op(latch));
@@ -4330,6 +4353,111 @@ impl Structurer<'_> {
             self.jump_op(bi),
             "JS" | "JNS" | "JP" | "JNP" | "JZ" | "JNZ" | "JLowZ" | "JLowNZ"
         ) && b.succs.iter().any(|&s| s <= b.start_dw)
+    }
+
+    /// batch-36 Stage C — block `bi` ends in an UNCONDITIONAL `JMP` back to an earlier-or-equal
+    /// offset (an uncond-JMP loop latch: `while(true)`/mid-test loops that `loop_latch`
+    /// (cond-only) and `top_test_while` (strict block-before-taken rule) both miss).
+    fn is_backward_jump(&self, bi: usize) -> bool {
+        let b = &self.g.blocks[bi];
+        self.jump_op(bi) == "JMP" && b.succs.first().is_some_and(|&s| s <= b.start_dw)
+    }
+
+    /// batch-36 Stage C (conservative first cut, spec §2.3) — detect a mid-test loop whose latch
+    /// is an UNCONDITIONAL `JMP` back to the header block `i`, in the CLEAN top-test form only:
+    /// block `i` is itself a single-block conditional (`is_cond`) that tests the loop condition,
+    /// one edge continues the body (`i+1`), the other is the loop EXIT (`break_off`, forward past
+    /// the latch), and the last body block JMPs unconditionally back to `i`. Returns
+    /// `(latch_idx, cond, continue_off, break_off)`. Bails (None) on any compound-header /
+    /// mid-body-test / multi-exit shape — those stay on their status-quo emission (a stub or
+    /// flat chain), never a guessed `while(true)`.
+    fn uncond_latch_loop(&self, i: usize, stop: usize) -> Option<(usize, String, usize, usize)> {
+        // never steal a block a conditional latch or top-test already claims
+        if self.loop_latch(i, stop).is_some() || self.top_test_while(i, stop).is_some() {
+            return None;
+        }
+        let header_off = self.g.blocks[i].start_dw;
+        // the header block must be a single 2-succ conditional = the loop test
+        if !self.is_cond(i) {
+            return None;
+        }
+        let b = &self.g.blocks[i];
+        let taken = *b.succs.first()?;
+        let fall = *b.succs.get(1)?;
+        // find the uncond-JMP latch: a block in (i, stop) whose JMP targets exactly `header_off`
+        let mut latch = None;
+        for bi in (i + 1)..stop {
+            if self.is_backward_jump(bi) && self.g.blocks[bi].succs.first() == Some(&header_off) {
+                if latch.is_some() {
+                    return None; // more than one back-edge to the header — not the clean shape
+                }
+                latch = Some(bi);
+            }
+        }
+        let latch = latch?;
+        let latch_off = self.g.blocks[latch].start_dw;
+        // exactly one of {taken, fall} continues the body (== i+1 offset), the other is the exit
+        let fall_idx = *self.idx_of.get(&fall)?;
+        let taken_idx = *self.idx_of.get(&taken)?;
+        // body must be the fall-through run [i+1, latch); the exit is the other edge, and it must
+        // lie strictly after the latch (a genuine loop exit, not an in-body forward jump)
+        let (body_continue_idx, exit_off) = if fall_idx == i + 1 {
+            (fall_idx, taken)
+        } else if taken_idx == i + 1 {
+            (taken_idx, fall)
+        } else {
+            return None;
+        };
+        let _ = body_continue_idx;
+        let exit_idx = *self.idx_of.get(&exit_off)?;
+        // the exit must be OUTSIDE the loop span (past the latch) — else it is an inner branch,
+        // and this is not a clean top-test loop.
+        if exit_idx <= latch || exit_off <= latch_off {
+            return None;
+        }
+        // no OTHER back-edge inside the body may target an offset <= header (irreducible / a
+        // second loop we are not modeling) — keep this to the single-latch reducible shape.
+        for bi in (i + 1)..latch {
+            let bb = &self.g.blocks[bi];
+            if bb.succs.iter().any(|&s| s <= header_off) {
+                return None;
+            }
+        }
+        // condition renders so the loop CONTINUES on the fall edge (body) and EXITS on the other:
+        // if fall is the body, the taken edge is the exit → `while (!taken_cond)`; if taken is the
+        // body, `while (taken_cond)`. Mirror `top_test_while` (which always has fall = body).
+        let cmp = block_stmts(self.ctx, b.instr_lo, b.instr_hi).1;
+        let raw = branch_cond(&cmp, self.jump_op(i));
+        let cond = if fall_idx == i + 1 { negate(&raw) } else { raw };
+        Some((latch, cond, header_off, exit_off))
+    }
+
+    /// batch-36 Stage C — [`Self::uncond_latch_loop`] PLUS the two body gates, run with the loop
+    /// scope active so the Gate-2 dry run's nested-switch probe agrees with the real emit. Returns
+    /// the loop tuple ONLY when the body has a genuine inner branch (Gate 1) AND fully structures
+    /// (Gate 2). If either gate fails, returns None so the caller falls through to the `is_cond`
+    /// arm — a newly-detected loop must NOT emit a linearized/lossy body (that would be a QUALITY
+    /// regression vs the status-quo `if` the is_cond arm produces, and risks mis-binding an inner
+    /// break/continue). This is the "a newly-detected loop only wins when fully recoverable" rule.
+    fn uncond_latch_loop_recoverable(
+        &mut self,
+        i: usize,
+        stop: usize,
+    ) -> Option<(usize, String, usize, usize)> {
+        let (latch, cond, cont_off, brk_off) = self.uncond_latch_loop(i, stop)?;
+        let ls = LoopScope { continue_off: cont_off, break_off: brk_off };
+        if !self.body_has_inner_branch(i + 1, latch, ls) {
+            return None;
+        }
+        let saved = self.loop_scope;
+        self.loop_scope = Some(ls);
+        let ok = self.loop_body_recoverable(i + 1, latch, ls);
+        self.loop_scope = saved;
+        if ok {
+            Some((latch, cond, cont_off, brk_off))
+        } else {
+            None
+        }
     }
 }
 
