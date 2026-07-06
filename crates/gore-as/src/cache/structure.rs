@@ -307,7 +307,12 @@ pub fn decompile(f: &FuncCode, refs: &RefResolver) -> String {
         .enumerate()
         .map(|(i, n)| if n.is_empty() { format!("arg{i}") } else { n.clone() })
         .collect();
-    let body = body_statements(f, refs, 1)
+    // Pass the return type so RVO / value-return functions decompile faithfully in the CLI
+    // (the ret_ty-less `body_statements` path renders `return;` for a struct-by-value return,
+    // masking the emitter's real `return <rvo_local>;`). Diagnostic-only: the authoritative
+    // emitter is emit.rs (which already threads `Some(&f.ret)`); this only aligns the readable
+    // `as decompile` view with it. Other context (fields/class/hints) stays None as before.
+    let body = body_statements_ctor(f, refs, 1, None, Some(&f.ret), None, None, None, None, None)
         .replace(RVODEF, "/* unrecovered */ {}")
         .replace(CONSTSTORE, "");
     format!(
