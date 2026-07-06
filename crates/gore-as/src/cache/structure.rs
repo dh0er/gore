@@ -218,6 +218,47 @@ fn assign_lhs(v: &str) -> Option<&str> {
     None
 }
 
+/// batch-37 (Idiom S, ctor-member-init.md §4.1): true iff `arg` is a clean ASSIGNABLE member/
+/// local lvalue — a `this.<field>` (or deeper `this.a.b`) member path, or a bare `local_N` slot.
+/// Used to gate the ctor value-type member-default-init recovery: the `$beh0` copy/value-init
+/// behaviour whose receiver is such an lvalue is `this.<field> = <value>;`, not a temp construct.
+/// FALSE for: bare `this` (that is the whole-object copyctor stub, which must stay authoritative),
+/// the hidden `__return` RVO slot (handled by the `$beh0(__return, src)` return arm above), a PSF
+/// address, and any `$`/`~`/`\u{2}`/UNRESOLVED behaviour/sentinel marker. Same "plain lhs"
+/// character rule as `assign_lhs` (identifiers, `_`, `.`), so no expression/literal can slip in.
+fn is_lvalue_arg(arg: &Arg) -> bool {
+    if arg.is_psf {
+        return false;
+    }
+    let s = arg.s.as_str();
+    // reject sentinels / behaviour markers / empties outright.
+    if s.is_empty()
+        || s == UNRESOLVED
+        || s.starts_with('$')
+        || s.starts_with('~')
+        || s.contains('\u{2}')
+        || s.contains('\u{1}')
+    {
+        return false;
+    }
+    // bare `this` = whole-object copyctor (no source form); `__return` = RVO slot (own arm).
+    if s == "this" || s == "__return" {
+        return false;
+    }
+    // plain member/local path: identifier chars + `.` only, and the HEAD must be an assignable
+    // root (`this`, a `local_` slot, or a plain identifier param) — never a call/index/literal.
+    if !s.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'.') {
+        return false;
+    }
+    let head = s.split('.').next().unwrap_or(s);
+    (s.starts_with("this.")) || head.starts_with("local_") || {
+        // a bare param/slot name (`Foo`, `local_3`) with no `.` is assignable; a bare `this`
+        // was already rejected. A dotted head that is a plain identifier (a param.member) is
+        // also assignable. Require the head be a valid identifier start (not a digit).
+        head.bytes().next().is_some_and(|b| b.is_ascii_alphabetic() || b == b'_')
+    }
+}
+
 /// Decompile a function to a self-contained `function(...) { ... }` (readable, not recompilable).
 pub fn decompile(f: &FuncCode, refs: &RefResolver) -> String {
     let params: Vec<String> = f
@@ -2402,8 +2443,59 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                             }
                             continue;
                         }
+                        // batch-37 (Idiom S, ctor-member-init.md §2/§4.1): value-type FIELD
+                        // default-init. `PGA/CALL <const> ; PshVPtr this ; ADDSi this.<field> ;
+                        // CALLSYS $beh0` is the ctor-path 1-arg value copy/init behaviour whose
+                        // receiver is a `this.<field>` member LVALUE (not PSF -> the construct arm
+                        // above skipped it; not `__return` -> the return arm above skipped it). The
+                        // A/B control proves the render path exists: the RUNTIME `FString::opAssign`
+                        // (a DIFFERENT ptr, name `opAssign` not `$beh0`) renders the identical shape
+                        // via build_call's method arm, but this ctor-init `$beh0` was dropped by the
+                        // generic `$`-behaviour guard -> the store vanished (Armor ctors decompiled
+                        // to an EMPTY body; corpus-wide 0 `this.X = "..."` stores). Recover it as
+                        // `this.<field> = <value>;` so the member default FLOWS. Census (cache_A):
+                        // 1867 member-store sites across FString/FName/FGameplayTag/FVector/
+                        // TSoftObjectPtr/FRotator/FKey — every clean rhs a literal/enum/global.
+                        //
+                        // SAFETY (spec top risk): a WRONG rhs (mis-resolved const / dropped &inout
+                        // cast) is WORSE than a dropped one. Fire ONLY on a 1-value-param behaviour
+                        // whose receiver `is_lvalue_arg` (this.<field>/local_N; NOT bare `this`,
+                        // NOT __return, NOT PSF/sentinel) AND whose rhs is a cleanly-resolved value
+                        // (not empty/UNRESOLVED/$/~/\u{2}, not PSF). Any failure BAILS to the
+                        // status-quo drop (fall through to the generic `$`-guard). The rhs is cast
+                        // to the param type via the SAME `cast_arg` path as the method arm, so a
+                        // definite value-type head mismatch force-drops via the `\u{2}` sentinel.
+                        if is_lvalue_arg(&recv)
+                            && ctx.refs.func_params_by_ptr(ptr).map(|p| p.len()) == Some(1)
+                            && stack.len() >= 2
+                        {
+                            let rhs = stack[stack.len() - 2].clone();
+                            let rhs_ok = !rhs.is_psf
+                                && !rhs.s.is_empty()
+                                && rhs.s != UNRESOLVED
+                                && !rhs.s.starts_with('$')
+                                && !rhs.s.starts_with('~')
+                                && !rhs.s.contains('\u{2}')
+                                && !rhs.s.contains('\u{1}');
+                            if rhs_ok {
+                                // cast the rhs to the init param type exactly like the method
+                                // operator arm — an FName/enum/soft-object default takes its proper
+                                // literal form; a definite value-type mismatch yields the `\u{2}`
+                                // sentinel, which the guard below turns into a status-quo drop.
+                                let r = ctx.refs.func_params_by_ptr(ptr).and_then(|p| p.first())
+                                    .map(|pt| cast_arg(&rhs, pt, ctx.refs))
+                                    .unwrap_or_else(|| rhs.s.clone());
+                                if !r.contains('\u{2}') && !r.contains('\u{1}') {
+                                    stack.truncate(stack.len() - 2); // consume recv + rhs
+                                    flush!();
+                                    out.push(format!("{} = {};", recv.s, r));
+                                    continue;
+                                }
+                            }
+                        }
                     }
-                    // not a recoverable in-place construct -> fall through to the generic `$` drop.
+                    // not a recoverable in-place construct / member-init -> fall through to the
+                    // generic `$` drop (operands cleared by build_call; status-quo behaviour).
                 }
                 pending = if f == "StaticClass" {
                     // Fix b1 — do NOT clear the stack; StaticClass takes 0 operands and the entries
