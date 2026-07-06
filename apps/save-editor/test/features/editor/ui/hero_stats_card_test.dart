@@ -201,13 +201,13 @@ void main() {
     await tester.pumpAndSettle();
 
     // Sidebar entry present.
-    expect(find.text('Hero transform'), findsOneWidget);
+    expect(find.text('Position'), findsOneWidget);
     // Detail area currently shows Main stats (default selection).
     expect(find.widgetWithText(TextField, 'MaxHealth base'), findsOneWidget);
     expect(find.text('transform content'), findsNothing);
 
     // Tap transform entry.
-    await tester.tap(find.text('Hero transform'));
+    await tester.tap(find.text('Position'));
     await tester.pumpAndSettle();
 
     expect(find.text('transform content'), findsOneWidget);
@@ -228,7 +228,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Hero transform'), findsNothing);
+    expect(find.text('Position'), findsNothing);
   });
 
   testWidgets('Advanced is a regular sidebar entry (no ExpansionTile)',
@@ -648,7 +648,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('Hero transform'));
+    await tester.tap(find.text('Position'));
     await tester.pumpAndSettle();
     await tester.enterText(find.widgetWithText(TextField, 'probe'), '123');
     await tester.pump();
@@ -657,7 +657,7 @@ void main() {
     // text backs a registered pending edit that would otherwise go stale.
     await tester.tap(find.text('Main stats'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Hero transform'));
+    await tester.tap(find.text('Position'));
     await tester.pumpAndSettle();
 
     expect(
