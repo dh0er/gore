@@ -3343,13 +3343,97 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                         guard_param_alias.insert(dst_slot0, top.s.clone());
                         continue;
                     }
+                    // batch-46c (FIX-7): the RefCpyV result is consumed ONLY by a following
+                    // `CmpPtr` in this block (the `if (this.Children.Last() == FailedNode)` guard of
+                    // the UCBT `OnChildNode{Failed,Succeeded}` overrides). A getter CALL-expression
+                    // source (`this.Children.Last()`) and a bare object PARAMETER source both drop
+                    // today (the `ok` whitelist rejects `(`-bearing call exprs and non-local params),
+                    // leaving `local_4`/`local_6` UNDECLARED in `if (local_4 != local_6)`. Accept the
+                    // copy ONLY when the destination slot is an operand of a following `CmpPtr` BEFORE
+                    // it is re-defined — the copy materialises the compare operand, so it cannot
+                    // reorder a side effect past its sole consumer (the batch-43 call-src caution was
+                    // about copies flowing into arbitrary non-return locals; here the copy is
+                    // immediately compared, never re-observed). Bounded forward scan within the block
+                    // locates that `CmpPtr` and returns the PAIRED operand slot (the compare partner).
+                    let cmp_paired_slot: Option<i32> = {
+                        let mut paired = None;
+                        for j in (k + 1)..insns.len().min(k + 9) {
+                            let nx = &insns[j];
+                            match nx.op.name {
+                                "CmpPtr" if w(nx, 0) == dst_slot0 => {
+                                    paired = Some(w(nx, 1));
+                                    break;
+                                }
+                                "CmpPtr" if w(nx, 1) == dst_slot0 => {
+                                    paired = Some(w(nx, 0));
+                                    break;
+                                }
+                                // the slot is re-defined (output word 0) by another value producer
+                                // before any compare -> not this idiom, bail.
+                                "RefCpyV" | "CpyRtoV4" | "CpyRtoV8" | "RDR4" | "RDR8"
+                                | "SetV4" | "SetV8" | "SetV1"
+                                    if w(nx, 0) == dst_slot0 =>
+                                {
+                                    break;
+                                }
+                                _ => {}
+                            }
+                        }
+                        paired
+                    };
+                    let feeds_following_cmp = cmp_paired_slot.is_some();
+                    // A getter is a resolved CALL expression (ends `)`, no sentinel/unresolved).
+                    let src_is_getter = top.s.ends_with(')')
+                        && !top.s.contains('\u{2}')
+                        && !top.s.contains('\u{1}')
+                        && top.s != UNRESOLVED
+                        && !top.s.starts_with('~');
+                    // batch-46c (FIX-7): recover the getter feeding a `CmpPtr` — a container
+                    // accessor (`this.Nodes.Last(0)`, `this.m_Targets.opIndex(0)`) whose result is
+                    // consumed only by the compare. Safe: a call result is non-const, materialising
+                    // it into a slot for the compare cannot reorder a side effect past its sole use.
+                    let getter_into_cmp = feeds_following_cmp && src_is_getter;
+                    // batch-46c (FIX-7): recover the PARAM operand of a getter-vs-param compare
+                    // (`if (this.Nodes.Last() == FailedNode)` — the OnChildNode override idiom, and
+                    // the `opIndex(0) == OtherActor` overlap checks). Gated HARD on the paired
+                    // CmpPtr operand being a GETTER-produced slot (a `RefCpyV <paired>` whose source
+                    // is a call expression, scanned across the whole block): this scopes the param
+                    // materialisation to the getter-compare idiom and AVOIDS the wide "every param
+                    // into a null/identity guard" population. CRITICAL: use `param_src_ok` (NOT the
+                    // const-agnostic `param_object_ref`) so a CONST/read-only param is EXCLUDED —
+                    // materialising `const AActor TargetActor` into a non-const slot is the batch-41/
+                    // 45c "const -> non-const" generate-mode cascade (a const compare partner would
+                    // stay dropped; FIX-4 folds const params, it never materialises them). The
+                    // OnChildNode `FailedNode`/`SucceededNode` + overlap `OtherActor` params are all
+                    // non-const, so the idiom is fully covered; const-param compares bail safely.
+                    let param_into_cmp = ctx.param_src_ok(&top.s)
+                        && cmp_paired_slot.is_some_and(|ps| {
+                            // find the `RefCpyV <ps>` that produced the paired slot, then confirm it
+                            // is a GETTER result and NOT another param. The getter idiom lowers as
+                            // `Thiscall1/CALLSYS; PshRPtr; RDSPtr; RefCpyV <ps>` — the deref `RDSPtr`
+                            // IMMEDIATELY precedes the copy (a PARAM copy is `PshVPtr; RefCpyV`, with
+                            // no RDSPtr). Requiring `insns[qj-1] == RDSPtr` AND a getter call in the
+                            // short lead distinguishes a getter partner from a param-vs-param compare
+                            // (CheckTargetChanged's `PreviousTarget == NewTarget`, where a nearby
+                            // FStatID profiler CALLSYS falsely satisfied a call-only probe).
+                            (1..insns.len()).any(|qj| {
+                                insns[qj].op.name == "RefCpyV"
+                                    && w(&insns[qj], 0) == ps
+                                    && insns[qj - 1].op.name == "RDSPtr"
+                                    && insns[qj.saturating_sub(4)..qj]
+                                        .iter()
+                                        .any(|g| matches!(g.op.name, "Thiscall1" | "CALLSYS"))
+                            })
+                        });
                     let ok = !top.s.is_empty()
                         && top.s != dst
                         && !const_ret_getter
                         && (top.s.starts_with("local_")
                             || top.s.starts_with("Cast<")
                             || member_src
-                            || call_src_to_out);
+                            || call_src_to_out
+                            || getter_into_cmp
+                            || param_into_cmp);
                     if ok {
                         flush!();
                         // batch-25b (G4 assign shape): a slot-to-slot handle copy whose DEST
