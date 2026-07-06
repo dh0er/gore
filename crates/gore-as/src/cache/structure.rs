@@ -3071,8 +3071,25 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                     None
                 };
                 flush!();
-                if non_void && v.is_none() && !ctx.ret_via_rvo() {
-                    v = scan_back_retval(ctx, lo + k);
+                // batch-44a (E4, specs/loop-body-cfg-ext.md §2.4): recover the terminal
+                // register-return value when the RET's own capture is a sentinel. Today the
+                // scan-back fires ONLY when `v` is exactly None; but a value-type RVO destructor
+                // (`PSF wT; CALLSYS ~T`/`$beh2`) intervening between the value copy
+                // (`CpyRtoV4 wN`) and the terminal `CpyVtoR4 wN; RET` can leave `v` holding a
+                // sentinel string (empty / `~`-dtor / `$`-behaviour / ARGMISMATCH `\u{2}`) rather
+                // than the genuine return slot. Extend the guard so the scan-back ALSO runs for a
+                // sentinel `v` and recovers the terminal `CpyVtoR4 wN` slot as `return local_N;`.
+                // Additive + bail-safe: this can only REPLACE a broken `return;`/`return ~x;` with
+                // the scan-back slot (`.or(v)` keeps the sentinel if the scan finds nothing); a
+                // legitimate `return <expr>;` (a real slot/call) is a non-sentinel `v` and is
+                // untouched. RVO functions are excluded (they never scan-back — batch-24a G1).
+                if non_void
+                    && !ctx.ret_via_rvo()
+                    && v.as_deref().map_or(true, |s| {
+                        s.is_empty() || s.starts_with('~') || s.starts_with('$') || s.contains('\u{2}')
+                    })
+                {
+                    v = scan_back_retval(ctx, lo + k).or(v);
                 }
                 // value fix-ups (RVO-assign strip, declared-bool, int -> bool/enum cast) and
                 // the RVODEF default all live in the shared helper (also used by the switch
