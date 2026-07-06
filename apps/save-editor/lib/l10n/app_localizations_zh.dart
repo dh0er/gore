@@ -170,6 +170,42 @@ class AppLocalizationsZh extends AppLocalizations {
   String get skillNameTakeUluMulu => '摘取乌鲁-穆鲁战利品';
 
   @override
+  String get skillNameOrcWeapons => '兽人武器';
+
+  @override
+  String get skillNameMining => '采矿';
+
+  @override
+  String get skillNameDiving => '潜水';
+
+  @override
+  String get skillNameScavenging => '拾荒';
+
+  @override
+  String get skillNameTakeMinecrawlerMandibles => '摘取矿虫颚';
+
+  @override
+  String get skillNameSkinReptiles => '剥取爬行动物皮';
+
+  @override
+  String get skillNameTakeShadowbeastHorn => '摘取暗影兽角';
+
+  @override
+  String get skillNameTakeSpines => '摘取尖刺';
+
+  @override
+  String get skillNameTakeBloodflyStingers => '摘取血蝇毒刺';
+
+  @override
+  String get skillNameBreakSwampsharkTeeth => '敲取沼泽鲨牙齿';
+
+  @override
+  String get skillNameTakeFireTongue => '摘取火舌';
+
+  @override
+  String get skillNameTakeTrollHorn => '摘取巨魔角';
+
+  @override
   String get skillNameAcrobatics => '杂技';
 
   @override
@@ -1434,6 +1470,42 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get skillNameTakeUluMulu => '采集乌鲁-穆鲁战利品';
+
+  @override
+  String get skillNameOrcWeapons => '兽人武器';
+
+  @override
+  String get skillNameMining => '采矿';
+
+  @override
+  String get skillNameDiving => '潜水';
+
+  @override
+  String get skillNameScavenging => '拾荒';
+
+  @override
+  String get skillNameTakeMinecrawlerMandibles => '摘取矿虫颚';
+
+  @override
+  String get skillNameSkinReptiles => '剥取爬行动物皮';
+
+  @override
+  String get skillNameTakeShadowbeastHorn => '摘取暗影兽角';
+
+  @override
+  String get skillNameTakeSpines => '摘取尖刺';
+
+  @override
+  String get skillNameTakeBloodflyStingers => '摘取血蝇毒刺';
+
+  @override
+  String get skillNameBreakSwampsharkTeeth => '敲取沼泽鲨牙齿';
+
+  @override
+  String get skillNameTakeFireTongue => '摘取火舌';
+
+  @override
+  String get skillNameTakeTrollHorn => '摘取巨魔角';
 
   @override
   String get skillNameAcrobatics => '杂技';

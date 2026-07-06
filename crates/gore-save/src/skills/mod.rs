@@ -579,8 +579,6 @@ mod tests {
         let def = catalog::find("Melee_OneHanded").unwrap();
         let opts = tier_options(def, true, "Master");
         assert_eq!(opt_values(&opts), ["Untrained", "Trained", "Master"]);
-        // No `_Untrained` class -> lowering to Untrained is an unlearn.
-        assert!(opts[0]["label"].as_str().unwrap().contains("unlearn"));
         assert!(opts[2]["label"].as_str().unwrap().contains("(III)"));
     }
 

@@ -171,6 +171,43 @@ class AppLocalizationsRu extends AppLocalizations {
   String get skillNameTakeUluMulu => 'Сбор трофеев улу-мулу';
 
   @override
+  String get skillNameOrcWeapons => 'Оружие орков';
+
+  @override
+  String get skillNameMining => 'Добыча руды';
+
+  @override
+  String get skillNameDiving => 'Ныряние';
+
+  @override
+  String get skillNameScavenging => 'Собирательство';
+
+  @override
+  String get skillNameTakeMinecrawlerMandibles => 'Извлечение жвал ползуна';
+
+  @override
+  String get skillNameSkinReptiles => 'Разделка рептилий';
+
+  @override
+  String get skillNameTakeShadowbeastHorn => 'Извлечение рога теневого зверя';
+
+  @override
+  String get skillNameTakeSpines => 'Извлечение шипов';
+
+  @override
+  String get skillNameTakeBloodflyStingers => 'Извлечение жал кровавой мухи';
+
+  @override
+  String get skillNameBreakSwampsharkTeeth =>
+      'Выламывание зубов болотной акулы';
+
+  @override
+  String get skillNameTakeFireTongue => 'Извлечение огненного языка';
+
+  @override
+  String get skillNameTakeTrollHorn => 'Извлечение рога тролля';
+
+  @override
   String get skillNameAcrobatics => 'Акробатика';
 
   @override

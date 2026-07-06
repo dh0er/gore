@@ -171,6 +171,42 @@ class AppLocalizationsJa extends AppLocalizations {
   String get skillNameTakeUluMulu => 'ウル・ムルの戦利品の採取';
 
   @override
+  String get skillNameOrcWeapons => 'オークの武器';
+
+  @override
+  String get skillNameMining => '採掘';
+
+  @override
+  String get skillNameDiving => '潜水';
+
+  @override
+  String get skillNameScavenging => 'あさり';
+
+  @override
+  String get skillNameTakeMinecrawlerMandibles => 'マインクロウラーの大顎の採取';
+
+  @override
+  String get skillNameSkinReptiles => '爬虫類の解体';
+
+  @override
+  String get skillNameTakeShadowbeastHorn => 'シャドウビーストの角の採取';
+
+  @override
+  String get skillNameTakeSpines => '棘の採取';
+
+  @override
+  String get skillNameTakeBloodflyStingers => 'ブラッドフライの針の採取';
+
+  @override
+  String get skillNameBreakSwampsharkTeeth => 'スワンプシャークの歯を折る';
+
+  @override
+  String get skillNameTakeFireTongue => '炎の舌の採取';
+
+  @override
+  String get skillNameTakeTrollHorn => 'トロルの角の採取';
+
+  @override
   String get skillNameAcrobatics => 'アクロバット';
 
   @override

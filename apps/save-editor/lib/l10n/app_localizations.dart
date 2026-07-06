@@ -434,6 +434,78 @@ abstract class AppLocalizations {
   /// **'Take Ulu-Mulu Trophies'**
   String get skillNameTakeUluMulu;
 
+  /// No description provided for @skillNameOrcWeapons.
+  ///
+  /// In en, this message translates to:
+  /// **'Orc Weapons'**
+  String get skillNameOrcWeapons;
+
+  /// No description provided for @skillNameMining.
+  ///
+  /// In en, this message translates to:
+  /// **'Mining'**
+  String get skillNameMining;
+
+  /// No description provided for @skillNameDiving.
+  ///
+  /// In en, this message translates to:
+  /// **'Diving'**
+  String get skillNameDiving;
+
+  /// No description provided for @skillNameScavenging.
+  ///
+  /// In en, this message translates to:
+  /// **'Scavenging'**
+  String get skillNameScavenging;
+
+  /// No description provided for @skillNameTakeMinecrawlerMandibles.
+  ///
+  /// In en, this message translates to:
+  /// **'Take Minecrawler Mandibles'**
+  String get skillNameTakeMinecrawlerMandibles;
+
+  /// No description provided for @skillNameSkinReptiles.
+  ///
+  /// In en, this message translates to:
+  /// **'Skin Reptiles'**
+  String get skillNameSkinReptiles;
+
+  /// No description provided for @skillNameTakeShadowbeastHorn.
+  ///
+  /// In en, this message translates to:
+  /// **'Take Shadowbeast Horn'**
+  String get skillNameTakeShadowbeastHorn;
+
+  /// No description provided for @skillNameTakeSpines.
+  ///
+  /// In en, this message translates to:
+  /// **'Take Spines'**
+  String get skillNameTakeSpines;
+
+  /// No description provided for @skillNameTakeBloodflyStingers.
+  ///
+  /// In en, this message translates to:
+  /// **'Take Bloodfly Stingers'**
+  String get skillNameTakeBloodflyStingers;
+
+  /// No description provided for @skillNameBreakSwampsharkTeeth.
+  ///
+  /// In en, this message translates to:
+  /// **'Break Swampshark Teeth'**
+  String get skillNameBreakSwampsharkTeeth;
+
+  /// No description provided for @skillNameTakeFireTongue.
+  ///
+  /// In en, this message translates to:
+  /// **'Take Fire Tongue'**
+  String get skillNameTakeFireTongue;
+
+  /// No description provided for @skillNameTakeTrollHorn.
+  ///
+  /// In en, this message translates to:
+  /// **'Take Troll Horn'**
+  String get skillNameTakeTrollHorn;
+
   /// No description provided for @skillNameAcrobatics.
   ///
   /// In en, this message translates to:

@@ -173,6 +173,46 @@ class AppLocalizationsPt extends AppLocalizations {
   String get skillNameTakeUluMulu => 'Recolher troféus Ulu-Mulu';
 
   @override
+  String get skillNameOrcWeapons => 'Armas de orc';
+
+  @override
+  String get skillNameMining => 'Mineração';
+
+  @override
+  String get skillNameDiving => 'Mergulho';
+
+  @override
+  String get skillNameScavenging => 'Necrofagia';
+
+  @override
+  String get skillNameTakeMinecrawlerMandibles =>
+      'Extrair mandíbulas de rastejante-das-minas';
+
+  @override
+  String get skillNameSkinReptiles => 'Esfolar répteis';
+
+  @override
+  String get skillNameTakeShadowbeastHorn =>
+      'Extrair chifre de besta das sombras';
+
+  @override
+  String get skillNameTakeSpines => 'Extrair espinhos';
+
+  @override
+  String get skillNameTakeBloodflyStingers =>
+      'Extrair ferrões de mosca-de-sangue';
+
+  @override
+  String get skillNameBreakSwampsharkTeeth =>
+      'Quebrar dentes de tubarão-do-pântano';
+
+  @override
+  String get skillNameTakeFireTongue => 'Extrair língua de fogo';
+
+  @override
+  String get skillNameTakeTrollHorn => 'Extrair chifre de troll';
+
+  @override
   String get skillNameAcrobatics => 'Acrobacia';
 
   @override
@@ -1480,6 +1520,46 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
 
   @override
   String get skillNameTakeUluMulu => 'Extrair troféus Ulu-Mulu';
+
+  @override
+  String get skillNameOrcWeapons => 'Armas de orc';
+
+  @override
+  String get skillNameMining => 'Mineração';
+
+  @override
+  String get skillNameDiving => 'Mergulho';
+
+  @override
+  String get skillNameScavenging => 'Necrofagia';
+
+  @override
+  String get skillNameTakeMinecrawlerMandibles =>
+      'Extrair mandíbulas de rastejador-de-mina';
+
+  @override
+  String get skillNameSkinReptiles => 'Esfolar répteis';
+
+  @override
+  String get skillNameTakeShadowbeastHorn =>
+      'Extrair chifre de besta das sombras';
+
+  @override
+  String get skillNameTakeSpines => 'Extrair espinhos';
+
+  @override
+  String get skillNameTakeBloodflyStingers =>
+      'Extrair ferrões de mosca-de-sangue';
+
+  @override
+  String get skillNameBreakSwampsharkTeeth =>
+      'Quebrar dentes de tubarão-do-pântano';
+
+  @override
+  String get skillNameTakeFireTongue => 'Extrair língua de fogo';
+
+  @override
+  String get skillNameTakeTrollHorn => 'Extrair chifre de troll';
 
   @override
   String get skillNameAcrobatics => 'Acrobacia';

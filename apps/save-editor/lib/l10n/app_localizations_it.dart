@@ -173,6 +173,44 @@ class AppLocalizationsIt extends AppLocalizations {
   String get skillNameTakeUluMulu => 'Preleva trofei Ulu-Mulu';
 
   @override
+  String get skillNameOrcWeapons => 'Armi orchesche';
+
+  @override
+  String get skillNameMining => 'Estrazione mineraria';
+
+  @override
+  String get skillNameDiving => 'Immersione';
+
+  @override
+  String get skillNameScavenging => 'Saccheggio';
+
+  @override
+  String get skillNameTakeMinecrawlerMandibles =>
+      'Preleva mandibole di strisciaminiere';
+
+  @override
+  String get skillNameSkinReptiles => 'Scuoia rettili';
+
+  @override
+  String get skillNameTakeShadowbeastHorn => 'Preleva corno di bestia d\'ombra';
+
+  @override
+  String get skillNameTakeSpines => 'Preleva spine';
+
+  @override
+  String get skillNameTakeBloodflyStingers =>
+      'Preleva pungiglioni di mosca del sangue';
+
+  @override
+  String get skillNameBreakSwampsharkTeeth => 'Rompi denti di squalo di palude';
+
+  @override
+  String get skillNameTakeFireTongue => 'Preleva lingua di fuoco';
+
+  @override
+  String get skillNameTakeTrollHorn => 'Preleva corno di troll';
+
+  @override
   String get skillNameAcrobatics => 'Acrobazia';
 
   @override
