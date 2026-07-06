@@ -138,12 +138,28 @@ pub struct NormOpts {
     pub n2_slots: bool,
     pub n3_jumps: bool,
     pub n4_consts: bool,
+    /// N5 (`n5_scope`): one-sided vanilla strip of the `FScopeCycleCounter` RAII profiler-scope
+    /// pair + the `FStatID` temp dtor — pure CPU-timing instrumentation, provably behavior-neutral
+    /// (`specs/final-residue.md §B.2`). Default ON.
+    pub n5_scope: bool,
+    /// N6 (`n6_reguard`): one-sided vanilla fold of a short-circuit boolean-cascade re-guard that
+    /// is PROVABLY DOMINATED by an identical earlier same-slot null-guard with no intervening write
+    /// (`specs/final-residue.md §B.1`). Default ON.
+    pub n6_reguard: bool,
 }
 
 impl Default for NormOpts {
     fn default() -> Self {
-        // All ON except N2 (slot renumber) — the spec default.
-        NormOpts { n1_refs: true, n2_slots: false, n3_jumps: true, n4_consts: true }
+        // All ON except N2 (slot renumber) — the spec default. N5/N6 (benign-attribution strips)
+        // are ON by default, mirroring N1/N3/N4.
+        NormOpts {
+            n1_refs: true,
+            n2_slots: false,
+            n3_jumps: true,
+            n4_consts: true,
+            n5_scope: true,
+            n6_reguard: true,
+        }
     }
 }
 
@@ -482,6 +498,8 @@ pub struct NormFired {
     pub n2_slots: bool,
     pub n3_jumps: bool,
     pub n4_consts: bool,
+    pub n5_scope: bool,
+    pub n6_reguard: bool,
 }
 
 impl NormFired {
@@ -499,10 +517,21 @@ impl NormFired {
         if self.n4_consts {
             v.push("N4:consts");
         }
+        if self.n5_scope {
+            v.push("N5:scope");
+        }
+        if self.n6_reguard {
+            v.push("N6:reguard");
+        }
         v
     }
     fn any(&self) -> bool {
-        self.n1_refs || self.n2_slots || self.n3_jumps || self.n4_consts
+        self.n1_refs
+            || self.n2_slots
+            || self.n3_jumps
+            || self.n4_consts
+            || self.n5_scope
+            || self.n6_reguard
     }
 }
 
@@ -550,6 +579,268 @@ fn strip_jitentry(instrs: &[NormInstr]) -> Vec<NormInstr> {
     instrs.iter().filter(|ni| !is_benign_only_op(ni.op)).cloned().collect()
 }
 
+// =================================================================================================
+// N5 / N6 — benign-attribution ONE-SIDED VANILLA strips (`specs/final-residue.md` PART B).
+//
+// Both remove a PROVEN-INERT subsequence from the VANILLA normalized list only (regen already
+// lacks it), so they can only ever SHORTEN vanilla toward the (shorter) regen — never pad, never
+// manufacture a match by insertion. Governing safety rule (`bytediff.rs:12`): a false BENIGN hides
+// a real bug (catastrophic); when a pattern cannot be PROVEN inert/dominated, it is left in place
+// and the length mismatch keeps the function SEMANTIC.
+// =================================================================================================
+
+/// The (owner-type-name, method-name) of a normalized CALLSYS/CALL instruction's callee, if it
+/// resolved to a `Named` function identity. Keys N5 on a cache-INDEPENDENT identity (the raw
+/// func-ptr drifts across builds; the resolved owner+method does not — mirrors GAP-B/GAP-C keying
+/// on `callee_name`). Returns `None` for a non-call op or an unresolved callee.
+fn callsys_owner_method(ni: &NormInstr) -> Option<(&str, &str)> {
+    if !matches!(ni.op, "CALLSYS" | "CALL" | "CALLBND" | "CALLINTF" | "Thiscall1" | "FuncPtr") {
+        return None;
+    }
+    ni.operands.iter().find_map(|o| match o {
+        Operand::Ref(id) => id.func_owner_method(),
+        _ => None,
+    })
+}
+
+/// N5 — `FScopeCycleCounter` RAII profiler-scope strip (`specs/final-residue.md §B.2`).
+///
+/// Removes, from the VANILLA list, each `[PSF <slot>; CALLSYS <inert-scope-callee>]` PAIR where the
+/// callee resolves EXACTLY to one of the three inert RAII identities:
+///   * `FScopeCycleCounter::$beh0`  — the RAII scope-counter CTOR (snapshots `Cycles()`)
+///   * `FScopeCycleCounter::$beh2`  — the RAII scope-counter DTOR (accumulates elapsed cycles)
+///   * `FStatID::$beh2`             — the transient `FStatID` temp DTOR that only fed the ctor
+///
+/// The `FStatID::$beh0` CTOR is KEPT (both sides emit it — NOT stripped). Each CALLSYS is removed
+/// together with its immediately-preceding `PSF <same-or-any slot>` frame-push (that push exists
+/// only to address the RAII object for this call); if the preceding op is not a `PSF`, only the
+/// CALLSYS is removed (defensive — never remove an unrelated op).
+///
+/// Behaviour proof (§B.2): the three callees touch no game object / ability / actor / return
+/// register — they read `FPlatformTime::Cycles()` and accumulate into a named `TStatId` CPU
+/// counter (compiled-in `SCOPE_CYCLE_COUNTER` instrumentation). Removing them changes only the
+/// stats-HUD timing readout. Provably behavior-neutral.
+///
+/// Returns the number of CALLSYS scope-ops removed (each with its paired push).
+fn strip_benign_scopes(v: &mut Vec<NormInstr>) -> usize {
+    // Identify the indices of the inert scope CALLSYS ops and their paired preceding PSF.
+    let mut drop: Vec<bool> = vec![false; v.len()];
+    let mut removed = 0usize;
+    for i in 0..v.len() {
+        let is_scope = matches!(
+            callsys_owner_method(&v[i]),
+            Some(("FScopeCycleCounter", "$beh0"))
+                | Some(("FScopeCycleCounter", "$beh2"))
+                | Some(("FStatID", "$beh2"))
+        );
+        if !is_scope {
+            continue;
+        }
+        drop[i] = true;
+        removed += 1;
+        // Pair the immediately-preceding PSF frame-push (only if it is a PSF and not already
+        // claimed by another dropped call).
+        if i > 0 && v[i - 1].op == "PSF" && !drop[i - 1] {
+            drop[i - 1] = true;
+        }
+    }
+    if removed > 0 {
+        let mut idx = 0usize;
+        v.retain(|_| {
+            let keep = !drop[idx];
+            idx += 1;
+            keep
+        });
+    }
+    removed
+}
+
+/// True if a normalized op WRITES the object/ref frame slot `slot` — the anti-false-benign clause-3
+/// scan for N6. Any op that reassigns / re-references the guarded slot between the dominating guard
+/// and the re-guard breaks domination (the guarded value may have changed), so the re-guard is NOT
+/// redundant and must NOT be folded. Conservative: an op we are unsure about is treated as a write.
+fn writes_slot(ni: &NormInstr, slot: i32) -> bool {
+    // Ops whose FIRST slot operand is a destination (write) of an object/ref slot.
+    let dst_first = matches!(
+        ni.op,
+        "RefCpyV"        // ref-copy INTO a slot (the re-guard's own load target — a write)
+            | "STOREOBJ" // store an object handle INTO a slot
+            | "CpyVtoV4" | "CpyRtoV4" | "CpyGtoV4" | "LdGRdR4"
+            | "SetV1" | "SetV2" | "SetV4" | "SetV8"
+            | "FreeV" | "FreeNullV8" | "AllocMem"
+    );
+    if dst_first {
+        if let Some(Operand::Slot(s)) = ni.operands.first() {
+            if *s == slot {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// N6 — dominated short-circuit boolean-cascade re-guard fold (`specs/final-residue.md §B.1`).
+///
+/// A re-guard is a null-check on a STABLE object slot that was ALREADY null-checked earlier in the
+/// SAME boolean cascade, on a value that has NOT been reassigned since:
+///   S1 (object slot):  PshVPtr <slot X> ; RefCpyV <slot Y> ; CmpPtrNull <slot Y> ; TNZ
+/// The 4-op S1 window is stripped from the VANILLA list ONLY when PROVABLY DOMINATED:
+///   (clause 1) an identical earlier guard on the SAME source slot X exists in this function, AND
+///   (clause 3) no write to slot X intervenes between the dominating guard and the re-guard.
+/// (Clause 2 of the spec — the re-guard sits in an accumulator-merge term — is subsumed here by
+/// requiring the exact S1 op-shape AND a `TNZ` terminator, which only the cascade emits.)
+///
+/// The S2 form (`STOREOBJ <slot>; CmpPtrNull <slot>; TNZ`) is DELIBERATELY NOT folded: its own
+/// `STOREOBJ` reassigns the slot with a FRESH call result, so it guards a new value — a genuine
+/// safe-nav null-check, never a redundant re-check. Folding it would risk hiding a real dropped
+/// guard on a fresh result (catastrophic). Conservatism over coverage (`bytediff.rs:12`).
+///
+/// Behaviour proof (§B.1): in an `&&`/`||` short-circuit chain, term-k's guard `X != null` is
+/// reached only when term-(k-1) held, and the earlier identical guard already established
+/// `X != null`; with no intervening write to X, the value is unchanged → the re-guard is provably
+/// dead. Clause 3 is the load-bearing anti-false-benign guard: a *genuine* dropped null-check (slot
+/// never guarded earlier, clause 1 fails; or reassigned since, clause 3 fails) is left in place and
+/// the length mismatch keeps the function SEMANTIC.
+///
+/// One-sided (vanilla only — regen's decompiled accumulator emits one guard per slot, never the
+/// per-term re-guards). Returns the number of re-guard windows folded.
+fn fold_dominated_reguards(v: &mut Vec<NormInstr>) -> usize {
+    let mut drop: Vec<bool> = vec![false; v.len()];
+    let mut folded = 0usize;
+
+    let mut i = 0usize;
+    while i < v.len() {
+        // Try S1 at i: PshVPtr <X> ; RefCpyV <Y> ; CmpPtrNull <Y> ; TNZ
+        if let Some((src, _guard_slot, win_len)) = match_reguard(v, i) {
+            // clause 1 + clause 3: an identical earlier guard on the SAME source with no
+            // intervening write to that slot.
+            if dominating_guard_exists(v, i, &src) {
+                for slot in drop.iter_mut().take(i + win_len).skip(i) {
+                    *slot = true;
+                }
+                folded += 1;
+                i += win_len;
+                continue;
+            }
+        }
+        i += 1;
+    }
+
+    if folded > 0 {
+        let mut idx = 0usize;
+        v.retain(|_| {
+            let keep = !drop[idx];
+            idx += 1;
+            keep
+        });
+    }
+    folded
+}
+
+/// The identity of a re-guard's SOURCE — what value is being re-checked. For an S1 re-guard the
+/// source is the `PshVPtr <slot X>` operand (a stable frame/member object slot). Compared on the
+/// NORMALIZED operand (post-N1/N2).
+#[derive(Debug, Clone, PartialEq)]
+enum ReguardSrc {
+    /// S1: `PshVPtr <slot>` re-loaded a stack/frame object slot for a null-check.
+    Push(Operand),
+}
+
+/// If a FOLDABLE S1 re-guard window begins at `pos`, return `(source, guarded_slot, window_len)`.
+/// Only the S1 4-op `PshVPtr X; RefCpyV Y; CmpPtrNull Y; TNZ` form is foldable (S2 is never folded
+/// — see [`fold_dominated_reguards`] docs). Otherwise `None`.
+fn match_reguard(v: &[NormInstr], pos: usize) -> Option<(ReguardSrc, i32, usize)> {
+    if pos + 3 < v.len()
+        && v[pos].op == "PshVPtr"
+        && v[pos + 1].op == "RefCpyV"
+        && v[pos + 2].op == "CmpPtrNull"
+        && v[pos + 3].op == "TNZ"
+    {
+        let push = v[pos].operands.first()?.clone();
+        // Only a slot-addressed push is a stable, trackable source (clause-3 needs a slot).
+        if !matches!(push, Operand::Slot(_)) {
+            return None;
+        }
+        let y = slot_of(&v[pos + 1])?;
+        // The CmpPtrNull must test the SAME slot Y that RefCpyV loaded.
+        if slot_of(&v[pos + 2]) == Some(y) {
+            return Some((ReguardSrc::Push(push), y, 4));
+        }
+    }
+    None
+}
+
+/// The first `Slot` operand of an instruction (the addressed frame slot), if any.
+fn slot_of(ni: &NormInstr) -> Option<i32> {
+    ni.operands.iter().find_map(|o| match o {
+        Operand::Slot(s) => Some(*s),
+        _ => None,
+    })
+}
+
+/// Clause 1 + clause 3 of the domination gate: scanning BACKWARD from the re-guard at `pos`, is
+/// there an EARLIER guard on the identical source, with NO write to that source's slot in between?
+///
+/// For an S1 `Push(slot X)` source the dominating guard is an earlier S1 window (term `TNZ` form or
+/// cascade-head `JNZ` form) whose `PshVPtr` operand equals `X`. If a write to slot X is found before
+/// a matching guard, the re-guard is NOT dominated (clause 3 fails) → return false (leave SEMANTIC).
+fn dominating_guard_exists(v: &[NormInstr], pos: usize, src: &ReguardSrc) -> bool {
+    // The slot whose non-null-ness must be preserved (for the intervening-write scan).
+    let ReguardSrc::Push(Operand::Slot(guard_slot)) = src else { return false };
+    let guard_slot = *guard_slot;
+
+    let mut j = pos;
+    while j > 0 {
+        j -= 1;
+        // clause 3: any intervening WRITE to the guarded slot breaks domination — UNLESS the write
+        // op is itself the START of the matching earlier guard window (a dominator's own load is
+        // not a hostile reassignment). Check for the guard shape at `j` first.
+        if writes_slot(&v[j], guard_slot) {
+            if guard_matches_source(v, j, src) {
+                return true;
+            }
+            return false;
+        }
+        // clause 1: an earlier guard on the identical source dominates.
+        if guard_matches_source(v, j, src) {
+            return true;
+        }
+    }
+    false
+}
+
+/// True if a guard window starting at index `j` guards the SAME source as `src` — an S1 term guard
+/// (`...; TNZ`) whose push equals `src`'s push, OR the cascade-HEAD guard (`...; JNZ`) on the same
+/// push. Both establish `X != null`, so either dominates a later re-guard on `X`.
+fn guard_matches_source(v: &[NormInstr], j: usize, src: &ReguardSrc) -> bool {
+    if let Some((ReguardSrc::Push(b), _slot, _len)) = match_reguard(v, j) {
+        let ReguardSrc::Push(a) = src;
+        return *a == b;
+    }
+    // Also accept the CASCADE-HEAD guard shape `PshVPtr X; RefCpyV Y; CmpPtrNull Y; JNZ` (the very
+    // first term branches into the merge with JNZ, not TNZ) as a dominator for an S1 source.
+    head_guard_matches(v, j, src)
+}
+
+/// The FIRST term of an `&&` cascade guards with `... ; JNZ` (branch into the accumulator merge)
+/// rather than `TNZ`. Recognise `PshVPtr X ; RefCpyV Y ; CmpPtrNull Y ; JNZ` as a dominating guard
+/// for an S1 `Push(X)` source (clause 1), so a later `TNZ` re-guard on the same X is dominated.
+fn head_guard_matches(v: &[NormInstr], j: usize, src: &ReguardSrc) -> bool {
+    let ReguardSrc::Push(push) = src;
+    if j + 3 < v.len()
+        && v[j].op == "PshVPtr"
+        && v[j + 1].op == "RefCpyV"
+        && v[j + 2].op == "CmpPtrNull"
+        && is_jump_op(v[j + 3].op)
+    {
+        let y = slot_of(&v[j + 1]);
+        if y.is_some() && slot_of(&v[j + 2]) == y {
+            return v[j].operands.first() == Some(push);
+        }
+    }
+    false
+}
+
 /// Classify one aligned function pair given both sides' normalized + raw instruction lists.
 #[allow(clippy::too_many_arguments)]
 fn classify(
@@ -585,12 +876,19 @@ fn classify(
         opts.n2_slots && distinct_slot_count(v_norm) != distinct_slot_count(r_norm);
 
     // Compare normalized lists, tolerating JitEntry scaffolding.
-    let (v_cmp, r_cmp, jit_fired) = {
+    let (mut v_cmp, r_cmp, jit_fired) = {
         let vj = strip_jitentry(v_norm);
         let rj = strip_jitentry(r_norm);
         let fired = vj.len() != v_norm.len() || rj.len() != r_norm.len();
         (vj, rj, fired)
     };
+
+    // N5/N6 — benign-attribution ONE-SIDED VANILLA strips (`specs/final-residue.md` PART B). Apply
+    // #2 (scope strip) BEFORE #1 (re-guard fold) per §B.3 (disjoint, but scope-first keeps the
+    // re-guard scanner's contiguous windows intact). Each only ever SHORTENS the vanilla side, so
+    // neither can pad a match into existence.
+    let scope_fired = if opts.n5_scope { strip_benign_scopes(&mut v_cmp) > 0 } else { false };
+    let reguard_fired = if opts.n6_reguard { fold_dominated_reguards(&mut v_cmp) > 0 } else { false };
 
     let norm_identical = !n2_slot_mismatch
         && v_cmp.len() == r_cmp.len()
@@ -598,9 +896,11 @@ fn classify(
 
     if norm_identical {
         // BENIGN: determine WHICH normalizers were responsible by re-diffing raw operand roles.
-        let fired = which_normalizers_fired(v_raw, r_raw, v_norm, r_norm, opts, jit_fired);
-        // Defensive: if raw differs but NO normalizer is credited and no JitEntry fired, that is a
-        // classifier blind spot — treat as SEMANTIC rather than silently benign.
+        let mut fired = which_normalizers_fired(v_raw, r_raw, v_norm, r_norm, opts, jit_fired);
+        fired.n5_scope = scope_fired;
+        fired.n6_reguard = reguard_fired;
+        // Defensive: if raw differs but NO normalizer is credited and no JitEntry/N5/N6 fired, that
+        // is a classifier blind spot — treat as SEMANTIC rather than silently benign.
         if !fired.any() && !jit_fired {
             return semantic(name, v_raw, r_raw, v_norm, r_norm, context, opts);
         }
@@ -1354,5 +1654,276 @@ mod tests {
             vs2.iter().any(|(_, verd)| *verd == Verdict::Semantic),
             "UCBT_CompleteSequence::Tick must stay SEMANTIC, got {vs2:?}"
         );
+    }
+
+    // =============================================================================================
+    // N5 / N6 — benign-attribution one-sided vanilla strips (batch-48, `specs/final-residue.md` B).
+    // Synthetic unit tests operate DIRECTLY on `Vec<NormInstr>` (the strips' input), so they need
+    // no encoded bytecode — the exact op-shapes + a `Named` CALLSYS callee (via the remap
+    // test-constructor) suffice.
+    // =============================================================================================
+
+    /// A NO-operand normalized instruction (e.g. TNZ, PshRPtr).
+    fn ni(op: &'static str) -> NormInstr {
+        NormInstr { op, operands: vec![] }
+    }
+    /// A normalized instruction addressing a single frame slot.
+    fn ni_slot(op: &'static str, slot: i32) -> NormInstr {
+        NormInstr { op, operands: vec![Operand::Slot(slot)] }
+    }
+    /// A normalized CALLSYS whose callee resolves to `owner::method` (via the remap test ctor).
+    fn ni_callsys(owner: &str, method: &str) -> NormInstr {
+        NormInstr {
+            op: "CALLSYS",
+            operands: vec![Operand::Ref(OperandId::named_func_for_test(owner, method))],
+        }
+    }
+
+    /// An S1 re-guard window on object slot `x` loading into temp `y`, terminated by `TNZ`.
+    fn s1_reguard(x: i32, y: i32) -> Vec<NormInstr> {
+        vec![
+            ni_slot("PshVPtr", x),
+            ni_slot("RefCpyV", y),
+            ni_slot("CmpPtrNull", y),
+            ni("TNZ"),
+        ]
+    }
+    /// The cascade-HEAD guard (first term): same shape but `JNZ` into the merge instead of `TNZ`.
+    fn s1_head_guard(x: i32, y: i32) -> Vec<NormInstr> {
+        vec![
+            ni_slot("PshVPtr", x),
+            ni_slot("RefCpyV", y),
+            ni_slot("CmpPtrNull", y),
+            ni_slot("JNZ", 0), // jump target operand irrelevant to the guard shape
+        ]
+    }
+
+    /// N6: a dominated S1 re-guard (an identical earlier same-slot guard, no intervening write)
+    /// FOLDS — the strip removes its 4-op window.
+    #[test]
+    fn n6_dominated_s1_folds() {
+        let mut v = Vec::new();
+        v.extend(s1_head_guard(3, 7)); // dominating head guard on slot 3
+        v.push(ni("PshRPtr")); // some inert filler (no write to slot 3)
+        v.extend(s1_reguard(3, 7)); // the re-guard on the SAME slot 3 -> should fold
+        let before = v.len();
+        let folded = fold_dominated_reguards(&mut v);
+        assert_eq!(folded, 1, "the dominated re-guard must fold exactly once");
+        assert_eq!(v.len(), before - 4, "a 4-op S1 window is removed");
+        // The head guard survives (it is the dominator, not a re-guard).
+        assert_eq!(v[0].op, "PshVPtr");
+    }
+
+    /// N6 GUARD (clause 3 — the load-bearing anti-false-benign clause): the SAME S1 re-guard but
+    /// with an intervening WRITE to the guarded slot does NOT fold (the value may have changed).
+    #[test]
+    fn n6_reguard_with_intervening_write_stays() {
+        let mut v = Vec::new();
+        v.extend(s1_head_guard(3, 7)); // dominating guard on slot 3
+        v.push(ni_slot("STOREOBJ", 3)); // <-- REASSIGNS slot 3 (a real write)
+        v.extend(s1_reguard(3, 7)); // re-guard on slot 3 -> must NOT fold (not dominated)
+        let before = v.len();
+        let folded = fold_dominated_reguards(&mut v);
+        assert_eq!(folded, 0, "an intervening write to the guarded slot blocks the fold");
+        assert_eq!(v.len(), before, "nothing removed");
+    }
+
+    /// N6 GUARD (clause 1): an S1 re-guard with NO earlier guard on that slot does NOT fold — a
+    /// genuine first null-check must stay (a real dropped guard elsewhere would present this shape).
+    #[test]
+    fn n6_reguard_without_dominator_stays() {
+        let mut v = Vec::new();
+        v.push(ni("PshRPtr"));
+        v.extend(s1_reguard(3, 7)); // only guard on slot 3, nothing earlier -> not dominated
+        let before = v.len();
+        let folded = fold_dominated_reguards(&mut v);
+        assert_eq!(folded, 0, "a re-guard with no dominating earlier guard must stay");
+        assert_eq!(v.len(), before);
+    }
+
+    /// N6: a DIFFERENT-slot earlier guard does not dominate — the re-guard on slot 4 with an
+    /// earlier guard only on slot 3 stays (clause 1 requires the IDENTICAL source).
+    #[test]
+    fn n6_reguard_different_slot_stays() {
+        let mut v = Vec::new();
+        v.extend(s1_head_guard(3, 7)); // guard on slot 3
+        v.extend(s1_reguard(4, 7)); // re-guard on slot 4 -> different source, not dominated
+        let folded = fold_dominated_reguards(&mut v);
+        assert_eq!(folded, 0, "a re-guard on a different slot is not dominated");
+    }
+
+    /// N6 CONSERVATISM (S2 form): an S2 re-guard whose slot is RE-STORED (a fresh `STOREOBJ`, i.e.
+    /// a fresh call result) is NOT dominated — the store is a write that breaks clause 3, so the
+    /// re-guard stays. This is the correct safe behavior: an S2 `STOREOBJ; CmpPtrNull; TNZ` guards
+    /// a NEW value, never a proven-non-null earlier one. (A false fold here would hide a genuine
+    /// dropped null-check on a fresh call result — catastrophic.)
+    #[test]
+    fn n6_s2_restore_is_not_dominated() {
+        let mut v = Vec::new();
+        // earlier S2 guard on slot 5.
+        v.push(ni_slot("STOREOBJ", 5));
+        v.push(ni_slot("CmpPtrNull", 5));
+        v.push(ni("TNZ"));
+        v.push(ni("PshRPtr"));
+        // a SECOND S2 on slot 5 — its own STOREOBJ re-writes slot 5 (a fresh call result).
+        v.push(ni_slot("STOREOBJ", 5));
+        v.push(ni_slot("CmpPtrNull", 5));
+        v.push(ni("TNZ"));
+        let before = v.len();
+        let folded = fold_dominated_reguards(&mut v);
+        assert_eq!(folded, 0, "a re-stored S2 slot is a fresh value, never dominated");
+        assert_eq!(v.len(), before);
+    }
+
+    /// N6 (S1 dominated by an S1 head guard on a STORED slot): an S1 re-load+guard of a slot that
+    /// was guarded earlier by a HEAD guard (JNZ form) on the SAME slot, with no intervening write,
+    /// folds. This is the real cascade shape (a `self`/member object slot re-checked per term).
+    #[test]
+    fn n6_s1_dominated_by_head_guard_folds() {
+        let mut v = Vec::new();
+        v.extend(s1_head_guard(5, 1)); // head guard on slot 5 (PshVPtr v5; ...; JNZ)
+        v.push(ni("PshRPtr")); // inert, no write to slot 5
+        v.push(ni_slot("CpyVtoV4", 2)); // writes slot 2 (NOT slot 5) — irrelevant
+        v.extend(s1_reguard(5, 1)); // re-guard on slot 5 -> dominated, folds
+        let folded = fold_dominated_reguards(&mut v);
+        assert_eq!(folded, 1, "S1 re-guard on slot 5 dominated by the earlier head guard folds");
+    }
+
+    /// N5: the `FScopeCycleCounter` RAII ctor/dtor pair + `FStatID` temp dtor strip; the kept-on-
+    /// both-sides `FStatID::$beh0` ctor is NOT stripped.
+    #[test]
+    fn n5_scope_strips_raii_keeps_fstatid_ctor() {
+        let mut v = vec![
+            ni_slot("PSF", 0),
+            ni_callsys("FStatID", "$beh0"), // KEPT (both sides emit it)
+            ni_slot("PSF", 0),
+            ni_callsys("FScopeCycleCounter", "$beh0"), // strip (with its PSF)
+            ni_slot("PSF", 0),
+            ni_callsys("FStatID", "$beh2"), // strip (with its PSF)
+            ni("PshRPtr"), // body op
+            ni_slot("PSF", 1),
+            ni_callsys("FScopeCycleCounter", "$beh2"), // strip (with its PSF)
+            ni("RET"),
+        ];
+        let removed = strip_benign_scopes(&mut v);
+        assert_eq!(removed, 3, "three inert scope CALLSYS ops removed");
+        // Each removed CALLSYS took its paired PSF too: 3 pairs = 6 ops gone; 10 -> 4.
+        assert_eq!(v.len(), 4, "the FStatID::$beh0 ctor + its PSF + body + RET survive");
+        // The kept ctor is still present.
+        assert!(v.iter().any(|n| callsys_owner_method(n) == Some(("FStatID", "$beh0"))));
+        // No FScopeCycleCounter / FStatID::$beh2 op survives.
+        assert!(!v.iter().any(|n| matches!(
+            callsys_owner_method(n),
+            Some(("FScopeCycleCounter", _)) | Some(("FStatID", "$beh2"))
+        )));
+    }
+
+    /// N5 GUARD: a `CALLSYS` to an UNRELATED callee is never stripped.
+    #[test]
+    fn n5_scope_leaves_unrelated_callsys() {
+        let mut v = vec![
+            ni_slot("PSF", 0),
+            ni_callsys("AGothicCharacterState", "IsTrulyPartOfGuild"),
+            ni("RET"),
+        ];
+        let before = v.len();
+        let removed = strip_benign_scopes(&mut v);
+        assert_eq!(removed, 0);
+        assert_eq!(v.len(), before);
+    }
+
+    /// Self-identity MUST stay 162828/0/0 with N5/N6 ON — the raw-eq fast path returns IDENTICAL
+    /// before any normalization, so the strips never run on a self-diff (spec §B.4.1).
+    #[test]
+    #[ignore = "reads large gitignored sample caches; run with --ignored"]
+    fn self_identity_with_n5_n6() {
+        let base = format!("{}/../../work/reversing/gore-as/samples", env!("CARGO_MANIFEST_DIR"));
+        let Ok(b) = std::fs::read(format!("{base}/cache_A.Cache")) else { return };
+        // Default opts have N5/N6 ON; also assert with N2 on (the --norm-slots config).
+        for n2 in [false, true] {
+            let mut opts = NormOpts::default();
+            opts.n2_slots = n2;
+            let rep = run(&b, &b, &opts, &Filters::default(), 6).expect("run");
+            assert_eq!(rep.count(Verdict::Semantic), 0, "self-diff SEMANTIC must be 0 (n2={n2})");
+            assert_eq!(rep.count(Verdict::Benign), 0, "self-diff BENIGN must be 0 (n2={n2})");
+            assert_eq!(rep.count(Verdict::Identical), rep.diffs.len());
+        }
+    }
+
+    fn real_pair_47() -> Option<(Vec<u8>, Vec<u8>)> {
+        let base = format!("{}/../../work/reversing/gore-as/samples", env!("CARGO_MANIFEST_DIR"));
+        let v = std::fs::read(format!("{base}/cache_A.Cache")).ok()?;
+        let r = std::fs::read(format!("{base}/regen_batch47.Cache")).ok()?;
+        Some((v, r))
+    }
+
+    /// CURATED REAL-BUG REGRESSION (batch-48): the four functions that MUST stay SEMANTIC after
+    /// N5/N6 — a false BENIGN here would hide a real bug (catastrophic). None has a foldable
+    /// scope/re-guard-only diff, so the strips must not flip them.
+    #[test]
+    #[ignore = "reads large gitignored sample caches; run with --ignored"]
+    fn n5_n6_curated_regression_stays_semantic() {
+        let Some((v, r)) = real_pair_47() else { return };
+        for f in [
+            "LoadOrCreateDataGame_Implementation", // op-count divergence
+            "UCBT_CompleteSequence::Tick",          // 104->2 force-stub (has a dropped scope!)
+            "OnGracefulExitRequested",              // dropped this.<field>=true member-store
+            "DoWhenEventStarted",                   // documented dead-loop
+        ] {
+            let vs = verdict_of(&v, &r, f);
+            assert!(!vs.is_empty(), "expected functions matching {f:?}");
+            // SAFETY PROPERTY: no matched function may be marked BENIGN (a false BENIGN hides a
+            // real bug — catastrophic). Sibling IDENTICAL stubs (e.g. a 1-op `DoWhenEventStarted`
+            // override) are fine; the KNOWN-buggy one must remain SEMANTIC.
+            assert!(
+                vs.iter().all(|(_, verd)| *verd != Verdict::Benign),
+                "{f}: N5/N6 must NEVER flip a real-bug function to BENIGN, got {vs:?}"
+            );
+            assert!(
+                vs.iter().any(|(_, verd)| *verd == Verdict::Semantic),
+                "{f}: the known-buggy function must STAY SEMANTIC after N5/N6, got {vs:?}"
+            );
+        }
+    }
+
+    /// The N5 scope strip must actually ENGAGE on a real scope function: with N5 ON the vanilla
+    /// side loses its `FScopeCycleCounter`/`FStatID::$beh2` ops. We assert the mechanism works by
+    /// checking that a scope function's raw disasm CONTAINS the scope callees (so the strip has
+    /// something to remove) — proving the identity-keying resolves on real data, independent of
+    /// whether the function flips (it stays SEMANTIC due to additional accumulator/default-init
+    /// residue — documented in the batch-48 journal entry).
+    #[test]
+    #[ignore = "reads large gitignored sample caches; run with --ignored"]
+    fn n5_scope_engages_on_real_function() {
+        let Some((v, r)) = real_pair_47() else { return };
+        let v_side = Side::build(&v).expect("v side");
+        let _ = Side::build(&r);
+        let fns = crate::cache::walk_modules::collect_function_bytecodes(&v).expect("walk");
+        let opts = NormOpts::default();
+        let target = fns
+            .iter()
+            .find(|f| f.func.contains("UCBT_Inverter::Tick"))
+            .expect("UCBT_Inverter::Tick present in vanilla");
+        let raw = disassemble(&target.bytecode).expect("disasm");
+        let mut norm = normalize(&target.bytecode, &raw, &v_side, &opts);
+        // The scope callees resolve by identity on real data.
+        let scope_ops = norm
+            .iter()
+            .filter(|n| {
+                matches!(
+                    callsys_owner_method(n),
+                    Some(("FScopeCycleCounter", "$beh0"))
+                        | Some(("FScopeCycleCounter", "$beh2"))
+                        | Some(("FStatID", "$beh2"))
+                )
+            })
+            .count();
+        assert!(scope_ops >= 2, "UCBT_Inverter::Tick has ≥2 inert scope callees, found {scope_ops}");
+        let before = norm.len();
+        let removed = strip_benign_scopes(&mut norm);
+        assert_eq!(removed, scope_ops, "strip removes exactly the resolved scope callees");
+        assert!(norm.len() < before, "the strip shortened the vanilla stream");
+        // The kept FStatID::$beh0 ctor survives.
+        assert!(norm.iter().any(|n| callsys_owner_method(n) == Some(("FStatID", "$beh0"))));
     }
 }

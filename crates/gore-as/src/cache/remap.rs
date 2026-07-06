@@ -1090,6 +1090,44 @@ impl OperandId {
         }
     }
 
+    /// For a resolved FUNCTION identity (a `CALLSYS`/`CALL` callee), return the callee's
+    /// (owner-type-name, method-name) as borrowed slices of the composed `Ident.full`.
+    ///
+    /// A T3 FunctionReference identity is composed (see `SymTables::build`) as the SEP-joined
+    /// fields `module | namespace | <owner.full> | name | is_method | params | ret`, where
+    /// `<owner.full>` is itself a TYPE identity of EXACTLY 4 SEP-fields
+    /// (`owner_module | owner_ns | owner_name | Nsub:subs`). So on a raw `split(SEP)` the layout is
+    /// positionally fixed regardless of field CONTENT:
+    ///   [0]=module [1]=ns [2]=owner_module [3]=owner_ns [4]=owner_name [5]=owner_subs
+    ///   [6]=name(the method) [7]=is_method [8..]=params/ret.
+    /// This is the cache-INDEPENDENT keying the scope-strip needs (the raw CALLSYS func-PTR drifts
+    /// across builds, but the resolved owner+method identity does not). Returns `None` for a
+    /// non-`Named` operand or a malformed identity with too few fields (defensive).
+    pub fn func_owner_method(&self) -> Option<(&str, &str)> {
+        match self {
+            OperandId::Named { kind: RefKind::FuncPtr | RefKind::FuncId, ident } => {
+                let mut it = ident.full.split(SEP);
+                let owner = it.nth(4)?; // fields 0..=4, leaving cursor after field 4
+                let method = it.nth(1)?; // field 6 (skip field 5 = owner_subs)
+                Some((owner, method))
+            }
+            _ => None,
+        }
+    }
+
+    /// TEST-ONLY constructor: build a `Named` FUNC-ptr identity from an owner-type name + method
+    /// name, composing the exact SEP layout `SEP SEP SEP SEP owner SEP 0: SEP method SEP 1` so
+    /// [`func_owner_method`](Self::func_owner_method) round-trips. Used by the bytediff N5 unit
+    /// tests (which construct synthetic `NormInstr` CALLSYS callees).
+    #[doc(hidden)]
+    pub fn named_func_for_test(owner: &str, method: &str) -> OperandId {
+        let full = format!("{SEP}{SEP}{SEP}{SEP}{owner}{SEP}0:{SEP}{method}{SEP}1");
+        OperandId::Named {
+            kind: RefKind::FuncPtr,
+            ident: Ident { full: full.clone(), ns_stripped: full, namespaces: vec![] },
+        }
+    }
+
     /// True if this is a large runtime object type-id resolved as [`OperandId::Primitive`] (an
     /// `asCTypeInfo` id NOT in T2 that has the AngelScript object-mask bits set). Such an id is
     /// build-specific and drifts across recompiles; GAP-C (batch-38) treats a lone diff of one as
@@ -1313,5 +1351,51 @@ mod bytediff_n1_tests {
         assert!(!OperandId::Primitive(10).is_runtime_object_typeid());
         // Non-primitive variants are never runtime type-ids.
         assert!(!OperandId::RawId(1207972964).is_runtime_object_typeid());
+    }
+
+    /// `func_owner_method` extracts owner-type-name (field 4) + method-name (field 6) from a
+    /// composed T3 function identity, positionally fixed because the embedded owner is EXACTLY 4
+    /// SEP-fields. This is the cache-independent key the n5 scope-strip uses.
+    #[test]
+    fn func_owner_method_splits_composed_identity() {
+        let sep = SEP;
+        // Mirror the exact composition for a RAII scope-counter ctor `FScopeCycleCounter::$beh0`:
+        // module="" ns="" owner=(""|""|"FScopeCycleCounter"|"0:") name="$beh0" is_method="1" ...
+        let full = format!(
+            "{sep}{sep}{sep}{sep}FScopeCycleCounter{sep}0:{sep}$beh0{sep}1{sep}110100:5:{sep}{sep}FStatID{sep}0:,{sep}000000:82:"
+        );
+        let stripped = full.clone(); // ns fields already empty here
+        let id = OperandId::Named {
+            kind: RefKind::FuncPtr,
+            ident: Ident { full, ns_stripped: stripped, namespaces: vec![] },
+        };
+        assert_eq!(id.func_owner_method(), Some(("FScopeCycleCounter", "$beh0")));
+
+        // FStatID temp dtor `FStatID::$beh2`.
+        let full2 = format!("{sep}{sep}{sep}{sep}FStatID{sep}0:{sep}$beh2{sep}1{sep}{sep}000000:82:");
+        let id2 = OperandId::Named {
+            kind: RefKind::FuncPtr,
+            ident: Ident { full: full2.clone(), ns_stripped: full2, namespaces: vec![] },
+        };
+        assert_eq!(id2.func_owner_method(), Some(("FStatID", "$beh2")));
+
+        // A callee WITH non-empty module/namespace/owner-namespace still indexes correctly (the
+        // owner is still exactly 4 fields).
+        let full3 = format!(
+            "GAS.Mixins{sep}NS{sep}OMod{sep}ONs{sep}AGothicCharacterState{sep}0:{sep}IsTrulyPartOfGuild{sep}1{sep}p{sep}r"
+        );
+        let id3 = OperandId::Named {
+            kind: RefKind::FuncPtr,
+            ident: Ident { full: full3.clone(), ns_stripped: full3, namespaces: vec![] },
+        };
+        assert_eq!(id3.func_owner_method(), Some(("AGothicCharacterState", "IsTrulyPartOfGuild")));
+
+        // Non-function operands / malformed identities return None.
+        assert_eq!(OperandId::Primitive(3).func_owner_method(), None);
+        let short = OperandId::Named {
+            kind: RefKind::FuncPtr,
+            ident: Ident { full: format!("a{sep}b"), ns_stripped: String::new(), namespaces: vec![] },
+        };
+        assert_eq!(short.func_owner_method(), None);
     }
 }
