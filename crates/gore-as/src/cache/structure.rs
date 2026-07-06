@@ -2229,6 +2229,39 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                         Some(t) if looks_int(&raw) => field_assign_rhs(&raw, t),
                         _ => raw.clone(),
                     };
+                    // batch-45b (FIX-3): a member-write on a FOREIGN object (a call-result /
+                    // this-member via LoadRObjR/LoadThisR) where `ref_reg_ty` resolved to the
+                    // field's OWNER class (member_type's OldTypeId is the owner, not the value
+                    // type — see the LoadThisR comment) makes `field_assign_rhs` bail to
+                    // UNRESOLVED for a `local_N` RHS, so the whole store dropped and the
+                    // quest/document/routine flag was NEVER set (`UStoryG1R::Get().<flag> = ...;`
+                    // — a REAL behavioural bug: 18 RegionTrait + 2 Document + Crime writers).
+                    // Retry with `ref_reg_vty` (the precise VALUE type from field_type_by_class /
+                    // the this-class field map) — a real PRIMITIVE value type. Bail-safe: only
+                    // rescues an already-DROPPED store (rhs still UNRESOLVED) and only when vty is
+                    // a real primitive value type (never an object/owner name that would re-bail),
+                    // so no working store changes.
+                    if rhs == UNRESOLVED {
+                        if let Some(vty) = ref_reg_vty.as_deref() {
+                            let v = vty.trim_start_matches("const ");
+                            let is_primitive = matches!(
+                                v,
+                                "int" | "uint" | "int8" | "int16" | "int64" | "uint8" | "uint16"
+                                | "uint64" | "float" | "float32" | "double" | "bool"
+                            ) || is_enum_name(v);
+                            if is_primitive {
+                                let cand = match v {
+                                    "float32" => float_lit(&set_consts, slot, false).unwrap_or_else(|| raw.clone()),
+                                    "float" | "double" => float_lit(&set_consts, slot, true).unwrap_or_else(|| raw.clone()),
+                                    _ if looks_int(&raw) => field_assign_rhs(&raw, v),
+                                    _ => raw.clone(),
+                                };
+                                if cand != UNRESOLVED {
+                                    rhs = cand;
+                                }
+                            }
+                        }
+                    }
                     // batch-25a (G2, specs/batch23-cantconvert.md): a 1-byte write to a NATIVE
                     // struct's field whose value type the in-crate native-field table resolves
                     // to an ENUM is the enum ORDINAL store (`SetV1 w80, 0x2 ... WRTV1 w80`), not
