@@ -2771,21 +2771,19 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                             let src = stack[stack.len() - 2].clone();
                             if !src.s.is_empty() && src.s != UNRESOLVED && !src.s.starts_with('\u{2}') {
                                 stack.truncate(stack.len() - 2);
-                                // batch-43 (Fix 2): a `$beh0(__return, src)` inside a struct-RVO
-                                // SWITCH CASE region (JMP-terminated, `ctx.rvo_switch_region` set)
-                                // has NO RET here to consume `ret_val` — the JMP goes to the shared
-                                // bare RET, and `ret_val` is block-local, so the value would be
-                                // LOST. Emit `__return = src;` as a STATEMENT so the switch's per-
-                                // case `return <val>;` fold (region_exit_stmt + fold_rvo_return)
-                                // recovers it. EVERYWHERE ELSE (the normal single-region struct
-                                // return, and — deliberately out of batch-43 scope — branch/loop
-                                // early returns) keep the byte-identical `ret_val` path: its RET arm
-                                // folds `ret_val`/pending to `return src;` with no duplicate stmt.
-                                // Scoping to switch regions keeps the general branch/loop RVO-return
-                                // recovery to the deferred Fix 3 / loop-body-cfg lever.
-                                if ctx.rvo_switch_region.get()
-                                    && ctx.instrs[hi - 1].op.name != "RET"
-                                {
+                                // batch-43 (Fix 2) / batch-47b (FIX-2b): a `$beh0(__return, src)`
+                                // that DEFAULT-CONSTRUCTS-then-returns the RVO struct in a block
+                                // ending in JMP (not RET) — the JMP goes to the shared tail RET and
+                                // `ret_val` is block-local, so the value would be LOST (the tail RET
+                                // ships the RVODEF default). Emit `__return = src;` as a STATEMENT so
+                                // emit.rs declares `{ret} __return;` and folds the tail
+                                // `return RVODEF;` to `return __return;` (region_exit_stmt +
+                                // fold_rvo_return in the switch case). batch-43 scoped this to
+                                // `rvo_switch_region`; FIX-2b generalises it to ANY non-RET block
+                                // (the branch/loop early-return that was deferred). When the block
+                                // ends in RET, keep the byte-identical `ret_val` path (folds to
+                                // `return src;` with no duplicate store).
+                                if ctx.instrs[hi - 1].op.name != "RET" {
                                     flush!();
                                     out.push(format!("__return = {};", src.s));
                                 } else {
@@ -3644,9 +3642,9 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
             "OBJTYPE" => stack.push(Arg::obj("objtype".into())), // +2: RTTI objtype ptr
             "STR" => stack.push(Arg::obj("\"\"".into())),         // +3: string-constant push
             "PshListElmnt" => stack.push(Arg::int(name(w(ins, 0)))), // +2: list element
-            "COPY" => { stack.pop(); }                           // -2: pop the source ptr
-            // asBC_CopyScript (QW_ARG = object-type ptr; stack -2): a script value-type / struct
-            // copy = the source-level assignment `dest = src;`. Per asBC_COPY (as_context.cpp) the
+            // asBC_COPY (W_DW_ARG = byte-size + object-type ptr) and asBC_CopyScript (QW_ARG =
+            // object-type ptr) are the SAME operation — a script value-type / struct copy =
+            // the source-level assignment `dest = src;`. Per asBC_COPY (as_context.cpp) the
             // DESTINATION pointer is popped FIRST (it is the stack TOP), the SOURCE is the next
             // entry below it. The compiler pushes SRC first then DEST, so DEST ends up on top —
             // e.g. `PSF <localSrc>; PshVPtr this; ADDSi <member>; CopyScript` is `this.member =
@@ -3655,7 +3653,7 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
             // every struct copy/member-init/RVO-return BACKWARDS — `local = this.member` and
             // `local = retSlot`.) Both operands arrive as fully-rendered member/local exprs;
             // dropping it left the destination (member or RVO temp) unwritten -> garbage/null.
-            "CopyScript" => {
+            "CopyScript" | "COPY" => {
                 let dst = stack.pop();
                 let src = stack.pop();
                 if let (Some(dst), Some(src)) = (dst, src) {
@@ -3664,7 +3662,25 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                         // function's `return <src>;` — capture it as the return value (the slot
                         // itself has no source name) instead of emitting `__return = <src>;`.
                         if dst.s == "__return" {
-                            ret_val = Some(src.s);
+                            // batch-47b (FIX-2b, specs/final-tail-triage.md §3.2): the RVO copy-out
+                            // (`CopyScript` into `__return`) can sit in a mid-function BRANCH/LOOP
+                            // block that ends in JMP to the shared tail RET (e.g. an early
+                            // `if (…) return FRelativeCrimeMemoryFilter(local_16, Witness);`). There
+                            // `ret_val` is block-local and NEVER consumed — the tail RET emits the
+                            // RVODEF default, so `return __r;` (a default-constructed struct) ships
+                            // on that path, LOSING the built value. This generalises the batch-43
+                            // switch-region carry (which emitted `__return = src;` only inside a
+                            // `rvo_switch_region`) to ANY non-RET-terminated block: emit the store as
+                            // a STATEMENT so emit.rs declares `{ret} __return;` and folds the tail
+                            // `return RVODEF;` to `return __return;` — the value flows on this path.
+                            // When the block DOES end in RET, keep the byte-identical `ret_val` path
+                            // (its RET arm folds to `return <src>;` with no duplicate store).
+                            if ctx.instrs[hi - 1].op.name != "RET" {
+                                flush!();
+                                out.push(format!("__return = {};", src.s));
+                            } else {
+                                ret_val = Some(src.s);
+                            }
                         } else if !dst.s.is_empty() && dst.s != UNRESOLVED && dst.s != src.s {
                             flush!();
                             out.push(format!("{} = {};", dst.s, src.s));
@@ -3740,10 +3756,10 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
             | "DestructScript" | "SaveReturnValue" | "ResolveObjectPtr" | "GETOBJ"
             | "GETOBJREF" | "GETREF"
             | "JMP" => {}
-            // CopyScript performs a script-value copy (an assignment), not housekeeping — it's
-            // unmodeled, so fall through to the marker + stub rather than dropping the copy.
-            // (FinConstruct/DestructScript stay ignored: implicit AS construct/destruct that
-            // appear in nearly every function — emitting/stubbing them would be wrong.)
+            // (CopyScript/COPY are handled above as `dest = src;`. FinConstruct/DestructScript
+            // stay ignored: implicit AS construct/destruct that appear in nearly every function —
+            // emitting/stubbing them would be wrong.) Any genuinely unmodeled opcode falls through
+            // to the marker + stub rather than emitting recompilable source with it silently dropped.
             _ => {
                 flush!();
                 out.push(format!("// {} {}", n, operand_str(ins)));
