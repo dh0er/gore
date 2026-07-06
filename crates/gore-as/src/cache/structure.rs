@@ -1870,7 +1870,20 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                         .type_by_id(tid)
                         .and_then(|cls| ctx.refs.known_native_field_subtype(cls, &field))
                         .map(|s| s.to_string())
-                });
+                })
+                // batch-40 (specs/rgt-and-methods-triage.md PART 1): the FLOAT-FAMILY-gated
+                // precise field type for a NATIVE-struct member store — mirrors the LoadThisR/
+                // LoadRObjR Idiom-B path (line ~1915/1941). The stack-built Idiom-A member store
+                // (`PSF; ADDSi field; PopRPtr; WRTV4 <constSlot>`) never consulted native_field_type
+                // for float, so a `SetV4 w,0x437a0000` const feeding `FLightValues.SourceWidth`
+                // (float32) left `top.ty = None` -> `ref_reg_ty = None` -> the WRTV float_lit
+                // reinterpret didn't fire -> `SourceWidth = 1132068864` (int bits of 250.0f), which
+                // the AS compiler then iTOf-coerces to 1.13e9 (WideShot camera / SetupTransitions
+                // weights, ~140 fns). float_field_type only ever returns float/float32/double, so
+                // this is the PROVABLY-float gate the safety rule demands; every non-float field
+                // stays None and the int RHS is untouched. Absent binds (raw baseline) this
+                // resolves None too, so the stub gate is unaffected.
+                .or_else(|| float_field_type(ctx.refs, tid, &field));
                 // batch-25a (G2): when the normal chain can't type the field (NATIVE struct
                 // owner), consult the in-crate native-field table — carried in the SEPARATE
                 // nfty channel so only the WRTV1 guard sees it (never the call-arg gates).
