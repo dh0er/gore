@@ -16,9 +16,9 @@
   "skillLearn": "Naucz się",
   "skillActionLearn": "naucz się",
   "skillActionUnlearn": "zapomnij",
-  "skillTierUntrained": "Stopień I",
+  "skillTierUntrained": "Niewyszkolony",
   "skillTierBeginner": "Początkujący",
-  "skillTierTrained": "Stopień II",
+  "skillTierTrained": "Wyszkolony",
   "skillTierMaster": "Mistrz",
   "skillTierNovice": "Nowicjusz",
   "skillTierAmateur": "Amator (Krąg 0)",
@@ -388,5 +388,14 @@
   "attributeEmpty": "{name} jest puste — wpisz wartość lub przywróć oryginał przed zapisem.",
   "attributeInvalidNumber": "Nieprawidłowa liczba dla {name}: „{text}”",
   "loadingEditorData": "Wczytywanie danych edytora",
-  "localizedTextExtractedCount": "Wyodrębniono {idCount} identyfikatorów w {languageCount} językach"
+  "localizedTextExtractedCount": "Wyodrębniono {idCount} identyfikatorów w {languageCount} językach",
+  "skillSmithing1H": "Kowalstwo – broń jednoręczna",
+  "skillSmithing2H": "Kowalstwo – broń dwuręczna",
+  "skillCircleNovice": "Nowicjusz Mag",
+  "skillCircle1": "Pierwszy Krąg Magii",
+  "skillCircle2": "Drugi Krąg Magii",
+  "skillCircle3": "Trzeci Krąg Magii",
+  "skillCircle4": "Czwarty Krąg Magii",
+  "skillCircle5": "Piąty Krąg Magii",
+  "skillCircle6": "Szósty Krąg Magii"
 }

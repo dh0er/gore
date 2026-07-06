@@ -58,16 +58,16 @@ class AppLocalizationsJa extends AppLocalizations {
   String get skillActionUnlearn => '習得解除';
 
   @override
-  String get skillTierUntrained => '未熟練';
+  String get skillTierUntrained => '未訓練';
 
   @override
   String get skillTierBeginner => '初心者';
 
   @override
-  String get skillTierTrained => '熟練';
+  String get skillTierTrained => '訓練済み';
 
   @override
-  String get skillTierMaster => '達人';
+  String get skillTierMaster => 'マスター';
 
   @override
   String get skillTierNovice => '見習い';
@@ -1320,4 +1320,31 @@ class AppLocalizationsJa extends AppLocalizations {
   String localizedTextExtractedCount(int idCount, int languageCount) {
     return '$languageCount言語で$idCount個のIDを抽出しました';
   }
+
+  @override
+  String get skillSmithing1H => '片手鍛冶屋';
+
+  @override
+  String get skillSmithing2H => '両手鍛冶屋';
+
+  @override
+  String get skillCircleNovice => '見習い魔法使い';
+
+  @override
+  String get skillCircle1 => '第一魔法円';
+
+  @override
+  String get skillCircle2 => '第二魔法円';
+
+  @override
+  String get skillCircle3 => '第三魔法円';
+
+  @override
+  String get skillCircle4 => '第四魔法円';
+
+  @override
+  String get skillCircle5 => '第五魔法円';
+
+  @override
+  String get skillCircle6 => '第六魔法円';
 }

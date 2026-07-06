@@ -1354,4 +1354,31 @@ class AppLocalizationsFr extends AppLocalizations {
   String localizedTextExtractedCount(int idCount, int languageCount) {
     return '$idCount identifiants extraits dans $languageCount langues';
   }
+
+  @override
+  String get skillSmithing1H => 'Forge d’armes à une main';
+
+  @override
+  String get skillSmithing2H => 'Forge d’armes à deux mains';
+
+  @override
+  String get skillCircleNovice => 'Magicien novice';
+
+  @override
+  String get skillCircle1 => 'Premier Cercle de la magie';
+
+  @override
+  String get skillCircle2 => 'Deuxième Cercle de magie';
+
+  @override
+  String get skillCircle3 => 'Troisième Cercle de magie';
+
+  @override
+  String get skillCircle4 => 'Quatrième Cercle de la magie';
+
+  @override
+  String get skillCircle5 => 'Cinquième Cercle de la magie';
+
+  @override
+  String get skillCircle6 => 'Sixième Cercle de la magie';
 }

@@ -388,5 +388,14 @@
   "attributeEmpty": "{name} est vide — saisissez une valeur ou restaurez la valeur d'origine avant d'enregistrer.",
   "attributeInvalidNumber": "Nombre invalide pour {name} : « {text} »",
   "loadingEditorData": "Chargement des données de l'éditeur",
-  "localizedTextExtractedCount": "{idCount} identifiants extraits dans {languageCount} langues"
+  "localizedTextExtractedCount": "{idCount} identifiants extraits dans {languageCount} langues",
+  "skillSmithing1H": "Forge d’armes à une main",
+  "skillSmithing2H": "Forge d’armes à deux mains",
+  "skillCircleNovice": "Magicien novice",
+  "skillCircle1": "Premier Cercle de la magie",
+  "skillCircle2": "Deuxième Cercle de magie",
+  "skillCircle3": "Troisième Cercle de magie",
+  "skillCircle4": "Quatrième Cercle de la magie",
+  "skillCircle5": "Cinquième Cercle de la magie",
+  "skillCircle6": "Sixième Cercle de la magie"
 }

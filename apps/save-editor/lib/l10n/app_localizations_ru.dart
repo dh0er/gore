@@ -58,16 +58,16 @@ class AppLocalizationsRu extends AppLocalizations {
   String get skillActionUnlearn => 'забыть';
 
   @override
-  String get skillTierUntrained => 'I';
+  String get skillTierUntrained => 'Не обучен';
 
   @override
   String get skillTierBeginner => 'Новичок';
 
   @override
-  String get skillTierTrained => 'II';
+  String get skillTierTrained => 'Обучен';
 
   @override
-  String get skillTierMaster => 'III';
+  String get skillTierMaster => 'Мастер';
 
   @override
   String get skillTierNovice => 'Новичок';
@@ -1355,4 +1355,31 @@ class AppLocalizationsRu extends AppLocalizations {
   String localizedTextExtractedCount(int idCount, int languageCount) {
     return 'Извлечено $idCount идентификаторов на $languageCount языках';
   }
+
+  @override
+  String get skillSmithing1H => 'Кузнечное дело — одноручное';
+
+  @override
+  String get skillSmithing2H => 'Кузнечное дело — двуручное';
+
+  @override
+  String get skillCircleNovice => 'Маг-послушник';
+
+  @override
+  String get skillCircle1 => 'Первый круг магии';
+
+  @override
+  String get skillCircle2 => 'Второй круг магии';
+
+  @override
+  String get skillCircle3 => 'Третий круг магии';
+
+  @override
+  String get skillCircle4 => 'Четвёртый круг магии';
+
+  @override
+  String get skillCircle5 => 'Пятый круг магии';
+
+  @override
+  String get skillCircle6 => 'Шестой круг магии';
 }

@@ -16,7 +16,7 @@
   "skillLearn": "Aprender",
   "skillActionLearn": "aprender",
   "skillActionUnlearn": "olvidar",
-  "skillTierUntrained": "Sin entrenar",
+  "skillTierUntrained": "No entrenado",
   "skillTierBeginner": "Principiante",
   "skillTierTrained": "Entrenado",
   "skillTierMaster": "Maestro",
@@ -388,5 +388,14 @@
   "attributeEmpty": "{name} está vacío: introduce un valor o restaura el original antes de guardar.",
   "attributeInvalidNumber": "Número no válido para {name}: «{text}»",
   "loadingEditorData": "Cargando los datos del editor",
-  "localizedTextExtractedCount": "{idCount} ID extraídos en {languageCount} idiomas"
+  "localizedTextExtractedCount": "{idCount} ID extraídos en {languageCount} idiomas",
+  "skillSmithing1H": "Herrería de una mano",
+  "skillSmithing2H": "Herrería de dos manos",
+  "skillCircleNovice": "Mago Novato",
+  "skillCircle1": "Primer Círculo de Magia",
+  "skillCircle2": "Segundo Círculo de Magia",
+  "skillCircle3": "Tercer Círculo de Magia",
+  "skillCircle4": "Cuarto Círculo de Magia",
+  "skillCircle5": "Quinto Círculo de Magia",
+  "skillCircle6": "Sexto Círculo de Magia"
 }

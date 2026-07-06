@@ -59,7 +59,7 @@ class AppLocalizationsPt extends AppLocalizations {
   String get skillActionUnlearn => 'desaprender';
 
   @override
-  String get skillTierUntrained => 'Sem treino';
+  String get skillTierUntrained => 'Sem Treinamento';
 
   @override
   String get skillTierBeginner => 'Principiante';
@@ -1347,6 +1347,33 @@ class AppLocalizationsPt extends AppLocalizations {
   String localizedTextExtractedCount(int idCount, int languageCount) {
     return '$idCount IDs extraídos em $languageCount idiomas';
   }
+
+  @override
+  String get skillSmithing1H => 'Ferraria de Armas de Uma Mão';
+
+  @override
+  String get skillSmithing2H => 'Ferraria de Armas de Duas Mãos';
+
+  @override
+  String get skillCircleNovice => 'Mago Iniciado';
+
+  @override
+  String get skillCircle1 => 'Primeiro Círculo de Magia';
+
+  @override
+  String get skillCircle2 => 'Segundo Círculo de Magia';
+
+  @override
+  String get skillCircle3 => 'Terceiro Círculo de Magia';
+
+  @override
+  String get skillCircle4 => 'Quarto Círculo de Magia';
+
+  @override
+  String get skillCircle5 => 'Quinto Círculo de Magia';
+
+  @override
+  String get skillCircle6 => 'Sexto Círculo de Magia';
 }
 
 /// The translations for Portuguese, as used in Brazil (`pt_BR`).
@@ -1404,7 +1431,7 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
   String get skillActionUnlearn => 'desaprender';
 
   @override
-  String get skillTierUntrained => 'Não treinado';
+  String get skillTierUntrained => 'Sem Treinamento';
 
   @override
   String get skillTierBeginner => 'Iniciante';
@@ -2668,4 +2695,31 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
   String localizedTextExtractedCount(int idCount, int languageCount) {
     return '$idCount IDs extraídos em $languageCount idiomas';
   }
+
+  @override
+  String get skillSmithing1H => 'Ferraria de Armas de Uma Mão';
+
+  @override
+  String get skillSmithing2H => 'Ferraria de Armas de Duas Mãos';
+
+  @override
+  String get skillCircleNovice => 'Mago Iniciado';
+
+  @override
+  String get skillCircle1 => 'Primeiro Círculo de Magia';
+
+  @override
+  String get skillCircle2 => 'Segundo Círculo de Magia';
+
+  @override
+  String get skillCircle3 => 'Terceiro Círculo de Magia';
+
+  @override
+  String get skillCircle4 => 'Quarto Círculo de Magia';
+
+  @override
+  String get skillCircle5 => 'Quinto Círculo de Magia';
+
+  @override
+  String get skillCircle6 => 'Sexto Círculo de Magia';
 }

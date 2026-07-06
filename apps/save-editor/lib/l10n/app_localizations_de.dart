@@ -59,7 +59,7 @@ class AppLocalizationsDe extends AppLocalizations {
   String get skillActionUnlearn => 'verlernen';
 
   @override
-  String get skillTierUntrained => 'Ungelernt';
+  String get skillTierUntrained => 'Untrainiert';
 
   @override
   String get skillTierBeginner => 'Anfänger';
@@ -1349,4 +1349,31 @@ class AppLocalizationsDe extends AppLocalizations {
   String localizedTextExtractedCount(int idCount, int languageCount) {
     return '$idCount IDs in $languageCount Sprachen extrahiert';
   }
+
+  @override
+  String get skillSmithing1H => 'Einhand-Schmieden';
+
+  @override
+  String get skillSmithing2H => 'Zweihand-Schmieden';
+
+  @override
+  String get skillCircleNovice => 'Magier-Novize';
+
+  @override
+  String get skillCircle1 => 'Erster Kreis der Magie';
+
+  @override
+  String get skillCircle2 => 'Zweiter Kreis der Magie';
+
+  @override
+  String get skillCircle3 => 'Dritter Kreis der Magie';
+
+  @override
+  String get skillCircle4 => 'Vierter Kreis der Magie';
+
+  @override
+  String get skillCircle5 => 'Fünfter Kreis der Magie';
+
+  @override
+  String get skillCircle6 => 'Sechster Kreis der Magie';
 }

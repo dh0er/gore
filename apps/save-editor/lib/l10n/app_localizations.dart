@@ -2449,6 +2449,60 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Extracted {idCount} ids across {languageCount} languages'**
   String localizedTextExtractedCount(int idCount, int languageCount);
+
+  /// No description provided for @skillSmithing1H.
+  ///
+  /// In en, this message translates to:
+  /// **'One-Hand Smithing'**
+  String get skillSmithing1H;
+
+  /// No description provided for @skillSmithing2H.
+  ///
+  /// In en, this message translates to:
+  /// **'Two-Hand Smithing'**
+  String get skillSmithing2H;
+
+  /// No description provided for @skillCircleNovice.
+  ///
+  /// In en, this message translates to:
+  /// **'Novice Magician'**
+  String get skillCircleNovice;
+
+  /// No description provided for @skillCircle1.
+  ///
+  /// In en, this message translates to:
+  /// **'First Circle of Magic'**
+  String get skillCircle1;
+
+  /// No description provided for @skillCircle2.
+  ///
+  /// In en, this message translates to:
+  /// **'Second Circle of Magic'**
+  String get skillCircle2;
+
+  /// No description provided for @skillCircle3.
+  ///
+  /// In en, this message translates to:
+  /// **'Third Circle of Magic'**
+  String get skillCircle3;
+
+  /// No description provided for @skillCircle4.
+  ///
+  /// In en, this message translates to:
+  /// **'Fourth Circle of Magic'**
+  String get skillCircle4;
+
+  /// No description provided for @skillCircle5.
+  ///
+  /// In en, this message translates to:
+  /// **'Fifth Circle of Magic'**
+  String get skillCircle5;
+
+  /// No description provided for @skillCircle6.
+  ///
+  /// In en, this message translates to:
+  /// **'Sixth Circle of Magic'**
+  String get skillCircle6;
 }
 
 class _AppLocalizationsDelegate

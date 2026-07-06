@@ -417,28 +417,49 @@ String _skillName(AppLocalizations l10n, Skill skill) {
 ///   keyed by VALUE because a learned on/off skill lists its options in the
 ///   reverse order (learned value first, Untrained second).
 String _optionLabel(AppLocalizations l10n, Skill skill, int index) {
-  final options = skill.options;
-  final value = options[index].value;
+  final value = skill.options[index].value;
 
+  // Blacksmithing's two learned tiers have bespoke in-game names
+  // (skill_crafting_blacksmith_trained/master); Untrained uses the generic label.
+  if (skill.base == 'Crafting_Blacksmith') {
+    if (value == 'Trained') return l10n.skillSmithing1H;
+    if (value == 'Master') return l10n.skillSmithing2H;
+  }
+
+  // Magic Circle uses the game's circle names (skill_mage_circle_*).
   if (skill.kind == 'circle') {
-    if (value == 'Untrained') return l10n.skillNotLearned;
-    if (value == 'Amateur') return l10n.skillTierCircle(0);
-    final n = int.tryParse(value);
-    return n != null ? l10n.skillTierCircle(n) : value;
+    switch (value) {
+      case 'Amateur':
+        return l10n.skillCircleNovice;
+      case '1':
+        return l10n.skillCircle1;
+      case '2':
+        return l10n.skillCircle2;
+      case '3':
+        return l10n.skillCircle3;
+      case '4':
+        return l10n.skillCircle4;
+      case '5':
+        return l10n.skillCircle5;
+      case '6':
+        return l10n.skillCircle6;
+    }
   }
 
-  // A ladder with two tiers above Untrained is the only 3-option shape; label by
-  // position so the tier order (Trained/Skilled → Master) maps consistently.
-  if (options.length == 3) {
-    return switch (index) {
-      0 => l10n.skillTierBeginner,
-      1 => l10n.skillTierTrained,
-      _ => l10n.skillTierMaster,
-    };
+  // Generic mastery labels (the game's skillmastery_* vocabulary). The internal
+  // `Skilled` tier (thievery/mining/orcish) and the binary `Learned` state both
+  // display as Trained in-game — the game has no separate "Skilled" label.
+  switch (value) {
+    case 'Master':
+      return l10n.skillTierMaster;
+    case 'Trained':
+    case 'Skilled':
+    case 'Learned':
+      return l10n.skillTierTrained;
+    case 'Untrained':
+    default:
+      return l10n.skillTierUntrained;
   }
-
-  // 2-state on/off (and 2-tier ladders like Orcish): a plain learned/not split.
-  return value == 'Untrained' ? l10n.skillNotLearned : l10n.skillTierLearned;
 }
 
 /// Localized category header. Falls back to the raw category for anything not

@@ -58,13 +58,13 @@ class AppLocalizationsPl extends AppLocalizations {
   String get skillActionUnlearn => 'zapomnij';
 
   @override
-  String get skillTierUntrained => 'Stopień I';
+  String get skillTierUntrained => 'Niewyszkolony';
 
   @override
   String get skillTierBeginner => 'Początkujący';
 
   @override
-  String get skillTierTrained => 'Stopień II';
+  String get skillTierTrained => 'Wyszkolony';
 
   @override
   String get skillTierMaster => 'Mistrz';
@@ -1359,4 +1359,31 @@ class AppLocalizationsPl extends AppLocalizations {
   String localizedTextExtractedCount(int idCount, int languageCount) {
     return 'Wyodrębniono $idCount identyfikatorów w $languageCount językach';
   }
+
+  @override
+  String get skillSmithing1H => 'Kowalstwo – broń jednoręczna';
+
+  @override
+  String get skillSmithing2H => 'Kowalstwo – broń dwuręczna';
+
+  @override
+  String get skillCircleNovice => 'Nowicjusz Mag';
+
+  @override
+  String get skillCircle1 => 'Pierwszy Krąg Magii';
+
+  @override
+  String get skillCircle2 => 'Drugi Krąg Magii';
+
+  @override
+  String get skillCircle3 => 'Trzeci Krąg Magii';
+
+  @override
+  String get skillCircle4 => 'Czwarty Krąg Magii';
+
+  @override
+  String get skillCircle5 => 'Piąty Krąg Magii';
+
+  @override
+  String get skillCircle6 => 'Szósty Krąg Magii';
 }

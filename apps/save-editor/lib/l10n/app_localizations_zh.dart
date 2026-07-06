@@ -57,16 +57,16 @@ class AppLocalizationsZh extends AppLocalizations {
   String get skillActionUnlearn => '遗忘';
 
   @override
-  String get skillTierUntrained => '一级';
+  String get skillTierUntrained => '未受过训练';
 
   @override
   String get skillTierBeginner => '初學者';
 
   @override
-  String get skillTierTrained => '二级';
+  String get skillTierTrained => '训练有素';
 
   @override
-  String get skillTierMaster => '三级';
+  String get skillTierMaster => '大师级';
 
   @override
   String get skillTierNovice => '熟练';
@@ -1304,6 +1304,33 @@ class AppLocalizationsZh extends AppLocalizations {
   String localizedTextExtractedCount(int idCount, int languageCount) {
     return '已提取 $idCount 个 ID，涵盖 $languageCount 种语言';
   }
+
+  @override
+  String get skillSmithing1H => '单手武器锻造';
+
+  @override
+  String get skillSmithing2H => '双手武器锻造';
+
+  @override
+  String get skillCircleNovice => '新手法师';
+
+  @override
+  String get skillCircle1 => '第一魔法环阶';
+
+  @override
+  String get skillCircle2 => '第二魔法环阶';
+
+  @override
+  String get skillCircle3 => '第三魔法环阶';
+
+  @override
+  String get skillCircle4 => '第四魔法环阶';
+
+  @override
+  String get skillCircle5 => '第五魔法环阶';
+
+  @override
+  String get skillCircle6 => '第六魔法环阶';
 }
 
 /// The translations for Chinese, using the Han script (`zh_Hans`).
@@ -1359,16 +1386,16 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   String get skillActionUnlearn => '遗忘';
 
   @override
-  String get skillTierUntrained => '未受训';
+  String get skillTierUntrained => '未受过训练';
 
   @override
   String get skillTierBeginner => '初学者';
 
   @override
-  String get skillTierTrained => '已受训';
+  String get skillTierTrained => '训练有素';
 
   @override
-  String get skillTierMaster => '大师';
+  String get skillTierMaster => '大师级';
 
   @override
   String get skillTierNovice => '熟练';
@@ -2582,4 +2609,31 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   String localizedTextExtractedCount(int idCount, int languageCount) {
     return '已提取 $idCount 个 ID，涵盖 $languageCount 种语言';
   }
+
+  @override
+  String get skillSmithing1H => '单手武器锻造';
+
+  @override
+  String get skillSmithing2H => '双手武器锻造';
+
+  @override
+  String get skillCircleNovice => '新手法师';
+
+  @override
+  String get skillCircle1 => '第一魔法环阶';
+
+  @override
+  String get skillCircle2 => '第二魔法环阶';
+
+  @override
+  String get skillCircle3 => '第三魔法环阶';
+
+  @override
+  String get skillCircle4 => '第四魔法环阶';
+
+  @override
+  String get skillCircle5 => '第五魔法环阶';
+
+  @override
+  String get skillCircle6 => '第六魔法环阶';
 }

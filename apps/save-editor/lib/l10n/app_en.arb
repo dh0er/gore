@@ -754,5 +754,14 @@
         "type": "int"
       }
     }
-  }
+  },
+  "skillSmithing1H": "One-Hand Smithing",
+  "skillSmithing2H": "Two-Hand Smithing",
+  "skillCircleNovice": "Novice Magician",
+  "skillCircle1": "First Circle of Magic",
+  "skillCircle2": "Second Circle of Magic",
+  "skillCircle3": "Third Circle of Magic",
+  "skillCircle4": "Fourth Circle of Magic",
+  "skillCircle5": "Fifth Circle of Magic",
+  "skillCircle6": "Sixth Circle of Magic"
 }
