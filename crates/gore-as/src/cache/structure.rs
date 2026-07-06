@@ -3085,14 +3085,18 @@ impl Structurer<'_> {
                 let break_off = self.g.blocks[latch].succs.iter().copied().find(|&s| s > latch_off);
                 if let Some(break_off) = break_off {
                     let ls = LoopScope { continue_off: latch_off, break_off };
+                    // `loop_scope` must be set BEFORE Gate 2 — its nested-switch dry run
+                    // (`switch_span` -> `try_emit_switch`) consults it to accept loop
+                    // continue/break as switch exits, so the dry run and the real emit agree.
+                    let saved = self.loop_scope;
+                    self.loop_scope = Some(ls);
                     if self.body_has_inner_branch(i, latch, ls)
                         && self.loop_body_recoverable(i, latch, ls)
                     {
-                        let saved = self.loop_scope;
-                        self.loop_scope = Some(ls);
                         self.emit_range(i, latch, depth + 1, out);
                         self.loop_scope = saved;
                     } else {
+                        self.loop_scope = saved;
                         self.emit_linear(i, latch + 1, depth + 1, out, true);
                     }
                 } else {
@@ -3420,7 +3424,13 @@ impl Structurer<'_> {
                         if !self.loop_edge_ok(ib, lo, hi, ls) && !ib_in_body {
                             return false;
                         }
-                        if !self.loop_body_recoverable(bi, inner, inner_ls) {
+                        // the inner body's own dry run must see the inner loop_scope (so a switch
+                        // nested in the inner loop resolves against the inner continue/break).
+                        let saved = self.loop_scope;
+                        self.loop_scope = Some(inner_ls);
+                        let ok = self.loop_body_recoverable(bi, inner, inner_ls);
+                        self.loop_scope = saved;
+                        if !ok {
                             return false;
                         }
                         bi = inner + 1;
@@ -3598,6 +3608,12 @@ impl Structurer<'_> {
         let ctx = self.ctx;
         let g = self.g;
         let blocks = &g.blocks;
+        // batch-36 (Stage B): when this switch is emitted inside a recursed loop body, a case/DEF
+        // region that exits by falling into the loop-continue point (the increment/latch = `stop`)
+        // or by jumping to the loop break offset is a legal switch exit (`break;` out of the
+        // switch → the loop continues), not the "escapes the region" bail. `loop_scope` is set by
+        // the loop_latch arm before both the Gate-2 dry run and the real emit, so the two agree.
+        let lscope = self.loop_scope;
         if stop > blocks.len() || i + 3 > stop || i + 2 >= blocks.len() {
             return None;
         }
@@ -3708,13 +3724,20 @@ impl Structurer<'_> {
         let mut join_cands: Vec<usize> = Vec::new();
         let mut ret_rows: Vec<usize> = Vec::new();
         let mut fall_pend: Vec<usize> = Vec::new();
+        // batch-36 (Stage B): an edge to the loop break/continue offset is a valid switch exit.
+        let is_loop_exit = |x: usize| -> bool {
+            lscope.is_some_and(|ls| x == ls.continue_off || x == ls.break_off)
+        };
         for w in bounds.windows(2) {
             let last_bi = self.idx_of.get(&w[1]).copied()? - 1;
             let lb = &blocks[last_bi];
             match ctx.instrs[lb.instr_hi - 1].op.name {
                 "JMP" => {
                     let x = lb.succs.first().copied()?;
-                    if self.is_bare_ret_off(x) {
+                    if is_loop_exit(x) {
+                        // `break;`/`continue;` out of the switch to the enclosing loop
+                        join_cands.push(x);
+                    } else if self.is_bare_ret_off(x) {
                         if !register_based {
                             return None;
                         }
@@ -3727,14 +3750,31 @@ impl Structurer<'_> {
                 }
                 "RET" => {}
                 name if is_cond_op(name) => return None,
-                _ => fall_pend.push(w[1]), // falls into next boundary: legal only into JOIN
+                // falls into the next boundary: legal into the JOIN, or (in a loop) into the
+                // loop-continue point which IS `stop` == the next boundary past the switch.
+                _ => fall_pend.push(w[1]),
             }
         }
         join_cands.sort_unstable();
         join_cands.dedup();
         ret_rows.sort_unstable();
         ret_rows.dedup();
+        // batch-36 (Stage B): inside a loop, the natural JOIN of a switch whose non-returning
+        // regions fall through / break to the loop-continue is that continue offset (== `stop`,
+        // the loop increment/latch). Prefer it so the returning cases stay `return`s and the DEF
+        // falls into the increment as a `break;`. Only when NO explicit forward join exists.
+        let loop_join = lscope.and_then(|ls| {
+            let cont_idx = self.idx_of.get(&ls.continue_off).copied();
+            if cont_idx == Some(stop) && join_cands.iter().all(|&j| is_loop_exit(j)) {
+                Some(ls.continue_off)
+            } else {
+                None
+            }
+        });
         let join_off = match (join_cands.as_slice(), ret_rows.as_slice()) {
+            _ if loop_join.is_some() && join_cands.iter().all(|&j| is_loop_exit(j)) => {
+                loop_join.unwrap()
+            }
             ([j], _) => *j,
             // every region returns: the shared bare RET row is the join/epilogue
             ([], [r]) => *r,
