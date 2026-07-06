@@ -2986,10 +2986,40 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                     }
                 }
             }
-            // REFCPY (NO_ARG): a pure stack handle-copy with no destination slot operand — just
-            // balance the operand stack (the dominant phantom-arg cause); the value is re-read
-            // where it is actually used.
-            "REFCPY" => { stack.pop(); }
+            // REFCPY (NO_ARG): object-handle STORE — `dst.member = src` (the object analogue of
+            // WRTV*; there is no WRTV for handles). Stack top = the member lvalue built by
+            // `PshVPtr obj; ADDSi member` (optionally RDSPtr); second = the source handle. Recover
+            // it as a statement; BAIL (drop, exactly as before — pop both, emit nothing) on any
+            // un-provable operand. A WRONG store silently corrupts an object graph (worse than a
+            // dropped store), so the source-provenance gate is strict (batch-41b, Fix 1, S1/S3).
+            "REFCPY" => {
+                let dst = stack.pop(); // member lvalue (top)
+                let src = stack.pop(); // source handle (second)
+                if let (Some(dst), Some(src)) = (&dst, &src) {
+                    // GATE:
+                    //  dst is a MEMBER lvalue: contains '.', not empty/UNRESOLVED/sentinel, and NOT
+                    //  a bare slot (a bare local_N dst would be a RefCpyV, not a REFCPY member store).
+                    //  src is a PROVEN handle: `local_N` (a STOREOBJ/allocated slot), a `Cast<…>`, or
+                    //  `nullptr` (the S3 clear via PshNull). NEVER a member/param/temp whose const-ness
+                    //  or aliasing we can't prove (mirrors the RefCpyV arm's original caution — copying
+                    //  a const param/member handle into a non-const dest fails "Can't implicitly
+                    //  convert"), so those bail to the drop.
+                    let dst_ok = dst.s.contains('.')
+                        && !dst.s.is_empty()
+                        && dst.s != UNRESOLVED
+                        && !dst.s.contains('\u{2}')
+                        && !dst.s.starts_with("local_");
+                    let src_ok = !src.s.is_empty()
+                        && src.s != UNRESOLVED
+                        && !src.s.contains('\u{2}')
+                        && (src.s.starts_with("local_") || src.s.starts_with("Cast<") || src.s == "nullptr");
+                    if dst_ok && src_ok {
+                        flush!();
+                        out.push(format!("{} = {};", dst.s, src.s));
+                    }
+                    // else: both popped, nothing emitted = the status-quo drop.
+                }
+            }
             // The TYPEID push is the implicit type operand of the following opCast/cast syscall
             // (NOT counted in the cache param list) — it is not a real stack arg, so don't push
             // it. Capture its resolved typename as the target T of the upcoming `opCast` so the
