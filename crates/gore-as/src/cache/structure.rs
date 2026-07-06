@@ -3465,6 +3465,22 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                     // consumed only by the compare. Safe: a call result is non-const, materialising
                     // it into a slot for the compare cannot reorder a side effect past its sole use.
                     let getter_into_cmp = feeds_following_cmp && src_is_getter;
+                    // batch-49c (opIndex-read-into-null-compare, specs/final-tail-triage.md §3.11
+                    // Contains): a container/map element read whose result is null-guarded by the
+                    // VERY NEXT op — `… CALLSYS opIndex; PshRPtr; RDSPtr; RefCpyV wN; CmpPtrNull wN`
+                    // (`local_N = m_SpawnedAreas[type]; if (local_N == nullptr)`). Today the
+                    // getter call-expr source drops (the `ok` whitelist rejects `(`-bearing exprs
+                    // outside the out-slot), leaving `local_N` UNDECLARED and the null-guard reading
+                    // an uninitialised slot — a real bug (Contains returns garbage-nullness).
+                    // FIX-4's `param_guard_fold` only folds a PARAM into CmpPtrNull; FIX-7's
+                    // `getter_into_cmp` only fires for the binary `CmpPtr`. Add the getter→CmpPtrNull
+                    // case: materialise the copy so the compare reads the real element. Safe — the
+                    // getter result is non-const and its SOLE consumer is the immediate CmpPtrNull,
+                    // so no side effect is reordered past its use (same argument as getter_into_cmp).
+                    let getter_into_null_cmp = src_is_getter
+                        && insns
+                            .get(k + 1)
+                            .is_some_and(|nx| nx.op.name == "CmpPtrNull" && w(nx, 0) == dst_slot0);
                     // batch-46c (FIX-7): recover the PARAM operand of a getter-vs-param compare
                     // (`if (this.Nodes.Last() == FailedNode)` — the OnChildNode override idiom, and
                     // the `opIndex(0) == OtherActor` overlap checks). Gated HARD on the paired
@@ -3565,6 +3581,7 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                             || member_src
                             || call_src_to_out
                             || getter_into_cmp
+                            || getter_into_null_cmp
                             || param_into_cmp
                             || param_into_later_use);
                     if ok {
