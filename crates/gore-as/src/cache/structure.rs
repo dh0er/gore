@@ -3568,12 +3568,29 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                         && !dst.s.is_empty()
                         && dst.s != UNRESOLVED
                         && !dst.s.contains('\u{2}');
+                    // batch-47c (FIX-1b, specs/final-tail-triage.md §3.7): accept a MEMBER-ACCESS
+                    // source (`this.m_XardasChar`, built by `PshVPtr this; ADDSi member; RDSPtr`)
+                    // into a member/struct-temp dest — `local_44.Instigator = this.m_XardasChar;`
+                    // (DoTeleport) / `this.<dst> = this.<src>;`. This mirrors the widen batch-41a
+                    // applied to the RefCpyV *read* arm (`member_src`), now for the REFCPY *store*
+                    // arm. A member handle field is a legal RHS of a handle assignment. Gates:
+                    // contains '.' (a real member access), no '(' (never a call/ctor expr — those
+                    // have their own path and could reorder side effects), and — CRITICALLY —
+                    // NON-const: `nf_const` set means the source is a `const T` native field, and
+                    // storing it into a non-const member is the b41d "Can't implicitly convert from
+                    // 'const T' to 'T'" cascade, so a const member source stays dropped exactly as
+                    // before. A bare `this` has no '.' and is already excluded (its back-link store
+                    // stays bailed). BAIL-safe: any un-provable source keeps the current drop.
+                    let member_src = src.s.contains('.')
+                        && !src.s.contains('(')
+                        && src.nf_const.is_none();
                     let src_ok = !src.s.is_empty()
                         && src.s != UNRESOLVED
                         && !src.s.contains('\u{2}')
                         && (src.s.starts_with("local_")
                             || src.s.starts_with("Cast<")
                             || src.s == "nullptr"
+                            || member_src
                             || ctx.param_src_ok(&src.s));
                     // batch-41d (CLASS 1b): the source slot holds a CONST object handle (a
                     // const-returning call result / const member read). Storing it into a
