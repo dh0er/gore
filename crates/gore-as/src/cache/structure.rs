@@ -161,11 +161,11 @@ pub fn body_statements_ctor(f: &FuncCode, refs: &RefResolver, depth: usize, supe
     // self-correcting on observed offsets. Built once per function; consulted by slot_name/slot_type.
     let (param_off_map, rvo_off) = super::decompile::build_param_off_map_rvo(f, &instrs, refs);
     let keep_ints = hints.map(|h| &h.keep_ints);
-    let ctx = Ctx { f, refs, instrs: &instrs, super_ctor, ret_ty, fields, param_types, class_name, local_types, float_slots, param_off_map, rvo_off, keep_ints };
+    let ctx = Ctx { f, refs, instrs: &instrs, super_ctor, ret_ty, fields, param_types, class_name, local_types, float_slots, param_off_map, rvo_off, keep_ints, rvo_switch_region: std::cell::Cell::new(false) };
     let idx_of: HashMap<usize, usize> =
         g.blocks.iter().enumerate().map(|(i, b)| (b.start_dw, i)).collect();
     let mut body = String::new();
-    let mut st = Structurer { ctx: &ctx, g: &g, idx_of: &idx_of, exit_join: None, exit_join_is_ret: false, exit_ret_rows_ok: false, exit_scan_floor: 0, carry: None, loop_scope: None };
+    let mut st = Structurer { ctx: &ctx, g: &g, idx_of: &idx_of, exit_join: None, exit_join_is_ret: false, exit_ret_rows_ok: false, exit_rvo_return: false, exit_scan_floor: 0, carry: None, loop_scope: None };
     st.emit_range(0, g.blocks.len(), depth, &mut body);
     body
 }
@@ -186,6 +186,46 @@ fn strip_return_assign(v: &str) -> &str {
         i += 1;
     }
     v
+}
+
+/// batch-43 (Fix 2, switch-rvo-return.md §4.2): fold a struct-RVO case region's trailing
+/// out-slot store + synthetic return into a single per-case value return. The region text was
+/// emitted with `exit_rvo_return` set, so its last two meaningful lines are
+/// `<ws>__return = <val>;` then `<ws>return __return;`. Replace both with `<ws>return <val>;`.
+///
+/// Returns `Some(folded_text)` when the fold applied — which DOUBLES as gate G-RVO's per-region
+/// out-slot-write proof: a `return __return;` with NO immediately-preceding `__return = <val>;`
+/// store (and no resolved `<val>`) means the region does NOT provably write the out-slot on this
+/// path, so the caller MUST bail the whole switch (never emit a case that silently returns a
+/// default struct). `None` = proof failed / no fold site → bail.
+fn fold_rvo_return(region: &str) -> Option<String> {
+    let lines: Vec<&str> = region.lines().collect();
+    // locate the synthetic `return __return;` (there must be exactly the tail exit)
+    let ret_idx = lines.iter().rposition(|l| l.trim_end() == "return __return;" || l.trim() == "return __return;")?;
+    if ret_idx == 0 {
+        return None; // no preceding store line at all
+    }
+    let store = lines[ret_idx - 1];
+    let ws: String = store.chars().take_while(|c| c.is_whitespace()).collect();
+    let body = store.trim();
+    // the preceding line MUST be `__return = <val>;` with a resolved, non-empty, non-sentinel val
+    let val = body.strip_prefix("__return = ")?.strip_suffix(';')?;
+    if val.is_empty()
+        || val.contains('\u{1}')
+        || val.contains('\u{2}')
+        || val == UNRESOLVED
+        || val.contains("__return")
+        || val.contains(RVODEF)
+    {
+        return None;
+    }
+    let mut out: Vec<String> = lines[..ret_idx - 1].iter().map(|s| s.to_string()).collect();
+    out.push(format!("{ws}return {val};"));
+    for l in &lines[ret_idx + 1..] {
+        out.push(l.to_string());
+    }
+    // preserve a trailing newline (writeln! always leaves one)
+    Some(format!("{}\n", out.join("\n")))
 }
 
 /// batch-27b: if `v` is a top-level assignment expression `lhs = rhs` with a PLAIN slot /
@@ -300,6 +340,14 @@ struct Ctx<'a> {
     /// [`ArgSlotHints::keep_ints`]) — pushed with `keep` so the nested-call stack-split
     /// retain spares them.
     keep_ints: Option<&'a std::collections::HashSet<i32>>,
+    /// batch-43 (Fix 2): set ONLY while emitting a struct-RVO switch's per-case region (the
+    /// bare-RET-join shape, GetDebugColor). While set, a `$beh0(__return, src)` in a JMP-
+    /// terminated block emits `__return = src;` as a STATEMENT (so the switch's per-case
+    /// `return <val>;` fold recovers it), instead of stashing it in the block-local `ret_val`
+    /// that a JMP-terminated block would drop. OUTSIDE a switch RVO region it stays the byte-
+    /// identical `ret_val` path — this keeps batch-43 strictly switch-scoped (the general
+    /// branch/loop RVO-return recovery is the deferred Fix 3 / loop-body-cfg lever).
+    rvo_switch_region: std::cell::Cell<bool>,
 }
 
 /// Collect slots used as an operand of a float/double arithmetic or compare op. Every word
@@ -455,6 +503,45 @@ impl Ctx<'_> {
     /// `return <chain>;` (the cross-block reference carry).
     fn ret_is_ref(&self) -> bool {
         self.ret_ty.map(|t| t.token != 0x52 && t.is_reference).unwrap_or(false)
+    }
+
+    /// The frame slot that carries this function's RETURN value OUT (batch-43, Fix 1):
+    /// - struct-by-value RVO: the hidden `__return` out-slot (`self.rvo_off`);
+    /// - object/scalar/enum: the slot loaded into the return register by the terminal
+    ///   `LOADOBJ`/`CpyVtoR*` IMMEDIATELY before the function's final `RET` (e.g.
+    ///   `PopBucketFront`'s `LOADOBJ w2; RET` → slot 2). `None` when the terminal return has
+    ///   no such single-slot fill (a plain `RET`, or a computed/expression return).
+    ///
+    /// Used only to widen a copy-INTO-the-return-value (`RefCpyV`) — a phantom copy into a
+    /// normal local stays dropped; a copy into THIS slot IS the return-value write and must
+    /// survive. Conservative: matches at most one slot, from the function's own tail.
+    fn return_out_slot(&self) -> Option<i32> {
+        if let Some(off) = self.rvo_off {
+            if self.ret_via_rvo() {
+                return Some(off);
+            }
+        }
+        // scan for the function's final RET; the instr before it must be a single-slot
+        // return-register fill whose operand names the out-slot.
+        let n = self.instrs.len();
+        if n < 2 {
+            return None;
+        }
+        let last = &self.instrs[n - 1];
+        if last.op.name != "RET" {
+            return None;
+        }
+        let prev = &self.instrs[n - 2];
+        if matches!(prev.op.name, "LOADOBJ" | "CpyVtoR4" | "CpyVtoR8" | "CpyVtoR1") {
+            if let Some(&wd) = prev.words.first() {
+                return Some(wd as i16 as i32);
+            }
+        }
+        None
+    }
+
+    fn is_return_out_slot(&self, slot: i32) -> bool {
+        self.return_out_slot() == Some(slot)
     }
 
     /// Name for parameter slot `idx`: the stored name, else `arg{idx}` — which MUST match
@@ -2555,7 +2642,26 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                             let src = stack[stack.len() - 2].clone();
                             if !src.s.is_empty() && src.s != UNRESOLVED && !src.s.starts_with('\u{2}') {
                                 stack.truncate(stack.len() - 2);
-                                ret_val = Some(src.s);
+                                // batch-43 (Fix 2): a `$beh0(__return, src)` inside a struct-RVO
+                                // SWITCH CASE region (JMP-terminated, `ctx.rvo_switch_region` set)
+                                // has NO RET here to consume `ret_val` — the JMP goes to the shared
+                                // bare RET, and `ret_val` is block-local, so the value would be
+                                // LOST. Emit `__return = src;` as a STATEMENT so the switch's per-
+                                // case `return <val>;` fold (region_exit_stmt + fold_rvo_return)
+                                // recovers it. EVERYWHERE ELSE (the normal single-region struct
+                                // return, and — deliberately out of batch-43 scope — branch/loop
+                                // early returns) keep the byte-identical `ret_val` path: its RET arm
+                                // folds `ret_val`/pending to `return src;` with no duplicate stmt.
+                                // Scoping to switch regions keeps the general branch/loop RVO-return
+                                // recovery to the deferred Fix 3 / loop-body-cfg lever.
+                                if ctx.rvo_switch_region.get()
+                                    && ctx.instrs[hi - 1].op.name != "RET"
+                                {
+                                    flush!();
+                                    out.push(format!("__return = {};", src.s));
+                                } else {
+                                    ret_val = Some(src.s);
+                                }
                                 continue;
                             }
                         }
@@ -3033,10 +3139,29 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                                 && d.is_object_const
                                 && d.base_name(ctx.refs) == *top.nf_const.as_deref().unwrap_or("")
                         });
+                    // batch-43 (Fix 1, switch-rvo-return.md §4.1): accept a CALL-EXPRESSION
+                    // source ONLY when the destination is the function's return out-slot — the
+                    // object/struct being popped INTO the return value (`<out> = arr.opIndex(0)`
+                    // in `PopBucketFront`, an opIndex result RefCpyV'd into the returned slot).
+                    // A call-expr source is normally dropped (a phantom copy could reorder side
+                    // effects into a non-return local), but into the out-slot the copy IS the
+                    // return-value write and must survive so the terminal `LOADOBJ <out>; RET`
+                    // renders `return <out>;` (else the popped element is silently lost). Gate
+                    // hard: a resolved call expression (`…)`), never a sentinel/unresolved/
+                    // destructor, and the destination is exactly the proven out-slot.
+                    let call_src_to_out = ctx.is_return_out_slot(w(ins, 0))
+                        && top.s.ends_with(')')
+                        && !top.s.contains('\u{2}')
+                        && !top.s.contains('\u{1}')
+                        && top.s != UNRESOLVED
+                        && !top.s.starts_with('~');
                     let ok = !top.s.is_empty()
                         && top.s != dst
                         && !const_ret_getter
-                        && (top.s.starts_with("local_") || top.s.starts_with("Cast<") || member_src);
+                        && (top.s.starts_with("local_")
+                            || top.s.starts_with("Cast<")
+                            || member_src
+                            || call_src_to_out);
                     if ok {
                         flush!();
                         // batch-25b (G4 assign shape): a slot-to-slot handle copy whose DEST
@@ -3390,6 +3515,14 @@ struct Structurer<'a> {
     exit_join: Option<usize>,
     exit_join_is_ret: bool,
     exit_ret_rows_ok: bool,
+    /// batch-43 (Fix 2, switch-rvo-return.md §4.2): RVO-struct-return switch mode. When set, a
+    /// case region's exit `JMP` to the shared bare-RET join renders `return <val>;` folded from
+    /// the region's trailing `__return = <val>;` out-slot store (a struct-by-value return travels
+    /// through the hidden RVO slot, never the value register, so the register scan-back is empty
+    /// and would otherwise emit `return <default-struct>;` — silently wrong). Fires ONLY under the
+    /// heavily-gated G-RVO proof (`ret_via_rvo` + bare-RET join + EVERY region proves an `__return`
+    /// write); any gap bails the whole switch to the stub.
+    exit_rvo_return: bool,
     /// Instruction-index floor for the synthesized-return value scan (the current case
     /// region's first instruction — a value must not leak in from a preceding region).
     exit_scan_floor: usize,
@@ -3677,7 +3810,13 @@ impl Structurer<'_> {
         }
         let t = *b.succs.first()?;
         if t == join {
-            return Some(if self.exit_join_is_ret {
+            return Some(if self.exit_rvo_return && self.exit_join_is_ret {
+                // batch-43 (Fix 2): struct-RVO return — the payload is in the `__return` out-slot
+                // (a register scan-back is empty). Emit `return __return;`; the emission-site fold
+                // (try_emit_switch) collapses the region's trailing `__return = <val>;` store +
+                // this line into `return <val>;` to match vanilla's per-case value return.
+                "return __return;".into()
+            } else if self.exit_join_is_ret {
                 self.ctx.return_stmt(scan_back_retval_floor(self.ctx, b.instr_hi - 1, self.exit_scan_floor))
             } else {
                 "break;".into()
@@ -4129,6 +4268,15 @@ impl Structurer<'_> {
                     || is_enum_name(&t.base_name(ctx.refs))
             }
         };
+        // batch-43 (Fix 2, switch-rvo-return.md §4.2): a struct-by-value RVO return switch
+        // (`!register_based` AND a genuine RVO out-slot, NOT enum). Its per-case returns travel
+        // through the `__return` out-slot, so `JMP -> bare RET` cannot be synthesized from the
+        // register — the status quo bails the whole switch (leaving the function stubbed).
+        // Under this mode we RELAX the two `!register_based` bare-RET bails, but ONLY after a
+        // per-region `__return`-write proof (gate G-RVO, below) confirms EVERY region writes the
+        // out-slot before its exit; any unproven region bails the whole switch. Never emit a
+        // switch that silently returns a DEFAULT struct.
+        let rvo_return_mode = !register_based && ctx.ret_via_rvo() && ctx.rvo_off.is_some();
         let non_void = ctx.ret_ty.map(|t| t.token != 0x52).unwrap_or(false);
         let mut join_cands: Vec<usize> = Vec::new();
         let mut ret_rows: Vec<usize> = Vec::new();
@@ -4147,7 +4295,12 @@ impl Structurer<'_> {
                         // `break;`/`continue;` out of the switch to the enclosing loop
                         join_cands.push(x);
                     } else if self.is_bare_ret_off(x) {
-                        if !register_based {
+                        // batch-43 (Fix 2): a struct-RVO switch's per-case exit ALSO jumps to a
+                        // bare RET (GetDebugColor: every case writes `__return = FColor::X` then
+                        // `JMP -> RET`). Allow it under `rvo_return_mode` — the per-region
+                        // out-slot-write proof (G-RVO) gates the actual recovery below; here we
+                        // only let the join be recognized so validation can proceed.
+                        if !register_based && !rvo_return_mode {
                             return None;
                         }
                         ret_rows.push(x);
@@ -4196,7 +4349,15 @@ impl Structurer<'_> {
             return None;
         }
         let join_is_ret = self.is_bare_ret_off(join_off);
-        if join_is_ret && !register_based {
+        // batch-43 (Fix 2): the RVO-return recovery fires ONLY for the true out-slot shape — a
+        // struct-by-value switch whose per-case regions write `__return` and JMP to the shared
+        // BARE RET row (GetDebugColor). A struct-RVO switch whose join is a REAL block (cases
+        // write a normal local `local_N` then `break;`, and the function returns `local_N` AFTER
+        // the switch — GetSFXTagByLevel) recovers through the NORMAL `break;`-to-join path and
+        // must NOT enter RVO-return mode (its cases write no `__return`, so the G-RVO proof would
+        // wrongly bail the whole switch to a stub). Gate the proof + fold on `join_is_ret`.
+        let rvo_ret_switch = rvo_return_mode && join_is_ret;
+        if join_is_ret && !register_based && !rvo_ret_switch {
             return None; // per-case RVO-struct returns are not recoverable from the register
         }
         let join_idx = self.idx_of.get(&join_off).copied()?;
@@ -4263,13 +4424,17 @@ impl Structurer<'_> {
                             continue;
                         }
                     }
-                    if uncond && register_based && self.is_bare_ret_off(s) {
-                        continue; // per-case `return` exit
+                    if uncond && (register_based || rvo_ret_switch) && self.is_bare_ret_off(s) {
+                        continue; // per-case `return` exit (register value or RVO out-slot)
                     }
                     return None; // escapes the region (incl. cond jumps to an exit)
                 }
-                // a return-exit must have a recoverable value INSIDE this region
-                if uncond && non_void {
+                // a return-exit must have a recoverable value INSIDE this region. For a
+                // register-based return that value is a `CpyVtoR*`/`LOADOBJ` scan-back; for a
+                // struct-RVO return (rvo_ret_switch) the value travels through `__return` and is
+                // proven separately by G-RVO (the scratch-emit proof below), so the register
+                // scan-back is DELIBERATELY not required here (it is always empty for an RVO struct).
+                if uncond && non_void && !rvo_ret_switch {
                     if let Some(&s) = bb.succs.first() {
                         let ret_exit = (s == join_off && join_is_ret)
                             || (s != join_off && !(s >= b && s < end_off) && self.is_bare_ret_off(s));
@@ -4326,6 +4491,57 @@ impl Structurer<'_> {
                 }
             }
         }
+        // batch-43 (Fix 2, gate G-RVO): a struct-RVO-return switch may recover ONLY when EVERY
+        // non-trap region PROVABLY writes the `__return` out-slot before its exit. Prove it by a
+        // non-emitting scratch pass: emit each region with `exit_rvo_return` set, then require
+        // `fold_rvo_return` to succeed (its `__return = <val>;` + `return __return;` fold IS the
+        // proof — a resolved out-slot store). ANY region without such a store bails the WHOLE
+        // switch to the stub (never emit a case that silently returns a default struct). This is
+        // the LAST bail point; the real emission below is byte-for-byte identical, so the proof
+        // and the emit agree. Runs only for the bare-RET-join RVO shape (`rvo_ret_switch`).
+        if rvo_ret_switch {
+            let saved = (self.exit_join, self.exit_join_is_ret, self.exit_ret_rows_ok, self.exit_rvo_return, self.exit_scan_floor);
+            let mut all_ok = true;
+            ctx.rvo_switch_region.set(true); // scope the `$beh0(__return,src)` statement-emit
+            for r in &regions {
+                if r.trap {
+                    continue;
+                }
+                let mut scratch = String::new();
+                self.exit_join = Some(join_off);
+                self.exit_join_is_ret = join_is_ret;
+                self.exit_ret_rows_ok = register_based;
+                self.exit_rvo_return = true;
+                self.exit_scan_floor = blocks[r.start].instr_lo;
+                self.emit_range(r.start, r.end, depth + 1, &mut scratch);
+                (self.exit_join, self.exit_join_is_ret, self.exit_ret_rows_ok, self.exit_rvo_return, self.exit_scan_floor) = saved;
+                // a region that FALLS THROUGH into the join (the default, whose destructor +
+                // shared RET follow) still writes `__return` inside its body but ends without the
+                // synthetic `return __return;` — accept it iff its body carries a resolved
+                // `__return = <val>;` store; the emission handles its fallthrough return normally.
+                let has_synth_return = scratch.lines().any(|l| l.trim() == "return __return;");
+                let ok = if has_synth_return {
+                    fold_rvo_return(&scratch).is_some()
+                } else {
+                    // fallthrough region (last, into the epilogue): require a resolved out-slot store
+                    scratch.lines().rev().find_map(|l| {
+                        let t = l.trim();
+                        t.strip_prefix("__return = ").and_then(|s| s.strip_suffix(';'))
+                    }).is_some_and(|val| {
+                        !val.is_empty() && !val.contains('\u{1}') && !val.contains('\u{2}')
+                            && val != UNRESOLVED && !val.contains(RVODEF)
+                    })
+                };
+                if !ok {
+                    all_ok = false;
+                    break;
+                }
+            }
+            ctx.rvo_switch_region.set(false);
+            if !all_ok {
+                return None;
+            }
+        }
         // ---- emission (validated: no bail past this point) ----
         let ind = "    ".repeat(depth);
         let (stmts, _) = block_stmts(ctx, b0.instr_lo, b0.instr_hi);
@@ -4342,7 +4558,7 @@ impl Structurer<'_> {
         };
         let _ = writeln!(out, "{ind}switch ({sel})");
         let _ = writeln!(out, "{ind}{{");
-        let saved = (self.exit_join, self.exit_join_is_ret, self.exit_ret_rows_ok, self.exit_scan_floor);
+        let saved = (self.exit_join, self.exit_join_is_ret, self.exit_ret_rows_ok, self.exit_rvo_return, self.exit_scan_floor);
         for r in &regions {
             if r.trap {
                 continue; // trap DEF = source had NO default; recompiling regenerates it
@@ -4367,9 +4583,26 @@ impl Structurer<'_> {
             self.exit_join = Some(join_off);
             self.exit_join_is_ret = join_is_ret;
             self.exit_ret_rows_ok = register_based;
+            self.exit_rvo_return = rvo_ret_switch;
             self.exit_scan_floor = blocks[r.start].instr_lo;
-            self.emit_range(r.start, r.end, depth + 1, out);
-            (self.exit_join, self.exit_join_is_ret, self.exit_ret_rows_ok, self.exit_scan_floor) = saved;
+            if rvo_ret_switch {
+                // batch-43 (Fix 2): emit to scratch, then fold the region's trailing
+                // `__return = <val>;` + `return __return;` into `return <val>;` (G-RVO already
+                // proved every region has such a store, so the fold cannot silently drop a
+                // value). A fallthrough region (default, whose body writes `__return` but exits
+                // by falling into the shared epilogue) has no synthetic `return __return;` — its
+                // scratch has no fold site, so it is written verbatim and the trailing epilogue's
+                // shared `return __return;` (see below) covers it.
+                let mut scratch = String::new();
+                ctx.rvo_switch_region.set(true); // scope the `$beh0(__return,src)` statement-emit
+                self.emit_range(r.start, r.end, depth + 1, &mut scratch);
+                ctx.rvo_switch_region.set(false);
+                let folded = fold_rvo_return(&scratch).unwrap_or(scratch);
+                out.push_str(&folded);
+            } else {
+                self.emit_range(r.start, r.end, depth + 1, out);
+            }
+            (self.exit_join, self.exit_join_is_ret, self.exit_ret_rows_ok, self.exit_rvo_return, self.exit_scan_floor) = saved;
             if r.append_break {
                 let _ = writeln!(out, "{ind}    break;");
             }
