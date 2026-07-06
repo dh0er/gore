@@ -641,6 +641,14 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
             }
         }
     }
+    // batch-41d: when the function's own return type is a CONST object handle (vanilla marked
+    // `const T GetX()`), a `return local_n;` of a const-marked slot is const->const = legal, so
+    // the return use must NOT strip the slot's const (the strip would relocate the error to the
+    // const-member-read assignment: "const T -> T", GetSelectedItem). The signature re-adds the
+    // `const` too (see `ret_sig` below). Gated to object-const returns only — a non-const-return
+    // getter still strips (the pre-batch-41d behaviour). Mirrors DataType::render's const
+    // condition (is_read_only || is_object_const) so `ret` and the kept slot stay consistent.
+    let ret_obj_const = f.ret.is_object_handle && (f.ret.is_object_const || f.ret.is_read_only);
     loop {
         let keep: HashSet<i32> = const_slots
             .iter()
@@ -659,7 +667,7 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
                         .map(|m| const_slots.contains(&m))
                         .unwrap_or(false);
                     !lhs_const
-                }) && !body.contains(&format!("return local_{n};"))
+                }) && (ret_obj_const || !body.contains(&format!("return local_{n};")))
             })
             .collect();
         // fixed point: dropping a slot can invalidate a copy INTO it that justified keeping
@@ -853,6 +861,18 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
             || (reason.is_some() && percep_stub_param.is_some()))
     {
         format!("{}&", f.ret.render(refs))
+    } else if ret_obj_const
+        && reason.is_none()
+        && const_slots
+            .iter()
+            .any(|n| body.contains(&format!("return local_{n};")))
+    {
+        // batch-41d: a getter that returns a const-marked slot (`return this.<constMember>;`)
+        // needs its return type const too, so `return local_n;` is const->const. Vanilla marked
+        // this return `const T` (f.ret.is_object_const); re-add the qualifier the generic strip
+        // at line ~349 removed. Only when a const slot is actually returned (the stub/RVODEF
+        // paths use the non-const `ret` for `T __r;`, which stays correct).
+        format!("const {ret}")
     } else {
         ret.clone()
     };

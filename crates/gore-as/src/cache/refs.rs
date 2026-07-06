@@ -301,11 +301,19 @@ impl RefResolver {
         // vanilla-compiled => the chain passes through AProjectileVisual; single
         // inheritance makes the link row sound (intermediates stay transparent to the
         // walk — precedent: the UAIGroup_Combat_Base row).
+        // batch-41d: UAbilityTask_AI derives UAbilityTaskGeneric — evidence: the vanilla-compiled
+        // TryPerformActionNow body upcasts `local_36 (UAbilityTaskGeneric) = local_34
+        // (UAITask_CombatMove : UGothicCharacterAITask : UAbilityTask_AI)` (a legal derived->base
+        // handle copy), proving UAITask_CombatMove's chain passes through UAbilityTaskGeneric; the
+        // script walk dead-ends at the native super UAbilityTask_AI, so this link lets the
+        // reciprocal member store `this.ActiveActionTask (UAITask_CombatMove) = local_36` recover
+        // the required `Cast<UAITask_CombatMove>`. Single inheritance keeps the row sound.
         const KNOWN_NATIVE_HIERARCHY: &[(&str, &str)] = &[
             ("UAIGroup_Combat_Base", "UGothicAIGroup"),
             ("AGothicNPCState", "AGothicCharacterState"),
             ("AGothicCharacter", "ACharacter"),
             ("ASpellProjectileVisual", "AProjectileVisual"),
+            ("UAbilityTask_AI", "UAbilityTaskGeneric"),
         ];
         if sub == sup {
             return true;
@@ -548,8 +556,21 @@ impl RefResolver {
     /// from KNOWN_NATIVE_FIELD_TYPES: those rows mirror the Binds field DECLS (validated by
     /// the binds.rs test) and feed enum/float-filtered consumers.
     pub fn native_field_const_object(&self, class: &str, field: &str) -> Option<&'static str> {
-        const KNOWN_NATIVE_CONST_OBJECT_FIELDS: &[(&str, &str, &str)] =
-            &[("FItemActionHandler", "ItemDefinition", "UItemDefinition")];
+        // batch-41d: FGameplayEventData's object-handle fields are declared const in the engine
+        // (`TObjectPtr<const AActor> Instigator/Target`, `TWeakObjectPtr<const UObject>
+        // OptionalObject`). A member read of a `const FGameplayEventData &inout` PARAM yields a
+        // const handle, so batch-41a's `local_N = EventData.Target;` recovery into a same-typed
+        // non-const local failed "Can't implicitly convert from 'const AActor' to 'AActor'" in
+        // generate-mode (18 sites: GA_Defeated/MCQueen/Xardas/Summon* etc.). Same production
+        // source + exact-type-match consumer discipline as the FItemActionHandler row; the read
+        // slots are only ever used const-safely (null-check / method receiver / Cast<Derived>
+        // source), so const-declaring them is regression-free.
+        const KNOWN_NATIVE_CONST_OBJECT_FIELDS: &[(&str, &str, &str)] = &[
+            ("FItemActionHandler", "ItemDefinition", "UItemDefinition"),
+            ("FGameplayEventData", "Instigator", "AActor"),
+            ("FGameplayEventData", "Target", "AActor"),
+            ("FGameplayEventData", "OptionalObject", "UObject"),
+        ];
         KNOWN_NATIVE_CONST_OBJECT_FIELDS
             .iter()
             .find(|(c, f, _)| *c == class && *f == field)

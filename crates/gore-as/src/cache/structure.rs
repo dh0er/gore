@@ -1590,6 +1590,13 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
     // Slots whose current value came from a MEMBER READ (RDR* after a member-ref load) — real
     // data values, kept by the nested-call retain (see Arg.keep). Invalidated on overwrite.
     let mut member_read_slots: std::collections::HashSet<i32> = std::collections::HashSet::new();
+    // batch-41d: slots currently holding a CONST object handle (a const-returning CALL result,
+    // batch-20/21 `downcast` CONSTSTORE, or a const-member-read RefCpyV, batch-32d). A REFCPY
+    // member STORE (Fix 1) of such a slot into a non-const member is a "Can't implicitly convert
+    // from 'const T' to 'T'" error in generate-mode — so Fix 1 BAILS on a const source (the
+    // store is dropped, exactly as pre-batch-41, keeping the slot's const decl intact). Cleared
+    // when the slot is re-written with a non-const value.
+    let mut const_obj_slots: std::collections::HashSet<i32> = std::collections::HashSet::new();
     let mut pending: Option<String> = None; // unconsumed call/ctor result
     let mut pending_ty: Option<String> = None; // recovered type of `pending` (call return type)
     // batch-20 Class B: the call returns a CONST object handle (`const UCharacterAIState`).
@@ -2728,6 +2735,15 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                     Some(p) => Some(downcast(p, pending_ty.take(), std::mem::take(&mut pending_const), ctx.local_types.and_then(|m| m.get(&slot)), ctx.refs)),
                     None => obj_reg.take(),
                 };
+                // batch-41d: track whether this slot now holds a CONST object handle (the
+                // downcast() CONSTSTORE marker means a const-returning call result stored
+                // same-type). A later REFCPY member store of this slot must bail (const->non-const
+                // field). Cleared for a non-const write so a slot reused later is not stale.
+                if rhs.as_deref().is_some_and(|r| r.contains(CONSTSTORE)) {
+                    const_obj_slots.insert(slot);
+                } else {
+                    const_obj_slots.remove(&slot);
+                }
                 flush_store(&mut out, name(slot), rhs);
             }
             "CpyRtoV4" | "CpyRtoV8" => {
@@ -2980,8 +2996,17 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                                 == (dst_slot > 0).then(|| ctx.slot_type(dst_slot)).flatten().as_deref()
                         {
                             out.push(format!("{dst} = {CONSTSTORE}{rhs};"));
+                            // batch-41d: the dest slot now holds a const object handle; a later
+                            // REFCPY member store of it must bail (const->non-const field).
+                            if dst_slot > 0 {
+                                const_obj_slots.insert(dst_slot);
+                            }
                         } else {
                             out.push(format!("{dst} = {rhs};"));
+                            // non-const write clears any stale const provenance for the slot.
+                            if dst_slot > 0 {
+                                const_obj_slots.remove(&dst_slot);
+                            }
                         }
                     }
                 }
@@ -3013,9 +3038,35 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                         && src.s != UNRESOLVED
                         && !src.s.contains('\u{2}')
                         && (src.s.starts_with("local_") || src.s.starts_with("Cast<") || src.s == "nullptr");
-                    if dst_ok && src_ok {
+                    // batch-41d (CLASS 1b): the source slot holds a CONST object handle (a
+                    // const-returning call result / const member read). Storing it into a
+                    // (non-const) member is a "Can't implicitly convert from 'const T' to 'T'"
+                    // error in generate-mode. BAIL to the drop — the slot keeps its const decl
+                    // and the store is dropped exactly as pre-batch-41 (safe: it was dropped
+                    // before batch-41b and those functions compiled).
+                    let src_slot = src
+                        .s
+                        .strip_prefix("local_")
+                        .and_then(|d| d.parse::<i32>().ok());
+                    let src_is_const = src_slot.is_some_and(|n| const_obj_slots.contains(&n));
+                    if dst_ok && src_ok && !src_is_const {
                         flush!();
-                        out.push(format!("{} = {};", dst.s, src.s));
+                        // batch-41d (CLASS 2): the member field type PROVABLY derives from the
+                        // source's type (`this.ActiveActionTask (UAITask_CombatMove) =
+                        // local_36 (UAbilityTaskGeneric&)` — a base-typed call result into a
+                        // derived member). AS rejects the implicit downcast; wrap Cast<field>(src).
+                        // Same provably_derived gate as the RefCpyV read path; never wrap when the
+                        // pair is unprovable (renders bare = status quo).
+                        let rhs = match (dst.ty.as_deref(), src.ty.as_deref()) {
+                            (Some(fty), Some(sty))
+                                if provably_derived(fty, sty, ctx.refs) =>
+                            {
+                                let head = fty.split('<').next().unwrap_or(fty).trim_start_matches("const ");
+                                format!("Cast<{head}>({})", src.s)
+                            }
+                            _ => src.s.clone(),
+                        };
+                        out.push(format!("{} = {};", dst.s, rhs));
                     }
                     // else: both popped, nothing emitted = the status-quo drop.
                 }
