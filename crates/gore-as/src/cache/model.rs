@@ -69,8 +69,18 @@ fn is_enum_name(name: &str) -> bool {
 /// out-pointer slot (one `AS_PTR_SIZE`) between `this` and the first real parameter.
 /// UObject/AActor handles (`is_object_handle`) return in the value register, NOT via an RVO
 /// slot, so they are excluded.
-pub fn returns_struct_by_value(ret: &DataType) -> bool {
-    ret.token == 5 && !ret.is_object_handle && !ret.is_reference
+///
+/// batch-29c (A4, specs/batch29-errortail.md §1.1): ENUMS are also token 5 but return in the
+/// VALUE REGISTER — no hidden RVO slot exists (the callee-side probes in structure.rs/emit.rs
+/// already exclude `E*` heads; this predicate was the last admitter). Counting an enum return
+/// as by-value-struct mapped a REAL param onto the phantom RVO slot (`ERelationship __return;
+/// ... UpdateCrimeSeverityTowardsPlayer(__return, AI);` — 11 [E] lines, 6 fns), so enum-named
+/// returns are excluded here, at the map-building choke point.
+pub fn returns_struct_by_value(ret: &DataType, refs: &RefResolver) -> bool {
+    ret.token == 5
+        && !ret.is_object_handle
+        && !ret.is_reference
+        && !is_enum_name(&ret.base_name(refs))
 }
 
 /// Build the AS_PTR_SIZE-aware map from a frame offset (signed dword slot, negative below the
@@ -115,6 +125,17 @@ pub struct Func {
     /// (slot offset, type-ptr) for object-typed locals.
     pub obj_locals: Vec<(i32, i64)>,
     pub is_ufunction: bool,
+    /// asSFunctionTraits bitfield (asTRAIT_CONST=4, asTRAIT_FINAL=32, generated=0x40000, ...).
+    pub traits: i32,
+}
+
+impl Func {
+    /// The vanilla method was declared `const` (asTRAIT_CONST). Dropping it on re-emit makes
+    /// every call through a `const` object handle fail with "Non-const method call on
+    /// read-only object reference", so the emitter must render it back.
+    pub fn is_const_method(&self) -> bool {
+        self.traits & 4 != 0
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -131,6 +152,8 @@ pub struct Class {
     pub fields: Vec<Field>,
     pub methods: Vec<Func>,
     pub ctors: Vec<Func>,
+    /// asCObjectType flags (asOBJ_* bitfield) from the cache Class record.
+    pub flags: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -190,7 +213,7 @@ fn read_function(c: &mut Cursor) -> Result<Func, WireError> {
         pflags.push(c.read_i32()?);
     }
     c.skip_tarray_sia("ParameterDefaultArgs")?;
-    c.skip(4)?; // FunctionTraits
+    let traits = c.read_i32()?; // FunctionTraits (asSFunctionTraits bitfield)
     let bytecode = c.read_tarray_i32("ByteCode")?;
     c.skip_tarray_fixed(4, "ByteCodeReferences")?;
     c.skip(4)?; // VariableSpace
@@ -230,7 +253,7 @@ fn read_function(c: &mut Cursor) -> Result<Func, WireError> {
         });
     }
     let obj_locals = obj_pos.into_iter().zip(obj_types).collect();
-    Ok(Func { name, namespace, ret, params, bytecode, obj_locals, is_ufunction })
+    Ok(Func { name, namespace, ret, params, bytecode, obj_locals, is_ufunction, traits })
 }
 
 fn read_property(c: &mut Cursor) -> Result<Field, WireError> {
@@ -261,7 +284,7 @@ fn read_property(c: &mut Cursor) -> Result<Field, WireError> {
 fn read_class(c: &mut Cursor) -> Result<Class, WireError> {
     let name = c.read_sia()?;
     c.read_sia()?; // Namespace
-    c.skip(4)?; // Flags
+    let flags = c.read_i32()? as u32; // asCObjectType Flags (asOBJ_* bitfield)
     let nprops = c.read_count("Class.Properties")?;
     let mut fields = Vec::with_capacity(nprops);
     for _ in 0..nprops {
@@ -298,7 +321,7 @@ fn read_class(c: &mut Cursor) -> Result<Class, WireError> {
         c.skip_tarray_sia("Class.MetaValues")?;
         c.read_sia()?; // ComposeOntoClassName
     }
-    Ok(Class { name, super_class, fields, methods, ctors })
+    Ok(Class { name, super_class, fields, methods, ctors, flags })
 }
 
 fn read_enum(c: &mut Cursor) -> Result<EnumDef, WireError> {

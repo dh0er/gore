@@ -12,6 +12,30 @@ use std::collections::BTreeSet;
 
 use super::disasm::Instr;
 
+/// JMPP dispatch-row shape check (Hazelight `rW_DW_ARG` form, 2 dwords): the DW operand is
+/// `N-1` (max selector value); execution lands on row `jmpp_dw + 2 + 2*value`. The compiler
+/// emits rows 0..N-2 as `JMP` trampolines; row N-1 is either a `JMP` trampoline or the START
+/// of the last case body inlined in place (it is the highest row, so an inline body cannot
+/// overlap another row). Returns the N row start offsets when the shape holds, else None
+/// (leaving the JMPP successor-less, exactly the prior behavior).
+fn jmpp_rows(instrs: &[Instr], idx: usize) -> Option<Vec<usize>> {
+    let ins = &instrs[idx];
+    let n = (*ins.dwords.first()? as usize).checked_add(1)?;
+    let mut rows = Vec::with_capacity(n);
+    for k in 0..n {
+        let row = ins.offset_dw + 2 + 2 * k;
+        let ri = instrs.get(idx + 1 + k)?;
+        if ri.offset_dw != row {
+            return None; // rows must be adjacent 2-dword instructions
+        }
+        if k + 1 < n && ri.op.name != "JMP" {
+            return None; // all but the last row must be trampolines
+        }
+        rows.push(row);
+    }
+    Some(rows)
+}
+
 #[derive(Debug, Clone)]
 pub struct BasicBlock {
     /// Dword offset where the block starts.
@@ -83,6 +107,12 @@ pub fn build(instrs: &[Instr]) -> Cfg {
             if let Some(next) = instrs.get(i + 1) {
                 leaders.insert(next.offset_dw);
             }
+        } else if n == "JMPP" && jmpp_rows(instrs, i).is_some() {
+            // dispatch row 0 starts right after the JMPP; rows 1.. become leaders via the
+            // trampoline JMPs' own next-instruction rule, and row targets via the JMP rule.
+            if let Some(next) = instrs.get(i + 1) {
+                leaders.insert(next.offset_dw);
+            }
         }
     }
 
@@ -102,8 +132,15 @@ pub fn build(instrs: &[Instr]) -> Cfg {
         let last = &instrs[hi - 1];
         let n = last.op.name;
         let mut succs = Vec::new();
-        if is_return(n) || n == "JMPP" {
-            // RET: none; JMPP: table targets unknown here
+        if n == "JMPP" {
+            // Verified switch-dispatch shape: successors = the N dispatch-row start offsets
+            // (in selector-value order). Unverified shape: none (prior behavior — the
+            // structurer's marker/stub path still catches the uncovered transfer).
+            if let Some(rows) = jmpp_rows(instrs, hi - 1) {
+                succs = rows.into_iter().filter(|r| off_to_idx.contains_key(r)).collect();
+            }
+        } else if is_return(n) {
+            // none
         } else if is_uncond_jump(n) {
             if let Some(t) = jump_target(last).filter(|t| off_to_idx.contains_key(t)) {
                 succs.push(t);

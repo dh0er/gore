@@ -64,6 +64,44 @@ fn structures_branchtest() {
     assert!(src.contains("return local_1;"), "return:\n{src}");
 }
 
+/// batch-49 recovery locks: decompile named functions from the real vanilla cache_A sample
+/// (gitignored; graceful-skip when absent) and assert the recovered statement is present.
+/// These guard the batch-49a bool-member-store and batch-49c opIndex-getter-into-null-compare
+/// arms against future regression. Uses `structure::decompile` (ret_ty-aware since batch-49b).
+#[test]
+fn batch49_recoveries_present() {
+    let Some(b) = read_sample("cache_A.Cache") else {
+        eprintln!("skip: cache_A.Cache sample not present");
+        return;
+    };
+    let refs = RefResolver::build(&b).expect("resolver");
+    let funcs = collect_function_bytecodes(&b).expect("collect");
+    let decomp = |needle: &str| -> String {
+        funcs
+            .iter()
+            .find(|f| f.func.contains(needle))
+            .map(|f| gore_as::cache::structure::decompile(f, &refs))
+            .unwrap_or_default()
+    };
+    // batch-49a: `this.bShouldExitState = true` (WRTV1 into a UE-bool member) was dropped.
+    let og = decomp("UAIState_UseFreepoint::OnGracefulExitRequested");
+    assert!(
+        og.contains("bShouldExitState = (local_1 != 0)"),
+        "batch-49a bool member-store dropped:\n{og}"
+    );
+    // batch-49c: `local_4 = m_SpawnedAreas[type]` (opIndex getter into a null-compared slot)
+    // was dropped, leaving the null-guard reading an uninitialised slot.
+    let contains = decomp("UDemonAreaRegisterComponent::Contains");
+    assert!(
+        contains.contains("local_4 = this.m_SpawnedAreas.opIndex("),
+        "batch-49c opIndex-getter-into-null-compare dropped:\n{contains}"
+    );
+    assert!(
+        contains.contains("if (local_4 == nullptr)"),
+        "batch-49c null-guard should read the recovered element:\n{contains}"
+    );
+}
+
 /// Structured decompile must not panic or hang across many real functions (loop guard).
 #[test]
 fn structured_real_cache_no_panic() {

@@ -46,6 +46,12 @@ pub struct NativeApi {
     /// `name -> Some(arity)` when every signature with that name shares one arity, else `None`.
     /// Built from the printable-run scan (full coverage, class-agnostic).
     by_name: HashMap<String, Option<usize>>,
+    /// Plain STRUCT-FIELD value types: `(class, field) -> type` from the two-token
+    /// `"<TYPE> <Name>"` decls (no parens = not a signature). Conflicting keys are dropped,
+    /// same policy as the arity map. batch-25a (specs/batch23-cantconvert.md G2): resolves
+    /// native-struct enum field types the script cache cannot (PropertyReferences.OldTypeId
+    /// is the OWNER struct, not the field's value type).
+    field_types: HashMap<(String, String), String>,
 }
 
 impl NativeApi {
@@ -56,13 +62,13 @@ impl NativeApi {
         if data.len() < 8 {
             return None;
         }
-        let by_class = parse_records(&data);
+        let (by_class, field_types) = parse_records(&data);
         let by_name = scan_by_name(&data);
         // A partially readable cache may populate only one table; keep it if either has data.
         if by_name.is_empty() && by_class.is_empty() {
             return None;
         }
-        Some(NativeApi { by_class, by_name })
+        Some(NativeApi { by_class, by_name, field_types })
     }
 
     /// Exact `(class, name)` arity if known and unambiguous.
@@ -76,6 +82,27 @@ impl NativeApi {
     /// (unambiguous across overloads). `None` if overloaded with differing arities or unknown.
     pub fn arity_by_name(&self, name: &str) -> Option<usize> {
         self.by_name.get(name).copied().flatten()
+    }
+
+    /// True if `name` appears as ANY native function/method signature name in the printable-run
+    /// scan — `contains_key`, NOT `arity_by_name`: ambiguous-arity overloads still count as
+    /// "exists". Batch-24b shadow gate (a script global sharing a name with any native member
+    /// must be `::`-qualified inside classes).
+    pub fn has_name(&self, name: &str) -> bool {
+        self.by_name.contains_key(name)
+    }
+
+    /// Plain struct-field VALUE type for an exact `(class, field)` key, if unambiguous.
+    /// batch-25a: `("FWidgetAlignment", "VerticalAlignment") -> "EVerticalAlignment"`.
+    pub fn field_type(&self, class: &str, field: &str) -> Option<&str> {
+        self.field_types
+            .get(&(class.to_string(), field.to_string()))
+            .map(|s| s.as_str())
+    }
+
+    /// Number of distinct `(class, field)` plain-field type entries (diagnostic).
+    pub fn field_type_count(&self) -> usize {
+        self.field_types.len()
     }
 
     /// Number of distinct names in the by-name table (diagnostic).
@@ -264,14 +291,21 @@ fn find_record_starts(data: &[u8]) -> Vec<usize> {
     starts
 }
 
-/// Tolerant record parse -> `(class, name) -> arity`, dropping any conflicting keys.
-fn parse_records(data: &[u8]) -> HashMap<(String, String), usize> {
+/// Tolerant record parse -> (`(class, name) -> arity`, `(class, field) -> plain-field type`),
+/// dropping any conflicting keys from either map.
+fn parse_records(
+    data: &[u8],
+) -> (HashMap<(String, String), usize>, HashMap<(String, String), String>) {
     let n = data.len();
     let starts = find_record_starts(data);
     let start_set: std::collections::HashSet<usize> = starts.iter().copied().collect();
 
     let mut map: HashMap<(String, String), usize> = HashMap::new();
     let mut conflicting: std::collections::HashSet<(String, String)> =
+        std::collections::HashSet::new();
+    // plain two-token field decls `"<TYPE> <Name>"` (no parens): value type per (class, field).
+    let mut ftypes: HashMap<(String, String), String> = HashMap::new();
+    let mut ftype_conflicts: std::collections::HashSet<(String, String)> =
         std::collections::HashSet::new();
 
     for (ri, &o) in starts.iter().enumerate() {
@@ -336,6 +370,26 @@ fn parse_records(data: &[u8]) -> HashMap<(String, String), usize> {
                         }
                     }
                 }
+            } else {
+                // Plain STRUCT-FIELD decl: strictly two whitespace-separated tokens with the
+                // second token equal to the bare field name -> the first token is the value
+                // type (`"EVerticalAlignment VerticalAlignment"`). Anything wider (const,
+                // templates with spaces, property accessors) is skipped — strict two-token
+                // keeps the map free of misparses (batch-25a).
+                let mut toks = decl.split_whitespace();
+                if let (Some(ty), Some(fname), None) = (toks.next(), toks.next(), toks.next()) {
+                    if fname == name && !ty.is_empty() {
+                        let key = (tn.clone(), name.clone());
+                        match ftypes.get(&key) {
+                            Some(prev) if prev != ty => {
+                                ftype_conflicts.insert(key);
+                            }
+                            _ => {
+                                ftypes.insert(key, ty.to_string());
+                            }
+                        }
+                    }
+                }
             }
 
             // Re-sync over the variable-width metadata slot: scan forward to the next
@@ -366,7 +420,10 @@ fn parse_records(data: &[u8]) -> HashMap<(String, String), usize> {
     for key in conflicting {
         map.remove(&key);
     }
-    map
+    for key in ftype_conflicts {
+        ftypes.remove(&key);
+    }
+    (map, ftypes)
 }
 
 /// Class-agnostic printable-run scan -> `name -> Some(arity)|None(conflict)`.
@@ -489,5 +546,112 @@ mod tests {
         // (class,name) exact lookups from the record parse.
         assert_eq!(api.arity("UGameplayAbility_CharacterAI", "AssessEvent"), Some(2));
         assert_eq!(api.arity("UGameplayAbility", "GetAvatarActorFromActorInfo"), Some(0));
+    }
+
+    /// batch-25a: the in-crate `refs::native_field_type` table must MATCH the shipped
+    /// Binds.Cache field decls — this is the verification path for the production source
+    /// (the production emit runs without Binds, so the hardcoded table is load-bearing).
+    /// Skipped when the game install is absent.
+    #[test]
+    fn validate_field_types_against_real_binds_cache() {
+        let path = Path::new(REAL_BINDS);
+        if !path.exists() {
+            eprintln!("skipping: {REAL_BINDS} not present");
+            return;
+        }
+        let api = NativeApi::load(path).expect("load Binds.Cache");
+        eprintln!("distinct (class,field) type entries: {}", api.field_type_count());
+        // mirror of refs.rs KNOWN_NATIVE_FIELD_TYPES (keep in sync)
+        for (cls, field, want) in [
+            ("FWidgetAlignment", "VerticalAlignment", "EVerticalAlignment"),
+            ("FWidgetAlignment", "HorizontalAlignment", "EHorizontalAlignment"),
+            ("FPerceivedAgent", "Relationship", "ERelationship"),
+            ("FPerceivedAgent", "Hostility", "ERelationshipHostility"),
+            ("FPerceivedAgent", "RelativeRank", "ERelationshipRelativeRank"),
+            ("FFXPerceptionSoundArea", "PerceptionLoudness", "EPerceptionNoiseLoudness"),
+            ("FALoadingScreenSettings", "Layout", "EAsyncLoadingScreenLayout"),
+            ("FALoadingScreenSettings", "PlaybackType", "EMoviePlaybackType"),
+            ("FTextAppearance", "Justification", "ETextJustify"),
+            ("FInteractionAnimTransition", "TransitionKind", "EInteractionInputKind"),
+            ("FWeatherSaveGame", "CurrentWeather", "EWeather"),
+            ("FLetterboxLayoutSettings", "VerticalLoadingWidgetPosition", "EVerticalAlignment"),
+            ("FLetterboxLayoutSettings", "VerticalTipWidgetPosition", "EVerticalAlignment"),
+        ] {
+            assert_eq!(
+                api.field_type(cls, field),
+                Some(want),
+                "table entry ({cls}, {field}) disagrees with the shipped Binds.Cache"
+            );
+        }
+    }
+
+    /// batch-40b: the in-crate `refs` `KNOWN_NATIVE_FLOAT_FIELDS` table must MATCH the shipped
+    /// Binds.Cache field decls. Same verification path as
+    /// `validate_field_types_against_real_binds_cache` above (the production emit runs without
+    /// Binds, so the hardcoded float-field table is load-bearing). This proves the baked-in
+    /// float types are authoritative rather than guessed. Skipped when the game install is absent.
+    #[test]
+    fn validate_float_field_types_against_real_binds_cache() {
+        let path = Path::new(REAL_BINDS);
+        if !path.exists() {
+            eprintln!("skipping: {REAL_BINDS} not present");
+            return;
+        }
+        let api = NativeApi::load(path).expect("load Binds.Cache");
+        // mirror of refs.rs KNOWN_NATIVE_FLOAT_FIELDS (keep in sync)
+        for (cls, field, want) in [
+            ("FALoadingScreenSettings", "MinimumLoadingScreenDisplayTime", "float32"),
+            ("FAlphaBlendArgs", "BlendTime", "float32"),
+            ("FCameraBehaviour", "m_ArmLength", "float32"),
+            ("FCameraBehaviour", "m_LagSpeed", "float32"),
+            ("FCameraBehaviour", "m_SpellPitchLimit", "float32"),
+            ("FCameraBehaviour", "m_SpellYawLimit", "float32"),
+            ("FDodgeData", "m_SuperArmorResistanceMultiplier", "float32"),
+            ("FFreezeParams", "m_BlendOutDuration", "float32"),
+            ("FFreezeParams", "m_CustomTimeDilation", "float32"),
+            ("FFreezeParams", "m_FreezeDuration", "float32"),
+            ("FGameplayCueParameters", "NormalizedMagnitude", "float32"),
+            ("FGameplayCueParameters", "RawMagnitude", "float32"),
+            ("FGameplayEffectContext_HitResponse", "BowStretch", "float32"),
+            ("FGameplayEffectContext_HitResponse", "MultiplierSuperArmor", "float32"),
+            ("FGothicFlyDiveSettings", "AdaptToCollisionSampleZDistance", "float32"),
+            ("FGothicFlyDiveSettings", "CharacterZDivergeOffset", "float32"),
+            ("FGothicFlyDiveSettings", "GroundedMoveBeforeGoalDistance", "float32"),
+            ("FGothicFlyDiveSettings", "UseFlyDiveMinDistance", "float32"),
+            ("FGothicPathfollowSettings", "AgentRadiusMultiplier", "float32"),
+            ("FGothicPathfollowSettings", "CrowdAgentRadiusMultiplier", "float32"),
+            ("FGothicPathfollowSettings", "CrowdAgentSeparationWeight", "float32"),
+            ("FInteractionAnimTransition", "BlockOtherTransitionsForSeconds", "float32"),
+            ("FInteractionAnimTransition", "CooldownSeconds", "float32"),
+            ("FInteractionAnimTransition", "Probability", "float32"),
+            ("FInteractionAnimTransition", "Weight", "float32"),
+            ("FLightSet", "BarnDoorAngle", "float32"),
+            ("FLightSet", "BarnDoorLength", "float32"),
+            ("FLightSet", "IndirectLightingIntensity", "float32"),
+            ("FLightSet", "VolumetricScatteringIntensity", "float32"),
+            ("FLightValues", "AttenuationRadius", "float32"),
+            ("FLightValues", "SourceHeight", "float32"),
+            ("FLightValues", "SourceWidth", "float32"),
+            ("FMemorizedEvent", "Magnitude", "float32"),
+            ("FPathfollowModifyAvoidVelocitySettings", "FastSpeedVelocityMultiplier", "float32"),
+            ("FPathfollowModifyAvoidVelocitySettings", "MediumRangeVelocityMultiplier", "float32"),
+            ("FPathfollowModifyAvoidVelocitySettings", "ShortRangeVelocityMultiplier", "float32"),
+            ("FPathfollowMoveFocusSettings", "FocalPointHeightMultiplier", "float32"),
+            ("FPerceptionHandler", "DelaySeconds", "float32"),
+            ("FRelativeCrimeDataEntry", "BaseSeverity", "float32"),
+            ("FRememberedPerception", "Magnitude", "float32"),
+            ("FRememberedPerception", "TimeUpdated", "float32"),
+            ("FScalableFloat", "Value", "float32"),
+            ("FScoredItemAction", "Score", "float32"),
+            ("FSlateFontInfo", "Size", "float32"),
+            ("FTipSettings", "TipSwapTime", "float32"),
+            ("FTipSettings", "TipWrapAt", "float32"),
+        ] {
+            assert_eq!(
+                api.field_type(cls, field),
+                Some(want),
+                "float-field table entry ({cls}, {field}) disagrees with the shipped Binds.Cache"
+            );
+        }
     }
 }
