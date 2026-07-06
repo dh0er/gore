@@ -901,17 +901,56 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
         Some(format!("{}.{f}({})", wrap_uobject_recv(&recv, target_owner, refs), render_args(&a, params, refs)))
     } else {
         if refs.is_type_name(f) {
-            // EDIT C: a value-type factory call (FName/E*/T* — NOT U*/A*, which use ALLOC) whose
+            // A factory GLOBAL whose name collides with a registered type name. Two flavours:
+            //
+            // EDIT C: a VALUE-type factory call (FName/E*/T* — NOT U*/A*, which use ALLOC) whose
             // result is built into the return register and re-pushed by a following `PshRPtr` as
             // an ENCLOSING call's arg. Dropping it (return None) loses that arg → the consuming
             // call renders 0-arg (`this.GetCharacter()`). Instead render it as `T(args)` so it
             // FLOWS into `pending` and PshRPtr recovers it (`this.GetCharacter(FName(...))`).
             // Restores ARITY; the literal may be a name-table index (acceptable per spec). Gate
             // strictly: value type AND non-empty args (a 0-arg in-place default ctor stays None).
-            let is_value = matches!(f.bytes().next(), Some(b'F') | Some(b'E') | Some(b'T'));
+            //
+            // batch-42: an OBJECT-factory GLOBAL (U*/A*) — a CALL-dispatched global that RETURNS a
+            // handle (NOT an ALLOC in-place ctor: ALLOC is the factory's OWN body, not the call
+            // site). Names like `UCBT_Root(prio)`, `UTauntConfigManager()`,
+            // `UCBT_AttackTokenRequest()`, the BT-wrapper family `Inverter`/`Succeeder`/… collide
+            // with their return type name, so `is_type_name` is true and the arm dropped them as if
+            // they were struct ctors — stranding the `STOREOBJ wN` slot that the downstream member
+            // store (`this.x = local_N`), chained call receiver (`Parent.DoNode(local_N, …)`), or
+            // `LOADOBJ; RET` then reads as a phantom (near-empty factories degenerate to `return;`).
+            // Recover as `f(args)` so it FLOWS into `pending`; the bytecode's own `STOREOBJ` then
+            // captures it into `local_N` (so the member-ref REFCPY store — batch-41b — sees a plain
+            // `local_N` src that already passes its gate, and `LOADOBJ; RET` renders `return f(…)`).
+            // DISCRIMINATOR (both data points already in hand): a real in-place ctor returns VOID
+            // (token 0x52) and/or is a METHOD the idiom-C ctor path consumed BEFORE build_call; a
+            // factory returns a non-void OBJECT handle (ret_ty head U/A, token 5) AND is a non-method
+            // free global. Gate on the RETURN TYPE, NOT arg count — a 0-arg `UCBT_AttackTokenRequest()`
+            // MUST recover. Any un-provable operand (no U/A class-head return, void, sentinel/
+            // unresolved arg) BAILS to the current drop below — never guess (a wrong factory fed into
+            // a member store / return is worse than a dropped one, and a mis-fire on a genuine in-place
+            // ctor = silent DOUBLE construction).
+            let head = f.split('<').next().unwrap_or(f);
+            let is_value = matches!(head.bytes().next(), Some(b'F') | Some(b'E') | Some(b'T'));
             if is_value && !a.is_empty() {
                 maybe_reverse_args(&mut a, params, refs);
                 return Some(format!("{f}({})", render_args(&a, params, refs)));
+            }
+            // OBJECT factory: non-method (structurally: an in-place ctor is void and/or a method the
+            // idiom-C arm consumed first), return type resolves to a real U/A class head, non-void.
+            let is_object_factory = !is_method
+                && matches!(ret_ty.map(tyhead), Some(rh) if
+                    matches!(rh.bytes().next(), Some(b'U') | Some(b'A'))
+                    // U/A + uppercase-2nd-char = a real class head (rejects `uint`-ish primitives).
+                    && rh.as_bytes().get(1).map(|c| c.is_ascii_uppercase()).unwrap_or(false)
+                    && rh != "void");
+            if is_object_factory {
+                maybe_reverse_args(&mut a, params, refs);
+                let rendered = render_args(&a, params, refs);
+                // Never emit a sentinel-marked / unresolved arg list (a definite mismatch): bail.
+                if !rendered.contains('\u{2}') && !rendered.contains('\u{1}') && rendered != UNRESOLVED {
+                    return Some(format!("{f}({rendered})"));
+                }
             }
             return None; // free-standing in-place constructor — implicit in AS source
         }
