@@ -3124,6 +3124,22 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                     cmp = None;
                 }
             }
+            // FreeNullV8 vN: the compiler's `return null` prologue — free slot N and set it to a
+            // null object handle. Model as `local_N = nullptr;` so the following `LOADOBJ vN; RET`
+            // renders `return nullptr;` (previously it was ignored -> the null-return branch
+            // rendered empty). Additive and always correct — nulling its own slot IS the opcode's
+            // VM semantics; a rare non-return slot-reuse also legitimately nulls the slot
+            // (a redundant null-init of an already-null-defaulted object local, value-preserving).
+            // Depends on Fix 2 (the member-load must be recovered first so the null-check tests the
+            // right operand). batch-41c, Fix 3, S4.
+            "FreeNullV8" => {
+                flush!();
+                let slot = w(ins, 0);
+                out.push(format!("{} = nullptr;", name(slot)));
+                // clear any stale const / member-read provenance for this slot
+                set_consts.remove(&slot);
+                member_read_slots.remove(&slot);
+            }
             // ---- pure VM housekeeping / flow: ignore ----
             // NOTE: `ThrowException` (throw) and `JMPP` (jump-table/switch) are NOT housekeeping
             // — they're unmodeled control transfers, and `cfg.rs` leaves JMPP successors unknown.
@@ -3131,7 +3147,7 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
             // rather than emitting recompilable source with the throw/switch silently dropped.
             "SUSPEND" | "JitEntry" | "PopPtr" | "SwapPtr" | "ClrHi" | "ClrVPtr"
             | "FREE" | "FinConstruct" | "CHKREF" | "ChkRefS" | "ChkNullV" | "ChkNullS"
-            | "DestructScript" | "SaveReturnValue" | "ResolveObjectPtr" | "FreeNullV8" | "GETOBJ"
+            | "DestructScript" | "SaveReturnValue" | "ResolveObjectPtr" | "GETOBJ"
             | "GETOBJREF" | "GETREF"
             | "JMP" => {}
             // CopyScript performs a script-value copy (an assignment), not housekeeping — it's
