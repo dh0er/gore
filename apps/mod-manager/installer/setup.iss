@@ -21,12 +21,12 @@
 ; Distinct from goresave's and gore-mod's GUIDs so the products install
 ; side by side.
 AppId={{B7E4D2C9-5A18-4F6B-9E3D-1C8A7F4B2D60}
-AppName=gore-manager
+AppName=GORE Mod Manager
 AppVersion={#AppVersion}
-AppVerName=gore-manager {#AppVersion}
+AppVerName=GORE Mod Manager {#AppVersion}
 AppPublisher=dh0er
 DefaultDirName={autopf}\gore-manager
-DefaultGroupName=gore-manager
+DefaultGroupName=GORE Mod Manager
 ; Per-user installs work without elevation; the dialog lets the user pick
 ; all-users (Program Files, admin) or current-user (no UAC prompt).
 PrivilegesRequired=lowest
@@ -57,11 +57,11 @@ Source: "..\..\..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\..\THIRD_PARTY_LICENSES.md"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\gore-manager"; Filename: "{app}\gore_manager.exe"
-Name: "{autodesktop}\gore-manager"; Filename: "{app}\gore_manager.exe"; Tasks: desktopicon
+Name: "{group}\GORE Mod Manager"; Filename: "{app}\gore_manager.exe"
+Name: "{autodesktop}\GORE Mod Manager"; Filename: "{app}\gore_manager.exe"; Tasks: desktopicon
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional icons:"
 
 [Run]
-Filename: "{app}\gore_manager.exe"; Description: "Launch gore-manager"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\gore_manager.exe"; Description: "Launch GORE Mod Manager"; Flags: nowait postinstall skipifsilent

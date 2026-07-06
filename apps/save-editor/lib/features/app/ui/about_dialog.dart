@@ -38,7 +38,7 @@ class _GoresaveAboutDialogState extends State<GoresaveAboutDialog> {
               Image.asset('assets/goresave_icon.png', height: 120),
               const SizedBox(height: 12),
               Text(
-                'goresave',
+                'GORE Save Editor',
                 style: textTheme.titleLarge?.copyWith(
                   fontWeight: FontWeight.bold,
                 ),
@@ -54,12 +54,6 @@ class _GoresaveAboutDialogState extends State<GoresaveAboutDialog> {
                 },
               ),
               const SizedBox(height: 16),
-              Text(
-                l10n.aboutSubtitle,
-                textAlign: TextAlign.center,
-                style: textTheme.bodyMedium,
-              ),
-              const SizedBox(height: 8),
               TextButton.icon(
                 icon: const Icon(Icons.open_in_new, size: 16),
                 label: const Text(_githubUrl),

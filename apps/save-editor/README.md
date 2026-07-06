@@ -1,4 +1,4 @@
-# gore-save
+# GORE Save Editor
 
 `gore-save` (the `goresave` app) is a savegame editor for Gothic Remake. It
 provides a Flutter interface backed by a Rust savegame core. It is one project

@@ -21,7 +21,7 @@ Future<void> main() async {
       size: settings.windowSize ?? const Size(1280, 800),
       minimumSize: const Size(1100, 600),
       center: true,
-      title: 'gore-manager',
+      title: 'GORE Mod Manager',
       // The app bar acts as the title bar (drag area, window buttons).
       titleBarStyle: TitleBarStyle.hidden,
     );

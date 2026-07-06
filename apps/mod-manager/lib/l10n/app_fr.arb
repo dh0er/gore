@@ -1,6 +1,6 @@
 {
   "@@locale": "fr",
-  "appTitle": "gore-manager",
+  "appTitle": "GORE Mod Manager",
   "tabMods": "Mods",
   "tabSettings": "Paramètres",
   "settingsGameExe": "Exécutable du jeu",
@@ -57,7 +57,6 @@
     }
   },
   "about": "À propos",
-  "aboutSubtitle": "Gestionnaire de mods Gothic 1 Remake",
   "aboutCopyright": "© 2026 contributeurs de goresave",
   "aboutLicense": "Sous licence MIT.",
   "appearanceTitle": "Apparence",

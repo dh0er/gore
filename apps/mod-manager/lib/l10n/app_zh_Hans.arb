@@ -1,6 +1,6 @@
 {
   "@@locale": "zh_Hans",
-  "appTitle": "gore-manager",
+  "appTitle": "GORE Mod Manager",
   "tabMods": "模组",
   "tabSettings": "设置",
   "settingsGameExe": "游戏可执行文件",
@@ -57,7 +57,6 @@
     }
   },
   "about": "关于",
-  "aboutSubtitle": "Gothic 1 Remake 模组管理器",
   "aboutCopyright": "© 2026 goresave 贡献者",
   "aboutLicense": "基于 MIT 许可证授权。",
   "appearanceTitle": "外观",

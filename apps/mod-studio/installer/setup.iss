@@ -20,12 +20,12 @@
 ; Fixed GUID identifies the app across versions for in-place updates.
 ; Distinct from goresave's GUID so the two products install side by side.
 AppId={{F2B9C4A7-8D63-4F1E-A0C5-7E3B6D2A91F4}
-AppName=gore-mod
+AppName=GORE Mod Studio
 AppVersion={#AppVersion}
-AppVerName=gore-mod {#AppVersion}
+AppVerName=GORE Mod Studio {#AppVersion}
 AppPublisher=dh0er
 DefaultDirName={autopf}\gore-mod
-DefaultGroupName=gore-mod
+DefaultGroupName=GORE Mod Studio
 ; Per-user installs work without elevation; the dialog lets the user pick
 ; all-users (Program Files, admin) or current-user (no UAC prompt).
 PrivilegesRequired=lowest
@@ -59,11 +59,11 @@ Source: "..\..\..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\..\THIRD_PARTY_LICENSES.md"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\gore-mod"; Filename: "{app}\gore_mod.exe"
-Name: "{autodesktop}\gore-mod"; Filename: "{app}\gore_mod.exe"; Tasks: desktopicon
+Name: "{group}\GORE Mod Studio"; Filename: "{app}\gore_mod.exe"
+Name: "{autodesktop}\GORE Mod Studio"; Filename: "{app}\gore_mod.exe"; Tasks: desktopicon
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional icons:"
 
 [Run]
-Filename: "{app}\gore_mod.exe"; Description: "Launch gore-mod"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\gore_mod.exe"; Description: "Launch GORE Mod Studio"; Flags: nowait postinstall skipifsilent

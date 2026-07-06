@@ -1,7 +1,7 @@
 {
   "@@locale": "pl",
-  "appTitle": "Edytor zapisów gry Gothic Remake",
-  "appLogoSemanticLabel": "Logo goresave",
+  "appTitle": "GORE Save Editor",
+  "appLogoSemanticLabel": "GORE Save Editor logo",
   "zoomTooltip": "Naciśnij Ctrl +/-, aby przybliżyć lub oddalić",
   "switchToLightMode": "Przełącz na tryb jasny",
   "switchToDarkMode": "Przełącz na tryb ciemny",
@@ -320,7 +320,6 @@
   "codecBackendLine": "Backend: {backend}",
   "yes": "tak",
   "no": "nie",
-  "aboutSubtitle": "Edytor zapisów gry Gothic Remake",
   "aboutVersion": "Wersja {version} ({sha})",
   "aboutCopyright": "© 2026 współtwórcy goresave",
   "aboutLicense": "Udostępniane na licencji MIT.",

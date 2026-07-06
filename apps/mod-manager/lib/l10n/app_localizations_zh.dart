@@ -9,7 +9,7 @@ class AppLocalizationsZh extends AppLocalizations {
   AppLocalizationsZh([String locale = 'zh']) : super(locale);
 
   @override
-  String get appTitle => 'gore-manager';
+  String get appTitle => 'GORE Mod Manager';
 
   @override
   String get tabMods => '模组';
@@ -158,9 +158,6 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get about => '关于';
-
-  @override
-  String get aboutSubtitle => 'Gothic 1 Remake 模组管理器';
 
   @override
   String get aboutCopyright => '© 2026 goresave 贡献者';
@@ -216,7 +213,7 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   AppLocalizationsZhHans() : super('zh_Hans');
 
   @override
-  String get appTitle => 'gore-manager';
+  String get appTitle => 'GORE Mod Manager';
 
   @override
   String get tabMods => '模组';
@@ -365,9 +362,6 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get about => '关于';
-
-  @override
-  String get aboutSubtitle => 'Gothic 1 Remake 模组管理器';
 
   @override
   String get aboutCopyright => '© 2026 goresave 贡献者';

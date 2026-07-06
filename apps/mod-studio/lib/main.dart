@@ -17,7 +17,7 @@ Future<void> main() async {
       // editor's label column always fit without horizontal overflow.
       size: Size(1600, 900),
       minimumSize: Size(1340, 640),
-      title: 'gore-mod',
+      title: 'GORE Mod Studio',
       titleBarStyle: TitleBarStyle.hidden,
     ),
     () async {

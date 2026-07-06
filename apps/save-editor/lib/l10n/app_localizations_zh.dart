@@ -9,10 +9,10 @@ class AppLocalizationsZh extends AppLocalizations {
   AppLocalizationsZh([String locale = 'zh']) : super(locale);
 
   @override
-  String get appTitle => 'Gothic Remake 存档编辑器';
+  String get appTitle => 'GORE Save Editor';
 
   @override
-  String get appLogoSemanticLabel => 'goresave 标志';
+  String get appLogoSemanticLabel => 'GORE Save Editor logo';
 
   @override
   String get zoomTooltip => '按 Ctrl +/- 放大/缩小';
@@ -1099,9 +1099,6 @@ class AppLocalizationsZh extends AppLocalizations {
   String get no => '否';
 
   @override
-  String get aboutSubtitle => 'Gothic Remake 存档编辑器';
-
-  @override
   String aboutVersion(String version, String sha) {
     return '版本 $version（$sha）';
   }
@@ -1275,10 +1272,10 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   AppLocalizationsZhHans() : super('zh_Hans');
 
   @override
-  String get appTitle => 'Gothic Remake 存档编辑器';
+  String get appTitle => 'GORE Save Editor';
 
   @override
-  String get appLogoSemanticLabel => 'goresave 标志';
+  String get appLogoSemanticLabel => 'GORE Save Editor logo';
 
   @override
   String get zoomTooltip => '按 Ctrl +/- 放大/缩小';
@@ -2339,9 +2336,6 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get no => '否';
-
-  @override
-  String get aboutSubtitle => 'Gothic Remake 存档编辑器';
 
   @override
   String aboutVersion(String version, String sha) {

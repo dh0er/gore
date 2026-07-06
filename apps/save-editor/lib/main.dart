@@ -19,7 +19,7 @@ Future<void> main() async {
       size: settings.windowSize ?? const Size(1600, 900),
       minimumSize: const Size(960, 600),
       center: true,
-      title: 'Gothic Remake Savegame Editor',
+      title: 'GORE Save Editor',
       // The app bar acts as the title bar (drag area, window buttons).
       titleBarStyle: TitleBarStyle.hidden,
     );

@@ -1,6 +1,6 @@
 {
   "@@locale": "ja",
-  "appTitle": "gore-manager",
+  "appTitle": "GORE Mod Manager",
   "tabMods": "Mod",
   "tabSettings": "設定",
   "settingsGameExe": "ゲーム実行ファイル",
@@ -57,7 +57,6 @@
     }
   },
   "about": "このアプリについて",
-  "aboutSubtitle": "Gothic 1 Remake Mod マネージャー",
   "aboutCopyright": "© 2026 goresave コントリビューター",
   "aboutLicense": "MIT ライセンスの下で提供されています。",
   "appearanceTitle": "外観",
