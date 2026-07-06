@@ -3627,6 +3627,31 @@ impl Structurer<'_> {
                 self.loop_scope = saved;
                 let _ = writeln!(out, "{ind}}}");
                 next = latch + 1;
+            } else if let Some((test_idx, cond, body_head, break_off)) =
+                self.test_first_foreach(i, stop)
+            {
+                // batch-44b (E2): a TEST-FIRST foreach. Block `i` is a bare `JMP →test` that enters
+                // the loop AT the CanProceed test (guarding the first iteration). The iterator
+                // SETUP (`PSF wIt; CALLSYS Iterator`) lives in block `i` before the JMP — emit it
+                // ONCE, before the loop (loop-invariant construction). Then render the top-test
+                // `while (it.CanProceed) { body }` where body = [body_head, test_idx) (the test
+                // block IS the condition, re-lowered by the compiler to the same entry-JMP form) —
+                // never the bottom-test `while (uninit_slot != 0)` the status-quo `loop_latch` arm
+                // would emit. `continue_off` = test block start (a `continue;` re-tests);
+                // `break_off` = the test's forward exit. Gate 2 already proved (in the detector)
+                // that the body fully structures under this scope; on ANY deviation the detector
+                // returned None and this arm never fired (the status-quo bottom-test stands).
+                self.emit_linear(i, i + 1, depth, out, true);
+                let _ = writeln!(out, "{ind}while ({cond})");
+                let _ = writeln!(out, "{ind}{{");
+                let test_off = self.g.blocks[test_idx].start_dw;
+                let ls = LoopScope { continue_off: test_off, break_off };
+                let saved = self.loop_scope;
+                self.loop_scope = Some(ls);
+                self.emit_range(body_head, test_idx, depth + 1, out);
+                self.loop_scope = saved;
+                let _ = writeln!(out, "{ind}}}");
+                next = test_idx + 1;
             } else if let Some(latch) = self.loop_latch(i, stop) {
                 let lcmp = block_stmts(self.ctx, self.g.blocks[latch].instr_lo, self.g.blocks[latch].instr_hi).1;
                 let cond = branch_cond(&lcmp, self.jump_op(latch));
@@ -4981,6 +5006,101 @@ impl Structurer<'_> {
         let cmp = block_stmts(self.ctx, b.instr_lo, b.instr_hi).1;
         let cond = negate(&branch_cond(&cmp, self.jump_op(i)));
         Some((taken_idx, cond))
+    }
+
+    /// batch-44b (E2, specs/loop-body-cfg-ext.md §2.2): the `it.CanProceed` top-test condition of
+    /// a test-first foreach whose latch/test block is `test_idx`. The iterator test lowers as
+    /// `LoadVObjR wIt, ?, <CanProceed-off>; RDR1 wS; CpyVtoR1 wS; JLowNZ/JLowZ →body`. Render the
+    /// condition DIRECTLY from the member load (`local_It.CanProceed`) instead of the
+    /// bottom-test's uninitialized slot read (`local_S != 0`), oriented so the loop CONTINUES on
+    /// the back-edge sense. Returns None on ANY deviation from the exact iterator idiom (bail-safe:
+    /// the caller then keeps the current bottom-test emission).
+    fn foreach_test_cond(&self, test_idx: usize) -> Option<String> {
+        let b = &self.g.blocks[test_idx];
+        let jop = self.jump_op(test_idx);
+        // the test terminator must be the conditional back-edge itself
+        if !matches!(jop, "JLowNZ" | "JLowZ") || !self.is_backward_cond(test_idx) {
+            return None;
+        }
+        // find the member load feeding the test register: LoadVObjR wIt, ?, off -> a `CanProceed`
+        // field on the iterator. Require the field name to be exactly `CanProceed` — the iterator
+        // termination predicate — so no other member-tested loop can match.
+        let mut recv_field: Option<String> = None;
+        for j in b.instr_lo..b.instr_hi {
+            let ins = &self.ctx.instrs[j];
+            if ins.op.name == "LoadVObjR" {
+                let obj = self.ctx.slot_name(ins.words.first().copied().map(s16).unwrap_or(0));
+                let off = ins.words.get(1).copied().unwrap_or(0) as i32;
+                let tid = ins.dwords.first().copied().unwrap_or(0) as i32;
+                if let Some(field) = self.ctx.refs.member(tid, off) {
+                    if field == "CanProceed" {
+                        recv_field = Some(format!("{obj}.{field}"));
+                    }
+                }
+            }
+        }
+        let expr = recv_field?;
+        // back-edge (loop body) is taken when the iterator can proceed. JLowNZ → body when the
+        // test is non-zero (true): loop continues while `expr`. JLowZ → body when zero (a NOT'd
+        // form): loop continues while `!expr`.
+        Some(match jop {
+            "JLowNZ" => expr,
+            _ => format!("!({expr})"),
+        })
+    }
+
+    /// batch-44b (E2, specs/loop-body-cfg-ext.md §2.2): detect a TEST-FIRST `foreach` whose ENTRY
+    /// block `e` is a bare `JMP →T` into the CanProceed test block `T` (the loop is entered at the
+    /// test, guarding the first iteration). The loop IS already detected by `loop_latch` (firing at
+    /// `e+1`, latch=`T`), but the current emission renders it as a BOTTOM-test `while (slot != 0)`
+    /// reading an uninitialized test slot — an invalid `.as` that collapses. When this exact
+    /// signature holds, the caller renders the correct top-test `while (it.CanProceed) { body }`.
+    ///
+    /// Signature (ALL required; any deviation ⇒ None ⇒ status-quo bottom-test):
+    ///   1. block `e` ends in a bare `JMP →jt` with a SINGLE successor (no fall-through);
+    ///   2. `T = idx_of[jt]`, `e < T < stop`, and `T` is the CanProceed test block
+    ///      (`is_backward_cond`, terminator `JLowNZ`/`JLowZ`, `foreach_test_cond` recognizes it);
+    ///   3. `T`'s back-edge target is exactly `blocks[e+1].start_dw` — the body head is `e+1`;
+    ///   4. the body `[e+1, T)` is Gate-2 recoverable under `loop_scope = {continue: T, break:
+    ///      T's forward exit}`.
+    /// Returns `(test_idx, cond, body_head, break_off)`.
+    fn test_first_foreach(&mut self, e: usize, stop: usize) -> Option<(usize, String, usize, usize)> {
+        // 1. entry block `e` must be a bare single-successor JMP.
+        if self.jump_op(e) != "JMP" {
+            return None;
+        }
+        let eb = &self.g.blocks[e];
+        if eb.succs.len() != 1 {
+            return None;
+        }
+        let jt = eb.succs[0];
+        let test_idx = *self.idx_of.get(&jt)?;
+        if test_idx <= e || test_idx >= stop {
+            return None;
+        }
+        // 2. `T` is the CanProceed test with a recognized condition.
+        let cond = self.foreach_test_cond(test_idx)?;
+        // 3. `T`'s back-edge target is the body head = block e+1.
+        let tb = &self.g.blocks[test_idx];
+        let test_off = tb.start_dw;
+        let back = *tb.succs.iter().find(|&&s| s <= test_off)?;
+        let body_head = e + 1;
+        if body_head >= test_idx || self.g.blocks[body_head].start_dw != back {
+            return None;
+        }
+        // break_off = the test's forward (non-back-edge) successor (the loop exit).
+        let break_off = *tb.succs.iter().find(|&&s| s > test_off)?;
+        // 4. Gate 2 — the body must fully structure under the loop scope. (No Gate 1: a foreach
+        //    body is legitimately straight-line; Gate 2 alone proves every edge is recoverable.)
+        let ls = LoopScope { continue_off: test_off, break_off };
+        let saved = self.loop_scope;
+        self.loop_scope = Some(ls);
+        let ok = self.loop_body_recoverable(body_head, test_idx, ls);
+        self.loop_scope = saved;
+        if !ok {
+            return None;
+        }
+        Some((test_idx, cond, body_head, break_off))
     }
 
     fn is_backward_cond(&self, bi: usize) -> bool {
