@@ -465,7 +465,7 @@ class AppLocalizationsEs extends AppLocalizations {
       'La edición de datos privados del personaje requiere un códec capaz de comprimir.';
 
   @override
-  String get heroTransform => 'Posición del héroe';
+  String get heroTransform => 'Posición';
 
   @override
   String get locationX => 'Posición X';
@@ -1330,7 +1330,7 @@ class AppLocalizationsEs extends AppLocalizations {
   String get heroGroupAdvanced => 'Avanzado';
 
   @override
-  String get heroEntryHeroTransform => 'Posición del héroe';
+  String get heroEntryHeroTransform => 'Posición';
 
   @override
   String attributeEmpty(String name) {

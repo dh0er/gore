@@ -463,7 +463,7 @@ class AppLocalizationsDe extends AppLocalizations {
       'Private Spielerbearbeitungen benötigen einen komprimierfähigen Codec.';
 
   @override
-  String get heroTransform => 'Helden-Transform';
+  String get heroTransform => 'Position';
 
   @override
   String get locationX => 'Position X';
@@ -1330,7 +1330,7 @@ class AppLocalizationsDe extends AppLocalizations {
   String get heroGroupAdvanced => 'Erweitert';
 
   @override
-  String get heroEntryHeroTransform => 'Helden-Transform';
+  String get heroEntryHeroTransform => 'Position';
 
   @override
   String attributeEmpty(String name) {

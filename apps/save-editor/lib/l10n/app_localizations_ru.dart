@@ -462,7 +462,7 @@ class AppLocalizationsRu extends AppLocalizations {
       'Для редактирования приватных данных персонажа нужен кодек с поддержкой сжатия.';
 
   @override
-  String get heroTransform => 'Положение героя';
+  String get heroTransform => 'Позиция';
 
   @override
   String get locationX => 'Координата X';
@@ -1336,7 +1336,7 @@ class AppLocalizationsRu extends AppLocalizations {
   String get heroGroupAdvanced => 'Дополнительно';
 
   @override
-  String get heroEntryHeroTransform => 'Положение героя';
+  String get heroEntryHeroTransform => 'Позиция';
 
   @override
   String attributeEmpty(String name) {

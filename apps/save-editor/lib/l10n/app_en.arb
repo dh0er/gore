@@ -201,7 +201,7 @@
   "gameTimeInvalid": "Enter whole numbers — day ≥ 0, hours 0–23, minutes and seconds 0–59.",
   "required": "Required",
   "playerLockedBody": "Private player edits need a compress-ready codec.",
-  "heroTransform": "Hero transform",
+  "heroTransform": "Position",
   "locationX": "Location X",
   "locationY": "Location Y",
   "locationZ": "Location Z",
@@ -723,7 +723,7 @@
   "heroGroupResistances": "Resistances",
   "heroGroupThieving": "Thieving",
   "heroGroupAdvanced": "Advanced",
-  "heroEntryHeroTransform": "Hero transform",
+  "heroEntryHeroTransform": "Position",
   "attributeEmpty": "{name} is empty — enter a value or restore the original before saving.",
   "@attributeEmpty": {
     "placeholders": {

@@ -461,7 +461,7 @@ class AppLocalizationsPl extends AppLocalizations {
       'Edycja prywatnych danych postaci wymaga kodeka obsługującego kompresję.';
 
   @override
-  String get heroTransform => 'Pozycja bohatera';
+  String get heroTransform => 'Pozycja';
 
   @override
   String get locationX => 'Pozycja X';
@@ -1340,7 +1340,7 @@ class AppLocalizationsPl extends AppLocalizations {
   String get heroGroupAdvanced => 'Zaawansowane';
 
   @override
-  String get heroEntryHeroTransform => 'Pozycja bohatera';
+  String get heroEntryHeroTransform => 'Pozycja';
 
   @override
   String attributeEmpty(String name) {

@@ -971,7 +971,7 @@ abstract class AppLocalizations {
   /// No description provided for @heroTransform.
   ///
   /// In en, this message translates to:
-  /// **'Hero transform'**
+  /// **'Position'**
   String get heroTransform;
 
   /// No description provided for @locationX.
@@ -2423,7 +2423,7 @@ abstract class AppLocalizations {
   /// No description provided for @heroEntryHeroTransform.
   ///
   /// In en, this message translates to:
-  /// **'Hero transform'**
+  /// **'Position'**
   String get heroEntryHeroTransform;
 
   /// No description provided for @attributeEmpty.

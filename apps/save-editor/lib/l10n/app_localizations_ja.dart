@@ -460,7 +460,7 @@ class AppLocalizationsJa extends AppLocalizations {
   String get playerLockedBody => 'プライベートプレイヤーの編集には圧縮対応のコーデックが必要です。';
 
   @override
-  String get heroTransform => 'ヒーローのトランスフォーム';
+  String get heroTransform => '位置';
 
   @override
   String get locationX => '位置 X';
@@ -1301,7 +1301,7 @@ class AppLocalizationsJa extends AppLocalizations {
   String get heroGroupAdvanced => '詳細設定';
 
   @override
-  String get heroEntryHeroTransform => 'ヒーローのトランスフォーム';
+  String get heroEntryHeroTransform => '位置';
 
   @override
   String attributeEmpty(String name) {

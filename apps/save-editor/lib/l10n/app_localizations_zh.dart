@@ -458,7 +458,7 @@ class AppLocalizationsZh extends AppLocalizations {
   String get playerLockedBody => '编辑私有玩家数据需要支持压缩的编解码器。';
 
   @override
-  String get heroTransform => '主角变换';
+  String get heroTransform => '位置';
 
   @override
   String get locationX => '位置 X';
@@ -1285,7 +1285,7 @@ class AppLocalizationsZh extends AppLocalizations {
   String get heroGroupAdvanced => '高级';
 
   @override
-  String get heroEntryHeroTransform => '主角变换';
+  String get heroEntryHeroTransform => '位置';
 
   @override
   String attributeEmpty(String name) {
@@ -1763,7 +1763,7 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   String get playerLockedBody => '编辑私有玩家数据需要支持压缩的编解码器。';
 
   @override
-  String get heroTransform => '主角变换';
+  String get heroTransform => '位置';
 
   @override
   String get locationX => '位置 X';
@@ -2590,7 +2590,7 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   String get heroGroupAdvanced => '高级';
 
   @override
-  String get heroEntryHeroTransform => '主角变换';
+  String get heroEntryHeroTransform => '位置';
 
   @override
   String attributeEmpty(String name) {

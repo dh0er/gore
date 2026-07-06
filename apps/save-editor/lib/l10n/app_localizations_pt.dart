@@ -464,7 +464,7 @@ class AppLocalizationsPt extends AppLocalizations {
       'Edições privadas do jogador exigem um codec capaz de comprimir.';
 
   @override
-  String get heroTransform => 'Transformação do herói';
+  String get heroTransform => 'Posição';
 
   @override
   String get locationX => 'Posição X';
@@ -1328,7 +1328,7 @@ class AppLocalizationsPt extends AppLocalizations {
   String get heroGroupAdvanced => 'Avançado';
 
   @override
-  String get heroEntryHeroTransform => 'Transformação do herói';
+  String get heroEntryHeroTransform => 'Posição';
 
   @override
   String attributeEmpty(String name) {
@@ -1812,7 +1812,7 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
       'Edições privadas do jogador exigem um codec capaz de comprimir.';
 
   @override
-  String get heroTransform => 'Transformação do herói';
+  String get heroTransform => 'Posição';
 
   @override
   String get locationX => 'Posição X';
@@ -2676,7 +2676,7 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
   String get heroGroupAdvanced => 'Avançado';
 
   @override
-  String get heroEntryHeroTransform => 'Transformação do herói';
+  String get heroEntryHeroTransform => 'Posição';
 
   @override
   String attributeEmpty(String name) {
