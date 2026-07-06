@@ -110,6 +110,12 @@ PROJECTS: dict[str, dict] = {
         "core_crate": "gore-ffi",  # cargo -p selector (cargo wants the hyphenated package id)
         "core_dll": "gore_ffi",  # was gore_core; dll now gore_ffi.dll (cargo underscores it)
         "dist_zip": "gore-mod-{version}-windows-x64",
+        # Bundle the standalone `gore` CLI (gore.exe + its lua/shared SDK) beside
+        # the app, so GUI users get the power tools Studio does not expose (gore
+        # as disasm/decompile, catalog/dump/stubs, mgr) without a second download.
+        # Staged into the Flutter Release dir, so both the installer
+        # (SourceDir=Release) and the portable zip (copied from Release) ship it.
+        "companions": ["gore"],
         "releasable": True,
     },
     "gore-manager": {  # mod manager (Flutter, WinSparkle)
@@ -272,6 +278,48 @@ def target_dir(release: bool) -> Path:
     return ROOT / "target" / ("release" if release else "debug")
 
 
+def stage_companions(project: str, dry: bool) -> None:
+    """Build sibling CLI binaries and drop them into the Flutter Release dir.
+
+    A Flutter project may declare `companions: [<project>, ...]` to ship another
+    project's release binary (and its bundled data dirs) beside the app. Injecting
+    into the Release dir means both dist paths pick it up for free: the installer
+    packages from SourceDir=Release, and the portable zip is copied from Release.
+    Used to bundle the `gore` CLI with mod-studio.
+    """
+    cfg = PROJECTS[project]
+    companions = cfg.get("companions", [])
+    if not companions:
+        return
+    rel = flutter_release_dir(project)
+    for dep in companions:
+        dcfg = PROJECTS[dep]
+        run(
+            f"cargo build companion {dep}",
+            [CARGO, "build", "-p", dcfg["crate"], "--release"],
+            dry=dry,
+        )
+        if dry:
+            print(f"[dry-run] would bundle {dep} into {rel}")
+            continue
+        exe = target_dir(True) / f"{dcfg['bin']}.exe"
+        if not exe.exists():
+            raise SystemExit(f"missing companion binary: {exe}")
+        shutil.copy2(exe, rel / exe.name)
+        print(f"bundled companion {exe.name} -> {rel / exe.name}")
+        # Mirror the companion's own bundled data dirs (e.g. gore's lua/shared
+        # SDK), so the bundled CLI behaves identically to the standalone one.
+        for src_rel, dest_name in dcfg.get("bundle_dirs", []):
+            src_dir = ROOT / src_rel
+            if not src_dir.is_dir():
+                raise SystemExit(f"missing companion bundle dir: {src_dir}")
+            dest = rel / dest_name
+            if dest.exists():
+                shutil.rmtree(dest)
+            shutil.copytree(src_dir, dest)
+            print(f"bundled companion dir {src_rel} -> {dest}")
+
+
 def build_project(project: str, release: bool, dry: bool) -> None:
     cfg = PROJECTS[project]
     mode = "release" if release else "debug"
@@ -347,6 +395,9 @@ def dist_project(project: str, dry: bool) -> Path | None:
     if not cfg.get("releasable"):
         raise SystemExit(f"{project} is not releasable")
     build_project(project, release=True, dry=dry)
+    # Drop any declared companion binaries (e.g. the `gore` CLI for mod-studio)
+    # into the Release dir before it is packaged / handed to the installer.
+    stage_companions(project, dry=dry)
     version = read_version(project)
     dist = dist_dir(project)
     if not dry:
