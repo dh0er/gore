@@ -2342,6 +2342,34 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                             }
                         }
                     }
+                    // batch-49a (FIX-3-ext, specs/final-residue.md §A.3a OnGracefulExitRequested):
+                    // a 1-byte member write (`SetV1 w1,1; LoadThisR bShouldExitState; WRTV1 w1`)
+                    // where BOTH type channels failed — `ref_reg_ty` resolved to the OWNER class
+                    // (`member_type`'s OldTypeId is the owner, e.g. `UCharacterAIState`) and
+                    // `ref_reg_vty` is None (the field is an INHERITED native bool not in the
+                    // this-class map) — so `field_assign_rhs` bailed to UNRESOLVED and the store
+                    // dropped: `this.bShouldExitState = true` was LOST before the
+                    // `StopWaitingAndContinueTask` call (a REAL exit-state write loss, 2 fns).
+                    // Rescue ONLY when the field name follows the engine-enforced UE bool
+                    // convention (`b` + ASCII-uppercase), so the field PROVABLY denotes a bool
+                    // UPROPERTY (UHT reserves the `b<Upper>` prefix for bools; a non-bool field
+                    // never carries it). Bail-safe: rewrites ONLY an already-DROPPED store
+                    // (rhs still UNRESOLVED), only for a 1-byte write (bool/int8/uint8 width),
+                    // only for an int-family source, and renders the same `(x != 0)` bool wrap the
+                    // heuristic below produces for owner-typed fields — so no working store changes.
+                    if rhs == UNRESOLVED
+                        && n == "WRTV1"
+                        && looks_int(&raw)
+                    {
+                        let field_name = r.rsplit('.').next().unwrap_or("");
+                        let fb = field_name.as_bytes();
+                        let is_ue_bool = fb.len() >= 2
+                            && fb[0] == b'b'
+                            && fb[1].is_ascii_uppercase();
+                        if is_ue_bool {
+                            rhs = format!("({raw} != 0)");
+                        }
+                    }
                     // batch-25a (G2, specs/batch23-cantconvert.md): a 1-byte write to a NATIVE
                     // struct's field whose value type the in-crate native-field table resolves
                     // to an ENUM is the enum ORDINAL store (`SetV1 w80, 0x2 ... WRTV1 w80`), not
