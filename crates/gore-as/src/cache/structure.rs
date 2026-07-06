@@ -2934,9 +2934,20 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
             "RefCpyV" => {
                 let dst = name(w(ins, 0));
                 if let Some(top) = stack.pop() {
+                    // batch-41a (Fix 2, S2/S5): also accept a MEMBER-ACCESS source
+                    // (`this.member`, built by `PshVPtr;ADDSi;RDSPtr`). Such a source is a legal
+                    // RHS of a handle assignment (the field's accessor is `T@`) and was NEVER the
+                    // const PARAMETER the original guard excluded. This un-stubs the object-member
+                    // getters (`return this.member;`) and fixes the null-check operand for the
+                    // null-guard shape. Exclude call/ctor expressions (`(`) — those have their own
+                    // paths — sentinels (\u{2}) and UNRESOLVED.
+                    let member_src = top.s.contains('.')
+                        && !top.s.contains('(')
+                        && !top.s.contains('\u{2}')
+                        && top.s != UNRESOLVED;
                     let ok = !top.s.is_empty()
                         && top.s != dst
-                        && (top.s.starts_with("local_") || top.s.starts_with("Cast<"));
+                        && (top.s.starts_with("local_") || top.s.starts_with("Cast<") || member_src);
                     if ok {
                         flush!();
                         // batch-25b (G4 assign shape): a slot-to-slot handle copy whose DEST
