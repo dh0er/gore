@@ -2272,6 +2272,106 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                     .renamed_free_fn_by_id(id)
                     .map(|s| s.to_string())
                     .unwrap_or_else(|| orig.clone());
+                // batch-39 (Idiom C, ctor-member-init.md §3/§4.2): a SCRIPT-STRUCT in-place
+                // multi-arg constructor with an RVO out-slot. Shape (WeaponBehaviorSet family,
+                // ~135 ctors): `<args...> ; PSF <out> ; CALL <StructType-ctor>`, where the ctor
+                // is registered as a struct METHOD returning VOID (it constructs AT the PSF'd
+                // out-slot, the receiver on stack TOP), and a following `CopyScript` copies the
+                // out-slot into a member (`this.AttackRightSingle = local_60`). build_call pops
+                // the out-slot as the receiver, hits `is_type_name(f) -> return None` (line ~867),
+                // and DROPS the whole build — leaving the member assigned a default-constructed
+                // struct and the recovered arg scalars dead. Recover it as `out = Struct(args);`
+                // so the build FLOWS into the CopyScript store (which already renders). The
+                // nested sub-struct temp args (FGameplayTag/TSet/TSubclassOf via $beh0/RVO) are
+                // separate slots that the $beh0 / RVO-free-call arms already assign or default-
+                // construct in EMIT mode (obj_locals gives them types -> the RVO out-slot probe
+                // fires and the duplicate is consumed); the FGameplayTag 0-arg default temp is
+                // dropped but its slot stays a legal DECLARED default-constructed local, exactly
+                // as vanilla passes a default temp. This arm runs only in EMIT mode where slots
+                // are typed; decompile mode (untyped slots) fails the gates below and is unchanged.
+                //
+                // SAFETY (spec top risk — a WRONG/partial arg list is worse than a dropped one):
+                // recover ONLY when ALL args resolve CLEANLY. Bail (fall through to the status-quo
+                // drop) on ANY of: arg count != declared params; a value-type PSF temp arg with an
+                // UNKNOWN type (an unrecovered slot, not a declared temp); an empty/UNRESOLVED/
+                // $-/~-/\u{1}-/\u{2}-marked arg; or a render that yields the \u{2} arg-mismatch
+                // sentinel (a definite arg-type mismatch, e.g. a mis-resolved const). Never emit a
+                // partial or guessed arg list.
+                let idiom_c_done = 'idiom_c: {
+                    if n != "CALL"
+                        || !ctx.refs.is_type_name(&f)
+                        || !ctx.refs.is_method_by_id(id)
+                        || ctx.refs.func_ret_by_id(id).map(|d| d.base_name(ctx.refs)).as_deref() != Some("void")
+                    {
+                        break 'idiom_c false;
+                    }
+                    let Some(params) = ctx.refs.func_params_by_id(id).filter(|p| !p.is_empty()) else {
+                        break 'idiom_c false;
+                    };
+                    let np = params.len();
+                    // out-slot = stack TOP: a PSF'd slot whose type head == the struct name and
+                    // whose name is a plain local/member lvalue (never a sentinel). is_lvalue_arg
+                    // rejects PSF outright (it targets the non-PSF member-store receiver), so the
+                    // out-slot's plain-name check is inlined here.
+                    fn head(s: &str) -> &str { s.split('<').next().unwrap_or(s) }
+                    let plain_lvalue = |s: &str| -> bool {
+                        !s.is_empty()
+                            && s != UNRESOLVED
+                            && !s.contains('\u{1}')
+                            && !s.contains('\u{2}')
+                            && s.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'.')
+                            && (s.starts_with("local_") || s.starts_with("this."))
+                    };
+                    let out_ok = stack.last().map(|r| {
+                        r.is_psf && r.ty.as_deref().map(head) == Some(f.as_str()) && plain_lvalue(&r.s)
+                    }).unwrap_or(false);
+                    // Need out-slot + exactly `np` args below it (STRICT: `>` not `>=` so a
+                    // short stack that can't supply the full arg list bails, never guesses).
+                    if !out_ok || stack.len() <= np {
+                        break 'idiom_c false;
+                    }
+                    // Validate the args WITHOUT popping (peek), so a bail leaves the stack
+                    // untouched and falls through to build_call (exact status-quo behaviour).
+                    let base = stack.len() - 1 - np; // index of the deepest of this ctor's args
+                    let mut args: Vec<Arg> = stack[base..stack.len() - 1].to_vec();
+                    maybe_reverse_args(&mut args, Some(params), ctx.refs);
+                    // Bail unless every arg is a cleanly-recovered value:
+                    //  - a PSF temp arg MUST carry a known type (a declared temp slot); an
+                    //    untyped PSF is an unrecovered slot -> a dangling local reference.
+                    //  - no empty / UNRESOLVED / $-/~-/\u{1}-/\u{2}-marked arg.
+                    let args_clean = args.iter().all(|a| {
+                        !a.s.is_empty()
+                            && a.s != UNRESOLVED
+                            && !a.s.starts_with('$')
+                            && !a.s.starts_with('~')
+                            && !a.s.contains('\u{1}')
+                            && !a.s.contains('\u{2}')
+                            && !(a.is_psf && a.ty.is_none())
+                    });
+                    if !args_clean {
+                        break 'idiom_c false;
+                    }
+                    let rendered = render_args(&args, Some(params), ctx.refs);
+                    // A definite arg-type mismatch surfaces as the \u{2} sentinel from cast_arg
+                    // -> bail (keep the member's default-constructed struct) rather than emit an
+                    // uncompilable build.
+                    if rendered.contains('\u{2}') || rendered.contains('\u{1}') {
+                        break 'idiom_c false;
+                    }
+                    // All args resolved cleanly: commit. Pop the out-slot + args and emit the
+                    // build; the following CopyScript store (already recovered) flows it into the
+                    // member (`this.<field> = <out_slot>`).
+                    let out_s = stack[stack.len() - 1].s.clone();
+                    stack.truncate(base);
+                    flush!();
+                    out.push(format!("{out_s} = {f}({rendered});"));
+                    true
+                };
+                if idiom_c_done {
+                    pending_is_static_name = false;
+                    pending_is_pure_elem = false;
+                    continue;
+                }
                 pending = if f == "StaticClass" {
                     // Fix b1 — StaticClass takes 0 operands; the stack holds the ENCLOSING call's
                     // already-pushed args. Do NOT clear it (clearing destroys those args).
