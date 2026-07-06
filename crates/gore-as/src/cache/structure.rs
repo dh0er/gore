@@ -585,6 +585,25 @@ impl Ctx<'_> {
             && !ty.is_read_only
             && !ty.is_object_const
     }
+
+    /// batch-45c (FIX-4): true when `name` is EXACTLY a declared object/reference PARAMETER —
+    /// const-AGNOSTIC (unlike `param_src_ok`), because the only use is a null-guard fold
+    /// (`if (<param> == nullptr)`), a comparison that is const-safe. Never matches `this` (not a
+    /// param name) or a `local_`/temp.
+    fn param_object_ref(&self, name: &str) -> bool {
+        let idx = self.f.param_names.iter().position(|n| !n.is_empty() && n == name)
+            .or_else(|| {
+                name.strip_prefix("arg")
+                    .and_then(|d| d.parse::<usize>().ok())
+                    .filter(|&i| i < self.f.param_types.len()
+                        && self.f.param_names.get(i).map(|n| n.is_empty()).unwrap_or(false))
+            });
+        let Some(idx) = idx else { return false };
+        match self.f.param_types.get(idx) {
+            Some(t) => t.is_object_handle || t.is_reference,
+            None => false,
+        }
+    }
 }
 
 fn s16(w: u16) -> i32 {
@@ -1753,6 +1772,15 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
     // store is dropped, exactly as pre-batch-41, keeping the slot's const decl intact). Cleared
     // when the slot is re-written with a non-const value.
     let mut const_obj_slots: std::collections::HashSet<i32> = std::collections::HashSet::new();
+    // batch-45c (FIX-4): slot -> PARAMETER name, recorded when `RefCpyV wSlot` copies a param
+    // into a slot immediately consumed by `CmpPtrNull wSlot` in a short-circuit null-guard
+    // (`Me != null && …`). The copy is FOLDED (not materialised) so the guard renders
+    // `if (<param> == nullptr)` on the param directly — the vanilla dropped the RefCpyV, leaving
+    // the guard testing an UNWRITTEN slot. Folding (vs materialising `local_N = <param>;`) is
+    // const-safe: the GVL `Me` param is `const AGothicCharacterState`, so a slot copy would need a
+    // const decl (batch-41 cascade risk); a direct null-compare of the const param has no
+    // conversion. Consumed + cleared by the very next `CmpPtrNull`.
+    let mut guard_param_alias: HashMap<i32, String> = HashMap::new();
     let mut pending: Option<String> = None; // unconsumed call/ctor result
     let mut pending_ty: Option<String> = None; // recovered type of `pending` (call return type)
     // batch-20 Class B: the call returns a CONST object handle (`const UCharacterAIState`).
@@ -2451,7 +2479,13 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
             }
             "CmpPtrNull" => {
                 test_after_call = true;
-                cmp = Some(Cmp { a: name(w(ins, 0)), b: "nullptr".into(), ..Default::default() });
+                // batch-45c (FIX-4): if the preceding RefCpyV folded a param into this guard slot
+                // (`RefCpyV wN(<param>) ; CmpPtrNull wN`), render the guard on the param directly
+                // (`<param> == nullptr`) — the vanilla copy was dropped, leaving `local_N`
+                // unwritten. `remove` so a later reuse of the slot never re-aliases.
+                let slot = w(ins, 0);
+                let a = guard_param_alias.remove(&slot).unwrap_or_else(|| name(slot));
+                cmp = Some(Cmp { a, b: "nullptr".into(), ..Default::default() });
             }
             // a test op turns the CMP register into a bool; it carries the real relational
             // operator (the jump only carries the true/false sense).
@@ -3235,6 +3269,24 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                         && !top.s.contains('\u{1}')
                         && top.s != UNRESOLVED
                         && !top.s.starts_with('~');
+                    // batch-45c (FIX-4): a param copied into a slot that the VERY NEXT op
+                    // null-guards (`RefCpyV wN(<param>) ; CmpPtrNull wN`) in a short-circuit
+                    // `<param> != null && …` chain. Vanilla drops the RefCpyV, so `local_N` is
+                    // never written and `if (local_N == nullptr)` guards garbage. FOLD the copy:
+                    // record slot -> param so the following CmpPtrNull renders `if (<param> ==
+                    // nullptr)` directly (no slot decl -> const-safe for the `const` GVL `Me`).
+                    // Hard gate: source is an object/ref PARAM, and insns[k+1] is exactly
+                    // `CmpPtrNull` on this SAME slot (never touches a non-guard RefCpyV).
+                    let dst_slot0 = w(ins, 0);
+                    let param_guard_fold = ctx.param_object_ref(&top.s)
+                        && insns
+                            .get(k + 1)
+                            .is_some_and(|nx| nx.op.name == "CmpPtrNull" && w(nx, 0) == dst_slot0);
+                    if param_guard_fold {
+                        flush!();
+                        guard_param_alias.insert(dst_slot0, top.s.clone());
+                        continue;
+                    }
                     let ok = !top.s.is_empty()
                         && top.s != dst
                         && !const_ret_getter
