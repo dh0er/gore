@@ -2256,6 +2256,47 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                 }
             }
             _ if n.starts_with("WRTV") => {
+                // batch-47d (opIndex-lvalue WRTV, specs/final-tail-triage.md §3.9 DropEmptyTeams):
+                // an array-element WRITE `arr[i] = <value>;` lowers as `PshV4 i; PSF arr;
+                // Thiscall1 opIndex; WRTV*` — the opIndex Thiscall1 returns a REFERENCE to the
+                // element (into `pending`, `pending_is_ref`), and the following WRTV writes the
+                // value THROUGH it. There is no PopRPtr, so `ref_reg` is unset and the store
+                // dropped: `flush!` emitted the opIndex as a bare `arr[i];` statement and the WRTV
+                // silently vanished (DropEmptyTeams' `_IdxToRemappedIdx[i] = <newIdx>` compaction
+                // store-backs [0085],[0099] — a REAL mutation bug: the remap table never written).
+                // Capture the ref-returning opIndex lvalue BEFORE flush! and route the WRTV into
+                // it. Gated HARD: `ref_reg` genuinely unset, `pending_is_ref` (the opIndex returns
+                // a reference — a value-returning opIndex would be a temp, never an lvalue), and
+                // the pending is a RESOLVED `.opIndex(` call expr (ends ')', no sentinel/unresolved)
+                // — so the lvalue is provable and the store cannot target a garbage receiver.
+                let opindex_lvalue = if ref_reg.is_none() && pending_is_ref {
+                    pending.as_deref().filter(|p| {
+                        p.contains(".opIndex(")
+                            && p.ends_with(')')
+                            && !p.contains('\u{2}')
+                            && !p.contains('\u{1}')
+                            && *p != UNRESOLVED
+                    }).map(|p| p.to_string())
+                } else {
+                    None
+                };
+                if let Some(lval) = opindex_lvalue {
+                    // consume the pending (do NOT flush it as a bare statement) and set it as the
+                    // write destination; a following field-typed cast is not needed for an element
+                    // write (the element type is the array's, matched by the value's own decl).
+                    pending = None;
+                    pending_ty = None;
+                    pending_is_ref = false;
+                    let slot = w(ins, 0);
+                    let raw = name(slot);
+                    let rhs = match ref_reg_ty.as_deref() {
+                        Some("float32") => float_lit(&set_consts, slot, false).unwrap_or(raw.clone()),
+                        Some("float") | Some("double") => float_lit(&set_consts, slot, true).unwrap_or(raw.clone()),
+                        _ => raw,
+                    };
+                    out.push(format!("{lval} = {rhs};"));
+                    continue;
+                }
                 flush!();
                 if let Some(r) = &ref_reg {
                     let slot = w(ins, 0);
