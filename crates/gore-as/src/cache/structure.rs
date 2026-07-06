@@ -2411,6 +2411,15 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                     // one WE emit (GetG1R renders `UStoryG1R GetG1R()`, no const), while the
                     // tail-table entry spuriously carries bIsObjectConst (2757 GetG1R stores compile
                     // CLEAN in the batch-19 capture). Never const-wrap script-call results.
+                    // batch-41e CONFIRMED: the return DataType flag `is_object_const` is NOT a
+                    // reliable const-return signal — GetG1R (UG1RQuest) carries is_object_const=true
+                    // identically to GetSelectedItem, yet its emitted decl is legitimately non-const
+                    // (emit.rs `ret_sig` re-adds `const` only when the BODY returns a const-marked
+                    // slot, which GetG1R does not). Const-wrapping on the flag alone cascades const
+                    // to ~900 GetG1R + GetRootNode call sites that contradict their non-const decls.
+                    // So the blanket stays; GetSelectedItem's const-member-getter recovery is
+                    // reverted at the source instead (the RefCpyV `const_ret_getter` bail below,
+                    // batch-41e).
                     pending_const = false;
                     let na = ctx.refs.native_arity_by_id(id, &orig);
                     // SCRIPT call by id: the cache FunctionReference param count is authoritative
@@ -2961,8 +2970,33 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                         && !top.s.contains('(')
                         && !top.s.contains('\u{2}')
                         && top.s != UNRESOLVED;
+                    // batch-41e (CASE B): BAIL when this const native-field member read would
+                    // become the function's RETURNED value, forcing an object-const RETURN type.
+                    // A const-member getter body (`return this.<constMember>;`) makes emit.rs render
+                    // `const T GetX()`; every caller then needs a `const T` slot, and the script
+                    // CALL arm cannot const-propagate (the return DataType flag is unreliable —
+                    // GetG1R carries is_object_const=true identically yet is legitimately non-const,
+                    // so flagging on it cascades const to ~900 unrelated call sites). Rather than a
+                    // fragile, wide const-cascade, keep the ONE getter stubbed (its pre-batch-41
+                    // state): dropping this store leaves the returned slot undeclared, so the
+                    // LOADOBJ..RET stubs the whole function (1 stub, ZERO caller cascade).
+                    // Precise gate: source is a const native-field read (`top.nf_const`) AND the
+                    // enclosing function returns an object-const handle of the SAME type. This
+                    // matches ONLY GetSelectedItem (`const UItemDefinition` return). It does NOT
+                    // touch GetSelectedItemAction (return is non-const UActionKeywords) nor the
+                    // CharacterAI_Gothic const-member READS that feed null-checks / GetClass()
+                    // receivers (their functions return FItemActionHandler / bool / void, never an
+                    // object-const handle of the member's type) — those keep their batch-32d/41
+                    // `const T` local recovery.
+                    let const_ret_getter = top.nf_const.is_some()
+                        && ctx.ret_ty.is_some_and(|d| {
+                            d.is_object_handle
+                                && d.is_object_const
+                                && d.base_name(ctx.refs) == *top.nf_const.as_deref().unwrap_or("")
+                        });
                     let ok = !top.s.is_empty()
                         && top.s != dst
+                        && !const_ret_getter
                         && (top.s.starts_with("local_") || top.s.starts_with("Cast<") || member_src);
                     if ok {
                         flush!();
