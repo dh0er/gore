@@ -1,7 +1,7 @@
 {
   "@@locale": "de",
-  "appTitle": "Gothic Remake Spielstand-Editor",
-  "appLogoSemanticLabel": "goresave-Logo",
+  "appTitle": "GORE Save Editor",
+  "appLogoSemanticLabel": "GORE Save Editor logo",
   "zoomTooltip": "Strg +/- zum Vergrößern/Verkleinern drücken",
   "switchToLightMode": "Zum hellen Modus wechseln",
   "switchToDarkMode": "Zum dunklen Modus wechseln",
@@ -327,7 +327,6 @@
   "codecBackendLine": "Backend: {backend}",
   "yes": "ja",
   "no": "nein",
-  "aboutSubtitle": "Gothic Remake Spielstand-Editor",
   "aboutVersion": "Version {version} ({sha})",
   "aboutCopyright": "© 2026 goresave-Mitwirkende",
   "aboutLicense": "Lizenziert unter der MIT-Lizenz.",

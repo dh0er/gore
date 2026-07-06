@@ -1,7 +1,7 @@
 {
   "@@locale": "ru",
-  "appTitle": "Редактор сохранений Gothic Remake",
-  "appLogoSemanticLabel": "Логотип goresave",
+  "appTitle": "GORE Save Editor",
+  "appLogoSemanticLabel": "GORE Save Editor logo",
   "zoomTooltip": "Нажмите Ctrl +/- для увеличения или уменьшения",
   "switchToLightMode": "Переключить на светлую тему",
   "switchToDarkMode": "Переключить на тёмную тему",
@@ -320,7 +320,6 @@
   "codecBackendLine": "Бэкенд: {backend}",
   "yes": "да",
   "no": "нет",
-  "aboutSubtitle": "Редактор сохранений Gothic Remake",
   "aboutVersion": "Версия {version} ({sha})",
   "aboutCopyright": "© 2026 участники проекта goresave",
   "aboutLicense": "Распространяется по лицензии MIT.",

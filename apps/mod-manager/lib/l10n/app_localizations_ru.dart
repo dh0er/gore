@@ -9,7 +9,7 @@ class AppLocalizationsRu extends AppLocalizations {
   AppLocalizationsRu([String locale = 'ru']) : super(locale);
 
   @override
-  String get appTitle => 'gore-manager';
+  String get appTitle => 'GORE Mod Manager';
 
   @override
   String get tabMods => 'Моды';
@@ -160,9 +160,6 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get about => 'О программе';
-
-  @override
-  String get aboutSubtitle => 'Менеджер модов Gothic 1 Remake';
 
   @override
   String get aboutCopyright => '© 2026 участники проекта goresave';

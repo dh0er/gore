@@ -19,12 +19,12 @@
 [Setup]
 ; Fixed GUID identifies the app across versions for in-place updates.
 AppId={{C7A35D8E-4B61-4E0D-9C0A-2F8B5D1E6A43}
-AppName=goresave
+AppName=GORE Save Editor
 AppVersion={#AppVersion}
-AppVerName=goresave {#AppVersion}
+AppVerName=GORE Save Editor {#AppVersion}
 AppPublisher=dh0er
 DefaultDirName={autopf}\goresave
-DefaultGroupName=goresave
+DefaultGroupName=GORE Save Editor
 ; Per-user installs work without elevation; the dialog lets the user pick
 ; all-users (Program Files, admin) or current-user (no UAC prompt).
 PrivilegesRequired=lowest
@@ -69,11 +69,11 @@ Source: "..\..\..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\..\THIRD_PARTY_LICENSES.md"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\goresave"; Filename: "{app}\goresave.exe"
-Name: "{autodesktop}\goresave"; Filename: "{app}\goresave.exe"; Tasks: desktopicon
+Name: "{group}\GORE Save Editor"; Filename: "{app}\goresave.exe"
+Name: "{autodesktop}\GORE Save Editor"; Filename: "{app}\goresave.exe"; Tasks: desktopicon
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional icons:"
 
 [Run]
-Filename: "{app}\goresave.exe"; Description: "Launch goresave"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\goresave.exe"; Description: "Launch GORE Save Editor"; Flags: nowait postinstall skipifsilent

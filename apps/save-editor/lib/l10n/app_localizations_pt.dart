@@ -9,10 +9,10 @@ class AppLocalizationsPt extends AppLocalizations {
   AppLocalizationsPt([String locale = 'pt']) : super(locale);
 
   @override
-  String get appTitle => 'Editor de Saves do Gothic Remake';
+  String get appTitle => 'GORE Save Editor';
 
   @override
-  String get appLogoSemanticLabel => 'logotipo do goresave';
+  String get appLogoSemanticLabel => 'GORE Save Editor logo';
 
   @override
   String get zoomTooltip => 'Pressione Ctrl +/- para ampliar/reduzir';
@@ -1137,9 +1137,6 @@ class AppLocalizationsPt extends AppLocalizations {
   String get no => 'não';
 
   @override
-  String get aboutSubtitle => 'Editor de Saves do Gothic Remake';
-
-  @override
   String aboutVersion(String version, String sha) {
     return 'Versão $version ($sha)';
   }
@@ -1318,10 +1315,10 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
   AppLocalizationsPtBr() : super('pt_BR');
 
   @override
-  String get appTitle => 'Editor de Saves do Gothic Remake';
+  String get appTitle => 'GORE Save Editor';
 
   @override
-  String get appLogoSemanticLabel => 'logotipo do goresave';
+  String get appLogoSemanticLabel => 'GORE Save Editor logo';
 
   @override
   String get zoomTooltip => 'Pressione Ctrl +/- para ampliar/reduzir';
@@ -2420,9 +2417,6 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
 
   @override
   String get no => 'não';
-
-  @override
-  String get aboutSubtitle => 'Editor de Saves do Gothic Remake';
 
   @override
   String aboutVersion(String version, String sha) {

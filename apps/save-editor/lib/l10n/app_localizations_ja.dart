@@ -9,10 +9,10 @@ class AppLocalizationsJa extends AppLocalizations {
   AppLocalizationsJa([String locale = 'ja']) : super(locale);
 
   @override
-  String get appTitle => 'Gothic Remake セーブデータエディター';
+  String get appTitle => 'GORE Save Editor';
 
   @override
-  String get appLogoSemanticLabel => 'goresave ロゴ';
+  String get appLogoSemanticLabel => 'GORE Save Editor logo';
 
   @override
   String get zoomTooltip => 'Ctrl +/- で拡大・縮小';
@@ -1113,9 +1113,6 @@ class AppLocalizationsJa extends AppLocalizations {
 
   @override
   String get no => 'いいえ';
-
-  @override
-  String get aboutSubtitle => 'Gothic Remake セーブデータエディター';
 
   @override
   String aboutVersion(String version, String sha) {

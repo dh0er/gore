@@ -119,13 +119,13 @@ abstract class AppLocalizations {
   /// No description provided for @appTitle.
   ///
   /// In en, this message translates to:
-  /// **'Gothic Remake Savegame Editor'**
+  /// **'GORE Save Editor'**
   String get appTitle;
 
   /// No description provided for @appLogoSemanticLabel.
   ///
   /// In en, this message translates to:
-  /// **'goresave logo'**
+  /// **'GORE Save Editor logo'**
   String get appLogoSemanticLabel;
 
   /// No description provided for @zoomTooltip.
@@ -2071,12 +2071,6 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'no'**
   String get no;
-
-  /// No description provided for @aboutSubtitle.
-  ///
-  /// In en, this message translates to:
-  /// **'Gothic Remake Savegame Editor'**
-  String get aboutSubtitle;
 
   /// No description provided for @aboutVersion.
   ///

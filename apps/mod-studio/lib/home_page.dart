@@ -245,7 +245,7 @@ class _HomePageState extends ConsumerState<HomePage>
           child: Row(
             children: [
               const SizedBox(width: 16),
-              const Text('gore-mod'),
+              const Text('GORE Mod Studio'),
               const Expanded(child: SizedBox()),
             ],
           ),

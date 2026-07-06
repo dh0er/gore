@@ -119,7 +119,7 @@ abstract class AppLocalizations {
   /// No description provided for @appTitle.
   ///
   /// In en, this message translates to:
-  /// **'gore-manager'**
+  /// **'GORE Mod Manager'**
   String get appTitle;
 
   /// No description provided for @tabMods.
@@ -397,12 +397,6 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'About'**
   String get about;
-
-  /// No description provided for @aboutSubtitle.
-  ///
-  /// In en, this message translates to:
-  /// **'Gothic 1 Remake Mod Manager'**
-  String get aboutSubtitle;
 
   /// No description provided for @aboutCopyright.
   ///

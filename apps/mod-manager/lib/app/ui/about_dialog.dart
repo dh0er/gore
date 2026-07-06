@@ -39,7 +39,7 @@ class _GoreManagerAboutDialogState extends State<GoreManagerAboutDialog> {
               Image.asset('assets/gore_manager_icon.png', height: 120),
               const SizedBox(height: 12),
               Text(
-                'gore-manager',
+                'GORE Mod Manager',
                 style: textTheme.titleLarge?.copyWith(
                   fontWeight: FontWeight.bold,
                 ),
@@ -56,12 +56,6 @@ class _GoreManagerAboutDialogState extends State<GoreManagerAboutDialog> {
                 },
               ),
               const SizedBox(height: 16),
-              Text(
-                l10n.aboutSubtitle,
-                textAlign: TextAlign.center,
-                style: textTheme.bodyMedium,
-              ),
-              const SizedBox(height: 8),
               TextButton.icon(
                 icon: const Icon(Icons.open_in_new, size: 16),
                 label: const Text(_githubUrl),

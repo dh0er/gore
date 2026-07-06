@@ -4,7 +4,7 @@ use std::path::PathBuf;
 mod cmd;
 
 #[derive(Parser)]
-#[command(name = "gore", about = "Gothic Remake mod tooling CLI", version)]
+#[command(name = "gore", about = "GORE Command Line Tools", version)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -132,7 +132,7 @@ enum Commands {
         #[command(subcommand)]
         action: AudioAction,
     },
-    /// Build / deploy / undeploy a unified mod bundle (overrides + loc + audio)
+    /// Build / deploy / undeploy a unified mod bundle (overrides + loc + audio + textures + scripts)
     Mod {
         #[command(subcommand)]
         action: ModAction,

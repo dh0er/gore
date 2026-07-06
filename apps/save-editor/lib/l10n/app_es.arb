@@ -1,7 +1,7 @@
 {
   "@@locale": "es",
-  "appTitle": "Editor de partidas guardadas de Gothic Remake",
-  "appLogoSemanticLabel": "Logotipo de goresave",
+  "appTitle": "GORE Save Editor",
+  "appLogoSemanticLabel": "GORE Save Editor logo",
   "zoomTooltip": "Pulsa Ctrl +/- para acercar o alejar",
   "switchToLightMode": "Cambiar al modo claro",
   "switchToDarkMode": "Cambiar al modo oscuro",
@@ -320,7 +320,6 @@
   "codecBackendLine": "Backend: {backend}",
   "yes": "sí",
   "no": "no",
-  "aboutSubtitle": "Editor de partidas guardadas de Gothic Remake",
   "aboutVersion": "Versión {version} ({sha})",
   "aboutCopyright": "© 2026 colaboradores de goresave",
   "aboutLicense": "Distribuido bajo la licencia MIT.",

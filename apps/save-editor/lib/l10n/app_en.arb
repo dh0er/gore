@@ -1,7 +1,7 @@
 {
   "@@locale": "en",
-  "appTitle": "Gothic Remake Savegame Editor",
-  "appLogoSemanticLabel": "goresave logo",
+  "appTitle": "GORE Save Editor",
+  "appLogoSemanticLabel": "GORE Save Editor logo",
   "zoomTooltip": "Press Ctrl +/- to zoom in/out",
   "switchToLightMode": "Switch to light mode",
   "switchToDarkMode": "Switch to dark mode",
@@ -614,7 +614,6 @@
   },
   "yes": "yes",
   "no": "no",
-  "aboutSubtitle": "Gothic Remake Savegame Editor",
   "aboutVersion": "Version {version} ({sha})",
   "@aboutVersion": {
     "placeholders": {

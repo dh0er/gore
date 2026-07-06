@@ -1,6 +1,6 @@
 {
   "@@locale": "ru",
-  "appTitle": "gore-manager",
+  "appTitle": "GORE Mod Manager",
   "tabMods": "Моды",
   "tabSettings": "Настройки",
   "settingsGameExe": "Исполняемый файл игры",
@@ -57,7 +57,6 @@
     }
   },
   "about": "О программе",
-  "aboutSubtitle": "Менеджер модов Gothic 1 Remake",
   "aboutCopyright": "© 2026 участники проекта goresave",
   "aboutLicense": "Распространяется по лицензии MIT.",
   "appearanceTitle": "Внешний вид",

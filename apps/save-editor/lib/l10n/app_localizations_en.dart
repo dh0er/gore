@@ -9,10 +9,10 @@ class AppLocalizationsEn extends AppLocalizations {
   AppLocalizationsEn([String locale = 'en']) : super(locale);
 
   @override
-  String get appTitle => 'Gothic Remake Savegame Editor';
+  String get appTitle => 'GORE Save Editor';
 
   @override
-  String get appLogoSemanticLabel => 'goresave logo';
+  String get appLogoSemanticLabel => 'GORE Save Editor logo';
 
   @override
   String get zoomTooltip => 'Press Ctrl +/- to zoom in/out';
@@ -1128,9 +1128,6 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get no => 'no';
-
-  @override
-  String get aboutSubtitle => 'Gothic Remake Savegame Editor';
 
   @override
   String aboutVersion(String version, String sha) {
