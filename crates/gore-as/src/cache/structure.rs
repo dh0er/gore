@@ -3425,6 +3425,66 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                                         .any(|g| matches!(g.op.name, "Thiscall1" | "CALLSYS"))
                             })
                         });
+                    // batch-47a (FIX-8, specs/final-tail-triage.md §3.3): materialise a NON-const
+                    // object/ref PARAM copy `local_N = <param>;` when the copy's dest slot is later
+                    // CONSUMED by a `CmpPtr` (binary pointer compare, either operand) or by a
+                    // MEMBER-ACCESS base (`PshVPtr <dst>; ADDSi …` — the param-alias store idiom)
+                    // several ops later, and is NOT immediately null-guarded (that adjacent-guard
+                    // case is FIX-4's fold). Today FIX-4 only folds when insns[k+1] is CmpPtrNull;
+                    // FIX-7's `param_into_cmp` only fires when the compare PARTNER is a getter-
+                    // produced RefCpyV slot. Neither covers `if (OtherActor == GetAvatar())`
+                    // (partner produced by STOREOBJ, not RefCpyV), the pure param-vs-param
+                    // `if (PreviousTarget == NewTarget)` (CheckTargetChanged), nor the param-alias
+                    // `local_2 = Data; local_2.SourceActor = SourceActor;` (InitializeValidatorData)
+                    // — so the copy drops and the comparison/member-access reads an UNINITIALISED
+                    // slot: a real behavioural bug (verified vanilla+regen on
+                    // UGA_FireDemon_FireExplosion::OnTargetReceived — regen compares garbage vs
+                    // GetAvatar()). Bounded forward scan for the FIRST consumer within the block;
+                    // BAIL if the slot is re-defined (alias-shadowed) before any consumer, so a
+                    // reused slot can never be mis-materialised. Const-safe: `param_src_ok` excludes
+                    // read-only/object-const params (the b41d/45c const-cascade class) and `this`,
+                    // exactly like FIX-4/FIX-7 — a materialised copy of a non-const object PARAM into
+                    // a plain local is a legal handle assign. Additive: a copy that is neither a
+                    // getter-compare nor an immediate null-guard was DROPPED before, so recovering
+                    // it can only ADD the vanilla store back.
+                    let param_into_later_use = ctx.param_src_ok(&top.s) && {
+                        let mut consumed = false;
+                        for j in (k + 1)..insns.len() {
+                            let nx = &insns[j];
+                            // first consumer is a binary pointer compare on this slot -> materialise.
+                            if nx.op.name == "CmpPtr"
+                                && (w(nx, 0) == dst_slot0 || w(nx, 1) == dst_slot0)
+                            {
+                                consumed = true;
+                                break;
+                            }
+                            // first consumer is a member-access base: `PshVPtr <dst>; ADDSi …`
+                            // (the param-alias `local_N.field = …` store) -> materialise. The very
+                            // next op after the PshVPtr must be an ADDSi (member offset) so a bare
+                            // PshVPtr that merely re-pushes the handle as a call arg does NOT trip
+                            // this (that use reads the SAME undefined slot but is covered by the
+                            // param name flowing through the push, not a slot alias).
+                            if nx.op.name == "PshVPtr"
+                                && w(nx, 0) == dst_slot0
+                                && insns.get(j + 1).is_some_and(|a| a.op.name == "ADDSi")
+                            {
+                                consumed = true;
+                                break;
+                            }
+                            // the slot is RE-DEFINED (output word 0) by another value producer
+                            // before any consumer -> alias-shadow, this copy is not the one read; bail.
+                            if matches!(
+                                nx.op.name,
+                                "RefCpyV" | "CpyRtoV4" | "CpyRtoV8" | "RDR4" | "RDR8"
+                                    | "SetV4" | "SetV8" | "SetV1" | "STOREOBJ" | "FreeNullV8"
+                                    | "ClrVPtr"
+                            ) && w(nx, 0) == dst_slot0
+                            {
+                                break;
+                            }
+                        }
+                        consumed
+                    };
                     let ok = !top.s.is_empty()
                         && top.s != dst
                         && !const_ret_getter
@@ -3433,7 +3493,8 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                             || member_src
                             || call_src_to_out
                             || getter_into_cmp
-                            || param_into_cmp);
+                            || param_into_cmp
+                            || param_into_later_use);
                     if ok {
                         flush!();
                         // batch-25b (G4 assign shape): a slot-to-slot handle copy whose DEST
