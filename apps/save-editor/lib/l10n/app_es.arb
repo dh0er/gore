@@ -24,7 +24,13 @@
   "skillTierAmateur": "Aprendiz (Círculo 0)",
   "skillTierLearned": "Aprendida",
   "skillTierCircle": "Círculo {n}",
-  "@skillTierCircle": { "placeholders": { "n": { "type": "int" } } },
+  "@skillTierCircle": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
   "skillHintBlacksmith1H": "armas a una mano",
   "skillHintBlacksmith2H": "armas a dos manos",
   "skillCategoryCombat": "Combate",
@@ -74,7 +80,7 @@
   "skillNameRuneInscription": "Inscripción de runas",
   "skillNameBlacksmithing": "Herrería",
   "skillNameMagicCircle": "Círculo mágico",
-  "skillNameOrcish": "Lengua orca",
+  "skillNameOrcish": "Orco",
   "tabInventory": "Inventario",
   "tabWorld": "Mundo",
   "tabCharacters": "Personajes",

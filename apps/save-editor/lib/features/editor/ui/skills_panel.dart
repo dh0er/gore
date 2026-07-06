@@ -209,6 +209,15 @@ class _SkillsSectionState extends ConsumerState<SkillsSection> {
     for (final s in visible) {
       byCategory.putIfAbsent(s.category, () => []).add(s);
     }
+    // Sort skills within each category by their localized name (the core orders
+    // by base name; the user reads them by display name). Case-insensitive.
+    for (final list in byCategory.values) {
+      list.sort(
+        (a, b) => _skillName(l10n, a)
+            .toLowerCase()
+            .compareTo(_skillName(l10n, b).toLowerCase()),
+      );
+    }
     final categories = byCategory.entries.toList();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,

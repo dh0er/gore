@@ -24,7 +24,13 @@
   "skillTierAmateur": "Amateur (Circle 0)",
   "skillTierLearned": "Learned",
   "skillTierCircle": "Circle {n}",
-  "@skillTierCircle": { "placeholders": { "n": { "type": "int" } } },
+  "@skillTierCircle": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
   "skillHintBlacksmith1H": "1H weapons",
   "skillHintBlacksmith2H": "2H weapons",
   "skillCategoryCombat": "Combat",
@@ -74,7 +80,7 @@
   "skillNameRuneInscription": "Rune Inscription",
   "skillNameBlacksmithing": "Blacksmithing",
   "skillNameMagicCircle": "Magic Circle",
-  "skillNameOrcish": "Orcish Language",
+  "skillNameOrcish": "Orcish",
   "tabInventory": "Inventory",
   "tabWorld": "World",
   "tabCharacters": "Characters",

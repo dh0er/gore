@@ -24,7 +24,13 @@
   "skillTierAmateur": "Amateur (Kreis 0)",
   "skillTierLearned": "Gelernt",
   "skillTierCircle": "Kreis {n}",
-  "@skillTierCircle": { "placeholders": { "n": { "type": "int" } } },
+  "@skillTierCircle": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
   "skillHintBlacksmith1H": "1H-Waffen",
   "skillHintBlacksmith2H": "2H-Waffen",
   "skillCategoryCombat": "Kampf",
@@ -61,7 +67,7 @@
   "skillNameTakeMinecrawlerMandibles": "Minecrawler-Mandibeln nehmen",
   "skillNameSkinReptiles": "Reptilien häuten",
   "skillNameTakeShadowbeastHorn": "Schattenläufer-Horn nehmen",
-  "skillNameTakeSpines": "Stacheln nehmen",
+  "skillNameTakeSpines": "Dornen nehmen",
   "skillNameTakeBloodflyStingers": "Blutfliegen-Stachel nehmen",
   "skillNameBreakSwampsharkTeeth": "Sumpfhai-Zähne brechen",
   "skillNameTakeFireTongue": "Feuerzunge nehmen",
@@ -74,7 +80,7 @@
   "skillNameRuneInscription": "Runen einschreiben",
   "skillNameBlacksmithing": "Schmieden",
   "skillNameMagicCircle": "Magiekreis",
-  "skillNameOrcish": "Orcische Sprache",
+  "skillNameOrcish": "Orkisch",
   "tabInventory": "Inventar",
   "tabWorld": "Welt",
   "tabCharacters": "Charaktere",

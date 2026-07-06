@@ -24,7 +24,13 @@
   "skillTierAmateur": "Любитель (Круг 0)",
   "skillTierLearned": "Изучен",
   "skillTierCircle": "Круг {n}",
-  "@skillTierCircle": { "placeholders": { "n": { "type": "int" } } },
+  "@skillTierCircle": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
   "skillHintBlacksmith1H": "Одноручное оружие",
   "skillHintBlacksmith2H": "Двуручное оружие",
   "skillCategoryCombat": "Бой",
@@ -74,7 +80,7 @@
   "skillNameRuneInscription": "Начертание рун",
   "skillNameBlacksmithing": "Кузнечное дело",
   "skillNameMagicCircle": "Круг магии",
-  "skillNameOrcish": "Язык орков",
+  "skillNameOrcish": "Орочий",
   "tabInventory": "Инвентарь",
   "tabWorld": "Мир",
   "tabCharacters": "Персонажи",

@@ -194,7 +194,7 @@ class AppLocalizationsDe extends AppLocalizations {
   String get skillNameTakeShadowbeastHorn => 'Schattenläufer-Horn nehmen';
 
   @override
-  String get skillNameTakeSpines => 'Stacheln nehmen';
+  String get skillNameTakeSpines => 'Dornen nehmen';
 
   @override
   String get skillNameTakeBloodflyStingers => 'Blutfliegen-Stachel nehmen';
@@ -233,7 +233,7 @@ class AppLocalizationsDe extends AppLocalizations {
   String get skillNameMagicCircle => 'Magiekreis';
 
   @override
-  String get skillNameOrcish => 'Orcische Sprache';
+  String get skillNameOrcish => 'Orkisch';
 
   @override
   String get tabInventory => 'Inventar';

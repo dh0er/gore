@@ -24,7 +24,13 @@
   "skillTierAmateur": "素人（第0サークル）",
   "skillTierLearned": "習得済み",
   "skillTierCircle": "第{n}サークル",
-  "@skillTierCircle": { "placeholders": { "n": { "type": "int" } } },
+  "@skillTierCircle": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
   "skillHintBlacksmith1H": "片手武器",
   "skillHintBlacksmith2H": "両手武器",
   "skillCategoryCombat": "戦闘",

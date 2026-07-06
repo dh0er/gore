@@ -231,7 +231,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get skillNameMagicCircle => 'Magic Circle';
 
   @override
-  String get skillNameOrcish => 'Orcish Language';
+  String get skillNameOrcish => 'Orcish';
 
   @override
   String get tabInventory => 'Inventory';

@@ -236,7 +236,7 @@ class AppLocalizationsFr extends AppLocalizations {
   String get skillNameMagicCircle => 'Cercle de magie';
 
   @override
-  String get skillNameOrcish => 'Langue des orques';
+  String get skillNameOrcish => 'Langue orc';
 
   @override
   String get tabInventory => 'Inventaire';

@@ -24,7 +24,13 @@
   "skillTierAmateur": "业余（第0环）",
   "skillTierLearned": "已习得",
   "skillTierCircle": "第{n}环",
-  "@skillTierCircle": { "placeholders": { "n": { "type": "int" } } },
+  "@skillTierCircle": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
   "skillHintBlacksmith1H": "单手武器",
   "skillHintBlacksmith2H": "双手武器",
   "skillCategoryCombat": "战斗",

@@ -232,7 +232,7 @@ class AppLocalizationsRu extends AppLocalizations {
   String get skillNameMagicCircle => 'Круг магии';
 
   @override
-  String get skillNameOrcish => 'Язык орков';
+  String get skillNameOrcish => 'Орочий';
 
   @override
   String get tabInventory => 'Инвентарь';

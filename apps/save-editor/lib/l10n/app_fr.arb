@@ -24,7 +24,13 @@
   "skillTierAmateur": "Amateur (Cercle 0)",
   "skillTierLearned": "Apprise",
   "skillTierCircle": "Cercle {n}",
-  "@skillTierCircle": { "placeholders": { "n": { "type": "int" } } },
+  "@skillTierCircle": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
   "skillHintBlacksmith1H": "Armes à une main",
   "skillHintBlacksmith2H": "Armes à deux mains",
   "skillCategoryCombat": "Combat",
@@ -74,7 +80,7 @@
   "skillNameRuneInscription": "Gravure de runes",
   "skillNameBlacksmithing": "Forge",
   "skillNameMagicCircle": "Cercle de magie",
-  "skillNameOrcish": "Langue des orques",
+  "skillNameOrcish": "Langue orc",
   "tabInventory": "Inventaire",
   "tabWorld": "Monde",
   "tabCharacters": "Personnages",

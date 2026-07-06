@@ -557,7 +557,7 @@ abstract class AppLocalizations {
   /// No description provided for @skillNameOrcish.
   ///
   /// In en, this message translates to:
-  /// **'Orcish Language'**
+  /// **'Orcish'**
   String get skillNameOrcish;
 
   /// No description provided for @tabInventory.
