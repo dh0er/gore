@@ -458,8 +458,78 @@ impl RefResolver {
             ("FRotator", "Yaw", "float"),
             ("FRotator", "Roll", "float"),
         ];
+        // batch-40b (specs/rgt-and-methods-triage.md PART 1): NATIVE-struct FLOAT-family fields
+        // the script cache cannot type. The production emit runs WITHOUT Binds.Cache, so the
+        // batch-40 float-const-store fix (float literal instead of raw int bit-pattern) was inert
+        // for these NATIVE structs: `float_field_type` reaches `native_field_type`, which — absent
+        // binds — returned None, leaving `top.ty = None` so the WRTV `float_lit` reinterpret never
+        // fired (e.g. `FLightValues.SourceWidth = local_1101;` = the int bits of 250.0f, which the
+        // AS compiler then iTOf-coerces to the garbage float 1.13e9). These rows are the CACHE-FREE
+        // production source. The owner CLASS is still resolved cache-only (via the ADDSi type-id ->
+        // `type_by_id`, always present); this table only supplies the (class, field) -> float TYPE
+        // that used to require binds. Every entry is `float32` (verified). Enumerated by diffing the
+        // with-binds vs no-binds emit (the ADDSi member-store idiom sites) and confirmed against the
+        // shipped Binds.Cache field decls by `binds.rs::validate_float_field_types_against_real_binds_cache`.
+        const KNOWN_NATIVE_FLOAT_FIELDS: &[(&str, &str, &str)] = &[
+            ("FALoadingScreenSettings", "MinimumLoadingScreenDisplayTime", "float32"),
+            ("FAlphaBlendArgs", "BlendTime", "float32"),
+            ("FCameraBehaviour", "m_ArmLength", "float32"),
+            ("FCameraBehaviour", "m_LagSpeed", "float32"),
+            ("FCameraBehaviour", "m_SpellPitchLimit", "float32"),
+            ("FCameraBehaviour", "m_SpellYawLimit", "float32"),
+            ("FDodgeData", "m_SuperArmorResistanceMultiplier", "float32"),
+            ("FFreezeParams", "m_BlendOutDuration", "float32"),
+            ("FFreezeParams", "m_CustomTimeDilation", "float32"),
+            ("FFreezeParams", "m_FreezeDuration", "float32"),
+            ("FGameplayCueParameters", "NormalizedMagnitude", "float32"),
+            ("FGameplayCueParameters", "RawMagnitude", "float32"),
+            ("FGameplayEffectContext_HitResponse", "BowStretch", "float32"),
+            ("FGameplayEffectContext_HitResponse", "MultiplierSuperArmor", "float32"),
+            ("FGothicFlyDiveSettings", "AdaptToCollisionSampleZDistance", "float32"),
+            ("FGothicFlyDiveSettings", "CharacterZDivergeOffset", "float32"),
+            ("FGothicFlyDiveSettings", "GroundedMoveBeforeGoalDistance", "float32"),
+            ("FGothicFlyDiveSettings", "UseFlyDiveMinDistance", "float32"),
+            ("FGothicPathfollowSettings", "AgentRadiusMultiplier", "float32"),
+            ("FGothicPathfollowSettings", "CrowdAgentRadiusMultiplier", "float32"),
+            ("FGothicPathfollowSettings", "CrowdAgentSeparationWeight", "float32"),
+            ("FInteractionAnimTransition", "BlockOtherTransitionsForSeconds", "float32"),
+            ("FInteractionAnimTransition", "CooldownSeconds", "float32"),
+            ("FInteractionAnimTransition", "Probability", "float32"),
+            ("FInteractionAnimTransition", "Weight", "float32"),
+            ("FLightSet", "BarnDoorAngle", "float32"),
+            ("FLightSet", "BarnDoorLength", "float32"),
+            ("FLightSet", "IndirectLightingIntensity", "float32"),
+            ("FLightSet", "VolumetricScatteringIntensity", "float32"),
+            ("FLightValues", "AttenuationRadius", "float32"),
+            ("FLightValues", "SourceHeight", "float32"),
+            ("FLightValues", "SourceWidth", "float32"),
+            ("FMemorizedEvent", "Magnitude", "float32"),
+            ("FPathfollowModifyAvoidVelocitySettings", "FastSpeedVelocityMultiplier", "float32"),
+            ("FPathfollowModifyAvoidVelocitySettings", "MediumRangeVelocityMultiplier", "float32"),
+            ("FPathfollowModifyAvoidVelocitySettings", "ShortRangeVelocityMultiplier", "float32"),
+            ("FPathfollowMoveFocusSettings", "FocalPointHeightMultiplier", "float32"),
+            ("FPerceptionHandler", "DelaySeconds", "float32"),
+            ("FRelativeCrimeDataEntry", "BaseSeverity", "float32"),
+            ("FRememberedPerception", "Magnitude", "float32"),
+            ("FRememberedPerception", "TimeUpdated", "float32"),
+            ("FScalableFloat", "Value", "float32"),
+            ("FScoredItemAction", "Score", "float32"),
+            ("FSlateFontInfo", "Size", "float32"),
+            ("FTipSettings", "TipSwapTime", "float32"),
+            ("FTipSettings", "TipWrapAt", "float32"),
+        ];
         if let Some((_, _, t)) =
             KNOWN_NATIVE_FIELD_TYPES.iter().find(|(c, f, _)| *c == class && *f == field)
+        {
+            return Some(t);
+        }
+        // batch-40b: NATIVE-struct FLOAT-family field types the script cache cannot resolve.
+        // Kept in a SEPARATE table from the enum rows above because these are consumed only by
+        // the float-family-gated `float_field_type` (WRTV float-const store + RDR8 read wraps),
+        // never the enum/int cast gates. Every row is verified against the shipped Binds.Cache
+        // by `binds.rs::validate_float_field_types_against_real_binds_cache`.
+        if let Some((_, _, t)) =
+            KNOWN_NATIVE_FLOAT_FIELDS.iter().find(|(c, f, _)| *c == class && *f == field)
         {
             return Some(t);
         }

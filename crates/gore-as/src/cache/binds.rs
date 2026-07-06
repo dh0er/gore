@@ -584,4 +584,74 @@ mod tests {
             );
         }
     }
+
+    /// batch-40b: the in-crate `refs` `KNOWN_NATIVE_FLOAT_FIELDS` table must MATCH the shipped
+    /// Binds.Cache field decls. Same verification path as
+    /// `validate_field_types_against_real_binds_cache` above (the production emit runs without
+    /// Binds, so the hardcoded float-field table is load-bearing). This proves the baked-in
+    /// float types are authoritative rather than guessed. Skipped when the game install is absent.
+    #[test]
+    fn validate_float_field_types_against_real_binds_cache() {
+        let path = Path::new(REAL_BINDS);
+        if !path.exists() {
+            eprintln!("skipping: {REAL_BINDS} not present");
+            return;
+        }
+        let api = NativeApi::load(path).expect("load Binds.Cache");
+        // mirror of refs.rs KNOWN_NATIVE_FLOAT_FIELDS (keep in sync)
+        for (cls, field, want) in [
+            ("FALoadingScreenSettings", "MinimumLoadingScreenDisplayTime", "float32"),
+            ("FAlphaBlendArgs", "BlendTime", "float32"),
+            ("FCameraBehaviour", "m_ArmLength", "float32"),
+            ("FCameraBehaviour", "m_LagSpeed", "float32"),
+            ("FCameraBehaviour", "m_SpellPitchLimit", "float32"),
+            ("FCameraBehaviour", "m_SpellYawLimit", "float32"),
+            ("FDodgeData", "m_SuperArmorResistanceMultiplier", "float32"),
+            ("FFreezeParams", "m_BlendOutDuration", "float32"),
+            ("FFreezeParams", "m_CustomTimeDilation", "float32"),
+            ("FFreezeParams", "m_FreezeDuration", "float32"),
+            ("FGameplayCueParameters", "NormalizedMagnitude", "float32"),
+            ("FGameplayCueParameters", "RawMagnitude", "float32"),
+            ("FGameplayEffectContext_HitResponse", "BowStretch", "float32"),
+            ("FGameplayEffectContext_HitResponse", "MultiplierSuperArmor", "float32"),
+            ("FGothicFlyDiveSettings", "AdaptToCollisionSampleZDistance", "float32"),
+            ("FGothicFlyDiveSettings", "CharacterZDivergeOffset", "float32"),
+            ("FGothicFlyDiveSettings", "GroundedMoveBeforeGoalDistance", "float32"),
+            ("FGothicFlyDiveSettings", "UseFlyDiveMinDistance", "float32"),
+            ("FGothicPathfollowSettings", "AgentRadiusMultiplier", "float32"),
+            ("FGothicPathfollowSettings", "CrowdAgentRadiusMultiplier", "float32"),
+            ("FGothicPathfollowSettings", "CrowdAgentSeparationWeight", "float32"),
+            ("FInteractionAnimTransition", "BlockOtherTransitionsForSeconds", "float32"),
+            ("FInteractionAnimTransition", "CooldownSeconds", "float32"),
+            ("FInteractionAnimTransition", "Probability", "float32"),
+            ("FInteractionAnimTransition", "Weight", "float32"),
+            ("FLightSet", "BarnDoorAngle", "float32"),
+            ("FLightSet", "BarnDoorLength", "float32"),
+            ("FLightSet", "IndirectLightingIntensity", "float32"),
+            ("FLightSet", "VolumetricScatteringIntensity", "float32"),
+            ("FLightValues", "AttenuationRadius", "float32"),
+            ("FLightValues", "SourceHeight", "float32"),
+            ("FLightValues", "SourceWidth", "float32"),
+            ("FMemorizedEvent", "Magnitude", "float32"),
+            ("FPathfollowModifyAvoidVelocitySettings", "FastSpeedVelocityMultiplier", "float32"),
+            ("FPathfollowModifyAvoidVelocitySettings", "MediumRangeVelocityMultiplier", "float32"),
+            ("FPathfollowModifyAvoidVelocitySettings", "ShortRangeVelocityMultiplier", "float32"),
+            ("FPathfollowMoveFocusSettings", "FocalPointHeightMultiplier", "float32"),
+            ("FPerceptionHandler", "DelaySeconds", "float32"),
+            ("FRelativeCrimeDataEntry", "BaseSeverity", "float32"),
+            ("FRememberedPerception", "Magnitude", "float32"),
+            ("FRememberedPerception", "TimeUpdated", "float32"),
+            ("FScalableFloat", "Value", "float32"),
+            ("FScoredItemAction", "Score", "float32"),
+            ("FSlateFontInfo", "Size", "float32"),
+            ("FTipSettings", "TipSwapTime", "float32"),
+            ("FTipSettings", "TipWrapAt", "float32"),
+        ] {
+            assert_eq!(
+                api.field_type(cls, field),
+                Some(want),
+                "float-field table entry ({cls}, {field}) disagrees with the shipped Binds.Cache"
+            );
+        }
+    }
 }
