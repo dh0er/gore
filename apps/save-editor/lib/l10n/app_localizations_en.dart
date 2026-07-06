@@ -111,10 +111,10 @@ class AppLocalizationsEn extends AppLocalizations {
   String get skillCategoryThievery => 'Thievery';
 
   @override
-  String get skillNameOneHanded => 'One-Handed';
+  String get skillNameOneHanded => 'One Handed';
 
   @override
-  String get skillNameTwoHanded => 'Two-Handed';
+  String get skillNameTwoHanded => 'Two Handed';
 
   @override
   String get skillNameFists => 'Fists';
@@ -132,43 +132,43 @@ class AppLocalizationsEn extends AppLocalizations {
   String get skillNamePickpocketing => 'Pickpocketing';
 
   @override
-  String get skillNameTakeOrgans => 'Take Organs';
+  String get skillNameTakeOrgans => 'Extract Organ';
 
   @override
-  String get skillNameBreakTeeth => 'Break Teeth';
+  String get skillNameBreakTeeth => 'Extract Teeth';
 
   @override
-  String get skillNameTakeClaws => 'Take Claws';
+  String get skillNameTakeClaws => 'Extract Claw';
 
   @override
-  String get skillNameSkinFur => 'Skin Fur';
+  String get skillNameSkinFur => 'Take Fur';
 
   @override
-  String get skillNameSkin => 'Skin';
+  String get skillNameSkin => 'Take Skin';
 
   @override
   String get skillNameTakeFins => 'Take Fins';
 
   @override
-  String get skillNameTakeStingers => 'Take Stingers';
+  String get skillNameTakeStingers => 'Extract Stings';
 
   @override
-  String get skillNameTakeSecretion => 'Take Secretion';
+  String get skillNameTakeSecretion => 'Extract Secretion';
 
   @override
-  String get skillNameTakeSkullPlates => 'Take Skull Plates';
+  String get skillNameTakeSkullPlates => 'Take Skull Armor';
 
   @override
-  String get skillNameSkinSwampshark => 'Skin Swampshark';
+  String get skillNameSkinSwampshark => 'Take Shark Skin';
 
   @override
-  String get skillNameTakeMinecrawlerPlates => 'Take Minecrawler Plates';
+  String get skillNameTakeMinecrawlerPlates => 'Take Plates';
 
   @override
   String get skillNameTakeScutes => 'Take Scutes';
 
   @override
-  String get skillNameTakeUluMulu => 'Take Ulu-Mulu Trophies';
+  String get skillNameTakeUluMulu => 'Take Ulu-Mulu';
 
   @override
   String get skillNameOrcWeapons => 'Orc Weapons';
@@ -183,37 +183,37 @@ class AppLocalizationsEn extends AppLocalizations {
   String get skillNameScavenging => 'Scavenging';
 
   @override
-  String get skillNameTakeMinecrawlerMandibles => 'Take Minecrawler Mandibles';
+  String get skillNameTakeMinecrawlerMandibles => 'Extract Mandibles';
 
   @override
   String get skillNameSkinReptiles => 'Skin Reptiles';
 
   @override
-  String get skillNameTakeShadowbeastHorn => 'Take Shadowbeast Horn';
+  String get skillNameTakeShadowbeastHorn => 'Take Horn (Shadowbeast)';
 
   @override
-  String get skillNameTakeSpines => 'Take Spines';
+  String get skillNameTakeSpines => 'Extract Spine';
 
   @override
   String get skillNameTakeBloodflyStingers => 'Take Bloodfly Stingers';
 
   @override
-  String get skillNameBreakSwampsharkTeeth => 'Break Swampshark Teeth';
+  String get skillNameBreakSwampsharkTeeth => 'Extract Shark Teeth';
 
   @override
-  String get skillNameTakeFireTongue => 'Take Fire Tongue';
+  String get skillNameTakeFireTongue => 'Take Tongue of Fire';
 
   @override
-  String get skillNameTakeTrollHorn => 'Take Troll Horn';
+  String get skillNameTakeTrollHorn => 'Take Horn (Troll)';
 
   @override
   String get skillNameAcrobatics => 'Acrobatics';
 
   @override
-  String get skillNameWallClimbing => 'Wall Climbing';
+  String get skillNameWallClimbing => 'Climbing';
 
   @override
-  String get skillNameRiding => 'Riding';
+  String get skillNameRiding => 'Scavenger Riding';
 
   @override
   String get skillNameSneaking => 'Sneaking';
@@ -222,10 +222,10 @@ class AppLocalizationsEn extends AppLocalizations {
   String get skillNameAlchemy => 'Alchemy';
 
   @override
-  String get skillNameRuneInscription => 'Rune Inscription';
+  String get skillNameRuneInscription => 'Inscription';
 
   @override
-  String get skillNameBlacksmithing => 'Blacksmithing';
+  String get skillNameBlacksmithing => 'Smithing';
 
   @override
   String get skillNameMagicCircle => 'Magic Circle';

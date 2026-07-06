@@ -127,7 +127,7 @@ class AppLocalizationsDe extends AppLocalizations {
   String get skillNameCrossbow => 'Armbrust';
 
   @override
-  String get skillNameLockpicking => 'Schlösser knacken';
+  String get skillNameLockpicking => 'Schlösserknacken';
 
   @override
   String get skillNamePickpocketing => 'Taschendiebstahl';
@@ -136,46 +136,46 @@ class AppLocalizationsDe extends AppLocalizations {
   String get skillNameTakeOrgans => 'Organe entnehmen';
 
   @override
-  String get skillNameBreakTeeth => 'Zähne brechen';
+  String get skillNameBreakTeeth => 'Zähne ziehen';
 
   @override
-  String get skillNameTakeClaws => 'Klauen nehmen';
+  String get skillNameTakeClaws => 'Krallen ziehen';
 
   @override
   String get skillNameSkinFur => 'Fell abziehen';
 
   @override
-  String get skillNameSkin => 'Häuten';
+  String get skillNameSkin => 'Haut abziehen';
 
   @override
-  String get skillNameTakeFins => 'Flossen nehmen';
+  String get skillNameTakeFins => 'Flossen entnehmen';
 
   @override
-  String get skillNameTakeStingers => 'Stacheln nehmen';
+  String get skillNameTakeStingers => 'Stachel ziehen';
 
   @override
   String get skillNameTakeSecretion => 'Sekret entnehmen';
 
   @override
-  String get skillNameTakeSkullPlates => 'Schädelplatten nehmen';
+  String get skillNameTakeSkullPlates => 'Schädelpanzerung entnehmen';
 
   @override
-  String get skillNameSkinSwampshark => 'Sumpfhai häuten';
+  String get skillNameSkinSwampshark => 'Haihaut abziehen';
 
   @override
-  String get skillNameTakeMinecrawlerPlates => 'Minecrawler-Panzer nehmen';
+  String get skillNameTakeMinecrawlerPlates => 'Platten entnehmen';
 
   @override
-  String get skillNameTakeScutes => 'Schuppen nehmen';
+  String get skillNameTakeScutes => 'Hornschuppen entnehmen';
 
   @override
-  String get skillNameTakeUluMulu => 'Ulu-Mulu-Trophäen nehmen';
+  String get skillNameTakeUluMulu => 'Ulu-Mulu entnehmen';
 
   @override
-  String get skillNameOrcWeapons => 'Orkwaffen';
+  String get skillNameOrcWeapons => 'Ork-Waffen';
 
   @override
-  String get skillNameMining => 'Schürfen';
+  String get skillNameMining => 'Bergbau';
 
   @override
   String get skillNameDiving => 'Tauchen';
@@ -184,29 +184,28 @@ class AppLocalizationsDe extends AppLocalizations {
   String get skillNameScavenging => 'Plündern';
 
   @override
-  String get skillNameTakeMinecrawlerMandibles =>
-      'Minecrawler-Mandibeln nehmen';
+  String get skillNameTakeMinecrawlerMandibles => 'Zangen entnehmen';
 
   @override
   String get skillNameSkinReptiles => 'Reptilien häuten';
 
   @override
-  String get skillNameTakeShadowbeastHorn => 'Schattenläufer-Horn nehmen';
+  String get skillNameTakeShadowbeastHorn => 'Horn entnehmen (Schattenläufer)';
 
   @override
-  String get skillNameTakeSpines => 'Dornen nehmen';
+  String get skillNameTakeSpines => 'Wirbelsäule entnehmen';
 
   @override
   String get skillNameTakeBloodflyStingers => 'Blutfliegen-Stachel nehmen';
 
   @override
-  String get skillNameBreakSwampsharkTeeth => 'Sumpfhai-Zähne brechen';
+  String get skillNameBreakSwampsharkTeeth => 'Haizähne ziehen';
 
   @override
-  String get skillNameTakeFireTongue => 'Feuerzunge nehmen';
+  String get skillNameTakeFireTongue => 'Flammenzunge entnehmen';
 
   @override
-  String get skillNameTakeTrollHorn => 'Trollhorn nehmen';
+  String get skillNameTakeTrollHorn => 'Horn entnehmen (Troll)';
 
   @override
   String get skillNameAcrobatics => 'Akrobatik';
@@ -215,7 +214,7 @@ class AppLocalizationsDe extends AppLocalizations {
   String get skillNameWallClimbing => 'Klettern';
 
   @override
-  String get skillNameRiding => 'Reiten';
+  String get skillNameRiding => 'Scavenger-Reiten';
 
   @override
   String get skillNameSneaking => 'Schleichen';
@@ -224,7 +223,7 @@ class AppLocalizationsDe extends AppLocalizations {
   String get skillNameAlchemy => 'Alchemie';
 
   @override
-  String get skillNameRuneInscription => 'Runen einschreiben';
+  String get skillNameRuneInscription => 'Inskribieren';
 
   @override
   String get skillNameBlacksmithing => 'Schmieden';

@@ -317,13 +317,13 @@ abstract class AppLocalizations {
   /// No description provided for @skillNameOneHanded.
   ///
   /// In en, this message translates to:
-  /// **'One-Handed'**
+  /// **'One Handed'**
   String get skillNameOneHanded;
 
   /// No description provided for @skillNameTwoHanded.
   ///
   /// In en, this message translates to:
-  /// **'Two-Handed'**
+  /// **'Two Handed'**
   String get skillNameTwoHanded;
 
   /// No description provided for @skillNameFists.
@@ -359,31 +359,31 @@ abstract class AppLocalizations {
   /// No description provided for @skillNameTakeOrgans.
   ///
   /// In en, this message translates to:
-  /// **'Take Organs'**
+  /// **'Extract Organ'**
   String get skillNameTakeOrgans;
 
   /// No description provided for @skillNameBreakTeeth.
   ///
   /// In en, this message translates to:
-  /// **'Break Teeth'**
+  /// **'Extract Teeth'**
   String get skillNameBreakTeeth;
 
   /// No description provided for @skillNameTakeClaws.
   ///
   /// In en, this message translates to:
-  /// **'Take Claws'**
+  /// **'Extract Claw'**
   String get skillNameTakeClaws;
 
   /// No description provided for @skillNameSkinFur.
   ///
   /// In en, this message translates to:
-  /// **'Skin Fur'**
+  /// **'Take Fur'**
   String get skillNameSkinFur;
 
   /// No description provided for @skillNameSkin.
   ///
   /// In en, this message translates to:
-  /// **'Skin'**
+  /// **'Take Skin'**
   String get skillNameSkin;
 
   /// No description provided for @skillNameTakeFins.
@@ -395,31 +395,31 @@ abstract class AppLocalizations {
   /// No description provided for @skillNameTakeStingers.
   ///
   /// In en, this message translates to:
-  /// **'Take Stingers'**
+  /// **'Extract Stings'**
   String get skillNameTakeStingers;
 
   /// No description provided for @skillNameTakeSecretion.
   ///
   /// In en, this message translates to:
-  /// **'Take Secretion'**
+  /// **'Extract Secretion'**
   String get skillNameTakeSecretion;
 
   /// No description provided for @skillNameTakeSkullPlates.
   ///
   /// In en, this message translates to:
-  /// **'Take Skull Plates'**
+  /// **'Take Skull Armor'**
   String get skillNameTakeSkullPlates;
 
   /// No description provided for @skillNameSkinSwampshark.
   ///
   /// In en, this message translates to:
-  /// **'Skin Swampshark'**
+  /// **'Take Shark Skin'**
   String get skillNameSkinSwampshark;
 
   /// No description provided for @skillNameTakeMinecrawlerPlates.
   ///
   /// In en, this message translates to:
-  /// **'Take Minecrawler Plates'**
+  /// **'Take Plates'**
   String get skillNameTakeMinecrawlerPlates;
 
   /// No description provided for @skillNameTakeScutes.
@@ -431,7 +431,7 @@ abstract class AppLocalizations {
   /// No description provided for @skillNameTakeUluMulu.
   ///
   /// In en, this message translates to:
-  /// **'Take Ulu-Mulu Trophies'**
+  /// **'Take Ulu-Mulu'**
   String get skillNameTakeUluMulu;
 
   /// No description provided for @skillNameOrcWeapons.
@@ -461,7 +461,7 @@ abstract class AppLocalizations {
   /// No description provided for @skillNameTakeMinecrawlerMandibles.
   ///
   /// In en, this message translates to:
-  /// **'Take Minecrawler Mandibles'**
+  /// **'Extract Mandibles'**
   String get skillNameTakeMinecrawlerMandibles;
 
   /// No description provided for @skillNameSkinReptiles.
@@ -473,13 +473,13 @@ abstract class AppLocalizations {
   /// No description provided for @skillNameTakeShadowbeastHorn.
   ///
   /// In en, this message translates to:
-  /// **'Take Shadowbeast Horn'**
+  /// **'Take Horn (Shadowbeast)'**
   String get skillNameTakeShadowbeastHorn;
 
   /// No description provided for @skillNameTakeSpines.
   ///
   /// In en, this message translates to:
-  /// **'Take Spines'**
+  /// **'Extract Spine'**
   String get skillNameTakeSpines;
 
   /// No description provided for @skillNameTakeBloodflyStingers.
@@ -491,19 +491,19 @@ abstract class AppLocalizations {
   /// No description provided for @skillNameBreakSwampsharkTeeth.
   ///
   /// In en, this message translates to:
-  /// **'Break Swampshark Teeth'**
+  /// **'Extract Shark Teeth'**
   String get skillNameBreakSwampsharkTeeth;
 
   /// No description provided for @skillNameTakeFireTongue.
   ///
   /// In en, this message translates to:
-  /// **'Take Fire Tongue'**
+  /// **'Take Tongue of Fire'**
   String get skillNameTakeFireTongue;
 
   /// No description provided for @skillNameTakeTrollHorn.
   ///
   /// In en, this message translates to:
-  /// **'Take Troll Horn'**
+  /// **'Take Horn (Troll)'**
   String get skillNameTakeTrollHorn;
 
   /// No description provided for @skillNameAcrobatics.
@@ -515,13 +515,13 @@ abstract class AppLocalizations {
   /// No description provided for @skillNameWallClimbing.
   ///
   /// In en, this message translates to:
-  /// **'Wall Climbing'**
+  /// **'Climbing'**
   String get skillNameWallClimbing;
 
   /// No description provided for @skillNameRiding.
   ///
   /// In en, this message translates to:
-  /// **'Riding'**
+  /// **'Scavenger Riding'**
   String get skillNameRiding;
 
   /// No description provided for @skillNameSneaking.
@@ -539,13 +539,13 @@ abstract class AppLocalizations {
   /// No description provided for @skillNameRuneInscription.
   ///
   /// In en, this message translates to:
-  /// **'Rune Inscription'**
+  /// **'Inscription'**
   String get skillNameRuneInscription;
 
   /// No description provided for @skillNameBlacksmithing.
   ///
   /// In en, this message translates to:
-  /// **'Blacksmithing'**
+  /// **'Smithing'**
   String get skillNameBlacksmithing;
 
   /// No description provided for @skillNameMagicCircle.

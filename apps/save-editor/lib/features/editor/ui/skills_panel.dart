@@ -370,14 +370,10 @@ String _skillName(AppLocalizations l10n, Skill skill) {
       return l10n.skillNameTakeUluMulu;
     case 'Hunting_MandibleMineCrawler':
       return l10n.skillNameTakeMinecrawlerMandibles;
-    case 'Hunting_Reptiles':
-      return l10n.skillNameSkinReptiles;
     case 'Hunting_ShadowbeastHorn':
       return l10n.skillNameTakeShadowbeastHorn;
     case 'Hunting_Spines':
       return l10n.skillNameTakeSpines;
-    case 'Hunting_StingsBloodfly':
-      return l10n.skillNameTakeBloodflyStingers;
     case 'Hunting_TeethSwampshark':
       return l10n.skillNameBreakSwampsharkTeeth;
     case 'Hunting_TongueOfFire':
@@ -394,8 +390,6 @@ String _skillName(AppLocalizations l10n, Skill skill) {
       return l10n.skillNameSneaking;
     case 'Diving':
       return l10n.skillNameDiving;
-    case 'Scavenging':
-      return l10n.skillNameScavenging;
     case 'Crafting_Alchemy':
       return l10n.skillNameAlchemy;
     case 'Crafting_Inscription':

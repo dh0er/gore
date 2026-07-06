@@ -111,10 +111,10 @@ class AppLocalizationsFr extends AppLocalizations {
   String get skillCategoryThievery => 'Vol';
 
   @override
-  String get skillNameOneHanded => 'Arme à une main';
+  String get skillNameOneHanded => 'À une main';
 
   @override
-  String get skillNameTwoHanded => 'Arme à deux mains';
+  String get skillNameTwoHanded => 'À deux mains';
 
   @override
   String get skillNameFists => 'Poings';
@@ -126,56 +126,55 @@ class AppLocalizationsFr extends AppLocalizations {
   String get skillNameCrossbow => 'Arbalète';
 
   @override
-  String get skillNameLockpicking => 'Crochetage';
+  String get skillNameLockpicking => 'Crochetage de serrures';
 
   @override
   String get skillNamePickpocketing => 'Vol à la tire';
 
   @override
-  String get skillNameTakeOrgans => 'Prélever des organes';
+  String get skillNameTakeOrgans => 'Extraire les organes';
 
   @override
-  String get skillNameBreakTeeth => 'Arracher les dents';
+  String get skillNameBreakTeeth => 'Extraire les dents';
 
   @override
-  String get skillNameTakeClaws => 'Prélever les griffes';
+  String get skillNameTakeClaws => 'Extraire les griffes';
 
   @override
-  String get skillNameSkinFur => 'Dépecer la fourrure';
+  String get skillNameSkinFur => 'Prélever la fourrure';
 
   @override
-  String get skillNameSkin => 'Dépecer';
+  String get skillNameSkin => 'Prélever la peau';
 
   @override
-  String get skillNameTakeFins => 'Prélever les nageoires';
+  String get skillNameTakeFins => 'Prélever les voiles dorsales';
 
   @override
-  String get skillNameTakeStingers => 'Prélever les dards';
+  String get skillNameTakeStingers => 'Extraire les aiguillons';
 
   @override
-  String get skillNameTakeSecretion => 'Recueillir la sécrétion';
+  String get skillNameTakeSecretion => 'Extraire les sécrétions';
 
   @override
-  String get skillNameTakeSkullPlates => 'Prélever les plaques crâniennes';
+  String get skillNameTakeSkullPlates => 'Prélever l’armure crânienne';
 
   @override
-  String get skillNameSkinSwampshark => 'Dépecer le requin des marais';
+  String get skillNameSkinSwampshark => 'Prélever la peau de requin';
 
   @override
-  String get skillNameTakeMinecrawlerPlates =>
-      'Prélever les plaques de rampant des mines';
+  String get skillNameTakeMinecrawlerPlates => 'Prélever les plaques';
 
   @override
   String get skillNameTakeScutes => 'Prélever les écailles';
 
   @override
-  String get skillNameTakeUluMulu => 'Récupérer des trophées Ulu-Mulu';
+  String get skillNameTakeUluMulu => 'Prendre l’Ulu-Mulu';
 
   @override
-  String get skillNameOrcWeapons => 'Armes d\'orque';
+  String get skillNameOrcWeapons => 'Armes orques';
 
   @override
-  String get skillNameMining => 'Extraction minière';
+  String get skillNameMining => 'Extraction de minerai';
 
   @override
   String get skillNameDiving => 'Plongée';
@@ -184,32 +183,29 @@ class AppLocalizationsFr extends AppLocalizations {
   String get skillNameScavenging => 'Charognage';
 
   @override
-  String get skillNameTakeMinecrawlerMandibles =>
-      'Prélever les mandibules de rampant des mines';
+  String get skillNameTakeMinecrawlerMandibles => 'Prélever les mandibules';
 
   @override
   String get skillNameSkinReptiles => 'Dépecer les reptiles';
 
   @override
-  String get skillNameTakeShadowbeastHorn =>
-      'Prélever la corne de bête d\'ombre';
+  String get skillNameTakeShadowbeastHorn => 'Prélever la corne (Shadowbeast)';
 
   @override
-  String get skillNameTakeSpines => 'Prélever les épines';
+  String get skillNameTakeSpines => 'Extraire l’épine dorsale';
 
   @override
   String get skillNameTakeBloodflyStingers =>
       'Prélever les dards de mouche de sang';
 
   @override
-  String get skillNameBreakSwampsharkTeeth =>
-      'Casser les dents de requin des marais';
+  String get skillNameBreakSwampsharkTeeth => 'Extraire les dents de requin';
 
   @override
-  String get skillNameTakeFireTongue => 'Prélever la langue de feu';
+  String get skillNameTakeFireTongue => 'Extraire la langue de feu';
 
   @override
-  String get skillNameTakeTrollHorn => 'Prélever la corne de troll';
+  String get skillNameTakeTrollHorn => 'Prélever la corne (Troll)';
 
   @override
   String get skillNameAcrobatics => 'Acrobatie';
@@ -218,16 +214,16 @@ class AppLocalizationsFr extends AppLocalizations {
   String get skillNameWallClimbing => 'Escalade';
 
   @override
-  String get skillNameRiding => 'Équitation';
+  String get skillNameRiding => 'Monte à dos de charognard';
 
   @override
-  String get skillNameSneaking => 'Furtivité';
+  String get skillNameSneaking => 'Déplacement furtif';
 
   @override
   String get skillNameAlchemy => 'Alchimie';
 
   @override
-  String get skillNameRuneInscription => 'Gravure de runes';
+  String get skillNameRuneInscription => 'Inscription';
 
   @override
   String get skillNameBlacksmithing => 'Forge';

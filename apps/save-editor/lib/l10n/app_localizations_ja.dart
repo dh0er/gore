@@ -111,13 +111,13 @@ class AppLocalizationsJa extends AppLocalizations {
   String get skillCategoryThievery => '盗み';
 
   @override
-  String get skillNameOneHanded => '片手武器';
+  String get skillNameOneHanded => '片手持ち';
 
   @override
-  String get skillNameTwoHanded => '両手武器';
+  String get skillNameTwoHanded => '両手持ち';
 
   @override
-  String get skillNameFists => '格闘';
+  String get skillNameFists => '裸の拳';
 
   @override
   String get skillNameBow => '弓';
@@ -126,103 +126,103 @@ class AppLocalizationsJa extends AppLocalizations {
   String get skillNameCrossbow => 'クロスボウ';
 
   @override
-  String get skillNameLockpicking => '鍵開け';
+  String get skillNameLockpicking => 'ロックピッキング';
 
   @override
   String get skillNamePickpocketing => 'スリ';
 
   @override
-  String get skillNameTakeOrgans => '臓器の摘出';
+  String get skillNameTakeOrgans => '内臓を取る';
 
   @override
-  String get skillNameBreakTeeth => '牙の採取';
+  String get skillNameBreakTeeth => '歯を取る';
 
   @override
-  String get skillNameTakeClaws => '爪の採取';
+  String get skillNameTakeClaws => '爪を取る';
 
   @override
-  String get skillNameSkinFur => '毛皮の剥ぎ取り';
+  String get skillNameSkinFur => '毛皮を取る';
 
   @override
-  String get skillNameSkin => '皮の剥ぎ取り';
+  String get skillNameSkin => '皮を取る';
 
   @override
-  String get skillNameTakeFins => 'ヒレの採取';
+  String get skillNameTakeFins => 'ひれを取る';
 
   @override
-  String get skillNameTakeStingers => '毒針の採取';
+  String get skillNameTakeStingers => '針を取る';
 
   @override
-  String get skillNameTakeSecretion => '分泌液の採取';
+  String get skillNameTakeSecretion => '分泌液を取る';
 
   @override
-  String get skillNameTakeSkullPlates => '頭蓋骨板の採取';
+  String get skillNameTakeSkullPlates => 'スカル・アーマーを取る';
 
   @override
-  String get skillNameSkinSwampshark => 'スワンプシャークの解体';
+  String get skillNameSkinSwampshark => 'サメの皮を取る';
 
   @override
-  String get skillNameTakeMinecrawlerPlates => 'マインクロウラー甲板の採取';
+  String get skillNameTakeMinecrawlerPlates => 'プレートを取る';
 
   @override
-  String get skillNameTakeScutes => '鱗甲板の採取';
+  String get skillNameTakeScutes => '骨板を取る';
 
   @override
-  String get skillNameTakeUluMulu => 'ウル・ムルの戦利品の採取';
+  String get skillNameTakeUluMulu => 'ウルムルを取る';
 
   @override
-  String get skillNameOrcWeapons => 'オークの武器';
+  String get skillNameOrcWeapons => 'オーク武器';
 
   @override
   String get skillNameMining => '採掘';
 
   @override
-  String get skillNameDiving => '潜水';
+  String get skillNameDiving => 'ダイビング';
 
   @override
   String get skillNameScavenging => 'あさり';
 
   @override
-  String get skillNameTakeMinecrawlerMandibles => 'マインクロウラーの大顎の採取';
+  String get skillNameTakeMinecrawlerMandibles => 'あごを取る';
 
   @override
   String get skillNameSkinReptiles => '爬虫類の解体';
 
   @override
-  String get skillNameTakeShadowbeastHorn => 'シャドウビーストの角の採取';
+  String get skillNameTakeShadowbeastHorn => '角を取る (Shadowbeast)';
 
   @override
-  String get skillNameTakeSpines => '棘の採取';
+  String get skillNameTakeSpines => '背骨を取る';
 
   @override
   String get skillNameTakeBloodflyStingers => 'ブラッドフライの針の採取';
 
   @override
-  String get skillNameBreakSwampsharkTeeth => 'スワンプシャークの歯を折る';
+  String get skillNameBreakSwampsharkTeeth => 'サメの歯を取る';
 
   @override
-  String get skillNameTakeFireTongue => '炎の舌の採取';
+  String get skillNameTakeFireTongue => '炎の舌を取る';
 
   @override
-  String get skillNameTakeTrollHorn => 'トロルの角の採取';
+  String get skillNameTakeTrollHorn => '角を取る (Troll)';
 
   @override
-  String get skillNameAcrobatics => 'アクロバット';
+  String get skillNameAcrobatics => 'アクロバティック';
 
   @override
-  String get skillNameWallClimbing => '壁登り';
+  String get skillNameWallClimbing => 'クライミング';
 
   @override
-  String get skillNameRiding => '騎乗';
+  String get skillNameRiding => 'スカベンジャー乗り';
 
   @override
-  String get skillNameSneaking => '忍び歩き';
+  String get skillNameSneaking => 'スニーク';
 
   @override
-  String get skillNameAlchemy => '錬金術';
+  String get skillNameAlchemy => 'アルケミー';
 
   @override
-  String get skillNameRuneInscription => 'ルーン刻印';
+  String get skillNameRuneInscription => 'インスクリプション';
 
   @override
   String get skillNameBlacksmithing => '鍛冶';
