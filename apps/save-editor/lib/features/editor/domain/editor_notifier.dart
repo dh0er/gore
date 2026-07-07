@@ -743,27 +743,26 @@ class EditorNotifier extends StateNotifier<EditorState> {
       if (fixedBatch.isNotEmpty)
         _SubWrite(
           edits: [for (final keyed in fixedBatch) keyed.edit],
-          keys: {for (final keyed in fixedBatch) keyed.key},
           // syncPersistentDataList keys off a public/fixed edit, so it rides the
           // fixed-size batch.
           syncPersistentDataList: syncPersistent,
         ),
-      for (final keyed in splicing)
-        _SubWrite(edits: [keyed.edit], keys: {keyed.key}),
+      for (final keyed in splicing) _SubWrite(edits: [keyed.edit]),
       // All skill edits together, in their own trailing write: they batch safely
       // among themselves but must not share a write with an index-addressed peer
       // (see skillPath above).
       if (skillEdits.isNotEmpty)
-        _SubWrite(
-          edits: [for (final keyed in skillEdits) keyed.edit],
-          keys: {for (final keyed in skillEdits) keyed.key},
-        ),
+        _SubWrite(edits: [for (final keyed in skillEdits) keyed.edit]),
     ];
 
     final n = allEdits.length;
-    // Keys whose sub-write committed bytes to disk, captured BEFORE the trailing
-    // refresh() so we still converge (clear them) even if that refresh fails.
-    final committedKeys = <String>{};
+    // Edit objects (matched by identity) that committed bytes to disk, captured
+    // BEFORE the trailing refresh() so we still converge even if that refresh
+    // fails. Tracked per-EDIT, not per-key: one pending key can span several
+    // sequential sub-writes (e.g. multiple inventory adds), so a key may be only
+    // PARTIALLY committed — if a later add fails, the earlier committed adds must
+    // not drag the whole key's still-unwritten edits out of the pending set.
+    final committedEdits = <Map<String, Object?>>{};
     // The first (backup-taking) sub-write's response data drives the success
     // message: its `backupPath` is the one pristine snapshot for this Save.
     Map<String, Object?> firstData = const {};
@@ -776,82 +775,127 @@ class EditorNotifier extends StateNotifier<EditorState> {
       state = state.copyWith(
         saveProgress: (done: 0, total: worklist.length),
       );
-      for (var i = 0; i < worklist.length; i++) {
-        final sub = worklist[i];
-        final response = await _execute(
-          'write_save',
-          payload: {
-            'path': savePath,
-            // Backup-once: only the first sub-write snapshots the pristine file.
-            'backup': i == 0,
-            if (sub.syncPersistentDataList) 'syncPersistentDataList': true,
-            'edits': sub.edits,
-          },
-        );
-        if (response['ok'] != true) {
-          // Stop on the first failure. Earlier sub-writes already committed.
-          failureError = _errorMessage(response);
-          break;
+      try {
+        for (var i = 0; i < worklist.length; i++) {
+          final sub = worklist[i];
+          final response = await _execute(
+            'write_save',
+            payload: {
+              'path': savePath,
+              // Backup-once: only the first sub-write snapshots the pristine file.
+              'backup': i == 0,
+              if (sub.syncPersistentDataList) 'syncPersistentDataList': true,
+              'edits': sub.edits,
+            },
+          );
+          if (response['ok'] != true) {
+            // Stop on the first failure. Earlier sub-writes already committed.
+            failureError = _errorMessage(response);
+            break;
+          }
+          if (i == 0) {
+            firstData = (response['data'] as Map?)?.cast<String, Object?>() ??
+                const {};
+          }
+          committedEdits.addAll(sub.edits);
+          state = state.copyWith(
+            saveProgress: (done: i + 1, total: worklist.length),
+          );
         }
-        if (i == 0) {
-          firstData = (response['data'] as Map?)?.cast<String, Object?>() ??
-              const {};
+        // Writes are done — drop the bar so the trailing refresh shows the plain
+        // spinner (and a failure path shows its error, not a frozen bar).
+        state = state.copyWith(clearSaveProgress: true);
+
+        if (failureError == null) {
+          // All sub-writes succeeded.
+          state = state.copyWith(
+            lastWriteMessage: _backupMessage(
+              '$n change${n == 1 ? '' : 's'} saved with backup',
+              firstData,
+            ),
+          );
+          // Single trailing refresh after the last successful write.
+          await refresh();
+          ok = true;
+          return;
         }
-        committedKeys.addAll(sub.keys);
-        state = state.copyWith(
-          saveProgress: (done: i + 1, total: worklist.length),
-        );
-      }
-      // Writes are done — drop the bar so the trailing refresh shows the plain
-      // spinner (and a failure path shows its error, not a frozen bar).
-      state = state.copyWith(clearSaveProgress: true);
 
-      if (failureError == null) {
-        // All sub-writes succeeded.
-        state = state.copyWith(
-          lastWriteMessage: _backupMessage(
-            '$n change${n == 1 ? '' : 's'} saved with backup',
-            firstData,
-          ),
-        );
-        // Single trailing refresh after the last successful write.
-        await refresh();
-        ok = true;
-        return;
+        // A sub-write failed AFTER an earlier one already committed bytes to disk.
+        // The panes are still seeded from the pre-save inspection, so refresh to
+        // show the new on-disk state — but PRESERVE the still-unsaved (uncommitted)
+        // pending edits so the user can retry them. refresh() clears every pending
+        // edit AND the error, so snapshot the uncommitted ones, refresh, re-apply
+        // them, then re-surface the error. With nothing committed yet, the panes
+        // already match disk, so skip the refresh and just surface the error.
+        if (committedEdits.isNotEmpty) {
+          final preserved = _pendingMinusCommitted(committedEdits);
+          // Refresh from disk and restore the still-unsaved edits ATOMICALLY with
+          // the new inspection — but only if we land back on the same save they
+          // target. refresh() may clear/auto-switch selectedPath (this save
+          // vanished, or another slot was auto-selected); the preserved edits
+          // target the ORIGINAL file, so they are dropped in that case rather than
+          // re-targeted at the wrong save. Restoring inside the inspection re-seed
+          // (vs. re-adding afterward) means the kept-alive editors rehydrate WITH
+          // them, so a preserved inventory add/remove is shown, not just counted.
+          await refresh(preservedEdits: preserved, preservedForPath: savePath);
+        }
+        state = state.copyWith(error: failureError);
+      } finally {
+        // A thrown _execute (e.g. CoreWorkerException from the persistent worker
+        // isolate) skips the in-loop clear above; guarantee the determinate bar
+        // is dropped so a later load shows the plain spinner, not stale counts.
+        if (state.saveProgress != null) {
+          state = state.copyWith(clearSaveProgress: true);
+        }
       }
-
-      // A sub-write failed AFTER an earlier one already committed bytes to disk.
-      // The panes are still seeded from the pre-save inspection, so refresh to
-      // show the new on-disk state — but PRESERVE the still-unsaved (uncommitted)
-      // pending edits so the user can retry them. refresh() clears every pending
-      // edit AND the error, so snapshot the uncommitted ones, refresh, re-apply
-      // them, then re-surface the error. With nothing committed yet, the panes
-      // already match disk, so skip the refresh and just surface the error.
-      if (committedKeys.isNotEmpty) {
-        final preserved = <String, PendingSaveEdit>{
-          for (final entry in state.pendingEdits.entries)
-            if (!committedKeys.contains(entry.key)) entry.key: entry.value,
-        };
-        // Refresh from disk and restore the still-unsaved edits ATOMICALLY with
-        // the new inspection — but only if we land back on the same save they
-        // target. refresh() may clear/auto-switch selectedPath (this save
-        // vanished, or another slot was auto-selected); the preserved edits
-        // target the ORIGINAL file, so they are dropped in that case rather than
-        // re-targeted at the wrong save. Restoring inside the inspection re-seed
-        // (vs. re-adding afterward) means the kept-alive editors rehydrate WITH
-        // them, so a preserved inventory add/remove is shown, not just counted.
-        await refresh(preservedEdits: preserved, preservedForPath: savePath);
-      }
-      state = state.copyWith(error: failureError);
     });
 
-    // The committed edits are on disk now — clear exactly their keys so a failed
-    // re-inspect still converges, and a partial save keeps only the unsaved keys
-    // pending for retry.
-    for (final key in committedKeys) {
-      clearPendingEdit(key);
+    // Converge the pending set to only the still-uncommitted edits — per EDIT, so
+    // a partially-committed key keeps its unwritten edits for retry — even if the
+    // refresh above never ran or threw. On success refresh() already cleared
+    // everything (this is then a no-op); on a partial/failed refresh this is the
+    // safety net that stops committed edits from lingering as pending.
+    if (committedEdits.isNotEmpty) {
+      for (final entry
+          in Map<String, PendingSaveEdit>.from(state.pendingEdits).entries) {
+        final remaining = entry.value.edits
+            .where((e) => !committedEdits.contains(e))
+            .toList();
+        if (remaining.isEmpty) {
+          clearPendingEdit(entry.key);
+        } else if (remaining.length != entry.value.edits.length) {
+          setPendingEdit(
+            entry.key,
+            PendingSaveEdit(
+              edits: remaining,
+              syncPersistentDataList: entry.value.syncPersistentDataList,
+            ),
+          );
+        }
+      }
     }
     return ok;
+  }
+
+  /// The current pending edits minus any that already committed to disk, keyed
+  /// the same way, dropping keys left with nothing. Edits are matched by identity
+  /// (the same objects flow from the registry into the sub-writes), so a key
+  /// whose earlier sub-write committed keeps only its still-unwritten edits.
+  Map<String, PendingSaveEdit> _pendingMinusCommitted(
+    Set<Map<String, Object?>> committed,
+  ) {
+    final result = <String, PendingSaveEdit>{};
+    for (final entry in state.pendingEdits.entries) {
+      final remaining =
+          entry.value.edits.where((e) => !committed.contains(e)).toList();
+      if (remaining.isNotEmpty) {
+        result[entry.key] = PendingSaveEdit(
+          edits: remaining,
+          syncPersistentDataList: entry.value.syncPersistentDataList,
+        );
+      }
+    }
+    return result;
   }
 
   Future<void> chooseSaveDir() async {
@@ -1998,15 +2042,14 @@ String? _activeEffectsDefActor(Map<String, Object?> edit) {
 }
 
 /// One write_save unit in [EditorNotifier.saveAllPending]'s worklist: the edits
-/// to submit and the snapshot keys to clear once it commits.
+/// to submit. Post-write convergence is done per-edit (matched by identity)
+/// rather than per-key, so a sub-write no longer needs to carry its keys.
 class _SubWrite {
   const _SubWrite({
     required this.edits,
-    required this.keys,
     this.syncPersistentDataList = false,
   });
 
   final List<Map<String, Object?>> edits;
-  final Set<String> keys;
   final bool syncPersistentDataList;
 }

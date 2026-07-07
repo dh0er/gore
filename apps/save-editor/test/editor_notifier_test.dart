@@ -429,6 +429,89 @@ void main() {
   );
 
   test(
+    'partial commit keeps the uncommitted add when several share one key',
+    () async {
+      // Regression: several inventory adds queue under ONE pending key but each
+      // is its own sequential write_save. Commit tracking is per-EDIT, so when a
+      // later add fails the earlier committed add must not drag the still-unwritten
+      // add out of pending — the user must keep the failed one for retry.
+      final core = _FailSecondWriteCoreService(
+        scanData: {
+          'saves': [
+            {
+              'path': r'C:\tmp\saves\G1R-001.sav',
+              'slot': 'G1R-001',
+              'format': 'GSAV',
+              'fileSize': 914367,
+              'sha1': 'abc',
+              'status': 'ok',
+              'playerSaveName': 'Auto',
+            },
+          ],
+        },
+      );
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+      // Two adds under ONE key → two sequential splicing writes: the first
+      // commits, the second fails.
+      notifier.setPendingEdit(
+        'inventory:player',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.inventory.addItem',
+              'value': {'path': '/Game/Item_A', 'count': 1},
+            },
+            {
+              'path': 'private.inventory.addItem',
+              'value': {'path': '/Game/Item_B', 'count': 1},
+            },
+          ],
+        ),
+      );
+
+      final ok = await notifier.saveAllPending();
+
+      expect(ok, isFalse);
+      expect(notifier.state.error, isNotNull);
+      // The key survives, carrying ONLY the second (uncommitted) add — the first
+      // committed and is gone; the second never wrote and stays for retry.
+      final pending = notifier.state.pendingEdits['inventory:player'];
+      expect(pending, isNotNull);
+      expect(pending!.edits, hasLength(1));
+      expect(pending.edits.single['value'], {
+        'path': '/Game/Item_B',
+        'count': 1,
+      });
+    },
+  );
+
+  test('saveAllPending clears the progress bar when a write throws', () async {
+    // Regression: the save progress bar is set before the write loop. A thrown
+    // write_save (CoreWorkerException from the worker isolate) must still clear
+    // saveProgress, or a later load shows a determinate bar with stale counts.
+    final core = _ThrowingWriteCoreService();
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+    notifier.setPendingEdit(
+      'publicName',
+      const PendingSaveEdit(
+        edits: [
+          {'path': 'public.m_PlayerSaveName', 'value': 'New Name'},
+        ],
+      ),
+    );
+
+    final ok = await notifier.saveAllPending();
+
+    expect(ok, isFalse);
+    expect(notifier.state.error, isNotNull);
+    expect(notifier.state.saveProgress, isNull);
+    expect(notifier.state.isLoading, isFalse);
+  });
+
+  test(
     'partial commit drops uncommitted edits when the slot changes on refresh',
     () async {
       // After the partial commit the original save VANISHES from the scan
@@ -2629,6 +2712,21 @@ class _FailSecondWriteCoreService extends _RecordingCoreService {
           'error': {'message': 'second write failed'},
         };
       }
+    }
+    return super.execute(command, payload: payload);
+  }
+}
+
+/// write_save throws (as the persistent worker isolate does via
+/// CoreWorkerException on a native failure) instead of returning `ok: false`.
+class _ThrowingWriteCoreService extends _RecordingCoreService {
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    if (command == 'write_save') {
+      throw Exception('native worker died');
     }
     return super.execute(command, payload: payload);
   }
