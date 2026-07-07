@@ -133,6 +133,50 @@ void main() {
   );
 
   test(
+    'activeResourcesLevel uses the preset-implied level when no explicit sub-level',
+    () async {
+      // A non-Custom preset stores NO explicit Resources sub-level (resourcesLabel
+      // is '-'); the level is implied by the preset. Reading only resourcesLabel
+      // would wrongly send every Novice/Hard profile to the Gothic start-save.
+      Future<EditorNotifier> build(Map<String, Object?> profileFields) async {
+        final core = _RecordingCoreService(
+          scanData: {
+            'saves': <Object?>[],
+            'profiles': [
+              {'profileId': 0, 'profileName': '0', ...profileFields},
+            ],
+            'activeProfileId': 0,
+          },
+        );
+        final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+        await pumpEventQueue();
+        return notifier;
+      }
+
+      // Novice preset (class suffix '_Easy'), no explicit resources → 'Novice'.
+      final novice = await build({'difficultyPreset': 'DifficultyPreset_Easy'});
+      expect(novice.state.activeProfile?.difficulty.resourcesLabel, '-');
+      expect(novice.activeResourcesLevel(), 'Novice');
+
+      // Hard preset ('_Hard') → 'Hard'.
+      final hard = await build({'difficultyPreset': 'DifficultyPreset_Hard'});
+      expect(hard.activeResourcesLevel(), 'Hard');
+
+      // Gothic preset ('_Standard') → 'Gothic'.
+      final gothic = await build({'difficultyPreset': 'DifficultyPreset_Standard'});
+      expect(gothic.activeResourcesLevel(), 'Gothic');
+
+      // Custom preset with an explicit Resources sub-level → the explicit level
+      // wins over the preset ('_Easy' resources class → 'Novice').
+      final custom = await build({
+        'difficultyPreset': 'DifficultyPreset_Custom',
+        'customResourcesSettings': 'ResourcesDifficultySettings_Easy',
+      });
+      expect(custom.activeResourcesLevel(), 'Novice');
+    },
+  );
+
+  test(
     'inspect sends no codec config and decodes all chunks',
     () async {
       final core = _RecordingCoreService();

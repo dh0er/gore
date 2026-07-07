@@ -474,14 +474,28 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// without reaching into the protected `state`.
   PendingSaveEdit? pendingEditFor(String key) => state.pendingEdits[key];
 
-  /// The active profile's Resources difficulty level, normalized to one of
-  /// 'Novice' | 'Gothic' | 'Hard'. Falls back to 'Gothic' (the standard preset)
-  /// when there is no profile, no difficulty, or an unrecognized level — matching
-  /// the core's own fallback for the inventory-reset start-save selection.
+  /// The active profile's effective Resources difficulty level, normalized to
+  /// one of 'Novice' | 'Gothic' | 'Hard' — used to pick the inventory-reset
+  /// start-save. Falls back to 'Gothic' (the standard preset) when there is no
+  /// profile or difficulty.
+  ///
+  /// A non-Custom preset (Novice/Gothic/Hard) does NOT store an explicit
+  /// Resources sub-level — the level is IMPLIED by the preset (as the difficulty
+  /// dialog shows it locked). So an explicit sub-level (a Custom preset, or a
+  /// stored value) wins when present; otherwise the preset itself implies the
+  /// level: Novice→Novice, Hard→Hard, Gothic/Custom/unknown→Gothic. Reading only
+  /// `resourcesLabel` would send every Novice/Hard profile to the Gothic save.
   String activeResourcesLevel() {
     const known = {'Novice', 'Gothic', 'Hard'};
-    final label = state.activeProfile?.difficulty.resourcesLabel;
-    return known.contains(label) ? label! : 'Gothic';
+    final difficulty = state.activeProfile?.difficulty;
+    if (difficulty == null) return 'Gothic';
+    final resources = difficulty.resourcesLabel;
+    if (known.contains(resources)) return resources;
+    return switch (difficulty.presetLabel) {
+      'Novice' => 'Novice',
+      'Hard' => 'Hard',
+      _ => 'Gothic',
+    };
   }
 
   /// Dismiss the current error banner.
