@@ -556,6 +556,37 @@ void main() {
   );
 
   test(
+    'activeResourcesLevel falls back to the inspected save own difficulty (no profile)',
+    () async {
+      const savePath = r'C:\tmp\saves\Standalone.sav';
+      final core = _RecordingCoreService(
+        scanData: {
+          'saves': [
+            {
+              'path': savePath,
+              // A standalone/imported save: no profile attribution, but the GSAV
+              // still carries its own parsed difficulty (Hard).
+              'persistentProfileId': null,
+              'difficulty': {'preset': 'DifficultyPreset_Hard'},
+            },
+          ],
+          'profiles': <Object?>[],
+          'activeProfileId': null,
+        },
+      );
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await pumpEventQueue();
+      await notifier.inspect(savePath);
+
+      // No profile metadata resolves → use the save's OWN difficulty (Hard),
+      // not the Gothic default.
+      expect(notifier.state.selectedSave?.path, savePath);
+      expect(notifier.state.activeProfile, isNull);
+      expect(notifier.activeResourcesLevel(), 'Hard');
+    },
+  );
+
+  test(
     'saveAllPending sets syncPersistentDataList true when any edit requests it',
     () async {
       final core = _RecordingCoreService();

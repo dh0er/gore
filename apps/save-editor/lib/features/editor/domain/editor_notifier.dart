@@ -478,10 +478,14 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// normalized to 'Novice' | 'Gothic' | 'Hard' — used to pick the inventory-reset
   /// start-save. Falls back to 'Gothic' when no profile/difficulty resolves.
   ///
-  /// Resolves the save's OWN profile (its persistentProfileId, then the scan's
-  /// active profile id) — NOT the sidebar profile FILTER that `activeProfile` /
-  /// `effectiveProfileId` honor for browsing, since the reset targets this save
-  /// and its NPC inventories depend on this save's profile.
+  /// Resolves difficulty in priority order: the inspected save's own PROFILE
+  /// (its persistentProfileId, then the scan's active profile id — NOT the
+  /// sidebar profile FILTER that `activeProfile`/`effectiveProfileId` honor for
+  /// browsing), then the inspected save's OWN parsed difficulty (a
+  /// standalone/imported save, or a missing PersistentDataList.sav, has no
+  /// profile metadata but the GSAV still carries its DifficultySettings), and
+  /// only then the 'Gothic' default. Without the save fallback a Novice/Hard
+  /// standalone save would silently reset from the Gothic save.
   ///
   /// Mirrors the difficulty dialog's authoritative display: a non-Custom preset
   /// (Novice/Gothic/Hard) LOCKS every sub-level to its implied tier, so a stale
@@ -492,6 +496,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// Gothic).
   String activeResourcesLevel() {
     const known = {'Novice', 'Gothic', 'Hard'};
+    // 1. The save's PROFILE difficulty (profile-wide, authoritative).
     final saveProfileId =
         state.selectedSave?.persistentProfileId ?? state.activeProfileId;
     DifficultySettings? difficulty;
@@ -503,7 +508,16 @@ class EditorNotifier extends StateNotifier<EditorState> {
         }
       }
     }
-    if (difficulty == null) return 'Gothic';
+    // 2. Fall back to the inspected save's OWN parsed difficulty when no profile
+    //    difficulty resolved (standalone/imported save, or missing profile
+    //    metadata).
+    if (difficulty == null || !difficulty.hasAnyValue) {
+      final saveDifficulty = state.selectedSave?.difficulty;
+      if (saveDifficulty != null && saveDifficulty.hasAnyValue) {
+        difficulty = saveDifficulty;
+      }
+    }
+    if (difficulty == null || !difficulty.hasAnyValue) return 'Gothic';
     return switch (difficulty.presetLabel) {
       'Novice' => 'Novice',
       'Gothic' => 'Gothic',
