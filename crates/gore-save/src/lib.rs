@@ -6173,9 +6173,9 @@ fn apply_private_edit_to_payload(
         PrivateEdit::InventoryRemoveItem(edit) => {
             apply_private_inventory_remove_item_to_payload(payload, edit)
         }
-        PrivateEdit::InventoryReset(_edit) => Err(CoreError::UnsupportedEdit(
-            "private.inventory.reset apply not yet implemented".to_string(),
-        )),
+        PrivateEdit::InventoryReset(edit) => {
+            apply_private_inventory_reset_to_payload(payload, edit)
+        }
         PrivateEdit::TypedSetValue(edit) => {
             apply_private_typed_set_value_edit_to_payload(payload, edit)
         }
@@ -7126,6 +7126,97 @@ fn apply_private_inventory_add_item_to_payload(
     }
     *payload = patched;
     Ok(())
+}
+
+/// Build the user-facing error for an actor that has no inventory in `where_`.
+fn reset_actor_missing_err(actor_id: Option<&str>, where_: &str) -> CoreError {
+    match actor_id {
+        Some(id) => CoreError::InvalidRequest(format!(
+            "the selected NPC ({id}) has no inventory in the {where_}; it may only \
+             appear later in the game, so there is no start inventory to reset to"
+        )),
+        None => CoreError::Parse(format!(
+            "the {where_} has no player m_Inventory; cannot reset"
+        )),
+    }
+}
+
+// NOTE: this splices m_Inventory (length-changing). Task 8 adds PrivateEdit::InventoryReset
+// to the structural/splicing batch-safety guards so it is never batched with a peer edit.
+/// Replace the current actor's `m_Inventory` bytes with the same actor's
+/// `m_Inventory` from an already-decoded reference private payload. Pure (no
+/// codec). Works on a scratch copy; commits only after a strict re-parse, so a
+/// failure leaves `payload` untouched.
+fn apply_inventory_reset_with_reference(
+    payload: &mut Vec<u8>,
+    actor_id: Option<&str>,
+    reference_private: &[u8],
+) -> Result<(), CoreError> {
+    // Lift the reference actor's whole m_Inventory value bytes.
+    let ref_root = properties::parse_private_root(reference_private).map_err(|err| {
+        CoreError::Parse(format!("start-save private payload did not parse: {err}"))
+    })?;
+    let ref_path = resolve_inventory_path(&ref_root, actor_id)
+        .ok_or_else(|| reset_actor_missing_err(actor_id, "start save"))?;
+    let ref_segs = properties::parse_path(&ref_path)?;
+    let ref_target = properties::resolve(&ref_root.properties, &ref_segs)?;
+    let ref_bytes = reference_private
+        [ref_target.value_offset..ref_target.value_offset + ref_target.value_size]
+        .to_vec();
+
+    // Resolve the current actor's m_Inventory; clone the target + enclosing size
+    // fields OUT of the borrow so the final `*payload = patched` has no
+    // outstanding immutable borrow of `payload`.
+    let (cur_target, cur_enclosing) = {
+        let cur_root = properties::parse_private_root(payload).map_err(|err| {
+            CoreError::Parse(format!(
+                "private.inventory.reset requires a typed-parsable private payload: {err}"
+            ))
+        })?;
+        let cur_path = resolve_inventory_path(&cur_root, actor_id)
+            .ok_or_else(|| reset_actor_missing_err(actor_id, "current save"))?;
+        let cur_segs = properties::parse_path(&cur_path)?;
+        let cur_chain = properties::resolve_chain(&cur_root.properties, &cur_segs)?;
+        (cur_chain.target.clone(), cur_chain.enclosing_size_fields.clone())
+    };
+
+    let mut patched = payload.clone();
+    properties::patch_value_bytes(&mut patched, &cur_target, &cur_enclosing, &ref_bytes)?;
+
+    // Prove the splice landed byte-for-byte across the WHOLE m_Inventory (not
+    // just the MainContainer a summary would show) and re-parses to the same
+    // boundaries — catches any silent mis-splice / size-field error.
+    let reparsed = properties::parse_private_root(&patched).map_err(|err| {
+        CoreError::Parse(format!("inventory reset produced an inconsistent payload: {err}"))
+    })?;
+    let check_path = resolve_inventory_path(&reparsed, actor_id)
+        .ok_or_else(|| CoreError::Parse("inventory reset lost the actor's m_Inventory".to_string()))?;
+    let check_segs = properties::parse_path(&check_path)?;
+    let check = properties::resolve(&reparsed.properties, &check_segs)?;
+    if patched[check.value_offset..check.value_offset + check.value_size] != ref_bytes[..] {
+        return Err(CoreError::Validation(
+            "inventory reset did not reproduce the reference bytes".to_string(),
+        ));
+    }
+
+    *payload = patched;
+    Ok(())
+}
+
+/// Command apply: decode the embedded start-save for the edit's level, then run
+/// the pure reset above.
+fn apply_private_inventory_reset_to_payload(
+    payload: &mut Vec<u8>,
+    edit: &PrivateInventoryResetEdit,
+) -> Result<(), CoreError> {
+    let backend = codec_backend::KrakenBackend::default();
+    // The embedded start-save is decoded + parsed fresh each call (uncached);
+    // reset is a deliberate one-shot action, so this is intentional.
+    let reference_private = decode_private_payload_from_bytes(
+        startsaves::start_save_bytes(edit.resources_level),
+        &backend,
+    )?;
+    apply_inventory_reset_with_reference(payload, edit.actor_id.as_deref(), &reference_private)
 }
 
 /// Raw bytes of a template item slot borrowed from a non-Main inventory
@@ -13887,6 +13978,107 @@ mod tests {
         p.extend_from_slice(&fstring("None"));
         p.extend_from_slice(&0u32.to_le_bytes()); // footer
         p
+    }
+
+    /// Private payload with a single controlled player (Party ID 0) whose
+    /// `m_Inventory` MainContainer holds one item slot per definition path in
+    /// `paths`. `resolve_inventory_path(root, None)` resolves this player, and
+    /// `actor_inventory_summary(root, None)` lists exactly these paths. Mirrors
+    /// the low-level builders `two_saved_players_private_payload` uses.
+    fn single_player_inventory_payload(paths: &[&str]) -> Vec<u8> {
+        let main_slots: Vec<Vec<u8>> = paths
+            .iter()
+            .enumerate()
+            .map(|(index, path)| {
+                inv_item_slot(
+                    index as i32,
+                    INV_MAIN_LABEL,
+                    path,
+                    1,
+                    &inv_empty_payload_map(),
+                )
+            })
+            .collect();
+        let keys = inv_enum_array_property("m_Keys", &[INV_MAIN_LABEL]);
+        let items = inv_struct_array_property(
+            "Items",
+            "ContainerVirtualData",
+            &[inv_container(INV_MAIN_LABEL, &main_slots)],
+        );
+        let values = inv_struct_property("m_Values", "ContainerVirtualDataArray", &items);
+        let mut inventory_props = keys;
+        inventory_props.extend_from_slice(&values);
+        let inventory =
+            inv_struct_property("m_Inventory", "ReplicatedInventoryMap", &inventory_props);
+
+        let mut player = str_property("m_PlayerID", "Party ID 0");
+        player.extend_from_slice(&inventory);
+
+        let saved_players =
+            inv_struct_array_property("m_SavedPlayers", "PlayerSavedData", &[player]);
+        let mut instanced_body = saved_players;
+        instanced_body.extend_from_slice(&fstring("None"));
+        let mut instanced = fstring("/Script/Angelscript.PlayersSavedData");
+        instanced.extend_from_slice(&(instanced_body.len() as u32).to_le_bytes());
+        instanced.extend_from_slice(&instanced_body);
+
+        let mut map_body = 0u32.to_le_bytes().to_vec(); // num_to_remove
+        map_body.extend_from_slice(&1u32.to_le_bytes()); // count
+        map_body.extend_from_slice(&fstring("PlayersSavedData"));
+        map_body.extend_from_slice(&instanced);
+        let mut map_descriptor = 2u32.to_le_bytes().to_vec();
+        map_descriptor.extend_from_slice(&fstring("NameProperty"));
+        map_descriptor.extend_from_slice(&0u32.to_le_bytes()); // key_flags
+        map_descriptor.extend_from_slice(&fstring("StructProperty"));
+        map_descriptor.extend_from_slice(&inv_struct_descriptor("InstancedStruct"));
+        let generic = inv_tagged(
+            "m_GenericData",
+            "MapProperty",
+            &map_descriptor,
+            0,
+            &map_body,
+        );
+
+        let mut p = fstring("/Script/Angelscript.GothicFinalDataGame");
+        p.push(0);
+        p.extend_from_slice(&generic);
+        p.extend_from_slice(&fstring("None"));
+        p.extend_from_slice(&0u32.to_le_bytes()); // footer
+        p
+    }
+
+    /// Resetting an actor from a reference whose inventory differs must make the
+    /// current inventory equal the reference's (player path).
+    #[test]
+    fn inventory_reset_player_matches_reference() {
+        let mut cur = single_player_inventory_payload(&["/Script/Angelscript.ItMi_Sulfur"]);
+        let reference = single_player_inventory_payload(&[
+            "/Script/Angelscript.ItMi_Orenugget",
+            "/Script/Angelscript.ItFo_Cheese",
+        ]);
+
+        apply_inventory_reset_with_reference(&mut cur, None, &reference).unwrap();
+
+        let cur_root = properties::parse_private_root(&cur).unwrap();
+        let ref_root = properties::parse_private_root(&reference).unwrap();
+        assert_eq!(
+            actor_inventory_summary(&cur_root, None),
+            actor_inventory_summary(&ref_root, None),
+        );
+    }
+
+    /// An NPC missing from the reference is a clear error, and the payload is
+    /// untouched.
+    #[test]
+    fn inventory_reset_npc_absent_in_reference_errors() {
+        let mut cur = single_player_inventory_payload(&["/Script/Angelscript.ItMi_Sulfur"]);
+        let before = cur.clone();
+        let reference = single_player_inventory_payload(&["/Script/Angelscript.ItMi_Orenugget"]);
+
+        let err = apply_inventory_reset_with_reference(&mut cur, Some("Char_NotHere"), &reference)
+            .unwrap_err();
+        assert!(matches!(err, CoreError::InvalidRequest(_)));
+        assert_eq!(cur, before, "a failed reset must not mutate the payload");
     }
 
     const INV_MELEE_LABEL: &str = "EInventoryTypes::MeleeSlot";
