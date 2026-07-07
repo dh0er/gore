@@ -454,8 +454,15 @@ String _optionLabel(AppLocalizations l10n, Skill skill, int index) {
       return l10n.skillTierMaster;
     case 'Trained':
     case 'Skilled':
-    case 'Learned':
       return l10n.skillTierTrained;
+    case 'Learned':
+      // Binary/hunting skills learn into the sentinel `Learned` → Trained. For a
+      // ladder/circle skill, `Learned` only appears as the raw fallback the core
+      // inserts for a class stored without its tier suffix; keep it raw so it
+      // stays distinct from the real Trained tier in the dropdown.
+      return (skill.kind == 'ladder' || skill.kind == 'circle')
+          ? value
+          : l10n.skillTierTrained;
     case 'Untrained':
       return l10n.skillTierUntrained;
     default:
