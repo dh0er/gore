@@ -8527,6 +8527,31 @@ mod tests {
         assert!(!from_bytes.is_empty());
     }
 
+    /// Every embedded start save (one per Resources level) must decode with the
+    /// real codec, parse as a private root, and expose a resolvable player
+    /// inventory (what a player reset targets). Guards a truncated or corrupt
+    /// drop-in for ANY level, not just Gothic.
+    #[test]
+    fn all_embedded_start_saves_decode_and_parse() {
+        let backend = codec_backend::KrakenBackend::default();
+        for level in [
+            startsaves::ResourcesLevel::Novice,
+            startsaves::ResourcesLevel::Gothic,
+            startsaves::ResourcesLevel::Hard,
+        ] {
+            let bytes = startsaves::start_save_bytes(level);
+            assert!(bytes.starts_with(b"GSAV"), "{level:?} start save must be GSAV");
+            let payload = decode_private_payload_from_bytes(bytes, &backend)
+                .unwrap_or_else(|e| panic!("{level:?} start save failed to decode: {e}"));
+            let root = properties::parse_private_root(&payload)
+                .unwrap_or_else(|e| panic!("{level:?} start save failed to parse: {e}"));
+            assert!(
+                resolve_inventory_path(&root, None).is_some(),
+                "{level:?} start save has no resolvable player inventory"
+            );
+        }
+    }
+
     /// `inspect_save` (which the editor runs on load) must SEED the parsed-root
     /// cache with the parse it already does for its summary, so the FIRST private
     /// read command right after a load (characters.list / npc.*) is a cache hit
