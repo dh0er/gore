@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
@@ -46,15 +47,20 @@ class NativeGoresaveCoreService implements GoresaveCoreService {
   @override
   bool get isAvailable => true;
 
+  /// One long-lived worker isolate that opens the DLL ONCE and services every
+  /// request, instead of `Isolate.run` per call (which spawned a fresh isolate
+  /// and re-opened + re-resolved the DLL every time — ~10-20 ms of pure overhead
+  /// on top of the native work). Created lazily on first use.
+  _CoreWorker? _worker;
+
   @override
   Future<Map<String, Object?>> execute(
     String command, {
     Map<String, Object?> payload = const {},
   }) async {
     final request = jsonEncode({'command': command, 'payload': payload});
-    final response = await runCoreWorkOnBackgroundIsolate(
-      () => _executeNativeRequest(description, request),
-    );
+    final worker = _worker ??= _CoreWorker(description);
+    final response = await worker.send(request);
     final decoded = jsonDecode(response);
     if (decoded is Map) {
       return decoded.cast<String, Object?>();
@@ -63,17 +69,101 @@ class NativeGoresaveCoreService implements GoresaveCoreService {
   }
 }
 
-Future<T> runCoreWorkOnBackgroundIsolate<T>(T Function() work) {
-  return Isolate.run(work);
+/// Payload thrown when the worker isolate reports a native failure. Mirrors the
+/// old `Isolate.run` behaviour where the error surfaced to the awaiting caller.
+class CoreWorkerException implements Exception {
+  const CoreWorkerException(this.message);
+  final String message;
+  @override
+  String toString() => message;
 }
 
-String _executeNativeRequest(String libraryPath, String request) {
-  final library = DynamicLibrary.open(libraryPath);
+class _WorkerInit {
+  const _WorkerInit(this.sendPort, this.libraryPath);
+  final SendPort sendPort;
+  final String libraryPath;
+}
+
+/// A persistent background isolate that owns the loaded core DLL. The main
+/// isolate sends `[id, requestJson]`; the worker replies `[id, ok, payload]`
+/// where `payload` is the response JSON (ok) or an error string. Requests are
+/// id-correlated so concurrent callers (e.g. a loc lookup racing an inspect)
+/// each get their own reply, and the worker processes them one at a time —
+/// matching the core's internal Mutex — without blocking the UI isolate.
+class _CoreWorker {
+  _CoreWorker(this._libraryPath) {
+    _readyFuture = _spawn();
+  }
+
+  final String _libraryPath;
+  final ReceivePort _fromWorker = ReceivePort();
+  SendPort? _toWorker;
+  late final Future<void> _readyFuture;
+  final Map<int, Completer<String>> _pending = {};
+  int _nextId = 0;
+
+  Future<void> _spawn() async {
+    final ready = Completer<void>();
+    _fromWorker.listen((message) {
+      if (message is SendPort) {
+        _toWorker = message;
+        ready.complete();
+        return;
+      }
+      final list = message as List<Object?>;
+      final id = list[0] as int;
+      final ok = list[1] as bool;
+      final pending = _pending.remove(id);
+      if (pending == null) return;
+      if (ok) {
+        pending.complete(list[2] as String);
+      } else {
+        pending.completeError(CoreWorkerException(list[2] as String));
+      }
+    });
+    await Isolate.spawn(
+      _coreWorkerEntry,
+      _WorkerInit(_fromWorker.sendPort, _libraryPath),
+    );
+    return ready.future;
+  }
+
+  Future<String> send(String request) async {
+    await _readyFuture;
+    final id = _nextId++;
+    final completer = Completer<String>();
+    _pending[id] = completer;
+    _toWorker!.send([id, request]);
+    return completer.future;
+  }
+}
+
+/// Worker isolate entry: open the DLL once, then serve requests forever.
+void _coreWorkerEntry(_WorkerInit init) {
+  final toMain = init.sendPort;
+  final fromMain = ReceivePort();
+  toMain.send(fromMain.sendPort);
+
+  final library = DynamicLibrary.open(init.libraryPath);
   final execute = library.lookupFunction<_ExecuteNative, _ExecuteDart>(
     'goresave_execute',
   );
   final free = library.lookupFunction<_FreeNative, _FreeDart>('goresave_free');
 
+  fromMain.listen((message) {
+    final list = message as List<Object?>;
+    final id = list[0] as int;
+    final request = list[1] as String;
+    try {
+      toMain.send([id, true, _invokeNative(execute, free, request)]);
+    } catch (error) {
+      toMain.send([id, false, error.toString()]);
+    }
+  });
+}
+
+/// Single native round-trip against an already-open library.
+String _invokeNative(_ExecuteDart execute, _FreeDart free, String request) {
   final requestPtr = request.toNativeUtf8();
   Pointer<Utf8> responsePtr = nullptr;
   try {
@@ -88,6 +178,13 @@ String _executeNativeRequest(String libraryPath, String request) {
       free(responsePtr);
     }
   }
+}
+
+/// Generic "run this off the UI isolate" helper. Kept for one-shot background
+/// work (and covered by a test); the core itself now uses the persistent
+/// [_CoreWorker] above rather than a fresh isolate per call.
+Future<T> runCoreWorkOnBackgroundIsolate<T>(T Function() work) {
+  return Isolate.run(work);
 }
 
 class MissingGoresaveCoreService implements GoresaveCoreService {

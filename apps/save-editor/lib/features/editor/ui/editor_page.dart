@@ -136,7 +136,7 @@ class _EditorPageState extends ConsumerState<EditorPage>
                 child: Text(
                   // Title bar text is language-independent — always the
                   // product name (see goresave_app.dart).
-                  'Gothic Remake Savegame Editor',
+                  'GORE Save Editor',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -672,6 +672,11 @@ class _EditorWorkspace extends StatelessWidget {
                   Expanded(
                     child: TabBar(
                       isScrollable: true,
+                      // Material 3 defaults a scrollable TabBar to
+                      // TabAlignment.startOffset, which inserts a ~52px empty gap
+                      // before the first (Overview) tab. Pin to the start so the
+                      // tab row begins flush-left with no wasted leading padding.
+                      tabAlignment: TabAlignment.start,
                       tabs: [
                         Tab(
                           icon: const Icon(Icons.dashboard_outlined),
@@ -829,11 +834,37 @@ class _EditorWorkspace extends StatelessWidget {
               child: Center(
                 child: Semantics(
                   label: l10n.loadingEditorData,
-                  child: const SizedBox(
-                    width: 44,
-                    height: 44,
-                    child: CircularProgressIndicator(strokeWidth: 3),
-                  ),
+                  // A multi-step save reports (done, total): show a determinate
+                  // bar with the count so sequential writes read as progress, not
+                  // a hung spinner. Any other load keeps the plain spinner.
+                  child: state.saveProgress != null
+                      ? SizedBox(
+                          width: 240,
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              LinearProgressIndicator(
+                                value: state.saveProgress!.total == 0
+                                    ? null
+                                    : state.saveProgress!.done /
+                                          state.saveProgress!.total,
+                              ),
+                              const SizedBox(height: 12),
+                              Text(
+                                l10n.savingProgress(
+                                  state.saveProgress!.done,
+                                  state.saveProgress!.total,
+                                ),
+                                style: Theme.of(context).textTheme.bodyMedium,
+                              ),
+                            ],
+                          ),
+                        )
+                      : const SizedBox(
+                          width: 44,
+                          height: 44,
+                          child: CircularProgressIndicator(strokeWidth: 3),
+                        ),
                 ),
               ),
             ),

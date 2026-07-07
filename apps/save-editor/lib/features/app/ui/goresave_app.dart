@@ -19,7 +19,7 @@ class GoresaveApp extends ConsumerWidget {
     return MaterialApp.router(
       // Window/OS title is language-independent on purpose — always the
       // product name, never the localized UI string.
-      title: 'Gothic Remake Savegame Editor',
+      title: 'GORE Save Editor',
       debugShowCheckedModeBanner: false,
       theme: buildGoresaveTheme(),
       darkTheme: buildGoresaveDarkTheme(),

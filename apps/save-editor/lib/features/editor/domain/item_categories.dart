@@ -113,20 +113,35 @@ class InventoryItemGroup {
 }
 
 /// Groups items by category. Groups appear in [ItemCategory] declaration
-/// order, empty groups are omitted, items are sorted by id within a group.
+/// order, empty groups are omitted, items are sorted within a group.
+///
+/// When [displayNameOf] is given, items sort case-insensitively by that
+/// (localized) name — what the user actually reads — with the id as a stable
+/// tiebreak. Without it (e.g. tests), items fall back to id order.
 List<InventoryItemGroup> groupInventoryItems(
-  List<PrivateInventoryItem> items,
-) {
+  List<PrivateInventoryItem> items, {
+  String Function(PrivateInventoryItem item)? displayNameOf,
+}) {
   final byCategory = <ItemCategory, List<PrivateInventoryItem>>{};
   for (final item in items) {
     byCategory.putIfAbsent(itemCategoryFromId(item.id), () => []).add(item);
   }
+  int compare(PrivateInventoryItem a, PrivateInventoryItem b) {
+    if (displayNameOf != null) {
+      final byName = displayNameOf(a).toLowerCase().compareTo(
+        displayNameOf(b).toLowerCase(),
+      );
+      if (byName != 0) return byName;
+    }
+    return a.id.compareTo(b.id);
+  }
+
   return [
     for (final category in ItemCategory.values)
       if (byCategory.containsKey(category))
         InventoryItemGroup(
           category: category,
-          items: byCategory[category]!..sort((a, b) => a.id.compareTo(b.id)),
+          items: byCategory[category]!..sort(compare),
         ),
   ];
 }

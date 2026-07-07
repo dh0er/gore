@@ -298,11 +298,15 @@ class _PrivateInventorySummaryCardState
   final TextEditingController _searchController = TextEditingController();
   final Map<String, InventoryItemCountChange> _pendingCountChanges = {};
   ItemCategory? _selectedCategory;
-  InventoryItemAdd? _pendingAdd;
+  // Items queued for addition. The core splices in one added slot per write and
+  // rejects a batch with more than one structural edit, but saveAllPending gives
+  // each addItem its OWN sequential write_save (each re-parses the prior splice),
+  // so the UI can stage several adds at once and they commit one after another.
+  final List<InventoryItemAdd> _pendingAdds = [];
   // The item queued for removal (carries path + slotId + containerType so the
-  // core can target the right container's exact slot). addItem and removeItem
-  // are both structural edits, so at most one of _pendingAdd / _pendingRemove is
-  // ever set (the core allows one structural inventory edit per write).
+  // core can target the right container's exact slot). Add and remove are kept
+  // mutually exclusive in the UI (queuing one clears the other), so a save never
+  // mixes them.
   PrivateInventoryItem? _pendingRemove;
 
   /// Asset path of the item queued for removal, or null when none is queued.
@@ -361,7 +365,7 @@ class _PrivateInventorySummaryCardState
           final itemPath = value['path'] as String? ?? '';
           final count = (value['count'] as num?)?.toInt();
           if (itemPath.isEmpty || count == null) continue;
-          _pendingAdd = InventoryItemAdd(path: itemPath, count: count);
+          _pendingAdds.add(InventoryItemAdd(path: itemPath, count: count));
         case 'private.inventory.removeItem':
           final itemPath = value['path'] as String? ?? '';
           if (itemPath.isEmpty) continue;
@@ -394,7 +398,7 @@ class _PrivateInventorySummaryCardState
       // registry with only that field. Rehydrate only mutates LOCAL state (never
       // the provider), so it is safe in this build-context callback.
       _pendingCountChanges.clear();
-      _pendingAdd = null;
+      _pendingAdds.clear();
       _pendingRemove = null;
       _rehydrateFromPending();
     }
@@ -417,13 +421,15 @@ class _PrivateInventorySummaryCardState
           ).toEditJson(),
         )
         .toList();
-    final addEdit = _pendingAdd != null
-        ? InventoryItemAdd(
-            path: _pendingAdd!.path,
-            count: _pendingAdd!.count,
+    final addEdits = _pendingAdds
+        .map(
+          (a) => InventoryItemAdd(
+            path: a.path,
+            count: a.count,
             actorId: actorId,
-          ).toEditJson()
-        : null;
+          ).toEditJson(),
+        )
+        .toList();
     final removeEdit = _pendingRemove != null
         ? InventoryItemRemove(
             path: _pendingRemove!.path,
@@ -432,7 +438,7 @@ class _PrivateInventorySummaryCardState
             containerType: _pendingRemove!.containerType,
           ).toEditJson()
         : null;
-    final allEdits = [...countEdits, ?addEdit, ?removeEdit];
+    final allEdits = [...countEdits, ...addEdits, ?removeEdit];
     if (allEdits.isEmpty) {
       widget.notifier.clearPendingEdit(widget.pendingKey);
     } else {
@@ -463,14 +469,17 @@ class _PrivateInventorySummaryCardState
         excludePaths: {
           ...widget.inventory.mainContainerPaths,
           ...widget.inventory.equippedArmorPaths,
+          // Already-queued adds go to the MainContainer too; addItem rejects a
+          // duplicate MainContainer path, so don't offer the same item twice.
+          for (final a in _pendingAdds) a.path,
         },
       ),
     );
     if (result == null) return;
     if (!mounted || widget.notifier.selectedPath != dialogSavePath) return;
     setState(() {
-      _pendingAdd = result;
-      // Keep the one-structural-edit-per-save invariant unconditionally.
+      _pendingAdds.add(result);
+      // Add and remove stay mutually exclusive (see _pendingAdds doc).
       _pendingRemove = null;
     });
     _pushInventoryPending();
@@ -479,9 +488,9 @@ class _PrivateInventorySummaryCardState
   void _queueRemove(PrivateInventoryItem item) {
     setState(() {
       // A removal supersedes any pending count change on the same item, and is
-      // mutually exclusive with a pending add (one structural edit per save).
+      // mutually exclusive with pending adds (add and remove never mix).
       _pendingCountChanges.remove(_inventoryItemKey(item));
-      _pendingAdd = null;
+      _pendingAdds.clear();
       // Carry the full item so the remove edit echoes slotId + containerType,
       // letting the core target the exact slot in the right container.
       _pendingRemove = item;
@@ -517,7 +526,14 @@ class _PrivateInventorySummaryCardState
           item.path.toLowerCase().contains(query) ||
           (name != null && name.toLowerCase().contains(query));
     }).toList();
-    final groups = groupInventoryItems(items);
+    // What the row actually shows (see the ListTile title below): the localized
+    // game name, falling back to id/path. Sorting by this keeps the browse list
+    // and the flat search list ordered the way the user reads them, not by the
+    // raw internal id.
+    String nameOf(PrivateInventoryItem item) =>
+        localizedGameName(locCatalog, lang, item.id) ??
+        (item.id.isEmpty ? item.path : item.id);
+    final groups = groupInventoryItems(items, displayNameOf: nameOf);
 
     // Keep the current category selected if it still has items, else fall
     // back to the first available group.
@@ -533,23 +549,28 @@ class _PrivateInventorySummaryCardState
     // an empty query browses by the selected category.
     final searching = query.isNotEmpty;
     final shownItems = searching
-        ? items
+        ? (items
+            ..sort(
+              (a, b) => nameOf(a).toLowerCase().compareTo(nameOf(b).toLowerCase()),
+            ))
         : (selectedGroup?.items ?? const <PrivateInventoryItem>[]);
 
     final hasItems = inventory.items.isNotEmpty;
-    final hasPendingAdd = _pendingAdd != null;
+    final hasPendingAdd = _pendingAdds.isNotEmpty;
     final hasPendingRemove = _pendingRemovePath != null;
     final hasPendingCount = _pendingCountChanges.isNotEmpty;
     final hasPendingChanges =
         hasPendingCount || hasPendingAdd || hasPendingRemove;
     final canRemove = widget.canRemoveItem;
-    // A structural edit (add/remove) must be saved on its own (the core/notifier
-    // reject a batch that mixes it with count edits), so structural edits and
-    // count edits are kept mutually exclusive in the UI: a structural edit is
-    // blocked while counts are pending, and count editing is blocked while a
-    // structural edit is pending.
-    final structuralBlocked =
-        hasPendingAdd || hasPendingRemove || hasPendingCount;
+    // Structural edits (add/remove) and count edits are kept mutually exclusive
+    // in the UI: count editing is blocked while a structural edit is pending, and
+    // queuing a remove is blocked while counts are pending. Multiple ADDS may be
+    // queued together, though — saveAllPending commits each as its own sequential
+    // write — so a pending add does NOT block the Add button.
+    final addBlocked = hasPendingRemove || hasPendingCount;
+    // Remove is a single structural edit — mutually exclusive with any other
+    // pending edit (adds, another remove, or counts).
+    final removeBlocked = hasPendingAdd || hasPendingRemove || hasPendingCount;
     final countEditable =
         widget.editable && !hasPendingAdd && !hasPendingRemove;
 
@@ -585,9 +606,7 @@ class _PrivateInventorySummaryCardState
                   if (widget.canAddItem) ...[
                     const SizedBox(width: 8),
                     Tooltip(
-                      message: hasPendingAdd
-                          ? l10n.addItemTooltipPendingAdd
-                          : hasPendingRemove
+                      message: hasPendingRemove
                           ? l10n.addItemTooltipPendingRemove
                           : hasPendingCount
                           ? l10n.addItemTooltipPendingCount
@@ -595,7 +614,7 @@ class _PrivateInventorySummaryCardState
                       child: FilledButton.icon(
                         icon: const Icon(Icons.add, size: 18),
                         label: Text(l10n.addItemButton),
-                        onPressed: structuralBlocked ? null : _openAddDialog,
+                        onPressed: addBlocked ? null : _openAddDialog,
                       ),
                     ),
                   ],
@@ -608,7 +627,7 @@ class _PrivateInventorySummaryCardState
                         onPressed: () {
                           setState(() {
                             _pendingCountChanges.clear();
-                            _pendingAdd = null;
+                            _pendingAdds.clear();
                             _pendingRemove = null;
                           });
                           widget.notifier.clearPendingEdit(widget.pendingKey);
@@ -618,16 +637,16 @@ class _PrivateInventorySummaryCardState
                   ],
                 ],
               ),
-            if (hasPendingAdd) ...[
+            for (final add in _pendingAdds) ...[
               const SizedBox(height: 12),
               _PendingStructuralRow(
                 tone: _PendingTone.add,
                 icon: Icons.add_circle_outline,
-                title: _itemDisplayFromPath(_pendingAdd!.path),
-                subtitle: l10n.pendingAddSubtitle(_pendingAdd!.count),
+                title: _itemDisplayFromPath(add.path),
+                subtitle: l10n.pendingAddSubtitle(add.count),
                 cancelTooltip: l10n.cancelPendingAdd,
                 onCancel: () {
-                  setState(() => _pendingAdd = null);
+                  setState(() => _pendingAdds.remove(add));
                   _pushInventoryPending();
                 },
               ),
@@ -837,7 +856,7 @@ class _PrivateInventorySummaryCardState
                                           item,
                                           canRemove: canRemove,
                                           countEditable: countEditable,
-                                          removeBlocked: structuralBlocked,
+                                          removeBlocked: removeBlocked,
                                         ),
                                       );
                                     },

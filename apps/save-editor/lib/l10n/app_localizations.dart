@@ -2366,6 +2366,12 @@ abstract class AppLocalizations {
   /// **'Loading editor data'**
   String get loadingEditorData;
 
+  /// No description provided for @savingProgress.
+  ///
+  /// In en, this message translates to:
+  /// **'Saving… {done} of {total}'**
+  String savingProgress(int done, int total);
+
   /// No description provided for @localizedTextExtractedCount.
   ///
   /// In en, this message translates to:

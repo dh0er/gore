@@ -76,10 +76,18 @@ class EditorState {
     this.invalidNpcEditKey,
     this.heroGlobalId,
     this.heroGlobalIdSettled = false,
+    this.saveProgress,
   });
 
   final String saveDir;
   final bool isLoading;
+
+  /// Progress of an in-flight multi-step save: `done` sub-writes committed out
+  /// of `total`. Non-null only while [saveAllPending] runs its sequential
+  /// write_save worklist (a structural inventory add/remove gets its own write),
+  /// so the overlay can show a determinate bar instead of an indeterminate
+  /// spinner. Null at rest and during single ordinary loads.
+  final ({int done, int total})? saveProgress;
   final List<SaveSlot> saves;
   final List<ProfileSummary> profiles;
   final int? activeProfileId;
@@ -218,6 +226,8 @@ class EditorState {
     Object? invalidNpcEditKey = _unchanged,
     Object? heroGlobalId = _unchanged,
     bool? heroGlobalIdSettled,
+    Object? saveProgress = _unchanged,
+    bool clearSaveProgress = false,
     bool clearInspection = false,
     bool clearBackups = false,
     bool clearError = false,
@@ -266,6 +276,11 @@ class EditorState {
           ? this.heroGlobalId
           : heroGlobalId as String?,
       heroGlobalIdSettled: heroGlobalIdSettled ?? this.heroGlobalIdSettled,
+      saveProgress: clearSaveProgress
+          ? null
+          : identical(saveProgress, _unchanged)
+          ? this.saveProgress
+          : saveProgress as ({int done, int total})?,
     );
   }
 }
@@ -755,6 +770,12 @@ class EditorNotifier extends StateNotifier<EditorState> {
     String? failureError;
     var ok = false;
     await _withLoading(() async {
+      // Seed the determinate progress bar (0 of N committed). Each sequential
+      // write_save below bumps `done`, so a multi-write save (e.g. several
+      // inventory adds) shows real progress instead of a stuck spinner.
+      state = state.copyWith(
+        saveProgress: (done: 0, total: worklist.length),
+      );
       for (var i = 0; i < worklist.length; i++) {
         final sub = worklist[i];
         final response = await _execute(
@@ -777,7 +798,13 @@ class EditorNotifier extends StateNotifier<EditorState> {
               const {};
         }
         committedKeys.addAll(sub.keys);
+        state = state.copyWith(
+          saveProgress: (done: i + 1, total: worklist.length),
+        );
       }
+      // Writes are done — drop the bar so the trailing refresh shows the plain
+      // spinner (and a failure path shows its error, not a frozen bar).
+      state = state.copyWith(clearSaveProgress: true);
 
       if (failureError == null) {
         // All sub-writes succeeded.
@@ -1524,11 +1551,23 @@ class EditorNotifier extends StateNotifier<EditorState> {
   Future<NpcActorsPage>? _allNpcActorsFuture;
   SaveInspection? _allNpcActorsFor;
 
-  /// Drop the cached full NPC list. Called whenever a fresh inspection lands so
-  /// the next [loadAllNpcActors] call re-fetches against the new save state.
+  /// Per-NPC memo of [loadNpcAttributes] / [loadNpcInventory], keyed by GlobalId.
+  /// Re-selecting an NPC (or toggling between its Attribute/Inventory sub-tabs)
+  /// otherwise re-hits the core each time; caching the future makes a revisit
+  /// free. Cleared with the rest of the NPC caches on a fresh inspection, so an
+  /// edit+save (which refreshes) re-fetches the changed NPC. Errors are not
+  /// cached (the entry is dropped) so a transient failure can retry.
+  final Map<String, Future<NpcAttributesResult>> _npcAttributesCache = {};
+  final Map<String, Future<NpcInventoryResult>> _npcInventoryCache = {};
+
+  /// Drop the cached full NPC list and per-NPC detail memos. Called whenever a
+  /// fresh inspection lands so the next load re-fetches against the new save
+  /// state.
   void _invalidateNpcCache() {
     _allNpcActorsFuture = null;
     _allNpcActorsFor = null;
+    _npcAttributesCache.clear();
+    _npcInventoryCache.clear();
   }
 
   /// Load (and memoize) the FULL NPC list for the current inspection.
@@ -1593,25 +1632,33 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// register edits via the same pending-edit mechanism the player uses.
   /// Returns a result carrying an inline error instead of throwing, mirroring
   /// [loadHeroAttributes].
-  Future<NpcAttributesResult> loadNpcAttributes(String id) async {
+  Future<NpcAttributesResult> loadNpcAttributes(String id) {
     final path = state.selectedPath;
     if (path == null) {
-      return const NpcAttributesResult(error: 'No save selected.');
+      return Future.value(const NpcAttributesResult(error: 'No save selected.'));
     }
-    try {
-      final response = await _execute(
-        'private.npc.attributes',
-        payload: {'path': path, 'id': id},
-      );
-      if (response['ok'] != true) {
-        return NpcAttributesResult(error: _errorMessage(response));
+    final cached = _npcAttributesCache[id];
+    if (cached != null) return cached;
+    final future = () async {
+      try {
+        final response = await _execute(
+          'private.npc.attributes',
+          payload: {'path': path, 'id': id},
+        );
+        if (response['ok'] != true) {
+          _npcAttributesCache.remove(id);
+          return NpcAttributesResult(error: _errorMessage(response));
+        }
+        return NpcAttributesResult.fromJson(
+          (response['data'] as Map).cast<String, Object?>(),
+        );
+      } catch (error) {
+        _npcAttributesCache.remove(id);
+        return NpcAttributesResult(error: 'NPC attributes failed: $error');
       }
-      return NpcAttributesResult.fromJson(
-        (response['data'] as Map).cast<String, Object?>(),
-      );
-    } catch (error) {
-      return NpcAttributesResult(error: 'NPC attributes failed: $error');
-    }
+    }();
+    _npcAttributesCache[id] = future;
+    return future;
   }
 
   /// Load a single NPC's inventory (by GlobalId) from the core
@@ -1621,25 +1668,33 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// queued edits carry `actorId: <id>` so they target this NPC's container.
   /// Returns a result carrying an inline error instead of throwing, mirroring
   /// [loadNpcAttributes].
-  Future<NpcInventoryResult> loadNpcInventory(String id) async {
+  Future<NpcInventoryResult> loadNpcInventory(String id) {
     final path = state.selectedPath;
     if (path == null) {
-      return const NpcInventoryResult(error: 'No save selected.');
+      return Future.value(const NpcInventoryResult(error: 'No save selected.'));
     }
-    try {
-      final response = await _execute(
-        'private.npc.inventory',
-        payload: {'path': path, 'id': id},
-      );
-      if (response['ok'] != true) {
-        return NpcInventoryResult(error: _errorMessage(response));
+    final cached = _npcInventoryCache[id];
+    if (cached != null) return cached;
+    final future = () async {
+      try {
+        final response = await _execute(
+          'private.npc.inventory',
+          payload: {'path': path, 'id': id},
+        );
+        if (response['ok'] != true) {
+          _npcInventoryCache.remove(id);
+          return NpcInventoryResult(error: _errorMessage(response));
+        }
+        return NpcInventoryResult.fromJson(
+          (response['data'] as Map).cast<String, Object?>(),
+        );
+      } catch (error) {
+        _npcInventoryCache.remove(id);
+        return NpcInventoryResult(error: 'NPC inventory failed: $error');
       }
-      return NpcInventoryResult.fromJson(
-        (response['data'] as Map).cast<String, Object?>(),
-      );
-    } catch (error) {
-      return NpcInventoryResult(error: 'NPC inventory failed: $error');
-    }
+    }();
+    _npcInventoryCache[id] = future;
+    return future;
   }
 
   Future<MemoryEventsPage> loadMemoryEvents(

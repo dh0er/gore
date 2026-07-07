@@ -1318,6 +1318,11 @@ class AppLocalizationsPl extends AppLocalizations {
   String get loadingEditorData => 'Wczytywanie danych edytora';
 
   @override
+  String savingProgress(int done, int total) {
+    return 'Saving… $done of $total';
+  }
+
+  @override
   String localizedTextExtractedCount(int idCount, int languageCount) {
     return 'Wyodrębniono $idCount identyfikatorów w $languageCount językach';
   }

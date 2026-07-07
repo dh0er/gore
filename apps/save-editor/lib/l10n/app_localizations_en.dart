@@ -1296,6 +1296,11 @@ class AppLocalizationsEn extends AppLocalizations {
   String get loadingEditorData => 'Loading editor data';
 
   @override
+  String savingProgress(int done, int total) {
+    return 'Saving… $done of $total';
+  }
+
+  @override
   String localizedTextExtractedCount(int idCount, int languageCount) {
     return 'Extracted $idCount ids across $languageCount languages';
   }
