@@ -895,6 +895,56 @@ pub fn patch_string(
     Ok(())
 }
 
+/// Replace a property's entire serialized value with `new_bytes` (any length),
+/// fixing the property's own size field and every enclosing size field by the
+/// length delta. The generic sibling of [`patch_string`]: no type check and no
+/// FString framing — `new_bytes` must be a schema-valid serialized value body
+/// for `target`'s type, which the caller proves with a re-parse afterwards.
+pub fn patch_value_bytes(
+    payload: &mut Vec<u8>,
+    target: &Property,
+    enclosing_size_fields: &[usize],
+    new_bytes: &[u8],
+) -> Result<(), CoreError> {
+    let value_end = target
+        .value_offset
+        .checked_add(target.value_size)
+        .filter(|end| *end <= payload.len())
+        .ok_or_else(|| {
+            CoreError::Parse(format!(
+                "patch target out of bounds: offset {}, size {}",
+                target.value_offset, target.value_size
+            ))
+        })?;
+    let new_size = u32::try_from(new_bytes.len())
+        .map_err(|_| CoreError::InvalidRequest("replacement value too long".to_string()))?;
+    let delta = new_bytes.len() as i64 - target.value_size as i64;
+    if target.value_offset < 5 {
+        return Err(CoreError::Parse("value tag offset underflow".to_string()));
+    }
+    let mut writes = Vec::with_capacity(enclosing_size_fields.len() + 1);
+    writes.push((target.size_field_offset(), new_size));
+    for &offset in enclosing_size_fields {
+        if offset + 4 > target.value_offset {
+            return Err(CoreError::Parse(format!(
+                "enclosing size field at 0x{offset:x} does not precede the patch target"
+            )));
+        }
+        let old = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap());
+        let updated = u32::try_from(i64::from(old) + delta).map_err(|_| {
+            CoreError::Parse(format!(
+                "enclosing size field at 0x{offset:x} would leave the u32 range"
+            ))
+        })?;
+        writes.push((offset, updated));
+    }
+    for (offset, value) in writes {
+        payload[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+    }
+    payload.splice(target.value_offset..value_end, new_bytes.iter().copied());
+    Ok(())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContainerKind {
     Array,
@@ -2143,6 +2193,86 @@ mod tests {
         out.extend_from_slice(&fstring("None"));
         out.extend_from_slice(&0u32.to_le_bytes()); // footer
         out
+    }
+
+    /// A non-native (property-list) StructProperty named `name`, whose body is
+    /// the given IntProperty members closed by the `None` terminator. Its
+    /// header size field spans the whole member list including the terminator.
+    fn struct_property(name: &str, members: &[(&str, i32)]) -> Vec<u8> {
+        let mut struct_body = Vec::new();
+        for (member, value) in members {
+            struct_body.extend_from_slice(&int_property(member, *value));
+        }
+        struct_body.extend_from_slice(&fstring("None")); // close the property list
+
+        let mut out = tag(name, "StructProperty");
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&fstring("InventoryData"));
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&fstring("/Script/Test"));
+        out.extend_from_slice(&header(struct_body.len() as u32, 0));
+        out.extend_from_slice(&struct_body);
+        out
+    }
+
+    /// A root object holding just the StructProperty from [`struct_property`], so
+    /// `resolve(root, [name])` yields it. Used as the byte donor whose full value
+    /// body is lifted and spliced elsewhere.
+    fn single_struct_property_payload(name: &str, members: &[(&str, i32)]) -> Vec<u8> {
+        root("/Script/Test.Save", &struct_property(name, members))
+    }
+
+    /// Wrap `m_Inventory` inside a non-native "Parent" struct, followed by a
+    /// trailing sibling `m_After` int, so patching `m_Inventory` exercises an
+    /// enclosing size field (Parent's) AND shifts `m_After` unless every
+    /// enclosing/sibling offset is fixed up. Modeled on
+    /// `nested_tag_container_payload`. Layout:
+    /// `Parent: StructProperty { m_Inventory: InventoryData, m_After: Int }`.
+    fn parent_with_inventory_payload(members: &[(&str, i32)]) -> Vec<u8> {
+        let mut struct_body = struct_property("m_Inventory", members);
+        struct_body.extend_from_slice(&int_property("m_After", 9));
+        struct_body.extend_from_slice(&fstring("None")); // close Parent's property list
+
+        let mut props = tag("Parent", "StructProperty");
+        props.extend_from_slice(&1u32.to_le_bytes());
+        props.extend_from_slice(&fstring("NPCData"));
+        props.extend_from_slice(&1u32.to_le_bytes());
+        props.extend_from_slice(&fstring("/Script/Test"));
+        props.extend_from_slice(&header(struct_body.len() as u32, 0));
+        props.extend_from_slice(&struct_body);
+        root("/Script/Test.Save", &props)
+    }
+
+    #[test]
+    fn patch_value_bytes_replaces_struct_body_and_reparses() {
+        // A nested StructProperty whose body we overwrite with a longer, still-
+        // valid body lifted from a second parse of the same shape. Nesting under
+        // "Parent" (and the trailing m_After sibling) forces the enclosing-size-
+        // field fixup and sibling-offset consistency to be exercised.
+        let mut payload = parent_with_inventory_payload(&[("m_Count", 1i32)]);
+        let donor = single_struct_property_payload("m_Inventory", &[("m_Count", 7i32), ("m_Extra", 9i32)]);
+
+        let donor_root = parse_private_root(&donor).unwrap();
+        let donor_target = resolve(&donor_root.properties, &parse_path(&["m_Inventory".into()]).unwrap()).unwrap();
+        let donor_bytes = donor[donor_target.value_offset..donor_target.value_offset + donor_target.value_size].to_vec();
+
+        let inventory_path = parse_path(&["Parent".into(), "m_Inventory".into()]).unwrap();
+        let root = parse_private_root(&payload).unwrap();
+        let chain = resolve_chain(&root.properties, &inventory_path).unwrap();
+        // Lock in that the target is genuinely nested: the enclosing-size-field
+        // fixup loop in patch_value_bytes must have work to do.
+        assert!(!chain.enclosing_size_fields.is_empty());
+        patch_value_bytes(&mut payload, chain.target, &chain.enclosing_size_fields, &donor_bytes).unwrap();
+
+        let reparsed = parse_private_root(&payload).unwrap();
+        assert_eq!(reparsed.consumed, payload.len());
+        // (a) the patched value now carries the donor body verbatim.
+        let inv = resolve(&reparsed.properties, &inventory_path).unwrap();
+        assert_eq!(inv.value_size, donor_bytes.len());
+        // (b) the trailing sibling survives intact: a missed/wrong enclosing-size
+        // fixup would shift m_After and break this resolve (or the re-parse).
+        let after = resolve(&reparsed.properties, &parse_path(&["Parent".into(), "m_After".into()]).unwrap()).unwrap();
+        assert_eq!(after.value, PropertyValue::Int(9));
     }
 
     #[test]
