@@ -4,6 +4,7 @@ pub mod factions;
 pub mod npc;
 pub mod properties;
 pub mod skills;
+pub mod startsaves;
 
 use base64::{Engine as _, engine::general_purpose};
 use serde::{Deserialize, Serialize};
