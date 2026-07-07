@@ -432,6 +432,130 @@ void main() {
   );
 
   test(
+    'saveAllPending refuses a reset queued with a same-actor inventory count edit',
+    () async {
+      final core = _RecordingCoreService();
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+      // Reset the PLAYER inventory (no actorId)...
+      notifier.setPendingEdit(
+        'inventory',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.inventory.reset',
+              'value': {'resourcesLevel': 'Gothic'},
+            },
+          ],
+        ),
+      );
+      // ...and a PLAYER setItemCount (same actor: no actorId) under another key.
+      // It lands in the fixed batch before the reset splice, so the reset would
+      // discard it — the save must be refused.
+      notifier.setPendingEdit(
+        'count',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.inventory.setItemCount',
+              'value': {'id': 'ItMi_Orenugget', 'count': 5},
+            },
+          ],
+        ),
+      );
+
+      final writesBefore = core.requests
+          .where((r) => r.command == 'write_save')
+          .length;
+      final ok = await notifier.saveAllPending();
+
+      expect(ok, isFalse);
+      expect(notifier.state.error, contains('discard'));
+      expect(
+        core.requests.where((r) => r.command == 'write_save').length,
+        writesBefore,
+      );
+    },
+  );
+
+  test(
+    'saveAllPending allows a reset with an inventory edit on a DIFFERENT actor',
+    () async {
+      final core = _RecordingCoreService();
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+      // Reset the PLAYER inventory...
+      notifier.setPendingEdit(
+        'inventory',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.inventory.reset',
+              'value': {'resourcesLevel': 'Gothic'},
+            },
+          ],
+        ),
+      );
+      // ...and a setItemCount on an NPC (different inventory) — no conflict, the
+      // reset does not touch the NPC's inventory, so the save proceeds.
+      notifier.setPendingEdit(
+        'inventory:Char_1',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.inventory.setItemCount',
+              'value': {'id': 'ItMi_Orenugget', 'count': 5, 'actorId': 'Char_1'},
+            },
+          ],
+        ),
+      );
+
+      final ok = await notifier.saveAllPending();
+
+      // Not refused for the conflict — it committed both (recording core succeeds).
+      expect(ok, isTrue);
+      expect(notifier.state.error, isNull);
+    },
+  );
+
+  test(
+    'activeResourcesLevel follows the save/scan profile, not the sidebar filter',
+    () async {
+      final core = _RecordingCoreService(
+        scanData: {
+          'saves': <Object?>[],
+          'profiles': [
+            {
+              'profileId': 0,
+              'profileName': 'A',
+              'difficultyPreset': 'DifficultyPreset_Hard',
+            },
+            {
+              'profileId': 1,
+              'profileName': 'B',
+              'difficultyPreset': 'DifficultyPreset_Easy',
+            },
+          ],
+          // The scan's active (this save's) profile is 1 → Novice.
+          'activeProfileId': 1,
+        },
+      );
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await pumpEventQueue();
+
+      // The user explicitly filters the sidebar to profile 0 (Hard) — a browsing
+      // choice that must NOT change which start-save a reset targets.
+      notifier.selectProfile(0);
+      expect(notifier.state.activeProfile?.difficulty.presetLabel, 'Hard');
+
+      // Reset follows the save/scan profile (1 = Novice), not the filter.
+      expect(notifier.activeResourcesLevel(), 'Novice');
+    },
+  );
+
+  test(
     'saveAllPending sets syncPersistentDataList true when any edit requests it',
     () async {
       final core = _RecordingCoreService();

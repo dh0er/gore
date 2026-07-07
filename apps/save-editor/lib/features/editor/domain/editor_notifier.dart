@@ -474,10 +474,14 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// without reaching into the protected `state`.
   PendingSaveEdit? pendingEditFor(String key) => state.pendingEdits[key];
 
-  /// The active profile's effective Resources difficulty level, normalized to
-  /// one of 'Novice' | 'Gothic' | 'Hard' — used to pick the inventory-reset
-  /// start-save. Falls back to 'Gothic' (the standard preset) when there is no
-  /// profile or difficulty.
+  /// The effective Resources difficulty level of the INSPECTED save's profile,
+  /// normalized to 'Novice' | 'Gothic' | 'Hard' — used to pick the inventory-reset
+  /// start-save. Falls back to 'Gothic' when no profile/difficulty resolves.
+  ///
+  /// Resolves the save's OWN profile (its persistentProfileId, then the scan's
+  /// active profile id) — NOT the sidebar profile FILTER that `activeProfile` /
+  /// `effectiveProfileId` honor for browsing, since the reset targets this save
+  /// and its NPC inventories depend on this save's profile.
   ///
   /// Mirrors the difficulty dialog's authoritative display: a non-Custom preset
   /// (Novice/Gothic/Hard) LOCKS every sub-level to its implied tier, so a stale
@@ -485,11 +489,20 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// resets from the Hard save even if it carries an out-of-date `_Standard`
   /// resources class. Only a Custom preset — or a profile with no recognized
   /// preset to imply from — lets the stored Resources sub-level decide (else
-  /// Gothic). Reading `resourcesLabel` first would both mis-route Novice/Hard
-  /// profiles (no explicit sub-level → Gothic) and honor a stale sub-level.
+  /// Gothic).
   String activeResourcesLevel() {
     const known = {'Novice', 'Gothic', 'Hard'};
-    final difficulty = state.activeProfile?.difficulty;
+    final saveProfileId =
+        state.selectedSave?.persistentProfileId ?? state.activeProfileId;
+    DifficultySettings? difficulty;
+    if (saveProfileId != null) {
+      for (final profile in state.profiles) {
+        if (profile.profileId == saveProfileId) {
+          difficulty = profile.difficulty;
+          break;
+        }
+      }
+    }
     if (difficulty == null) return 'Gothic';
     return switch (difficulty.presetLabel) {
       'Novice' => 'Novice',
@@ -750,19 +763,39 @@ class EditorNotifier extends StateNotifier<EditorState> {
       );
       return false;
     }
-    // A reset REPLACES the whole m_Inventory. A raw All-data private.typed.setValue
-    // targeting an m_Inventory runs in the fixed batch BEFORE the reset splice, so
-    // the reset would silently overwrite (discard) it while Save still reported
-    // success for both. Refuse the combination (like the conflicts above) — a reset
-    // and a raw inventory edit must be saved separately. Deliberately broad (any
-    // m_Inventory typed edit, not just the reset's actor): a cross-actor pair is
-    // rare and the worst case here is a clear "save separately" nudge, never a
-    // silent overwrite.
-    if (allEdits.any((k) => k.edit['path'] == 'private.inventory.reset') &&
-        allEdits.any((k) => _isInventoryTypedEdit(k.edit))) {
+    // A reset REPLACES the whole m_Inventory of its actor. Any other edit that
+    // touches that SAME inventory — a structured setItemCount/addItem/removeItem
+    // for the same actor, or a raw All-data private.typed.setValue stepping
+    // through an m_Inventory — lands in an earlier sub-write (the fixed batch, or
+    // another splice), so the reset would silently overwrite (discard) it while
+    // Save still reported success for both. Refuse the combination (like the
+    // conflicts above); the reset and the other inventory edit must be saved
+    // separately. Structured ops are matched by the reset's actorId (null =
+    // player); the raw typed case is matched broadly (its actor is not cheaply
+    // recoverable from the path), so a cross-actor typed pair just gets a "save
+    // separately" nudge rather than a silent overwrite.
+    final resetActors = <String?>{
+      for (final k in allEdits)
+        if (k.edit['path'] == 'private.inventory.reset')
+          (k.edit['value'] as Map?)?['actorId'] as String?,
+    };
+    if (resetActors.isNotEmpty &&
+        allEdits.any((k) {
+          final path = k.edit['path'];
+          if (path == 'private.inventory.reset') return false;
+          if (_isInventoryTypedEdit(k.edit)) return true;
+          if (path == 'private.inventory.setItemCount' ||
+              path == 'private.inventory.addItem' ||
+              path == 'private.inventory.removeItem') {
+            return resetActors.contains(
+              (k.edit['value'] as Map?)?['actorId'] as String?,
+            );
+          }
+          return false;
+        })) {
       state = state.copyWith(
         error:
-            'An inventory reset and a raw All-data edit to an inventory are both '
+            'An inventory reset and another edit to the same inventory are both '
             'queued. The reset replaces the entire inventory and would discard the '
             'other edit — reset or revert one of them, then save again.',
       );
