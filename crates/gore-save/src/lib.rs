@@ -12486,6 +12486,40 @@ mod tests {
         );
     }
 
+    /// Full path: an inventory-reset edit routed through the same write entry point
+    /// the FFI uses round-trips cleanly and yields the start-save's inventory on
+    /// disk. Uses the real KrakenBackend (reset decodes an embedded GSAV; the target
+    /// is that same real GSAV).
+    #[test]
+    fn write_save_applies_inventory_reset_end_to_end() {
+        let backend = codec_backend::KrakenBackend::default();
+        let start = startsaves::start_save_bytes(startsaves::ResourcesLevel::Gothic);
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-target.sav");
+        std::fs::write(&path, start).unwrap();
+
+        // Reference summary (what the reset should produce): the embedded save's player inventory.
+        let ref_priv = decode_private_payload_from_bytes(start, &backend).unwrap();
+        let ref_root = properties::parse_private_root(&ref_priv).unwrap();
+        let expected = actor_inventory_summary(&ref_root, None);
+
+        // Route a reset edit through the real write entry point.
+        let result = write_save_with_codec_backend(
+            &path,
+            &[json!({ "path": "private.inventory.reset",
+                       "value": { "resourcesLevel": "Gothic" } })],
+            false,
+            None,
+            Some(&backend),
+        );
+        assert!(result.is_ok(), "reset write failed: {result:?}");
+
+        // Re-read from disk: inventory still resolves and equals the start save's.
+        let root = decode_private_root_cached(&path, &backend).unwrap();
+        let got = actor_inventory_summary(&*root, None);
+        assert_eq!(got, expected, "on-disk inventory after reset must equal the start save's");
+    }
+
     #[test]
     fn write_save_rejects_knowledge_add_character_with_peer() {
         // knowledge.addCharacter splices the CharacterKnowledgeByUniqueName map,
