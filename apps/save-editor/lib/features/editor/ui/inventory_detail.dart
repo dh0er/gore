@@ -511,8 +511,12 @@ class _PrivateInventorySummaryCardState
     if (!mounted || widget.notifier.selectedPath != dialogSavePath) return;
     setState(() {
       _pendingAdds.add(result);
-      // Add and remove stay mutually exclusive (see _pendingAdds doc).
+      // Add is mutually exclusive with remove and with a pending reset (see the
+      // _pendingReset / _pendingAdds docs). The reset button is already disabled
+      // while an add is queuable, so this clear is defensive symmetry.
       _pendingRemove = null;
+      _pendingReset = false;
+      _pendingResetLevel = null;
     });
     _pushInventoryPending();
   }
@@ -520,9 +524,13 @@ class _PrivateInventorySummaryCardState
   void _queueRemove(PrivateInventoryItem item) {
     setState(() {
       // A removal supersedes any pending count change on the same item, and is
-      // mutually exclusive with pending adds (add and remove never mix).
+      // mutually exclusive with pending adds and a pending reset (structural
+      // edits never mix). The reset button is disabled while a remove is
+      // queuable, so clearing reset here is defensive symmetry.
       _pendingCountChanges.remove(_inventoryItemKey(item));
       _pendingAdds.clear();
+      _pendingReset = false;
+      _pendingResetLevel = null;
       // Carry the full item so the remove edit echoes slotId + containerType,
       // letting the core target the exact slot in the right container.
       _pendingRemove = item;
