@@ -180,23 +180,13 @@ class AppLocalizationsFr extends AppLocalizations {
   String get skillNameDiving => 'Plongée';
 
   @override
-  String get skillNameScavenging => 'Charognage';
-
-  @override
   String get skillNameTakeMinecrawlerMandibles => 'Prélever les mandibules';
-
-  @override
-  String get skillNameSkinReptiles => 'Dépecer les reptiles';
 
   @override
   String get skillNameTakeShadowbeastHorn => 'Prélever la corne (Shadowbeast)';
 
   @override
   String get skillNameTakeSpines => 'Extraire l’épine dorsale';
-
-  @override
-  String get skillNameTakeBloodflyStingers =>
-      'Prélever les dards de mouche de sang';
 
   @override
   String get skillNameBreakSwampsharkTeeth => 'Extraire les dents de requin';

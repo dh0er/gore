@@ -181,23 +181,13 @@ class AppLocalizationsPt extends AppLocalizations {
   String get skillNameDiving => 'Mergulhar';
 
   @override
-  String get skillNameScavenging => 'Necrofagia';
-
-  @override
   String get skillNameTakeMinecrawlerMandibles => 'Extrair Mandíbulas';
-
-  @override
-  String get skillNameSkinReptiles => 'Esfolar répteis';
 
   @override
   String get skillNameTakeShadowbeastHorn => 'Pegar Chifre (Shadowbeast)';
 
   @override
   String get skillNameTakeSpines => 'Extrair Espinha';
-
-  @override
-  String get skillNameTakeBloodflyStingers =>
-      'Extrair ferrões de mosca-de-sangue';
 
   @override
   String get skillNameBreakSwampsharkTeeth => 'Extrair Dentes de Tubarão';
@@ -1553,23 +1543,13 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
   String get skillNameDiving => 'Mergulhar';
 
   @override
-  String get skillNameScavenging => 'Necrofagia';
-
-  @override
   String get skillNameTakeMinecrawlerMandibles => 'Extrair Mandíbulas';
-
-  @override
-  String get skillNameSkinReptiles => 'Esfolar répteis';
 
   @override
   String get skillNameTakeShadowbeastHorn => 'Pegar Chifre (Shadowbeast)';
 
   @override
   String get skillNameTakeSpines => 'Extrair Espinha';
-
-  @override
-  String get skillNameTakeBloodflyStingers =>
-      'Extrair ferrões de mosca-de-sangue';
 
   @override
   String get skillNameBreakSwampsharkTeeth => 'Extrair Dentes de Tubarão';

@@ -452,23 +452,11 @@ abstract class AppLocalizations {
   /// **'Diving'**
   String get skillNameDiving;
 
-  /// No description provided for @skillNameScavenging.
-  ///
-  /// In en, this message translates to:
-  /// **'Scavenging'**
-  String get skillNameScavenging;
-
   /// No description provided for @skillNameTakeMinecrawlerMandibles.
   ///
   /// In en, this message translates to:
   /// **'Extract Mandibles'**
   String get skillNameTakeMinecrawlerMandibles;
-
-  /// No description provided for @skillNameSkinReptiles.
-  ///
-  /// In en, this message translates to:
-  /// **'Skin Reptiles'**
-  String get skillNameSkinReptiles;
 
   /// No description provided for @skillNameTakeShadowbeastHorn.
   ///
@@ -481,12 +469,6 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Extract Spine'**
   String get skillNameTakeSpines;
-
-  /// No description provided for @skillNameTakeBloodflyStingers.
-  ///
-  /// In en, this message translates to:
-  /// **'Take Bloodfly Stingers'**
-  String get skillNameTakeBloodflyStingers;
 
   /// No description provided for @skillNameBreakSwampsharkTeeth.
   ///

@@ -180,22 +180,13 @@ class AppLocalizationsPl extends AppLocalizations {
   String get skillNameDiving => 'Nurkowanie';
 
   @override
-  String get skillNameScavenging => 'Padlinożerstwo';
-
-  @override
   String get skillNameTakeMinecrawlerMandibles => 'Wyrwanie żuwaczek';
-
-  @override
-  String get skillNameSkinReptiles => 'Zdejmowanie skóry gadów';
 
   @override
   String get skillNameTakeShadowbeastHorn => 'Róg cieniostwora (Shadowbeast)';
 
   @override
   String get skillNameTakeSpines => 'Wyjęcie kręgosłupa';
-
-  @override
-  String get skillNameTakeBloodflyStingers => 'Pobieranie żądeł krwawej muchy';
 
   @override
   String get skillNameBreakSwampsharkTeeth => 'Kły błotnego węża';

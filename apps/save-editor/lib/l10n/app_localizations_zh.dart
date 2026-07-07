@@ -179,22 +179,13 @@ class AppLocalizationsZh extends AppLocalizations {
   String get skillNameDiving => '潜水';
 
   @override
-  String get skillNameScavenging => '拾荒';
-
-  @override
   String get skillNameTakeMinecrawlerMandibles => '摘取下颌';
-
-  @override
-  String get skillNameSkinReptiles => '剥取爬行动物皮';
 
   @override
   String get skillNameTakeShadowbeastHorn => '拿取角 (Shadowbeast)';
 
   @override
   String get skillNameTakeSpines => '摘取脊柱';
-
-  @override
-  String get skillNameTakeBloodflyStingers => '摘取血蝇毒刺';
 
   @override
   String get skillNameBreakSwampsharkTeeth => '摘取鲨鱼牙';
@@ -1508,22 +1499,13 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   String get skillNameDiving => '潜水';
 
   @override
-  String get skillNameScavenging => '拾荒';
-
-  @override
   String get skillNameTakeMinecrawlerMandibles => '摘取下颌';
-
-  @override
-  String get skillNameSkinReptiles => '剥取爬行动物皮';
 
   @override
   String get skillNameTakeShadowbeastHorn => '拿取角 (Shadowbeast)';
 
   @override
   String get skillNameTakeSpines => '摘取脊柱';
-
-  @override
-  String get skillNameTakeBloodflyStingers => '摘取血蝇毒刺';
 
   @override
   String get skillNameBreakSwampsharkTeeth => '摘取鲨鱼牙';
