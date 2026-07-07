@@ -59,7 +59,7 @@ class AppLocalizationsDe extends AppLocalizations {
   String get skillActionUnlearn => 'verlernen';
 
   @override
-  String get skillTierUntrained => 'Ungelernt';
+  String get skillTierUntrained => 'Untrainiert';
 
   @override
   String get skillTierBeginner => 'Anfänger';
@@ -127,7 +127,7 @@ class AppLocalizationsDe extends AppLocalizations {
   String get skillNameCrossbow => 'Armbrust';
 
   @override
-  String get skillNameLockpicking => 'Schlösser knacken';
+  String get skillNameLockpicking => 'Schlösserknacken';
 
   @override
   String get skillNamePickpocketing => 'Taschendiebstahl';
@@ -136,40 +136,67 @@ class AppLocalizationsDe extends AppLocalizations {
   String get skillNameTakeOrgans => 'Organe entnehmen';
 
   @override
-  String get skillNameBreakTeeth => 'Zähne brechen';
+  String get skillNameBreakTeeth => 'Zähne ziehen';
 
   @override
-  String get skillNameTakeClaws => 'Klauen nehmen';
+  String get skillNameTakeClaws => 'Krallen ziehen';
 
   @override
   String get skillNameSkinFur => 'Fell abziehen';
 
   @override
-  String get skillNameSkin => 'Häuten';
+  String get skillNameSkin => 'Haut abziehen';
 
   @override
-  String get skillNameTakeFins => 'Flossen nehmen';
+  String get skillNameTakeFins => 'Flossen entnehmen';
 
   @override
-  String get skillNameTakeStingers => 'Stacheln nehmen';
+  String get skillNameTakeStingers => 'Stachel ziehen';
 
   @override
   String get skillNameTakeSecretion => 'Sekret entnehmen';
 
   @override
-  String get skillNameTakeSkullPlates => 'Schädelplatten nehmen';
+  String get skillNameTakeSkullPlates => 'Schädelpanzerung entnehmen';
 
   @override
-  String get skillNameSkinSwampshark => 'Sumpfhai häuten';
+  String get skillNameSkinSwampshark => 'Haihaut abziehen';
 
   @override
-  String get skillNameTakeMinecrawlerPlates => 'Minecrawler-Panzer nehmen';
+  String get skillNameTakeMinecrawlerPlates => 'Platten entnehmen';
 
   @override
-  String get skillNameTakeScutes => 'Schuppen nehmen';
+  String get skillNameTakeScutes => 'Hornschuppen entnehmen';
 
   @override
-  String get skillNameTakeUluMulu => 'Ulu-Mulu-Trophäen nehmen';
+  String get skillNameTakeUluMulu => 'Ulu-Mulu entnehmen';
+
+  @override
+  String get skillNameOrcWeapons => 'Ork-Waffen';
+
+  @override
+  String get skillNameMining => 'Bergbau';
+
+  @override
+  String get skillNameDiving => 'Tauchen';
+
+  @override
+  String get skillNameTakeMinecrawlerMandibles => 'Zangen entnehmen';
+
+  @override
+  String get skillNameTakeShadowbeastHorn => 'Horn entnehmen (Schattenläufer)';
+
+  @override
+  String get skillNameTakeSpines => 'Wirbelsäule entnehmen';
+
+  @override
+  String get skillNameBreakSwampsharkTeeth => 'Haizähne ziehen';
+
+  @override
+  String get skillNameTakeFireTongue => 'Flammenzunge entnehmen';
+
+  @override
+  String get skillNameTakeTrollHorn => 'Horn entnehmen (Troll)';
 
   @override
   String get skillNameAcrobatics => 'Akrobatik';
@@ -178,7 +205,7 @@ class AppLocalizationsDe extends AppLocalizations {
   String get skillNameWallClimbing => 'Klettern';
 
   @override
-  String get skillNameRiding => 'Reiten';
+  String get skillNameRiding => 'Scavenger-Reiten';
 
   @override
   String get skillNameSneaking => 'Schleichen';
@@ -187,7 +214,7 @@ class AppLocalizationsDe extends AppLocalizations {
   String get skillNameAlchemy => 'Alchemie';
 
   @override
-  String get skillNameRuneInscription => 'Runen einschreiben';
+  String get skillNameRuneInscription => 'Inskribieren';
 
   @override
   String get skillNameBlacksmithing => 'Schmieden';
@@ -196,7 +223,7 @@ class AppLocalizationsDe extends AppLocalizations {
   String get skillNameMagicCircle => 'Magiekreis';
 
   @override
-  String get skillNameOrcish => 'Orcische Sprache';
+  String get skillNameOrcish => 'Orkisch';
 
   @override
   String get tabInventory => 'Inventar';
@@ -427,7 +454,7 @@ class AppLocalizationsDe extends AppLocalizations {
       'Private Spielerbearbeitungen benötigen einen komprimierfähigen Codec.';
 
   @override
-  String get heroTransform => 'Helden-Transform';
+  String get heroTransform => 'Position';
 
   @override
   String get locationX => 'Position X';
@@ -1291,7 +1318,7 @@ class AppLocalizationsDe extends AppLocalizations {
   String get heroGroupAdvanced => 'Erweitert';
 
   @override
-  String get heroEntryHeroTransform => 'Helden-Transform';
+  String get heroEntryHeroTransform => 'Position';
 
   @override
   String attributeEmpty(String name) {
@@ -1315,4 +1342,31 @@ class AppLocalizationsDe extends AppLocalizations {
   String localizedTextExtractedCount(int idCount, int languageCount) {
     return '$idCount IDs in $languageCount Sprachen extrahiert';
   }
+
+  @override
+  String get skillSmithing1H => 'Einhand-Schmieden';
+
+  @override
+  String get skillSmithing2H => 'Zweihand-Schmieden';
+
+  @override
+  String get skillCircleNovice => 'Magier-Novize';
+
+  @override
+  String get skillCircle1 => 'Erster Kreis der Magie';
+
+  @override
+  String get skillCircle2 => 'Zweiter Kreis der Magie';
+
+  @override
+  String get skillCircle3 => 'Dritter Kreis der Magie';
+
+  @override
+  String get skillCircle4 => 'Vierter Kreis der Magie';
+
+  @override
+  String get skillCircle5 => 'Fünfter Kreis der Magie';
+
+  @override
+  String get skillCircle6 => 'Sechster Kreis der Magie';
 }

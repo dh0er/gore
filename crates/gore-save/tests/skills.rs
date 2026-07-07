@@ -72,13 +72,18 @@ fn skills_batch_learn_unlearn_retier_roundtrips() {
     let before = list_skills(&path);
 
     // Pick a learned ladder skill with a `_Untrained` class (retier target) and
-    // a learned skill WITHOUT one (so Untrained means a structural delete).
+    // a learned skill WITHOUT one (so Untrained means a structural delete). Read
+    // `hasUntrained` from the data rather than hardcoding a family, so the choice
+    // stays correct as the catalog's has_untrained flags change.
     let retier = ["Ranged_Bow", "Ranged_Crossbow", "Picklock", "Pickpocket"]
         .into_iter()
         .find(|b| skill(&before, b).is_some_and(|s| s["learned"] == json!(true)));
-    let unlearn = ["Melee_OneHanded", "Melee_TwoHanded", "Melee_Fists"]
-        .into_iter()
-        .find(|b| skill(&before, b).is_some_and(|s| s["learned"] == json!(true)));
+    let unlearn = before["skills"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["learned"] == json!(true) && s["hasUntrained"] == json!(false))
+        .and_then(|s| s["base"].as_str());
     // Pick any roster (unlearned) skill to learn, and a tier that is valid for
     // it — the first non-Untrained option value (a binary skill's is "Learned",
     // a ladder/hunting/circle skill's is a real tier). Hardcoding "Learned"

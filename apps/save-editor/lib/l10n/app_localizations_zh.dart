@@ -57,16 +57,16 @@ class AppLocalizationsZh extends AppLocalizations {
   String get skillActionUnlearn => '遗忘';
 
   @override
-  String get skillTierUntrained => '一级';
+  String get skillTierUntrained => '未受过训练';
 
   @override
   String get skillTierBeginner => '初學者';
 
   @override
-  String get skillTierTrained => '二级';
+  String get skillTierTrained => '训练有素';
 
   @override
-  String get skillTierMaster => '三级';
+  String get skillTierMaster => '大师级';
 
   @override
   String get skillTierNovice => '熟练';
@@ -110,13 +110,13 @@ class AppLocalizationsZh extends AppLocalizations {
   String get skillCategoryThievery => '盗窃';
 
   @override
-  String get skillNameOneHanded => '单手武器';
+  String get skillNameOneHanded => '单手';
 
   @override
-  String get skillNameTwoHanded => '双手武器';
+  String get skillNameTwoHanded => '双手';
 
   @override
-  String get skillNameFists => '拳斗';
+  String get skillNameFists => '赤手空拳';
 
   @override
   String get skillNameBow => '弓';
@@ -131,52 +131,79 @@ class AppLocalizationsZh extends AppLocalizations {
   String get skillNamePickpocketing => '扒窃';
 
   @override
-  String get skillNameTakeOrgans => '摘取器官';
+  String get skillNameTakeOrgans => '摘取内脏';
 
   @override
-  String get skillNameBreakTeeth => '敲取牙齿';
+  String get skillNameBreakTeeth => '摘取牙齿';
 
   @override
-  String get skillNameTakeClaws => '摘取利爪';
+  String get skillNameTakeClaws => '摘取爪子';
 
   @override
-  String get skillNameSkinFur => '剥取毛皮';
+  String get skillNameSkinFur => '拿取毛皮';
 
   @override
-  String get skillNameSkin => '剥皮';
+  String get skillNameSkin => '拿取皮肤';
 
   @override
-  String get skillNameTakeFins => '摘取鱼鳍';
+  String get skillNameTakeFins => '拿取鳍';
 
   @override
-  String get skillNameTakeStingers => '摘取毒刺';
+  String get skillNameTakeStingers => '摘取刺';
 
   @override
-  String get skillNameTakeSecretion => '采集分泌物';
+  String get skillNameTakeSecretion => '摘取分泌物';
 
   @override
-  String get skillNameTakeSkullPlates => '摘取头骨板';
+  String get skillNameTakeSkullPlates => '拿取头骨甲';
 
   @override
-  String get skillNameSkinSwampshark => '剥取沼泽鲨皮';
+  String get skillNameSkinSwampshark => '拿取鲨鱼皮';
 
   @override
-  String get skillNameTakeMinecrawlerPlates => '摘取矿虫甲板';
+  String get skillNameTakeMinecrawlerPlates => '拿取护甲板';
 
   @override
-  String get skillNameTakeScutes => '摘取甲鳞';
+  String get skillNameTakeScutes => '拿取鳞甲';
 
   @override
-  String get skillNameTakeUluMulu => '摘取乌鲁-穆鲁战利品';
+  String get skillNameTakeUluMulu => '拿取乌鲁木鲁';
+
+  @override
+  String get skillNameOrcWeapons => '兽人武器';
+
+  @override
+  String get skillNameMining => '采矿';
+
+  @override
+  String get skillNameDiving => '潜水';
+
+  @override
+  String get skillNameTakeMinecrawlerMandibles => '摘取下颌';
+
+  @override
+  String get skillNameTakeShadowbeastHorn => '拿取角 (Shadowbeast)';
+
+  @override
+  String get skillNameTakeSpines => '摘取脊柱';
+
+  @override
+  String get skillNameBreakSwampsharkTeeth => '摘取鲨鱼牙';
+
+  @override
+  String get skillNameTakeFireTongue => '拿取火蜥蜴的舌';
+
+  @override
+  String get skillNameTakeTrollHorn => '拿取角 (Troll)';
 
   @override
   String get skillNameAcrobatics => '杂技';
 
   @override
-  String get skillNameWallClimbing => '攀墙';
+  String get skillNameWallClimbing => '攀登';
 
   @override
-  String get skillNameRiding => '骑术';
+  String get skillNameRiding => '骑乘食尸鸟';
 
   @override
   String get skillNameSneaking => '潜行';
@@ -185,7 +212,7 @@ class AppLocalizationsZh extends AppLocalizations {
   String get skillNameAlchemy => '炼金术';
 
   @override
-  String get skillNameRuneInscription => '符文铭刻';
+  String get skillNameRuneInscription => '铭刻';
 
   @override
   String get skillNameBlacksmithing => '锻造';
@@ -422,7 +449,7 @@ class AppLocalizationsZh extends AppLocalizations {
   String get playerLockedBody => '编辑私有玩家数据需要支持压缩的编解码器。';
 
   @override
-  String get heroTransform => '主角变换';
+  String get heroTransform => '位置';
 
   @override
   String get locationX => '位置 X';
@@ -1246,7 +1273,7 @@ class AppLocalizationsZh extends AppLocalizations {
   String get heroGroupAdvanced => '高级';
 
   @override
-  String get heroEntryHeroTransform => '主角变换';
+  String get heroEntryHeroTransform => '位置';
 
   @override
   String attributeEmpty(String name) {
@@ -1270,6 +1297,33 @@ class AppLocalizationsZh extends AppLocalizations {
   String localizedTextExtractedCount(int idCount, int languageCount) {
     return '已提取 $idCount 个 ID，涵盖 $languageCount 种语言';
   }
+
+  @override
+  String get skillSmithing1H => '单手武器锻造';
+
+  @override
+  String get skillSmithing2H => '双手武器锻造';
+
+  @override
+  String get skillCircleNovice => '新手法师';
+
+  @override
+  String get skillCircle1 => '第一魔法环阶';
+
+  @override
+  String get skillCircle2 => '第二魔法环阶';
+
+  @override
+  String get skillCircle3 => '第三魔法环阶';
+
+  @override
+  String get skillCircle4 => '第四魔法环阶';
+
+  @override
+  String get skillCircle5 => '第五魔法环阶';
+
+  @override
+  String get skillCircle6 => '第六魔法环阶';
 }
 
 /// The translations for Chinese, using the Han script (`zh_Hans`).
@@ -1325,16 +1379,16 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   String get skillActionUnlearn => '遗忘';
 
   @override
-  String get skillTierUntrained => '未受训';
+  String get skillTierUntrained => '未受过训练';
 
   @override
   String get skillTierBeginner => '初学者';
 
   @override
-  String get skillTierTrained => '已受训';
+  String get skillTierTrained => '训练有素';
 
   @override
-  String get skillTierMaster => '大师';
+  String get skillTierMaster => '大师级';
 
   @override
   String get skillTierNovice => '熟练';
@@ -1378,13 +1432,13 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   String get skillCategoryThievery => '盗窃';
 
   @override
-  String get skillNameOneHanded => '单手武器';
+  String get skillNameOneHanded => '单手';
 
   @override
-  String get skillNameTwoHanded => '双手武器';
+  String get skillNameTwoHanded => '双手';
 
   @override
-  String get skillNameFists => '拳斗';
+  String get skillNameFists => '赤手空拳';
 
   @override
   String get skillNameBow => '弓';
@@ -1402,58 +1456,85 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   String get skillNameTakeOrgans => '摘取内脏';
 
   @override
-  String get skillNameBreakTeeth => '敲取獠牙';
+  String get skillNameBreakTeeth => '摘取牙齿';
 
   @override
-  String get skillNameTakeClaws => '摘取利爪';
+  String get skillNameTakeClaws => '摘取爪子';
 
   @override
-  String get skillNameSkinFur => '剥取兽皮';
+  String get skillNameSkinFur => '拿取毛皮';
 
   @override
-  String get skillNameSkin => '剥皮';
+  String get skillNameSkin => '拿取皮肤';
 
   @override
-  String get skillNameTakeFins => '摘取鱼鳍';
+  String get skillNameTakeFins => '拿取鳍';
 
   @override
-  String get skillNameTakeStingers => '摘取毒刺';
+  String get skillNameTakeStingers => '摘取刺';
 
   @override
-  String get skillNameTakeSecretion => '采集分泌物';
+  String get skillNameTakeSecretion => '摘取分泌物';
 
   @override
-  String get skillNameTakeSkullPlates => '摘取颅骨甲片';
+  String get skillNameTakeSkullPlates => '拿取头骨甲';
 
   @override
-  String get skillNameSkinSwampshark => '剥取沼泽鲨皮';
+  String get skillNameSkinSwampshark => '拿取鲨鱼皮';
 
   @override
-  String get skillNameTakeMinecrawlerPlates => '摘取矿虫甲片';
+  String get skillNameTakeMinecrawlerPlates => '拿取护甲板';
 
   @override
-  String get skillNameTakeScutes => '摘取角质甲片';
+  String get skillNameTakeScutes => '拿取鳞甲';
 
   @override
-  String get skillNameTakeUluMulu => '采集乌鲁-穆鲁战利品';
+  String get skillNameTakeUluMulu => '拿取乌鲁木鲁';
+
+  @override
+  String get skillNameOrcWeapons => '兽人武器';
+
+  @override
+  String get skillNameMining => '采矿';
+
+  @override
+  String get skillNameDiving => '潜水';
+
+  @override
+  String get skillNameTakeMinecrawlerMandibles => '摘取下颌';
+
+  @override
+  String get skillNameTakeShadowbeastHorn => '拿取角 (Shadowbeast)';
+
+  @override
+  String get skillNameTakeSpines => '摘取脊柱';
+
+  @override
+  String get skillNameBreakSwampsharkTeeth => '摘取鲨鱼牙';
+
+  @override
+  String get skillNameTakeFireTongue => '拿取火蜥蜴的舌';
+
+  @override
+  String get skillNameTakeTrollHorn => '拿取角 (Troll)';
 
   @override
   String get skillNameAcrobatics => '杂技';
 
   @override
-  String get skillNameWallClimbing => '攀墙';
+  String get skillNameWallClimbing => '攀登';
 
   @override
-  String get skillNameRiding => '骑术';
+  String get skillNameRiding => '骑乘食尸鸟';
 
   @override
   String get skillNameSneaking => '潜行';
 
   @override
-  String get skillNameAlchemy => '炼金';
+  String get skillNameAlchemy => '炼金术';
 
   @override
-  String get skillNameRuneInscription => '符文铭刻';
+  String get skillNameRuneInscription => '铭刻';
 
   @override
   String get skillNameBlacksmithing => '锻造';
@@ -1666,7 +1747,7 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   String get playerLockedBody => '编辑私有玩家数据需要支持压缩的编解码器。';
 
   @override
-  String get heroTransform => '主角变换';
+  String get heroTransform => '位置';
 
   @override
   String get locationX => '位置 X';
@@ -2490,7 +2571,7 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   String get heroGroupAdvanced => '高级';
 
   @override
-  String get heroEntryHeroTransform => '主角变换';
+  String get heroEntryHeroTransform => '位置';
 
   @override
   String attributeEmpty(String name) {
@@ -2509,4 +2590,31 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   String localizedTextExtractedCount(int idCount, int languageCount) {
     return '已提取 $idCount 个 ID，涵盖 $languageCount 种语言';
   }
+
+  @override
+  String get skillSmithing1H => '单手武器锻造';
+
+  @override
+  String get skillSmithing2H => '双手武器锻造';
+
+  @override
+  String get skillCircleNovice => '新手法师';
+
+  @override
+  String get skillCircle1 => '第一魔法环阶';
+
+  @override
+  String get skillCircle2 => '第二魔法环阶';
+
+  @override
+  String get skillCircle3 => '第三魔法环阶';
+
+  @override
+  String get skillCircle4 => '第四魔法环阶';
+
+  @override
+  String get skillCircle5 => '第五魔法环阶';
+
+  @override
+  String get skillCircle6 => '第六魔法环阶';
 }

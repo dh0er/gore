@@ -59,16 +59,16 @@ class AppLocalizationsIt extends AppLocalizations {
   String get skillActionUnlearn => 'dimentica';
 
   @override
-  String get skillTierUntrained => 'Livello I';
+  String get skillTierUntrained => 'Inesperto';
 
   @override
   String get skillTierBeginner => 'Principiante';
 
   @override
-  String get skillTierTrained => 'Livello II';
+  String get skillTierTrained => 'Esperto';
 
   @override
-  String get skillTierMaster => 'Livello III';
+  String get skillTierMaster => 'Maestro';
 
   @override
   String get skillTierNovice => 'Novizio';
@@ -112,10 +112,10 @@ class AppLocalizationsIt extends AppLocalizations {
   String get skillCategoryThievery => 'Furto';
 
   @override
-  String get skillNameOneHanded => 'Armi a una mano';
+  String get skillNameOneHanded => 'A una mano';
 
   @override
-  String get skillNameTwoHanded => 'Armi a due mani';
+  String get skillNameTwoHanded => 'A due mani';
 
   @override
   String get skillNameFists => 'Pugni';
@@ -127,68 +127,94 @@ class AppLocalizationsIt extends AppLocalizations {
   String get skillNameCrossbow => 'Balestra';
 
   @override
-  String get skillNameLockpicking => 'Scasso';
+  String get skillNameLockpicking => 'Scassinamento';
 
   @override
   String get skillNamePickpocketing => 'Borseggio';
 
   @override
-  String get skillNameTakeOrgans => 'Preleva organi';
+  String get skillNameTakeOrgans => 'Estrai organi';
 
   @override
   String get skillNameBreakTeeth => 'Estrai denti';
 
   @override
-  String get skillNameTakeClaws => 'Preleva artigli';
+  String get skillNameTakeClaws => 'Estrai artigli';
 
   @override
-  String get skillNameSkinFur => 'Scuoia pelliccia';
+  String get skillNameSkinFur => 'Prendi pelliccia';
 
   @override
   String get skillNameSkin => 'Scuoia';
 
   @override
-  String get skillNameTakeFins => 'Preleva pinne';
+  String get skillNameTakeFins => 'Prendi pinne';
 
   @override
-  String get skillNameTakeStingers => 'Preleva pungiglioni';
+  String get skillNameTakeStingers => 'Estrai pungiglioni';
 
   @override
-  String get skillNameTakeSecretion => 'Preleva secrezione';
+  String get skillNameTakeSecretion => 'Estrai secrezioni';
 
   @override
-  String get skillNameTakeSkullPlates => 'Preleva placche craniche';
+  String get skillNameTakeSkullPlates => 'Prendi corazza craniale';
 
   @override
-  String get skillNameSkinSwampshark => 'Scuoia squalo di palude';
+  String get skillNameSkinSwampshark => 'Scuoia squalo';
 
   @override
-  String get skillNameTakeMinecrawlerPlates =>
-      'Preleva placche di strisciaminiere';
+  String get skillNameTakeMinecrawlerPlates => 'Prendi piastre';
 
   @override
-  String get skillNameTakeScutes => 'Preleva scudetti';
+  String get skillNameTakeScutes => 'Prendi placche';
 
   @override
-  String get skillNameTakeUluMulu => 'Preleva trofei Ulu-Mulu';
+  String get skillNameTakeUluMulu => 'Prendi Ulu-Mulu';
 
   @override
-  String get skillNameAcrobatics => 'Acrobazia';
+  String get skillNameOrcWeapons => 'Armi orchesche';
+
+  @override
+  String get skillNameMining => 'Estrazione del metallo';
+
+  @override
+  String get skillNameDiving => 'Immersione';
+
+  @override
+  String get skillNameTakeMinecrawlerMandibles => 'Estrai mandibole';
+
+  @override
+  String get skillNameTakeShadowbeastHorn => 'Prendi corno (Shadowbeast)';
+
+  @override
+  String get skillNameTakeSpines => 'Estrai spine dorsali';
+
+  @override
+  String get skillNameBreakSwampsharkTeeth => 'Estrai denti di squalo';
+
+  @override
+  String get skillNameTakeFireTongue => 'Prendi lingua di fuoco';
+
+  @override
+  String get skillNameTakeTrollHorn => 'Prendi corno (Troll)';
+
+  @override
+  String get skillNameAcrobatics => 'Acrobazie';
 
   @override
   String get skillNameWallClimbing => 'Arrampicata';
 
   @override
-  String get skillNameRiding => 'Cavalcatura';
+  String get skillNameRiding => 'Cavalcata di saprofagi';
 
   @override
-  String get skillNameSneaking => 'Movimento furtivo';
+  String get skillNameSneaking => 'Furtività';
 
   @override
   String get skillNameAlchemy => 'Alchimia';
 
   @override
-  String get skillNameRuneInscription => 'Incisione di rune';
+  String get skillNameRuneInscription => 'Iscrizione';
 
   @override
   String get skillNameBlacksmithing => 'Forgiatura';
@@ -197,7 +223,7 @@ class AppLocalizationsIt extends AppLocalizations {
   String get skillNameMagicCircle => 'Cerchio magico';
 
   @override
-  String get skillNameOrcish => 'Lingua degli orchi';
+  String get skillNameOrcish => 'Orchese';
 
   @override
   String get tabInventory => 'Inventario';
@@ -429,7 +455,7 @@ class AppLocalizationsIt extends AppLocalizations {
       'Le modifiche private del giocatore richiedono un codec in grado di comprimere.';
 
   @override
-  String get heroTransform => 'Transform dell\'eroe';
+  String get heroTransform => 'Posizione';
 
   @override
   String get locationX => 'Posizione X';
@@ -1295,7 +1321,7 @@ class AppLocalizationsIt extends AppLocalizations {
   String get heroGroupAdvanced => 'Avanzate';
 
   @override
-  String get heroEntryHeroTransform => 'Transform dell\'eroe';
+  String get heroEntryHeroTransform => 'Posizione';
 
   @override
   String attributeEmpty(String name) {
@@ -1319,4 +1345,31 @@ class AppLocalizationsIt extends AppLocalizations {
   String localizedTextExtractedCount(int idCount, int languageCount) {
     return '$idCount ID estratti in $languageCount lingue';
   }
+
+  @override
+  String get skillSmithing1H => 'Forgiatura di armi a una mano';
+
+  @override
+  String get skillSmithing2H => 'Forgiatura di armi a due mani';
+
+  @override
+  String get skillCircleNovice => 'Mago principiante';
+
+  @override
+  String get skillCircle1 => 'Primo Cerchio Magico';
+
+  @override
+  String get skillCircle2 => 'Secondo Cerchio Magico';
+
+  @override
+  String get skillCircle3 => 'Terzo Cerchio Magico';
+
+  @override
+  String get skillCircle4 => 'Quarto Cerchio Magico';
+
+  @override
+  String get skillCircle5 => 'Quinto Cerchio Magico';
+
+  @override
+  String get skillCircle6 => 'Sesto Cerchio Magico';
 }
