@@ -2861,9 +2861,11 @@ fn inspect_private_payload(
             // summary. Without this the FIRST private read command after a load
             // (characters.list / npc.attributes / …) re-parses the whole payload
             // — seconds of work — even though inspect already parsed it here. The
-            // Arc clone is O(1) (a refcount bump), so this costs nothing.
+            // Arc clone is O(1) (a refcount bump). Keyed by the same file SHA-1
+            // the decoded-byte cache uses, so a later read only hits on identical
+            // bytes.
             if let (Some(p), Some(Ok(root))) = (path, typed_result.as_ref()) {
-                store_parsed_root_cache(p, Arc::clone(root));
+                store_parsed_root_cache(p, sha1_hex(data), Arc::clone(root));
             }
             let main_container = typed_result
                 .as_ref()
@@ -3509,88 +3511,74 @@ fn list_guild_crimes_command(
     Ok(json!({ "guilds": guilds }))
 }
 
-fn decode_private_root(
-    path: &Path,
-    backend: &dyn codec_backend::CodecBackend,
-) -> Result<properties::RootObject, CoreError> {
-    let data = fs::read(path)?;
-    if !data.starts_with(b"GSAV") {
-        return Err(CoreError::UnsupportedEdit(
-            "NPC commands are only available for GSAV files".to_string(),
-        ));
-    }
-    let parts = split_gsav(&data)?;
-    let stream = parse_compressed_stream(&data, 13 + parts.public_payload.len())?;
-    let decoded = decoded_private_payload_cached(path, &data, &stream, backend)?;
-    properties::parse_private_root(&decoded)
-}
-
 /// Parsing the decoded payload into the typed [`properties::RootObject`] tree is
 /// itself expensive — it walks the whole (~77 MB) payload — and EVERY private
 /// read command (npc.list / characters.list / npc.attributes / npc.inventory /
 /// factions.list) re-parses it from scratch. That is what makes each click in
 /// the editor (open a character, then its inventory, …) re-do heavy work even
 /// though the decoded bytes are already cached. Cache the parsed root so
-/// repeated reads of an unchanged save skip fs::read + decode + parse entirely.
+/// repeated reads of an unchanged save skip the decode + parse entirely.
 ///
-/// Keyed by (path, mtime, len): the editor is the only writer and every
-/// write_save calls [`invalidate_decoded_payload_cache`], so a matching
-/// mtime+len means the on-disk save is byte-identical to what we parsed. Holds a
-/// single entry (the active save). When mtime is unavailable we fall through to
-/// an uncached parse rather than risk serving stale data.
+/// Keyed by (path, SHA-1 of the whole file) — the SAME content check the
+/// decoded-byte cache uses, NOT a timestamp. Any replacement of the save
+/// (write_save, restore_backup, an external/cloud sync, a coarse-mtime
+/// filesystem) changes the hash and misses, so a hit is a true byte-identity
+/// match, never a trust-the-clock guess. Holds a single entry (the active save).
 static PARSED_ROOT_CACHE: Mutex<Option<ParsedRootEntry>> = Mutex::new(None);
 
 struct ParsedRootEntry {
     path: PathBuf,
-    mtime: SystemTime,
-    len: u64,
+    save_sha1: String,
     root: Arc<properties::RootObject>,
 }
 
-/// [`decode_private_root`] with the parsed tree memoized across FFI calls. All
-/// read-only NPC/character/inventory/faction commands go through this so that,
-/// after the first parse of a save, subsequent clicks reuse the same tree.
+/// The decoded+parsed private root, memoized across FFI calls. All read-only
+/// NPC/character/inventory/faction commands go through this so that, after the
+/// first parse of a save, subsequent clicks reuse the same tree. The file is
+/// read and hashed on every call (cheap next to the parse it saves) so the cache
+/// key is a real content check, matching [`decoded_private_payload_cached`].
 fn decode_private_root_cached(
     path: &Path,
     backend: &dyn codec_backend::CodecBackend,
 ) -> Result<Arc<properties::RootObject>, CoreError> {
-    // Cheap freshness probe: stat mtime+len, no file read.
-    let fresh = fs::metadata(path)
-        .ok()
-        .and_then(|m| Some((m.len(), m.modified().ok()?)));
-    if let Some((len, mtime)) = fresh {
+    let data = fs::read(path)?;
+    if !data.starts_with(b"GSAV") {
+        return Err(CoreError::UnsupportedEdit(
+            "NPC commands are only available for GSAV files".to_string(),
+        ));
+    }
+    let save_sha1 = sha1_hex(&data);
+    {
         let guard = PARSED_ROOT_CACHE.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(entry) = guard.as_ref() {
-            if entry.path == path && entry.len == len && entry.mtime == mtime {
+            if entry.path == path && entry.save_sha1 == save_sha1 {
                 return Ok(Arc::clone(&entry.root));
             }
         }
     }
-    // Miss (or no mtime): full decode + parse. The decoded bytes still come from
-    // the byte-level cache above, so a miss here that follows a decode-cache hit
-    // only pays the parse.
-    let root = Arc::new(decode_private_root(path, backend)?);
-    store_parsed_root_cache(path, Arc::clone(&root));
+    // Miss: decode (the decoded-byte cache keys on this same SHA-1, so a prior
+    // inspect's decode is reused) + parse, then cache the parse by SHA-1.
+    let parts = split_gsav(&data)?;
+    let stream = parse_compressed_stream(&data, 13 + parts.public_payload.len())?;
+    let decoded = decoded_private_payload_cached(path, &data, &stream, backend)?;
+    let root = Arc::new(properties::parse_private_root(&decoded)?);
+    store_parsed_root_cache(path, save_sha1, Arc::clone(&root));
     Ok(root)
 }
 
 /// Store `root` as the single parsed-root cache entry, keyed by the file's
-/// current (mtime, len). A no-op when metadata is unavailable (then a later read
-/// can't validate freshness, so it must re-parse rather than risk staleness).
-/// Also seeded by `inspect_save`, which already parses the root for its summary —
-/// so the first private read command after a load is a cache hit, not a re-parse.
-fn store_parsed_root_cache(path: &Path, root: Arc<properties::RootObject>) {
-    let Some((len, mtime)) = fs::metadata(path)
-        .ok()
-        .and_then(|m| Some((m.len(), m.modified().ok()?)))
-    else {
-        return;
-    };
+/// SHA-1. Also seeded by `inspect_save`, which already decodes+parses the root
+/// for its summary and hashes the file — so the first private read after a load
+/// is a cache hit, not a re-parse.
+fn store_parsed_root_cache(
+    path: &Path,
+    save_sha1: String,
+    root: Arc<properties::RootObject>,
+) {
     let mut guard = PARSED_ROOT_CACHE.lock().unwrap_or_else(|e| e.into_inner());
     *guard = Some(ParsedRootEntry {
         path: path.to_path_buf(),
-        mtime,
-        len,
+        save_sha1,
         root,
     });
 }
