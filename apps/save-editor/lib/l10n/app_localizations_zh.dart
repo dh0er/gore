@@ -516,6 +516,28 @@ class AppLocalizationsZh extends AppLocalizations {
   String get addItemButton => '添加物品';
 
   @override
+  String get resetInventoryButton => 'Reset inventory';
+
+  @override
+  String get resetInventoryTooltipDefault =>
+      'Replace this inventory with the game-start save\'s inventory';
+
+  @override
+  String get resetInventoryTooltipBlocked =>
+      'Save or cancel the pending inventory changes first';
+
+  @override
+  String get pendingResetTitle => 'Reset to game-start inventory';
+
+  @override
+  String pendingResetSubtitle(String level) {
+    return 'Resources level: $level';
+  }
+
+  @override
+  String get cancelPendingReset => 'Cancel reset';
+
+  @override
   String pendingAddSubtitle(int count) {
     return '×$count — 待添加（尚未保存）';
   }

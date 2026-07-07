@@ -526,6 +526,28 @@ class AppLocalizationsDe extends AppLocalizations {
   String get addItemButton => 'Item hinzufügen';
 
   @override
+  String get resetInventoryButton => 'Inventar zurücksetzen';
+
+  @override
+  String get resetInventoryTooltipDefault =>
+      'Inventar durch das Spielstart-Inventar ersetzen';
+
+  @override
+  String get resetInventoryTooltipBlocked =>
+      'Zuerst die ausstehenden Inventaränderungen speichern oder verwerfen';
+
+  @override
+  String get pendingResetTitle => 'Auf Spielstart-Inventar zurücksetzen';
+
+  @override
+  String pendingResetSubtitle(String level) {
+    return 'Ressourcen-Stufe: $level';
+  }
+
+  @override
+  String get cancelPendingReset => 'Zurücksetzen abbrechen';
+
+  @override
   String pendingAddSubtitle(int count) {
     return '×$count — ausstehende Hinzufügung (noch nicht gespeichert)';
   }
