@@ -173,6 +173,15 @@ void main() {
         'customResourcesSettings': 'ResourcesDifficultySettings_Easy',
       });
       expect(custom.activeResourcesLevel(), 'Novice');
+
+      // A non-Custom preset LOCKS the level: a stale/disagreeing stored Resources
+      // class is ignored (Hard preset + stale '_Standard' resources → 'Hard', NOT
+      // 'Gothic'). Only Custom profiles let the sub-level override the preset.
+      final hardStale = await build({
+        'difficultyPreset': 'DifficultyPreset_Hard',
+        'customResourcesSettings': 'ResourcesDifficultySettings_Standard',
+      });
+      expect(hardStale.activeResourcesLevel(), 'Hard');
     },
   );
 

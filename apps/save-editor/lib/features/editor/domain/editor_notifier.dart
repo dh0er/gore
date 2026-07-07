@@ -479,22 +479,29 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// start-save. Falls back to 'Gothic' (the standard preset) when there is no
   /// profile or difficulty.
   ///
-  /// A non-Custom preset (Novice/Gothic/Hard) does NOT store an explicit
-  /// Resources sub-level — the level is IMPLIED by the preset (as the difficulty
-  /// dialog shows it locked). So an explicit sub-level (a Custom preset, or a
-  /// stored value) wins when present; otherwise the preset itself implies the
-  /// level: Novice→Novice, Hard→Hard, Gothic/Custom/unknown→Gothic. Reading only
-  /// `resourcesLabel` would send every Novice/Hard profile to the Gothic save.
+  /// Mirrors the difficulty dialog's authoritative display: a non-Custom preset
+  /// (Novice/Gothic/Hard) LOCKS every sub-level to its implied tier, so a stale
+  /// or disagreeing stored Resources class is ignored — a Hard profile always
+  /// resets from the Hard save even if it carries an out-of-date `_Standard`
+  /// resources class. Only a Custom preset — or a profile with no recognized
+  /// preset to imply from — lets the stored Resources sub-level decide (else
+  /// Gothic). Reading `resourcesLabel` first would both mis-route Novice/Hard
+  /// profiles (no explicit sub-level → Gothic) and honor a stale sub-level.
   String activeResourcesLevel() {
     const known = {'Novice', 'Gothic', 'Hard'};
     final difficulty = state.activeProfile?.difficulty;
     if (difficulty == null) return 'Gothic';
-    final resources = difficulty.resourcesLabel;
-    if (known.contains(resources)) return resources;
     return switch (difficulty.presetLabel) {
       'Novice' => 'Novice',
+      'Gothic' => 'Gothic',
       'Hard' => 'Hard',
-      _ => 'Gothic',
+      // Custom, or an unrecognized/absent preset: the stored Resources sub-level
+      // is authoritative (a non-Custom preset returned above and locked the
+      // level to its tier).
+      _ =>
+        known.contains(difficulty.resourcesLabel)
+            ? difficulty.resourcesLabel
+            : 'Gothic',
     };
   }
 
