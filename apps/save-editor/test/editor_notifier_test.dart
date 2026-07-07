@@ -95,6 +95,44 @@ void main() {
   );
 
   test(
+    'activeResourcesLevel normalizes known levels and falls back to Gothic',
+    () async {
+      // Active profile carries a Resources difficulty class ending in
+      // '_Hard' (the raw class-name shape DifficultySettings.resourcesLabel
+      // expects — see _difficultyLevelLabel), which resourcesLabel maps to
+      // the normalized label 'Hard'.
+      final core = _RecordingCoreService(
+        scanData: {
+          'saves': <Object?>[],
+          'profiles': [
+            {
+              'profileId': 0,
+              'profileName': '0',
+              'customResourcesSettings': 'ResourcesDifficultySettings_Hard',
+            },
+          ],
+          'activeProfileId': 0,
+        },
+      );
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+
+      await pumpEventQueue();
+
+      expect(notifier.state.activeProfile?.difficulty.resourcesLabel, 'Hard');
+      expect(notifier.activeResourcesLevel(), 'Hard');
+
+      // No active profile at all (empty scan) → falls back to 'Gothic'.
+      final core2 = _RecordingCoreService();
+      final notifier2 = EditorNotifier(core2, saveDir: r'C:\tmp\saves');
+
+      await pumpEventQueue();
+
+      expect(notifier2.state.activeProfile, isNull);
+      expect(notifier2.activeResourcesLevel(), 'Gothic');
+    },
+  );
+
+  test(
     'inspect sends no codec config and decodes all chunks',
     () async {
       final core = _RecordingCoreService();

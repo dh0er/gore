@@ -474,6 +474,16 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// without reaching into the protected `state`.
   PendingSaveEdit? pendingEditFor(String key) => state.pendingEdits[key];
 
+  /// The active profile's Resources difficulty level, normalized to one of
+  /// 'Novice' | 'Gothic' | 'Hard'. Falls back to 'Gothic' (the standard preset)
+  /// when there is no profile, no difficulty, or an unrecognized level — matching
+  /// the core's own fallback for the inventory-reset start-save selection.
+  String activeResourcesLevel() {
+    const known = {'Novice', 'Gothic', 'Hard'};
+    final label = state.activeProfile?.difficulty.resourcesLabel;
+    return known.contains(label) ? label! : 'Gothic';
+  }
+
   /// Dismiss the current error banner.
   void dismissError() {
     if (state.error != null) state = state.copyWith(clearError: true);
@@ -677,6 +687,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
     const splicingPaths = {
       'private.inventory.addItem',
       'private.inventory.removeItem',
+      'private.inventory.reset',
       'private.knowledge.addCharacter',
       'private.npc.revive',
     };
