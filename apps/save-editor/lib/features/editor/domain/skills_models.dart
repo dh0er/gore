@@ -3,36 +3,17 @@
 // in the hero's ActiveEffects array; the core resolves each edit by skill base
 // name (never a stale index), so a batch of these applies safely in one write.
 
-/// One selectable tier for a skill. [value] is what the UI sends as `tier`.
-/// [label] is the core's composed English fallback; the UI prefers a label
-/// built from the structured pieces ([roman]/[suffix]/[standalone]) so it can
-/// localize. [roman] is the ladder-position numeral (else null); [suffix] is
-/// `learn`/`unlearn` (else null); [standalone] is `notLearned`/`learn` (else
-/// null — when set the whole label is that single word).
+/// One selectable tier for a skill. [value] is what the UI sends as `tier` and
+/// what the UI composes the visible label from (via the game's localized tier
+/// vocabulary). The core emits only the value; order is significant.
 class SkillOption {
-  const SkillOption({
-    required this.value,
-    required this.label,
-    this.roman,
-    this.suffix,
-    this.standalone,
-  });
+  const SkillOption({required this.value});
 
   factory SkillOption.fromJson(Map<String, Object?> json) {
-    return SkillOption(
-      value: json['value'] as String? ?? '',
-      label: json['label'] as String? ?? '',
-      roman: json['roman'] as String?,
-      suffix: json['suffix'] as String?,
-      standalone: json['standalone'] as String?,
-    );
+    return SkillOption(value: json['value'] as String? ?? '');
   }
 
   final String value;
-  final String label;
-  final String? roman;
-  final String? suffix;
-  final String? standalone;
 }
 
 /// One hero skill: either learned (with its current tier) or a roster entry the

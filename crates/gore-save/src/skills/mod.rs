@@ -32,22 +32,6 @@ use serde_json::{json, Value};
 /// The map key of the controlled protagonist's character-state entry.
 pub const HERO: &str = "Hero";
 
-const ROMAN: &[&str] = &["I", "II", "III", "IV", "V", "VI", "VII"];
-
-/// Human display for a raw tier value (mirrors the reference `_TIER_DISPLAY`).
-fn tier_display(tier: &str) -> String {
-    match tier {
-        "Untrained" => "Untrained".to_string(),
-        "Trained" => "Trained".to_string(),
-        "Master" => "Master".to_string(),
-        "Skilled" => "Novice".to_string(),
-        "Amateur" => "Amateur (Circle 0)".to_string(),
-        "Learned" => "Learned".to_string(),
-        n if n.chars().all(|c| c.is_ascii_digit()) => format!("Circle {n}"),
-        other => other.to_string(),
-    }
-}
-
 /// The GE class string of a hero skill element, if it is a `GE_Skill_*` ref.
 fn element_class(element: &PropertyValue) -> Option<&str> {
     match struct_member(element, "EffectSpec").and_then(|s| struct_member(s, "Def")) {
@@ -92,102 +76,35 @@ fn current_value(tier: Option<&str>) -> String {
     tier.map(str::to_string).unwrap_or_else(|| "Learned".to_string())
 }
 
-/// Build the `{value, label}` tier options for one skill, plus the value that is
-/// currently selected. Ported from the reference `_tier_options` (learned) and
-/// `_learn_tier_options` (roster).
+/// The ordered tier option VALUES a skill's dropdown offers, each as
+/// `{ "value": <tier> }`. Only the value and order matter: the UI composes the
+/// visible label from the value using the game's own localized tier vocabulary
+/// (`skillmastery_*`, `skill_crafting_blacksmith_*`, `skill_mage_circle_*`), so
+/// no label/roman/suffix metadata is emitted here. The op the value maps to
+/// (retarget vs unlearn) is decided by [`build_skill_ops`] from `has_untrained`,
+/// not per-option metadata.
 ///
-/// Each option carries both a composed English `label` (a fallback the UI shows
-/// when it has no localization) AND structured pieces the UI composes into a
-/// localized label: `value`, `roman` (ladder position numeral, else null),
-/// `suffix` (`learn`/`unlearn`, else null), and `standalone`
-/// (`notLearned`/`learn`, else null — when set the whole label is that single
-/// localized word).
+/// Ladder and circle skills always offer the full ladder (`Untrained` +
+/// `def.ladder`); on/off skills (hunting/binary/language) offer their learned
+/// class + Untrained when learned, or Untrained + the learn value in the roster.
 fn tier_options(def: &SkillDef, learned: bool, current: &str) -> Vec<Value> {
-    // `roman`/`suffix`/`standalone` are the structured pieces; `label` is the
-    // English fallback composed from `tier_display` + the same pieces.
-    let hint = |tier: &str| -> String {
-        def.tier_labels
-            .iter()
-            .find(|(t, _)| *t == tier)
-            .map(|(_, h)| format!(" — {h}"))
-            .unwrap_or_default()
-    };
-    let opt = |value: &str,
-               roman: Option<&str>,
-               suffix: Option<&str>,
-               standalone: Option<&str>| {
-        let label = match standalone {
-            Some("notLearned") => "Not learned".to_string(),
-            Some("learn") => "Learn".to_string(),
-            _ => {
-                let mut s = tier_display(value);
-                if let Some(r) = roman {
-                    s.push_str(&format!(" ({r})"));
-                }
-                s.push_str(&hint(value));
-                match suffix {
-                    Some("learn") => s.push_str(" · learn"),
-                    Some("unlearn") => s.push_str(" · unlearn"),
-                    _ => {}
-                }
-                s
-            }
-        };
-        json!({
-            "value": value,
-            "label": label,
-            "roman": roman,
-            "suffix": suffix,
-            "standalone": standalone,
-        })
-    };
+    let opt = |value: &str| json!({ "value": value });
     match def.kind {
-        Kind::Circle => {
-            let mut opts: Vec<Value> = def
-                .ladder
-                .iter()
-                .map(|t| {
-                    let suffix = if learned { None } else { Some("learn") };
-                    opt(t, None, suffix, None)
-                })
-                .collect();
-            // Circle has no `_Untrained` class, so lowering to Untrained is an
-            // unlearn when learned; a plain "Untrained" choice in the roster.
-            let untrained = if learned {
-                opt("Untrained", None, Some("unlearn"), None)
-            } else {
-                opt("Untrained", None, None, None)
-            };
-            opts.insert(0, untrained);
-            opts
-        }
-        Kind::Ladder => {
-            let mut opts = Vec::new();
-            let rungs = std::iter::once("Untrained").chain(def.ladder.iter().copied());
-            for (i, t) in rungs.enumerate() {
-                let roman = ROMAN.get(i).copied();
-                let suffix = if learned {
-                    (t == "Untrained" && !def.has_untrained).then_some("unlearn")
-                } else {
-                    (t != "Untrained").then_some("learn")
-                };
-                opts.push(opt(t, roman, suffix, None));
-            }
-            opts
-        }
+        // Ladder and circle always offer the full ladder: Untrained + tiers.
+        Kind::Ladder | Kind::Circle => std::iter::once("Untrained")
+            .chain(def.ladder.iter().copied())
+            .map(opt)
+            .collect(),
         // hunting / binary / language: on/off (single learned state).
         _ => {
             if learned {
-                let mut opts = vec![opt(current, None, None, None)];
+                let mut opts = vec![opt(current)];
                 if current != "Untrained" {
-                    opts.push(opt("Untrained", None, Some("unlearn"), None));
+                    opts.push(opt("Untrained"));
                 }
                 opts
             } else {
-                vec![
-                    opt("Untrained", None, None, Some("notLearned")),
-                    opt(catalog::learn_value(def.kind), None, None, Some("learn")),
-                ]
+                vec![opt("Untrained"), opt(catalog::learn_value(def.kind))]
             }
         }
     }
@@ -240,7 +157,7 @@ pub fn list_skills(root: &properties::RootObject, actor: &str) -> Value {
                 base.replace('_', " "),
                 "Other".to_string(),
                 false,
-                vec![json!({ "value": current, "label": tier_display(&current) })],
+                vec![json!({ "value": current })],
             ),
         };
         // The dropdown requires the current value to be a selectable option. A
@@ -248,16 +165,7 @@ pub fn list_skills(root: &properties::RootObject, actor: &str) -> Value {
         // ("Learned") that the tier list does not contain; keep the row valid by
         // surfacing that raw value as its own option rather than crashing the UI.
         if !options.iter().any(|o| o["value"] == json!(current)) {
-            options.insert(
-                0,
-                json!({
-                    "value": current,
-                    "label": tier_display(&current),
-                    "roman": Value::Null,
-                    "suffix": Value::Null,
-                    "standalone": Value::Null,
-                }),
-            );
+            options.insert(0, json!({ "value": current }));
         }
         skills.push(json!({
             "base": base,
@@ -579,22 +487,13 @@ mod tests {
         let def = catalog::find("Melee_OneHanded").unwrap();
         let opts = tier_options(def, true, "Master");
         assert_eq!(opt_values(&opts), ["Untrained", "Trained", "Master"]);
-        assert!(opts[2]["label"].as_str().unwrap().contains("(III)"));
     }
 
     #[test]
-    fn ladder_with_untrained_class_is_not_labelled_unlearn() {
-        let def = catalog::find("Ranged_Bow").unwrap();
-        let opts = tier_options(def, true, "Master");
-        assert!(!opts[0]["label"].as_str().unwrap().contains("unlearn"));
-    }
-
-    #[test]
-    fn roster_ladder_offers_learn() {
+    fn roster_ladder_offers_full_ladder() {
         let def = catalog::find("Melee_TwoHanded").unwrap();
         let opts = tier_options(def, false, "Untrained");
         assert_eq!(opt_values(&opts), ["Untrained", "Trained", "Master"]);
-        assert!(opts[1]["label"].as_str().unwrap().contains("learn"));
     }
 
     #[test]
@@ -622,11 +521,10 @@ mod tests {
     }
 
     #[test]
-    fn blacksmith_tier_hint_is_shown() {
+    fn blacksmith_lists_the_full_ladder() {
         let def = catalog::find("Crafting_Blacksmith").unwrap();
         let opts = tier_options(def, false, "Untrained");
-        let master = opts.iter().find(|o| o["value"] == "Master").unwrap();
-        assert!(master["label"].as_str().unwrap().contains("2H weapons"));
+        assert_eq!(opt_values(&opts), ["Untrained", "Trained", "Master"]);
     }
 
     #[test]
