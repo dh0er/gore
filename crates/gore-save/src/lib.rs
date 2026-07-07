@@ -3154,6 +3154,12 @@ fn summarize_private_inventory_payload(
     let mut writable = Vec::new();
     if item_scope == "player_inventory_region" && item_stack_count > 0 {
         writable.push("private.inventory.setItemCount");
+        // reset is a wholesale swap of the whole m_Inventory from an embedded
+        // start save, not an in-place patch of a scanned stack, but it shares
+        // setItemCount's precondition: some inventory content must actually be
+        // present in this region. Unlike addItem it does not need a clean
+        // template (nothing is cloned), so it is not gated on `main_container`.
+        writable.push("private.inventory.reset");
     }
     if let Some(mc) = main_container {
         // addItem clones a clean template slot; only offer it when one exists
@@ -3726,11 +3732,12 @@ fn npc_attributes_command(
 /// builder serves the player and any NPC.
 ///
 /// `writable` advertises the inventory edit commands the same way the player
-/// summary does — gated on container presence: `setItemCount` when the
-/// MainContainer holds at least one row, `addItem` when a clean template slot
-/// exists, `removeItem` when at least one globally-unique (removable) path is
-/// present. The command names are identical to the player's; the frontend
-/// attaches `actorId` for the NPC case.
+/// summary does — gated on container presence: `setItemCount` and `reset`
+/// when the MainContainer holds at least one row (reset is a wholesale swap,
+/// so unlike `addItem` it needs no clean template), `addItem` when a clean
+/// template slot exists, `removeItem` when at least one globally-unique
+/// (removable) path is present. The command names are identical to the
+/// player's; the frontend attaches `actorId` for the NPC case.
 fn actor_inventory_summary(root: &properties::RootObject, actor_id: Option<&str>) -> Value {
     let Some(view) = inventory_main_container_view(root, actor_id) else {
         return json!({
@@ -3773,6 +3780,12 @@ fn actor_inventory_summary(root: &properties::RootObject, actor_id: Option<&str>
     let mut writable = Vec::new();
     if !view.rows.is_empty() {
         writable.push("private.inventory.setItemCount");
+        // reset is a wholesale swap from an embedded start save, not an
+        // in-place patch, but it shares setItemCount's precondition: the
+        // typed MainContainer view must be resolvable and non-empty. Unlike
+        // addItem it does not need a clean template, so it is not gated on
+        // `view.summary.has_clean_template`.
+        writable.push("private.inventory.reset");
     }
     if view.summary.has_clean_template {
         writable.push("private.inventory.addItem");
@@ -11830,11 +11843,12 @@ mod tests {
         assert_eq!(value["private"]["inventory"]["itemStackCount"], 1);
         // This synthetic payload is detected by the FString region scan but is
         // not a complete typed property tree, so the MainContainer cannot be
-        // resolved: only the in-place setItemCount edit is offered, and no row
-        // is marked removable (addItem/removeItem need a typed MainContainer).
+        // resolved: only the in-place setItemCount/reset edits are offered
+        // (both gated on the scan, not the typed tree), and no row is marked
+        // removable (addItem/removeItem need a typed MainContainer).
         assert_eq!(
             value["private"]["inventory"]["writable"],
-            json!(["private.inventory.setItemCount"])
+            json!(["private.inventory.setItemCount", "private.inventory.reset"])
         );
         assert_eq!(
             value["private"]["inventory"]["items"],
@@ -12869,11 +12883,12 @@ mod tests {
             summary["mainContainerPaths"],
             json!(["/Script/Angelscript.ItMi_Orenugget"])
         );
-        // Clean template present + globally-unique path ⇒ all three edits offered.
+        // Clean template present + globally-unique path ⇒ all four edits offered.
         assert_eq!(
             summary["writable"],
             json!([
                 "private.inventory.setItemCount",
+                "private.inventory.reset",
                 "private.inventory.addItem",
                 "private.inventory.removeItem",
             ])
@@ -15117,6 +15132,7 @@ mod tests {
             inv["writable"],
             json!([
                 "private.inventory.setItemCount",
+                "private.inventory.reset",
                 "private.inventory.addItem",
                 "private.inventory.removeItem"
             ])
