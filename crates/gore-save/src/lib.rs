@@ -14081,6 +14081,33 @@ mod tests {
         assert_eq!(cur, before, "a failed reset must not mutate the payload");
     }
 
+    /// GATE: lifting an actor's whole m_Inventory bytes from one real save and
+    /// splicing them into another must produce a payload that re-parses and whose
+    /// inventory summary matches the reference. Proves the private payload has no
+    /// payload-global name table (inline strings), which the wholesale-swap reset
+    /// depends on. Set GORESAVE_START and GORESAVE_TARGET to two real GSAV files.
+    #[test]
+    #[ignore = "needs GORESAVE_START + GORESAVE_TARGET real saves"]
+    fn spike_cross_save_inventory_lift_roundtrips() {
+        let backend = codec_backend::KrakenBackend::default();
+        let start = std::fs::read(std::env::var("GORESAVE_START").unwrap()).unwrap();
+        let target = std::fs::read(std::env::var("GORESAVE_TARGET").unwrap()).unwrap();
+
+        let ref_priv = decode_private_payload_from_bytes(&start, &backend).unwrap();
+        let mut cur_priv = decode_private_payload_from_bytes(&target, &backend).unwrap();
+
+        // Player inventory (actor_id = None).
+        apply_inventory_reset_with_reference(&mut cur_priv, None, &ref_priv).unwrap();
+
+        let reparsed = properties::parse_private_root(&cur_priv).unwrap();
+        let ref_root = properties::parse_private_root(&ref_priv).unwrap();
+        assert_eq!(
+            actor_inventory_summary(&reparsed, None),
+            actor_inventory_summary(&ref_root, None),
+            "reset inventory must equal the start-save's inventory"
+        );
+    }
+
     const INV_MELEE_LABEL: &str = "EInventoryTypes::MeleeSlot";
     const INV_POUCH_LABEL: &str = "EInventoryTypes::Pouch";
 
