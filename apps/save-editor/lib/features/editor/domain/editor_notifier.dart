@@ -756,13 +756,15 @@ class EditorNotifier extends StateNotifier<EditorState> {
     ];
 
     final n = allEdits.length;
-    // Edit objects (matched by identity) that committed bytes to disk, captured
-    // BEFORE the trailing refresh() so we still converge even if that refresh
-    // fails. Tracked per-EDIT, not per-key: one pending key can span several
-    // sequential sub-writes (e.g. multiple inventory adds), so a key may be only
-    // PARTIALLY committed — if a later add fails, the earlier committed adds must
-    // not drag the whole key's still-unwritten edits out of the pending set.
-    final committedEdits = <Map<String, Object?>>{};
+    // Edit objects that committed bytes to disk, captured BEFORE the trailing
+    // refresh() so we still converge even if that refresh fails. Tracked per-EDIT,
+    // not per-key: one pending key can span several sequential sub-writes (e.g.
+    // multiple inventory adds), so a key may be only PARTIALLY committed — if a
+    // later add fails, the earlier committed adds must not drag the whole key's
+    // still-unwritten edits out of the pending set. An IDENTITY set: the exact
+    // edit map objects flow from the registry into the sub-writes, and two
+    // distinct adds of the same item must count as two entries, never collapse.
+    final committedEdits = Set<Map<String, Object?>>.identity();
     // The first (backup-taking) sub-write's response data drives the success
     // message: its `backupPath` is the one pristine snapshot for this Save.
     Map<String, Object?> firstData = const {};
