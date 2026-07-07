@@ -5182,6 +5182,7 @@ fn apply_private_edits(
                     ..
                 }) | PrivateEdit::InventoryAddItem(_)
                     | PrivateEdit::InventoryRemoveItem(_)
+                    | PrivateEdit::InventoryReset(_)
             )
         })
         .count();
@@ -5196,6 +5197,8 @@ fn apply_private_edits(
     // A splicing structural edit inserts or removes bytes mid-payload and shifts
     // every byte after the splice point:
     //   - inventory addItem/removeItem splice the MainContainer slot array,
+    //   - inventory.reset replaces the whole m_Inventory value with a
+    //     differently-sized reference (start-save) copy,
     //   - knowledge.addCharacter inserts a new entry into the
     //     CharacterKnowledgeByUniqueName MapProperty, and
     //   - npc.revive strips the authoritative State.Dead/KillBounty/Executed loose
@@ -5213,6 +5216,7 @@ fn apply_private_edits(
                 edit,
                 PrivateEdit::InventoryAddItem(_)
                     | PrivateEdit::InventoryRemoveItem(_)
+                    | PrivateEdit::InventoryReset(_)
                     | PrivateEdit::KnowledgeAddCharacter(_)
                     | PrivateEdit::NpcRevive(_)
             )
@@ -5221,10 +5225,10 @@ fn apply_private_edits(
     if splicing_structural_edits >= 1 && edit_specs.len() > 1 {
         return Err(CoreError::UnsupportedEdit(
             "a write containing private.inventory.addItem, private.inventory.removeItem, \
-             private.knowledge.addCharacter, or private.npc.revive must contain no other \
-             edits — the structural splice (slot-array, map insert, or memory-event removal) \
-             shifts the byte offsets and array indices later edits resolve against; submit \
-             them as separate writes"
+             private.inventory.reset, private.knowledge.addCharacter, or private.npc.revive \
+             must contain no other edits — the structural splice (slot-array, map insert, or \
+             memory-event removal) shifts the byte offsets and array indices later edits \
+             resolve against; submit them as separate writes"
                 .to_string(),
         ));
     }
@@ -7141,8 +7145,6 @@ fn reset_actor_missing_err(actor_id: Option<&str>, where_: &str) -> CoreError {
     }
 }
 
-// NOTE: this splices m_Inventory (length-changing). Task 8 adds PrivateEdit::InventoryReset
-// to the structural/splicing batch-safety guards so it is never batched with a peer edit.
 /// Replace the current actor's `m_Inventory` bytes with the same actor's
 /// `m_Inventory` from an already-decoded reference private payload. Pure (no
 /// codec). Works on a scratch copy; commits only after a strict re-parse, so a
@@ -12421,6 +12423,43 @@ mod tests {
                     "path": "private.typed.setValue",
                     "value": { "path": ["m_MaxQuick"], "value": 9 }
                 }),
+            ],
+            false,
+            None,
+            Some(&backend),
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("must contain no other edits"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn write_rejects_inventory_reset_with_peer_edit() {
+        // A reset plus any peer edit in one write must be rejected (it splices
+        // bytes, shifting offsets later edits resolve against).
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-001.sav");
+        let private_payload = inventory_payload_for_add_item_tests();
+        let seed_compressed = b"seed-reset-peer".to_vec();
+        let stream = compressed_stream_with_one_chunk(&seed_compressed, private_payload.len());
+        fs::write(
+            &path,
+            build_gsav(2, &public_payload("Slot A"), &stream, &[0, 0, 0, 0]),
+        )
+        .unwrap();
+        let backend = PrefixCodecBackend {
+            seed_compressed,
+            seed_uncompressed: private_payload,
+        };
+
+        let err = write_save_with_codec_backend(
+            &path,
+            &[
+                json!({ "path": "private.inventory.reset", "value": { "resourcesLevel": "Gothic" } }),
+                json!({ "path": "private.inventory.setItemCount",
+                        "value": { "id": "ItMi_Orenugget", "count": 5 } }),
             ],
             false,
             None,
