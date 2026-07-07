@@ -58,16 +58,16 @@ class AppLocalizationsJa extends AppLocalizations {
   String get skillActionUnlearn => '習得解除';
 
   @override
-  String get skillTierUntrained => '未熟練';
+  String get skillTierUntrained => '未訓練';
 
   @override
   String get skillTierBeginner => '初心者';
 
   @override
-  String get skillTierTrained => '熟練';
+  String get skillTierTrained => '訓練済み';
 
   @override
-  String get skillTierMaster => '達人';
+  String get skillTierMaster => 'マスター';
 
   @override
   String get skillTierNovice => '見習い';
@@ -111,13 +111,13 @@ class AppLocalizationsJa extends AppLocalizations {
   String get skillCategoryThievery => '盗み';
 
   @override
-  String get skillNameOneHanded => '片手武器';
+  String get skillNameOneHanded => '片手持ち';
 
   @override
-  String get skillNameTwoHanded => '両手武器';
+  String get skillNameTwoHanded => '両手持ち';
 
   @override
-  String get skillNameFists => '格闘';
+  String get skillNameFists => '裸の拳';
 
   @override
   String get skillNameBow => '弓';
@@ -126,67 +126,94 @@ class AppLocalizationsJa extends AppLocalizations {
   String get skillNameCrossbow => 'クロスボウ';
 
   @override
-  String get skillNameLockpicking => '鍵開け';
+  String get skillNameLockpicking => 'ロックピッキング';
 
   @override
   String get skillNamePickpocketing => 'スリ';
 
   @override
-  String get skillNameTakeOrgans => '臓器の摘出';
+  String get skillNameTakeOrgans => '内臓を取る';
 
   @override
-  String get skillNameBreakTeeth => '牙の採取';
+  String get skillNameBreakTeeth => '歯を取る';
 
   @override
-  String get skillNameTakeClaws => '爪の採取';
+  String get skillNameTakeClaws => '爪を取る';
 
   @override
-  String get skillNameSkinFur => '毛皮の剥ぎ取り';
+  String get skillNameSkinFur => '毛皮を取る';
 
   @override
-  String get skillNameSkin => '皮の剥ぎ取り';
+  String get skillNameSkin => '皮を取る';
 
   @override
-  String get skillNameTakeFins => 'ヒレの採取';
+  String get skillNameTakeFins => 'ひれを取る';
 
   @override
-  String get skillNameTakeStingers => '毒針の採取';
+  String get skillNameTakeStingers => '針を取る';
 
   @override
-  String get skillNameTakeSecretion => '分泌液の採取';
+  String get skillNameTakeSecretion => '分泌液を取る';
 
   @override
-  String get skillNameTakeSkullPlates => '頭蓋骨板の採取';
+  String get skillNameTakeSkullPlates => 'スカル・アーマーを取る';
 
   @override
-  String get skillNameSkinSwampshark => 'スワンプシャークの解体';
+  String get skillNameSkinSwampshark => 'サメの皮を取る';
 
   @override
-  String get skillNameTakeMinecrawlerPlates => 'マインクロウラー甲板の採取';
+  String get skillNameTakeMinecrawlerPlates => 'プレートを取る';
 
   @override
-  String get skillNameTakeScutes => '鱗甲板の採取';
+  String get skillNameTakeScutes => '骨板を取る';
 
   @override
-  String get skillNameTakeUluMulu => 'ウル・ムルの戦利品の採取';
+  String get skillNameTakeUluMulu => 'ウルムルを取る';
 
   @override
-  String get skillNameAcrobatics => 'アクロバット';
+  String get skillNameOrcWeapons => 'オーク武器';
 
   @override
-  String get skillNameWallClimbing => '壁登り';
+  String get skillNameMining => '採掘';
 
   @override
-  String get skillNameRiding => '騎乗';
+  String get skillNameDiving => 'ダイビング';
 
   @override
-  String get skillNameSneaking => '忍び歩き';
+  String get skillNameTakeMinecrawlerMandibles => 'あごを取る';
 
   @override
-  String get skillNameAlchemy => '錬金術';
+  String get skillNameTakeShadowbeastHorn => '角を取る (Shadowbeast)';
 
   @override
-  String get skillNameRuneInscription => 'ルーン刻印';
+  String get skillNameTakeSpines => '背骨を取る';
+
+  @override
+  String get skillNameBreakSwampsharkTeeth => 'サメの歯を取る';
+
+  @override
+  String get skillNameTakeFireTongue => '炎の舌を取る';
+
+  @override
+  String get skillNameTakeTrollHorn => '角を取る (Troll)';
+
+  @override
+  String get skillNameAcrobatics => 'アクロバティック';
+
+  @override
+  String get skillNameWallClimbing => 'クライミング';
+
+  @override
+  String get skillNameRiding => 'スカベンジャー乗り';
+
+  @override
+  String get skillNameSneaking => 'スニーク';
+
+  @override
+  String get skillNameAlchemy => 'アルケミー';
+
+  @override
+  String get skillNameRuneInscription => 'インスクリプション';
 
   @override
   String get skillNameBlacksmithing => '鍛冶';
@@ -424,7 +451,7 @@ class AppLocalizationsJa extends AppLocalizations {
   String get playerLockedBody => 'プライベートプレイヤーの編集には圧縮対応のコーデックが必要です。';
 
   @override
-  String get heroTransform => 'ヒーローのトランスフォーム';
+  String get heroTransform => '位置';
 
   @override
   String get locationX => '位置 X';
@@ -1262,7 +1289,7 @@ class AppLocalizationsJa extends AppLocalizations {
   String get heroGroupAdvanced => '詳細設定';
 
   @override
-  String get heroEntryHeroTransform => 'ヒーローのトランスフォーム';
+  String get heroEntryHeroTransform => '位置';
 
   @override
   String attributeEmpty(String name) {
@@ -1281,4 +1308,31 @@ class AppLocalizationsJa extends AppLocalizations {
   String localizedTextExtractedCount(int idCount, int languageCount) {
     return '$languageCount言語で$idCount個のIDを抽出しました';
   }
+
+  @override
+  String get skillSmithing1H => '片手鍛冶屋';
+
+  @override
+  String get skillSmithing2H => '両手鍛冶屋';
+
+  @override
+  String get skillCircleNovice => '見習い魔法使い';
+
+  @override
+  String get skillCircle1 => '第一魔法円';
+
+  @override
+  String get skillCircle2 => '第二魔法円';
+
+  @override
+  String get skillCircle3 => '第三魔法円';
+
+  @override
+  String get skillCircle4 => '第四魔法円';
+
+  @override
+  String get skillCircle5 => '第五魔法円';
+
+  @override
+  String get skillCircle6 => '第六魔法円';
 }

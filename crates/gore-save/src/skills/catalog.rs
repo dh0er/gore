@@ -66,14 +66,16 @@ const NO_HINTS: &[(&str, &str)] = &[];
 const RANK2: &[&str] = &["Trained", "Master"];
 const THIEF: &[&str] = &["Skilled", "Master"];
 const CIRCLE: &[&str] = &["Amateur", "1", "2", "3", "4", "5", "6"];
-const ORCISH: &[&str] = &["Master"];
 
 /// The complete skill roster. Keep grouped by category for readability.
 pub const SKILLS: &[SkillDef] = &[
     // ---- Combat (ranked) -------------------------------------------------
-    SkillDef { base: "Melee_OneHanded", label: "One-Handed", category: "Combat", kind: Kind::Ladder, ladder: RANK2, has_untrained: false, tier_labels: NO_HINTS },
-    SkillDef { base: "Melee_TwoHanded", label: "Two-Handed", category: "Combat", kind: Kind::Ladder, ladder: RANK2, has_untrained: false, tier_labels: NO_HINTS },
-    SkillDef { base: "Melee_Fists", label: "Fists", category: "Combat", kind: Kind::Ladder, ladder: RANK2, has_untrained: false, tier_labels: NO_HINTS },
+    // All melee ladders have an `_Untrained` baseline class (confirmed in the
+    // UE4SS object dump), so lowering to it is a retarget, not an unlearn.
+    SkillDef { base: "Melee_OneHanded", label: "One-Handed", category: "Combat", kind: Kind::Ladder, ladder: RANK2, has_untrained: true, tier_labels: NO_HINTS },
+    SkillDef { base: "Melee_TwoHanded", label: "Two-Handed", category: "Combat", kind: Kind::Ladder, ladder: RANK2, has_untrained: true, tier_labels: NO_HINTS },
+    SkillDef { base: "Melee_Fists", label: "Fists", category: "Combat", kind: Kind::Ladder, ladder: RANK2, has_untrained: true, tier_labels: NO_HINTS },
+    SkillDef { base: "Melee_Orc", label: "Orc Weapons", category: "Combat", kind: Kind::Ladder, ladder: RANK2, has_untrained: true, tier_labels: NO_HINTS },
     SkillDef { base: "Ranged_Bow", label: "Bow", category: "Combat", kind: Kind::Ladder, ladder: RANK2, has_untrained: true, tier_labels: NO_HINTS },
     SkillDef { base: "Ranged_Crossbow", label: "Crossbow", category: "Combat", kind: Kind::Ladder, ladder: RANK2, has_untrained: true, tier_labels: NO_HINTS },
     // ---- Thievery (ranked) ----------------------------------------------
@@ -93,23 +95,35 @@ pub const SKILLS: &[SkillDef] = &[
     SkillDef { base: "Hunting_MCPlate", label: "Take Minecrawler Plates", category: "Hunting", kind: Kind::Hunting, ladder: NO_TIERS, has_untrained: false, tier_labels: NO_HINTS },
     SkillDef { base: "Hunting_Scutes", label: "Take Scutes", category: "Hunting", kind: Kind::Hunting, ladder: NO_TIERS, has_untrained: false, tier_labels: NO_HINTS },
     SkillDef { base: "Hunting_UluMulu", label: "Take Ulu-Mulu Trophies", category: "Hunting", kind: Kind::Hunting, ladder: NO_TIERS, has_untrained: false, tier_labels: NO_HINTS },
+    SkillDef { base: "Hunting_MandibleMineCrawler", label: "Extract Mandibles", category: "Hunting", kind: Kind::Hunting, ladder: NO_TIERS, has_untrained: false, tier_labels: NO_HINTS },
+    SkillDef { base: "Hunting_ShadowbeastHorn", label: "Take Horn", category: "Hunting", kind: Kind::Hunting, ladder: NO_TIERS, has_untrained: false, tier_labels: NO_HINTS },
+    SkillDef { base: "Hunting_Spines", label: "Extract Spine", category: "Hunting", kind: Kind::Hunting, ladder: NO_TIERS, has_untrained: false, tier_labels: NO_HINTS },
+    SkillDef { base: "Hunting_TeethSwampshark", label: "Extract Shark Teeth", category: "Hunting", kind: Kind::Hunting, ladder: NO_TIERS, has_untrained: false, tier_labels: NO_HINTS },
+    SkillDef { base: "Hunting_TongueOfFire", label: "Take Fire Tongue", category: "Hunting", kind: Kind::Hunting, ladder: NO_TIERS, has_untrained: false, tier_labels: NO_HINTS },
+    SkillDef { base: "Hunting_TrollHorn", label: "Take Troll Horn", category: "Hunting", kind: Kind::Hunting, ladder: NO_TIERS, has_untrained: false, tier_labels: NO_HINTS },
     // ---- Movement / utility (binary) ------------------------------------
     SkillDef { base: "Acrobatics", label: "Acrobatics", category: "Movement", kind: Kind::Binary, ladder: NO_TIERS, has_untrained: false, tier_labels: NO_HINTS },
     SkillDef { base: "Wallclimbing", label: "Wall Climbing", category: "Movement", kind: Kind::Binary, ladder: NO_TIERS, has_untrained: false, tier_labels: NO_HINTS },
     SkillDef { base: "Riding", label: "Riding", category: "Movement", kind: Kind::Binary, ladder: NO_TIERS, has_untrained: false, tier_labels: NO_HINTS },
     SkillDef { base: "Sneak", label: "Sneaking", category: "Movement", kind: Kind::Binary, ladder: NO_TIERS, has_untrained: false, tier_labels: NO_HINTS },
+    SkillDef { base: "Diving", label: "Diving", category: "Movement", kind: Kind::Binary, ladder: NO_TIERS, has_untrained: false, tier_labels: NO_HINTS },
     // ---- Crafting -------------------------------------------------------
     SkillDef { base: "Crafting_Alchemy", label: "Alchemy", category: "Crafting", kind: Kind::Binary, ladder: NO_TIERS, has_untrained: false, tier_labels: NO_HINTS },
     SkillDef { base: "Crafting_Inscription", label: "Rune Inscription", category: "Crafting", kind: Kind::Binary, ladder: NO_TIERS, has_untrained: false, tier_labels: NO_HINTS },
-    // Blacksmithing is ranked: Trained (II) forges 1H weapons, Master (III) 2H.
-    SkillDef { base: "Crafting_Blacksmith", label: "Blacksmithing", category: "Crafting", kind: Kind::Ladder, ladder: RANK2, has_untrained: false, tier_labels: &[("Trained", "1H weapons"), ("Master", "2H weapons")] },
+    // Blacksmithing is ranked: Trained (II) forges 1H weapons, Master (III) 2H;
+    // an `_Untrained` baseline class exists (UE4SS dump), so Beginner retargets.
+    SkillDef { base: "Crafting_Blacksmith", label: "Blacksmithing", category: "Crafting", kind: Kind::Ladder, ladder: RANK2, has_untrained: true, tier_labels: &[("Trained", "1H weapons"), ("Master", "2H weapons")] },
+    // Mining (Schürfen): ranked Untrained/Skilled/Master, like the thievery
+    // skills; an `_Untrained` baseline class exists.
+    SkillDef { base: "Mining", label: "Mining", category: "Crafting", kind: Kind::Ladder, ladder: THIEF, has_untrained: true, tier_labels: NO_HINTS },
     // ---- Magic ----------------------------------------------------------
-    SkillDef { base: "Mage_Circle", label: "Magic Circle", category: "Magic", kind: Kind::Circle, ladder: CIRCLE, has_untrained: false, tier_labels: NO_HINTS },
+    // Mage_Circle has an `_Untrained` baseline class, so Circle 0 (Amateur) is a
+    // learn and the lowest state retargets rather than unlearns.
+    SkillDef { base: "Mage_Circle", label: "Magic Circle", category: "Magic", kind: Kind::Circle, ladder: CIRCLE, has_untrained: true, tier_labels: NO_HINTS },
     // ---- Language -------------------------------------------------------
-    // Orcish is ranked: Untrained baseline (always present) up to Master. Only
-    // _Untrained and _Master classes observed so far; add _Trained if a save
-    // shows it.
-    SkillDef { base: "Orcish", label: "Orcish Language", category: "Language", kind: Kind::Ladder, ladder: ORCISH, has_untrained: true, tier_labels: NO_HINTS },
+    // Orcish is ranked Untrained/Skilled/Master (all three classes confirmed in
+    // the UE4SS dump), with an `_Untrained` baseline.
+    SkillDef { base: "Orcish", label: "Orcish Language", category: "Language", kind: Kind::Ladder, ladder: THIEF, has_untrained: true, tier_labels: NO_HINTS },
 ];
 
 /// Tier suffixes that mark the END of a `GE_Skill_<base>_<tier>` class name, so

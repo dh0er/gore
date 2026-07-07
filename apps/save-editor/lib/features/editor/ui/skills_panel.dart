@@ -209,6 +209,15 @@ class _SkillsSectionState extends ConsumerState<SkillsSection> {
     for (final s in visible) {
       byCategory.putIfAbsent(s.category, () => []).add(s);
     }
+    // Sort skills within each category by their localized name (the core orders
+    // by base name; the user reads them by display name). Case-insensitive.
+    for (final list in byCategory.values) {
+      list.sort(
+        (a, b) => _skillName(l10n, a)
+            .toLowerCase()
+            .compareTo(_skillName(l10n, b).toLowerCase()),
+      );
+    }
     final categories = byCategory.entries.toList();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -323,6 +332,8 @@ String _skillName(AppLocalizations l10n, Skill skill) {
       return l10n.skillNameTwoHanded;
     case 'Melee_Fists':
       return l10n.skillNameFists;
+    case 'Melee_Orc':
+      return l10n.skillNameOrcWeapons;
     case 'Ranged_Bow':
       return l10n.skillNameBow;
     case 'Ranged_Crossbow':
@@ -357,6 +368,18 @@ String _skillName(AppLocalizations l10n, Skill skill) {
       return l10n.skillNameTakeScutes;
     case 'Hunting_UluMulu':
       return l10n.skillNameTakeUluMulu;
+    case 'Hunting_MandibleMineCrawler':
+      return l10n.skillNameTakeMinecrawlerMandibles;
+    case 'Hunting_ShadowbeastHorn':
+      return l10n.skillNameTakeShadowbeastHorn;
+    case 'Hunting_Spines':
+      return l10n.skillNameTakeSpines;
+    case 'Hunting_TeethSwampshark':
+      return l10n.skillNameBreakSwampsharkTeeth;
+    case 'Hunting_TongueOfFire':
+      return l10n.skillNameTakeFireTongue;
+    case 'Hunting_TrollHorn':
+      return l10n.skillNameTakeTrollHorn;
     case 'Acrobatics':
       return l10n.skillNameAcrobatics;
     case 'Wallclimbing':
@@ -365,12 +388,16 @@ String _skillName(AppLocalizations l10n, Skill skill) {
       return l10n.skillNameRiding;
     case 'Sneak':
       return l10n.skillNameSneaking;
+    case 'Diving':
+      return l10n.skillNameDiving;
     case 'Crafting_Alchemy':
       return l10n.skillNameAlchemy;
     case 'Crafting_Inscription':
       return l10n.skillNameRuneInscription;
     case 'Crafting_Blacksmith':
       return l10n.skillNameBlacksmithing;
+    case 'Mining':
+      return l10n.skillNameMining;
     case 'Mage_Circle':
       return l10n.skillNameMagicCircle;
     case 'Orcish':
@@ -390,28 +417,61 @@ String _skillName(AppLocalizations l10n, Skill skill) {
 ///   keyed by VALUE because a learned on/off skill lists its options in the
 ///   reverse order (learned value first, Untrained second).
 String _optionLabel(AppLocalizations l10n, Skill skill, int index) {
-  final options = skill.options;
-  final value = options[index].value;
+  final value = skill.options[index].value;
 
+  // Blacksmithing's two learned tiers have bespoke in-game names
+  // (skill_crafting_blacksmith_trained/master); Untrained uses the generic label.
+  if (skill.base == 'Crafting_Blacksmith') {
+    if (value == 'Trained') return l10n.skillSmithing1H;
+    if (value == 'Master') return l10n.skillSmithing2H;
+  }
+
+  // Magic Circle uses the game's circle names (skill_mage_circle_*).
   if (skill.kind == 'circle') {
-    if (value == 'Untrained') return l10n.skillNotLearned;
-    if (value == 'Amateur') return l10n.skillTierCircle(0);
-    final n = int.tryParse(value);
-    return n != null ? l10n.skillTierCircle(n) : value;
+    switch (value) {
+      case 'Amateur':
+        return l10n.skillCircleNovice;
+      case '1':
+        return l10n.skillCircle1;
+      case '2':
+        return l10n.skillCircle2;
+      case '3':
+        return l10n.skillCircle3;
+      case '4':
+        return l10n.skillCircle4;
+      case '5':
+        return l10n.skillCircle5;
+      case '6':
+        return l10n.skillCircle6;
+    }
   }
 
-  // A ladder with two tiers above Untrained is the only 3-option shape; label by
-  // position so the tier order (Trained/Skilled → Master) maps consistently.
-  if (options.length == 3) {
-    return switch (index) {
-      0 => l10n.skillTierBeginner,
-      1 => l10n.skillTierTrained,
-      _ => l10n.skillTierMaster,
-    };
+  // Generic mastery labels (the game's skillmastery_* vocabulary). The internal
+  // `Skilled` tier (thievery/mining/orcish) and the binary `Learned` state both
+  // display as Trained in-game — the game has no separate "Skilled" label.
+  switch (value) {
+    case 'Master':
+      return l10n.skillTierMaster;
+    case 'Trained':
+    case 'Skilled':
+      return l10n.skillTierTrained;
+    case 'Learned':
+      // Binary/hunting skills learn into the sentinel `Learned` → Trained. For a
+      // ladder/circle skill, `Learned` only appears as the raw fallback the core
+      // inserts for a class stored without its tier suffix; keep it raw so it
+      // stays distinct from the real Trained tier in the dropdown.
+      return (skill.kind == 'ladder' || skill.kind == 'circle')
+          ? value
+          : l10n.skillTierTrained;
+    case 'Untrained':
+      return l10n.skillTierUntrained;
+    default:
+      // An unrecognized tier (e.g. a save carrying an Apprentice/Journeyman
+      // suffix outside this skill's catalog ladder, which the core surfaces as
+      // its own option) must show its raw value — not a second "Untrained" that
+      // could be overwritten by accident.
+      return value;
   }
-
-  // 2-state on/off (and 2-tier ladders like Orcish): a plain learned/not split.
-  return value == 'Untrained' ? l10n.skillNotLearned : l10n.skillTierLearned;
 }
 
 /// Localized category header. Falls back to the raw category for anything not

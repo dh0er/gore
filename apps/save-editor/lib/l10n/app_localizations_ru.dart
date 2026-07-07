@@ -58,16 +58,16 @@ class AppLocalizationsRu extends AppLocalizations {
   String get skillActionUnlearn => 'забыть';
 
   @override
-  String get skillTierUntrained => 'I';
+  String get skillTierUntrained => 'Не обучен';
 
   @override
   String get skillTierBeginner => 'Новичок';
 
   @override
-  String get skillTierTrained => 'II';
+  String get skillTierTrained => 'Обучен';
 
   @override
-  String get skillTierMaster => 'III';
+  String get skillTierMaster => 'Мастер';
 
   @override
   String get skillTierNovice => 'Новичок';
@@ -120,10 +120,10 @@ class AppLocalizationsRu extends AppLocalizations {
   String get skillNameFists => 'Кулаки';
 
   @override
-  String get skillNameBow => 'Лук';
+  String get skillNameBow => 'Луки';
 
   @override
-  String get skillNameCrossbow => 'Арбалет';
+  String get skillNameCrossbow => 'Арбалеты';
 
   @override
   String get skillNameLockpicking => 'Взлом замков';
@@ -135,13 +135,13 @@ class AppLocalizationsRu extends AppLocalizations {
   String get skillNameTakeOrgans => 'Извлечение органов';
 
   @override
-  String get skillNameBreakTeeth => 'Выламывание зубов';
+  String get skillNameBreakTeeth => 'Извлечение зубов';
 
   @override
   String get skillNameTakeClaws => 'Извлечение когтей';
 
   @override
-  String get skillNameSkinFur => 'Снятие меха';
+  String get skillNameSkinFur => 'Добыча меха';
 
   @override
   String get skillNameSkin => 'Снятие шкуры';
@@ -150,43 +150,70 @@ class AppLocalizationsRu extends AppLocalizations {
   String get skillNameTakeFins => 'Извлечение плавников';
 
   @override
-  String get skillNameTakeStingers => 'Извлечение жал';
+  String get skillNameTakeStingers => 'Извлечение жала';
 
   @override
-  String get skillNameTakeSecretion => 'Сбор секрета';
+  String get skillNameTakeSecretion => 'Извлечение секрета';
 
   @override
-  String get skillNameTakeSkullPlates => 'Извлечение черепных пластин';
+  String get skillNameTakeSkullPlates => 'Извлечение черепной пластины';
 
   @override
-  String get skillNameSkinSwampshark => 'Разделка болотной акулы';
+  String get skillNameSkinSwampshark => 'Снятие шкуры болотожора';
 
   @override
-  String get skillNameTakeMinecrawlerPlates => 'Извлечение пластин ползуна';
+  String get skillNameTakeMinecrawlerPlates => 'Извлечение пластин';
 
   @override
-  String get skillNameTakeScutes => 'Извлечение чешуек';
+  String get skillNameTakeScutes => 'Снятие пластин';
 
   @override
-  String get skillNameTakeUluMulu => 'Сбор трофеев улу-мулу';
+  String get skillNameTakeUluMulu => 'Получение Улу-Мулу';
+
+  @override
+  String get skillNameOrcWeapons => 'Оружие орков';
+
+  @override
+  String get skillNameMining => 'Добыча руды';
+
+  @override
+  String get skillNameDiving => 'Ныряние';
+
+  @override
+  String get skillNameTakeMinecrawlerMandibles => 'Извлечение жвал';
+
+  @override
+  String get skillNameTakeShadowbeastHorn => 'Извлечение рога (Shadowbeast)';
+
+  @override
+  String get skillNameTakeSpines => 'Извлечение хребта';
+
+  @override
+  String get skillNameBreakSwampsharkTeeth => 'Извлечение зубов болотожора';
+
+  @override
+  String get skillNameTakeFireTongue => 'Извлечение огненного языка';
+
+  @override
+  String get skillNameTakeTrollHorn => 'Извлечение рога (Troll)';
 
   @override
   String get skillNameAcrobatics => 'Акробатика';
 
   @override
-  String get skillNameWallClimbing => 'Лазание по стенам';
+  String get skillNameWallClimbing => 'Лазание';
 
   @override
-  String get skillNameRiding => 'Верховая езда';
+  String get skillNameRiding => 'Езда на падальщике';
 
   @override
-  String get skillNameSneaking => 'Скрытность';
+  String get skillNameSneaking => 'Подкрадывание';
 
   @override
   String get skillNameAlchemy => 'Алхимия';
 
   @override
-  String get skillNameRuneInscription => 'Начертание рун';
+  String get skillNameRuneInscription => 'Создание заклинаний';
 
   @override
   String get skillNameBlacksmithing => 'Кузнечное дело';
@@ -195,7 +222,7 @@ class AppLocalizationsRu extends AppLocalizations {
   String get skillNameMagicCircle => 'Круг магии';
 
   @override
-  String get skillNameOrcish => 'Язык орков';
+  String get skillNameOrcish => 'Орочий язык';
 
   @override
   String get tabInventory => 'Инвентарь';
@@ -426,7 +453,7 @@ class AppLocalizationsRu extends AppLocalizations {
       'Для редактирования приватных данных персонажа нужен кодек с поддержкой сжатия.';
 
   @override
-  String get heroTransform => 'Положение героя';
+  String get heroTransform => 'Позиция';
 
   @override
   String get locationX => 'Координата X';
@@ -1297,7 +1324,7 @@ class AppLocalizationsRu extends AppLocalizations {
   String get heroGroupAdvanced => 'Дополнительно';
 
   @override
-  String get heroEntryHeroTransform => 'Положение героя';
+  String get heroEntryHeroTransform => 'Позиция';
 
   @override
   String attributeEmpty(String name) {
@@ -1316,4 +1343,31 @@ class AppLocalizationsRu extends AppLocalizations {
   String localizedTextExtractedCount(int idCount, int languageCount) {
     return 'Извлечено $idCount идентификаторов на $languageCount языках';
   }
+
+  @override
+  String get skillSmithing1H => 'Кузнечное дело — одноручное';
+
+  @override
+  String get skillSmithing2H => 'Кузнечное дело — двуручное';
+
+  @override
+  String get skillCircleNovice => 'Маг-послушник';
+
+  @override
+  String get skillCircle1 => 'Первый круг магии';
+
+  @override
+  String get skillCircle2 => 'Второй круг магии';
+
+  @override
+  String get skillCircle3 => 'Третий круг магии';
+
+  @override
+  String get skillCircle4 => 'Четвёртый круг магии';
+
+  @override
+  String get skillCircle5 => 'Пятый круг магии';
+
+  @override
+  String get skillCircle6 => 'Шестой круг магии';
 }

@@ -151,7 +151,7 @@ void main() {
     expect(find.widgetWithText(FilledButton, 'Save (1)'), findsOneWidget);
 
     await tester.scrollUntilVisible(
-      find.text('Hero transform'),
+      find.text('Position'),
       120,
       scrollable: find.byType(Scrollable).last,
     );
