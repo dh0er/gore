@@ -3567,6 +3567,23 @@ fn decode_private_root_cached(
     Ok(root)
 }
 
+/// Decode a GSAV file's decompressed private payload from raw bytes (no path,
+/// no cache). Mirrors the decode sequence in `decode_private_root_cached`; used
+/// for the embedded start-saves the inventory-reset command reads.
+fn decode_private_payload_from_bytes(
+    data: &[u8],
+    backend: &dyn codec_backend::CodecBackend,
+) -> Result<Vec<u8>, CoreError> {
+    if !data.starts_with(b"GSAV") {
+        return Err(CoreError::UnsupportedEdit(
+            "start-save reference is not a GSAV file".to_string(),
+        ));
+    }
+    let parts = split_gsav(data)?;
+    let stream = parse_compressed_stream(data, 13 + parts.public_payload.len())?;
+    decompress_private_payload(data, &stream, backend)
+}
+
 /// Store `root` as the single parsed-root cache entry, keyed by the file's
 /// SHA-1. Also seeded by `inspect_save`, which already decodes+parses the root
 /// for its summary and hashes the file — so the first private read after a load
@@ -8354,6 +8371,17 @@ mod tests {
             !Arc::ptr_eq(&b, &c),
             "invalidation must drop the cache so the next read re-parses"
         );
+    }
+
+    #[test]
+    fn decode_private_payload_from_bytes_matches_path_decode() {
+        // Decoding the embedded Gothic start save from raw bytes must yield a
+        // parseable private payload.
+        let backend = codec_backend::KrakenBackend::default();
+        let bytes = startsaves::start_save_bytes(startsaves::ResourcesLevel::Gothic);
+        let from_bytes = decode_private_payload_from_bytes(bytes, &backend).unwrap();
+        properties::parse_private_root(&from_bytes).unwrap();
+        assert!(!from_bytes.is_empty());
     }
 
     /// `inspect_save` (which the editor runs on load) must SEED the parsed-root
