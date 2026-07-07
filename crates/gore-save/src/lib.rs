@@ -5117,6 +5117,9 @@ fn apply_private_edits(
                 }
                 "private.inventory.removeItem" => parse_private_inventory_remove_item_edit(edit)
                     .map(PrivateEdit::InventoryRemoveItem),
+                "private.inventory.reset" => {
+                    parse_private_inventory_reset_edit(edit).map(PrivateEdit::InventoryReset)
+                }
                 "private.typed.setValue" => {
                     parse_private_typed_set_value_edit(edit).map(PrivateEdit::TypedSetValue)
                 }
@@ -5384,6 +5387,7 @@ enum PrivateEdit {
     InventoryItemCount(PrivateInventoryItemCountEdit),
     InventoryAddItem(PrivateInventoryAddItemEdit),
     InventoryRemoveItem(PrivateInventoryRemoveItemEdit),
+    InventoryReset(PrivateInventoryResetEdit),
     TypedSetValue(PrivateTypedSetValueEdit),
     TypedContainer(PrivateTypedContainerEdit),
     NpcRevive(PrivateNpcReviveEdit),
@@ -5982,6 +5986,38 @@ fn parse_private_inventory_add_item_edit(
     })
 }
 
+/// `private.inventory.reset` edit: `value = { resourcesLevel?, actorId? }`.
+/// Resets an actor's inventory to the embedded start-save contents for the
+/// given `startsaves::ResourcesLevel`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PrivateInventoryResetEdit {
+    /// The actor whose inventory is reset: `None` = controlled player,
+    /// `Some(global_id)` = that NPC.
+    pub actor_id: Option<String>,
+    /// Which embedded start-save to reset from.
+    pub resources_level: startsaves::ResourcesLevel,
+}
+
+fn parse_private_inventory_reset_edit(
+    edit: &Edit,
+) -> Result<PrivateInventoryResetEdit, CoreError> {
+    let value = edit.value.as_object().ok_or_else(|| {
+        CoreError::InvalidRequest("private.inventory.reset value must be an object".to_string())
+    })?;
+    let resources_level =
+        startsaves::resolve_level(value.get("resourcesLevel").and_then(Value::as_str));
+    let actor_id = value
+        .get("actorId")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(ToOwned::to_owned);
+    Ok(PrivateInventoryResetEdit {
+        actor_id,
+        resources_level,
+    })
+}
+
 fn parse_private_inventory_remove_item_edit(
     edit: &Edit,
 ) -> Result<PrivateInventoryRemoveItemEdit, CoreError> {
@@ -6137,6 +6173,9 @@ fn apply_private_edit_to_payload(
         PrivateEdit::InventoryRemoveItem(edit) => {
             apply_private_inventory_remove_item_to_payload(payload, edit)
         }
+        PrivateEdit::InventoryReset(_edit) => Err(CoreError::UnsupportedEdit(
+            "private.inventory.reset apply not yet implemented".to_string(),
+        )),
         PrivateEdit::TypedSetValue(edit) => {
             apply_private_typed_set_value_edit_to_payload(payload, edit)
         }
@@ -15056,6 +15095,25 @@ mod tests {
         })
         .unwrap();
         assert_eq!(count_blank.actor_id, None);
+    }
+
+    #[test]
+    fn parse_inventory_reset_edit_reads_level_and_actor() {
+        let edit = Edit {
+            path: "private.inventory.reset".to_string(),
+            value: json!({ "resourcesLevel": "Hard", "actorId": "Char_123" }),
+        };
+        let parsed = parse_private_inventory_reset_edit(&edit).unwrap();
+        assert_eq!(parsed.resources_level, startsaves::ResourcesLevel::Hard);
+        assert_eq!(parsed.actor_id.as_deref(), Some("Char_123"));
+
+        let edit2 = Edit {
+            path: "private.inventory.reset".to_string(),
+            value: json!({}),
+        };
+        let parsed2 = parse_private_inventory_reset_edit(&edit2).unwrap();
+        assert_eq!(parsed2.resources_level, startsaves::ResourcesLevel::Gothic);
+        assert_eq!(parsed2.actor_id, None);
     }
 
     #[test]
