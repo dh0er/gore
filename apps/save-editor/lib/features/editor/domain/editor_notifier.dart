@@ -1600,9 +1600,29 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// otherwise re-hits the core each time; caching the future makes a revisit
   /// free. Cleared with the rest of the NPC caches on a fresh inspection, so an
   /// edit+save (which refreshes) re-fetches the changed NPC. Errors are not
-  /// cached (the entry is dropped) so a transient failure can retry.
+  /// cached (the entry is dropped) so a transient failure can retry. Keyed by
+  /// GlobalId AND guarded by [_npcDetailCacheForPath] (below), because the same
+  /// GlobalId can exist in two saves.
   final Map<String, Future<NpcAttributesResult>> _npcAttributesCache = {};
   final Map<String, Future<NpcInventoryResult>> _npcInventoryCache = {};
+
+  /// The save path the per-NPC detail memos were populated for. `selectedPath`
+  /// changes at the START of a slot switch, but [_invalidateNpcCache] only runs
+  /// after a SUCCESSFUL inspect — so a detail load in that window (or after a
+  /// failed inspect) would otherwise return the previous save's memoized future
+  /// for a matching GlobalId. Guarding memo access on this path drops the stale
+  /// entries the moment a load runs for a different file.
+  String? _npcDetailCacheForPath;
+
+  /// Drop the per-NPC detail memos if they belong to a different save than
+  /// [path]. Called at the top of every detail load, before a cache hit.
+  void _guardNpcDetailCache(String path) {
+    if (_npcDetailCacheForPath != path) {
+      _npcAttributesCache.clear();
+      _npcInventoryCache.clear();
+      _npcDetailCacheForPath = path;
+    }
+  }
 
   /// Drop the cached full NPC list and per-NPC detail memos. Called whenever a
   /// fresh inspection lands so the next load re-fetches against the new save
@@ -1612,6 +1632,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
     _allNpcActorsFor = null;
     _npcAttributesCache.clear();
     _npcInventoryCache.clear();
+    _npcDetailCacheForPath = null;
   }
 
   /// Load (and memoize) the FULL NPC list for the current inspection.
@@ -1681,6 +1702,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
     if (path == null) {
       return Future.value(const NpcAttributesResult(error: 'No save selected.'));
     }
+    _guardNpcDetailCache(path);
     final cached = _npcAttributesCache[id];
     if (cached != null) return cached;
     final future = () async {
@@ -1717,6 +1739,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
     if (path == null) {
       return Future.value(const NpcInventoryResult(error: 'No save selected.'));
     }
+    _guardNpcDetailCache(path);
     final cached = _npcInventoryCache[id];
     if (cached != null) return cached;
     final future = () async {

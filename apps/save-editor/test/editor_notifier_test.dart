@@ -2302,6 +2302,38 @@ void main() {
     expect(result.error, isNotNull);
   });
 
+  test(
+    'per-NPC detail cache does not serve the previous save after a slot switch',
+    () async {
+      // Regression: the per-NPC attribute/inventory memo is keyed by GlobalId.
+      // selectedPath moves to the new save at the START of _inspect, but the
+      // cache is only invalidated after a SUCCESSFUL inspect — so a load in that
+      // window (here: the switch's inspect fails) must NOT return the previous
+      // save's memoized future for the same GlobalId.
+      final core = _NpcAttrFailSecondInspectCoreService();
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+      await notifier.loadNpcAttributes('Shared-Id'); // memoized for G1R-001
+      final before = core.requests
+          .where((r) => r.command == 'private.npc.attributes')
+          .length;
+      expect(before, 1);
+
+      // Switch to another save whose inspect fails: selectedPath becomes
+      // G1R-002 but the cache is never invalidated.
+      await notifier.inspect(r'C:\tmp\saves\G1R-002.sav');
+      expect(notifier.state.selectedPath, r'C:\tmp\saves\G1R-002.sav');
+
+      await notifier.loadNpcAttributes('Shared-Id');
+      final after = core.requests
+          .where((r) => r.command == 'private.npc.attributes')
+          .length;
+      // A fresh request proves the stale G1R-001 memo was dropped, not served.
+      expect(after, before + 1);
+    },
+  );
+
   // ---------------------------------------------------------------------------
   // Factions (private.factions.list / .forgive)
   // ---------------------------------------------------------------------------
@@ -2836,6 +2868,31 @@ class _NpcAttributesCoreService extends _RecordingCoreService {
           ],
         },
       };
+    }
+    return super.execute(command, payload: payload);
+  }
+}
+
+/// Like [_NpcAttributesCoreService] but the SECOND `inspect_save` fails. Used to
+/// reproduce the slot-switch window where `selectedPath` has already moved to the
+/// new save but the per-NPC cache was never invalidated (invalidate runs only on
+/// a successful inspect).
+class _NpcAttrFailSecondInspectCoreService extends _NpcAttributesCoreService {
+  var _inspects = 0;
+
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    if (command == 'inspect_save') {
+      _inspects++;
+      if (_inspects >= 2) {
+        return {
+          'ok': false,
+          'error': {'message': 'inspect failed'},
+        };
+      }
     }
     return super.execute(command, payload: payload);
   }
