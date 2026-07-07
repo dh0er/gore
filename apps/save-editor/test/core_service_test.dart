@@ -22,4 +22,27 @@ void main() {
     expect(await resultFuture, 42);
     startedPort.close();
   });
+
+  test('worker with an unloadable library fails fast and recovers', () async {
+    // The persistent worker opens the DLL before signalling ready; a bad path
+    // must surface as a thrown error (via onError/onExit) rather than an eternal
+    // await, and a second call must not hang either (a fresh worker is spawned).
+    final core = NativeGoresaveCoreService.withLibraryPath(
+      'gore_save_does_not_exist_${DateTime.now().microsecondsSinceEpoch}.dll',
+    );
+
+    await expectLater(
+      core
+          .execute('scan_save_dir')
+          .timeout(const Duration(seconds: 20)),
+      throwsA(isA<CoreWorkerException>()),
+    );
+    // A retry recovers to another fast failure, not a wedged call.
+    await expectLater(
+      core
+          .execute('scan_save_dir')
+          .timeout(const Duration(seconds: 20)),
+      throwsA(isA<CoreWorkerException>()),
+    );
+  });
 }

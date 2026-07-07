@@ -429,6 +429,89 @@ void main() {
   );
 
   test(
+    'partial commit keeps the uncommitted add when several share one key',
+    () async {
+      // Regression: several inventory adds queue under ONE pending key but each
+      // is its own sequential write_save. Commit tracking is per-EDIT, so when a
+      // later add fails the earlier committed add must not drag the still-unwritten
+      // add out of pending — the user must keep the failed one for retry.
+      final core = _FailSecondWriteCoreService(
+        scanData: {
+          'saves': [
+            {
+              'path': r'C:\tmp\saves\G1R-001.sav',
+              'slot': 'G1R-001',
+              'format': 'GSAV',
+              'fileSize': 914367,
+              'sha1': 'abc',
+              'status': 'ok',
+              'playerSaveName': 'Auto',
+            },
+          ],
+        },
+      );
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+      // Two adds under ONE key → two sequential splicing writes: the first
+      // commits, the second fails.
+      notifier.setPendingEdit(
+        'inventory:player',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.inventory.addItem',
+              'value': {'path': '/Game/Item_A', 'count': 1},
+            },
+            {
+              'path': 'private.inventory.addItem',
+              'value': {'path': '/Game/Item_B', 'count': 1},
+            },
+          ],
+        ),
+      );
+
+      final ok = await notifier.saveAllPending();
+
+      expect(ok, isFalse);
+      expect(notifier.state.error, isNotNull);
+      // The key survives, carrying ONLY the second (uncommitted) add — the first
+      // committed and is gone; the second never wrote and stays for retry.
+      final pending = notifier.state.pendingEdits['inventory:player'];
+      expect(pending, isNotNull);
+      expect(pending!.edits, hasLength(1));
+      expect(pending.edits.single['value'], {
+        'path': '/Game/Item_B',
+        'count': 1,
+      });
+    },
+  );
+
+  test('saveAllPending clears the progress bar when a write throws', () async {
+    // Regression: the save progress bar is set before the write loop. A thrown
+    // write_save (CoreWorkerException from the worker isolate) must still clear
+    // saveProgress, or a later load shows a determinate bar with stale counts.
+    final core = _ThrowingWriteCoreService();
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+    notifier.setPendingEdit(
+      'publicName',
+      const PendingSaveEdit(
+        edits: [
+          {'path': 'public.m_PlayerSaveName', 'value': 'New Name'},
+        ],
+      ),
+    );
+
+    final ok = await notifier.saveAllPending();
+
+    expect(ok, isFalse);
+    expect(notifier.state.error, isNotNull);
+    expect(notifier.state.saveProgress, isNull);
+    expect(notifier.state.isLoading, isFalse);
+  });
+
+  test(
     'partial commit drops uncommitted edits when the slot changes on refresh',
     () async {
       // After the partial commit the original save VANISHES from the scan
@@ -2219,6 +2302,38 @@ void main() {
     expect(result.error, isNotNull);
   });
 
+  test(
+    'per-NPC detail cache does not serve the previous save after a slot switch',
+    () async {
+      // Regression: the per-NPC attribute/inventory memo is keyed by GlobalId.
+      // selectedPath moves to the new save at the START of _inspect, but the
+      // cache is only invalidated after a SUCCESSFUL inspect — so a load in that
+      // window (here: the switch's inspect fails) must NOT return the previous
+      // save's memoized future for the same GlobalId.
+      final core = _NpcAttrFailSecondInspectCoreService();
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+      await notifier.loadNpcAttributes('Shared-Id'); // memoized for G1R-001
+      final before = core.requests
+          .where((r) => r.command == 'private.npc.attributes')
+          .length;
+      expect(before, 1);
+
+      // Switch to another save whose inspect fails: selectedPath becomes
+      // G1R-002 but the cache is never invalidated.
+      await notifier.inspect(r'C:\tmp\saves\G1R-002.sav');
+      expect(notifier.state.selectedPath, r'C:\tmp\saves\G1R-002.sav');
+
+      await notifier.loadNpcAttributes('Shared-Id');
+      final after = core.requests
+          .where((r) => r.command == 'private.npc.attributes')
+          .length;
+      // A fresh request proves the stale G1R-001 memo was dropped, not served.
+      expect(after, before + 1);
+    },
+  );
+
   // ---------------------------------------------------------------------------
   // Factions (private.factions.list / .forgive)
   // ---------------------------------------------------------------------------
@@ -2634,6 +2749,21 @@ class _FailSecondWriteCoreService extends _RecordingCoreService {
   }
 }
 
+/// write_save throws (as the persistent worker isolate does via
+/// CoreWorkerException on a native failure) instead of returning `ok: false`.
+class _ThrowingWriteCoreService extends _RecordingCoreService {
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    if (command == 'write_save') {
+      throw Exception('native worker died');
+    }
+    return super.execute(command, payload: payload);
+  }
+}
+
 /// write_save completes only after [gate] resolves.
 class _SlowWriteCoreService extends _RecordingCoreService {
   _SlowWriteCoreService(this.gate);
@@ -2738,6 +2868,31 @@ class _NpcAttributesCoreService extends _RecordingCoreService {
           ],
         },
       };
+    }
+    return super.execute(command, payload: payload);
+  }
+}
+
+/// Like [_NpcAttributesCoreService] but the SECOND `inspect_save` fails. Used to
+/// reproduce the slot-switch window where `selectedPath` has already moved to the
+/// new save but the per-NPC cache was never invalidated (invalidate runs only on
+/// a successful inspect).
+class _NpcAttrFailSecondInspectCoreService extends _NpcAttributesCoreService {
+  var _inspects = 0;
+
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    if (command == 'inspect_save') {
+      _inspects++;
+      if (_inspects >= 2) {
+        return {
+          'ok': false,
+          'error': {'message': 'inspect failed'},
+        };
+      }
     }
     return super.execute(command, payload: payload);
   }

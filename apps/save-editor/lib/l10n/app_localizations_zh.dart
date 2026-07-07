@@ -1289,6 +1289,11 @@ class AppLocalizationsZh extends AppLocalizations {
   String get loadingEditorData => '正在加载编辑器数据';
 
   @override
+  String savingProgress(int done, int total) {
+    return 'Saving… $done of $total';
+  }
+
+  @override
   String localizedTextExtractedCount(int idCount, int languageCount) {
     return '已提取 $idCount 个 ID，涵盖 $languageCount 种语言';
   }

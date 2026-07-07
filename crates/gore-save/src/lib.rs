@@ -14,7 +14,7 @@ use std::ffi::{CStr, CString, c_char};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::ptr;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
@@ -2851,19 +2851,30 @@ fn inspect_private_payload(
                 .take(200)
                 .collect::<Vec<_>>();
             let player = summarize_private_player_payload(&payload, &refs);
-            let typed_result = if preview {
-                None
-            } else {
-                Some(properties::parse_private_root(&payload))
-            };
+            let typed_result: Option<Result<Arc<properties::RootObject>, CoreError>> =
+                if preview {
+                    None
+                } else {
+                    Some(properties::parse_private_root(&payload).map(Arc::new))
+                };
+            // Seed the parsed-root cache with the parse we just did for the
+            // summary. Without this the FIRST private read command after a load
+            // (characters.list / npc.attributes / …) re-parses the whole payload
+            // — seconds of work — even though inspect already parsed it here. The
+            // Arc clone is O(1) (a refcount bump). Keyed by the same file SHA-1
+            // the decoded-byte cache uses, so a later read only hits on identical
+            // bytes.
+            if let (Some(p), Some(Ok(root))) = (path, typed_result.as_ref()) {
+                store_parsed_root_cache(p, sha1_hex(data), Arc::clone(root));
+            }
             let main_container = typed_result
                 .as_ref()
                 .and_then(|r| r.as_ref().ok())
-                .and_then(main_container_summary);
+                .and_then(|r| main_container_summary(r));
             let armor_slot = typed_result
                 .as_ref()
                 .and_then(|r| r.as_ref().ok())
-                .and_then(armor_slot_summary);
+                .and_then(|r| armor_slot_summary(r));
             let inventory = summarize_private_inventory_payload(
                 &payload,
                 &refs,
@@ -2885,7 +2896,8 @@ fn inspect_private_payload(
                 typed_result
                     .as_ref()
                     .and_then(|r| r.as_ref().ok())
-                    .filter(|_| typed_ok),
+                    .filter(|_| typed_ok)
+                    .map(|r| r.as_ref()),
             );
             // NPC capability block: the frontend feature-detects the "Attribute"
             // tab from this. `hasNpcs` is true only when the typed parse succeeds
@@ -2897,7 +2909,8 @@ fn inspect_private_payload(
                 typed_result
                     .as_ref()
                     .and_then(|r| r.as_ref().ok())
-                    .filter(|_| typed_ok),
+                    .filter(|_| typed_ok)
+                    .map(|r| r.as_ref()),
             );
             // Faction crime block: per-camp-guild crime counts for the player. The
             // forgive edit is advertised only when at least one guild has an
@@ -2906,7 +2919,7 @@ fn inspect_private_payload(
                 .as_ref()
                 .and_then(|r| r.as_ref().ok())
                 .filter(|_| typed_ok)
-                .map(factions::list_guild_crimes)
+                .map(|r| factions::list_guild_crimes(r))
                 .unwrap_or_default();
             let any_unforgiven = faction_guilds.iter().any(|g| g.unforgiven > 0);
             let factions = json!({ "guilds": faction_guilds });
@@ -3212,7 +3225,7 @@ fn summarize_private_npc_payload(root: Option<&properties::RootObject>) -> Value
 /// or `Some(&Err(...))` when parsing was attempted.
 fn summarize_typed_parse_result(
     payload: &[u8],
-    result: Option<&Result<properties::RootObject, CoreError>>,
+    result: Option<&Result<Arc<properties::RootObject>, CoreError>>,
 ) -> Value {
     let Some(result) = result else {
         return json!({
@@ -3291,12 +3304,17 @@ fn store_decoded_payload_cache(path: &Path, save_sha1: String, payload: Vec<u8>)
 
 /// Drop the cached decoded payload for `path` (called after a write changes it).
 fn invalidate_decoded_payload_cache(path: &Path) {
-    let mut guard = DECODED_PAYLOAD_CACHE
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    if guard.as_ref().is_some_and(|entry| entry.path == path) {
-        *guard = None;
+    {
+        let mut guard = DECODED_PAYLOAD_CACHE
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if guard.as_ref().is_some_and(|entry| entry.path == path) {
+            *guard = None;
+        }
     }
+    // The parsed tree is derived from the decoded bytes, so any write that
+    // invalidates one must invalidate the other.
+    invalidate_parsed_root_cache(path);
 }
 
 /// Search every typed property in the decoded private payload. Powers the
@@ -3488,25 +3506,90 @@ fn list_guild_crimes_command(
     let backend = backend.ok_or_else(|| {
         CoreError::Codec("listing faction crimes requires a working codec backend".to_string())
     })?;
-    let root = decode_private_root(path, backend)?;
+    let root = decode_private_root_cached(path, backend)?;
     let guilds = factions::list_guild_crimes(&root);
     Ok(json!({ "guilds": guilds }))
 }
 
-fn decode_private_root(
+/// Parsing the decoded payload into the typed [`properties::RootObject`] tree is
+/// itself expensive — it walks the whole (~77 MB) payload — and EVERY private
+/// read command (npc.list / characters.list / npc.attributes / npc.inventory /
+/// factions.list) re-parses it from scratch. That is what makes each click in
+/// the editor (open a character, then its inventory, …) re-do heavy work even
+/// though the decoded bytes are already cached. Cache the parsed root so
+/// repeated reads of an unchanged save skip the decode + parse entirely.
+///
+/// Keyed by (path, SHA-1 of the whole file) — the SAME content check the
+/// decoded-byte cache uses, NOT a timestamp. Any replacement of the save
+/// (write_save, restore_backup, an external/cloud sync, a coarse-mtime
+/// filesystem) changes the hash and misses, so a hit is a true byte-identity
+/// match, never a trust-the-clock guess. Holds a single entry (the active save).
+static PARSED_ROOT_CACHE: Mutex<Option<ParsedRootEntry>> = Mutex::new(None);
+
+struct ParsedRootEntry {
+    path: PathBuf,
+    save_sha1: String,
+    root: Arc<properties::RootObject>,
+}
+
+/// The decoded+parsed private root, memoized across FFI calls. All read-only
+/// NPC/character/inventory/faction commands go through this so that, after the
+/// first parse of a save, subsequent clicks reuse the same tree. The file is
+/// read and hashed on every call (cheap next to the parse it saves) so the cache
+/// key is a real content check, matching [`decoded_private_payload_cached`].
+fn decode_private_root_cached(
     path: &Path,
     backend: &dyn codec_backend::CodecBackend,
-) -> Result<properties::RootObject, CoreError> {
+) -> Result<Arc<properties::RootObject>, CoreError> {
     let data = fs::read(path)?;
     if !data.starts_with(b"GSAV") {
         return Err(CoreError::UnsupportedEdit(
             "NPC commands are only available for GSAV files".to_string(),
         ));
     }
+    let save_sha1 = sha1_hex(&data);
+    {
+        let guard = PARSED_ROOT_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(entry) = guard.as_ref() {
+            if entry.path == path && entry.save_sha1 == save_sha1 {
+                return Ok(Arc::clone(&entry.root));
+            }
+        }
+    }
+    // Miss: decode (the decoded-byte cache keys on this same SHA-1, so a prior
+    // inspect's decode is reused) + parse, then cache the parse by SHA-1.
     let parts = split_gsav(&data)?;
     let stream = parse_compressed_stream(&data, 13 + parts.public_payload.len())?;
     let decoded = decoded_private_payload_cached(path, &data, &stream, backend)?;
-    properties::parse_private_root(&decoded)
+    let root = Arc::new(properties::parse_private_root(&decoded)?);
+    store_parsed_root_cache(path, save_sha1, Arc::clone(&root));
+    Ok(root)
+}
+
+/// Store `root` as the single parsed-root cache entry, keyed by the file's
+/// SHA-1. Also seeded by `inspect_save`, which already decodes+parses the root
+/// for its summary and hashes the file — so the first private read after a load
+/// is a cache hit, not a re-parse.
+fn store_parsed_root_cache(
+    path: &Path,
+    save_sha1: String,
+    root: Arc<properties::RootObject>,
+) {
+    let mut guard = PARSED_ROOT_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    *guard = Some(ParsedRootEntry {
+        path: path.to_path_buf(),
+        save_sha1,
+        root,
+    });
+}
+
+/// Drop the cached parsed root for `path` (called alongside the decoded-payload
+/// cache after a write changes the file).
+fn invalidate_parsed_root_cache(path: &Path) {
+    let mut guard = PARSED_ROOT_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    if guard.as_ref().is_some_and(|entry| entry.path == path) {
+        *guard = None;
+    }
 }
 
 fn list_npcs_command(
@@ -3530,7 +3613,7 @@ fn list_npcs_command(
         .unwrap_or(100)
         .clamp(1, 1000);
 
-    let root = decode_private_root(path, backend)?;
+    let root = decode_private_root_cached(path, backend)?;
 
     let all = npc::list_npcs(&root)?;
     let page = npc::paginate_npcs(all, query, offset, limit);
@@ -3566,7 +3649,7 @@ fn characters_list_command(
         .unwrap_or("")
         .to_ascii_lowercase();
 
-    let root = decode_private_root(path, backend)?;
+    let root = decode_private_root_cached(path, backend)?;
     let all = npc::list_characters(&root)?;
     let rows: Vec<&npc::CharacterSummary> = all
         .iter()
@@ -3610,7 +3693,7 @@ fn npc_attributes_command(
         .and_then(Value::as_str)
         .ok_or_else(|| CoreError::InvalidRequest("missing payload.id".to_string()))?;
 
-    let root = decode_private_root(path, backend)?;
+    let root = decode_private_root_cached(path, backend)?;
 
     let attributes = npc::npc_attributes(&root, id)?;
     Ok(json!({ "attributes": attributes }))
@@ -3715,7 +3798,7 @@ fn npc_inventory_command(
         .and_then(Value::as_str)
         .ok_or_else(|| CoreError::InvalidRequest("missing payload.id".to_string()))?;
 
-    let root = decode_private_root(path, backend)?;
+    let root = decode_private_root_cached(path, backend)?;
 
     let mut summary = actor_inventory_summary(&root, Some(id));
     if let Value::Object(map) = &mut summary {
@@ -8244,6 +8327,76 @@ mod tests {
     use std::sync::Mutex;
     use tempfile::tempdir;
 
+    /// The parsed-root cache must hand back the SAME allocation for repeated
+    /// reads of an unchanged save — proof that clicking around the editor
+    /// (open a character, then its inventory, …) no longer re-decodes/re-parses
+    /// the whole payload each time. Invalidation (as a write does) must force a
+    /// fresh parse. Env-gated on a real save; skips when GORE_SAVE is unset.
+    #[test]
+    fn parsed_root_cache_reuses_parse_for_unchanged_save() {
+        let Ok(path) = std::env::var("GORE_SAVE") else {
+            eprintln!("GORE_SAVE not set; skipping");
+            return;
+        };
+        let path = Path::new(&path);
+        let backend = codec_backend::KrakenBackend::default();
+        let a = decode_private_root_cached(path, &backend).expect("first parse");
+        let b = decode_private_root_cached(path, &backend).expect("second parse");
+        assert!(
+            Arc::ptr_eq(&a, &b),
+            "second read must reuse the cached parsed root, not re-parse"
+        );
+        // A write invalidates the cache; the next read must re-parse (new alloc).
+        invalidate_decoded_payload_cache(path);
+        let c = decode_private_root_cached(path, &backend).expect("post-invalidate parse");
+        assert!(
+            !Arc::ptr_eq(&b, &c),
+            "invalidation must drop the cache so the next read re-parses"
+        );
+    }
+
+    /// `inspect_save` (which the editor runs on load) must SEED the parsed-root
+    /// cache with the parse it already does for its summary, so the FIRST private
+    /// read command right after a load (characters.list / npc.*) is a cache hit
+    /// instead of re-parsing the whole payload. Env-gated on a real save.
+    #[test]
+    fn inspect_save_seeds_parsed_root_cache() {
+        let Ok(path) = std::env::var("GORE_SAVE") else {
+            eprintln!("GORE_SAVE not set; skipping");
+            return;
+        };
+        let path = Path::new(&path);
+        let backend = codec_backend::KrakenBackend::default();
+        // Start cold.
+        invalidate_decoded_payload_cache(path);
+        // Load: full inspect with private payload (what the editor issues).
+        let req = json!({
+            "command": "inspect_save",
+            "payload": { "path": path.to_string_lossy(), "includePrivate": true }
+        })
+        .to_string();
+        let resp: serde_json::Value = serde_json::from_str(&execute_json(&req)).unwrap();
+        assert_eq!(resp["ok"], json!(true), "inspect failed: {resp}");
+        // The first private read after inspect must be a cache HIT. A re-parse of
+        // the whole payload takes seconds (in this debug/test profile); a hit is
+        // sub-millisecond. The generous threshold makes this a robust proof that
+        // inspect seeded the cache rather than a flaky micro-benchmark.
+        let t = SystemTime::now();
+        let a = decode_private_root_cached(path, &backend).unwrap();
+        let elapsed = t.elapsed().unwrap();
+        assert!(
+            elapsed < std::time::Duration::from_millis(200),
+            "first read after inspect took {elapsed:?} — inspect did not seed the \
+             parsed-root cache (a re-parse takes seconds)"
+        );
+        // And it is the SAME cached allocation on a repeat read.
+        let b = decode_private_root_cached(path, &backend).unwrap();
+        assert!(
+            Arc::ptr_eq(&a, &b),
+            "reads after inspect must reuse the inspect-seeded parse"
+        );
+    }
+
     #[test]
     fn equipped_marking_withholds_on_duplicate_path() {
         // Org_Armor is worn but also carried (so it is NOT unambiguous);
@@ -8302,14 +8455,14 @@ mod tests {
         payload.extend_from_slice(&7i32.to_le_bytes());
         payload.extend_from_slice(&fstring("None"));
         payload.extend_from_slice(&0u32.to_le_bytes()); // footer
-        let parse_ok = properties::parse_private_root(&payload);
+        let parse_ok = properties::parse_private_root(&payload).map(Arc::new);
         let ok = summarize_typed_parse_result(&payload, Some(&parse_ok));
         assert_eq!(ok["status"], "ok");
         assert_eq!(ok["propertyCount"], 1);
         assert_eq!(ok["consumed"], payload.len());
 
         // failed for garbage
-        let parse_bad = properties::parse_private_root(&[1, 2, 3, 4, 5, 6]);
+        let parse_bad = properties::parse_private_root(&[1, 2, 3, 4, 5, 6]).map(Arc::new);
         let bad = summarize_typed_parse_result(&[1, 2, 3, 4, 5, 6], Some(&parse_bad));
         assert_eq!(bad["status"], "failed");
     }

@@ -391,6 +391,7 @@
   "attributeEmpty": "{name} ist leer — gib einen Wert ein oder stelle den ursprünglichen Wert wieder her, bevor du speicherst.",
   "attributeInvalidNumber": "Ungültige Zahl für {name}: „{text}“",
   "loadingEditorData": "Editordaten werden geladen",
+  "savingProgress": "Speichern… {done} von {total}",
   "localizedTextExtractedCount": "{idCount} IDs in {languageCount} Sprachen extrahiert",
   "skillSmithing1H": "Einhand-Schmieden",
   "skillSmithing2H": "Zweihand-Schmieden",

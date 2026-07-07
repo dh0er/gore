@@ -1334,6 +1334,11 @@ class AppLocalizationsDe extends AppLocalizations {
   String get loadingEditorData => 'Editordaten werden geladen';
 
   @override
+  String savingProgress(int done, int total) {
+    return 'Speichern… $done von $total';
+  }
+
+  @override
   String localizedTextExtractedCount(int idCount, int languageCount) {
     return '$idCount IDs in $languageCount Sprachen extrahiert';
   }

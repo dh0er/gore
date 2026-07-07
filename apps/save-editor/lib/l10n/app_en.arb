@@ -740,6 +740,17 @@
     }
   },
   "loadingEditorData": "Loading editor data",
+  "savingProgress": "Saving… {done} of {total}",
+  "@savingProgress": {
+    "placeholders": {
+      "done": {
+        "type": "int"
+      },
+      "total": {
+        "type": "int"
+      }
+    }
+  },
   "localizedTextExtractedCount": "Extracted {idCount} ids across {languageCount} languages",
   "@localizedTextExtractedCount": {
     "placeholders": {

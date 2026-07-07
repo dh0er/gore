@@ -1340,6 +1340,11 @@ class AppLocalizationsRu extends AppLocalizations {
   String get loadingEditorData => 'Загрузка данных редактора';
 
   @override
+  String savingProgress(int done, int total) {
+    return 'Saving… $done of $total';
+  }
+
+  @override
   String localizedTextExtractedCount(int idCount, int languageCount) {
     return 'Извлечено $idCount идентификаторов на $languageCount языках';
   }

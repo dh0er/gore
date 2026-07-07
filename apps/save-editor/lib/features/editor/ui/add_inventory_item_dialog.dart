@@ -141,7 +141,15 @@ class _AddInventoryItemDialogState
             final catalog = snapshot.data!;
             final available = catalog.entries
                 .where((e) => !widget.excludePaths.contains(e.path))
-                .toList();
+                .toList()
+              // Order by the localized name shown in the rows, not the raw id,
+              // so both the per-category list and the flat search read A→Z the
+              // way the user sees them. _group preserves this encounter order.
+              ..sort(
+                (a, b) => _displayName(locCatalog, lang, a.id)
+                    .toLowerCase()
+                    .compareTo(_displayName(locCatalog, lang, b.id).toLowerCase()),
+              );
             final groups = _group(available);
 
             // Resolve the selected category (fall back to first available).
@@ -241,7 +249,7 @@ class _AddInventoryItemDialogState
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
                             SizedBox(
-                              width: 200,
+                              width: 240,
                               child: DecoratedBox(
                                 decoration: BoxDecoration(
                                   color: theme.colorScheme.surfaceContainerLow,
