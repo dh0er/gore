@@ -52,6 +52,9 @@ work/tex-fixtures/*.usmap
 *.sav.bak.*
 !fixtures/**/*.sav
 
+# Shipped game-start saves embedded into gore-save for inventory reset (tracked).
+!crates/gore-save/assets/start_saves/*.sav
+
 # Distribution build output (per-project: build.py writes to <project>/dist/)
 dist/
 
