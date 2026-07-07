@@ -3154,14 +3154,14 @@ fn summarize_private_inventory_payload(
     let mut writable = Vec::new();
     if item_scope == "player_inventory_region" && item_stack_count > 0 {
         writable.push("private.inventory.setItemCount");
-        // reset is a wholesale swap of the whole m_Inventory from an embedded
-        // start save, not an in-place patch of a scanned stack, but it shares
-        // setItemCount's precondition: some inventory content must actually be
-        // present in this region. Unlike addItem it does not need a clean
-        // template (nothing is cloned), so it is not gated on `main_container`.
-        writable.push("private.inventory.reset");
     }
     if let Some(mc) = main_container {
+        // reset is a wholesale swap of the whole m_Inventory from an embedded
+        // start save; it only needs a typed-resolvable inventory, so it is
+        // offered whenever a MainContainer resolves — INCLUDING an empty one
+        // (a user who emptied the inventory can reset it back to the start kit).
+        // Unlike addItem it needs no clean template (nothing is cloned).
+        writable.push("private.inventory.reset");
         // addItem clones a clean template slot; only offer it when one exists
         // somewhere in the inventory.
         if mc.has_clean_template {
@@ -3780,13 +3780,11 @@ fn actor_inventory_summary(root: &properties::RootObject, actor_id: Option<&str>
     let mut writable = Vec::new();
     if !view.rows.is_empty() {
         writable.push("private.inventory.setItemCount");
-        // reset is a wholesale swap from an embedded start save, not an
-        // in-place patch, but it shares setItemCount's precondition: the
-        // typed MainContainer view must be resolvable and non-empty. Unlike
-        // addItem it does not need a clean template, so it is not gated on
-        // `view.summary.has_clean_template`.
-        writable.push("private.inventory.reset");
     }
+    // reset only needs a resolvable inventory (view exists here), so it is
+    // offered even for an empty inventory — a user can reset an emptied NPC
+    // inventory back to its game-start contents. No clean template needed.
+    writable.push("private.inventory.reset");
     if view.summary.has_clean_template {
         writable.push("private.inventory.addItem");
     }
@@ -11843,12 +11841,13 @@ mod tests {
         assert_eq!(value["private"]["inventory"]["itemStackCount"], 1);
         // This synthetic payload is detected by the FString region scan but is
         // not a complete typed property tree, so the MainContainer cannot be
-        // resolved: only the in-place setItemCount/reset edits are offered
-        // (both gated on the scan, not the typed tree), and no row is marked
-        // removable (addItem/removeItem need a typed MainContainer).
+        // resolved: only the in-place setItemCount edit is offered (gated on the
+        // scan, not the typed tree). reset/addItem/removeItem all require a
+        // typed-resolvable MainContainer, which this payload lacks, so none of
+        // them are advertised and no row is marked removable.
         assert_eq!(
             value["private"]["inventory"]["writable"],
-            json!(["private.inventory.setItemCount", "private.inventory.reset"])
+            json!(["private.inventory.setItemCount"])
         );
         assert_eq!(
             value["private"]["inventory"]["items"],
@@ -12929,11 +12928,18 @@ mod tests {
         );
     }
 
-    /// An empty MainContainer yields empty items/paths and offers no edits.
+    /// An empty MainContainer yields empty items/paths but STILL offers reset:
+    /// reset is a wholesale m_Inventory swap that only needs a resolvable
+    /// inventory (the view exists here), so a user who emptied the inventory can
+    /// reset it back to the game-start kit. setItemCount (needs a scanned stack),
+    /// addItem (needs a clean template) and removeItem (needs a removable path)
+    /// remain unavailable.
     #[test]
-    fn actor_inventory_summary_empty_main_container_has_no_writable() {
+    fn actor_inventory_summary_empty_main_container_offers_only_reset() {
         // Only a non-clean (state-carrying) Quickslots slot exists, so there is
-        // no clean template and the MainContainer is empty.
+        // no clean template and the MainContainer is empty. The typed view still
+        // resolves (m_Keys has MainContainer with an empty m_Slots array), so
+        // reset is offered even though no other edit is.
         let other_slots = vec![inv_item_slot(
             1,
             INV_OTHER_LABEL,
@@ -12947,7 +12953,7 @@ mod tests {
         let summary = actor_inventory_summary(&root, None);
         assert_eq!(summary["items"], json!([]));
         assert_eq!(summary["mainContainerPaths"], json!([]));
-        assert_eq!(summary["writable"], json!([]));
+        assert_eq!(summary["writable"], json!(["private.inventory.reset"]));
     }
 
     /// An unresolvable actor (no inventory for that id) yields the empty shape
@@ -15192,6 +15198,42 @@ mod tests {
             Some(false),
             "an item only in the other container must not be removable"
         );
+    }
+
+    /// An EMPTY player inventory (typed MainContainer resolves but holds no
+    /// slots, and the FString scan finds zero item stacks) still advertises
+    /// `private.inventory.reset` so a user who emptied the inventory can reset
+    /// it back to the game-start kit. It advertises NOTHING else: setItemCount
+    /// needs a scanned stack, addItem needs a clean template, removeItem needs a
+    /// removable path — none of which an empty inventory has.
+    #[test]
+    fn inspect_offers_reset_for_empty_but_resolvable_player_inventory() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-empty.sav");
+        // Both containers empty: the MainContainer enum + its (empty) m_Slots
+        // array still resolve, so main_container_summary is Some with no clean
+        // template and no removable paths, while the region scan sees no stacks.
+        let private_payload = typed_inventory_private_payload(&[], &[]);
+        let seed_compressed = b"seed-empty".to_vec();
+        let stream = compressed_stream_with_one_chunk(&seed_compressed, private_payload.len());
+        fs::write(
+            &path,
+            build_gsav(2, &public_payload("Slot A"), &stream, &[0, 0, 0, 0]),
+        )
+        .unwrap();
+        let backend = PrefixCodecBackend {
+            seed_compressed,
+            seed_uncompressed: private_payload,
+        };
+
+        let value = inspect_save_with_codec_backend(&path, true, Some(&backend), None).unwrap();
+        let inv = &value["private"]["inventory"];
+        // No stacks scanned in the player region.
+        assert_eq!(inv["itemStackCount"], 0);
+        assert_eq!(inv["items"], json!([]));
+        // reset is the ONLY advertised edit — it needs only a resolvable
+        // inventory, which the empty typed MainContainer still is.
+        assert_eq!(inv["writable"], json!(["private.inventory.reset"]));
     }
 
     #[test]

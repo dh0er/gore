@@ -133,7 +133,10 @@ class InventoryDetail extends ConsumerWidget {
       canCompress: canCompress,
     );
     final hasItems = inspection.privateInventory.hasData;
-    if (!hasItems && !gates.canAddItem && !gates.canRemoveItem) {
+    if (!hasItems &&
+        !gates.canAddItem &&
+        !gates.canRemoveItem &&
+        !gates.canReset) {
       return _MessagePane(
         icon: Icons.inventory_2_outlined,
         title: l10n.inventoryTitle,
@@ -239,7 +242,10 @@ class _NpcInventoryDetailState extends State<_NpcInventoryDetail> {
       canCompress: widget.canCompress,
     );
     final hasItems = inventory.hasData;
-    if (!hasItems && !gates.canAddItem && !gates.canRemoveItem) {
+    if (!hasItems &&
+        !gates.canAddItem &&
+        !gates.canRemoveItem &&
+        !gates.canReset) {
       return _MessagePane(
         icon: Icons.inventory_2_outlined,
         title: l10n.inventoryTitle,

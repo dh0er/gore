@@ -140,6 +140,44 @@ void main() {
       expect(tester.widget<OutlinedButton>(resetFinder).onPressed, isNotNull);
     },
   );
+
+  testWidgets(
+    'an empty but resolvable inventory still renders the Reset button, '
+    'not the no-stacks message pane',
+    (tester) async {
+      // Bug fix: the card (with its Reset button) must appear even when the
+      // inventory is EMPTY — a user who emptied it wants to reset back to the
+      // game-start kit. The core advertises ONLY `private.inventory.reset`
+      // (empty inventory ⇒ no setItemCount/addItem/removeItem), and the card's
+      // empty-inventory early-return must not fire while reset is available.
+      final core = _EmptyResettableInventoryCoreService();
+      await pumpApp(tester, core);
+      await openPlayerInventory(tester);
+
+      // The card renders: the Reset button is present and enabled, and the
+      // "no item stacks" message pane is NOT shown.
+      final resetFinder = find.widgetWithText(OutlinedButton, 'Reset inventory');
+      expect(resetFinder, findsOneWidget);
+      expect(tester.widget<OutlinedButton>(resetFinder).onPressed, isNotNull);
+      expect(
+        find.text('No item stacks found in the decoded private payload.'),
+        findsNothing,
+        reason: 'the empty-inventory message pane must not suppress the card '
+            'when reset is available',
+      );
+      // The empty-inventory body text is shown inside the card instead.
+      expect(find.text('This inventory is empty.'), findsOneWidget);
+
+      // And the Reset button still queues the solo reset edit.
+      await tester.tap(resetFinder);
+      await tester.pumpAndSettle();
+      final notifier = _findNotifier(tester);
+      final pending = notifier.pendingEditFor('inventory');
+      expect(pending, isNotNull);
+      expect(pending!.edits, hasLength(1));
+      expect(pending.edits.single['path'], 'private.inventory.reset');
+    },
+  );
 }
 
 /// Reaches into the widget tree to fetch the live [EditorNotifier] instance so
@@ -279,6 +317,131 @@ class _ResettableInventoryCoreService implements GoresaveCoreService {
       case 'private.characters.list':
         // Player row is pinned by the shared master list itself; no spawned
         // actors are needed for this fixture.
+        return {
+          'ok': true,
+          'data': {'total': 0, 'characters': <Object?>[]},
+        };
+      case 'write_save':
+        return {
+          'ok': true,
+          'data': {'backupPath': r'C:\tmp\saves\G1R-001.sav.bak.1'},
+        };
+      default:
+        return {
+          'ok': false,
+          'error': {'message': 'Unhandled fake command $command'},
+        };
+    }
+  }
+}
+
+/// Fake core backing an EMPTY but typed-resolvable player inventory: zero item
+/// stacks, no rows, and `writable` advertising ONLY `private.inventory.reset`
+/// (an empty MainContainer resolves, so reset is offered while setItemCount /
+/// addItem / removeItem are not). Proves the card + Reset button still render
+/// for an empty inventory instead of the "no item stacks" message pane.
+class _EmptyResettableInventoryCoreService implements GoresaveCoreService {
+  final requests = <_RecordedRequest>[];
+
+  @override
+  String get description => 'empty-resettable-inventory-fake-core';
+
+  @override
+  bool get isAvailable => true;
+
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    requests.add(_RecordedRequest(command, Map<String, Object?>.from(payload)));
+    switch (command) {
+      case 'scan_save_dir':
+        return {
+          'ok': true,
+          'data': {
+            'saveRoot': r'C:\tmp\saves',
+            'saves': [
+              {
+                'path': r'C:\tmp\saves\G1R-001.sav',
+                'slot': 'G1R-001',
+                'format': 'GSAV',
+                'fileSize': 914367,
+                'sha1': 'abc',
+                'status': 'ok',
+                'persistentProfileId': 0,
+                'playerSaveName': 'Save',
+                'chapterId': 1,
+                'autoSave': true,
+                'slotName': 'G1R-001',
+              },
+            ],
+            'profiles': <Object?>[],
+            'activeProfileId': null,
+          },
+        };
+      case 'inspect_save':
+        return {
+          'ok': true,
+          'data': {
+            'format': 'GSAV',
+            'path': payload['path'],
+            'slot': 'G1R-001',
+            'size': 914367,
+            'sha1': 'abc',
+            'public': {'slotName': 'G1R-001', 'playerSaveName': 'Save'},
+            'private': {
+              'status': 'decoded',
+              'preview': false,
+              'decompressedSize': 9,
+              'typedParse': {
+                'status': 'ok',
+                'propertyCount': 1,
+                'maxDepth': 1,
+              },
+              'player': {
+                'saveVersionNumber': 17,
+                'playerName': 'Hero',
+                'attributes': <Object?>[],
+                'writable': <String>[],
+              },
+              // Empty inventory: no stacks, no rows, no candidates — hasData is
+              // false — but the typed MainContainer still resolves, so reset is
+              // the only advertised edit.
+              'inventory': {
+                'itemStackCount': 0,
+                'items': <Object?>[],
+                'candidates': <Object?>[],
+                'scriptPaths': <Object?>[],
+                'properties': <Object?>[],
+                'mainContainerPaths': <Object?>[],
+                'writable': ['private.inventory.reset'],
+              },
+            },
+          },
+        };
+      case 'list_backups':
+        return {
+          'ok': true,
+          'data': {
+            'path': payload['path'],
+            'backups': <Object?>[],
+            'companionBackups': <Object?>[],
+          },
+        };
+      case 'check_codec':
+        return {
+          'ok': true,
+          'data': {
+            'available': true,
+            'canDecompress': true,
+            'canCompress': true,
+            'status': 'ready',
+            'adapter': 'pure_rust_kraken',
+            'message': 'Codec host is ready.',
+          },
+        };
+      case 'private.characters.list':
         return {
           'ok': true,
           'data': {'total': 0, 'characters': <Object?>[]},
