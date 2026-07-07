@@ -457,8 +457,13 @@ String _optionLabel(AppLocalizations l10n, Skill skill, int index) {
     case 'Learned':
       return l10n.skillTierTrained;
     case 'Untrained':
-    default:
       return l10n.skillTierUntrained;
+    default:
+      // An unrecognized tier (e.g. a save carrying an Apprentice/Journeyman
+      // suffix outside this skill's catalog ladder, which the core surfaces as
+      // its own option) must show its raw value — not a second "Untrained" that
+      // could be overwritten by accident.
+      return value;
   }
 }
 
