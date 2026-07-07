@@ -838,6 +838,28 @@ class InventoryItemAdd {
   }
 }
 
+/// A queued "reset this actor's inventory to the game-start save" edit. Carries
+/// the resolved Resources difficulty level (which start-save to pull from) and
+/// the target actor (null = player, else the NPC's GlobalId).
+class InventoryReset {
+  const InventoryReset({required this.resourcesLevel, this.actorId});
+
+  final String resourcesLevel;
+
+  /// See [InventoryItemCountChange.actorId].
+  final String? actorId;
+
+  Map<String, Object?> toEditJson() {
+    return {
+      'path': 'private.inventory.reset',
+      'value': {
+        'resourcesLevel': resourcesLevel,
+        if (actorId != null) 'actorId': actorId,
+      },
+    };
+  }
+}
+
 class InventoryItemRemove {
   const InventoryItemRemove({
     required this.path,
