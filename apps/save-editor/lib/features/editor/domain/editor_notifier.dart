@@ -729,6 +729,24 @@ class EditorNotifier extends StateNotifier<EditorState> {
       );
       return false;
     }
+    // A reset REPLACES the whole m_Inventory. A raw All-data private.typed.setValue
+    // targeting an m_Inventory runs in the fixed batch BEFORE the reset splice, so
+    // the reset would silently overwrite (discard) it while Save still reported
+    // success for both. Refuse the combination (like the conflicts above) — a reset
+    // and a raw inventory edit must be saved separately. Deliberately broad (any
+    // m_Inventory typed edit, not just the reset's actor): a cross-actor pair is
+    // rare and the worst case here is a clear "save separately" nudge, never a
+    // silent overwrite.
+    if (allEdits.any((k) => k.edit['path'] == 'private.inventory.reset') &&
+        allEdits.any((k) => _isInventoryTypedEdit(k.edit))) {
+      state = state.copyWith(
+        error:
+            'An inventory reset and a raw All-data edit to an inventory are both '
+            'queued. The reset replaces the entire inventory and would discard the '
+            'other edit — reset or revert one of them, then save again.',
+      );
+      return false;
+    }
     final fixedBatch = allEdits
         .where(
           (k) =>
@@ -2075,6 +2093,19 @@ String? _activeEffectsDefActor(Map<String, Object?> edit) {
   return (key.startsWith('{') && key.endsWith('}'))
       ? key.substring(1, key.length - 1)
       : key;
+}
+
+/// Whether [edit] is a raw `private.typed.setValue` whose path steps through an
+/// `m_Inventory`. Such an edit collides with a queued `private.inventory.reset`,
+/// which replaces the whole `m_Inventory`: the reset splice runs after the fixed
+/// batch and would silently discard the typed edit (see [EditorNotifier.saveAllPending]).
+bool _isInventoryTypedEdit(Map<String, Object?> edit) {
+  if (edit['path'] != 'private.typed.setValue') return false;
+  final value = edit['value'];
+  if (value is! Map) return false;
+  final path = value['path'];
+  if (path is! List) return false;
+  return path.whereType<String>().contains('m_Inventory');
 }
 
 /// One write_save unit in [EditorNotifier.saveAllPending]'s worklist: the edits

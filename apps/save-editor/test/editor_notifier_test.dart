@@ -326,6 +326,59 @@ void main() {
   );
 
   test(
+    'saveAllPending refuses a reset queued with a same-inventory typed edit',
+    () async {
+      final core = _RecordingCoreService();
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+      notifier.setPendingEdit(
+        'inventory',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.inventory.reset',
+              'value': {'resourcesLevel': 'Gothic'},
+            },
+          ],
+        ),
+      );
+      // A raw All-data edit stepping through the player's m_Inventory. Running
+      // in the fixed batch before the reset splice, it would be silently
+      // overwritten by the reset — so the save must be refused.
+      notifier.setPendingEdit(
+        'typed:inv',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.typed.setValue',
+              'value': {
+                'path': ['m_SavedPlayers', '[0]', 'm_Inventory', 'm_Keys'],
+                'value': 0,
+              },
+            },
+          ],
+        ),
+      );
+
+      final writesBefore = core.requests
+          .where((r) => r.command == 'write_save')
+          .length;
+      final ok = await notifier.saveAllPending();
+
+      expect(ok, isFalse);
+      expect(notifier.state.error, contains('discard'));
+      // No write_save issued — the conflict is caught before the worklist runs.
+      final writesAfter = core.requests
+          .where((r) => r.command == 'write_save')
+          .length;
+      expect(writesAfter, writesBefore);
+      // Both pending edits are preserved for the user to resolve.
+      expect(notifier.state.pendingEdits, isNotEmpty);
+    },
+  );
+
+  test(
     'saveAllPending sets syncPersistentDataList true when any edit requests it',
     () async {
       final core = _RecordingCoreService();
