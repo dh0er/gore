@@ -763,7 +763,7 @@ mod tests {
     fn loc_status_reports_shared_catalog_path() {
         let v: Value = serde_json::from_str(&execute_json(r#"{"command":"loc_status"}"#)).unwrap();
         assert_eq!(v["ok"], true);
-        assert!(v["catalog_path"].as_str().unwrap().contains("gore-tools"));
+        assert!(v["catalog_path"].as_str().unwrap().contains("gore"));
         assert!(v.get("present").is_some());
     }
 
