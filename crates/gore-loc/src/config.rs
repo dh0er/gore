@@ -19,6 +19,11 @@ pub struct Config {
     /// `.exe`). Consumers normalize to the root via [`game_root`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub game_path: Option<String>,
+
+    /// Unknown/future keys written by a newer tool version. Preserved verbatim
+    /// on save so an older tool never clobbers a newer one's settings.
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 /// Absolute path of the shared `config.json`.
@@ -69,10 +74,31 @@ mod tests {
     fn save_then_load_round_trips() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.json");
-        let cfg = Config { game_path: Some("D:/Games/G1R".to_string()) };
+        let cfg = Config { game_path: Some("D:/Games/G1R".to_string()), ..Default::default() };
         save_to(&path, &cfg).unwrap();
         let read = load_from(&path);
         assert_eq!(read.game_path.as_deref(), Some("D:/Games/G1R"));
+    }
+
+    #[test]
+    fn save_preserves_unknown_keys_and_creates_parent_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        // Parent "nested/" does NOT exist -> save_to must create it.
+        let path = dir.path().join("nested").join("config.json");
+
+        // Seed a config file that carries an unmodeled key.
+        let mut seed = Config::default();
+        seed.extra.insert("future_key".to_string(), serde_json::json!(42));
+        seed.game_path = Some("x".to_string());
+        save_to(&path, &seed).unwrap(); // also proves parent-dir creation
+
+        let mut cfg = load_from(&path);
+        cfg.game_path = Some("y".to_string());
+        save_to(&path, &cfg).unwrap();
+
+        let reread = load_from(&path);
+        assert_eq!(reread.game_path.as_deref(), Some("y"));
+        assert_eq!(reread.extra.get("future_key"), Some(&serde_json::json!(42)));
     }
 
     #[test]
