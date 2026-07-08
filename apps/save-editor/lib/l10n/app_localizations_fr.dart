@@ -354,67 +354,12 @@ class AppLocalizationsFr extends AppLocalizations {
       'Les détails de la sauvegarde apparaîtront ici.';
 
   @override
-  String get diagnosticsTitle => 'Diagnostics et détails';
-
-  @override
-  String get diagnosticsSubtitle => 'Inspection du format en lecture seule';
-
-  @override
-  String get metricFormat => 'Format';
-
-  @override
-  String get metricSlot => 'Emplacement';
-
-  @override
-  String get metricChapter => 'Chapitre';
-
-  @override
-  String get metricTimePlayed => 'Temps de jeu';
-
-  @override
-  String get metricSaveKind => 'Type de sauvegarde';
-
-  @override
-  String get metricFileSize => 'Taille du fichier';
-
-  @override
-  String get metricCompression => 'Compression';
-
-  @override
-  String get metricChunks => 'Blocs';
-
-  @override
-  String get metricUncompressed => 'Décompressé';
-
-  @override
-  String get metricPrivate => 'Privé';
-
-  @override
-  String get metricSlotName => 'Nom de l\'emplacement';
-
-  @override
-  String get metricTrailer => 'Trailer';
-
-  @override
-  String get metricDecodedPrivate => 'Privé décodé';
-
-  @override
-  String get metricPrivateStrings => 'Chaînes privées';
-
-  @override
-  String get metricSha1 => 'SHA-1';
-
-  @override
   String bytesValue(String count) {
     return '$count octets';
   }
 
   @override
   String get inspectionJsonTitle => 'JSON d\'inspection';
-
-  @override
-  String get inspectionJsonSubtitle =>
-      'Données brutes d\'inspection de la sauvegarde';
 
   @override
   String get copy => 'Copier';

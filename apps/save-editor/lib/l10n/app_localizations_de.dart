@@ -353,66 +353,12 @@ class AppLocalizationsDe extends AppLocalizations {
   String get selectASaveBody => 'Die Spielstanddetails werden hier angezeigt.';
 
   @override
-  String get diagnosticsTitle => 'Diagnose & Details';
-
-  @override
-  String get diagnosticsSubtitle => 'Schreibgeschützte Formatprüfung';
-
-  @override
-  String get metricFormat => 'Format';
-
-  @override
-  String get metricSlot => 'Slot';
-
-  @override
-  String get metricChapter => 'Kapitel';
-
-  @override
-  String get metricTimePlayed => 'Spielzeit';
-
-  @override
-  String get metricSaveKind => 'Speicherart';
-
-  @override
-  String get metricFileSize => 'Dateigröße';
-
-  @override
-  String get metricCompression => 'Komprimierung';
-
-  @override
-  String get metricChunks => 'Chunks';
-
-  @override
-  String get metricUncompressed => 'Unkomprimiert';
-
-  @override
-  String get metricPrivate => 'Privat';
-
-  @override
-  String get metricSlotName => 'Slot-Name';
-
-  @override
-  String get metricTrailer => 'Trailer';
-
-  @override
-  String get metricDecodedPrivate => 'Entschlüsselt privat';
-
-  @override
-  String get metricPrivateStrings => 'Private Strings';
-
-  @override
-  String get metricSha1 => 'SHA-1';
-
-  @override
   String bytesValue(String count) {
     return '$count Bytes';
   }
 
   @override
   String get inspectionJsonTitle => 'Inspektions-JSON';
-
-  @override
-  String get inspectionJsonSubtitle => 'Rohdaten der Spielstandprüfung';
 
   @override
   String get copy => 'Kopieren';

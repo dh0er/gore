@@ -351,66 +351,12 @@ class AppLocalizationsEn extends AppLocalizations {
   String get selectASaveBody => 'The save details will appear here.';
 
   @override
-  String get diagnosticsTitle => 'Diagnostics & details';
-
-  @override
-  String get diagnosticsSubtitle => 'Read-only format inspection';
-
-  @override
-  String get metricFormat => 'Format';
-
-  @override
-  String get metricSlot => 'Slot';
-
-  @override
-  String get metricChapter => 'Chapter';
-
-  @override
-  String get metricTimePlayed => 'Time played';
-
-  @override
-  String get metricSaveKind => 'Save kind';
-
-  @override
-  String get metricFileSize => 'File size';
-
-  @override
-  String get metricCompression => 'Compression';
-
-  @override
-  String get metricChunks => 'Chunks';
-
-  @override
-  String get metricUncompressed => 'Uncompressed';
-
-  @override
-  String get metricPrivate => 'Private';
-
-  @override
-  String get metricSlotName => 'Slot name';
-
-  @override
-  String get metricTrailer => 'Trailer';
-
-  @override
-  String get metricDecodedPrivate => 'Decoded private';
-
-  @override
-  String get metricPrivateStrings => 'Private strings';
-
-  @override
-  String get metricSha1 => 'SHA-1';
-
-  @override
   String bytesValue(String count) {
     return '$count bytes';
   }
 
   @override
   String get inspectionJsonTitle => 'Inspection JSON';
-
-  @override
-  String get inspectionJsonSubtitle => 'Raw save inspection data';
 
   @override
   String get copy => 'Copy';

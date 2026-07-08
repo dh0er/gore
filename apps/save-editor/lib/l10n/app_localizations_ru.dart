@@ -352,67 +352,12 @@ class AppLocalizationsRu extends AppLocalizations {
   String get selectASaveBody => 'Здесь появятся сведения о сохранении.';
 
   @override
-  String get diagnosticsTitle => 'Диагностика и сведения';
-
-  @override
-  String get diagnosticsSubtitle => 'Просмотр формата (только чтение)';
-
-  @override
-  String get metricFormat => 'Формат';
-
-  @override
-  String get metricSlot => 'Слот';
-
-  @override
-  String get metricChapter => 'Глава';
-
-  @override
-  String get metricTimePlayed => 'Время в игре';
-
-  @override
-  String get metricSaveKind => 'Тип сохранения';
-
-  @override
-  String get metricFileSize => 'Размер файла';
-
-  @override
-  String get metricCompression => 'Сжатие';
-
-  @override
-  String get metricChunks => 'Блоки';
-
-  @override
-  String get metricUncompressed => 'Без сжатия';
-
-  @override
-  String get metricPrivate => 'Приватные';
-
-  @override
-  String get metricSlotName => 'Имя слота';
-
-  @override
-  String get metricTrailer => 'Концовка';
-
-  @override
-  String get metricDecodedPrivate => 'Декодированные приватные';
-
-  @override
-  String get metricPrivateStrings => 'Приватные строки';
-
-  @override
-  String get metricSha1 => 'SHA-1';
-
-  @override
   String bytesValue(String count) {
     return '$count байт';
   }
 
   @override
   String get inspectionJsonTitle => 'JSON проверки';
-
-  @override
-  String get inspectionJsonSubtitle =>
-      'Необработанные данные проверки сохранения';
 
   @override
   String get copy => 'Копировать';

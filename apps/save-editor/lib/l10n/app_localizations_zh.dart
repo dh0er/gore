@@ -349,66 +349,12 @@ class AppLocalizationsZh extends AppLocalizations {
   String get selectASaveBody => '存档详情将显示在此处。';
 
   @override
-  String get diagnosticsTitle => '诊断与详情';
-
-  @override
-  String get diagnosticsSubtitle => '只读格式检查';
-
-  @override
-  String get metricFormat => '格式';
-
-  @override
-  String get metricSlot => '槽位';
-
-  @override
-  String get metricChapter => '章节';
-
-  @override
-  String get metricTimePlayed => '游戏时长';
-
-  @override
-  String get metricSaveKind => '存档类型';
-
-  @override
-  String get metricFileSize => '文件大小';
-
-  @override
-  String get metricCompression => '压缩';
-
-  @override
-  String get metricChunks => '数据块';
-
-  @override
-  String get metricUncompressed => '未压缩';
-
-  @override
-  String get metricPrivate => '私有';
-
-  @override
-  String get metricSlotName => '槽位名称';
-
-  @override
-  String get metricTrailer => '尾部数据';
-
-  @override
-  String get metricDecodedPrivate => '已解码私有数据';
-
-  @override
-  String get metricPrivateStrings => '私有字符串';
-
-  @override
-  String get metricSha1 => 'SHA-1';
-
-  @override
   String bytesValue(String count) {
     return '$count 字节';
   }
 
   @override
   String get inspectionJsonTitle => '检查 JSON';
-
-  @override
-  String get inspectionJsonSubtitle => '原始存档检查数据';
 
   @override
   String get copy => '复制';
@@ -1699,66 +1645,12 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   String get selectASaveBody => '存档详情将显示在此处。';
 
   @override
-  String get diagnosticsTitle => '诊断与详情';
-
-  @override
-  String get diagnosticsSubtitle => '只读格式检查';
-
-  @override
-  String get metricFormat => '格式';
-
-  @override
-  String get metricSlot => '槽位';
-
-  @override
-  String get metricChapter => '章节';
-
-  @override
-  String get metricTimePlayed => '游戏时长';
-
-  @override
-  String get metricSaveKind => '存档类型';
-
-  @override
-  String get metricFileSize => '文件大小';
-
-  @override
-  String get metricCompression => '压缩';
-
-  @override
-  String get metricChunks => '数据块';
-
-  @override
-  String get metricUncompressed => '未压缩';
-
-  @override
-  String get metricPrivate => '私有';
-
-  @override
-  String get metricSlotName => '槽位名称';
-
-  @override
-  String get metricTrailer => '尾部数据';
-
-  @override
-  String get metricDecodedPrivate => '已解码私有数据';
-
-  @override
-  String get metricPrivateStrings => '私有字符串';
-
-  @override
-  String get metricSha1 => 'SHA-1';
-
-  @override
   String bytesValue(String count) {
     return '$count 字节';
   }
 
   @override
   String get inspectionJsonTitle => '检查 JSON';
-
-  @override
-  String get inspectionJsonSubtitle => '原始存档检查数据';
 
   @override
   String get copy => '复制';

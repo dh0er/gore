@@ -354,66 +354,12 @@ class AppLocalizationsPt extends AppLocalizations {
   String get selectASaveBody => 'Os detalhes do save aparecerão aqui.';
 
   @override
-  String get diagnosticsTitle => 'Diagnóstico e detalhes';
-
-  @override
-  String get diagnosticsSubtitle => 'Inspeção de formato somente leitura';
-
-  @override
-  String get metricFormat => 'Formato';
-
-  @override
-  String get metricSlot => 'Slot';
-
-  @override
-  String get metricChapter => 'Capítulo';
-
-  @override
-  String get metricTimePlayed => 'Tempo de jogo';
-
-  @override
-  String get metricSaveKind => 'Tipo de save';
-
-  @override
-  String get metricFileSize => 'Tamanho do arquivo';
-
-  @override
-  String get metricCompression => 'Compressão';
-
-  @override
-  String get metricChunks => 'Blocos';
-
-  @override
-  String get metricUncompressed => 'Não comprimido';
-
-  @override
-  String get metricPrivate => 'Privado';
-
-  @override
-  String get metricSlotName => 'Nome do slot';
-
-  @override
-  String get metricTrailer => 'Trailer';
-
-  @override
-  String get metricDecodedPrivate => 'Privado decodificado';
-
-  @override
-  String get metricPrivateStrings => 'Cadeias privadas';
-
-  @override
-  String get metricSha1 => 'SHA-1';
-
-  @override
   String bytesValue(String count) {
     return '$count bytes';
   }
 
   @override
   String get inspectionJsonTitle => 'JSON de inspeção';
-
-  @override
-  String get inspectionJsonSubtitle => 'Dados brutos de inspeção do save';
 
   @override
   String get copy => 'Copiar';
@@ -1747,66 +1693,12 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
   String get selectASaveBody => 'Os detalhes do save aparecerão aqui.';
 
   @override
-  String get diagnosticsTitle => 'Diagnóstico e detalhes';
-
-  @override
-  String get diagnosticsSubtitle => 'Inspeção de formato somente leitura';
-
-  @override
-  String get metricFormat => 'Formato';
-
-  @override
-  String get metricSlot => 'Slot';
-
-  @override
-  String get metricChapter => 'Capítulo';
-
-  @override
-  String get metricTimePlayed => 'Tempo de jogo';
-
-  @override
-  String get metricSaveKind => 'Tipo de save';
-
-  @override
-  String get metricFileSize => 'Tamanho do arquivo';
-
-  @override
-  String get metricCompression => 'Compressão';
-
-  @override
-  String get metricChunks => 'Blocos';
-
-  @override
-  String get metricUncompressed => 'Não comprimido';
-
-  @override
-  String get metricPrivate => 'Privado';
-
-  @override
-  String get metricSlotName => 'Nome do slot';
-
-  @override
-  String get metricTrailer => 'Trailer';
-
-  @override
-  String get metricDecodedPrivate => 'Privado decodificado';
-
-  @override
-  String get metricPrivateStrings => 'Cadeias privadas';
-
-  @override
-  String get metricSha1 => 'SHA-1';
-
-  @override
   String bytesValue(String count) {
     return '$count bytes';
   }
 
   @override
   String get inspectionJsonTitle => 'JSON de inspeção';
-
-  @override
-  String get inspectionJsonSubtitle => 'Dados brutos de inspeção do save';
 
   @override
   String get copy => 'Copiar';

@@ -354,67 +354,12 @@ class AppLocalizationsEs extends AppLocalizations {
   String get selectASaveBody => 'Los detalles de la partida aparecerán aquí.';
 
   @override
-  String get diagnosticsTitle => 'Diagnóstico y detalles';
-
-  @override
-  String get diagnosticsSubtitle => 'Inspección de formato (solo lectura)';
-
-  @override
-  String get metricFormat => 'Formato';
-
-  @override
-  String get metricSlot => 'Ranura';
-
-  @override
-  String get metricChapter => 'Capítulo';
-
-  @override
-  String get metricTimePlayed => 'Tiempo jugado';
-
-  @override
-  String get metricSaveKind => 'Tipo de guardado';
-
-  @override
-  String get metricFileSize => 'Tamaño del archivo';
-
-  @override
-  String get metricCompression => 'Compresión';
-
-  @override
-  String get metricChunks => 'Fragmentos';
-
-  @override
-  String get metricUncompressed => 'Sin comprimir';
-
-  @override
-  String get metricPrivate => 'Privado';
-
-  @override
-  String get metricSlotName => 'Nombre de la ranura';
-
-  @override
-  String get metricTrailer => 'Trailer';
-
-  @override
-  String get metricDecodedPrivate => 'Privado decodificado';
-
-  @override
-  String get metricPrivateStrings => 'Cadenas privadas';
-
-  @override
-  String get metricSha1 => 'SHA-1';
-
-  @override
   String bytesValue(String count) {
     return '$count bytes';
   }
 
   @override
   String get inspectionJsonTitle => 'JSON de inspección';
-
-  @override
-  String get inspectionJsonSubtitle =>
-      'Datos de inspección sin procesar de la partida';
 
   @override
   String get copy => 'Copiar';

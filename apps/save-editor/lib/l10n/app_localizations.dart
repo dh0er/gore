@@ -764,108 +764,6 @@ abstract class AppLocalizations {
   /// **'The save details will appear here.'**
   String get selectASaveBody;
 
-  /// No description provided for @diagnosticsTitle.
-  ///
-  /// In en, this message translates to:
-  /// **'Diagnostics & details'**
-  String get diagnosticsTitle;
-
-  /// No description provided for @diagnosticsSubtitle.
-  ///
-  /// In en, this message translates to:
-  /// **'Read-only format inspection'**
-  String get diagnosticsSubtitle;
-
-  /// No description provided for @metricFormat.
-  ///
-  /// In en, this message translates to:
-  /// **'Format'**
-  String get metricFormat;
-
-  /// No description provided for @metricSlot.
-  ///
-  /// In en, this message translates to:
-  /// **'Slot'**
-  String get metricSlot;
-
-  /// No description provided for @metricChapter.
-  ///
-  /// In en, this message translates to:
-  /// **'Chapter'**
-  String get metricChapter;
-
-  /// No description provided for @metricTimePlayed.
-  ///
-  /// In en, this message translates to:
-  /// **'Time played'**
-  String get metricTimePlayed;
-
-  /// No description provided for @metricSaveKind.
-  ///
-  /// In en, this message translates to:
-  /// **'Save kind'**
-  String get metricSaveKind;
-
-  /// No description provided for @metricFileSize.
-  ///
-  /// In en, this message translates to:
-  /// **'File size'**
-  String get metricFileSize;
-
-  /// No description provided for @metricCompression.
-  ///
-  /// In en, this message translates to:
-  /// **'Compression'**
-  String get metricCompression;
-
-  /// No description provided for @metricChunks.
-  ///
-  /// In en, this message translates to:
-  /// **'Chunks'**
-  String get metricChunks;
-
-  /// No description provided for @metricUncompressed.
-  ///
-  /// In en, this message translates to:
-  /// **'Uncompressed'**
-  String get metricUncompressed;
-
-  /// No description provided for @metricPrivate.
-  ///
-  /// In en, this message translates to:
-  /// **'Private'**
-  String get metricPrivate;
-
-  /// No description provided for @metricSlotName.
-  ///
-  /// In en, this message translates to:
-  /// **'Slot name'**
-  String get metricSlotName;
-
-  /// No description provided for @metricTrailer.
-  ///
-  /// In en, this message translates to:
-  /// **'Trailer'**
-  String get metricTrailer;
-
-  /// No description provided for @metricDecodedPrivate.
-  ///
-  /// In en, this message translates to:
-  /// **'Decoded private'**
-  String get metricDecodedPrivate;
-
-  /// No description provided for @metricPrivateStrings.
-  ///
-  /// In en, this message translates to:
-  /// **'Private strings'**
-  String get metricPrivateStrings;
-
-  /// No description provided for @metricSha1.
-  ///
-  /// In en, this message translates to:
-  /// **'SHA-1'**
-  String get metricSha1;
-
   /// No description provided for @bytesValue.
   ///
   /// In en, this message translates to:
@@ -877,12 +775,6 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Inspection JSON'**
   String get inspectionJsonTitle;
-
-  /// No description provided for @inspectionJsonSubtitle.
-  ///
-  /// In en, this message translates to:
-  /// **'Raw save inspection data'**
-  String get inspectionJsonSubtitle;
 
   /// No description provided for @copy.
   ///

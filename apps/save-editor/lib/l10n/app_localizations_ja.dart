@@ -351,66 +351,12 @@ class AppLocalizationsJa extends AppLocalizations {
   String get selectASaveBody => 'セーブの詳細がここに表示されます。';
 
   @override
-  String get diagnosticsTitle => '診断と詳細';
-
-  @override
-  String get diagnosticsSubtitle => '読み取り専用のフォーマット検査';
-
-  @override
-  String get metricFormat => 'フォーマット';
-
-  @override
-  String get metricSlot => 'スロット';
-
-  @override
-  String get metricChapter => '章';
-
-  @override
-  String get metricTimePlayed => 'プレイ時間';
-
-  @override
-  String get metricSaveKind => 'セーブ種別';
-
-  @override
-  String get metricFileSize => 'ファイルサイズ';
-
-  @override
-  String get metricCompression => '圧縮';
-
-  @override
-  String get metricChunks => 'チャンク';
-
-  @override
-  String get metricUncompressed => '非圧縮';
-
-  @override
-  String get metricPrivate => 'プライベート';
-
-  @override
-  String get metricSlotName => 'スロット名';
-
-  @override
-  String get metricTrailer => 'トレーラー';
-
-  @override
-  String get metricDecodedPrivate => 'デコード済みプライベート';
-
-  @override
-  String get metricPrivateStrings => 'プライベート文字列';
-
-  @override
-  String get metricSha1 => 'SHA-1';
-
-  @override
   String bytesValue(String count) {
     return '$count バイト';
   }
 
   @override
   String get inspectionJsonTitle => '検査 JSON';
-
-  @override
-  String get inspectionJsonSubtitle => '生のセーブ検査データ';
 
   @override
   String get copy => 'コピー';
