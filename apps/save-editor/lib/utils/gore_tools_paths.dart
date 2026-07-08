@@ -2,19 +2,19 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 
-/// Shared on-disk locations for the gore-tools suite.
+/// Shared on-disk locations for the gore suite.
 ///
 /// All tools (gore-cli, gore-save, gore-mod) keep their per-user data under ONE
-/// shared directory named `gore-tools` so a single localization extraction
+/// shared directory named `gore` so a single localization extraction
 /// serves every tool. This app's persisted JSON lives in the `gore-save`
-/// subfolder; the loc catalog stays directly in `gore-tools`.
+/// subfolder; the loc catalog stays directly in `gore`.
 ///
 /// The base-dir resolution mirrors the Rust side (`gore_loc::paths`) exactly:
-/// - Windows: `%LOCALAPPDATA%` (falls back to `%APPDATA%`) then `\gore-tools`
-/// - macOS:   `$HOME/Library/Application Support/gore-tools`
-/// - Linux:   `$XDG_DATA_HOME/gore-tools` (if set) else `$HOME/.local/share/gore-tools`
+/// - Windows: `%LOCALAPPDATA%` (falls back to `%APPDATA%`) then `\gore`
+/// - macOS:   `$HOME/Library/Application Support/gore`
+/// - Linux:   `$XDG_DATA_HOME/gore` (if set) else `$HOME/.local/share/gore`
 
-/// The shared `gore-tools` data directory root.
+/// The shared `gore` data directory root.
 String goreToolsDir({Map<String, String>? environment}) {
   final env = environment ?? Platform.environment;
   final String base;
@@ -34,10 +34,10 @@ String goreToolsDir({Map<String, String>? environment}) {
               ? Directory.current.path
               : p.join(home, '.local', 'share'));
   }
-  return p.join(base, 'gore-tools');
+  return p.join(base, 'gore');
 }
 
-/// This app's settings folder under the shared umbrella: `<gore-tools>/gore-save`.
+/// This app's settings folder under the shared umbrella: `<gore>/gore-save`.
 String goreSaveSettingsDir({Map<String, String>? environment}) {
   return p.join(goreToolsDir(environment: environment), 'gore-save');
 }

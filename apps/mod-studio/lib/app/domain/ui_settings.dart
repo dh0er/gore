@@ -134,11 +134,11 @@ class NoopUiSettingsStore implements UiSettingsStore {
   void write(UiSettings settings) {}
 }
 
-/// Resolves the shared `gore-tools` umbrella data directory, matching the Rust
+/// Resolves the shared `gore` umbrella data directory, matching the Rust
 /// side (`gore_loc::paths::shared_data_dir`) exactly:
-/// - Windows: `%LOCALAPPDATA%` (fallback `%APPDATA%`) then `\gore-tools`
-/// - macOS:   `$HOME/Library/Application Support/gore-tools`
-/// - Linux:   `$XDG_DATA_HOME/gore-tools` else `$HOME/.local/share/gore-tools`
+/// - Windows: `%LOCALAPPDATA%` (fallback `%APPDATA%`) then `\gore`
+/// - macOS:   `$HOME/Library/Application Support/gore`
+/// - Linux:   `$XDG_DATA_HOME/gore` else `$HOME/.local/share/gore`
 String sharedDataDir(Map<String, String> env) {
   final String base;
   if (Platform.isWindows) {
@@ -157,7 +157,7 @@ String sharedDataDir(Map<String, String> env) {
               ? Directory.current.path
               : p.join(home, '.local', 'share'));
   }
-  return p.join(base, 'gore-tools');
+  return p.join(base, 'gore');
 }
 
 /// The previous per-app config directory (`<config>/gore-mod`), kept only so a
