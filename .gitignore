@@ -10,9 +10,7 @@ outputs/
 .flutter-plugins
 .flutter-plugins-dependencies
 .packages
-apps/goresave/.dart_tool/
-apps/goresave/build/
-apps/goresave/windows/flutter/ephemeral/
+apps/*/windows/flutter/ephemeral/
 
 # FVM
 .fvm/flutter_sdk

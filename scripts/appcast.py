@@ -34,7 +34,7 @@ from datetime import datetime, timezone
 from email.utils import format_datetime
 from pathlib import Path
 
-REPO_DOWNLOAD_BASE = "https://github.com/dh0er/goresave/releases/download"
+REPO_DOWNLOAD_BASE = "https://github.com/dh0er/gore/releases/download"
 
 
 def sign_dsa(installer: Path) -> str:

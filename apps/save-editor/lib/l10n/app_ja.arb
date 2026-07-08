@@ -320,7 +320,7 @@
   "yes": "はい",
   "no": "いいえ",
   "aboutVersion": "バージョン {version}（{sha}）",
-  "aboutCopyright": "© 2026 goresave コントリビューター",
+  "aboutCopyright": "© 2026 GORE コントリビューター",
   "aboutLicense": "MIT ライセンスの下で提供されています。",
   "difficultyTitle": "難易度 — {profile}",
   "difficultyNoProfile": "プロファイルなし",

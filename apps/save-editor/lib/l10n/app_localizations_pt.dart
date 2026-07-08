@@ -1143,7 +1143,7 @@ class AppLocalizationsPt extends AppLocalizations {
   }
 
   @override
-  String get aboutCopyright => '© 2026 colaboradores do goresave';
+  String get aboutCopyright => '© 2026 colaboradores do GORE';
 
   @override
   String get aboutLicense => 'Licenciado sob a Licença MIT.';
@@ -2436,7 +2436,7 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
   }
 
   @override
-  String get aboutCopyright => '© 2026 colaboradores do goresave';
+  String get aboutCopyright => '© 2026 colaboradores do GORE';
 
   @override
   String get aboutLicense => 'Licenciado sob a Licença MIT.';

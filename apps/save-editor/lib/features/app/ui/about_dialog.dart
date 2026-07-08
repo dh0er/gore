@@ -3,11 +3,11 @@ import 'package:goresave/l10n/app_localizations.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-const _githubUrl = 'https://github.com/dh0er/goresave';
+const _githubUrl = 'https://github.com/dh0er/gore';
 
 const String _gitSha = String.fromEnvironment('GIT_SHA', defaultValue: 'dev');
 
-const aboutCopyrightNotice = '© 2026 goresave contributors';
+const aboutCopyrightNotice = '© 2026 GORE contributors';
 const aboutLicenseNotice = 'Licensed under the MIT License.';
 
 String aboutVersionLabel(PackageInfo? info) =>

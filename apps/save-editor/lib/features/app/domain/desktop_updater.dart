@@ -13,11 +13,11 @@ import 'package:url_launcher/url_launcher.dart';
 /// Stable URL: releases/latest/download/ redirects to the newest GitHub
 /// release's assets, where CI uploads the signed appcast.
 const _appcastUrl =
-    'https://github.com/dh0er/goresave/releases/latest/download/appcast-windows.xml';
+    'https://github.com/dh0er/gore/releases/latest/download/appcast-windows.xml';
 
 /// Where the portable build sends users to grab the new build. The latest
 /// release page lists both the installer and the portable zip.
-const _releasesPageUrl = 'https://github.com/dh0er/goresave/releases/latest';
+const _releasesPageUrl = 'https://github.com/dh0er/gore/releases/latest';
 
 const _checkIntervalSeconds = 3600;
 

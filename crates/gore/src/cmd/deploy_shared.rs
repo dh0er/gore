@@ -1,5 +1,5 @@
 //! `gore-cli deploy-shared` — copy the gore-lua shared/ tree into the game's
-//! `ue4ss/Mods/shared/`, so mods can `require("gorelib")`.
+//! `ue4ss/Mods/shared/`, so mods can `require("gore-lua")`.
 
 use anyhow::{bail, Context, Result};
 use std::{fs, path::Path, path::PathBuf};
@@ -51,7 +51,7 @@ pub fn run(src: Option<PathBuf>, game: PathBuf) -> Result<()> {
         );
     }
     // `Mods/shared` is a namespace shared by multiple mods, so we must NOT wipe it — only the
-    // top-level entries the SDK actually provides (currently `gorelib/`). Stage the full copy
+    // top-level entries the SDK actually provides (currently `gore-lua/`). Stage the full copy
     // in a sibling temp first (atomic: a failed copy leaves the old SDK intact), then for each
     // SDK-provided top-level entry replace just that entry under dest_root, leaving unrelated
     // libraries other mods stored there untouched.
@@ -112,7 +112,7 @@ fn resolve_default_src() -> Result<PathBuf> {
 }
 
 fn copy_dir(src: &Path, dest: &Path) -> Result<usize> {
-    // A pre-existing symlinked destination (anywhere in the tree, e.g. Mods/shared/gorelib ->
+    // A pre-existing symlinked destination (anywhere in the tree, e.g. Mods/shared/gore-lua ->
     // /tmp/elsewhere) would be FOLLOWED by create_dir_all / copy, writing outside Mods. Refuse
     // it; this runs at every recursion level, so nested links are caught too.
     if let Ok(meta) = fs::symlink_metadata(dest) {

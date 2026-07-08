@@ -1149,7 +1149,7 @@ class AppLocalizationsFr extends AppLocalizations {
   }
 
   @override
-  String get aboutCopyright => '© 2026 contributeurs de goresave';
+  String get aboutCopyright => '© 2026 contributeurs de GORE';
 
   @override
   String get aboutLicense => 'Sous licence MIT.';

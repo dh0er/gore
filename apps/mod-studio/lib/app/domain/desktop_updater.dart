@@ -9,7 +9,7 @@ import 'package:path/path.dart' as p;
 /// appcast-windows.xml asset it overwrites on every gore-mod release, so this
 /// URL is stable regardless of which product released most recently.
 const _appcastUrl =
-    'https://github.com/dh0er/goresave/releases/download/gore-mod-appcast/appcast-windows.xml';
+    'https://github.com/dh0er/gore/releases/download/gore-mod-appcast/appcast-windows.xml';
 
 const _checkIntervalSeconds = 3600;
 

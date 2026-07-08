@@ -1,6 +1,6 @@
 # GORE Save Editor
 
-`gore-save` (the `goresave` app) is a savegame editor for Gothic Remake. It
+`gore-save` is the savegame editor for Gothic Remake. It
 provides a Flutter interface backed by a Rust savegame core. It is one project
 in the [gore-tools](../../README.md) monorepo.
 
@@ -25,7 +25,7 @@ Tested with Steam game version CL168781. Should work with all versions.
 ## Installation & Updates
 
 Download `GoresaveSetup-<version>.exe` from the
-[latest release](https://github.com/dh0er/goresave/releases/latest) and run it.
+[latest release](https://github.com/dh0er/gore/releases/latest) and run it.
 The app checks for updates on startup and prompts you when a new version is
 available.
 
