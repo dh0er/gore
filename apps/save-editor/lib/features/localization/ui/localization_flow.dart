@@ -11,11 +11,12 @@ import 'package:goresave/providers/data_providers.dart';
 ///
 /// 1. Attempts extraction using the configured `game_path` (shared
 ///    `config.json`, e.g. set via `gore config` or another gore-suite app) as
-///    an authoritative hint when present; otherwise auto-detects via Steam.
-/// 2. On a not-found auto-detect failure (no hint at all), opens a `.lcache`
-///    file picker and retries with the picked path; if the user cancels,
-///    aborts gracefully.
-/// 3. Reports success/failure via a SnackBar.
+///    a preferred hint when present; otherwise auto-detects via Steam.
+/// 2. If that configured hint fails to resolve a `.lcache`, falls back to Steam
+///    auto-detect so a stale/wrong configured path never dead-ends the GUI.
+/// 3. On a not-found auto-detect failure, opens a `.lcache` file picker and
+///    retries with the picked path; if the user cancels, aborts gracefully.
+/// 4. Reports success/failure via a SnackBar.
 ///
 /// [context] must come from a widget that is still mounted; the function checks
 /// `context.mounted` after each await before touching the UI.
@@ -29,6 +30,15 @@ Future<void> runLocalizationExtractFlow(
   // (matches the `gore` CLI's own precedence: configured path > auto-detect).
   final configuredGamePath = ref.read(sharedConfigProvider).gamePath();
   var result = await controller.extract(lcacheHint: configuredGamePath);
+
+  // A configured game_path is only a preferred hint here — the GUI must stay
+  // recoverable. If it fails to resolve a .lcache, fall back to Steam
+  // auto-detect (called with no hint), which sets `notFound` and opens the
+  // picker below when it too finds nothing. Without this, a stale/wrong
+  // configured path would surface only an error with no way to proceed.
+  if (!result.success && configuredGamePath != null) {
+    result = await controller.extract(lcacheHint: null);
+  }
 
   if (result.notFound) {
     if (!context.mounted) return;
