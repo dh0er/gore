@@ -1076,6 +1076,42 @@ abstract class AppLocalizations {
   /// **'Add item'**
   String get addItemButton;
 
+  /// Button: reset the actor's inventory to the game-start save
+  ///
+  /// In en, this message translates to:
+  /// **'Reset inventory'**
+  String get resetInventoryButton;
+
+  /// No description provided for @resetInventoryTooltipDefault.
+  ///
+  /// In en, this message translates to:
+  /// **'Replace this inventory with the game-start save\'s inventory'**
+  String get resetInventoryTooltipDefault;
+
+  /// No description provided for @resetInventoryTooltipBlocked.
+  ///
+  /// In en, this message translates to:
+  /// **'Save or cancel the pending inventory changes first'**
+  String get resetInventoryTooltipBlocked;
+
+  /// No description provided for @pendingResetTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Reset to game-start inventory'**
+  String get pendingResetTitle;
+
+  /// No description provided for @pendingResetSubtitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Resources level: {level}'**
+  String pendingResetSubtitle(String level);
+
+  /// No description provided for @cancelPendingReset.
+  ///
+  /// In en, this message translates to:
+  /// **'Cancel reset'**
+  String get cancelPendingReset;
+
   /// No description provided for @pendingAddSubtitle.
   ///
   /// In en, this message translates to:

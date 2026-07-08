@@ -95,6 +95,97 @@ void main() {
   );
 
   test(
+    'activeResourcesLevel normalizes known levels and falls back to Gothic',
+    () async {
+      // Active profile carries a Resources difficulty class ending in
+      // '_Hard' (the raw class-name shape DifficultySettings.resourcesLabel
+      // expects — see _difficultyLevelLabel), which resourcesLabel maps to
+      // the normalized label 'Hard'.
+      final core = _RecordingCoreService(
+        scanData: {
+          'saves': <Object?>[],
+          'profiles': [
+            {
+              'profileId': 0,
+              'profileName': '0',
+              'customResourcesSettings': 'ResourcesDifficultySettings_Hard',
+            },
+          ],
+          'activeProfileId': 0,
+        },
+      );
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+
+      await pumpEventQueue();
+
+      expect(notifier.state.activeProfile?.difficulty.resourcesLabel, 'Hard');
+      expect(notifier.activeResourcesLevel(), 'Hard');
+
+      // No active profile at all (empty scan) → falls back to 'Gothic'.
+      final core2 = _RecordingCoreService();
+      final notifier2 = EditorNotifier(core2, saveDir: r'C:\tmp\saves');
+
+      await pumpEventQueue();
+
+      expect(notifier2.state.activeProfile, isNull);
+      expect(notifier2.activeResourcesLevel(), 'Gothic');
+    },
+  );
+
+  test(
+    'activeResourcesLevel uses the preset-implied level when no explicit sub-level',
+    () async {
+      // A non-Custom preset stores NO explicit Resources sub-level (resourcesLabel
+      // is '-'); the level is implied by the preset. Reading only resourcesLabel
+      // would wrongly send every Novice/Hard profile to the Gothic start-save.
+      Future<EditorNotifier> build(Map<String, Object?> profileFields) async {
+        final core = _RecordingCoreService(
+          scanData: {
+            'saves': <Object?>[],
+            'profiles': [
+              {'profileId': 0, 'profileName': '0', ...profileFields},
+            ],
+            'activeProfileId': 0,
+          },
+        );
+        final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+        await pumpEventQueue();
+        return notifier;
+      }
+
+      // Novice preset (class suffix '_Easy'), no explicit resources → 'Novice'.
+      final novice = await build({'difficultyPreset': 'DifficultyPreset_Easy'});
+      expect(novice.state.activeProfile?.difficulty.resourcesLabel, '-');
+      expect(novice.activeResourcesLevel(), 'Novice');
+
+      // Hard preset ('_Hard') → 'Hard'.
+      final hard = await build({'difficultyPreset': 'DifficultyPreset_Hard'});
+      expect(hard.activeResourcesLevel(), 'Hard');
+
+      // Gothic preset ('_Standard') → 'Gothic'.
+      final gothic = await build({'difficultyPreset': 'DifficultyPreset_Standard'});
+      expect(gothic.activeResourcesLevel(), 'Gothic');
+
+      // Custom preset with an explicit Resources sub-level → the explicit level
+      // wins over the preset ('_Easy' resources class → 'Novice').
+      final custom = await build({
+        'difficultyPreset': 'DifficultyPreset_Custom',
+        'customResourcesSettings': 'ResourcesDifficultySettings_Easy',
+      });
+      expect(custom.activeResourcesLevel(), 'Novice');
+
+      // A non-Custom preset LOCKS the level: a stale/disagreeing stored Resources
+      // class is ignored (Hard preset + stale '_Standard' resources → 'Hard', NOT
+      // 'Gothic'). Only Custom profiles let the sub-level override the preset.
+      final hardStale = await build({
+        'difficultyPreset': 'DifficultyPreset_Hard',
+        'customResourcesSettings': 'ResourcesDifficultySettings_Standard',
+      });
+      expect(hardStale.activeResourcesLevel(), 'Hard');
+    },
+  );
+
+  test(
     'inspect sends no codec config and decodes all chunks',
     () async {
       final core = _RecordingCoreService();
@@ -284,6 +375,250 @@ void main() {
       expect(edits[1]['path'], 'private.player.setTransform');
       // Pending cleared after success.
       expect(notifier.state.pendingEdits, isEmpty);
+    },
+  );
+
+  test(
+    'saveAllPending refuses a reset queued with a same-inventory typed edit',
+    () async {
+      final core = _RecordingCoreService();
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+      notifier.setPendingEdit(
+        'inventory',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.inventory.reset',
+              'value': {'resourcesLevel': 'Gothic'},
+            },
+          ],
+        ),
+      );
+      // A raw All-data edit stepping through the player's m_Inventory. Running
+      // in the fixed batch before the reset splice, it would be silently
+      // overwritten by the reset — so the save must be refused.
+      notifier.setPendingEdit(
+        'typed:inv',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.typed.setValue',
+              'value': {
+                'path': ['m_SavedPlayers', '[0]', 'm_Inventory', 'm_Keys'],
+                'value': 0,
+              },
+            },
+          ],
+        ),
+      );
+
+      final writesBefore = core.requests
+          .where((r) => r.command == 'write_save')
+          .length;
+      final ok = await notifier.saveAllPending();
+
+      expect(ok, isFalse);
+      expect(notifier.state.error, contains('discard'));
+      // No write_save issued — the conflict is caught before the worklist runs.
+      final writesAfter = core.requests
+          .where((r) => r.command == 'write_save')
+          .length;
+      expect(writesAfter, writesBefore);
+      // Both pending edits are preserved for the user to resolve.
+      expect(notifier.state.pendingEdits, isNotEmpty);
+    },
+  );
+
+  test(
+    'saveAllPending refuses a reset queued with a same-actor inventory count edit',
+    () async {
+      final core = _RecordingCoreService();
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+      // Reset the PLAYER inventory (no actorId)...
+      notifier.setPendingEdit(
+        'inventory',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.inventory.reset',
+              'value': {'resourcesLevel': 'Gothic'},
+            },
+          ],
+        ),
+      );
+      // ...and a PLAYER setItemCount (same actor: no actorId) under another key.
+      // It lands in the fixed batch before the reset splice, so the reset would
+      // discard it — the save must be refused.
+      notifier.setPendingEdit(
+        'count',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.inventory.setItemCount',
+              'value': {'id': 'ItMi_Orenugget', 'count': 5},
+            },
+          ],
+        ),
+      );
+
+      final writesBefore = core.requests
+          .where((r) => r.command == 'write_save')
+          .length;
+      final ok = await notifier.saveAllPending();
+
+      expect(ok, isFalse);
+      expect(notifier.state.error, contains('discard'));
+      expect(
+        core.requests.where((r) => r.command == 'write_save').length,
+        writesBefore,
+      );
+    },
+  );
+
+  test(
+    'saveAllPending allows a reset with an inventory edit on a DIFFERENT actor',
+    () async {
+      final core = _RecordingCoreService();
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+      // Reset the PLAYER inventory...
+      notifier.setPendingEdit(
+        'inventory',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.inventory.reset',
+              'value': {'resourcesLevel': 'Gothic'},
+            },
+          ],
+        ),
+      );
+      // ...and a setItemCount on an NPC (different inventory) — no conflict, the
+      // reset does not touch the NPC's inventory, so the save proceeds.
+      notifier.setPendingEdit(
+        'inventory:Char_1',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.inventory.setItemCount',
+              'value': {'id': 'ItMi_Orenugget', 'count': 5, 'actorId': 'Char_1'},
+            },
+          ],
+        ),
+      );
+
+      final ok = await notifier.saveAllPending();
+
+      // Not refused for the conflict — it committed both (recording core succeeds).
+      expect(ok, isTrue);
+      expect(notifier.state.error, isNull);
+    },
+  );
+
+  test(
+    'activeResourcesLevel follows the save/scan profile, not the sidebar filter',
+    () async {
+      final core = _RecordingCoreService(
+        scanData: {
+          'saves': <Object?>[],
+          'profiles': [
+            {
+              'profileId': 0,
+              'profileName': 'A',
+              'difficultyPreset': 'DifficultyPreset_Hard',
+            },
+            {
+              'profileId': 1,
+              'profileName': 'B',
+              'difficultyPreset': 'DifficultyPreset_Easy',
+            },
+          ],
+          // The scan's active (this save's) profile is 1 → Novice.
+          'activeProfileId': 1,
+        },
+      );
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await pumpEventQueue();
+
+      // The user explicitly filters the sidebar to profile 0 (Hard) — a browsing
+      // choice that must NOT change which start-save a reset targets.
+      notifier.selectProfile(0);
+      expect(notifier.state.activeProfile?.difficulty.presetLabel, 'Hard');
+
+      // Reset follows the save/scan profile (1 = Novice), not the filter.
+      expect(notifier.activeResourcesLevel(), 'Novice');
+    },
+  );
+
+  test(
+    'activeResourcesLevel falls back to the inspected save own difficulty (no profile)',
+    () async {
+      const savePath = r'C:\tmp\saves\Standalone.sav';
+      final core = _RecordingCoreService(
+        scanData: {
+          'saves': [
+            {
+              'path': savePath,
+              // A standalone/imported save: no profile attribution, but the GSAV
+              // still carries its own parsed difficulty (Hard).
+              'persistentProfileId': null,
+              'difficulty': {'preset': 'DifficultyPreset_Hard'},
+            },
+          ],
+          'profiles': <Object?>[],
+          'activeProfileId': null,
+        },
+      );
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await pumpEventQueue();
+      await notifier.inspect(savePath);
+
+      // No profile metadata resolves → use the save's OWN difficulty (Hard),
+      // not the Gothic default.
+      expect(notifier.state.selectedSave?.path, savePath);
+      expect(notifier.state.activeProfile, isNull);
+      expect(notifier.activeResourcesLevel(), 'Hard');
+    },
+  );
+
+  test(
+    'activeResourcesLevel prefers an unattributed save own difficulty over the active profile',
+    () async {
+      const savePath = r'C:\tmp\saves\Imported.sav';
+      final core = _RecordingCoreService(
+        scanData: {
+          'saves': [
+            {
+              'path': savePath,
+              'persistentProfileId': null, // not attached to any profile
+              'difficulty': {'preset': 'DifficultyPreset_Hard'}, // save's own = Hard
+            },
+          ],
+          // The folder HAS a profile and it is the scan-active one — but it is a
+          // DIFFERENT (Novice) profile, not this unattributed save's.
+          'profiles': [
+            {
+              'profileId': 7,
+              'profileName': 'Other',
+              'difficultyPreset': 'DifficultyPreset_Easy',
+            },
+          ],
+          'activeProfileId': 7,
+        },
+      );
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await pumpEventQueue();
+      await notifier.inspect(savePath);
+
+      expect(notifier.state.selectedSave?.path, savePath);
+      // Unattributed save → its OWN difficulty (Hard) wins over the active
+      // profile's (Novice); we never borrow a different save's profile.
+      expect(notifier.activeResourcesLevel(), 'Hard');
     },
   );
 

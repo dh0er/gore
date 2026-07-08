@@ -4,6 +4,7 @@ pub mod factions;
 pub mod npc;
 pub mod properties;
 pub mod skills;
+pub mod startsaves;
 
 use base64::{Engine as _, engine::general_purpose};
 use serde::{Deserialize, Serialize};
@@ -3155,6 +3156,12 @@ fn summarize_private_inventory_payload(
         writable.push("private.inventory.setItemCount");
     }
     if let Some(mc) = main_container {
+        // reset is a wholesale swap of the whole m_Inventory from an embedded
+        // start save; it only needs a typed-resolvable inventory, so it is
+        // offered whenever a MainContainer resolves — INCLUDING an empty one
+        // (a user who emptied the inventory can reset it back to the start kit).
+        // Unlike addItem it needs no clean template (nothing is cloned).
+        writable.push("private.inventory.reset");
         // addItem clones a clean template slot; only offer it when one exists
         // somewhere in the inventory.
         if mc.has_clean_template {
@@ -3566,6 +3573,23 @@ fn decode_private_root_cached(
     Ok(root)
 }
 
+/// Decode a GSAV file's decompressed private payload from raw bytes (no path,
+/// no cache). Mirrors the decode sequence in `decode_private_root_cached`; used
+/// for the embedded start-saves the inventory-reset command reads.
+fn decode_private_payload_from_bytes(
+    data: &[u8],
+    backend: &dyn codec_backend::CodecBackend,
+) -> Result<Vec<u8>, CoreError> {
+    if !data.starts_with(b"GSAV") {
+        return Err(CoreError::UnsupportedEdit(
+            "start-save reference is not a GSAV file".to_string(),
+        ));
+    }
+    let parts = split_gsav(data)?;
+    let stream = parse_compressed_stream(data, 13 + parts.public_payload.len())?;
+    decompress_private_payload(data, &stream, backend)
+}
+
 /// Store `root` as the single parsed-root cache entry, keyed by the file's
 /// SHA-1. Also seeded by `inspect_save`, which already decodes+parses the root
 /// for its summary and hashes the file — so the first private read after a load
@@ -3708,11 +3732,12 @@ fn npc_attributes_command(
 /// builder serves the player and any NPC.
 ///
 /// `writable` advertises the inventory edit commands the same way the player
-/// summary does — gated on container presence: `setItemCount` when the
-/// MainContainer holds at least one row, `addItem` when a clean template slot
-/// exists, `removeItem` when at least one globally-unique (removable) path is
-/// present. The command names are identical to the player's; the frontend
-/// attaches `actorId` for the NPC case.
+/// summary does — gated on container presence: `setItemCount` and `reset`
+/// when the MainContainer holds at least one row (reset is a wholesale swap,
+/// so unlike `addItem` it needs no clean template), `addItem` when a clean
+/// template slot exists, `removeItem` when at least one globally-unique
+/// (removable) path is present. The command names are identical to the
+/// player's; the frontend attaches `actorId` for the NPC case.
 fn actor_inventory_summary(root: &properties::RootObject, actor_id: Option<&str>) -> Value {
     let Some(view) = inventory_main_container_view(root, actor_id) else {
         return json!({
@@ -3756,6 +3781,10 @@ fn actor_inventory_summary(root: &properties::RootObject, actor_id: Option<&str>
     if !view.rows.is_empty() {
         writable.push("private.inventory.setItemCount");
     }
+    // reset only needs a resolvable inventory (view exists here), so it is
+    // offered even for an empty inventory — a user can reset an emptied NPC
+    // inventory back to its game-start contents. No clean template needed.
+    writable.push("private.inventory.reset");
     if view.summary.has_clean_template {
         writable.push("private.inventory.addItem");
     }
@@ -5099,6 +5128,9 @@ fn apply_private_edits(
                 }
                 "private.inventory.removeItem" => parse_private_inventory_remove_item_edit(edit)
                     .map(PrivateEdit::InventoryRemoveItem),
+                "private.inventory.reset" => {
+                    parse_private_inventory_reset_edit(edit).map(PrivateEdit::InventoryReset)
+                }
                 "private.typed.setValue" => {
                     parse_private_typed_set_value_edit(edit).map(PrivateEdit::TypedSetValue)
                 }
@@ -5161,6 +5193,7 @@ fn apply_private_edits(
                     ..
                 }) | PrivateEdit::InventoryAddItem(_)
                     | PrivateEdit::InventoryRemoveItem(_)
+                    | PrivateEdit::InventoryReset(_)
             )
         })
         .count();
@@ -5175,6 +5208,8 @@ fn apply_private_edits(
     // A splicing structural edit inserts or removes bytes mid-payload and shifts
     // every byte after the splice point:
     //   - inventory addItem/removeItem splice the MainContainer slot array,
+    //   - inventory.reset replaces the whole m_Inventory value with a
+    //     differently-sized reference (start-save) copy,
     //   - knowledge.addCharacter inserts a new entry into the
     //     CharacterKnowledgeByUniqueName MapProperty, and
     //   - npc.revive strips the authoritative State.Dead/KillBounty/Executed loose
@@ -5192,6 +5227,7 @@ fn apply_private_edits(
                 edit,
                 PrivateEdit::InventoryAddItem(_)
                     | PrivateEdit::InventoryRemoveItem(_)
+                    | PrivateEdit::InventoryReset(_)
                     | PrivateEdit::KnowledgeAddCharacter(_)
                     | PrivateEdit::NpcRevive(_)
             )
@@ -5200,10 +5236,10 @@ fn apply_private_edits(
     if splicing_structural_edits >= 1 && edit_specs.len() > 1 {
         return Err(CoreError::UnsupportedEdit(
             "a write containing private.inventory.addItem, private.inventory.removeItem, \
-             private.knowledge.addCharacter, or private.npc.revive must contain no other \
-             edits — the structural splice (slot-array, map insert, or memory-event removal) \
-             shifts the byte offsets and array indices later edits resolve against; submit \
-             them as separate writes"
+             private.inventory.reset, private.knowledge.addCharacter, or private.npc.revive \
+             must contain no other edits — the structural splice (slot-array, map insert, or \
+             memory-event removal) shifts the byte offsets and array indices later edits \
+             resolve against; submit them as separate writes"
                 .to_string(),
         ));
     }
@@ -5366,6 +5402,7 @@ enum PrivateEdit {
     InventoryItemCount(PrivateInventoryItemCountEdit),
     InventoryAddItem(PrivateInventoryAddItemEdit),
     InventoryRemoveItem(PrivateInventoryRemoveItemEdit),
+    InventoryReset(PrivateInventoryResetEdit),
     TypedSetValue(PrivateTypedSetValueEdit),
     TypedContainer(PrivateTypedContainerEdit),
     NpcRevive(PrivateNpcReviveEdit),
@@ -5964,6 +6001,38 @@ fn parse_private_inventory_add_item_edit(
     })
 }
 
+/// `private.inventory.reset` edit: `value = { resourcesLevel?, actorId? }`.
+/// Resets an actor's inventory to the embedded start-save contents for the
+/// given `startsaves::ResourcesLevel`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PrivateInventoryResetEdit {
+    /// The actor whose inventory is reset: `None` = controlled player,
+    /// `Some(global_id)` = that NPC.
+    pub actor_id: Option<String>,
+    /// Which embedded start-save to reset from.
+    pub resources_level: startsaves::ResourcesLevel,
+}
+
+fn parse_private_inventory_reset_edit(
+    edit: &Edit,
+) -> Result<PrivateInventoryResetEdit, CoreError> {
+    let value = edit.value.as_object().ok_or_else(|| {
+        CoreError::InvalidRequest("private.inventory.reset value must be an object".to_string())
+    })?;
+    let resources_level =
+        startsaves::resolve_level(value.get("resourcesLevel").and_then(Value::as_str));
+    let actor_id = value
+        .get("actorId")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(ToOwned::to_owned);
+    Ok(PrivateInventoryResetEdit {
+        actor_id,
+        resources_level,
+    })
+}
+
 fn parse_private_inventory_remove_item_edit(
     edit: &Edit,
 ) -> Result<PrivateInventoryRemoveItemEdit, CoreError> {
@@ -6118,6 +6187,9 @@ fn apply_private_edit_to_payload(
         }
         PrivateEdit::InventoryRemoveItem(edit) => {
             apply_private_inventory_remove_item_to_payload(payload, edit)
+        }
+        PrivateEdit::InventoryReset(edit) => {
+            apply_private_inventory_reset_to_payload(payload, edit)
         }
         PrivateEdit::TypedSetValue(edit) => {
             apply_private_typed_set_value_edit_to_payload(payload, edit)
@@ -7069,6 +7141,95 @@ fn apply_private_inventory_add_item_to_payload(
     }
     *payload = patched;
     Ok(())
+}
+
+/// Build the user-facing error for an actor that has no inventory in `where_`.
+fn reset_actor_missing_err(actor_id: Option<&str>, where_: &str) -> CoreError {
+    match actor_id {
+        Some(id) => CoreError::InvalidRequest(format!(
+            "the selected NPC ({id}) has no inventory in the {where_}; it may only \
+             appear later in the game, so there is no start inventory to reset to"
+        )),
+        None => CoreError::Parse(format!(
+            "the {where_} has no player m_Inventory; cannot reset"
+        )),
+    }
+}
+
+/// Replace the current actor's `m_Inventory` bytes with the same actor's
+/// `m_Inventory` from an already-decoded reference private payload. Pure (no
+/// codec). Works on a scratch copy; commits only after a strict re-parse, so a
+/// failure leaves `payload` untouched.
+fn apply_inventory_reset_with_reference(
+    payload: &mut Vec<u8>,
+    actor_id: Option<&str>,
+    reference_private: &[u8],
+) -> Result<(), CoreError> {
+    // Lift the reference actor's whole m_Inventory value bytes.
+    let ref_root = properties::parse_private_root(reference_private).map_err(|err| {
+        CoreError::Parse(format!("start-save private payload did not parse: {err}"))
+    })?;
+    let ref_path = resolve_inventory_path(&ref_root, actor_id)
+        .ok_or_else(|| reset_actor_missing_err(actor_id, "start save"))?;
+    let ref_segs = properties::parse_path(&ref_path)?;
+    let ref_target = properties::resolve(&ref_root.properties, &ref_segs)?;
+    let ref_bytes = reference_private
+        [ref_target.value_offset..ref_target.value_offset + ref_target.value_size]
+        .to_vec();
+
+    // Resolve the current actor's m_Inventory; clone the target + enclosing size
+    // fields OUT of the borrow so the final `*payload = patched` has no
+    // outstanding immutable borrow of `payload`.
+    let (cur_target, cur_enclosing) = {
+        let cur_root = properties::parse_private_root(payload).map_err(|err| {
+            CoreError::Parse(format!(
+                "private.inventory.reset requires a typed-parsable private payload: {err}"
+            ))
+        })?;
+        let cur_path = resolve_inventory_path(&cur_root, actor_id)
+            .ok_or_else(|| reset_actor_missing_err(actor_id, "current save"))?;
+        let cur_segs = properties::parse_path(&cur_path)?;
+        let cur_chain = properties::resolve_chain(&cur_root.properties, &cur_segs)?;
+        (cur_chain.target.clone(), cur_chain.enclosing_size_fields.clone())
+    };
+
+    let mut patched = payload.clone();
+    properties::patch_value_bytes(&mut patched, &cur_target, &cur_enclosing, &ref_bytes)?;
+
+    // Prove the splice landed byte-for-byte across the WHOLE m_Inventory (not
+    // just the MainContainer a summary would show) and re-parses to the same
+    // boundaries — catches any silent mis-splice / size-field error.
+    let reparsed = properties::parse_private_root(&patched).map_err(|err| {
+        CoreError::Parse(format!("inventory reset produced an inconsistent payload: {err}"))
+    })?;
+    let check_path = resolve_inventory_path(&reparsed, actor_id)
+        .ok_or_else(|| CoreError::Parse("inventory reset lost the actor's m_Inventory".to_string()))?;
+    let check_segs = properties::parse_path(&check_path)?;
+    let check = properties::resolve(&reparsed.properties, &check_segs)?;
+    if patched[check.value_offset..check.value_offset + check.value_size] != ref_bytes[..] {
+        return Err(CoreError::Validation(
+            "inventory reset did not reproduce the reference bytes".to_string(),
+        ));
+    }
+
+    *payload = patched;
+    Ok(())
+}
+
+/// Command apply: decode the embedded start-save for the edit's level, then run
+/// the pure reset above.
+fn apply_private_inventory_reset_to_payload(
+    payload: &mut Vec<u8>,
+    edit: &PrivateInventoryResetEdit,
+) -> Result<(), CoreError> {
+    let backend = codec_backend::KrakenBackend::default();
+    // The embedded start-save is decoded + parsed fresh each call (uncached);
+    // reset is a deliberate one-shot action, so this is intentional.
+    let reference_private = decode_private_payload_from_bytes(
+        startsaves::start_save_bytes(edit.resources_level),
+        &backend,
+    )?;
+    apply_inventory_reset_with_reference(payload, edit.actor_id.as_deref(), &reference_private)
 }
 
 /// Raw bytes of a template item slot borrowed from a non-Main inventory
@@ -8353,6 +8514,42 @@ mod tests {
             !Arc::ptr_eq(&b, &c),
             "invalidation must drop the cache so the next read re-parses"
         );
+    }
+
+    #[test]
+    fn decode_private_payload_from_bytes_matches_path_decode() {
+        // Decoding the embedded Gothic start save from raw bytes must yield a
+        // parseable private payload.
+        let backend = codec_backend::KrakenBackend::default();
+        let bytes = startsaves::start_save_bytes(startsaves::ResourcesLevel::Gothic);
+        let from_bytes = decode_private_payload_from_bytes(bytes, &backend).unwrap();
+        properties::parse_private_root(&from_bytes).unwrap();
+        assert!(!from_bytes.is_empty());
+    }
+
+    /// Every embedded start save (one per Resources level) must decode with the
+    /// real codec, parse as a private root, and expose a resolvable player
+    /// inventory (what a player reset targets). Guards a truncated or corrupt
+    /// drop-in for ANY level, not just Gothic.
+    #[test]
+    fn all_embedded_start_saves_decode_and_parse() {
+        let backend = codec_backend::KrakenBackend::default();
+        for level in [
+            startsaves::ResourcesLevel::Novice,
+            startsaves::ResourcesLevel::Gothic,
+            startsaves::ResourcesLevel::Hard,
+        ] {
+            let bytes = startsaves::start_save_bytes(level);
+            assert!(bytes.starts_with(b"GSAV"), "{level:?} start save must be GSAV");
+            let payload = decode_private_payload_from_bytes(bytes, &backend)
+                .unwrap_or_else(|e| panic!("{level:?} start save failed to decode: {e}"));
+            let root = properties::parse_private_root(&payload)
+                .unwrap_or_else(|e| panic!("{level:?} start save failed to parse: {e}"));
+            assert!(
+                resolve_inventory_path(&root, None).is_some(),
+                "{level:?} start save has no resolvable player inventory"
+            );
+        }
     }
 
     /// `inspect_save` (which the editor runs on load) must SEED the parsed-root
@@ -11669,8 +11866,10 @@ mod tests {
         assert_eq!(value["private"]["inventory"]["itemStackCount"], 1);
         // This synthetic payload is detected by the FString region scan but is
         // not a complete typed property tree, so the MainContainer cannot be
-        // resolved: only the in-place setItemCount edit is offered, and no row
-        // is marked removable (addItem/removeItem need a typed MainContainer).
+        // resolved: only the in-place setItemCount edit is offered (gated on the
+        // scan, not the typed tree). reset/addItem/removeItem all require a
+        // typed-resolvable MainContainer, which this payload lacks, so none of
+        // them are advertised and no row is marked removable.
         assert_eq!(
             value["private"]["inventory"]["writable"],
             json!(["private.inventory.setItemCount"])
@@ -12275,6 +12474,77 @@ mod tests {
     }
 
     #[test]
+    fn write_rejects_inventory_reset_with_peer_edit() {
+        // A reset plus any peer edit in one write must be rejected (it splices
+        // bytes, shifting offsets later edits resolve against).
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-001.sav");
+        let private_payload = inventory_payload_for_add_item_tests();
+        let seed_compressed = b"seed-reset-peer".to_vec();
+        let stream = compressed_stream_with_one_chunk(&seed_compressed, private_payload.len());
+        fs::write(
+            &path,
+            build_gsav(2, &public_payload("Slot A"), &stream, &[0, 0, 0, 0]),
+        )
+        .unwrap();
+        let backend = PrefixCodecBackend {
+            seed_compressed,
+            seed_uncompressed: private_payload,
+        };
+
+        let err = write_save_with_codec_backend(
+            &path,
+            &[
+                json!({ "path": "private.inventory.reset", "value": { "resourcesLevel": "Gothic" } }),
+                json!({ "path": "private.inventory.setItemCount",
+                        "value": { "id": "ItMi_Orenugget", "count": 5 } }),
+            ],
+            false,
+            None,
+            Some(&backend),
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("must contain no other edits"),
+            "unexpected error: {err}"
+        );
+    }
+
+    /// Full path: an inventory-reset edit routed through the same write entry point
+    /// the FFI uses round-trips cleanly and yields the start-save's inventory on
+    /// disk. Uses the real KrakenBackend (reset decodes an embedded GSAV; the target
+    /// is that same real GSAV).
+    #[test]
+    fn write_save_applies_inventory_reset_end_to_end() {
+        let backend = codec_backend::KrakenBackend::default();
+        let start = startsaves::start_save_bytes(startsaves::ResourcesLevel::Gothic);
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-target.sav");
+        std::fs::write(&path, start).unwrap();
+
+        // Reference summary (what the reset should produce): the embedded save's player inventory.
+        let ref_priv = decode_private_payload_from_bytes(start, &backend).unwrap();
+        let ref_root = properties::parse_private_root(&ref_priv).unwrap();
+        let expected = actor_inventory_summary(&ref_root, None);
+
+        // Route a reset edit through the real write entry point.
+        let result = write_save_with_codec_backend(
+            &path,
+            &[json!({ "path": "private.inventory.reset",
+                       "value": { "resourcesLevel": "Gothic" } })],
+            false,
+            None,
+            Some(&backend),
+        );
+        assert!(result.is_ok(), "reset write failed: {result:?}");
+
+        // Re-read from disk: inventory still resolves and equals the start save's.
+        let root = decode_private_root_cached(&path, &backend).unwrap();
+        let got = actor_inventory_summary(&*root, None);
+        assert_eq!(got, expected, "on-disk inventory after reset must equal the start save's");
+    }
+
+    #[test]
     fn write_save_rejects_knowledge_add_character_with_peer() {
         // knowledge.addCharacter splices the CharacterKnowledgeByUniqueName map,
         // shifting every byte after the insert. Like an inventory structural
@@ -12671,22 +12941,30 @@ mod tests {
             summary["mainContainerPaths"],
             json!(["/Script/Angelscript.ItMi_Orenugget"])
         );
-        // Clean template present + globally-unique path ⇒ all three edits offered.
+        // Clean template present + globally-unique path ⇒ all four edits offered.
         assert_eq!(
             summary["writable"],
             json!([
                 "private.inventory.setItemCount",
+                "private.inventory.reset",
                 "private.inventory.addItem",
                 "private.inventory.removeItem",
             ])
         );
     }
 
-    /// An empty MainContainer yields empty items/paths and offers no edits.
+    /// An empty MainContainer yields empty items/paths but STILL offers reset:
+    /// reset is a wholesale m_Inventory swap that only needs a resolvable
+    /// inventory (the view exists here), so a user who emptied the inventory can
+    /// reset it back to the game-start kit. setItemCount (needs a scanned stack),
+    /// addItem (needs a clean template) and removeItem (needs a removable path)
+    /// remain unavailable.
     #[test]
-    fn actor_inventory_summary_empty_main_container_has_no_writable() {
+    fn actor_inventory_summary_empty_main_container_offers_only_reset() {
         // Only a non-clean (state-carrying) Quickslots slot exists, so there is
-        // no clean template and the MainContainer is empty.
+        // no clean template and the MainContainer is empty. The typed view still
+        // resolves (m_Keys has MainContainer with an empty m_Slots array), so
+        // reset is offered even though no other edit is.
         let other_slots = vec![inv_item_slot(
             1,
             INV_OTHER_LABEL,
@@ -12700,7 +12978,7 @@ mod tests {
         let summary = actor_inventory_summary(&root, None);
         assert_eq!(summary["items"], json!([]));
         assert_eq!(summary["mainContainerPaths"], json!([]));
-        assert_eq!(summary["writable"], json!([]));
+        assert_eq!(summary["writable"], json!(["private.inventory.reset"]));
     }
 
     /// An unresolvable actor (no inventory for that id) yields the empty shape
@@ -13821,6 +14099,134 @@ mod tests {
         p
     }
 
+    /// Private payload with a single controlled player (Party ID 0) whose
+    /// `m_Inventory` MainContainer holds one item slot per definition path in
+    /// `paths`. `resolve_inventory_path(root, None)` resolves this player, and
+    /// `actor_inventory_summary(root, None)` lists exactly these paths. Mirrors
+    /// the low-level builders `two_saved_players_private_payload` uses.
+    fn single_player_inventory_payload(paths: &[&str]) -> Vec<u8> {
+        let main_slots: Vec<Vec<u8>> = paths
+            .iter()
+            .enumerate()
+            .map(|(index, path)| {
+                inv_item_slot(
+                    index as i32,
+                    INV_MAIN_LABEL,
+                    path,
+                    1,
+                    &inv_empty_payload_map(),
+                )
+            })
+            .collect();
+        let keys = inv_enum_array_property("m_Keys", &[INV_MAIN_LABEL]);
+        let items = inv_struct_array_property(
+            "Items",
+            "ContainerVirtualData",
+            &[inv_container(INV_MAIN_LABEL, &main_slots)],
+        );
+        let values = inv_struct_property("m_Values", "ContainerVirtualDataArray", &items);
+        let mut inventory_props = keys;
+        inventory_props.extend_from_slice(&values);
+        let inventory =
+            inv_struct_property("m_Inventory", "ReplicatedInventoryMap", &inventory_props);
+
+        let mut player = str_property("m_PlayerID", "Party ID 0");
+        player.extend_from_slice(&inventory);
+
+        let saved_players =
+            inv_struct_array_property("m_SavedPlayers", "PlayerSavedData", &[player]);
+        let mut instanced_body = saved_players;
+        instanced_body.extend_from_slice(&fstring("None"));
+        let mut instanced = fstring("/Script/Angelscript.PlayersSavedData");
+        instanced.extend_from_slice(&(instanced_body.len() as u32).to_le_bytes());
+        instanced.extend_from_slice(&instanced_body);
+
+        let mut map_body = 0u32.to_le_bytes().to_vec(); // num_to_remove
+        map_body.extend_from_slice(&1u32.to_le_bytes()); // count
+        map_body.extend_from_slice(&fstring("PlayersSavedData"));
+        map_body.extend_from_slice(&instanced);
+        let mut map_descriptor = 2u32.to_le_bytes().to_vec();
+        map_descriptor.extend_from_slice(&fstring("NameProperty"));
+        map_descriptor.extend_from_slice(&0u32.to_le_bytes()); // key_flags
+        map_descriptor.extend_from_slice(&fstring("StructProperty"));
+        map_descriptor.extend_from_slice(&inv_struct_descriptor("InstancedStruct"));
+        let generic = inv_tagged(
+            "m_GenericData",
+            "MapProperty",
+            &map_descriptor,
+            0,
+            &map_body,
+        );
+
+        let mut p = fstring("/Script/Angelscript.GothicFinalDataGame");
+        p.push(0);
+        p.extend_from_slice(&generic);
+        p.extend_from_slice(&fstring("None"));
+        p.extend_from_slice(&0u32.to_le_bytes()); // footer
+        p
+    }
+
+    /// Resetting an actor from a reference whose inventory differs must make the
+    /// current inventory equal the reference's (player path).
+    #[test]
+    fn inventory_reset_player_matches_reference() {
+        let mut cur = single_player_inventory_payload(&["/Script/Angelscript.ItMi_Sulfur"]);
+        let reference = single_player_inventory_payload(&[
+            "/Script/Angelscript.ItMi_Orenugget",
+            "/Script/Angelscript.ItFo_Cheese",
+        ]);
+
+        apply_inventory_reset_with_reference(&mut cur, None, &reference).unwrap();
+
+        let cur_root = properties::parse_private_root(&cur).unwrap();
+        let ref_root = properties::parse_private_root(&reference).unwrap();
+        assert_eq!(
+            actor_inventory_summary(&cur_root, None),
+            actor_inventory_summary(&ref_root, None),
+        );
+    }
+
+    /// An NPC missing from the reference is a clear error, and the payload is
+    /// untouched.
+    #[test]
+    fn inventory_reset_npc_absent_in_reference_errors() {
+        let mut cur = single_player_inventory_payload(&["/Script/Angelscript.ItMi_Sulfur"]);
+        let before = cur.clone();
+        let reference = single_player_inventory_payload(&["/Script/Angelscript.ItMi_Orenugget"]);
+
+        let err = apply_inventory_reset_with_reference(&mut cur, Some("Char_NotHere"), &reference)
+            .unwrap_err();
+        assert!(matches!(err, CoreError::InvalidRequest(_)));
+        assert_eq!(cur, before, "a failed reset must not mutate the payload");
+    }
+
+    /// GATE: lifting an actor's whole m_Inventory bytes from one real save and
+    /// splicing them into another must produce a payload that re-parses and whose
+    /// inventory summary matches the reference. Proves the private payload has no
+    /// payload-global name table (inline strings), which the wholesale-swap reset
+    /// depends on. Set GORESAVE_START and GORESAVE_TARGET to two real GSAV files.
+    #[test]
+    #[ignore = "needs GORESAVE_START + GORESAVE_TARGET real saves"]
+    fn spike_cross_save_inventory_lift_roundtrips() {
+        let backend = codec_backend::KrakenBackend::default();
+        let start = std::fs::read(std::env::var("GORESAVE_START").unwrap()).unwrap();
+        let target = std::fs::read(std::env::var("GORESAVE_TARGET").unwrap()).unwrap();
+
+        let ref_priv = decode_private_payload_from_bytes(&start, &backend).unwrap();
+        let mut cur_priv = decode_private_payload_from_bytes(&target, &backend).unwrap();
+
+        // Player inventory (actor_id = None).
+        apply_inventory_reset_with_reference(&mut cur_priv, None, &ref_priv).unwrap();
+
+        let reparsed = properties::parse_private_root(&cur_priv).unwrap();
+        let ref_root = properties::parse_private_root(&ref_priv).unwrap();
+        assert_eq!(
+            actor_inventory_summary(&reparsed, None),
+            actor_inventory_summary(&ref_root, None),
+            "reset inventory must equal the start-save's inventory"
+        );
+    }
+
     const INV_MELEE_LABEL: &str = "EInventoryTypes::MeleeSlot";
     const INV_POUCH_LABEL: &str = "EInventoryTypes::Pouch";
 
@@ -14791,6 +15197,7 @@ mod tests {
             inv["writable"],
             json!([
                 "private.inventory.setItemCount",
+                "private.inventory.reset",
                 "private.inventory.addItem",
                 "private.inventory.removeItem"
             ])
@@ -14816,6 +15223,42 @@ mod tests {
             Some(false),
             "an item only in the other container must not be removable"
         );
+    }
+
+    /// An EMPTY player inventory (typed MainContainer resolves but holds no
+    /// slots, and the FString scan finds zero item stacks) still advertises
+    /// `private.inventory.reset` so a user who emptied the inventory can reset
+    /// it back to the game-start kit. It advertises NOTHING else: setItemCount
+    /// needs a scanned stack, addItem needs a clean template, removeItem needs a
+    /// removable path — none of which an empty inventory has.
+    #[test]
+    fn inspect_offers_reset_for_empty_but_resolvable_player_inventory() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-empty.sav");
+        // Both containers empty: the MainContainer enum + its (empty) m_Slots
+        // array still resolve, so main_container_summary is Some with no clean
+        // template and no removable paths, while the region scan sees no stacks.
+        let private_payload = typed_inventory_private_payload(&[], &[]);
+        let seed_compressed = b"seed-empty".to_vec();
+        let stream = compressed_stream_with_one_chunk(&seed_compressed, private_payload.len());
+        fs::write(
+            &path,
+            build_gsav(2, &public_payload("Slot A"), &stream, &[0, 0, 0, 0]),
+        )
+        .unwrap();
+        let backend = PrefixCodecBackend {
+            seed_compressed,
+            seed_uncompressed: private_payload,
+        };
+
+        let value = inspect_save_with_codec_backend(&path, true, Some(&backend), None).unwrap();
+        let inv = &value["private"]["inventory"];
+        // No stacks scanned in the player region.
+        assert_eq!(inv["itemStackCount"], 0);
+        assert_eq!(inv["items"], json!([]));
+        // reset is the ONLY advertised edit — it needs only a resolvable
+        // inventory, which the empty typed MainContainer still is.
+        assert_eq!(inv["writable"], json!(["private.inventory.reset"]));
     }
 
     #[test]
@@ -15027,6 +15470,25 @@ mod tests {
         })
         .unwrap();
         assert_eq!(count_blank.actor_id, None);
+    }
+
+    #[test]
+    fn parse_inventory_reset_edit_reads_level_and_actor() {
+        let edit = Edit {
+            path: "private.inventory.reset".to_string(),
+            value: json!({ "resourcesLevel": "Hard", "actorId": "Char_123" }),
+        };
+        let parsed = parse_private_inventory_reset_edit(&edit).unwrap();
+        assert_eq!(parsed.resources_level, startsaves::ResourcesLevel::Hard);
+        assert_eq!(parsed.actor_id.as_deref(), Some("Char_123"));
+
+        let edit2 = Edit {
+            path: "private.inventory.reset".to_string(),
+            value: json!({}),
+        };
+        let parsed2 = parse_private_inventory_reset_edit(&edit2).unwrap();
+        assert_eq!(parsed2.resources_level, startsaves::ResourcesLevel::Gothic);
+        assert_eq!(parsed2.actor_id, None);
     }
 
     #[test]

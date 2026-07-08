@@ -16,7 +16,8 @@ import 'add_inventory_item_dialog.dart';
 /// addable / removable gates the card consumes. [typedVerified] and
 /// [canCompress] are save-wide; [writable] is the inventory's advertised op
 /// list (the player's from the inspection, an NPC's from its loaded summary).
-({bool editable, bool canAddItem, bool canRemoveItem}) _inventoryGates({
+({bool editable, bool canAddItem, bool canRemoveItem, bool canReset})
+_inventoryGates({
   required List<String> writable,
   required bool privateEditable,
   required bool typedVerified,
@@ -36,10 +37,16 @@ import 'add_inventory_item_dialog.dart';
       canCompress &&
       typedVerified &&
       writable.contains('private.inventory.removeItem');
+  final canReset =
+      privateEditable &&
+      canCompress &&
+      typedVerified &&
+      writable.contains('private.inventory.reset');
   return (
     editable: editable,
     canAddItem: canAddItem,
     canRemoveItem: canRemoveItem,
+    canReset: canReset,
   );
 }
 
@@ -126,7 +133,10 @@ class InventoryDetail extends ConsumerWidget {
       canCompress: canCompress,
     );
     final hasItems = inspection.privateInventory.hasData;
-    if (!hasItems && !gates.canAddItem && !gates.canRemoveItem) {
+    if (!hasItems &&
+        !gates.canAddItem &&
+        !gates.canRemoveItem &&
+        !gates.canReset) {
       return _MessagePane(
         icon: Icons.inventory_2_outlined,
         title: l10n.inventoryTitle,
@@ -143,6 +153,7 @@ class InventoryDetail extends ConsumerWidget {
         editable: gates.editable,
         canAddItem: gates.canAddItem,
         canRemoveItem: gates.canRemoveItem,
+        canReset: gates.canReset,
       ),
     );
   }
@@ -231,7 +242,10 @@ class _NpcInventoryDetailState extends State<_NpcInventoryDetail> {
       canCompress: widget.canCompress,
     );
     final hasItems = inventory.hasData;
-    if (!hasItems && !gates.canAddItem && !gates.canRemoveItem) {
+    if (!hasItems &&
+        !gates.canAddItem &&
+        !gates.canRemoveItem &&
+        !gates.canReset) {
       return _MessagePane(
         icon: Icons.inventory_2_outlined,
         title: l10n.inventoryTitle,
@@ -252,6 +266,7 @@ class _NpcInventoryDetailState extends State<_NpcInventoryDetail> {
         editable: gates.editable,
         canAddItem: gates.canAddItem,
         canRemoveItem: gates.canRemoveItem,
+        canReset: gates.canReset,
         pendingKey: 'inventory:${widget.npcId}',
         actorId: widget.npcId,
       ),
@@ -267,6 +282,7 @@ class _PrivateInventorySummaryCard extends ConsumerStatefulWidget {
     this.editable = true,
     this.canAddItem = false,
     this.canRemoveItem = false,
+    this.canReset = false,
     this.pendingKey = 'inventory',
     this.actorId,
   });
@@ -276,6 +292,7 @@ class _PrivateInventorySummaryCard extends ConsumerStatefulWidget {
   final bool editable;
   final bool canAddItem;
   final bool canRemoveItem;
+  final bool canReset;
 
   /// Pending-edit registry key this card writes to. The player inventory uses
   /// the literal `'inventory'`; each NPC uses a PER-NPC key (`'inventory:$id'`)
@@ -308,6 +325,10 @@ class _PrivateInventorySummaryCardState
   // mutually exclusive in the UI (queuing one clears the other), so a save never
   // mixes them.
   PrivateInventoryItem? _pendingRemove;
+  // Queued "reset to game-start" edit: true with the resolved Resources level.
+  // Mutually exclusive with every other pending inventory edit (like remove).
+  bool _pendingReset = false;
+  String? _pendingResetLevel;
 
   /// Asset path of the item queued for removal, or null when none is queued.
   /// Kept as a thin accessor so the existing path-based list filtering / display
@@ -375,6 +396,9 @@ class _PrivateInventorySummaryCardState
             slotId: (value['slotId'] as num?)?.toInt(),
             containerType: value['containerType'] as String?,
           );
+        case 'private.inventory.reset':
+          _pendingReset = true;
+          _pendingResetLevel = value['resourcesLevel'] as String?;
       }
     }
   }
@@ -400,6 +424,8 @@ class _PrivateInventorySummaryCardState
       _pendingCountChanges.clear();
       _pendingAdds.clear();
       _pendingRemove = null;
+      _pendingReset = false;
+      _pendingResetLevel = null;
       _rehydrateFromPending();
     }
   }
@@ -438,7 +464,13 @@ class _PrivateInventorySummaryCardState
             containerType: _pendingRemove!.containerType,
           ).toEditJson()
         : null;
-    final allEdits = [...countEdits, ...addEdits, ?removeEdit];
+    final resetEdit = _pendingReset
+        ? InventoryReset(
+            resourcesLevel: _pendingResetLevel ?? 'Gothic',
+            actorId: actorId,
+          ).toEditJson()
+        : null;
+    final allEdits = [...countEdits, ...addEdits, ?removeEdit, ?resetEdit];
     if (allEdits.isEmpty) {
       widget.notifier.clearPendingEdit(widget.pendingKey);
     } else {
@@ -479,8 +511,12 @@ class _PrivateInventorySummaryCardState
     if (!mounted || widget.notifier.selectedPath != dialogSavePath) return;
     setState(() {
       _pendingAdds.add(result);
-      // Add and remove stay mutually exclusive (see _pendingAdds doc).
+      // Add is mutually exclusive with remove and with a pending reset (see the
+      // _pendingReset / _pendingAdds docs). The reset button is already disabled
+      // while an add is queuable, so this clear is defensive symmetry.
       _pendingRemove = null;
+      _pendingReset = false;
+      _pendingResetLevel = null;
     });
     _pushInventoryPending();
   }
@@ -488,9 +524,13 @@ class _PrivateInventorySummaryCardState
   void _queueRemove(PrivateInventoryItem item) {
     setState(() {
       // A removal supersedes any pending count change on the same item, and is
-      // mutually exclusive with pending adds (add and remove never mix).
+      // mutually exclusive with pending adds and a pending reset (structural
+      // edits never mix). The reset button is disabled while a remove is
+      // queuable, so clearing reset here is defensive symmetry.
       _pendingCountChanges.remove(_inventoryItemKey(item));
       _pendingAdds.clear();
+      _pendingReset = false;
+      _pendingResetLevel = null;
       // Carry the full item so the remove edit echoes slotId + containerType,
       // letting the core target the exact slot in the right container.
       _pendingRemove = item;
@@ -500,6 +540,27 @@ class _PrivateInventorySummaryCardState
 
   void _undoRemove() {
     setState(() => _pendingRemove = null);
+    _pushInventoryPending();
+  }
+
+  void _queueReset() {
+    setState(() {
+      // Reset replaces the whole inventory, so it supersedes every other
+      // pending inventory edit (adds, removes, counts) and stands alone.
+      _pendingCountChanges.clear();
+      _pendingAdds.clear();
+      _pendingRemove = null;
+      _pendingReset = true;
+      _pendingResetLevel = widget.notifier.activeResourcesLevel();
+    });
+    _pushInventoryPending();
+  }
+
+  void _undoReset() {
+    setState(() {
+      _pendingReset = false;
+      _pendingResetLevel = null;
+    });
     _pushInventoryPending();
   }
 
@@ -559,20 +620,30 @@ class _PrivateInventorySummaryCardState
     final hasPendingAdd = _pendingAdds.isNotEmpty;
     final hasPendingRemove = _pendingRemovePath != null;
     final hasPendingCount = _pendingCountChanges.isNotEmpty;
+    final hasPendingReset = _pendingReset;
     final hasPendingChanges =
-        hasPendingCount || hasPendingAdd || hasPendingRemove;
+        hasPendingCount || hasPendingAdd || hasPendingRemove || hasPendingReset;
     final canRemove = widget.canRemoveItem;
     // Structural edits (add/remove) and count edits are kept mutually exclusive
     // in the UI: count editing is blocked while a structural edit is pending, and
     // queuing a remove is blocked while counts are pending. Multiple ADDS may be
     // queued together, though — saveAllPending commits each as its own sequential
-    // write — so a pending add does NOT block the Add button.
-    final addBlocked = hasPendingRemove || hasPendingCount;
+    // write — so a pending add does NOT block the Add button. A pending reset
+    // supersedes everything, so it blocks every other action too.
+    final addBlocked = hasPendingRemove || hasPendingCount || hasPendingReset;
     // Remove is a single structural edit — mutually exclusive with any other
-    // pending edit (adds, another remove, or counts).
-    final removeBlocked = hasPendingAdd || hasPendingRemove || hasPendingCount;
+    // pending edit (adds, another remove, counts, or a reset).
+    final removeBlocked =
+        hasPendingAdd || hasPendingRemove || hasPendingCount || hasPendingReset;
     final countEditable =
-        widget.editable && !hasPendingAdd && !hasPendingRemove;
+        widget.editable &&
+        !hasPendingAdd &&
+        !hasPendingRemove &&
+        !hasPendingReset;
+    // Reset is a single whole-inventory structural edit — offered only when no
+    // other edit (add/remove/count/reset) is already pending.
+    final resetBlocked =
+        hasPendingAdd || hasPendingRemove || hasPendingCount || hasPendingReset;
 
     return Card(
       child: Padding(
@@ -587,7 +658,8 @@ class _PrivateInventorySummaryCardState
             // an empty-but-addable inventory.
             if (hasItems ||
                 (widget.editable && hasPendingChanges) ||
-                widget.canAddItem)
+                widget.canAddItem ||
+                widget.canReset)
               Row(
                 children: [
                   if (hasItems)
@@ -618,6 +690,22 @@ class _PrivateInventorySummaryCardState
                       ),
                     ),
                   ],
+                  if (widget.canReset) ...[
+                    const SizedBox(width: 8),
+                    Tooltip(
+                      message: resetBlocked
+                          ? l10n.resetInventoryTooltipBlocked
+                          : l10n.resetInventoryTooltipDefault,
+                      child: OutlinedButton.icon(
+                        icon: const Icon(
+                          Icons.settings_backup_restore,
+                          size: 18,
+                        ),
+                        label: Text(l10n.resetInventoryButton),
+                        onPressed: resetBlocked ? null : _queueReset,
+                      ),
+                    ),
+                  ],
                   if (widget.editable && hasPendingChanges) ...[
                     const SizedBox(width: 8),
                     Tooltip(
@@ -629,6 +717,8 @@ class _PrivateInventorySummaryCardState
                             _pendingCountChanges.clear();
                             _pendingAdds.clear();
                             _pendingRemove = null;
+                            _pendingReset = false;
+                            _pendingResetLevel = null;
                           });
                           widget.notifier.clearPendingEdit(widget.pendingKey);
                         },
@@ -660,6 +750,17 @@ class _PrivateInventorySummaryCardState
                 subtitle: l10n.pendingRemovalSubtitle,
                 cancelTooltip: l10n.cancelPendingRemoval,
                 onCancel: _undoRemove,
+              ),
+            ],
+            if (hasPendingReset) ...[
+              const SizedBox(height: 12),
+              _PendingStructuralRow(
+                tone: _PendingTone.remove,
+                icon: Icons.settings_backup_restore,
+                title: l10n.pendingResetTitle,
+                subtitle: l10n.pendingResetSubtitle(_pendingResetLevel ?? 'Gothic'),
+                cancelTooltip: l10n.cancelPendingReset,
+                onCancel: _undoReset,
               ),
             ],
             if (hasItems) ...[

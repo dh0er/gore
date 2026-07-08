@@ -484,6 +484,20 @@ void main() {
     });
   });
 
+  test('InventoryReset.toEditJson emits path + level, omits null actorId', () {
+    expect(
+      const InventoryReset(resourcesLevel: 'Gothic').toEditJson(),
+      {'path': 'private.inventory.reset', 'value': {'resourcesLevel': 'Gothic'}},
+    );
+    expect(
+      const InventoryReset(resourcesLevel: 'Hard', actorId: 'Char_1').toEditJson(),
+      {
+        'path': 'private.inventory.reset',
+        'value': {'resourcesLevel': 'Hard', 'actorId': 'Char_1'},
+      },
+    );
+  });
+
   test('BackupEntry reads companion scope and allows direct restore', () {
     final backup = BackupEntry.fromJson({
       'path': r'C:\saves\PersistentDataList.sav.bak.250',

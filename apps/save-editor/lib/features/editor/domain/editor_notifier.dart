@@ -474,6 +474,65 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// without reaching into the protected `state`.
   PendingSaveEdit? pendingEditFor(String key) => state.pendingEdits[key];
 
+  /// The effective Resources difficulty level for the INSPECTED save, normalized
+  /// to 'Novice' | 'Gothic' | 'Hard' — used to pick the inventory-reset
+  /// start-save. Falls back to 'Gothic' when nothing resolves.
+  ///
+  /// Priority: (1) the profile ACTUALLY attached to the save (its
+  /// persistentProfileId); (2) the save's OWN parsed difficulty — an
+  /// unattributed/imported save carries it even when the folder holds OTHER
+  /// profiles, so we must NOT borrow another profile's level; (3) the scan's
+  /// active profile as a directory-wide default (e.g. no save inspected yet);
+  /// (4) 'Gothic'. Deliberately never the sidebar profile FILTER
+  /// (`activeProfile`/`effectiveProfileId`), which is a browsing choice.
+  ///
+  /// Mirrors the difficulty dialog's authoritative display: a non-Custom preset
+  /// (Novice/Gothic/Hard) LOCKS every sub-level to its implied tier, so a stale
+  /// or disagreeing stored Resources class is ignored — a Hard profile always
+  /// resets from the Hard save even if it carries an out-of-date `_Standard`
+  /// resources class. Only a Custom preset — or a profile with no recognized
+  /// preset to imply from — lets the stored Resources sub-level decide (else
+  /// Gothic).
+  String activeResourcesLevel() {
+    const known = {'Novice', 'Gothic', 'Hard'};
+    // A directory profile's difficulty by id, only when it carries values.
+    DifficultySettings? profileDifficulty(int? id) {
+      if (id == null) return null;
+      for (final profile in state.profiles) {
+        if (profile.profileId == id) {
+          return profile.difficulty.hasAnyValue ? profile.difficulty : null;
+        }
+      }
+      return null;
+    }
+
+    // 1. The profile ACTUALLY attached to the inspected save.
+    var difficulty = profileDifficulty(state.selectedSave?.persistentProfileId);
+    // 2. Else the inspected save's OWN parsed difficulty. An unattributed/imported
+    //    save carries it even when the folder holds OTHER profiles — do NOT borrow
+    //    the scan-active profile's level, which may belong to a different save.
+    if (difficulty == null) {
+      final own = state.selectedSave?.difficulty;
+      if (own != null && own.hasAnyValue) difficulty = own;
+    }
+    // 3. Else the scan's active profile (directory-wide default; e.g. no save
+    //    inspected yet).
+    difficulty ??= profileDifficulty(state.activeProfileId);
+    if (difficulty == null || !difficulty.hasAnyValue) return 'Gothic';
+    return switch (difficulty.presetLabel) {
+      'Novice' => 'Novice',
+      'Gothic' => 'Gothic',
+      'Hard' => 'Hard',
+      // Custom, or an unrecognized/absent preset: the stored Resources sub-level
+      // is authoritative (a non-Custom preset returned above and locked the
+      // level to its tier).
+      _ =>
+        known.contains(difficulty.resourcesLabel)
+            ? difficulty.resourcesLabel
+            : 'Gothic',
+    };
+  }
+
   /// Dismiss the current error banner.
   void dismissError() {
     if (state.error != null) state = state.copyWith(clearError: true);
@@ -677,6 +736,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
     const splicingPaths = {
       'private.inventory.addItem',
       'private.inventory.removeItem',
+      'private.inventory.reset',
       'private.knowledge.addCharacter',
       'private.npc.revive',
     };
@@ -715,6 +775,44 @@ class EditorNotifier extends StateNotifier<EditorState> {
             'A Skills change and an All-data edit to the same actor’s effect '
             '(ActiveEffects › EffectSpec › Def) are both queued. They cannot be '
             'saved together — reset or revert one of them, then save again.',
+      );
+      return false;
+    }
+    // A reset REPLACES the whole m_Inventory of its actor. Any other edit that
+    // touches that SAME inventory — a structured setItemCount/addItem/removeItem
+    // for the same actor, or a raw All-data private.typed.setValue stepping
+    // through an m_Inventory — lands in an earlier sub-write (the fixed batch, or
+    // another splice), so the reset would silently overwrite (discard) it while
+    // Save still reported success for both. Refuse the combination (like the
+    // conflicts above); the reset and the other inventory edit must be saved
+    // separately. Structured ops are matched by the reset's actorId (null =
+    // player); the raw typed case is matched broadly (its actor is not cheaply
+    // recoverable from the path), so a cross-actor typed pair just gets a "save
+    // separately" nudge rather than a silent overwrite.
+    final resetActors = <String?>{
+      for (final k in allEdits)
+        if (k.edit['path'] == 'private.inventory.reset')
+          (k.edit['value'] as Map?)?['actorId'] as String?,
+    };
+    if (resetActors.isNotEmpty &&
+        allEdits.any((k) {
+          final path = k.edit['path'];
+          if (path == 'private.inventory.reset') return false;
+          if (_isInventoryTypedEdit(k.edit)) return true;
+          if (path == 'private.inventory.setItemCount' ||
+              path == 'private.inventory.addItem' ||
+              path == 'private.inventory.removeItem') {
+            return resetActors.contains(
+              (k.edit['value'] as Map?)?['actorId'] as String?,
+            );
+          }
+          return false;
+        })) {
+      state = state.copyWith(
+        error:
+            'An inventory reset and another edit to the same inventory are both '
+            'queued. The reset replaces the entire inventory and would discard the '
+            'other edit — reset or revert one of them, then save again.',
       );
       return false;
     }
@@ -2064,6 +2162,19 @@ String? _activeEffectsDefActor(Map<String, Object?> edit) {
   return (key.startsWith('{') && key.endsWith('}'))
       ? key.substring(1, key.length - 1)
       : key;
+}
+
+/// Whether [edit] is a raw `private.typed.setValue` whose path steps through an
+/// `m_Inventory`. Such an edit collides with a queued `private.inventory.reset`,
+/// which replaces the whole `m_Inventory`: the reset splice runs after the fixed
+/// batch and would silently discard the typed edit (see [EditorNotifier.saveAllPending]).
+bool _isInventoryTypedEdit(Map<String, Object?> edit) {
+  if (edit['path'] != 'private.typed.setValue') return false;
+  final value = edit['value'];
+  if (value is! Map) return false;
+  final path = value['path'];
+  if (path is! List) return false;
+  return path.whereType<String>().contains('m_Inventory');
 }
 
 /// One write_save unit in [EditorNotifier.saveAllPending]'s worklist: the edits

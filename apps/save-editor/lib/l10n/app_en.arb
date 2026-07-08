@@ -233,6 +233,18 @@
   "addItemTooltipPendingCount": "Save or reset pending count changes first — a structural edit must be saved on its own",
   "addItemTooltipDefault": "Add item to inventory",
   "addItemButton": "Add item",
+  "resetInventoryButton": "Reset inventory",
+  "@resetInventoryButton": { "description": "Button: reset the actor's inventory to the game-start save" },
+  "resetInventoryTooltipDefault": "Replace this inventory with the game-start save's inventory",
+  "@resetInventoryTooltipDefault": {},
+  "resetInventoryTooltipBlocked": "Save or cancel the pending inventory changes first",
+  "@resetInventoryTooltipBlocked": {},
+  "pendingResetTitle": "Reset to game-start inventory",
+  "@pendingResetTitle": {},
+  "pendingResetSubtitle": "Resources level: {level}",
+  "@pendingResetSubtitle": { "placeholders": { "level": { "type": "String" } } },
+  "cancelPendingReset": "Cancel reset",
+  "@cancelPendingReset": {},
   "pendingAddSubtitle": "×{count} — pending add (not yet saved)",
   "@pendingAddSubtitle": {
     "placeholders": {
