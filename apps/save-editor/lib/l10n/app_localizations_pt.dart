@@ -9,6 +9,13 @@ class AppLocalizationsPt extends AppLocalizations {
   AppLocalizationsPt([String locale = 'pt']) : super(locale);
 
   @override
+  String get debugSectionTitle => 'Avançado (depuração)';
+
+  @override
+  String get debugSectionSubtitle =>
+      'Diagnóstico e dados brutos para relatórios de bugs';
+
+  @override
   String get appTitle => 'GORE Save Editor';
 
   @override
@@ -1393,6 +1400,13 @@ class AppLocalizationsPt extends AppLocalizations {
 /// The translations for Portuguese, as used in Brazil (`pt_BR`).
 class AppLocalizationsPtBr extends AppLocalizationsPt {
   AppLocalizationsPtBr() : super('pt_BR');
+
+  @override
+  String get debugSectionTitle => 'Avançado (depuração)';
+
+  @override
+  String get debugSectionSubtitle =>
+      'Diagnóstico e dados brutos para relatórios de bugs';
 
   @override
   String get appTitle => 'GORE Save Editor';

@@ -1,4 +1,6 @@
 {
+  "debugSectionTitle": "Дополнительно (отладка)",
+  "debugSectionSubtitle": "Диагностика и необработанные данные для отчётов об ошибках",
   "@@locale": "ru",
   "appTitle": "GORE Save Editor",
   "appLogoSemanticLabel": "GORE Save Editor logo",

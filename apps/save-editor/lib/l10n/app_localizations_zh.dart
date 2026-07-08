@@ -9,6 +9,12 @@ class AppLocalizationsZh extends AppLocalizations {
   AppLocalizationsZh([String locale = 'zh']) : super(locale);
 
   @override
+  String get debugSectionTitle => '高级（调试）';
+
+  @override
+  String get debugSectionSubtitle => '用于错误报告的诊断和原始数据';
+
+  @override
   String get appTitle => 'GORE Save Editor';
 
   @override
@@ -1351,6 +1357,12 @@ class AppLocalizationsZh extends AppLocalizations {
 /// The translations for Chinese, using the Han script (`zh_Hans`).
 class AppLocalizationsZhHans extends AppLocalizationsZh {
   AppLocalizationsZhHans() : super('zh_Hans');
+
+  @override
+  String get debugSectionTitle => '高级（调试）';
+
+  @override
+  String get debugSectionSubtitle => '用于错误报告的诊断和原始数据';
 
   @override
   String get appTitle => 'GORE Save Editor';

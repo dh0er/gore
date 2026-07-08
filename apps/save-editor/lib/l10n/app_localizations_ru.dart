@@ -9,6 +9,13 @@ class AppLocalizationsRu extends AppLocalizations {
   AppLocalizationsRu([String locale = 'ru']) : super(locale);
 
   @override
+  String get debugSectionTitle => 'Дополнительно (отладка)';
+
+  @override
+  String get debugSectionSubtitle =>
+      'Диагностика и необработанные данные для отчётов об ошибках';
+
+  @override
   String get appTitle => 'GORE Save Editor';
 
   @override

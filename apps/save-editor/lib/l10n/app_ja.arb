@@ -1,4 +1,6 @@
 {
+  "debugSectionTitle": "詳細（デバッグ）",
+  "debugSectionSubtitle": "バグ報告用の診断と生データ",
   "@@locale": "ja",
   "appTitle": "GORE Save Editor",
   "appLogoSemanticLabel": "GORE Save Editor logo",

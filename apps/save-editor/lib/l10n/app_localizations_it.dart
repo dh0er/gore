@@ -9,6 +9,13 @@ class AppLocalizationsIt extends AppLocalizations {
   AppLocalizationsIt([String locale = 'it']) : super(locale);
 
   @override
+  String get debugSectionTitle => 'Avanzate (debug)';
+
+  @override
+  String get debugSectionSubtitle =>
+      'Diagnostica e dati grezzi per le segnalazioni di bug';
+
+  @override
   String get appTitle => 'GORE Save Editor';
 
   @override

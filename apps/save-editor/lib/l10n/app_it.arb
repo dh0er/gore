@@ -1,4 +1,6 @@
 {
+  "debugSectionTitle": "Avanzate (debug)",
+  "debugSectionSubtitle": "Diagnostica e dati grezzi per le segnalazioni di bug",
   "@@locale": "it",
   "appTitle": "GORE Save Editor",
   "appLogoSemanticLabel": "GORE Save Editor logo",

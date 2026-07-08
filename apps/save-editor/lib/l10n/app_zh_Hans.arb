@@ -1,4 +1,6 @@
 {
+  "debugSectionTitle": "高级（调试）",
+  "debugSectionSubtitle": "用于错误报告的诊断和原始数据",
   "@@locale": "zh_Hans",
   "appTitle": "GORE Save Editor",
   "appLogoSemanticLabel": "GORE Save Editor logo",

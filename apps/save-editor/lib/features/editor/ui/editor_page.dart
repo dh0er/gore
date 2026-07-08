@@ -929,46 +929,48 @@ class _OverviewPanel extends StatelessWidget {
               inspection.privateTypedVerified &&
               state.codecCompressReady,
         ),
-        _OverviewDiagnostics(inspection: inspection),
-        const SizedBox(height: 16),
-        _OverviewInspectionJson(inspection: inspection),
       ],
     );
   }
 }
 
-class _OverviewInspectionJson extends StatefulWidget {
-  const _OverviewInspectionJson({required this.inspection});
+/// Collapsed "Advanced (debug)" section in Settings. Bundles the two
+/// developer-only readouts — the in-process codec self-test and the raw
+/// inspection JSON — that normal editing never needs. Kept for
+/// troubleshooting and bug reports (copy the JSON into an issue).
+class _DebugSection extends StatefulWidget {
+  const _DebugSection({required this.state, required this.notifier});
 
-  final SaveInspection inspection;
+  final EditorState state;
+  final EditorNotifier notifier;
 
   @override
-  State<_OverviewInspectionJson> createState() =>
-      _OverviewInspectionJsonState();
+  State<_DebugSection> createState() => _DebugSectionState();
 }
 
-class _OverviewInspectionJsonState extends State<_OverviewInspectionJson> {
+class _DebugSectionState extends State<_DebugSection> {
   bool _expanded = false;
   String? _cachedJson;
+  Object? _jsonFor;
 
-  @override
-  void didUpdateWidget(covariant _OverviewInspectionJson oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    // Every refresh/save produces a new SaveInspection instance; a cached
-    // pretty-print of the old one would show (and copy) stale data.
-    if (!identical(widget.inspection, oldWidget.inspection)) {
-      _cachedJson = null;
+  // Pretty-printing the raw inspection map isn't free; cache it per inspection
+  // identity (a refresh/save yields a new instance) so rebuilds and copy taps
+  // don't re-encode.
+  String _json(SaveInspection inspection) {
+    if (!identical(_jsonFor, inspection)) {
+      _cachedJson = inspection.prettyJson();
+      _jsonFor = inspection;
     }
-  }
-
-  String _getJson() {
-    _cachedJson ??= widget.inspection.prettyJson();
     return _cachedJson!;
   }
 
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
+    final state = widget.state;
+    final notifier = widget.notifier;
+    final inspection = state.inspection;
+    final theme = Theme.of(context);
     return Card(
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -976,130 +978,69 @@ class _OverviewInspectionJsonState extends State<_OverviewInspectionJson> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             _CollapsibleCardHeader(
-              icon: Icons.data_object,
-              title: l10n.inspectionJsonTitle,
-              subtitle: l10n.inspectionJsonSubtitle,
+              icon: Icons.bug_report_outlined,
+              title: l10n.debugSectionTitle,
+              subtitle: l10n.debugSectionSubtitle,
               expanded: _expanded,
               onToggle: () => setState(() => _expanded = !_expanded),
             ),
             if (_expanded) ...[
               const SizedBox(height: 8),
+              // Codec self-test: the in-process pure-Rust codec is effectively
+              // always ready, so this is a capability readout / smoke test.
               Row(
-                mainAxisAlignment: MainAxisAlignment.end,
                 children: [
-                  IconButton(
-                    tooltip: l10n.copy,
-                    icon: const Icon(Icons.copy),
-                    onPressed: () =>
-                        Clipboard.setData(ClipboardData(text: _getJson())),
+                  const Icon(Icons.compress_outlined, size: 20),
+                  const SizedBox(width: 8),
+                  Text(l10n.codecTitle, style: theme.textTheme.titleSmall),
+                  const Spacer(),
+                  OutlinedButton.icon(
+                    icon: const Icon(Icons.refresh),
+                    label: Text(l10n.check),
+                    onPressed: () => notifier.checkCodec(),
+                  ),
+                  const SizedBox(width: 8),
+                  OutlinedButton.icon(
+                    icon: const Icon(Icons.verified_outlined),
+                    label: Text(l10n.roundtrip),
+                    onPressed: state.selectedPath == null || state.isLoading
+                        ? null
+                        : notifier.validateCodecRoundtrip,
                   ),
                 ],
               ),
-              SelectableText(
-                _getJson(),
-                style: const TextStyle(fontFamily: 'Consolas', fontSize: 12),
+              const SizedBox(height: 12),
+              CodecStatusView(
+                codec: state.codecStatus,
+                codecError: state.codecError,
               ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _OverviewDiagnostics extends StatefulWidget {
-  const _OverviewDiagnostics({required this.inspection});
-
-  final SaveInspection inspection;
-
-  @override
-  State<_OverviewDiagnostics> createState() => _OverviewDiagnosticsState();
-}
-
-class _OverviewDiagnosticsState extends State<_OverviewDiagnostics> {
-  bool _expanded = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final inspection = widget.inspection;
-    final l10n = AppLocalizations.of(context);
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _CollapsibleCardHeader(
-              icon: Icons.science_outlined,
-              title: l10n.diagnosticsTitle,
-              subtitle: l10n.diagnosticsSubtitle,
-              expanded: _expanded,
-              onToggle: () => setState(() => _expanded = !_expanded),
-            ),
-            if (_expanded) ...[
-              const SizedBox(height: 8),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(
-                    child: _MetricGrid(
-                      metrics: {
-                        l10n.metricFormat: inspection.format,
-                        l10n.metricSlot: inspection.slot ?? '-',
-                        if (inspection.chapterId != null)
-                          l10n.metricChapter: inspection.chapterId.toString(),
-                        if (inspection.timePlayedSeconds != null)
-                          l10n.metricTimePlayed: _formatDurationSeconds(
-                            inspection.timePlayedSeconds,
-                          ),
-                        if (inspection.quickSave != null ||
-                            inspection.autoSave != null)
-                          l10n.metricSaveKind: _formatSaveKind(
-                            l10n,
-                            quickSave: inspection.quickSave,
-                            autoSave: inspection.autoSave,
-                          ),
-                        l10n.metricFileSize: l10n.bytesValue(
-                          _bytes.format(inspection.size),
-                        ),
-                        l10n.metricCompression:
-                            inspection.compressionMethod ?? '-',
-                        l10n.metricChunks:
-                            inspection.chunkCount?.toString() ?? '-',
-                        l10n.metricUncompressed:
-                            inspection.uncompressedSize == null
-                            ? '-'
-                            : l10n.bytesValue(
-                                _bytes.format(inspection.uncompressedSize),
-                              ),
-                        l10n.metricPrivate: inspection.privateStatus ?? '-',
-                      },
+              if (inspection != null) ...[
+                const Divider(height: 24),
+                Row(
+                  children: [
+                    const Icon(Icons.data_object, size: 20),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        l10n.inspectionJsonTitle,
+                        style: theme.textTheme.titleSmall,
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: _MetricGrid(
-                      metrics: {
-                        l10n.metricSlotName: inspection.slotName ?? '-',
-                        l10n.metricTrailer: inspection.trailerSize == null
-                            ? '-'
-                            : l10n.bytesValue('${inspection.trailerSize}'),
-                        l10n.metricDecodedPrivate:
-                            inspection.privateDecompressedSize == null
-                            ? '-'
-                            : l10n.bytesValue(
-                                _bytes.format(
-                                  inspection.privateDecompressedSize,
-                                ),
-                              ),
-                        l10n.metricPrivateStrings:
-                            inspection.privateStringCount?.toString() ?? '-',
-                        l10n.metricSha1: inspection.sha1,
-                      },
+                    IconButton(
+                      tooltip: l10n.copy,
+                      icon: const Icon(Icons.copy),
+                      onPressed: () => Clipboard.setData(
+                        ClipboardData(text: _json(inspection)),
+                      ),
                     ),
-                  ),
-                ],
-              ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                SelectableText(
+                  _json(inspection),
+                  style: const TextStyle(fontFamily: 'Consolas', fontSize: 12),
+                ),
+              ],
             ],
           ],
         ),
@@ -1629,45 +1570,6 @@ class _GameTimeCardState extends State<_GameTimeCard> {
         ),
         const SizedBox(height: 16),
       ],
-    );
-  }
-}
-
-class _MetricGrid extends StatelessWidget {
-  const _MetricGrid({required this.metrics});
-
-  final Map<String, String> metrics;
-
-  @override
-  Widget build(BuildContext context) {
-    // No Card here: callers place this inside their own card, so an extra card
-    // layer just doubles the padding.
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: metrics.entries
-          .map(
-            (entry) => Padding(
-              padding: const EdgeInsets.symmetric(vertical: 3),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  SizedBox(
-                    width: 130,
-                    child: Text(
-                      entry.key,
-                      style: TextStyle(
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ),
-                  // No maxLines: a multiline cap makes SelectableText reserve
-                  // that many lines of height even for one-line values.
-                  Expanded(child: SelectableText(entry.value)),
-                ],
-              ),
-            ),
-          )
-          .toList(),
     );
   }
 }
@@ -2533,7 +2435,6 @@ class _SettingsPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final codec = state.codecStatus;
     final l10n = AppLocalizations.of(context);
     return ListView(
       padding: const EdgeInsets.all(20),
@@ -2571,42 +2472,7 @@ class _SettingsPanel extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 16),
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    const Icon(Icons.compress_outlined),
-                    const SizedBox(width: 8),
-                    Text(
-                      l10n.codecTitle,
-                      style: Theme.of(context).textTheme.titleMedium,
-                    ),
-                    const Spacer(),
-                    OutlinedButton.icon(
-                      icon: const Icon(Icons.refresh),
-                      label: Text(l10n.check),
-                      onPressed: () => notifier.checkCodec(),
-                    ),
-                    const SizedBox(width: 8),
-                    OutlinedButton.icon(
-                      icon: const Icon(Icons.verified_outlined),
-                      label: Text(l10n.roundtrip),
-                      onPressed: state.selectedPath == null || state.isLoading
-                          ? null
-                          : notifier.validateCodecRoundtrip,
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                CodecStatusView(codec: codec, codecError: state.codecError),
-              ],
-            ),
-          ),
-        ),
+        _DebugSection(state: state, notifier: notifier),
       ],
     );
   }

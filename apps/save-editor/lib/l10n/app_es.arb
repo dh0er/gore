@@ -1,4 +1,6 @@
 {
+  "debugSectionTitle": "Avanzado (depuración)",
+  "debugSectionSubtitle": "Diagnóstico y datos sin procesar para informes de errores",
   "@@locale": "es",
   "appTitle": "GORE Save Editor",
   "appLogoSemanticLabel": "GORE Save Editor logo",

@@ -1,4 +1,6 @@
 {
+  "debugSectionTitle": "Avancé (débogage)",
+  "debugSectionSubtitle": "Diagnostic et données brutes pour les rapports de bogue",
   "@@locale": "fr",
   "appTitle": "GORE Save Editor",
   "appLogoSemanticLabel": "GORE Save Editor logo",

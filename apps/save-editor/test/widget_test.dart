@@ -40,35 +40,12 @@ void main() {
     // The profile header carries the difficulty chip (profile-wide difficulty).
     expect(find.text('Custom'), findsAtLeastNWidgets(1));
 
-    // Format/save-kind details live in the collapsed diagnostics card.
-    expect(find.text('Format'), findsNothing);
-    // Expand the diagnostics card to reach the format/save-kind metrics.
-    await tester.tap(find.text('Diagnostics & details'));
-    await tester.pumpAndSettle();
-    expect(find.text('Format'), findsOneWidget);
-    expect(find.text('Time played'), findsOneWidget);
-    expect(find.text('Auto save'), findsOneWidget);
+    // The header shows the save's screenshot on the Overview tab.
     expect(find.bySemanticsLabel('Screenshot for G1R-001'), findsWidgets);
-
-    // JSON content is not visible until expanded.
-    expect(find.text('"format"'), findsNothing);
-    // Scroll the Inspection JSON card into view (the lazy ListView only builds
-    // children near the viewport).
-    await tester.scrollUntilVisible(
-      find.text('Inspection JSON'),
-      120,
-      scrollable: find.byType(Scrollable).last,
-    );
-    // Inspection JSON card exists and is collapsed by default.
-    expect(find.text('Inspection JSON'), findsOneWidget);
-    expect(find.text('Raw save inspection data'), findsOneWidget);
-    // Expand the card and confirm JSON content appears.
-    await tester.tap(find.text('Inspection JSON'));
-    await tester.pumpAndSettle();
-    expect(find.textContaining('"format"'), findsOneWidget);
-    // Collapse it again.
-    await tester.tap(find.text('Inspection JSON'));
-    await tester.pumpAndSettle();
+    // Diagnostics + inspection JSON no longer live on Overview: they moved into
+    // the Settings debug section (covered by its own test below).
+    expect(find.text('Diagnostics & details'), findsNothing);
+    expect(find.text('Inspection JSON'), findsNothing);
 
     // Global Save button starts disabled (no pending edits yet).
     expect(
@@ -374,6 +351,48 @@ void main() {
       'path': r'C:\tmp\saves\PersistentDataList.sav',
       'backupPath': r'C:\tmp\saves\PersistentDataList.sav.bak.250',
     });
+  });
+
+  testWidgets('Settings debug section exposes codec status and inspection '
+      'JSON', (tester) async {
+    // Tall surface so all Settings cards (including the debug section) lay out
+    // without scrolling.
+    await tester.binding.setSurfaceSize(const Size(1400, 1600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final core = _FakeCoreService();
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          coreServiceProvider.overrideWithValue(core),
+          editorSettingsStoreProvider.overrideWithValue(
+            const NoopEditorSettingsStore(),
+          ),
+        ],
+        child: const GoresaveApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // Reveal and open the Settings tab (last entry in the scrollable tab bar).
+    await tester.drag(find.byType(TabBar).first, const Offset(-800, 0));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(Tab, 'Settings'), warnIfMissed: false);
+    await tester.pumpAndSettle();
+
+    // Collapsed by default: neither the codec status nor the raw JSON shows yet.
+    expect(find.text('Advanced (debug)'), findsOneWidget);
+    expect(find.text('Codec ready'), findsNothing);
+    expect(find.text('Inspection JSON'), findsNothing);
+
+    // Expand the debug section.
+    await tester.tap(find.text('Advanced (debug)'));
+    await tester.pumpAndSettle();
+
+    // Codec self-test status (the fake core reports a ready codec) and the raw
+    // inspection JSON of the loaded save both appear.
+    expect(find.text('Codec ready'), findsOneWidget);
+    expect(find.text('Inspection JSON'), findsOneWidget);
+    expect(find.textContaining('"format"'), findsOneWidget);
   });
 
   testWidgets('switching tabs preserves unsaved edit and Save count', (

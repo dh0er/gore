@@ -116,6 +116,18 @@ abstract class AppLocalizations {
     Locale.fromSubtags(languageCode: 'zh', scriptCode: 'Hans'),
   ];
 
+  /// No description provided for @debugSectionTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Advanced (debug)'**
+  String get debugSectionTitle;
+
+  /// No description provided for @debugSectionSubtitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Diagnostics & raw data for bug reports'**
+  String get debugSectionSubtitle;
+
   /// No description provided for @appTitle.
   ///
   /// In en, this message translates to:
