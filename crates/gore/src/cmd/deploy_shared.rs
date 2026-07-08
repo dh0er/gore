@@ -4,7 +4,8 @@
 use anyhow::{bail, Context, Result};
 use std::{fs, path::Path, path::PathBuf};
 
-pub fn run(src: Option<PathBuf>, game: PathBuf) -> Result<()> {
+pub fn run(src: Option<PathBuf>, game: Option<PathBuf>) -> Result<()> {
+    let game = gore_loc::config::game_root(game)?;
     let src = match src {
         Some(s) => s,
         None => resolve_default_src()?,

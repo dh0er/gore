@@ -110,9 +110,10 @@ enum Commands {
         /// executable (cwd-independent); pass this when running from an unusual layout.
         #[arg(long)]
         src: Option<std::path::PathBuf>,
-        /// Game dir containing ue4ss/Mods.
+        /// Game dir containing ue4ss/Mods. Defaults to the configured game path or
+        /// Steam auto-detect when omitted (see `gore config`).
         #[arg(long)]
-        game: std::path::PathBuf,
+        game: Option<std::path::PathBuf>,
     },
     /// AngelScript precompiled-cache tooling (decode/emit/splice/decompile).
     As {
@@ -172,13 +173,13 @@ enum ModAction {
         bundle: PathBuf,
         /// Game root (the folder containing G1R/)
         #[arg(long)]
-        game: PathBuf,
+        game: Option<PathBuf>,
     },
     /// Undeploy the active mod (restore backups)
     Undeploy {
         /// Game root (the folder containing G1R/)
         #[arg(long)]
-        game: PathBuf,
+        game: Option<PathBuf>,
     },
 }
 

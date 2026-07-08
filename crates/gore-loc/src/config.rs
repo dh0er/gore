@@ -74,10 +74,19 @@ pub enum ConfigError {
 /// `G1R/` parent). Returns [`ConfigError::Unresolved`] when nothing resolves.
 pub fn game_root(explicit: Option<PathBuf>) -> Result<PathBuf, ConfigError> {
     let configured = load().game_path.map(PathBuf::from);
-    let detected = discover::find_game_root();
+    let detected = if autodetect_disabled() { None } else { discover::find_game_root() };
     resolve_root(explicit, configured, detected)
         .map(|p| normalize_root(&p))
         .ok_or(ConfigError::Unresolved)
+}
+
+/// Test / power-user seam: when `GORE_DISABLE_GAME_AUTODETECT` is set to a
+/// non-empty value, skip Steam auto-detection so resolution relies solely on an
+/// explicit arg or the configured `game_path`.
+fn autodetect_disabled() -> bool {
+    std::env::var_os("GORE_DISABLE_GAME_AUTODETECT")
+        .map(|v| !v.is_empty())
+        .unwrap_or(false)
 }
 
 /// Pure precedence selection (no IO): explicit > configured > detected.

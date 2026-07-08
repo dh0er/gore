@@ -10,6 +10,12 @@ fn deploy_shared_copies_tree_into_mods_shared() {
     fs::write(src.path().join("gore-lua/gore-lua.lua"), "return {}\n").unwrap();
 
     let game = tempdir().unwrap();
+    // `--game` now resolves through `gore_loc::config::game_root`, which normalizes
+    // any resolved path (explicit args included) by walking up to the nearest
+    // ancestor holding a `G1R/` child. Give the fixture its own `G1R/` marker so it
+    // normalizes to itself instead of an unrelated ancestor further up the shared OS
+    // temp root (e.g. a stray leftover `G1R` dir from other tooling).
+    fs::create_dir_all(game.path().join("G1R")).unwrap();
     let mods = game.path().join("ue4ss/Mods");
     fs::create_dir_all(&mods).unwrap();
 
