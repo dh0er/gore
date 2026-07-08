@@ -26,6 +26,12 @@ pub fn loc_meta_path() -> PathBuf {
     shared_data_dir().join("loc_meta.json")
 }
 
+/// The shared per-user `config.json` (see [`crate::config`]).
+// TODO: a later task formalizes/tests this alongside the rest of `paths.rs`.
+pub fn config_path() -> PathBuf {
+    shared_data_dir().join("config.json")
+}
+
 #[cfg(windows)]
 fn local_app_data_root() -> PathBuf {
     std::env::var_os("LOCALAPPDATA")
