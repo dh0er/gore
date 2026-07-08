@@ -4,13 +4,17 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:goresave/features/localization/domain/localization_controller.dart';
 import 'package:goresave/l10n/app_localizations.dart';
 import 'package:goresave/loc/loc_catalog_provider.dart';
+import 'package:goresave/providers/data_providers.dart';
 
 /// Runs the shared "extract localized game text" flow used by both the
 /// first-run confirmation and the manual Settings button.
 ///
-/// 1. Attempts auto-detect extraction (no hint).
-/// 2. On a not-found auto-detect failure, opens a `.lcache` file picker and
-///    retries with the picked path; if the user cancels, aborts gracefully.
+/// 1. Attempts extraction using the configured `game_path` (shared
+///    `config.json`, e.g. set via `gore config` or another gore-suite app) as
+///    an authoritative hint when present; otherwise auto-detects via Steam.
+/// 2. On a not-found auto-detect failure (no hint at all), opens a `.lcache`
+///    file picker and retries with the picked path; if the user cancels,
+///    aborts gracefully.
 /// 3. Reports success/failure via a SnackBar.
 ///
 /// [context] must come from a widget that is still mounted; the function checks
@@ -21,7 +25,10 @@ Future<void> runLocalizationExtractFlow(
 ) async {
   final controller = ref.read(localizationControllerProvider.notifier);
 
-  var result = await controller.extract();
+  // An explicitly-configured game install is preferred over Steam auto-detect
+  // (matches the `gore` CLI's own precedence: configured path > auto-detect).
+  final configuredGamePath = ref.read(sharedConfigProvider).gamePath();
+  var result = await controller.extract(lcacheHint: configuredGamePath);
 
   if (result.notFound) {
     if (!context.mounted) return;
