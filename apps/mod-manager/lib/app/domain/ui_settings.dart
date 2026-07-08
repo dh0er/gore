@@ -6,9 +6,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
 import 'package:path/path.dart' as p;
 
+import 'shared_config.dart';
+
 class UiSettings {
   const UiSettings({
-    this.gameExePath,
     this.appLocale = 'en',
     this.themeMode = ThemeMode.light,
     this.uiScale = 1.0,
@@ -18,10 +19,6 @@ class UiSettings {
 
   factory UiSettings.fromJson(Map<String, Object?> json) {
     return UiSettings(
-      gameExePath: switch (json['gameExePath']) {
-        final String path when path.isNotEmpty => path,
-        _ => null,
-      },
       appLocale: switch (json['appLocale']) {
         // Trim so a stored " de " still matches kGameLangs (else the picker
         // would silently fall back to English).
@@ -46,10 +43,6 @@ class UiSettings {
     );
   }
 
-  /// Path to the game's executable (.exe). Used to derive the game root that
-  /// mods are deployed into; null until set by the user.
-  final String? gameExePath;
-
   /// Selected app/game language code (one of [kGameLangs]); drives the
   /// MaterialApp locale.
   final String appLocale;
@@ -65,8 +58,6 @@ class UiSettings {
   final bool windowMaximized;
 
   UiSettings copyWith({
-    String? gameExePath,
-    bool clearGameExePath = false,
     String? appLocale,
     ThemeMode? themeMode,
     double? uiScale,
@@ -74,7 +65,6 @@ class UiSettings {
     bool? windowMaximized,
   }) {
     return UiSettings(
-      gameExePath: clearGameExePath ? null : gameExePath ?? this.gameExePath,
       appLocale: appLocale ?? this.appLocale,
       themeMode: themeMode ?? this.themeMode,
       uiScale: uiScale ?? this.uiScale,
@@ -84,7 +74,6 @@ class UiSettings {
   }
 
   Map<String, Object?> toJson() => {
-    if (gameExePath != null) 'gameExePath': gameExePath,
     'appLocale': appLocale,
     'themeMode': switch (themeMode) {
       ThemeMode.dark => 'dark',
@@ -183,26 +172,36 @@ final uiSettingsStoreProvider = Provider<UiSettingsStore>((ref) {
   return JsonFileUiSettingsStore.defaultForPlatform();
 });
 
+/// The shared `config.json` the `gore` CLI and other apps also read/write.
+final sharedConfigProvider = Provider<SharedConfig>((ref) {
+  if (Platform.environment.containsKey('FLUTTER_TEST')) {
+    // Widget tests must not touch the real shared config.
+    return SharedConfig(File(p.join(Directory.systemTemp.path, 'gore-test', 'config.json')));
+  }
+  return SharedConfig.defaultForPlatform();
+});
+
 /// Path to the game's executable (.exe), or null if unset. Used to derive the
-/// game root for deploys. Persisted so the choice survives restarts.
+/// game root for deploys. Persisted (in the shared `config.json`) so the
+/// choice survives restarts and is shared with the `gore` CLI and other apps.
 final gameExePathProvider =
     StateNotifierProvider<GameExePathNotifier, String?>((ref) {
-  return GameExePathNotifier(ref.watch(uiSettingsStoreProvider));
+  return GameExePathNotifier(ref.watch(sharedConfigProvider));
 });
 
 class GameExePathNotifier extends StateNotifier<String?> {
-  GameExePathNotifier(this._store) : super(_store.read().gameExePath);
+  GameExePathNotifier(this._config) : super(_config.gamePath());
 
-  final UiSettingsStore _store;
+  final SharedConfig _config;
 
   void set(String path) {
     state = path;
-    _store.write(_store.read().copyWith(gameExePath: path));
+    _config.setGamePath(path);
   }
 
   void clear() {
     state = null;
-    _store.write(_store.read().copyWith(clearGameExePath: true));
+    _config.clearGamePath();
   }
 }
 

@@ -1,7 +1,10 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:gore_manager/app/domain/shared_config.dart';
 import 'package:gore_manager/app/domain/ui_settings.dart';
 import 'package:gore_manager/app/game_paths.dart';
 import 'package:gore_manager/core/core_service.dart';
@@ -9,10 +12,10 @@ import 'package:gore_manager/core/providers.dart';
 import 'package:gore_manager/home_page.dart';
 import 'package:gore_manager/l10n/app_localizations.dart';
 import 'package:gore_manager/library/domain/library_notifier.dart';
+import 'package:path/path.dart' as p;
 
-/// A settings store that starts with no game path so the startup status runs
-/// against a null root (the set-path sentinel), letting the test isolate the
-/// mgr_status call triggered by the *path change*.
+/// A settings store that starts empty; only theme/locale/scale live here now
+/// (the game path moved to the shared config, see [_freshSharedConfig]).
 class _EmptySettingsStore implements UiSettingsStore {
   UiSettings _current = const UiSettings();
 
@@ -23,11 +26,26 @@ class _EmptySettingsStore implements UiSettingsStore {
   void write(UiSettings settings) => _current = settings;
 }
 
-Widget _app(FakeGoreCoreFfiService fake, UiSettingsStore store) {
+/// A shared config backed by its own temp file, optionally pre-seeded with a
+/// game path. Isolated per call (fresh temp dir) so tests never observe state
+/// left over by another test or a previous run — unlike the app's default
+/// FLUTTER_TEST shared-config stub, which points at one fixed temp path.
+SharedConfig _freshSharedConfig({String? gamePath}) {
+  final dir = Directory.systemTemp.createTempSync('gm_status_test_cfg');
+  addTearDown(() {
+    if (dir.existsSync()) dir.deleteSync(recursive: true);
+  });
+  final config = SharedConfig(File(p.join(dir.path, 'config.json')));
+  if (gamePath != null) config.setGamePath(gamePath);
+  return config;
+}
+
+Widget _app(FakeGoreCoreFfiService fake, UiSettingsStore store, SharedConfig config) {
   return ProviderScope(
     overrides: [
       coreServiceProvider.overrideWithValue(fake),
       uiSettingsStoreProvider.overrideWithValue(store),
+      sharedConfigProvider.overrideWithValue(config),
     ],
     child: MaterialApp(
       localizationsDelegates: const [
@@ -102,11 +120,13 @@ class _StatefulFake implements GoreCoreFfiService {
   }
 }
 
-Widget _appService(GoreCoreFfiService svc, UiSettingsStore store) {
+Widget _appService(
+    GoreCoreFfiService svc, UiSettingsStore store, SharedConfig config) {
   return ProviderScope(
     overrides: [
       coreServiceProvider.overrideWithValue(svc),
       uiSettingsStoreProvider.overrideWithValue(store),
+      sharedConfigProvider.overrideWithValue(config),
     ],
     child: MaterialApp(
       localizationsDelegates: const [
@@ -124,14 +144,14 @@ Widget _appService(GoreCoreFfiService svc, UiSettingsStore store) {
 void main() {
   testWidgets('a loadout edit re-queries deployment status', (tester) async {
     // Start with the game path already set so status refreshes hit the FFI.
-    final store = _EmptySettingsStore()
-      ..write(const UiSettings().copyWith(
-        gameExePath: 'C:/games/gothic/G1R/Binaries/Win64/G1R-Win64-Shipping.exe',
-      ));
+    final store = _EmptySettingsStore();
+    final config = _freshSharedConfig(
+      gamePath: 'C:/games/gothic/G1R/Binaries/Win64/G1R-Win64-Shipping.exe',
+    );
     final fake = _StatefulFake([
       {'id': 'm1', 'enabled': false},
     ]);
-    await tester.pumpWidget(_appService(fake, store));
+    await tester.pumpWidget(_appService(fake, store, config));
     await tester.pumpAndSettle();
 
     final before = fake.calls.where((c) => c.command == 'mgr_status').length;
@@ -166,7 +186,8 @@ void main() {
         },
       },
     );
-    await tester.pumpWidget(_app(fake, _EmptySettingsStore()));
+    await tester.pumpWidget(
+        _app(fake, _EmptySettingsStore(), _freshSharedConfig()));
     await tester.pumpAndSettle();
 
     // Startup ran mgr_status with a null root -> the sentinel, no FFI call.
