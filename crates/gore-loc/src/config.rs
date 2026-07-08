@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::discover;
 use crate::paths;
 
 /// Persisted per-user settings. All fields optional and additive so old files
@@ -57,6 +58,47 @@ pub fn save_to(path: &Path, cfg: &Config) -> std::io::Result<()> {
     }
     let bytes = serde_json::to_vec_pretty(cfg)?;
     crate::loc_store::write_atomic(path, &bytes)
+}
+
+/// Error resolving the game path.
+#[derive(Debug, thiserror::Error)]
+pub enum ConfigError {
+    #[error("no game path set — run 'gore config set game-path <path>' or pass --game")]
+    Unresolved,
+}
+
+/// Resolve the game install ROOT (the folder containing `G1R/`).
+///
+/// Precedence: explicit CLI arg > configured `game_path` > Steam auto-detect.
+/// The winning path is normalized (an `.exe` or a descendant walks up to the
+/// `G1R/` parent). Returns [`ConfigError::Unresolved`] when nothing resolves.
+pub fn game_root(explicit: Option<PathBuf>) -> Result<PathBuf, ConfigError> {
+    let configured = load().game_path.map(PathBuf::from);
+    let detected = discover::find_game_root();
+    resolve_root(explicit, configured, detected)
+        .map(|p| normalize_root(&p))
+        .ok_or(ConfigError::Unresolved)
+}
+
+/// Pure precedence selection (no IO): explicit > configured > detected.
+fn resolve_root(
+    explicit: Option<PathBuf>,
+    configured: Option<PathBuf>,
+    detected: Option<PathBuf>,
+) -> Option<PathBuf> {
+    explicit.or(configured).or(detected)
+}
+
+/// Normalize any game path to the install root: the nearest ancestor (including
+/// `p` itself) that holds a `G1R/` child. Best-effort — returns `p` unchanged
+/// when no such ancestor exists (unusual layout / path not on disk).
+fn normalize_root(p: &Path) -> PathBuf {
+    for anc in p.ancestors() {
+        if anc.join("G1R").is_dir() {
+            return anc.to_path_buf();
+        }
+    }
+    p.to_path_buf()
 }
 
 #[cfg(test)]
@@ -116,5 +158,56 @@ mod tests {
         let path = dir.path().join("config.json");
         std::fs::write(&path, b"not json at all").unwrap();
         assert_eq!(load_from(&path).game_path, None);
+    }
+
+    #[test]
+    fn resolve_precedence_explicit_wins() {
+        let got = resolve_root(
+            Some(PathBuf::from("/explicit")),
+            Some(PathBuf::from("/configured")),
+            Some(PathBuf::from("/detected")),
+        );
+        assert_eq!(got, Some(PathBuf::from("/explicit")));
+    }
+
+    #[test]
+    fn resolve_precedence_config_over_detected() {
+        let got = resolve_root(None, Some(PathBuf::from("/configured")), Some(PathBuf::from("/detected")));
+        assert_eq!(got, Some(PathBuf::from("/configured")));
+    }
+
+    #[test]
+    fn resolve_precedence_detected_last() {
+        let got = resolve_root(None, None, Some(PathBuf::from("/detected")));
+        assert_eq!(got, Some(PathBuf::from("/detected")));
+    }
+
+    #[test]
+    fn resolve_none_when_all_absent() {
+        assert_eq!(resolve_root(None, None, None), None);
+    }
+
+    #[test]
+    fn normalize_walks_exe_up_to_g1r_parent() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("G1R")).unwrap();
+        let exe = root.join("G1R").join("Binaries").join("Win64").join("G1R-Win64-Shipping.exe");
+        std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        std::fs::write(&exe, b"x").unwrap();
+        assert_eq!(normalize_root(&exe), root.to_path_buf());
+    }
+
+    #[test]
+    fn normalize_returns_root_unchanged_when_it_holds_g1r() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("G1R")).unwrap();
+        assert_eq!(normalize_root(root), root.to_path_buf());
+    }
+
+    #[test]
+    fn normalize_best_effort_when_no_g1r() {
+        assert_eq!(normalize_root(Path::new("/no/such/place")), PathBuf::from("/no/such/place"));
     }
 }
