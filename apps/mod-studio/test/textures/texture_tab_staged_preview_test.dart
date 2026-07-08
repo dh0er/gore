@@ -4,25 +4,28 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:gore_mod/app/domain/ui_settings.dart';
+import 'package:gore_mod/app/domain/shared_config.dart';
+import 'package:gore_mod/app/domain/ui_settings.dart' show sharedConfigProvider;
 import 'package:gore_mod/textures/domain/texture_index_provider.dart';
 import 'package:gore_mod/textures/domain/texture_replacements_notifier.dart';
 import 'package:gore_mod/textures/ui/texture_tab.dart';
+import 'package:path/path.dart' as p;
 
-/// Settings store with a game exe path set so TextureTab proceeds past the
-/// "set the game path" hint. The path doesn't exist on disk, so the game root
-/// resolves to null and no FFI preview/extract is ever attempted — the
-/// original-preview branch stays on its "Preview to see…" placeholder, making
-/// the staged-vs-original branch switch directly observable.
-class _ExeStore implements UiSettingsStore {
-  const _ExeStore();
-
-  @override
-  UiSettings read() =>
-      const UiSettings(gameExePath: r'C:\gore-test-nonexistent\G1R.exe');
-
-  @override
-  void write(UiSettings settings) {}
+/// A shared config, backed by its own temp file, seeded with a fixed
+/// nonexistent exe path so TextureTab proceeds past the "set the game path"
+/// hint. The path doesn't exist on disk, so the game root resolves to null
+/// and no FFI preview/extract is ever attempted — the original-preview branch
+/// stays on its "Preview to see…" placeholder, making the staged-vs-original
+/// branch switch directly observable. Isolated per call so tests don't share
+/// state.
+SharedConfig _fixedSharedConfig() {
+  final dir = Directory.systemTemp.createTempSync('gore_texture_preview_cfg');
+  addTearDown(() {
+    if (dir.existsSync()) dir.deleteSync(recursive: true);
+  });
+  final config = SharedConfig(File(p.join(dir.path, 'config.json')));
+  config.setGamePath(r'C:\gore-test-nonexistent\G1R.exe');
+  return config;
 }
 
 const _asset = 'Game/Textures/A';
@@ -40,7 +43,7 @@ final Uint8List _onePixelPng = Uint8List.fromList(const [
 
 Widget _app() => ProviderScope(
   overrides: [
-    uiSettingsStoreProvider.overrideWithValue(const _ExeStore()),
+    sharedConfigProvider.overrideWithValue(_fixedSharedConfig()),
     textureIndexProvider.overrideWith((ref) async => _fakeIndex),
   ],
   child: const MaterialApp(home: Scaffold(body: TextureTab())),
