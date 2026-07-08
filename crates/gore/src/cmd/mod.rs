@@ -1,6 +1,7 @@
 pub mod as_cache;
 pub mod audio;
 pub mod catalog;
+pub mod config;
 pub mod deploy_shared;
 pub mod dump;
 pub mod dump_mod;

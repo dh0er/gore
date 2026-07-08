@@ -147,6 +147,11 @@ enum Commands {
         #[command(subcommand)]
         action: cmd::mgr::MgrAction,
     },
+    /// Read/write the shared per-user config (game path, …)
+    Config {
+        #[command(subcommand)]
+        action: cmd::config::ConfigAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -325,6 +330,7 @@ fn main() {
         },
         Commands::Texture { action } => cmd::texture::run(action),
         Commands::Mgr { action } => cmd::mgr::run(action),
+        Commands::Config { action } => cmd::config::run(action),
     };
     if let Err(e) = result {
         eprintln!("error: {e:#}");
