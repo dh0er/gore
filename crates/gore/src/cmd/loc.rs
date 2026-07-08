@@ -9,7 +9,7 @@
 
 use anyhow::{Context, Result};
 use gore_loc::loc::Lcache;
-use gore_loc::{loc_store, paths};
+use gore_loc::{config, loc_store, paths};
 use std::io::Write as _;
 use std::{collections::BTreeMap, fs, path::PathBuf};
 
@@ -18,10 +18,15 @@ type LocMap = BTreeMap<String, BTreeMap<String, String>>;
 /// Auto-detect (or use `--lcache`) the game's localization cache and write the
 /// shared `gore-tools/loc_catalog.json`. Prompts for confirmation unless `--yes`.
 pub fn extract(lcache: Option<PathBuf>, yes: bool) -> Result<()> {
-    let resolved = loc_store::resolve_lcache(lcache.as_deref())
+    // Resolution precedence: explicit --lcache > the configured game path
+    // (discover walks it to the .lcache) > Steam auto-detect. A configured path
+    // is used authoritatively (like an explicit hint), so `loc` reads text from
+    // YOUR configured install rather than a possibly-different Steam one.
+    let hint = lcache.or_else(|| config::load().game_path.map(PathBuf::from));
+    let resolved = loc_store::resolve_lcache(hint.as_deref())
         .ok_or_else(|| anyhow::anyhow!(
-            "no AlkimiaLocalization .lcache found (Steam auto-detect failed). \
-             Pass --lcache <path-to-.lcache or game dir>."
+            "no AlkimiaLocalization .lcache found (tried --lcache, the configured \
+             game path, then Steam auto-detect). Pass --lcache <path-to-.lcache or game dir>."
         ))?;
 
     if !yes {
