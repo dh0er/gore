@@ -474,18 +474,17 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// without reaching into the protected `state`.
   PendingSaveEdit? pendingEditFor(String key) => state.pendingEdits[key];
 
-  /// The effective Resources difficulty level of the INSPECTED save's profile,
-  /// normalized to 'Novice' | 'Gothic' | 'Hard' — used to pick the inventory-reset
-  /// start-save. Falls back to 'Gothic' when no profile/difficulty resolves.
+  /// The effective Resources difficulty level for the INSPECTED save, normalized
+  /// to 'Novice' | 'Gothic' | 'Hard' — used to pick the inventory-reset
+  /// start-save. Falls back to 'Gothic' when nothing resolves.
   ///
-  /// Resolves difficulty in priority order: the inspected save's own PROFILE
-  /// (its persistentProfileId, then the scan's active profile id — NOT the
-  /// sidebar profile FILTER that `activeProfile`/`effectiveProfileId` honor for
-  /// browsing), then the inspected save's OWN parsed difficulty (a
-  /// standalone/imported save, or a missing PersistentDataList.sav, has no
-  /// profile metadata but the GSAV still carries its DifficultySettings), and
-  /// only then the 'Gothic' default. Without the save fallback a Novice/Hard
-  /// standalone save would silently reset from the Gothic save.
+  /// Priority: (1) the profile ACTUALLY attached to the save (its
+  /// persistentProfileId); (2) the save's OWN parsed difficulty — an
+  /// unattributed/imported save carries it even when the folder holds OTHER
+  /// profiles, so we must NOT borrow another profile's level; (3) the scan's
+  /// active profile as a directory-wide default (e.g. no save inspected yet);
+  /// (4) 'Gothic'. Deliberately never the sidebar profile FILTER
+  /// (`activeProfile`/`effectiveProfileId`), which is a browsing choice.
   ///
   /// Mirrors the difficulty dialog's authoritative display: a non-Custom preset
   /// (Novice/Gothic/Hard) LOCKS every sub-level to its implied tier, so a stale
@@ -496,27 +495,29 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// Gothic).
   String activeResourcesLevel() {
     const known = {'Novice', 'Gothic', 'Hard'};
-    // 1. The save's PROFILE difficulty (profile-wide, authoritative).
-    final saveProfileId =
-        state.selectedSave?.persistentProfileId ?? state.activeProfileId;
-    DifficultySettings? difficulty;
-    if (saveProfileId != null) {
+    // A directory profile's difficulty by id, only when it carries values.
+    DifficultySettings? profileDifficulty(int? id) {
+      if (id == null) return null;
       for (final profile in state.profiles) {
-        if (profile.profileId == saveProfileId) {
-          difficulty = profile.difficulty;
-          break;
+        if (profile.profileId == id) {
+          return profile.difficulty.hasAnyValue ? profile.difficulty : null;
         }
       }
+      return null;
     }
-    // 2. Fall back to the inspected save's OWN parsed difficulty when no profile
-    //    difficulty resolved (standalone/imported save, or missing profile
-    //    metadata).
-    if (difficulty == null || !difficulty.hasAnyValue) {
-      final saveDifficulty = state.selectedSave?.difficulty;
-      if (saveDifficulty != null && saveDifficulty.hasAnyValue) {
-        difficulty = saveDifficulty;
-      }
+
+    // 1. The profile ACTUALLY attached to the inspected save.
+    var difficulty = profileDifficulty(state.selectedSave?.persistentProfileId);
+    // 2. Else the inspected save's OWN parsed difficulty. An unattributed/imported
+    //    save carries it even when the folder holds OTHER profiles — do NOT borrow
+    //    the scan-active profile's level, which may belong to a different save.
+    if (difficulty == null) {
+      final own = state.selectedSave?.difficulty;
+      if (own != null && own.hasAnyValue) difficulty = own;
     }
+    // 3. Else the scan's active profile (directory-wide default; e.g. no save
+    //    inspected yet).
+    difficulty ??= profileDifficulty(state.activeProfileId);
     if (difficulty == null || !difficulty.hasAnyValue) return 'Gothic';
     return switch (difficulty.presetLabel) {
       'Novice' => 'Novice',

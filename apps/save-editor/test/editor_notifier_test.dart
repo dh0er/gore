@@ -587,6 +587,42 @@ void main() {
   );
 
   test(
+    'activeResourcesLevel prefers an unattributed save own difficulty over the active profile',
+    () async {
+      const savePath = r'C:\tmp\saves\Imported.sav';
+      final core = _RecordingCoreService(
+        scanData: {
+          'saves': [
+            {
+              'path': savePath,
+              'persistentProfileId': null, // not attached to any profile
+              'difficulty': {'preset': 'DifficultyPreset_Hard'}, // save's own = Hard
+            },
+          ],
+          // The folder HAS a profile and it is the scan-active one — but it is a
+          // DIFFERENT (Novice) profile, not this unattributed save's.
+          'profiles': [
+            {
+              'profileId': 7,
+              'profileName': 'Other',
+              'difficultyPreset': 'DifficultyPreset_Easy',
+            },
+          ],
+          'activeProfileId': 7,
+        },
+      );
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await pumpEventQueue();
+      await notifier.inspect(savePath);
+
+      expect(notifier.state.selectedSave?.path, savePath);
+      // Unattributed save → its OWN difficulty (Hard) wins over the active
+      // profile's (Novice); we never borrow a different save's profile.
+      expect(notifier.activeResourcesLevel(), 'Hard');
+    },
+  );
+
+  test(
     'saveAllPending sets syncPersistentDataList true when any edit requests it',
     () async {
       final core = _RecordingCoreService();
