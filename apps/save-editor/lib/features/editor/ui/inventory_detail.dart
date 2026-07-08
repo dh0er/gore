@@ -88,7 +88,7 @@ class InventoryDetail extends ConsumerWidget {
 
     final selected = actor;
     final lang = ref.watch(currentGameLangProvider);
-    final locCatalog = ref.watch(locCatalogProvider).asData?.value ?? const {};
+    final locCatalog = ref.watch(locCatalogProvider).value ?? const {};
 
     final Widget body;
     if (selected.isPlayer) {
@@ -569,7 +569,7 @@ class _PrivateInventorySummaryCardState
     final theme = Theme.of(context);
     final l10n = AppLocalizations.of(context);
     final lang = ref.watch(currentGameLangProvider);
-    final locCatalog = ref.watch(locCatalogProvider).asData?.value ?? const {};
+    final locCatalog = ref.watch(locCatalogProvider).value ?? const {};
     final inventory = widget.inventory;
     final query = _query.trim().toLowerCase();
     final items = inventory.items.where((item) {

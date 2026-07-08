@@ -76,7 +76,7 @@ class _AddKnowledgeEntryDialogState
     final l10n = AppLocalizations.of(context);
     final lang = ref.watch(currentGameLangProvider);
     final catalog =
-        ref.watch(locCatalogProvider).asData?.value ?? const {};
+        ref.watch(locCatalogProvider).value ?? const {};
 
     final available = widget.catalog.entries
         .where((e) => !widget.exclude.contains(e.id.toLowerCase()))

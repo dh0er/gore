@@ -120,7 +120,7 @@ class _AddInventoryItemDialogState
     final l10n = AppLocalizations.of(context);
     final lang = ref.watch(currentGameLangProvider);
     final locCatalog =
-        ref.watch(locCatalogProvider).asData?.value ?? const {};
+        ref.watch(locCatalogProvider).value ?? const {};
     return AlertDialog(
       title: Text(l10n.addItemDialogTitle),
       contentPadding: const EdgeInsets.fromLTRB(24, 16, 24, 0),

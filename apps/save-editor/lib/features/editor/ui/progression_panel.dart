@@ -409,7 +409,7 @@ class _QuestsDetailState extends ConsumerState<QuestsDetail> {
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
     final lang = ref.watch(currentGameLangProvider);
-    final locCatalog = ref.watch(locCatalogProvider).asData?.value ?? const {};
+    final locCatalog = ref.watch(locCatalogProvider).value ?? const {};
     final scheme = widget.theme.colorScheme;
     final page = _computeView(locCatalog, lang);
     return Card(
@@ -1004,7 +1004,7 @@ class _KnowledgeDetailState extends ConsumerState<KnowledgeDetail> {
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
     final lang = ref.watch(currentGameLangProvider);
-    final locCatalog = ref.watch(locCatalogProvider).asData?.value ?? const {};
+    final locCatalog = ref.watch(locCatalogProvider).value ?? const {};
     final scheme = widget.theme.colorScheme;
     final character = _selectedCharacter;
 

@@ -68,7 +68,7 @@ class CharactersTab extends ConsumerWidget {
     final state = ref.watch(editorProvider);
     final selected = state.selectedActor;
     final lang = ref.watch(currentGameLangProvider);
-    final locCatalog = ref.watch(locCatalogProvider).asData?.value ?? const {};
+    final locCatalog = ref.watch(locCatalogProvider).value ?? const {};
 
     // Orphans have no actor-backed data: guard Attribute/Inventar/Ereignisse to
     // a clean empty state so they never issue an NPC load with the `orphan:`

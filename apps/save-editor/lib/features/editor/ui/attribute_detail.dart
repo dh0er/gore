@@ -90,7 +90,7 @@ class AttributeDetail extends ConsumerWidget {
     final state = ref.watch(editorProvider);
     final selected = actor;
     final lang = ref.watch(currentGameLangProvider);
-    final locCatalog = ref.watch(locCatalogProvider).asData?.value ?? const {};
+    final locCatalog = ref.watch(locCatalogProvider).value ?? const {};
 
     if (selected.isPlayer) {
       // Player → a shared header ("Player", no GlobalId) above the EXISTING
