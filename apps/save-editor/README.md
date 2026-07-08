@@ -2,7 +2,7 @@
 
 `gore-save` is the savegame editor for Gothic Remake. It
 provides a Flutter interface backed by a Rust savegame core. It is one project
-in the [gore-tools](../../README.md) monorepo.
+in the [gore](../../README.md) monorepo.
 
 ## Features
 

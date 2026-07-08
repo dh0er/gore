@@ -1,4 +1,4 @@
-"""Generate and DSA-sign a WinSparkle appcast for a gore-tools release.
+"""Generate and DSA-sign a WinSparkle appcast for a gore release.
 
 Shared by every WinSparkle-updated app in the monorepo (gore-save, gore-mod).
 The appcast is uploaded as a GitHub release asset; the app polls a stable

@@ -259,7 +259,7 @@ enum AudioAction {
 #[derive(Subcommand)]
 enum LocAction {
     /// Auto-detect (or --lcache) the game's .lcache and write the shared
-    /// gore-tools/loc_catalog.json (used by gore-save and gore-mod too)
+    /// gore/loc_catalog.json (used by gore-save and gore-mod too)
     Extract {
         /// Path to the .lcache, the game dir, or a Steam library (else auto-detect)
         #[arg(long)]

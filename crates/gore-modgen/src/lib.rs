@@ -1,4 +1,4 @@
-//! Config→Lua mod-generation engine + field-level validation for gore-tools.
+//! Config→Lua mod-generation engine + field-level validation for gore.
 
 pub mod gen;
 pub mod validate;

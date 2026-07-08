@@ -1,4 +1,4 @@
-//! Extract the game's localization into the shared `gore-tools` directory.
+//! Extract the game's localization into the shared `gore` directory.
 //!
 //! Ties together [`crate::discover`] (find the `.lcache`), [`crate::loc`] (decrypt
 //! + flatten), and [`crate::paths`] (where the shared catalog lives). All three
@@ -75,7 +75,7 @@ pub fn catalog_present() -> bool {
 }
 
 /// Decrypt the `.lcache` (resolved from `hint` or Steam), flatten it, and write
-/// `loc_catalog.json` + `loc_meta.json` into the shared `gore-tools` dir.
+/// `loc_catalog.json` + `loc_meta.json` into the shared `gore` dir.
 pub fn extract(hint: Option<&Path>) -> Result<LocMeta, LocStoreError> {
     let lcache = resolve_lcache(hint).ok_or(LocStoreError::NotFound)?;
     let enc = fs::read(&lcache).map_err(|source| LocStoreError::Read {

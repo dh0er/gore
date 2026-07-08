@@ -16,7 +16,7 @@ use std::{collections::BTreeMap, fs, path::PathBuf};
 type LocMap = BTreeMap<String, BTreeMap<String, String>>;
 
 /// Auto-detect (or use `--lcache`) the game's localization cache and write the
-/// shared `gore-tools/loc_catalog.json`. Prompts for confirmation unless `--yes`.
+/// shared `gore/loc_catalog.json`. Prompts for confirmation unless `--yes`.
 pub fn extract(lcache: Option<PathBuf>, yes: bool) -> Result<()> {
     // Resolution precedence: explicit --lcache > the configured game path
     // (discover walks it to the .lcache) > Steam auto-detect. A configured path

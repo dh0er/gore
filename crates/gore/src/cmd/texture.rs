@@ -78,7 +78,7 @@ pub enum TextureAction {
     Index {
         #[arg(long)]
         game: Option<PathBuf>,
-        /// Output path (defaults to the shared gore-tools texture_index.json)
+        /// Output path (defaults to the shared gore texture_index.json)
         #[arg(short = 'o', long)]
         out: Option<PathBuf>,
     },

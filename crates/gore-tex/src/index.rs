@@ -15,7 +15,7 @@ use retoc::{Config, EIoChunkType, FIoChunkId};
 use crate::error::Result;
 
 /// Maps each Texture2D asset path to its IoStore package id (u64). Built once per game
-/// build (a full container scan); cached to the shared gore-tools dir.
+/// build (a full container scan); cached to the shared gore dir.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TextureIndex {
     /// Identifies the game build the index was built against (the .usmap filename), so a

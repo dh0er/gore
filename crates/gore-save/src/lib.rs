@@ -536,7 +536,7 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
             Ok(write_difficulty_internal(&req, &targets, backup)?)
         }
         // Localized game text: extracted offline from the encrypted .lcache into
-        // the shared `gore-tools` dir (see gore_loc::loc_store). User-local only.
+        // the shared `gore` dir (see gore_loc::loc_store). User-local only.
         "loc_status" => {
             let present = gore_loc::loc_store::catalog_present();
             // Only report metadata while the catalog file is present, so stale

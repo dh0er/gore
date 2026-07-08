@@ -82,7 +82,7 @@ pub fn content_mount_rel(asset: &str) -> Option<String> {
     }
 }
 
-/// The shared gore-tools cache path for the texture index (next to loc_catalog.json).
+/// The shared gore cache path for the texture index (next to loc_catalog.json).
 pub fn texture_index_path() -> PathBuf {
     gore_loc::paths::shared_data_dir().join("texture_index.json")
 }
