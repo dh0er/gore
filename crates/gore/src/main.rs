@@ -110,8 +110,8 @@ enum Commands {
         /// executable (cwd-independent); pass this when running from an unusual layout.
         #[arg(long)]
         src: Option<std::path::PathBuf>,
-        /// Game dir containing ue4ss/Mods. Defaults to the configured game path or
-        /// Steam auto-detect when omitted (see `gore config`).
+        /// Game install root (the folder containing G1R/). Falls back to the
+        /// configured game path, then Steam auto-detect.
         #[arg(long)]
         game: Option<std::path::PathBuf>,
     },

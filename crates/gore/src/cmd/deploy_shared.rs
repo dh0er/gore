@@ -13,7 +13,12 @@ pub fn run(src: Option<PathBuf>, game: Option<PathBuf>) -> Result<()> {
     if !src.is_dir() {
         bail!("source '{}' is not a directory", src.display());
     }
-    let mods = game.join("ue4ss").join("Mods");
+    let mods = game
+        .join("G1R")
+        .join("Binaries")
+        .join("Win64")
+        .join("ue4ss")
+        .join("Mods");
     if !mods.is_dir() {
         bail!(
             "'{}' does not look like a game dir (no ue4ss/Mods)",
