@@ -1,4 +1,4 @@
-# gore-lua — shared UE4SS modding SDK
+# gore-lua — shared UE4SS helper library
 
 Common helpers for Gothic 1 Remake UE4SS mods. This README is the API reference;
 `gore.help.list([filter])` returns the same registry programmatically.
@@ -6,7 +6,7 @@ Common helpers for Gothic 1 Remake UE4SS mods. This README is the API reference;
 ## Use it
 Deploy with `gore-cli deploy-shared`, then in a mod:
 ```lua
-local ok, gore = pcall(require, "gorelib")
+local ok, gore = pcall(require, "gore-lua")
 ```
 New mods scaffolded with `gore-cli scaffold <name>` get this loader wired in automatically.
 

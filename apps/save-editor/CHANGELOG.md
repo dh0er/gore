@@ -1,10 +1,33 @@
 # Changelog
 
-All notable changes to goresave are documented here. The release workflow
+All notable changes to the GORE Save Editor are documented here. The release workflow
 publishes the section matching the released version as the GitHub release
 notes, so every release needs an entry.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
+## [1.0.0] - 2026-07-08
+
+### Added
+
+- NPCs are now fully editable, not just the player: select any NPC and change
+  its stats/attributes and inventory the same way you edit your own character.
+- Armor is supported in the inventory — equipped and carried armor pieces show
+  up as regular items and can be edited and added like anything else.
+- Faction crimes can be cleared, resetting the hostility an NPC's guild holds
+  against you.
+- NPCs can be revived — bring a dead NPC back to life (restores health and
+  strips the death state).
+- Inventories can be reset to a clean starting state.
+- The in-game time (play clock) can now be set.
+- All talents/skills can now be edited (previously only a subset was exposed).
+
+### Changed
+
+- Reworked the UI navigation: first pick who you're editing (an NPC or the
+  player), then choose what to edit (attributes, inventory, …). The layout is
+  clearer and more consistent across tabs.
+- Improved performance, especially responsiveness when editing.
 
 ## [0.4.0] - 2026-06-24
 

@@ -7,17 +7,18 @@ Gothic Remake.
 
 - **[`gore`](crates/gore) CLI** (`gore.exe`) — the one binary that does *all*
   modding from the terminal: item values, text/dialogs, audio, textures,
-  scripts. Start here if you want to mod.
+  scripts. Start here if you want to mod. **⚗️ Ready for experimental use.**
 - **[`mod-studio`](apps/mod-studio)** — a no-code Windows GUI over the same
   modding engine (incl. experimental AngelScript editing), for *authoring* one
-  mod.
+  mod. **🚧 Work in progress.**
 - **[`mod-manager`](apps/mod-manager)** — a Windows GUI for installing and
   managing *many* mods together (load order, conflict detection, one-click
-  apply); complements mod-studio (authoring).
+  apply); complements mod-studio (authoring). **🚧 Work in progress.**
 - **[`save-editor`](apps/save-editor)** — a Windows GUI for editing your save
   files (a separate job from modding — it never touches the game install).
-- **[`gorelib`](lua)** — a Lua SDK that ships into the game, for hand-writing
-  UE4SS mods.
+  **✅ Ready to use.**
+- **[`gore-lua`](lua)** — a small Lua helper library that ships into the game,
+  for hand-writing UE4SS mods. **🚧 Work in progress.**
 - **Supporting Rust crates** — the format codecs and data models the above
   share (see [Projects / layout](#projects--layout)), plus example mods under
   [`mods/`](mods).
@@ -34,7 +35,7 @@ the `gore` binary — no GUI required.
 
 Get the binary by building it (`cargo build --release -p gore` →
 `target/release/gore`) or downloading a `gore-cli-v*`
-[release](https://github.com/dh0er/goresave/releases). Examples below assume
+[release](https://github.com/dh0er/gore/releases). Examples below assume
 `gore` is on your `PATH` and use `"$GAME"` for your install root (the folder
 that contains `G1R/`). The exact `--game`/path each subcommand expects is always
 in `gore <cmd> --help`.
@@ -83,7 +84,7 @@ gore gen overrides.toml -o "$GAME/.../Mods" --model model.json
 
 The emitted mod looks up each class's CDO
 (`StaticFindObject("/Script/<module>.Default__<class>")`) and sets the field at
-load. It is self-contained — it does **not** need the gorelib SDK.
+load. It is self-contained — it does **not** need the gore-lua helpers.
 
 **Finding class & field names.** Item/NPC/knowledge classes are listed in the
 bundled catalogs (`apps/save-editor/assets/*_catalog.json`). To (re)generate the
@@ -219,8 +220,8 @@ gore mod undeploy --game "$GAME"                       # restore everything
 This is the same engine [`mod-studio`](#gore-mod-studio) drives. Other helpers:
 
 ```sh
-gore scaffold MyMod -o "$GAME/.../Mods"   # empty hand-written gorelib mod skeleton
-gore deploy-shared --game "$GAME/.../Win64"   # install the gorelib SDK (for custom Lua mods)
+gore scaffold MyMod -o "$GAME/.../Mods"   # empty hand-written gore-lua mod skeleton
+gore deploy-shared --game "$GAME/.../Win64"   # install the gore-lua helpers (for custom Lua mods)
 gore package mod_dir/ -o MyMod.zip        # zip a Lua mod for sharing
 ```
 
@@ -241,13 +242,16 @@ Every subcommand of the `gore` binary:
 | `dump` | — | Parse a UE4SS SDK header dump into a reflection model JSON. |
 | `stubs` | — | Emit LuaLS/EmmyLua type stubs from `model.json`. |
 | `gui-model` · `sync` · `dump-mod` | — | Build/refresh the data model (incl. real in-game defaults via the `gore-dump` mod). |
-| `scaffold` | — | Create a hand-written gorelib mod skeleton. |
-| `deploy-shared` | — | Install the gorelib SDK into `ue4ss/Mods/shared`. |
+| `scaffold` | — | Create a hand-written gore-lua mod skeleton. |
+| `deploy-shared` | — | Install the gore-lua helpers into `ue4ss/Mods/shared`. |
 | `package` | — | Zip a mod folder into distributable UE4SS layout. |
 
 ---
 
-# GORE Mod Studio
+# GORE Mod Studio 🚧
+
+> **Work in progress** — not yet ready for general use. For stable modding today,
+> use the [`gore` CLI](#modding-with-the-gore-cli).
 
 A no-code Windows app over the same bundle engine as the CLI — point-and-click
 modding with live previews and `.goremod` project files. Auto-updates on launch
@@ -269,13 +273,16 @@ modding with live previews and `.goremod` project files. Auto-updates on launch
 
 **It can not:**
 - Edit **save files** — that's [save-editor](#gore-save-editor).
-- Hand-write custom Lua logic — use `gore scaffold` + the [gorelib SDK](#the-gorelib-lua-sdk).
+- Hand-write custom Lua logic — use `gore scaffold` + the [gore-lua helpers](#gore-lua-helper-library).
 - Patch arbitrary game files outside the five supported domains.
 - Manage a *collection* of mods together — that's [mod-manager](#gore-mod-manager).
 
 ---
 
-# GORE Mod Manager
+# GORE Mod Manager 🚧
+
+> **Work in progress** — not yet ready for general use. For stable modding today,
+> use the [`gore` CLI](#modding-with-the-gore-cli).
 
 A Windows app for running **many** mods at once. Where [mod-studio](#gore-mod-studio)
 *authors* a single mod, mod-manager owns the multi-mod story: build a library,
@@ -307,7 +314,7 @@ Auto-updates on launch (WinSparkle). It consumes the mod bundles mod-studio (or
 
 # GORE Save Editor
 
-A Windows app (`goresave`) for editing your **save games**, backup-first. This is
+A Windows app for editing your **save games**, backup-first. This is
 *not* modding — it changes your saved progress, never the game install.
 Auto-updates on launch (WinSparkle). Tested against Steam build CL168781; should
 work across versions.
@@ -331,22 +338,26 @@ work across versions.
 
 ---
 
-# The gorelib Lua SDK
+# GORE Lua Helper Library 🚧
 
-[`gorelib`](lua) is a shared UE4SS SDK for **hand-writing** Gothic Remake mods in
-Lua — the path for behavior the override generator can't express (hooks,
-keybinds, console commands, live attribute tweaks). Override mods produced by
-`gore gen`/`mod-studio` do **not** use it; it's for custom mods.
+> **Work in progress** — a thin convenience layer, not a full SDK.
+
+[`gore-lua`](lua) is a small shared UE4SS **helper library** for hand-writing
+Gothic Remake mods in Lua — the path for behavior the override generator can't
+express (hooks, keybinds, console commands, live attribute tweaks). It's a
+handful of `pcall`-guarded wrappers over UE4SS reflection, not a large API.
+Override mods produced by `gore gen`/`mod-studio` do **not** use it; it's for
+custom mods.
 
 How a mod uses it:
 
 ```sh
-gore deploy-shared --game "$GAME/.../Win64"   # copy gorelib into ue4ss/Mods/shared (once)
+gore deploy-shared --game "$GAME/.../Win64"   # copy gore-lua into ue4ss/Mods/shared (once)
 gore scaffold MyMod -o "$GAME/.../Mods"       # new mod with the loader wired in
 ```
 
 ```lua
-local gore = require("gorelib")
+local gore = require("gore-lua")           -- load the shared gore-lua helpers
 gore.cheat.god(true)                       -- toggle god mode on the live CombatConfig + CDOs
 gore.gas.heal()                            -- set Health to MaxHealth
 gore.ui.text("hello from my mod")          -- on-screen message via the game's HUD
@@ -360,8 +371,8 @@ attributes), `gore.cheat`, `gore.cmd` (commands/keybinds/game-thread), and
 `nil`/`false` on failure — it never crashes the consuming mod. Full reference:
 [`lua/README.md`](lua/README.md) (or `gore.help.list()` at runtime).
 
-`gore deploy-shared` installs the SDK; UE4SS loads any mod folder containing an
-`enabled.txt`.
+`gore deploy-shared` installs the helpers; UE4SS loads any mod folder containing
+an `enabled.txt`.
 
 ---
 
@@ -388,9 +399,9 @@ gore/
 │  ├─ save-editor/         Flutter (Windows) savegame editor — WinSparkle auto-update
 │  ├─ mod-studio/          Flutter (Windows) no-code mod authoring GUI
 │  └─ mod-manager/         Flutter (Windows) multi-mod library/load-order/apply GUI
-├─ lua/                    gorelib UE4SS SDK (deployed into the game's Mods/shared)
+├─ lua/                    gore-lua UE4SS helper library (deployed into the game's Mods/shared)
 ├─ mods/                   first-party UE4SS mod folders
-│  ├─ example/             sample mod using gorelib
+│  ├─ example/             sample mod using gore-lua
 │  └─ gore-dump/           generated dump mod (regen: `gore dump-mod`)
 ├─ vendor/
 │  └─ retoc/               vendored IoStore reader fork (Oodle decode routed to gore-oodle)

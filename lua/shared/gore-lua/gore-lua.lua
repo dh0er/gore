@@ -1,5 +1,5 @@
--- gorelib.lua — shared UE4SS modding SDK for Gothic 1 Remake.  Load with:
---   local ok, gore = pcall(require, "gorelib")
+-- gore-lua.lua — shared UE4SS helper library for Gothic 1 Remake.  Load with:
+--   local ok, gore = pcall(require, "gore-lua")
 -- Every helper pcall-guards its reflection and returns nil/false on failure (never throws).
 -- `gore.selftest()` probes every namespace.  See the README for the full API.
 

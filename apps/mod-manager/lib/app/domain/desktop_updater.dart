@@ -10,7 +10,7 @@ import 'package:path/path.dart' as p;
 /// release, so this URL is stable regardless of which product released most
 /// recently.
 const _appcastUrl =
-    'https://github.com/dh0er/goresave/releases/download/gore-manager-appcast/appcast-windows.xml';
+    'https://github.com/dh0er/gore/releases/download/gore-manager-appcast/appcast-windows.xml';
 
 const _checkIntervalSeconds = 3600;
 

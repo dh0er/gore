@@ -28,7 +28,7 @@ fn scaffold_creates_mod_structure() {
 }
 
 #[test]
-fn scaffold_main_lua_wires_gorelib_loader() {
+fn scaffold_main_lua_wires_gore_lua_loader() {
     let dir = TempDir::new().unwrap();
     Command::cargo_bin("gore")
         .unwrap()
@@ -37,8 +37,8 @@ fn scaffold_main_lua_wires_gorelib_loader() {
         .success();
     let main = std::fs::read_to_string(dir.path().join("MyMod/Scripts/main.lua")).unwrap();
     assert!(
-        main.contains(r#"require("gorelib")"#) || main.contains(r#"require, "gorelib")"#),
-        "should require gorelib"
+        main.contains(r#"require("gore-lua")"#) || main.contains(r#"require, "gore-lua")"#),
+        "should require gore-lua"
     );
     assert!(main.contains("loadfile"), "should have a loadfile fallback");
 }

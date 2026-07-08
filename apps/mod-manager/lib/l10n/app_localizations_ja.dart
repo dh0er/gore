@@ -161,7 +161,7 @@ class AppLocalizationsJa extends AppLocalizations {
   String get about => 'このアプリについて';
 
   @override
-  String get aboutCopyright => '© 2026 goresave コントリビューター';
+  String get aboutCopyright => '© 2026 GORE コントリビューター';
 
   @override
   String get aboutLicense => 'MIT ライセンスの下で提供されています。';
