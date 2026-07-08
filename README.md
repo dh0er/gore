@@ -319,11 +319,17 @@ A Windows app for editing your **save games**, backup-first. This is
 Auto-updates on launch (WinSparkle). Tested against Steam build CL168781; should
 work across versions.
 
+[<img src="docs/images/screenshot_light.png" alt="GORE Save Editor" width="600"/>](docs/images/screenshot_light.png)
+
 **It can:**
-- **Profile** — change difficulty settings.
-- **Player** — edit stats, skills, location, and more.
+- **Profile** — change difficulty settings; set the in-game time (play clock).
+- **Player & NPCs** — edit stats, attributes, all talents/skills, location, and
+  more; revive a dead NPC (restore health, strip the death state).
 - **Inventory** — change counts of existing items; add new items from a bundled,
-  categorized catalog.
+  categorized catalog; reset an
+  inventory to a clean starting state.
+- **Faction crimes** — clear an NPC's crimes to reset the hostility its guild
+  holds against you.
 - **Progression** — edit quest markers, NPC knowledge, and events.
 - **Raw properties** — edit almost any internal property value directly
   (experimental; can corrupt a save).
@@ -425,6 +431,17 @@ gore/
 | [`gore-as`](crates/gore-as) | Rust lib | AngelScript precompiled-cache decoder/emitter/decompiler/splicer. |
 
 # Build
+
+## Requirements
+
+- Windows 10 or newer.
+- Rust toolchain (stable).
+- Flutter with Windows desktop support (for the GUI apps).
+- Visual Studio 2022 with "Desktop development with C++".
+- Python 3 (drives `build.py` / `test.py`).
+
+The local development setup used for this repository is Flutter 3.44.0, Dart
+3.12.0, and Rust 1.96.0.
 
 The Rust workspace spans every crate:
 
