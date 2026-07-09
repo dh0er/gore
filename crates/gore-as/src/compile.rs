@@ -365,6 +365,21 @@ pub fn precompile(opts: &PrecompileOpts) -> Result<PathBuf, String> {
     precompile_with(opts, real_generate)
 }
 
+/// Resolve `out` to an absolute path for the "output must be outside Script/" containment check:
+/// relative paths are taken relative to `cwd` (so a relative `-o` can't slip past the check), then
+/// canonicalized as far as the path exists — the file itself, else its existing parent joined with
+/// the filename, else the lexical absolute path. Extracted so the guard is testable without mutating
+/// the process cwd.
+fn resolve_out_real(out: &Path, cwd: &Path) -> PathBuf {
+    let abs = if out.is_absolute() { out.to_path_buf() } else { cwd.join(out) };
+    abs.canonicalize().unwrap_or_else(|_| match (abs.parent(), abs.file_name()) {
+        (Some(parent), Some(name)) => {
+            parent.canonicalize().map(|p| p.join(name)).unwrap_or_else(|_| abs.clone())
+        }
+        _ => abs.clone(),
+    })
+}
+
 /// Testable core of [`precompile`]. `generate(exe, g1r, cache)` must make the game (re)write
 /// `cache` and return its new bytes; the real impl [`real_generate`] launches the game and polls,
 /// tests inject a stub so the file orchestration can be exercised offline.
@@ -403,18 +418,8 @@ where
     // cache, omit `-o` (in-place mode).
     if let Some(out) = &opts.out {
         let script_real = script_dir.canonicalize().unwrap_or_else(|_| script_dir.clone());
-        // Resolve `out` as far as it exists: the file itself if present, else its existing parent
-        // joined with the filename, else the lexical path.
-        let out_real = out.canonicalize().unwrap_or_else(|_| {
-            match (out.parent(), out.file_name()) {
-                (Some(parent), Some(name)) => parent
-                    .canonicalize()
-                    .map(|p| p.join(name))
-                    .unwrap_or_else(|_| out.clone()),
-                _ => out.clone(),
-            }
-        });
-        if out_real.starts_with(&script_real) {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        if resolve_out_real(out, &cwd).starts_with(&script_real) {
             return Err(format!(
                 "output {} is inside the game's Script/ directory ({}); write the compiled cache \
                  elsewhere, or omit -o to install in place",
@@ -868,6 +873,25 @@ mod tests {
             !cache.parent().unwrap().join("Mod.as").exists(),
             "staged .as removed despite write failure"
         );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn resolve_out_real_makes_relative_paths_absolute_under_cwd() {
+        let base = std::env::temp_dir().join("gore-as-resolve-out");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let base_real = base.canonicalize().unwrap();
+
+        // A relative out resolves under cwd, so a Script/-relative path is caught by the guard.
+        let rel = resolve_out_real(Path::new("MyMod.Cache"), &base);
+        assert!(rel.starts_with(&base_real), "relative out resolved under cwd: {rel:?}");
+
+        // An absolute out elsewhere stays where it is (not under cwd).
+        let other = std::env::temp_dir().join("gore-as-resolve-other").join("x.Cache");
+        let abs = resolve_out_real(&other, &base);
+        assert!(!abs.starts_with(&base_real), "absolute out stays put: {abs:?}");
 
         let _ = std::fs::remove_dir_all(&base);
     }
