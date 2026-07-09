@@ -341,30 +341,158 @@ pub fn game_run_regen(game_dir: &Path, src_dir: &Path) -> Result<PathBuf, String
     }
 }
 
-/// Launch the shipping game with `-as-generate-precompiled-data` so it recompiles the loose
-/// AngelScript under `<G1R>/Script/` into `PrecompiledScript_Shipping.Cache` **in place**, inheriting
-/// stdio and blocking until the game exits. Returns the path of the (re)generated cache.
-///
-/// This is the raw precompiler trigger: unlike [`game_run_regen`] it stages nothing and backs up
-/// nothing — the game recompiles whatever `.as` are already installed under `Script/`, overwriting
-/// the live cache. The caller owns what is in `Script/` (and any backup of the prior cache).
-pub fn run_precompile(game_dir: &Path) -> Result<PathBuf, String> {
-    let g1r = g1r_dir(game_dir);
+/// Options for [`precompile`] — driving the game's own `-as-generate-precompiled-data` step as a
+/// standalone compiler that handles all the file juggling (backup, staging, output, restore).
+pub struct PrecompileOpts {
+    /// Game install root (the folder containing `G1R/`, or the `G1R` dir itself).
+    pub game_dir: PathBuf,
+    /// Source `.as` tree to stage under `Script/` before compiling. `None` recompiles whatever
+    /// `.as` are already installed there.
+    pub src: Option<PathBuf>,
+    /// Where to write the compiled cache. `Some` writes it there and RESTORES the install to its
+    /// pre-call state (the live cache and any staged sources are put back → install untouched).
+    /// `None` installs the fresh cache in place under `Script/`.
+    pub out: Option<PathBuf>,
+    /// When installing in place (`out` is `None`), back up the previous cache to `<cache>.gore-bak`
+    /// first — unless one already exists, so the earliest (pristine) backup is preserved.
+    pub backup: bool,
+}
+
+/// Compile `.as` into a precompiled script cache by driving the game, handling backup, staging,
+/// output placement and restore internally. Returns the path of the resulting cache (`out` if set,
+/// else the in-place `Script/PrecompiledScript_Shipping.Cache`).
+pub fn precompile(opts: &PrecompileOpts) -> Result<PathBuf, String> {
+    precompile_with(opts, real_generate)
+}
+
+/// Testable core of [`precompile`]. `generate(exe, g1r, cache)` must make the game (re)write
+/// `cache` and return its new bytes; the real impl [`real_generate`] launches the game and polls,
+/// tests inject a stub so the file orchestration can be exercised offline.
+fn precompile_with<G>(opts: &PrecompileOpts, generate: G) -> Result<PathBuf, String>
+where
+    G: FnOnce(&Path, &Path, &Path) -> Result<Vec<u8>, String>,
+{
+    let g1r = g1r_dir(&opts.game_dir);
     let exe = g1r.join("Binaries").join("Win64").join("G1R-Win64-Shipping.exe");
     if !exe.exists() {
         return Err(format!("game exe not found: {}", exe.display()));
     }
-    let status = std::process::Command::new(&exe)
+    let script_dir = g1r.join("Script");
+    let cache = script_dir.join("PrecompiledScript_Shipping.Cache");
+
+    // Snapshot the live cache so we can RESTORE it (out-mode) or back it up (in-place).
+    let saved = std::fs::read(&cache)
+        .map_err(|e| format!("reading live cache {}: {e}", cache.display()))?;
+
+    // In-place backup BEFORE regenerating. Never clobber an existing `.gore-bak`: that is the true
+    // pristine (gore-mod's deploy backup, or an earlier compile's), so preserving it keeps a path
+    // back to vanilla across repeated compiles.
+    if opts.out.is_none() && opts.backup {
+        let bak = deploy_bak_path(&cache);
+        if !bak.exists() {
+            std::fs::write(&bak, &saved).map_err(|e| format!("backing up cache: {e}"))?;
+        }
+    }
+
+    // Stage the source tree into Script/, recording overwrites so cleanup can restore them.
+    let mut staged: Vec<(PathBuf, Option<Vec<u8>>)> = Vec::new();
+    let staged_ok = match &opts.src {
+        Some(src) => {
+            copy_tree(src, &script_dir, &mut staged).map_err(|e| format!("staging src tree: {e}"))
+        }
+        None => Ok(()),
+    };
+
+    // Generate only if staging succeeded.
+    let result = staged_ok.and_then(|()| generate(&exe, &g1r, &cache));
+
+    match result {
+        Ok(regen) => {
+            if let Some(out) = &opts.out {
+                // Pristine mode: write the artifact, then restore the install (live cache + staged
+                // files) so nothing about the game changes. Attempt all steps; report the first
+                // failure but never skip a restore.
+                let write_err = std::fs::write(out, &regen)
+                    .map_err(|e| format!("writing output {}: {e}", out.display()))
+                    .err();
+                let restore_err = std::fs::write(&cache, &saved)
+                    .map_err(|e| format!("restoring live cache: {e}"))
+                    .err();
+                let cleanup_err = restore_or_remove(&staged, &script_dir).err();
+                if let Some(e) = write_err {
+                    return Err(e);
+                }
+                if let Some(e) = restore_err {
+                    return Err(format!("compiled to {}, but {e}", out.display()));
+                }
+                if let Some(e) = cleanup_err {
+                    return Err(format!(
+                        "compiled to {}, but failed to clean staged sources: {e}",
+                        out.display()
+                    ));
+                }
+                Ok(out.clone())
+            } else {
+                // In-place: the game already wrote the fresh cache; keep it and just remove the
+                // staged `.as` (the cache is never among `staged`, so it survives).
+                if let Err(e) = restore_or_remove(&staged, &script_dir) {
+                    return Err(format!("compiled in place, but failed to clean staged sources: {e}"));
+                }
+                Ok(cache.clone())
+            }
+        }
+        // Failure: undo everything (restore the possibly-half-written cache, remove staged sources)
+        // so the install is left exactly as we found it.
+        Err(e) => {
+            let _ = std::fs::write(&cache, &saved);
+            let _ = restore_or_remove(&staged, &script_dir);
+            Err(e)
+        }
+    }
+}
+
+/// Launch the game with `-as-generate-precompiled-data`, wait for `cache` to be (re)written
+/// (mtime advances + size stabilizes; ~5 min cap), and return its bytes. Mirrors the wait in
+/// [`game_run_regen`].
+fn real_generate(exe: &Path, g1r: &Path, cache: &Path) -> Result<Vec<u8>, String> {
+    let before = std::fs::metadata(cache).and_then(|m| m.modified()).ok();
+    let status = std::process::Command::new(exe)
         .arg("-as-generate-precompiled-data")
-        .current_dir(&g1r)
+        .current_dir(g1r)
         .status()
         .map_err(|e| format!("launching game: {e}"))?;
-    // Some shipping builds exit non-zero after generating; report it but don't treat it as a
-    // failure — the produced cache is what matters.
-    if !status.success() {
-        eprintln!("note: game exited with {status} (shipping builds often do after generating)");
+    // Some shipping builds exit non-zero after generating; the cache check below is authoritative.
+    let _ = status;
+
+    let mut last_len = 0u64;
+    let mut stable = 0;
+    for _ in 0..300 {
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        let Ok(meta) = std::fs::metadata(cache) else {
+            continue;
+        };
+        let advanced = match (before, meta.modified().ok()) {
+            (Some(b), Some(n)) => n > b,
+            _ => false,
+        };
+        if advanced {
+            let len = meta.len();
+            if len > 0 && len == last_len {
+                stable += 1;
+            } else {
+                stable = 0;
+            }
+            last_len = len;
+            if stable >= 2 {
+                return std::fs::read(cache).map_err(|e| format!("reading regen cache: {e}"));
+            }
+        }
     }
-    Ok(g1r.join("Script").join("PrecompiledScript_Shipping.Cache"))
+    Err(format!(
+        "no regenerated cache produced — confirm the game compiles loose .as under {} with \
+         `-as-generate-precompiled-data`",
+        cache.parent().unwrap_or(cache).display()
+    ))
 }
 
 /// Recursively copy `src` into `dst`, recording every destination FILE path written into `out`
@@ -457,11 +585,90 @@ mod tests {
     }
 
     #[test]
-    fn run_precompile_errors_when_exe_missing() {
-        // A dir with no shipping exe: the guard fires and NO process is launched.
+    fn precompile_errors_when_exe_missing() {
+        // No shipping exe: the guard fires and the generator is NEVER invoked.
         let dir = std::env::temp_dir().join("gore-as-no-exe-xyz");
-        let err = run_precompile(&dir).unwrap_err();
+        let opts = PrecompileOpts { game_dir: dir, src: None, out: None, backup: true };
+        let err = precompile_with(&opts, |_, _, _| panic!("must not launch")).unwrap_err();
         assert!(err.contains("game exe not found"), "got: {err}");
+    }
+
+    /// A fake install under `base`: a stub shipping exe (so the exists()-guard passes) and a live
+    /// cache holding `OLD`. Returns (game_dir, cache_path).
+    fn fake_install(base: &Path) -> (PathBuf, PathBuf) {
+        let win64 = base.join("G1R").join("Binaries").join("Win64");
+        std::fs::create_dir_all(&win64).unwrap();
+        std::fs::write(win64.join("G1R-Win64-Shipping.exe"), b"stub").unwrap();
+        let script = base.join("G1R").join("Script");
+        std::fs::create_dir_all(&script).unwrap();
+        let cache = script.join("PrecompiledScript_Shipping.Cache");
+        std::fs::write(&cache, b"OLD").unwrap();
+        (base.to_path_buf(), cache)
+    }
+
+    /// Stub generator: emulate the game overwriting the cache with `NEW`, and return those bytes.
+    fn gen_new(_exe: &Path, _g1r: &Path, cache: &Path) -> Result<Vec<u8>, String> {
+        std::fs::write(cache, b"NEW").map_err(|e| e.to_string())?;
+        Ok(b"NEW".to_vec())
+    }
+
+    #[test]
+    fn precompile_out_mode_writes_artifact_and_restores_install() {
+        let base = std::env::temp_dir().join("gore-as-compile-out");
+        let _ = std::fs::remove_dir_all(&base);
+        let (game, cache) = fake_install(&base);
+        let src = base.join("src");
+        std::fs::create_dir_all(src.join("AI")).unwrap();
+        std::fs::write(src.join("AI").join("Mod.as"), b"script").unwrap();
+        let out = base.join("out.Cache");
+
+        let opts = PrecompileOpts {
+            game_dir: game,
+            src: Some(src),
+            out: Some(out.clone()),
+            backup: true,
+        };
+        let res = precompile_with(&opts, gen_new).unwrap();
+
+        assert_eq!(res, out);
+        assert_eq!(std::fs::read(&out).unwrap(), b"NEW", "artifact holds the compiled bytes");
+        assert_eq!(std::fs::read(&cache).unwrap(), b"OLD", "live cache restored (install pristine)");
+        assert!(
+            !cache.parent().unwrap().join("AI").join("Mod.as").exists(),
+            "staged .as removed from Script/"
+        );
+        assert!(!deploy_bak_path(&cache).exists(), "out-mode leaves no .gore-bak");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn precompile_in_place_installs_new_cache_and_backs_up() {
+        let base = std::env::temp_dir().join("gore-as-compile-inplace");
+        let _ = std::fs::remove_dir_all(&base);
+        let (game, cache) = fake_install(&base);
+        let src = base.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("Mod.as"), b"script").unwrap();
+
+        let opts = PrecompileOpts {
+            game_dir: game,
+            src: Some(src),
+            out: None,
+            backup: true,
+        };
+        let res = precompile_with(&opts, gen_new).unwrap();
+
+        assert_eq!(res, cache);
+        assert_eq!(std::fs::read(&cache).unwrap(), b"NEW", "new cache installed in place");
+        assert_eq!(
+            std::fs::read(deploy_bak_path(&cache)).unwrap(),
+            b"OLD",
+            "previous cache backed up to .gore-bak"
+        );
+        assert!(!cache.parent().unwrap().join("Mod.as").exists(), "staged .as cleaned");
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     /// `copy_tree` records every file it writes (with its prior bytes); `restore_or_remove` then
