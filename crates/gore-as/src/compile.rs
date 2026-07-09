@@ -365,6 +365,22 @@ pub fn precompile(opts: &PrecompileOpts) -> Result<PathBuf, String> {
     precompile_with(opts, real_generate)
 }
 
+/// The first loose `.as` file found anywhere under `dir` (recursively), or `None`. Used to reject a
+/// dirty Script/ before staging a SRC tree, so the game never compiles leftover scripts alongside it.
+fn first_loose_script(dir: &Path) -> Option<PathBuf> {
+    for entry in std::fs::read_dir(dir).ok()?.flatten() {
+        let path = entry.path();
+        if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            if let Some(found) = first_loose_script(&path) {
+                return Some(found);
+            }
+        } else if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("as")) {
+            return Some(path);
+        }
+    }
+    None
+}
+
 /// Resolve `out` to an absolute path for the "output must be outside Script/" containment check:
 /// relative paths are taken relative to `cwd` (so a relative `-o` can't slip past the check), then
 /// canonicalized as far as the path exists — the file itself, else its existing parent joined with
@@ -425,6 +441,22 @@ where
                  elsewhere, or omit -o to install in place",
                 out.display(),
                 script_dir.display()
+            ));
+        }
+    }
+
+    // When compiling a specific SRC tree, the game must see ONLY that tree. The game compiles EVERY
+    // loose `.as` under Script/, so pre-existing loose scripts there (from a prior/interrupted
+    // compile or manual staging) would be mixed into the cache alongside SRC. Refuse rather than
+    // silently produce a mixed/stale cache; omit the source to compile Script/ as-is (no-src mode).
+    if opts.src.is_some() {
+        if let Some(stray) = first_loose_script(&script_dir) {
+            return Err(format!(
+                "the game's Script/ directory ({}) already contains a loose script ({}); the game \
+                 would compile it alongside your source. Remove loose .as files there first, or omit \
+                 the source argument to compile Script/ as-is",
+                script_dir.display(),
+                stray.display()
             ));
         }
     }
@@ -893,6 +925,28 @@ mod tests {
         let abs = resolve_out_real(&other, &base);
         assert!(!abs.starts_with(&base_real), "absolute out stays put: {abs:?}");
 
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn precompile_rejects_src_when_script_dir_has_loose_scripts() {
+        // A pre-existing loose .as in Script/ would be compiled alongside SRC — refuse.
+        let base = std::env::temp_dir().join("gore-as-compile-dirty");
+        let _ = std::fs::remove_dir_all(&base);
+        let (game, cache) = fake_install(&base);
+        std::fs::write(cache.parent().unwrap().join("Stale.as"), b"stale").unwrap();
+        let src = base.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("Mod.as"), b"script").unwrap();
+
+        let opts = PrecompileOpts {
+            game_dir: game,
+            src: Some(src),
+            out: None,
+            backup: false,
+        };
+        let err = precompile_with(&opts, |_, _, _| panic!("must not generate")).unwrap_err();
+        assert!(err.contains("loose script"), "got: {err}");
         let _ = std::fs::remove_dir_all(&base);
     }
 
