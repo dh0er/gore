@@ -100,3 +100,28 @@ fn loc_extract_honors_disabled_autodetect() {
             "no AlkimiaLocalization .lcache found",
         ));
 }
+
+#[test]
+fn set_stores_relative_game_path_as_absolute() {
+    let tmp = TempDir::new().unwrap();
+    // `set game-path .` run from cwd=tmp must persist an ABSOLUTE path, not the
+    // literal ".", so a later command run from any other directory resolves the
+    // same install rather than a stray ./G1R relative to its own cwd.
+    gore(tmp.path())
+        .current_dir(tmp.path())
+        .args(["config", "set", "game-path", "."])
+        .assert()
+        .success();
+    let out = gore(tmp.path())
+        .args(["config", "get", "game-path"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let got = String::from_utf8(out).unwrap();
+    assert!(
+        std::path::Path::new(got.trim()).is_absolute(),
+        "stored game-path is not absolute: {got:?}"
+    );
+}

@@ -23,9 +23,10 @@ final editorSettingsStoreProvider = Provider<EditorSettingsStore>((ref) {
 /// FLUTTER_TEST guard.
 final sharedConfigProvider = Provider<SharedConfig>((ref) {
   if (Platform.environment.containsKey('FLUTTER_TEST')) {
-    return SharedConfig(
-      File(p.join(Directory.systemTemp.path, 'gore-test', 'config.json')),
-    );
+    // Unique temp file per container so tests never leak persisted game-path
+    // state into one another via a shared fixed path.
+    final dir = Directory.systemTemp.createTempSync('gore_test_cfg');
+    return SharedConfig(File(p.join(dir.path, 'config.json')));
   }
   return SharedConfig.defaultForPlatform();
 });

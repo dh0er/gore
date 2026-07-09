@@ -4,6 +4,7 @@
 use anyhow::{bail, Result};
 use clap::{Subcommand, ValueEnum};
 use gore_loc::config::{self, Config};
+use std::path::PathBuf;
 
 #[derive(Subcommand)]
 pub enum ConfigAction {
@@ -33,11 +34,18 @@ pub fn run(action: ConfigAction) -> Result<()> {
     match action {
         ConfigAction::Set { key, value } => {
             let mut cfg = config::load();
-            match key {
-                ConfigKey::GamePath => cfg.game_path = Some(value.clone()),
-            }
+            let stored = match key {
+                // Persist an absolute path: a relative value (e.g. `.`) would
+                // otherwise be re-resolved against whatever directory a later
+                // command happens to run from.
+                ConfigKey::GamePath => {
+                    let s = absolutize(&value);
+                    cfg.game_path = Some(s.clone());
+                    s
+                }
+            };
             config::save(&cfg)?;
-            println!("set game-path = {value}");
+            println!("set game-path = {stored}");
             Ok(())
         }
         ConfigAction::Get { key } => {
@@ -97,4 +105,19 @@ fn value_of(cfg: &Config, key: ConfigKey) -> Option<String> {
     match key {
         ConfigKey::GamePath => cfg.game_path.clone(),
     }
+}
+
+/// Resolve a possibly-relative user path to an absolute one (joined against the
+/// current directory) so a stored config value doesn't depend on the cwd of a
+/// later command. Kept lexical — no symlink / `..` resolution — to avoid the
+/// Windows `\\?\` verbatim prefix that `canonicalize` produces, which some
+/// downstream tooling mishandles.
+fn absolutize(value: &str) -> String {
+    let raw = PathBuf::from(value);
+    let abs = if raw.is_absolute() {
+        raw
+    } else {
+        std::env::current_dir().map(|d| d.join(&raw)).unwrap_or(raw)
+    };
+    abs.to_string_lossy().into_owned()
 }

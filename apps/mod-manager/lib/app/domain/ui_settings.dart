@@ -175,8 +175,11 @@ final uiSettingsStoreProvider = Provider<UiSettingsStore>((ref) {
 /// The shared `config.json` the `gore` CLI and other apps also read/write.
 final sharedConfigProvider = Provider<SharedConfig>((ref) {
   if (Platform.environment.containsKey('FLUTTER_TEST')) {
-    // Widget tests must not touch the real shared config.
-    return SharedConfig(File(p.join(Directory.systemTemp.path, 'gore-test', 'config.json')));
+    // Widget tests must not touch the real shared config. Use a UNIQUE temp file
+    // per container so tests never leak persisted game-path state into one
+    // another via a shared fixed path; each starts from a clean default.
+    final dir = Directory.systemTemp.createTempSync('gore_test_cfg');
+    return SharedConfig(File(p.join(dir.path, 'config.json')));
   }
   return SharedConfig.defaultForPlatform();
 });
