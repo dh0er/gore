@@ -194,9 +194,27 @@ gore as emit-all   PrecompiledScript_Shipping.Cache out_as/    # all modules as 
 gore as disasm     PrecompiledScript_Shipping.Cache <needle>   # asBC bytecode listing
 ```
 
-To actually change behavior: edit a module's `.as`, regenerate a cache with the
-game's own `-as-generate-precompiled-data`, then splice just your edited module
-into the vanilla cache:
+### Recompiling: the game is the compiler
+
+There is no standalone AngelScript compiler — the shipping game **is** the
+compiler. Its executable takes a command-line flag,
+**`-as-generate-precompiled-data`**, which makes it read the loose `.as` scripts
+under `<install>/G1R/Script/`, compile them, and (over)write
+`PrecompiledScript_Shipping.Cache` in that same folder.
+
+`gore as compile` runs exactly that step for you: it resolves the install (from
+`--game`, else the configured game path / Steam auto-detect) and launches
+`G1R-Win64-Shipping.exe -as-generate-precompiled-data`, waiting for it to finish.
+
+```sh
+gore as emit-all "$GAME/G1R/Script/PrecompiledScript_Shipping.Cache" out_as/
+# …edit modules in out_as/, then copy the tree into "$GAME/G1R/Script/"…
+gore as compile  --game "$GAME"    # game recompiles Script/ → a fresh cache, in place
+```
+
+`compile` overwrites the live cache in place, so copy the vanilla
+`PrecompiledScript_Shipping.Cache` aside first. Then, instead of shipping the
+whole regenerated cache, splice just your edited module back into the vanilla one:
 
 ```sh
 # existing module — remap refs to the vanilla cache, then replace in place:

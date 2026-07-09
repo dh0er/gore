@@ -43,13 +43,17 @@ fn io(ctx: &str) -> impl FnOnce(std::io::Error) -> CompileError {
     move |e| CompileError::Io(format!("{ctx}: {e}"))
 }
 
-fn vanilla_cache(game_dir: &Path) -> PathBuf {
-    let g1r = if game_dir.file_name().is_some_and(|n| n == "G1R") {
+/// The `G1R` game directory: `game_dir` itself if it already ends in `G1R`, else `game_dir/G1R`.
+fn g1r_dir(game_dir: &Path) -> PathBuf {
+    if game_dir.file_name().is_some_and(|n| n == "G1R") {
         game_dir.to_path_buf()
     } else {
         game_dir.join("G1R")
-    };
-    g1r.join("Script").join("PrecompiledScript_Shipping.Cache")
+    }
+}
+
+fn vanilla_cache(game_dir: &Path) -> PathBuf {
+    g1r_dir(game_dir).join("Script").join("PrecompiledScript_Shipping.Cache")
 }
 
 /// The deploy backup path for a live cache: the live path with `.gore-bak` APPENDED to the full
@@ -227,11 +231,7 @@ fn native_api(cache_file: &Path) -> Option<crate::cache::binds::NativeApi> {
 /// `<G1R>/Script` plus any now-empty directories the copy created. Pre-existing files in `Script/`
 /// are left untouched.
 pub fn game_run_regen(game_dir: &Path, src_dir: &Path) -> Result<PathBuf, String> {
-    let g1r = if game_dir.file_name().is_some_and(|n| n == "G1R") {
-        game_dir.to_path_buf()
-    } else {
-        game_dir.join("G1R")
-    };
+    let g1r = g1r_dir(game_dir);
     let exe = g1r.join("Binaries").join("Win64").join("G1R-Win64-Shipping.exe");
     if !exe.exists() {
         return Err(format!("game exe not found: {}", exe.display()));
@@ -341,6 +341,32 @@ pub fn game_run_regen(game_dir: &Path, src_dir: &Path) -> Result<PathBuf, String
     }
 }
 
+/// Launch the shipping game with `-as-generate-precompiled-data` so it recompiles the loose
+/// AngelScript under `<G1R>/Script/` into `PrecompiledScript_Shipping.Cache` **in place**, inheriting
+/// stdio and blocking until the game exits. Returns the path of the (re)generated cache.
+///
+/// This is the raw precompiler trigger: unlike [`game_run_regen`] it stages nothing and backs up
+/// nothing — the game recompiles whatever `.as` are already installed under `Script/`, overwriting
+/// the live cache. The caller owns what is in `Script/` (and any backup of the prior cache).
+pub fn run_precompile(game_dir: &Path) -> Result<PathBuf, String> {
+    let g1r = g1r_dir(game_dir);
+    let exe = g1r.join("Binaries").join("Win64").join("G1R-Win64-Shipping.exe");
+    if !exe.exists() {
+        return Err(format!("game exe not found: {}", exe.display()));
+    }
+    let status = std::process::Command::new(&exe)
+        .arg("-as-generate-precompiled-data")
+        .current_dir(&g1r)
+        .status()
+        .map_err(|e| format!("launching game: {e}"))?;
+    // Some shipping builds exit non-zero after generating; report it but don't treat it as a
+    // failure — the produced cache is what matters.
+    if !status.success() {
+        eprintln!("note: game exited with {status} (shipping builds often do after generating)");
+    }
+    Ok(g1r.join("Script").join("PrecompiledScript_Shipping.Cache"))
+}
+
 /// Recursively copy `src` into `dst`, recording every destination FILE path written into `out`
 /// together with its PRIOR bytes (`None` if it didn't exist, `Some(bytes)` if the copy overwrote a
 /// pre-existing file) — so the caller can delete what it created and RESTORE what it overwrote.
@@ -423,6 +449,20 @@ fn restore_or_remove(written: &[(PathBuf, Option<Vec<u8>>)], root: &Path) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn g1r_dir_appends_or_keeps() {
+        assert_eq!(g1r_dir(Path::new("games/Gothic")), PathBuf::from("games/Gothic/G1R"));
+        assert_eq!(g1r_dir(Path::new("games/Gothic/G1R")), PathBuf::from("games/Gothic/G1R"));
+    }
+
+    #[test]
+    fn run_precompile_errors_when_exe_missing() {
+        // A dir with no shipping exe: the guard fires and NO process is launched.
+        let dir = std::env::temp_dir().join("gore-as-no-exe-xyz");
+        let err = run_precompile(&dir).unwrap_err();
+        assert!(err.contains("game exe not found"), "got: {err}");
+    }
 
     /// `copy_tree` records every file it writes (with its prior bytes); `restore_or_remove` then
     /// deletes the ones it created and RESTORES the ones it overwrote, plus prunes the now-empty

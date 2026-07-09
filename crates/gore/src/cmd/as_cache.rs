@@ -59,6 +59,16 @@ pub enum AsCmd {
         #[arg(long, default_value_t = 20)]
         max: usize,
     },
+    /// Recompile the loose AngelScript under `<game>/G1R/Script/` into a fresh
+    /// `PrecompiledScript_Shipping.Cache`, in place, by launching the game with its own
+    /// `-as-generate-precompiled-data` flag. Overwrites the live cache (back it up first if you
+    /// need the vanilla bytes); the game reads whatever `.as` are currently under `Script/`.
+    Compile {
+        /// Game install root (the folder containing `G1R/`). Falls back to the configured game
+        /// path, then Steam auto-detect.
+        #[arg(long)]
+        game: Option<PathBuf>,
+    },
     /// Replace an existing module (by name) in a base cache with a mini-cache's module.
     Replace {
         base: PathBuf,
@@ -398,6 +408,17 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                 n += 1;
             }
             eprintln!("({n} function(s))");
+        }
+        AsCmd::Compile { game } => {
+            let game = gore_loc::config::game_root(game).context("resolving game path")?;
+            let cache = gore_as::compile::run_precompile(&game).map_err(anyhow::Error::msg)?;
+            match std::fs::metadata(&cache) {
+                Ok(m) => println!("regenerated {} ({} bytes)", cache.display(), m.len()),
+                Err(_) => println!(
+                    "game launched, but no cache found at {} — did generation run?",
+                    cache.display()
+                ),
+            }
         }
         AsCmd::Replace { base, mini, target, out } => {
             let base_b = std::fs::read(&base).with_context(|| format!("reading {}", base.display()))?;
