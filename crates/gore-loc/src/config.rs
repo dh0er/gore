@@ -73,11 +73,22 @@ pub enum ConfigError {
 /// The winning path is normalized (an `.exe` or a descendant walks up to the
 /// `G1R/` parent). Returns [`ConfigError::Unresolved`] when nothing resolves.
 pub fn game_root(explicit: Option<PathBuf>) -> Result<PathBuf, ConfigError> {
-    let configured = load().game_path.map(PathBuf::from);
+    let configured = configured_game_path(&load());
     let detected = if autodetect_disabled() { None } else { discover::find_game_root() };
     resolve_root(explicit, configured, detected)
         .map(|p| normalize_root(&p))
         .ok_or(ConfigError::Unresolved)
+}
+
+/// The configured `game_path` as an `Option`, treating an empty/whitespace-only
+/// string as **unset** — parity with the Dart apps' `SharedConfig.gamePath()`,
+/// so the same `config.json` never leaves the CLI stuck on a blank value (and
+/// blocking auto-detect) while the GUI behaves as if nothing is configured.
+fn configured_game_path(cfg: &Config) -> Option<PathBuf> {
+    cfg.game_path
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+        .map(PathBuf::from)
 }
 
 /// Test / power-user seam: when `GORE_DISABLE_GAME_AUTODETECT` is set to a
@@ -195,6 +206,22 @@ mod tests {
     #[test]
     fn resolve_none_when_all_absent() {
         assert_eq!(resolve_root(None, None, None), None);
+    }
+
+    #[test]
+    fn empty_configured_game_path_is_unset() {
+        // Parity with Dart's SharedConfig.gamePath(): "" / whitespace = unset,
+        // so it never wins over Steam auto-detect in resolve_root.
+        let mut cfg = Config::default();
+        cfg.game_path = Some(String::new());
+        assert_eq!(configured_game_path(&cfg), None);
+        cfg.game_path = Some("   ".to_string());
+        assert_eq!(configured_game_path(&cfg), None);
+        cfg.game_path = Some("D:/Games/G1R".to_string());
+        assert_eq!(
+            configured_game_path(&cfg),
+            Some(PathBuf::from("D:/Games/G1R"))
+        );
     }
 
     #[test]
