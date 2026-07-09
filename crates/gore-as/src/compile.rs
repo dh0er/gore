@@ -441,28 +441,32 @@ where
         Ok(regen) => {
             if let Some(out) = &opts.out {
                 // Pristine mode: write the artifact, then restore the install (live cache + staged
-                // files) so nothing about the game changes. Attempt all steps; report the first
-                // failure but never skip a restore.
+                // files) so nothing about the game changes. Attempt EVERY step and aggregate all
+                // failures — a write error must not hide a failed rollback, which would leave the
+                // install modified without telling the user.
                 let write_err = std::fs::write(out, &regen)
                     .map_err(|e| format!("writing output {}: {e}", out.display()))
                     .err();
                 let restore_err = std::fs::write(&cache, &saved)
-                    .map_err(|e| format!("restoring live cache: {e}"))
+                    .map_err(|e| {
+                        format!(
+                            "failed to restore the live cache ({e}) — it may be left on regenerated \
+                             bytes; restore PrecompiledScript_Shipping.Cache from backup"
+                        )
+                    })
                     .err();
-                let cleanup_err = restore_or_remove(&staged, &script_dir).err();
-                if let Some(e) = write_err {
-                    return Err(e);
+                let cleanup_err = restore_or_remove(&staged, &script_dir)
+                    .map_err(|e| format!("failed to clean staged sources: {e}"))
+                    .err();
+                let rollback: Vec<String> = restore_err.into_iter().chain(cleanup_err).collect();
+                match (write_err, rollback.is_empty()) {
+                    (None, true) => Ok(out.clone()),
+                    (None, false) => {
+                        Err(format!("compiled to {}, but {}", out.display(), rollback.join("; ")))
+                    }
+                    (Some(w), true) => Err(w),
+                    (Some(w), false) => Err(format!("{w}; additionally {}", rollback.join("; "))),
                 }
-                if let Some(e) = restore_err {
-                    return Err(format!("compiled to {}, but {e}", out.display()));
-                }
-                if let Some(e) = cleanup_err {
-                    return Err(format!(
-                        "compiled to {}, but failed to clean staged sources: {e}",
-                        out.display()
-                    ));
-                }
-                Ok(out.clone())
             } else {
                 // In-place: the game wrote the fresh cache. Clean up the staged `.as`, but NEVER let
                 // cleanup touch the cache itself: if the staged source tree happened to include a
@@ -818,6 +822,37 @@ mod tests {
         let err = precompile_with(&opts, |_, _, _| panic!("must not generate")).unwrap_err();
         assert!(err.contains("live script cache"), "got: {err}");
         assert_eq!(std::fs::read(&cache).unwrap(), b"OLD", "live cache left untouched");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn precompile_out_mode_write_failure_still_restores_install() {
+        // If writing the output fails, the install must STILL be rolled back (cache restored, staged
+        // removed), and the write error surfaced.
+        let base = std::env::temp_dir().join("gore-as-compile-outfail");
+        let _ = std::fs::remove_dir_all(&base);
+        let (game, cache) = fake_install(&base);
+        let src = base.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("Mod.as"), b"script").unwrap();
+        // Output under a non-existent directory → std::fs::write fails.
+        let out = base.join("nope-dir").join("out.Cache");
+
+        let opts = PrecompileOpts {
+            game_dir: game,
+            src: Some(src),
+            out: Some(out),
+            backup: false,
+        };
+        let err = precompile_with(&opts, gen_new).unwrap_err();
+
+        assert!(err.contains("writing output"), "surfaces the write error; got: {err}");
+        assert_eq!(std::fs::read(&cache).unwrap(), b"OLD", "live cache restored despite write failure");
+        assert!(
+            !cache.parent().unwrap().join("Mod.as").exists(),
+            "staged .as removed despite write failure"
+        );
+
         let _ = std::fs::remove_dir_all(&base);
     }
 
