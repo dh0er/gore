@@ -139,7 +139,7 @@ shared catalog; `gore loc status` shows what's loaded.
 
 The game's sounds and music are encrypted FMOD `.bank` files at
 `$GAME/G1R/Content/FMOD/Desktop/*.bank`. `gore audio` reads and replaces samples
-in pure Rust (no FMOD install needed); the Gothic encryption key is built in.
+in pure Rust (no FMOD install needed).
 
 ```sh
 gore audio list    --bank "$GAME/.../SFX.bank"               # name, codec, rate, channels, length
