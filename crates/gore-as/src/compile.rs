@@ -396,6 +396,21 @@ where
         }
     }
 
+    // Reject `-o` pointing at the live cache: out-mode writes the artifact to `out` and then restores
+    // the live cache from its snapshot, so if they are the same path the restore overwrites the
+    // just-written output with the OLD bytes — a silent wrong result. To update the live cache, omit
+    // `-o` (in-place mode).
+    if let Some(out) = &opts.out {
+        let out_real = out.canonicalize().ok();
+        if out_real.is_some() && out_real == cache.canonicalize().ok() {
+            return Err(format!(
+                "output {} is the live script cache; omit -o to install in place, or choose a \
+                 different output path",
+                out.display()
+            ));
+        }
+    }
+
     // Snapshot the live cache so we can RESTORE it (out-mode) or back it up (in-place).
     let saved = std::fs::read(&cache)
         .map_err(|e| format!("reading live cache {}: {e}", cache.display()))?;
@@ -785,6 +800,24 @@ mod tests {
             "staged .as removed on rollback"
         );
 
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn precompile_rejects_out_equal_to_live_cache() {
+        // `-o` pointing at the live cache would have the restore clobber the just-written artifact.
+        let base = std::env::temp_dir().join("gore-as-compile-outcache");
+        let _ = std::fs::remove_dir_all(&base);
+        let (game, cache) = fake_install(&base);
+        let opts = PrecompileOpts {
+            game_dir: game,
+            src: None,
+            out: Some(cache.clone()),
+            backup: false,
+        };
+        let err = precompile_with(&opts, |_, _, _| panic!("must not generate")).unwrap_err();
+        assert!(err.contains("live script cache"), "got: {err}");
+        assert_eq!(std::fs::read(&cache).unwrap(), b"OLD", "live cache left untouched");
         let _ = std::fs::remove_dir_all(&base);
     }
 
