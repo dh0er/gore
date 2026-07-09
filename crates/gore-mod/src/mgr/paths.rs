@@ -1,9 +1,9 @@
-//! Shared on-disk layout for the mod manager, under the per-user `gore-tools` data dir
+//! Shared on-disk layout for the mod manager, under the per-user `gore` data dir
 //! (see `gore_loc::paths::shared_data_dir`) so every tool sees the same library/loadout.
 
 use std::path::PathBuf;
 
-/// Root of all manager state: `<gore-tools>/mod-manager`.
+/// Root of all manager state: `<gore>/mod-manager`.
 pub fn manager_root() -> PathBuf {
     gore_loc::paths::shared_data_dir().join("mod-manager")
 }

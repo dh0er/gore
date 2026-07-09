@@ -3,7 +3,7 @@ name = "gore-loc"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Localization cache decrypt + discovery/paths/store for gore-tools."
+description = "Localization cache decrypt + discovery/paths/store for gore."
 
 [lib]
 crate-type = ["rlib"]
@@ -16,3 +16,6 @@ aes = "0.8"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"
+
+[dev-dependencies]
+tempfile = "3"

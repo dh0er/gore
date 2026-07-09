@@ -6,6 +6,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
 import 'package:path/path.dart' as p;
 
+import 'shared_config.dart';
+
 class UiSettings {
   const UiSettings({
     this.themeMode = ThemeMode.light,
@@ -13,7 +15,6 @@ class UiSettings {
     this.windowSize,
     this.windowMaximized = false,
     this.dumpPath,
-    this.gameExePath,
     this.locExtractPrompted = false,
     this.appLocale = 'en',
   });
@@ -45,10 +46,6 @@ class UiSettings {
         final String path when path.isNotEmpty => path,
         _ => null,
       },
-      gameExePath: switch (json['gameExePath']) {
-        final String path when path.isNotEmpty => path,
-        _ => null,
-      },
       locExtractPrompted: json['locExtractPrompted'] == true,
     );
   }
@@ -63,10 +60,6 @@ class UiSettings {
   /// Path to a user-loaded game-data dump that overrides the bundled model;
   /// null means use the bundled assets.
   final String? dumpPath;
-
-  /// Path to the game's executable (.exe). Used as the hint when auto-detecting
-  /// localized text and the game install; null until set by the user.
-  final String? gameExePath;
 
   /// Whether the first-run localized-text extraction prompt has been shown.
   /// Persisted so the optional auto-prompt only fires once.
@@ -83,8 +76,6 @@ class UiSettings {
     bool? windowMaximized,
     String? dumpPath,
     bool clearDumpPath = false,
-    String? gameExePath,
-    bool clearGameExePath = false,
     bool? locExtractPrompted,
     String? appLocale,
   }) {
@@ -94,7 +85,6 @@ class UiSettings {
       windowSize: windowSize ?? this.windowSize,
       windowMaximized: windowMaximized ?? this.windowMaximized,
       dumpPath: clearDumpPath ? null : dumpPath ?? this.dumpPath,
-      gameExePath: clearGameExePath ? null : gameExePath ?? this.gameExePath,
       locExtractPrompted: locExtractPrompted ?? this.locExtractPrompted,
       appLocale: appLocale ?? this.appLocale,
     );
@@ -113,7 +103,6 @@ class UiSettings {
     },
     'windowMaximized': windowMaximized,
     if (dumpPath != null) 'dumpPath': dumpPath,
-    if (gameExePath != null) 'gameExePath': gameExePath,
     'locExtractPrompted': locExtractPrompted,
     'appLocale': appLocale,
   };
@@ -134,11 +123,11 @@ class NoopUiSettingsStore implements UiSettingsStore {
   void write(UiSettings settings) {}
 }
 
-/// Resolves the shared `gore-tools` umbrella data directory, matching the Rust
+/// Resolves the shared `gore` umbrella data directory, matching the Rust
 /// side (`gore_loc::paths::shared_data_dir`) exactly:
-/// - Windows: `%LOCALAPPDATA%` (fallback `%APPDATA%`) then `\gore-tools`
-/// - macOS:   `$HOME/Library/Application Support/gore-tools`
-/// - Linux:   `$XDG_DATA_HOME/gore-tools` else `$HOME/.local/share/gore-tools`
+/// - Windows: `%LOCALAPPDATA%` (fallback `%APPDATA%`) then `\gore`
+/// - macOS:   `$HOME/Library/Application Support/gore`
+/// - Linux:   `$XDG_DATA_HOME/gore` else `$HOME/.local/share/gore`
 String sharedDataDir(Map<String, String> env) {
   final String base;
   if (Platform.isWindows) {
@@ -157,7 +146,7 @@ String sharedDataDir(Map<String, String> env) {
               ? Directory.current.path
               : p.join(home, '.local', 'share'));
   }
-  return p.join(base, 'gore-tools');
+  return p.join(base, 'gore');
 }
 
 /// The previous per-app config directory (`<config>/gore-mod`), kept only so a
@@ -243,6 +232,18 @@ final uiSettingsStoreProvider = Provider<UiSettingsStore>((ref) {
   return JsonFileUiSettingsStore.defaultForPlatform();
 });
 
+/// The shared `config.json` the `gore` CLI and other apps also read/write.
+final sharedConfigProvider = Provider<SharedConfig>((ref) {
+  if (Platform.environment.containsKey('FLUTTER_TEST')) {
+    // Widget tests must not touch the real shared config. Use a UNIQUE temp file
+    // per container so tests never leak persisted game-path state into one
+    // another via a shared fixed path; each starts from a clean default.
+    final dir = Directory.systemTemp.createTempSync('gore_test_cfg');
+    return SharedConfig(File(p.join(dir.path, 'config.json')));
+  }
+  return SharedConfig.defaultForPlatform();
+});
+
 final themeModeProvider = StateNotifierProvider<ThemeModeNotifier, ThemeMode>((
   ref,
 ) {
@@ -308,26 +309,27 @@ class DumpPathNotifier extends StateNotifier<String?> {
 }
 
 /// Path to the game's executable (.exe), or null if unset. Used as the hint for
-/// localized-text auto-detection and game-install discovery. Persisted so the
-/// choice survives restarts.
+/// localized-text auto-detection and game-install discovery. Persisted (in the
+/// shared `config.json`) so the choice survives restarts and is shared with the
+/// `gore` CLI and other apps.
 final gameExePathProvider =
     StateNotifierProvider<GameExePathNotifier, String?>((ref) {
-  return GameExePathNotifier(ref.watch(uiSettingsStoreProvider));
+  return GameExePathNotifier(ref.watch(sharedConfigProvider));
 });
 
 class GameExePathNotifier extends StateNotifier<String?> {
-  GameExePathNotifier(this._store) : super(_store.read().gameExePath);
+  GameExePathNotifier(this._config) : super(_config.gamePath());
 
-  final UiSettingsStore _store;
+  final SharedConfig _config;
 
   void set(String path) {
     state = path;
-    _store.write(_store.read().copyWith(gameExePath: path));
+    _config.setGamePath(path);
   }
 
   void clear() {
     state = null;
-    _store.write(_store.read().copyWith(clearGameExePath: true));
+    _config.clearGamePath();
   }
 }
 

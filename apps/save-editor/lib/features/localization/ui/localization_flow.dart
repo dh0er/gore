@@ -4,14 +4,19 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:goresave/features/localization/domain/localization_controller.dart';
 import 'package:goresave/l10n/app_localizations.dart';
 import 'package:goresave/loc/loc_catalog_provider.dart';
+import 'package:goresave/providers/data_providers.dart';
 
 /// Runs the shared "extract localized game text" flow used by both the
 /// first-run confirmation and the manual Settings button.
 ///
-/// 1. Attempts auto-detect extraction (no hint).
-/// 2. On a not-found auto-detect failure, opens a `.lcache` file picker and
+/// 1. Attempts extraction using the configured `game_path` (shared
+///    `config.json`, e.g. set via `gore config` or another gore-suite app) as
+///    a preferred hint when present; otherwise auto-detects via Steam.
+/// 2. If that configured hint fails to resolve a `.lcache`, falls back to Steam
+///    auto-detect so a stale/wrong configured path never dead-ends the GUI.
+/// 3. On a not-found auto-detect failure, opens a `.lcache` file picker and
 ///    retries with the picked path; if the user cancels, aborts gracefully.
-/// 3. Reports success/failure via a SnackBar.
+/// 4. Reports success/failure via a SnackBar.
 ///
 /// [context] must come from a widget that is still mounted; the function checks
 /// `context.mounted` after each await before touching the UI.
@@ -21,7 +26,20 @@ Future<void> runLocalizationExtractFlow(
 ) async {
   final controller = ref.read(localizationControllerProvider.notifier);
 
-  var result = await controller.extract();
+  // An explicitly-configured game install is preferred over Steam auto-detect
+  // (matches the `gore` CLI's own precedence: configured path > auto-detect).
+  final configuredGamePath = ref.read(sharedConfigProvider).gamePath();
+  var result = await controller.extract(lcacheHint: configuredGamePath);
+
+  // A configured game_path is only a preferred hint here — the GUI must stay
+  // recoverable. If it resolved NO .lcache (notFound), fall back to Steam
+  // auto-detect (no hint), which sets `notFound` and opens the picker below when
+  // it too finds nothing. Retry only on not-found: a hint that found a cache but
+  // failed to read/decode it must surface that error, not silently fall back to
+  // a possibly-different install's catalog.
+  if (result.notFound && configuredGamePath != null) {
+    result = await controller.extract(lcacheHint: null);
+  }
 
   if (result.notFound) {
     if (!context.mounted) return;

@@ -40,6 +40,20 @@ Get the binary by building it (`cargo build --release -p gore` →
 that contains `G1R/`). The exact `--game`/path each subcommand expects is always
 in `gore <cmd> --help`.
 
+Set the game path once and skip `--game` everywhere:
+
+```sh
+gore config set game-path "$GAME"   # an install root or the game .exe
+gore config detect                  # …or auto-detect a Steam install & save it
+gore config list                    # show the stored value + resolved root
+```
+
+Every command that needs the game (`deploy-shared`, `mod`, `mgr`, `texture`,
+`loc`) then resolves it automatically. Precedence is an explicit `--game` (or
+`--lcache` for `loc`) > the configured path > Steam auto-detect. The path is
+stored in a shared `config.json` (`gore config path`) that the GUI apps read
+too, so you configure the install in one place.
+
 Each domain produces a mod a different way:
 
 | Domain | Mechanism | Touches |
@@ -221,7 +235,7 @@ This is the same engine [`mod-studio`](#gore-mod-studio) drives. Other helpers:
 
 ```sh
 gore scaffold MyMod -o "$GAME/.../Mods"   # empty hand-written gore-lua mod skeleton
-gore deploy-shared --game "$GAME/.../Win64"   # install the gore-lua helpers (for custom Lua mods)
+gore deploy-shared --game "$GAME"         # install the gore-lua helpers (for custom Lua mods)
 gore package mod_dir/ -o MyMod.zip        # zip a Lua mod for sharing
 ```
 
@@ -231,6 +245,7 @@ Every subcommand of the `gore` binary:
 
 | Command | Action(s) | Purpose |
 |---------|-----------|---------|
+| `config` | `set` · `get` · `unset` · `list` · `path` · `detect` | Persist shared settings (the game path) so other commands can omit `--game`. |
 | `gen` | — | Compile `overrides.toml` → a UE4SS Lua override mod. |
 | `mod` | `build` · `deploy` · `undeploy` | Build/deploy/undeploy a unified bundle (overrides + loc + audio + textures + scripts). |
 | `mgr` | `import` · `list` · `enable` · `disable` · `order` · `analyze` · `apply` · `status` · `reset` · `remove` | Multi-mod manager: library, load order, conflict analysis, composed deploy (the CLI behind mod-manager). |
@@ -358,7 +373,7 @@ custom mods.
 How a mod uses it:
 
 ```sh
-gore deploy-shared --game "$GAME/.../Win64"   # copy gore-lua into ue4ss/Mods/shared (once)
+gore deploy-shared --game "$GAME"             # copy gore-lua into ue4ss/Mods/shared (once)
 gore scaffold MyMod -o "$GAME/.../Mods"       # new mod with the loader wired in
 ```
 

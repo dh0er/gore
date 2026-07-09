@@ -71,3 +71,7 @@ path = "tests/integration/as_cache_test.rs"
 [[test]]
 name = "mgr"
 path = "tests/integration/mgr.rs"
+
+[[test]]
+name = "config_test"
+path = "tests/integration/config_test.rs"

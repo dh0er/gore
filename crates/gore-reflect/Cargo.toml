@@ -3,7 +3,7 @@ name = "gore-reflect"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "UE reflection model + UE4SS SDK dump parser for gore-tools."
+description = "UE reflection model + UE4SS SDK dump parser for gore."
 
 [lib]
 crate-type = ["rlib"]

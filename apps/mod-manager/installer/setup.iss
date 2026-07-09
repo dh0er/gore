@@ -43,10 +43,10 @@ SetupIconFile=..\windows\runner\resources\app_icon.ico
 LicenseFile=..\..\..\LICENSE
 
 [UninstallDelete]
-; Active settings live under the shared gore-tools umbrella
-; (%LOCALAPPDATA%\gore-tools\gore-manager\). Remove only gore-manager's own
-; subfolder so gore-save / gore-mod / gore-cli data under gore-tools survives.
-Type: filesandordirs; Name: "{localappdata}\gore-tools\gore-manager"
+; Active settings live under the shared gore umbrella
+; (%LOCALAPPDATA%\gore\gore-manager\). Remove only gore-manager's own
+; subfolder so gore-save / gore-mod / gore-cli data under gore survives.
+Type: filesandordirs; Name: "{localappdata}\gore\gore-manager"
 
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs

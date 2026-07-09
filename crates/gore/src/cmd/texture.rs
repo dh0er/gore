@@ -11,7 +11,7 @@ pub enum TextureAction {
     List {
         /// Path to the game install dir (contains G1R/Content/Paks/…)
         #[arg(long)]
-        game: PathBuf,
+        game: Option<PathBuf>,
         /// Keep only asset paths containing this substring
         #[arg(long)]
         filter: Option<String>,
@@ -20,7 +20,7 @@ pub enum TextureAction {
     Extract {
         /// Path to the game install dir (contains G1R/Content/Paks/…)
         #[arg(long)]
-        game: PathBuf,
+        game: Option<PathBuf>,
         /// Cooked asset path, e.g. /Game/UI/Textures/Common/T_HardwareCursor
         asset: String,
         /// Output PNG path
@@ -31,7 +31,7 @@ pub enum TextureAction {
     Replace {
         /// Path to the game install dir (contains G1R/Content/Paks/…)
         #[arg(long)]
-        game: PathBuf,
+        game: Option<PathBuf>,
         /// Cooked asset path, e.g. /Game/UI/Textures/Common/T_HardwareCursor
         asset: String,
         /// Replacement PNG (RGBA8 / RGB8); dims need not match the original
@@ -45,7 +45,7 @@ pub enum TextureAction {
     Pack {
         /// Path to the game install dir (needed for the global script-objects store)
         #[arg(long)]
-        game: PathBuf,
+        game: Option<PathBuf>,
         /// Mod dir laid out under its mount path (from `texture replace`)
         #[arg(long)]
         mod_dir: PathBuf,
@@ -66,7 +66,7 @@ pub enum TextureAction {
     Deploy {
         /// Path to the game install dir (contains G1R/Content/Paks/…)
         #[arg(long)]
-        game: PathBuf,
+        game: Option<PathBuf>,
         /// Dir holding <name>.{utoc,ucas,pak} (the `texture pack` output dir)
         #[arg(long)]
         triplet_dir: PathBuf,
@@ -77,8 +77,8 @@ pub enum TextureAction {
     /// Build the texture index (asset->package_id) and cache it to the shared dir
     Index {
         #[arg(long)]
-        game: PathBuf,
-        /// Output path (defaults to the shared gore-tools texture_index.json)
+        game: Option<PathBuf>,
+        /// Output path (defaults to the shared gore texture_index.json)
         #[arg(short = 'o', long)]
         out: Option<PathBuf>,
     },
@@ -86,7 +86,7 @@ pub enum TextureAction {
     Undeploy {
         /// Path to the game install dir (contains G1R/Content/Paks/…)
         #[arg(long)]
-        game: PathBuf,
+        game: Option<PathBuf>,
         /// Base name of the deployed triplet, e.g. zzz_MyMod_P
         #[arg(long)]
         name: String,
@@ -127,6 +127,7 @@ fn validate_triplet_name(name: &str) -> Result<()> {
 pub fn run(action: TextureAction) -> Result<()> {
     match action {
         TextureAction::List { game, filter } => {
+            let game = gore_loc::config::game_root(game)?;
             let utoc = gore_tex::paths::main_container(&game)?;
             let usmap = gore_tex::paths::usmap(&game)?;
             eprintln!(
@@ -138,6 +139,7 @@ pub fn run(action: TextureAction) -> Result<()> {
             Ok(())
         }
         TextureAction::Extract { game, asset, out } => {
+            let game = gore_loc::config::game_root(game)?;
             let utoc = gore_tex::paths::main_container(&game)?;
             let usmap = gore_tex::paths::usmap(&game)?;
 
@@ -207,6 +209,7 @@ pub fn run(action: TextureAction) -> Result<()> {
             image: image_path,
             mod_dir,
         } => {
+            let game = gore_loc::config::game_root(game)?;
             let utoc = gore_tex::paths::main_container(&game)?;
             let usmap = gore_tex::paths::usmap(&game)?;
 
@@ -302,6 +305,7 @@ pub fn run(action: TextureAction) -> Result<()> {
             out,
             compress,
         } => {
+            let game = gore_loc::config::game_root(game)?;
             validate_triplet_name(&name)?;
             let triplet = gore_tex::container::repack_to_zen(&mod_dir, &name, &out, &game, compress)
                 .with_context(|| format!("packing {} into {name}", mod_dir.display()))?;
@@ -316,6 +320,7 @@ pub fn run(action: TextureAction) -> Result<()> {
             triplet_dir,
             name,
         } => {
+            let game = gore_loc::config::game_root(game)?;
             validate_triplet_name(&name)?;
             let triplet = [
                 triplet_dir.join(format!("{name}.utoc")),
@@ -334,6 +339,7 @@ pub fn run(action: TextureAction) -> Result<()> {
             Ok(())
         }
         TextureAction::Index { game, out } => {
+            let game = gore_loc::config::game_root(game)?;
             let utoc = gore_tex::paths::main_container(&game)?;
             let usmap = gore_tex::paths::usmap(&game)?;
             let build_id = gore_tex::index::build_id_for(&utoc, &usmap);
@@ -345,6 +351,7 @@ pub fn run(action: TextureAction) -> Result<()> {
             Ok(())
         }
         TextureAction::Undeploy { game, name } => {
+            let game = gore_loc::config::game_root(game)?;
             validate_triplet_name(&name)?;
             gore_tex::container::undeploy(&game, &name)
                 .with_context(|| format!("undeploying {name}"))?;

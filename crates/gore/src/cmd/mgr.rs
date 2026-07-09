@@ -90,7 +90,7 @@ pub enum MgrAction {
     Apply {
         /// Game root (the folder containing G1R/)
         #[arg(long)]
-        game: PathBuf,
+        game: Option<PathBuf>,
         #[arg(long)]
         library: Option<PathBuf>,
         #[arg(long)]
@@ -100,7 +100,7 @@ pub enum MgrAction {
     Status {
         /// Game root (the folder containing G1R/)
         #[arg(long)]
-        game: PathBuf,
+        game: Option<PathBuf>,
         #[arg(long)]
         library: Option<PathBuf>,
         #[arg(long)]
@@ -110,7 +110,7 @@ pub enum MgrAction {
     Reset {
         /// Game root (the folder containing G1R/)
         #[arg(long)]
-        game: PathBuf,
+        game: Option<PathBuf>,
     },
 }
 
@@ -255,6 +255,7 @@ pub fn run(action: MgrAction) -> Result<()> {
         }
 
         MgrAction::Apply { game, library, loadout } => {
+            let game = gore_loc::config::game_root(game)?;
             let lib = library_of(library);
             let ld_path = loadout_of(loadout);
 
@@ -292,6 +293,7 @@ pub fn run(action: MgrAction) -> Result<()> {
         }
 
         MgrAction::Status { game, library, loadout } => {
+            let game = gore_loc::config::game_root(game)?;
             let lib = library_of(library);
             let ld_path = loadout_of(loadout);
             let ld = loadout::load(&ld_path).map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -301,6 +303,7 @@ pub fn run(action: MgrAction) -> Result<()> {
         }
 
         MgrAction::Reset { game } => {
+            let game = gore_loc::config::game_root(game)?;
             let removed = undeploy_all(&game).map_err(|e| anyhow::anyhow!("{e}"))?;
             if removed {
                 println!("reset: undeployed the active manager deployment");

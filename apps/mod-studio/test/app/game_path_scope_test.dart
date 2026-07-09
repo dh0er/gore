@@ -9,8 +9,9 @@ void main() {
   testWidgets(
     'game path change resets scoped tab state; tab switching alone keeps it',
     (tester) async {
-      // gameExePathProvider is backed by NoopUiSettingsStore under
-      // FLUTTER_TEST, so driving the real notifier is side-effect free.
+      // gameExePathProvider is backed by a SharedConfig pointed at a
+      // <systemTemp>/gore-test/config.json file under FLUTTER_TEST (never the
+      // real shared config), so driving the real notifier here is safe.
       await tester.pumpWidget(
         const ProviderScope(
           child: MaterialApp(

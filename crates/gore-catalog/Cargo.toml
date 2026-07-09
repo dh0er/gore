@@ -3,7 +3,7 @@ name = "gore-catalog"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Item/knowledge catalog model + prefix→category mapping for gore-tools."
+description = "Item/knowledge catalog model + prefix→category mapping for gore."
 
 [lib]
 crate-type = ["rlib"]

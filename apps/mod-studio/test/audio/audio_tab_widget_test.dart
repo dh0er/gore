@@ -3,7 +3,8 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:gore_mod/app/domain/ui_settings.dart';
+import 'package:gore_mod/app/domain/shared_config.dart';
+import 'package:gore_mod/app/domain/ui_settings.dart' show sharedConfigProvider;
 import 'package:gore_mod/audio/domain/audio_replacements_notifier.dart';
 import 'package:gore_mod/audio/domain/audio_samples_provider.dart';
 import 'package:gore_mod/audio/ui/audio_tab.dart';
@@ -22,16 +23,17 @@ final String _fakeGameExePath = p.join(
   'G1R-Win64-Shipping.exe',
 );
 
-/// In-memory settings store so the test never touches the real settings file.
-class _MemUiSettingsStore implements UiSettingsStore {
-  _MemUiSettingsStore(this._settings);
-  UiSettings _settings;
-
-  @override
-  UiSettings read() => _settings;
-
-  @override
-  void write(UiSettings settings) => _settings = settings;
+/// A shared config, backed by its own temp file, seeded with the fake exe
+/// path so AudioTab resolves an FMOD dir. Isolated per call so tests don't
+/// share state.
+SharedConfig _fixedSharedConfig() {
+  final dir = Directory.systemTemp.createTempSync('gore_audio_widget_cfg');
+  addTearDown(() {
+    if (dir.existsSync()) dir.deleteSync(recursive: true);
+  });
+  final config = SharedConfig(File(p.join(dir.path, 'config.json')));
+  config.setGamePath(_fakeGameExePath);
+  return config;
 }
 
 AudioSampleInfo _sample(String name) => AudioSampleInfo(
@@ -52,11 +54,7 @@ Future<void> _pumpAudioTab(
   await tester.pumpWidget(
     ProviderScope(
       overrides: [
-        uiSettingsStoreProvider.overrideWith(
-          (ref) => _MemUiSettingsStore(
-            UiSettings(gameExePath: _fakeGameExePath),
-          ),
-        ),
+        sharedConfigProvider.overrideWithValue(_fixedSharedConfig()),
         audioSamplesProvider.overrideWith(
           (ref, bankFullPath) async =>
               samplesByBank[bankFullPath.split(RegExp(r'[\\/]')).last] ??

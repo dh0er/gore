@@ -4,7 +4,8 @@
 use anyhow::{bail, Context, Result};
 use std::{fs, path::Path, path::PathBuf};
 
-pub fn run(src: Option<PathBuf>, game: PathBuf) -> Result<()> {
+pub fn run(src: Option<PathBuf>, game: Option<PathBuf>) -> Result<()> {
+    let game = gore_loc::config::game_root(game)?;
     let src = match src {
         Some(s) => s,
         None => resolve_default_src()?,
@@ -12,7 +13,12 @@ pub fn run(src: Option<PathBuf>, game: PathBuf) -> Result<()> {
     if !src.is_dir() {
         bail!("source '{}' is not a directory", src.display());
     }
-    let mods = game.join("ue4ss").join("Mods");
+    let mods = game
+        .join("G1R")
+        .join("Binaries")
+        .join("Win64")
+        .join("ue4ss")
+        .join("Mods");
     if !mods.is_dir() {
         bail!(
             "'{}' does not look like a game dir (no ue4ss/Mods)",

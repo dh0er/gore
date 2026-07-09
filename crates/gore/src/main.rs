@@ -110,9 +110,10 @@ enum Commands {
         /// executable (cwd-independent); pass this when running from an unusual layout.
         #[arg(long)]
         src: Option<std::path::PathBuf>,
-        /// Game dir containing ue4ss/Mods.
+        /// Game install root (the folder containing G1R/). Falls back to the
+        /// configured game path, then Steam auto-detect.
         #[arg(long)]
-        game: std::path::PathBuf,
+        game: Option<std::path::PathBuf>,
     },
     /// AngelScript precompiled-cache tooling (decode/emit/splice/decompile).
     As {
@@ -147,6 +148,11 @@ enum Commands {
         #[command(subcommand)]
         action: cmd::mgr::MgrAction,
     },
+    /// Read/write the shared per-user config (game path, …)
+    Config {
+        #[command(subcommand)]
+        action: cmd::config::ConfigAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -167,13 +173,13 @@ enum ModAction {
         bundle: PathBuf,
         /// Game root (the folder containing G1R/)
         #[arg(long)]
-        game: PathBuf,
+        game: Option<PathBuf>,
     },
     /// Undeploy the active mod (restore backups)
     Undeploy {
         /// Game root (the folder containing G1R/)
         #[arg(long)]
-        game: PathBuf,
+        game: Option<PathBuf>,
     },
 }
 
@@ -253,7 +259,7 @@ enum AudioAction {
 #[derive(Subcommand)]
 enum LocAction {
     /// Auto-detect (or --lcache) the game's .lcache and write the shared
-    /// gore-tools/loc_catalog.json (used by gore-save and gore-mod too)
+    /// gore/loc_catalog.json (used by gore-save and gore-mod too)
     Extract {
         /// Path to the .lcache, the game dir, or a Steam library (else auto-detect)
         #[arg(long)]
@@ -325,6 +331,7 @@ fn main() {
         },
         Commands::Texture { action } => cmd::texture::run(action),
         Commands::Mgr { action } => cmd::mgr::run(action),
+        Commands::Config { action } => cmd::config::run(action),
     };
     if let Err(e) = result {
         eprintln!("error: {e:#}");

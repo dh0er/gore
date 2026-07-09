@@ -4,7 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:gore_manager/app/domain/ui_settings.dart';
+import 'package:gore_manager/app/domain/shared_config.dart';
+import 'package:gore_manager/app/domain/ui_settings.dart' show sharedConfigProvider;
 import 'package:gore_manager/conflicts/ui/conflict_panel.dart';
 import 'package:gore_manager/core/core_service.dart';
 import 'package:gore_manager/core/providers.dart';
@@ -64,14 +65,16 @@ Map<String, Object?> _oneHardConflict() => {
       ],
     };
 
-/// A settings store that reports a fixed exe path so the game root resolves.
-class _FixedSettingsStore implements UiSettingsStore {
-  _FixedSettingsStore(this.exePath);
-  final String exePath;
-  @override
-  UiSettings read() => UiSettings(gameExePath: exePath);
-  @override
-  void write(UiSettings settings) {}
+/// A shared config, backed by its own temp file, seeded with a fixed exe path
+/// so the game root resolves. Isolated per call so tests don't share state.
+SharedConfig _fixedSharedConfig(String exePath) {
+  final dir = Directory.systemTemp.createTempSync('gm_widget_test_cfg');
+  addTearDown(() {
+    if (dir.existsSync()) dir.deleteSync(recursive: true);
+  });
+  final config = SharedConfig(File(p.join(dir.path, 'config.json')));
+  config.setGamePath(exePath);
+  return config;
 }
 
 /// Create a temp game tree whose exe path resolves via gameRootFromExe (it
@@ -91,8 +94,7 @@ Widget _appWith(FakeGoreCoreFfiService fake, {String? exePath}) {
     overrides: [
       coreServiceProvider.overrideWithValue(fake),
       if (exePath != null)
-        uiSettingsStoreProvider
-            .overrideWithValue(_FixedSettingsStore(exePath)),
+        sharedConfigProvider.overrideWithValue(_fixedSharedConfig(exePath)),
     ],
     child: MaterialApp(
       localizationsDelegates: const [

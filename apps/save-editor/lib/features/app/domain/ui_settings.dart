@@ -135,7 +135,7 @@ class JsonFileUiSettingsStore implements UiSettingsStore {
   }
 
   /// Previous per-app config location used before settings moved under the
-  /// shared `gore-tools` umbrella. Kept only to migrate old files once.
+  /// shared `gore` umbrella. Kept only to migrate old files once.
   static File _legacyFile(Map<String, String> env, String fileName) {
     final String root;
     if (Platform.isWindows) {

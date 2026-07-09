@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""gore-tools monorepo build orchestrator.
+"""gore monorepo build orchestrator.
 
 One entry point for every releasable product in the flat layout (Flutter apps
 under apps/, the gore CLI under crates/gore). Wraps the per-project build logic
