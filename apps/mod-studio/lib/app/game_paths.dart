@@ -1,12 +1,18 @@
 import 'dart:io';
 import 'package:path/path.dart' as p;
 
-/// Derive the game root (the folder containing `G1R/`) from the configured exe path.
-/// The exe lives at `<root>/G1R/Binaries/Win64/G1R-Win64-Shipping.exe`.
-String? gameRootFromExe(String? exePath) {
-  if (exePath == null || exePath.isEmpty) return null;
-  var dir = p.dirname(exePath);
-  for (var i = 0; i < 8; i++) {
+/// Derive the game root (the folder containing `G1R/`) from the configured path.
+///
+/// That path may be the install **root** itself — the shared `game_path` set by
+/// `gore config set game-path`/`detect` (and by another gore app) is the install
+/// root, not an exe — OR the game **.exe** at
+/// `<root>/G1R/Binaries/Win64/G1R-Win64-Shipping.exe`. The walk starts at the
+/// path itself and climbs to the nearest ancestor holding a `G1R/` child, so a
+/// root resolves to itself and an exe resolves to its root.
+String? gameRootFromExe(String? path) {
+  if (path == null || path.isEmpty) return null;
+  var dir = path;
+  for (var i = 0; i < 9; i++) {
     if (Directory(p.join(dir, 'G1R')).existsSync()) return dir;
     if (p.basename(dir) == 'G1R') return p.dirname(dir);
     final parent = p.dirname(dir);
