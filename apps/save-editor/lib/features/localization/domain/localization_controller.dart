@@ -124,10 +124,12 @@ class LocalizationController extends StateNotifier<LocalizationState> {
         final error = (response['error'] as Map?)?.cast<String, Object?>();
         final code = error?['code'] as String?;
         final message = error?['message'] as String? ?? 'Unknown core error';
-        // INVALID_REQUEST is raised when the .lcache wasn't found (e.g. Steam
-        // auto-detect came up empty); treat that as the file-picker fallback
-        // signal rather than a hard error.
-        final notFound = code == 'INVALID_REQUEST' && lcacheHint == null;
+        // INVALID_REQUEST is raised when the .lcache wasn't found — whether we
+        // were auto-detecting (no hint) or resolving from a hint that pointed at
+        // no cache. Signal it regardless of the hint so the caller can tell a
+        // "no cache here, try elsewhere" outcome (retry auto-detect / pick a
+        // file) apart from a real read/decode failure of a cache that WAS found.
+        final notFound = code == 'INVALID_REQUEST';
         if (notFound) {
           // Expected case: auto-detect came up empty and the caller will open
           // the file picker. Stay idle and clear the message so cancelling the

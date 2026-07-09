@@ -18,12 +18,7 @@ type LocMap = BTreeMap<String, BTreeMap<String, String>>;
 /// Auto-detect (or use `--lcache`) the game's localization cache and write the
 /// shared `gore/loc_catalog.json`. Prompts for confirmation unless `--yes`.
 pub fn extract(lcache: Option<PathBuf>, yes: bool) -> Result<()> {
-    // Resolution precedence: explicit --lcache > the configured game path
-    // (discover walks it to the .lcache) > Steam auto-detect. A configured path
-    // is used authoritatively (like an explicit hint), so `loc` reads text from
-    // YOUR configured install rather than a possibly-different Steam one.
-    let hint = lcache.or_else(|| config::load().game_path.map(PathBuf::from));
-    let resolved = loc_store::resolve_lcache(hint.as_deref())
+    let resolved = resolve_extract_lcache(lcache)
         .ok_or_else(|| anyhow::anyhow!(
             "no AlkimiaLocalization .lcache found (tried --lcache, the configured \
              game path, then Steam auto-detect). Pass --lcache <path-to-.lcache or game dir>."
@@ -50,6 +45,30 @@ pub fn extract(lcache: Option<PathBuf>, yes: bool) -> Result<()> {
         meta.catalog_path
     );
     Ok(())
+}
+
+/// Resolve the `.lcache` for `extract`, mirroring every other command's game-path
+/// precedence: explicit `--lcache` > the configured `game_path` > Steam
+/// auto-detect. The configured path is normalized to the install root via
+/// [`config::game_root`] (so an exe / `Win64` / intermediate path resolves the
+/// same as it does for `mod`/`mgr`/`texture`), and each level falls back to the
+/// next when it can't resolve a cache — so a stale configured path never blocks
+/// extraction, it just yields to Steam auto-detect.
+fn resolve_extract_lcache(lcache: Option<PathBuf>) -> Option<PathBuf> {
+    // 1. An explicit --lcache is authoritative: the user pointed us at it.
+    if let Some(hint) = lcache {
+        return loc_store::resolve_lcache(Some(&hint));
+    }
+    // 2. The configured game path (else Steam), normalized to the G1R-containing
+    //    root exactly like the other commands, then find the cache under it.
+    if let Ok(root) = config::game_root(None) {
+        if let Some(found) = loc_store::resolve_lcache(Some(&root)) {
+            return Some(found);
+        }
+    }
+    // 3. Fall back to a direct Steam `.lcache` scan (covers a stale configured
+    //    path, or an install whose root normalization missed but discover finds).
+    loc_store::resolve_lcache(None)
 }
 
 /// Print whether a shared catalog exists and its provenance.

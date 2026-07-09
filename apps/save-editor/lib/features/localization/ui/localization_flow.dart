@@ -32,11 +32,12 @@ Future<void> runLocalizationExtractFlow(
   var result = await controller.extract(lcacheHint: configuredGamePath);
 
   // A configured game_path is only a preferred hint here — the GUI must stay
-  // recoverable. If it fails to resolve a .lcache, fall back to Steam
-  // auto-detect (called with no hint), which sets `notFound` and opens the
-  // picker below when it too finds nothing. Without this, a stale/wrong
-  // configured path would surface only an error with no way to proceed.
-  if (!result.success && configuredGamePath != null) {
+  // recoverable. If it resolved NO .lcache (notFound), fall back to Steam
+  // auto-detect (no hint), which sets `notFound` and opens the picker below when
+  // it too finds nothing. Retry only on not-found: a hint that found a cache but
+  // failed to read/decode it must surface that error, not silently fall back to
+  // a possibly-different install's catalog.
+  if (result.notFound && configuredGamePath != null) {
     result = await controller.extract(lcacheHint: null);
   }
 
