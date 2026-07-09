@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
 import 'package:path/path.dart' as p;
 
+import '../../loc/game_lang.dart';
 import 'shared_config.dart';
 
 class UiSettings {
@@ -16,7 +17,7 @@ class UiSettings {
     this.windowMaximized = false,
     this.dumpPath,
     this.locExtractPrompted = false,
-    this.appLocale = 'en',
+    this.appLocale,
   });
 
   factory UiSettings.fromJson(Map<String, Object?> json) {
@@ -27,10 +28,11 @@ class UiSettings {
         _ => ThemeMode.light,
       },
       appLocale: switch (json['appLocale']) {
-        // Trim so a stored " de " still matches kGameLangs (else the picker
-        // would silently fall back to English).
+        // A missing or blank value stays null ("never chosen") so the app
+        // follows the device language until the user picks one; a stored code
+        // is trimmed so " de " still matches kGameLangs.
         final String code when code.trim().isNotEmpty => code.trim(),
-        _ => 'en',
+        _ => null,
       },
       uiScale: switch (json['uiScale']) {
         final num value => UiScaleNotifier.clampScale(value.toDouble()),
@@ -66,8 +68,9 @@ class UiSettings {
   final bool locExtractPrompted;
 
   /// Selected app/game language code (one of [kGameLangs]); drives both the
-  /// MaterialApp locale and which extracted game-text names are shown.
-  final String appLocale;
+  /// MaterialApp locale and which extracted game-text names are shown. Null
+  /// means "never chosen" — the app then follows the device language.
+  final String? appLocale;
 
   UiSettings copyWith({
     ThemeMode? themeMode,
@@ -104,7 +107,7 @@ class UiSettings {
     'windowMaximized': windowMaximized,
     if (dumpPath != null) 'dumpPath': dumpPath,
     'locExtractPrompted': locExtractPrompted,
-    'appLocale': appLocale,
+    'appLocale': ?appLocale,
   };
 }
 
@@ -117,7 +120,7 @@ class NoopUiSettingsStore implements UiSettingsStore {
   const NoopUiSettingsStore();
 
   @override
-  UiSettings read() => const UiSettings();
+  UiSettings read() => const UiSettings(appLocale: 'en');
 
   @override
   void write(UiSettings settings) {}
@@ -147,6 +150,42 @@ String sharedDataDir(Map<String, String> env) {
               : p.join(home, '.local', 'share'));
   }
   return p.join(base, 'gore');
+}
+
+/// One-time migration for the breaking `gore-tools` → `gore` shared-dir rename.
+///
+/// Copies every file from the legacy umbrella directory into the new one
+/// wherever the new dir doesn't already have it, so users upgrading across the
+/// rename keep their settings, language choice, and extracted loc/texture
+/// caches (which live at the umbrella root, not per app). Best effort: never
+/// throws, so a migration failure can't block startup.
+void migrateLegacyUmbrellaDir(Map<String, String> env) {
+  try {
+    final newDir = Directory(sharedDataDir(env));
+    final legacy = Directory(p.join(p.dirname(newDir.path), 'gore-tools'));
+    if (!legacy.existsSync()) return;
+    final marker = File(p.join(newDir.path, '.migrated-from-gore-tools'));
+    if (marker.existsSync()) return;
+    for (final entity in legacy.listSync(recursive: true)) {
+      if (entity is! File) continue;
+      final rel = p.relative(entity.path, from: legacy.path);
+      final target = File(p.join(newDir.path, rel));
+      if (target.existsSync()) continue; // never clobber newer data
+      target.parent.createSync(recursive: true);
+      entity.copySync(target.path);
+    }
+    marker.createSync(recursive: true);
+  } catch (_) {
+    // A failed migration must never block startup.
+  }
+}
+
+/// Runs [migrateLegacyUmbrellaDir] against the real environment, skipping
+/// widget-test runs so tests never touch on-disk user data. Call once at
+/// startup, before any settings or loc caches are read.
+void migrateLegacyUmbrellaDirForPlatform() {
+  if (Platform.environment.containsKey('FLUTTER_TEST')) return;
+  migrateLegacyUmbrellaDir(Platform.environment);
 }
 
 /// The previous per-app config directory (`<config>/gore-mod`), kept only so a
@@ -363,7 +402,13 @@ final localeProvider =
 });
 
 class LocaleNotifier extends StateNotifier<String> {
-  LocaleNotifier(this._store) : super(_store.read().appLocale);
+  LocaleNotifier(this._store)
+      : super(
+          _store.read().appLocale ??
+              deviceLanguageCode(
+                WidgetsBinding.instance.platformDispatcher.locales,
+              ),
+        );
 
   final UiSettingsStore _store;
 

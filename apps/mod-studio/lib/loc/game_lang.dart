@@ -29,6 +29,22 @@ const List<GameLang> kGameLangs = [
 GameLang gameLangByCode(String? code) =>
     kGameLangs.firstWhere((l) => l.code == code, orElse: () => kGameLangs.first);
 
+/// Best-supported language code for the device's preferred [deviceLocales]
+/// (highest priority first), matched by language code. Returns `'en'` as the
+/// last resort when none of the device languages are supported.
+///
+/// Matching on language code alone is intentional: any `zh-*` resolves to
+/// `zh-Hans` and any `pt-*` to `pt-BR`, the only Chinese and Portuguese
+/// variants shipped.
+String deviceLanguageCode(Iterable<Locale> deviceLocales) {
+  for (final device in deviceLocales) {
+    for (final lang in kGameLangs) {
+      if (lang.locale.languageCode == device.languageCode) return lang.code;
+    }
+  }
+  return 'en';
+}
+
 /// Resolve a game-text id to its localized value for [lang], falling back to
 /// English, then null. [catalog] is the loaded loc_catalog: id -> {set -> text}.
 String? resolveGameText(

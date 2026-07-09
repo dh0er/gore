@@ -7,10 +7,14 @@ import 'package:goresave/features/app/domain/ui_settings.dart';
 import 'package:goresave/features/app/domain/window_state_persistence.dart';
 import 'package:goresave/features/app/ui/goresave_app.dart';
 import 'package:goresave/features/app/ui/window_chrome.dart';
+import 'package:goresave/utils/gore_tools_paths.dart';
 import 'package:window_manager/window_manager.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Recover settings/loc caches left behind by the gore-tools → gore rename,
+  // before any settings or window state are read.
+  migrateLegacyUmbrellaDirForPlatform();
   if (windowChromeEnabled) {
     await windowManager.ensureInitialized();
     final settingsStore = JsonFileUiSettingsStore.defaultForPlatform();
