@@ -433,8 +433,12 @@ where
                 }
                 Ok(out.clone())
             } else {
-                // In-place: the game already wrote the fresh cache; keep it and just remove the
-                // staged `.as` (the cache is never among `staged`, so it survives).
+                // In-place: the game wrote the fresh cache. Clean up the staged `.as`, but NEVER let
+                // cleanup touch the cache itself: if the staged source tree happened to include a
+                // file at the cache path, restoring its pre-compile bytes here would silently clobber
+                // the freshly compiled cache while still reporting success. Drop that entry first so
+                // the new cache survives.
+                staged.retain(|(p, _)| p != &cache);
                 if let Err(e) = restore_or_remove(&staged, &script_dir) {
                     return Err(format!("compiled in place, but failed to clean staged sources: {e}"));
                 }
@@ -665,6 +669,37 @@ mod tests {
             std::fs::read(deploy_bak_path(&cache)).unwrap(),
             b"OLD",
             "previous cache backed up to .gore-bak"
+        );
+        assert!(!cache.parent().unwrap().join("Mod.as").exists(), "staged .as cleaned");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn precompile_in_place_keeps_new_cache_even_if_src_carries_a_cache_file() {
+        // Regression: a staged src tree that happens to include a file at the cache path must NOT
+        // cause cleanup to restore the old cache over the freshly compiled one.
+        let base = std::env::temp_dir().join("gore-as-compile-srccache");
+        let _ = std::fs::remove_dir_all(&base);
+        let (game, cache) = fake_install(&base);
+        let src = base.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("PrecompiledScript_Shipping.Cache"), b"SRCCACHE").unwrap();
+        std::fs::write(src.join("Mod.as"), b"script").unwrap();
+
+        let opts = PrecompileOpts {
+            game_dir: game,
+            src: Some(src),
+            out: None,
+            backup: true,
+        };
+        let res = precompile_with(&opts, gen_new).unwrap();
+
+        assert_eq!(res, cache);
+        assert_eq!(
+            std::fs::read(&cache).unwrap(),
+            b"NEW",
+            "freshly compiled cache kept, not clobbered by the staged src cache file"
         );
         assert!(!cache.parent().unwrap().join("Mod.as").exists(), "staged .as cleaned");
 
