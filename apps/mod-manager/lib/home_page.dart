@@ -83,7 +83,7 @@ class _HomePageState extends ConsumerState<HomePage> {
           child: Row(
             children: [
               const SizedBox(width: 8),
-              Image.asset('assets/gore_manager_icon.png', height: 22),
+              Image.asset('assets/gore_manager_icon.png', height: 32),
               const SizedBox(width: 10),
               Text(l10n.appTitle),
               const Expanded(child: SizedBox(height: 32)),
