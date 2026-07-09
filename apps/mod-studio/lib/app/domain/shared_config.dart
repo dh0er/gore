@@ -37,7 +37,9 @@ class SharedConfig {
 
   String? gamePath() {
     final v = _read()['game_path'];
-    return (v is String && v.isNotEmpty) ? v : null;
+    // Trim so a blank/whitespace-only value reads as unset, matching the Rust
+    // side (gore_loc::config) — else CLI and GUI disagree on whether it's set.
+    return (v is String && v.trim().isNotEmpty) ? v : null;
   }
 
   void setGamePath(String path) {

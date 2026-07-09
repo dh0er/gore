@@ -73,7 +73,13 @@ pub fn run(action: ConfigAction) -> Result<()> {
             println!("game-path = {raw}");
             match config::game_root(None) {
                 Ok(root) => {
-                    let source = if cfg.game_path.is_some() { "config" } else { "auto-detect" };
+                    // Match game_root's own view: a blank/whitespace game_path is
+                    // treated as unset, so the root came from auto-detect, not config.
+                    let from_config = cfg
+                        .game_path
+                        .as_deref()
+                        .is_some_and(|s| !s.trim().is_empty());
+                    let source = if from_config { "config" } else { "auto-detect" };
                     println!("resolved game root = {} (source: {source})", root.display());
                 }
                 Err(_) => println!("resolved game root = (unresolved)"),
