@@ -82,8 +82,9 @@ pub fn game_root(explicit: Option<PathBuf>) -> Result<PathBuf, ConfigError> {
 
 /// Test / power-user seam: when `GORE_DISABLE_GAME_AUTODETECT` is set to a
 /// non-empty value, skip Steam auto-detection so resolution relies solely on an
-/// explicit arg or the configured `game_path`.
-fn autodetect_disabled() -> bool {
+/// explicit arg or the configured `game_path`. Public so other Steam-scanning
+/// entry points (e.g. `loc extract`'s cache fallback) honor the same switch.
+pub fn autodetect_disabled() -> bool {
     std::env::var_os("GORE_DISABLE_GAME_AUTODETECT")
         .map(|v| !v.is_empty())
         .unwrap_or(false)

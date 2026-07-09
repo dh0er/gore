@@ -82,3 +82,21 @@ fn mgr_status_errors_helpfully_when_unset() {
         .failure()
         .stderr(predicates::str::contains("no game path set"));
 }
+
+#[test]
+fn loc_extract_honors_disabled_autodetect() {
+    let tmp = TempDir::new().unwrap();
+    // No configured game-path and autodetect disabled (the `gore` helper sets
+    // GORE_DISABLE_GAME_AUTODETECT=1): `loc extract` must NOT fall through to a
+    // Steam scan and reach an install the caller excluded. It must fail cleanly
+    // with the not-found message. (On a machine WITH the game installed, an
+    // ungated Steam fallback would instead succeed — so asserting `.failure()`
+    // is a real guard on the seam.)
+    gore(tmp.path())
+        .args(["loc", "extract", "-y"])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains(
+            "no AlkimiaLocalization .lcache found",
+        ));
+}

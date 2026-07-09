@@ -67,7 +67,12 @@ fn resolve_extract_lcache(lcache: Option<PathBuf>) -> Option<PathBuf> {
         }
     }
     // 3. Fall back to a direct Steam `.lcache` scan (covers a stale configured
-    //    path, or an install whose root normalization missed but discover finds).
+    //    path, or an install whose root normalization missed but discover finds)
+    //    — but honor the autodetect-disable seam, so a caller that excluded Steam
+    //    (tests / power users) never has `loc` reach an install behind their back.
+    if config::autodetect_disabled() {
+        return None;
+    }
     loc_store::resolve_lcache(None)
 }
 
