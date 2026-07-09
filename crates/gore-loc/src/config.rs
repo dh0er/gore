@@ -73,11 +73,17 @@ pub enum ConfigError {
 /// The winning path is normalized (an `.exe` or a descendant walks up to the
 /// `G1R/` parent). Returns [`ConfigError::Unresolved`] when nothing resolves.
 pub fn game_root(explicit: Option<PathBuf>) -> Result<PathBuf, ConfigError> {
-    let configured = configured_game_path(&load());
-    let detected = if autodetect_disabled() { None } else { discover::find_game_root() };
-    resolve_root(explicit, configured, detected)
-        .map(|p| normalize_root(&p))
-        .ok_or(ConfigError::Unresolved)
+    // Steam auto-detect is deferred (it probes the registry + filesystem): it
+    // runs only when neither an explicit arg nor a configured path resolves.
+    resolve_root(explicit, configured_game_path(&load()), || {
+        if autodetect_disabled() {
+            None
+        } else {
+            discover::find_game_root()
+        }
+    })
+    .map(|p| normalize_root(&p))
+    .ok_or(ConfigError::Unresolved)
 }
 
 /// The configured `game_path` as an `Option`, treating an empty/whitespace-only
@@ -101,13 +107,15 @@ pub fn autodetect_disabled() -> bool {
         .unwrap_or(false)
 }
 
-/// Pure precedence selection (no IO): explicit > configured > detected.
+/// Precedence selection: explicit > configured > detected. `detect` is a closure
+/// so Steam auto-detection is invoked only when neither an explicit arg nor a
+/// configured path is present (it does a registry + filesystem probe).
 fn resolve_root(
     explicit: Option<PathBuf>,
     configured: Option<PathBuf>,
-    detected: Option<PathBuf>,
+    detect: impl FnOnce() -> Option<PathBuf>,
 ) -> Option<PathBuf> {
-    explicit.or(configured).or(detected)
+    explicit.or(configured).or_else(detect)
 }
 
 /// Normalize any game path to the install root: the nearest ancestor (including
@@ -186,26 +194,41 @@ mod tests {
         let got = resolve_root(
             Some(PathBuf::from("/explicit")),
             Some(PathBuf::from("/configured")),
-            Some(PathBuf::from("/detected")),
+            || Some(PathBuf::from("/detected")),
         );
         assert_eq!(got, Some(PathBuf::from("/explicit")));
     }
 
     #[test]
     fn resolve_precedence_config_over_detected() {
-        let got = resolve_root(None, Some(PathBuf::from("/configured")), Some(PathBuf::from("/detected")));
+        let got = resolve_root(None, Some(PathBuf::from("/configured")), || {
+            Some(PathBuf::from("/detected"))
+        });
         assert_eq!(got, Some(PathBuf::from("/configured")));
     }
 
     #[test]
     fn resolve_precedence_detected_last() {
-        let got = resolve_root(None, None, Some(PathBuf::from("/detected")));
+        let got = resolve_root(None, None, || Some(PathBuf::from("/detected")));
         assert_eq!(got, Some(PathBuf::from("/detected")));
     }
 
     #[test]
     fn resolve_none_when_all_absent() {
-        assert_eq!(resolve_root(None, None, None), None);
+        assert_eq!(resolve_root(None, None, || None), None);
+    }
+
+    #[test]
+    fn resolve_does_not_detect_when_a_path_is_present() {
+        // Steam auto-detect must be deferred: the closure is not called when an
+        // explicit (or configured) path already resolves.
+        let mut detected = false;
+        let got = resolve_root(Some(PathBuf::from("/x")), None, || {
+            detected = true;
+            Some(PathBuf::from("/steam"))
+        });
+        assert_eq!(got, Some(PathBuf::from("/x")));
+        assert!(!detected, "detect closure ran despite an explicit path");
     }
 
     #[test]
