@@ -396,17 +396,30 @@ where
         }
     }
 
-    // Reject `-o` pointing at the live cache: out-mode writes the artifact to `out` and then restores
-    // the live cache from its snapshot, so if they are the same path the restore overwrites the
-    // just-written output with the OLD bytes — a silent wrong result. To update the live cache, omit
-    // `-o` (in-place mode).
+    // The output must live OUTSIDE the game's Script/ directory. Writing it inside would pollute the
+    // install (breaking out-mode's pristine-install contract); worse, if it lands on the live cache
+    // or a file staged from SRC, the later restore/cleanup would overwrite or delete the artifact we
+    // just wrote while still returning Ok. Reject any output under Script/ — to update the live
+    // cache, omit `-o` (in-place mode).
     if let Some(out) = &opts.out {
-        let out_real = out.canonicalize().ok();
-        if out_real.is_some() && out_real == cache.canonicalize().ok() {
+        let script_real = script_dir.canonicalize().unwrap_or_else(|_| script_dir.clone());
+        // Resolve `out` as far as it exists: the file itself if present, else its existing parent
+        // joined with the filename, else the lexical path.
+        let out_real = out.canonicalize().unwrap_or_else(|_| {
+            match (out.parent(), out.file_name()) {
+                (Some(parent), Some(name)) => parent
+                    .canonicalize()
+                    .map(|p| p.join(name))
+                    .unwrap_or_else(|_| out.clone()),
+                _ => out.clone(),
+            }
+        });
+        if out_real.starts_with(&script_real) {
             return Err(format!(
-                "output {} is the live script cache; omit -o to install in place, or choose a \
-                 different output path",
-                out.display()
+                "output {} is inside the game's Script/ directory ({}); write the compiled cache \
+                 elsewhere, or omit -o to install in place",
+                out.display(),
+                script_dir.display()
             ));
         }
     }
@@ -808,19 +821,22 @@ mod tests {
     }
 
     #[test]
-    fn precompile_rejects_out_equal_to_live_cache() {
-        // `-o` pointing at the live cache would have the restore clobber the just-written artifact.
-        let base = std::env::temp_dir().join("gore-as-compile-outcache");
+    fn precompile_rejects_out_inside_script_dir() {
+        // `-o` under Script/ (the live cache, or any path there) is rejected: it would pollute the
+        // install and could collide with a staged file / the restore.
+        let base = std::env::temp_dir().join("gore-as-compile-outinside");
         let _ = std::fs::remove_dir_all(&base);
         let (game, cache) = fake_install(&base);
-        let opts = PrecompileOpts {
-            game_dir: game,
-            src: None,
-            out: Some(cache.clone()),
-            backup: false,
-        };
-        let err = precompile_with(&opts, |_, _, _| panic!("must not generate")).unwrap_err();
-        assert!(err.contains("live script cache"), "got: {err}");
+        for out in [cache.clone(), cache.parent().unwrap().join("MyMod.Cache")] {
+            let opts = PrecompileOpts {
+                game_dir: game.clone(),
+                src: None,
+                out: Some(out.clone()),
+                backup: false,
+            };
+            let err = precompile_with(&opts, |_, _, _| panic!("must not generate")).unwrap_err();
+            assert!(err.contains("Script/ directory"), "out={:?} got: {err}", out);
+        }
         assert_eq!(std::fs::read(&cache).unwrap(), b"OLD", "live cache left untouched");
         let _ = std::fs::remove_dir_all(&base);
     }
