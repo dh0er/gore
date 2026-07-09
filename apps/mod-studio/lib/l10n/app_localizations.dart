@@ -410,6 +410,30 @@ abstract class AppLocalizations {
   /// **'Close'**
   String get close;
 
+  /// No description provided for @about.
+  ///
+  /// In en, this message translates to:
+  /// **'About'**
+  String get about;
+
+  /// No description provided for @aboutVersion.
+  ///
+  /// In en, this message translates to:
+  /// **'Version {version} ({sha})'**
+  String aboutVersion(String version, String sha);
+
+  /// No description provided for @aboutCopyright.
+  ///
+  /// In en, this message translates to:
+  /// **'© 2026 GORE contributors'**
+  String get aboutCopyright;
+
+  /// No description provided for @aboutLicense.
+  ///
+  /// In en, this message translates to:
+  /// **'Licensed under the MIT License.'**
+  String get aboutLicense;
+
   /// No description provided for @categoryMeleeWeapons.
   ///
   /// In en, this message translates to:

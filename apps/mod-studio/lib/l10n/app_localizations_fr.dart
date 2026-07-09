@@ -162,6 +162,20 @@ class AppLocalizationsFr extends AppLocalizations {
   String get close => 'Fermer';
 
   @override
+  String get about => 'À propos';
+
+  @override
+  String aboutVersion(String version, String sha) {
+    return 'Version $version ($sha)';
+  }
+
+  @override
+  String get aboutCopyright => '© 2026 contributeurs de GORE';
+
+  @override
+  String get aboutLicense => 'Sous licence MIT.';
+
+  @override
   String get categoryMeleeWeapons => 'Armes de mêlée';
 
   @override

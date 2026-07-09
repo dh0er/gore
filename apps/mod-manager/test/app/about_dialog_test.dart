@@ -36,7 +36,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('gore-manager'), findsOneWidget);
+    expect(find.text('GORE Mod Manager'), findsOneWidget);
     expect(find.text(aboutCopyrightNotice), findsOneWidget);
     expect(find.text(aboutLicenseNotice), findsOneWidget);
     // The version line resolves once PackageInfo returns.

@@ -161,6 +161,20 @@ class AppLocalizationsPl extends AppLocalizations {
   String get close => 'Zamknij';
 
   @override
+  String get about => 'O programie';
+
+  @override
+  String aboutVersion(String version, String sha) {
+    return 'Version $version ($sha)';
+  }
+
+  @override
+  String get aboutCopyright => '© 2026 współtwórcy GORE';
+
+  @override
+  String get aboutLicense => 'Udostępniane na licencji MIT.';
+
+  @override
   String get categoryMeleeWeapons => 'Broń biała';
 
   @override

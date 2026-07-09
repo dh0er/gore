@@ -162,6 +162,20 @@ class AppLocalizationsZh extends AppLocalizations {
   String get close => '关闭';
 
   @override
+  String get about => '关于';
+
+  @override
+  String aboutVersion(String version, String sha) {
+    return 'Version $version ($sha)';
+  }
+
+  @override
+  String get aboutCopyright => '© 2026 GORE 贡献者';
+
+  @override
+  String get aboutLicense => '基于 MIT 许可证授权。';
+
+  @override
   String get categoryMeleeWeapons => '近战武器';
 
   @override
@@ -476,6 +490,20 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get close => '关闭';
+
+  @override
+  String get about => '关于';
+
+  @override
+  String aboutVersion(String version, String sha) {
+    return 'Version $version ($sha)';
+  }
+
+  @override
+  String get aboutCopyright => '© 2026 GORE 贡献者';
+
+  @override
+  String get aboutLicense => '基于 MIT 许可证授权。';
 
   @override
   String get categoryMeleeWeapons => '近战武器';

@@ -161,6 +161,20 @@ class AppLocalizationsJa extends AppLocalizations {
   String get close => '閉じる';
 
   @override
+  String get about => 'このアプリについて';
+
+  @override
+  String aboutVersion(String version, String sha) {
+    return 'Version $version ($sha)';
+  }
+
+  @override
+  String get aboutCopyright => '© 2026 GORE コントリビューター';
+
+  @override
+  String get aboutLicense => 'MIT ライセンスの下で提供されています。';
+
+  @override
   String get categoryMeleeWeapons => '近接武器';
 
   @override

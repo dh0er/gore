@@ -17,7 +17,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('gore-manager'), findsOneWidget);
+    expect(find.text('GORE Mod Manager'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 }
