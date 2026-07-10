@@ -39,6 +39,23 @@ pub fn import(library_dir: &Path, source: &Path) -> crate::Result<ModEntryMeta> 
         canon.file_stem().and_then(|n| n.to_str()).unwrap_or(&source_name).to_string()
     };
 
+    // A folder import that points AT the library dir itself — or any parent that contains it —
+    // would place the staging dir (created under `library_dir` below) INSIDE the source tree, and
+    // the recursive `copy_dir` in `materialize` would then copy staging into itself, growing the
+    // path/disk until the filesystem errors. Reject such sources up front. Only directory sources
+    // are affected: file/zip imports don't walk the source tree.
+    if canon.is_dir() {
+        let lib_canon =
+            std::fs::canonicalize(library_dir).unwrap_or_else(|_| library_dir.to_path_buf());
+        if lib_canon.starts_with(&canon) {
+            return Err(ModError::Other(format!(
+                "refusing to import {}: it is or contains the manager library directory ({})",
+                source.display(),
+                library_dir.display()
+            )));
+        }
+    }
+
     let staging = library_dir.join(format!(
         ".staging-{}",
         crate::name_hash(&format!(
@@ -688,6 +705,28 @@ mod tests {
         let bdir = root.join("Target Probe");
         write_bundle(&bdir, &bundle).unwrap();
         bdir
+    }
+
+    /// A folder import that IS the library dir — or a parent that contains it — must be rejected
+    /// up front. Otherwise the staging dir (created under the library) lands inside the source and
+    /// the recursive copy would copy staging into itself until the filesystem errors.
+    #[test]
+    fn rejects_importing_the_library_or_a_containing_parent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("lib");
+        fs::create_dir_all(&lib).unwrap();
+
+        // Source == the library dir itself.
+        let err = import(&lib, &lib).unwrap_err().to_string();
+        assert!(err.contains("manager library directory"), "unexpected error: {err}");
+
+        // Source == a parent that contains the library dir.
+        let err = import(&lib, tmp.path()).unwrap_err().to_string();
+        assert!(err.contains("manager library directory"), "unexpected error: {err}");
+
+        // Sanity: a normal sibling folder next to the library still imports fine.
+        let bdir = mk_goremod_bundle(tmp.path());
+        assert!(import(&lib, &bdir).is_ok(), "a sibling source must still import");
     }
 
     /// Zip every file under `dir` (names relative to `dir`, '/'-separated), each entry name
