@@ -1,0 +1,24 @@
+[package]
+name = "gore-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "C ABI (dart:ffi) bridge for gore-mod: JSON-in/JSON-out mod engine."
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+gore-reflect = { path = "../gore-reflect" }
+gore-modgen = { path = "../gore-modgen" }
+gore-loc = { path = "../gore-loc" }
+gore-mod = { path = "../gore-mod" }
+gore-fmod = { path = "../gore-fmod" }
+gore-tex = { path = "../gore-tex" }
+gore-as = { path = "../gore-as" }
+image = "0.25"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"

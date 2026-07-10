@@ -1,0 +1,53 @@
+[package]
+name = "retoc"
+version = "0.1.5"
+edition = "2024"
+authors = ["trumank", "Archengius"]
+repository = "https://github.com/trumank/retoc"
+homepage = "https://github.com/trumank/retoc"
+license = "MIT"
+
+# Vendored fork of https://github.com/trumank/retoc @ d7b635039c3db60942efabcd29d49679f42ab089
+# Modifications:
+#   * Oodle DECODE routed to the in-repo `gore-oodle` crate (Kraken) instead
+#     of Epic's proprietary oo2core_9_win64.dll loaded via `oodle_loader`.
+#   * `oodle_loader` dependency removed; `repak`'s `oodle` feature removed so no
+#     part of the build fetches/links oo2core.
+#   * Only the `retoc` library crate is vendored (CLI / load_logger / test
+#     fixtures dropped) since gore-tex consumes it as a library.
+
+[dependencies]
+gore-oodle = { path = "../../crates/gore-oodle" }
+
+aes = "0.8.4"
+anyhow = "1.0.100"
+base64 = "0.22.1"
+bitflags = "2.10.0"
+blake3 = "1.8.2"
+byteorder = "1.5.0"
+cityhasher = "0.1.0"
+clap = { version = "4.5.51", features = ["derive"] }
+flate2 = { version = "1.1.5", features = ["zlib"] }
+fs-err = "3.1.3"
+hex = "0.4.3"
+indexmap = { version = "2.12.0", features = ["serde"] }
+indicatif = "0.18.2"
+itertools = "0.14.0"
+jmap = { git = "https://github.com/trumank/jmap.git", version = "0.1.0" }
+key-mutex = "0.1.3"
+lz4_flex = "0.11.5"
+pariter = "0.5.1"
+rayon = "1.11.0"
+repak = { git = "https://github.com/trumank/repak.git", version = "0.2.2" }
+ser-hex = { git = "https://github.com/trumank/ser-hex.git", version = "0.1.0" }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+serde_with = { version = "3.15.1", features = ["hex"] }
+sha1 = "0.10.6"
+strum = { version = "0.27.2", features = ["derive"] }
+tracing = "0.1.41"
+typed-path = "0.12.0"
+zstd = "0.13.3"
+
+[dev-dependencies]
+pretty_assertions = "1.4.1"

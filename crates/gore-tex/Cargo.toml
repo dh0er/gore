@@ -1,0 +1,29 @@
+[package]
+name = "gore-tex"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+gore-oodle = { path = "../gore-oodle" }
+gore-loc = { path = "../gore-loc" }
+# Vendored fork of retoc (IoStore reader) with its Oodle DECODE backend redirected
+# to gore-oodle so no oo2core_9_win64.dll is fetched/linked. See vendor/retoc.
+retoc = { path = "../../vendor/retoc" }
+# Same git source/version retoc itself uses (already in the workspace lockfile);
+# only needed to emit the empty `.pak` stub the game requires to detect and mount
+# the produced IoStore container (mirrors retoc's `action_to_zen`).
+repak = { git = "https://github.com/trumank/repak.git", version = "0.2.2" }
+thiserror = "1"
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+texture2ddecoder = "0.1"
+intel_tex_2 = "0.5"
+# IEEE half-float -> f32 for decoding PF_FloatRGBA (16-bit RGBA) previews.
+half = "2"
+
+[dev-dependencies]
+sha2 = "0.10"
+# Used only by the scratch examples/decode_real_container.rs proof (Task 2).
+blake3 = "1"

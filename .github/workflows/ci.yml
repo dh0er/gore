@@ -1,11 +1,21 @@
 name: CI
 
 on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
   workflow_dispatch:
 
 jobs:
   test:
     runs-on: windows-latest
+    defaults:
+      run:
+        # The save-editor app lives at apps/save-editor in the flat layout;
+        # test.py + its relative paths resolve from here. cargo walks up to the
+        # workspace root.
+        working-directory: apps/save-editor
     steps:
       - uses: actions/checkout@v4
 
@@ -23,6 +33,27 @@ jobs:
           cache: true
 
       # test.py resolves cargo/flutter from PATH (provided above), so no FVM
-      # fallback is needed on CI.
+      # fallback is needed on CI. The Rust suite (`cargo test`) walks up to the
+      # workspace root, so it already covers the workspace crates; only the
+      # Flutter analyze/test here are scoped to apps/save-editor.
       - name: Run all tests (rust, tools, analyze, flutter)
         run: python test.py all
+
+      # The mod-studio GUI is a separate Flutter package; test.py's APP points
+      # at apps/save-editor, so its analyze/test never reach it. Run it
+      # explicitly so regressions in the GUI can't merge unnoticed.
+      - name: gore-mod analyze + test
+        working-directory: apps/mod-studio
+        run: |
+          flutter pub get
+          flutter analyze
+          flutter test
+
+      # Same story for the mod-manager GUI (gore-manager): a separate Flutter
+      # package test.py never reaches, so analyze/test it explicitly.
+      - name: gore-manager analyze + test
+        working-directory: apps/mod-manager
+        run: |
+          flutter pub get
+          flutter analyze
+          flutter test

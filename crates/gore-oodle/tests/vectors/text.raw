@@ -1,0 +1,12 @@
+[package]
+name = "gore-oodle"
+version.workspace = true
+edition.workspace = true
+
+[dev-dependencies]
+base64 = "0.22"
+sha1 = "0.10"
+hex = "0.4"
+
+[build-dependencies]
+cc = "1"

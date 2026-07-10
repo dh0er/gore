@@ -1,0 +1,2671 @@
+import 'dart:async';
+import 'dart:convert';
+
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:goresave/features/app/domain/ui_settings.dart';
+import 'package:goresave/features/app/ui/about_dialog.dart';
+import 'package:goresave/features/app/ui/appearance_settings.dart';
+import 'package:goresave/features/app/ui/update_settings.dart';
+import 'package:goresave/features/app/ui/window_chrome.dart';
+import 'package:goresave/features/editor/domain/editor_notifier.dart';
+import 'package:goresave/features/editor/domain/editor_models.dart';
+import 'package:goresave/features/editor/domain/game_time.dart';
+import 'package:goresave/features/editor/domain/pending_edits.dart';
+import 'package:goresave/features/editor/ui/characters_tab.dart';
+import 'package:goresave/features/localization/domain/localization_controller.dart';
+import 'package:goresave/features/localization/ui/localization_flow.dart';
+import 'package:goresave/features/localization/ui/localization_settings.dart';
+import 'package:goresave/l10n/app_localizations.dart';
+import 'package:goresave/loc/loc_catalog_provider.dart';
+import 'package:goresave/providers/data_providers.dart';
+import 'package:intl/intl.dart';
+import 'difficulty_dialog.dart';
+import 'world_tab.dart';
+
+final _bytes = NumberFormat.decimalPattern();
+
+class EditorPage extends ConsumerStatefulWidget {
+  const EditorPage({super.key});
+
+  @override
+  ConsumerState<EditorPage> createState() => _EditorPageState();
+}
+
+class _EditorPageState extends ConsumerState<EditorPage>
+    with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    // First-run, optional localized-text extraction prompt. Runs after the
+    // first frame so the Scaffold (SnackBar host) and Navigator (dialog host)
+    // exist. Guarded by a persisted flag so it only auto-prompts once; the
+    // manual Settings button stays available regardless.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(_maybePromptLocalizationExtract());
+    });
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Another tool (or `gore-cli loc extract`) may have written the shared
+    // loc_catalog.json while this app was backgrounded; reload it on resume so
+    // item/NPC names pick up a catalog that appeared after first load.
+    if (state == AppLifecycleState.resumed) {
+      ref.read(locCatalogReloadProvider.notifier).state++;
+    }
+  }
+
+  Future<void> _maybePromptLocalizationExtract() async {
+    // Always refresh status first, so the Settings localization card reflects a
+    // catalog extracted earlier (or via `gore-cli loc extract`). The persisted
+    // flag only suppresses the one-time prompt dialog, not the status refresh.
+    final present = await ref
+        .read(localizationControllerProvider.notifier)
+        .status();
+    // Only prompt when the catalog is definitively absent: a null status means
+    // the query failed (e.g. core unavailable), where extraction can't work.
+    if (present != false || !mounted) return;
+
+    final store = ref.read(uiSettingsStoreProvider);
+    if (store.read().locExtractPrompted) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        final l10n = AppLocalizations.of(context);
+        return AlertDialog(
+          title: Text(l10n.extractLocalizedTextTitle),
+          content: Text(l10n.extractLocalizedTextBody),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: Text(l10n.notNow),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: Text(l10n.extract),
+            ),
+          ],
+        );
+      },
+    );
+    if (confirmed != true || !mounted) return;
+    // Record only once the user chose to extract, so the flag isn't set when the
+    // dialog never appeared and deferring ("Not now") lets the optional prompt
+    // offer again on a later launch (matching gore-mod).
+    store.write(store.read().copyWith(locExtractPrompted: true));
+    await runLocalizationExtractFlow(context, ref);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final state = ref.watch(editorProvider);
+    final notifier = ref.read(editorProvider.notifier);
+    final uiScale = ref.watch(uiScaleProvider);
+    final zoomPct = (uiScale * 100).round();
+    final scheme = Theme.of(context).colorScheme;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final l10n = AppLocalizations.of(context);
+
+    return Scaffold(
+      // The AppBar doubles as the window title bar: dragging the empty space
+      // moves the window, double-click toggles maximize/restore.
+      appBar: AppBar(
+        title: WindowDragArea(
+          child: Row(
+            children: [
+              const SizedBox(width: 16),
+              Image.asset(
+                'assets/goresave_icon.png',
+                height: 32,
+                semanticLabel: l10n.appLogoSemanticLabel,
+              ),
+              const SizedBox(width: 10),
+              // Flexible + ellipsis: at narrow window widths the long title
+              // must truncate instead of overflowing the title bar row.
+              Flexible(
+                child: Text(
+                  // Title bar text is language-independent — always the
+                  // product name (see goresave_app.dart).
+                  'GORE Save Editor',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              const Expanded(child: SizedBox()),
+            ],
+          ),
+        ),
+        titleSpacing: 0,
+        centerTitle: false,
+        scrolledUnderElevation: 0,
+        surfaceTintColor: Colors.transparent,
+        actions: [
+          const SizedBox(width: 8),
+          Tooltip(
+            message: l10n.zoomTooltip,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              decoration: BoxDecoration(
+                color: scheme.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.zoom_in, size: 18),
+                  const SizedBox(width: 3),
+                  Text(
+                    '$zoomPct%',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          IconButton(
+            icon: Icon(isDark ? Icons.light_mode : Icons.dark_mode),
+            onPressed: () {
+              ref
+                  .read(themeModeProvider.notifier)
+                  .setThemeMode(isDark ? ThemeMode.light : ThemeMode.dark);
+            },
+            tooltip: isDark ? l10n.switchToLightMode : l10n.switchToDarkMode,
+          ),
+          IconButton(
+            icon: const Icon(Icons.info_outline),
+            onPressed: () {
+              showDialog(
+                context: context,
+                builder: (_) => const GoresaveAboutDialog(),
+              );
+            },
+            tooltip: l10n.about,
+          ),
+          const SizedBox(width: 16),
+          const WindowControls(),
+        ],
+      ),
+      body: Column(
+        children: [
+          Expanded(
+            child: Row(
+              children: [
+                SizedBox(
+                  // Narrow enough that long save names ("…, Tag 4, 08:59")
+                  // wrap before "Tag" (not earlier), keeping day+time
+                  // together on line two: 380 kept "Tag" on line one, 350
+                  // pushed "Verurteilten" down too.
+                  width: 365,
+                  child: _SaveSidebar(state: state, notifier: notifier),
+                ),
+                const VerticalDivider(width: 1),
+                Expanded(
+                  child: _EditorWorkspace(state: state, notifier: notifier),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SaveSidebar extends StatelessWidget {
+  const _SaveSidebar({required this.state, required this.notifier});
+
+  final EditorState state;
+  final EditorNotifier notifier;
+
+  @override
+  Widget build(BuildContext context) {
+    // Use the notifier-computed visible saves so the list, header count, and
+    // Quick/Auto stats all agree.
+    final saves = state.visibleSaves;
+    final l10n = AppLocalizations.of(context);
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerLow,
+      ),
+      child: Column(
+        children: [
+          _ProfileHeader(
+            profile: state.activeProfile,
+            profiles: state.profiles,
+            notifier: notifier,
+            isLoading: state.isLoading,
+          ),
+          Expanded(
+            child: saves.isEmpty
+                ? Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: Text(
+                        l10n.noSavFilesFound,
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  )
+                : ListView.separated(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    itemCount: saves.length,
+                    separatorBuilder: (_, _) => const SizedBox(height: 4),
+                    itemBuilder: (context, index) {
+                      final save = saves[index];
+                      final selected = save.path == state.selectedPath;
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        child: _SaveSlotCard(
+                          save: save,
+                          selected: selected,
+                          enabled: !state.isLoading,
+                          onTap: () => notifier.inspect(save.path),
+                        ),
+                      );
+                    },
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ProfileHeader extends StatelessWidget {
+  const _ProfileHeader({
+    required this.profile,
+    required this.profiles,
+    required this.notifier,
+    required this.isLoading,
+  });
+
+  final ProfileSummary? profile;
+  final List<ProfileSummary> profiles;
+  final EditorNotifier notifier;
+  final bool isLoading;
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    final scheme = Theme.of(context).colorScheme;
+    final multiProfile = profiles.length > 1;
+    final l10n = AppLocalizations.of(context);
+    return Container(
+      width: double.infinity,
+      // Match the icon+text TabBar row in the workspace next door (72 tab
+      // height + 2 indicator weight = 74, measured) so the header's bottom
+      // edge lines up with the tab bar's.
+      height: 74,
+      padding: const EdgeInsets.only(left: 16, right: 4),
+      alignment: Alignment.centerLeft,
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerLowest,
+        border: Border(bottom: BorderSide(color: scheme.outlineVariant)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: scheme.primaryContainer,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Icon(Icons.person_outline, color: scheme.primary),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Row(
+              children: [
+                Flexible(
+                  child: multiProfile
+                      ? _ProfileSwitcher(
+                          profile: profile,
+                          profiles: profiles,
+                          notifier: notifier,
+                          isLoading: isLoading,
+                        )
+                      : Text(
+                          profile?.displayName ?? l10n.profile,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: textTheme.titleMedium,
+                        ),
+                ),
+                const SizedBox(width: 12),
+                // Inflexible on purpose: the chip label comes from a small
+                // fixed set, so the chip takes its intrinsic width and never
+                // truncates; the (flexible) profile name to its left yields
+                // the remaining space instead.
+                ProfileDifficultyChip(
+                  profile: profile,
+                  notifier: notifier,
+                  isLoading: isLoading,
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            tooltip: l10n.rescanSaveFolder,
+            visualDensity: VisualDensity.compact,
+            iconSize: 20,
+            onPressed: isLoading ? null : () => _confirmRefresh(context),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Rescanning re-inspects the selected slot, which clears the global
+  /// pending-edit registry (including any pending difficulty edit) and re-seeds
+  /// every editor — never silently discard unsaved changes. Guard on the same
+  /// `hasUnsavedEdits` signal the profile-switch guard uses (pending registry
+  /// edits OR a pending difficulty edit).
+  Future<void> _confirmRefresh(BuildContext context) async {
+    if (notifier.hasUnsavedEdits) {
+      final pendingCount = notifier.pendingEditCount;
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) {
+          final l10n = AppLocalizations.of(context);
+          return AlertDialog(
+            title: Text(l10n.discardUnsavedChangesTitle),
+            content: Text(l10n.rescanDiscardBody(pendingCount)),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(false),
+                child: Text(l10n.cancel),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(context).pop(true),
+                child: Text(l10n.discardAndRescan),
+              ),
+            ],
+          );
+        },
+      );
+      if (confirmed != true) return;
+      // The user chose to discard. refresh() centrally clears all pending edits
+      // (registry + the pending difficulty edit) and re-seeds the editors.
+    }
+    await notifier.refresh();
+  }
+}
+
+/// Profile name shown as a [PopupMenuButton] when multiple profiles exist.
+/// Selecting a profile calls [EditorNotifier.selectProfile].
+class _ProfileSwitcher extends StatelessWidget {
+  const _ProfileSwitcher({
+    required this.profile,
+    required this.profiles,
+    required this.notifier,
+    required this.isLoading,
+  });
+
+  final ProfileSummary? profile;
+  final List<ProfileSummary> profiles;
+  final EditorNotifier notifier;
+  final bool isLoading;
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    final scheme = Theme.of(context).colorScheme;
+    final currentId = profile?.profileId;
+    final l10n = AppLocalizations.of(context);
+    return PopupMenuButton<int>(
+      tooltip: l10n.switchProfile,
+      enabled: !isLoading,
+      onSelected: (id) => notifier.selectProfile(id),
+      itemBuilder: (context) => [
+        for (final p in profiles)
+          PopupMenuItem<int>(
+            value: p.profileId,
+            child: Row(
+              children: [
+                if (p.profileId == currentId)
+                  Icon(Icons.check, size: 18, color: scheme.primary)
+                else
+                  const SizedBox(width: 18),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    l10n.profileWithSaves(p.displayName, p.savedSlots.length),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+          ),
+      ],
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Flexible(
+            child: Text(
+              profile?.displayName ?? l10n.profile,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: textTheme.titleMedium,
+            ),
+          ),
+          Icon(
+            Icons.arrow_drop_down,
+            size: 18,
+            color: isLoading ? scheme.onSurfaceVariant : scheme.primary,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SaveSlotCard extends StatelessWidget {
+  const _SaveSlotCard({
+    required this.save,
+    required this.selected,
+    required this.enabled,
+    required this.onTap,
+  });
+
+  final SaveSlot save;
+  final bool selected;
+  final bool enabled;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final accent = selected ? scheme.primary : scheme.outline;
+    final l10n = AppLocalizations.of(context);
+    return Material(
+      color: selected ? scheme.primaryContainer : scheme.surfaceContainerLowest,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(8),
+        side: BorderSide(color: accent),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: enabled ? onTap : null,
+        child: Padding(
+          padding: const EdgeInsets.all(8),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SizedBox(
+                width: 124,
+                height: 72,
+                child: _ScreenshotPreview(
+                  screenshot: save.screenshot,
+                  slot: save.slot,
+                  compact: true,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.only(top: 2),
+                          child: _SaveKindIcon(
+                            quickSave: save.quickSave,
+                            autoSave: save.autoSave,
+                            selected: selected,
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            save.displayName,
+                            maxLines: 3,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.titleSmall,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      _saveSlotSubtitle(l10n, save),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SaveKindIcon extends StatelessWidget {
+  const _SaveKindIcon({
+    required this.quickSave,
+    required this.autoSave,
+    required this.selected,
+  });
+
+  final bool? quickSave;
+  final bool? autoSave;
+  final bool selected;
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    final label = _formatSaveKind(
+      l10n,
+      quickSave: quickSave,
+      autoSave: autoSave,
+    );
+    if (label == '-') return const SizedBox(height: 16);
+    final icon = quickSave == true
+        ? Icons.flash_on_outlined
+        : autoSave == true
+        ? Icons.timer_outlined
+        : Icons.edit_note_outlined;
+    return Tooltip(
+      message: label,
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: Icon(
+          icon,
+          size: 16,
+          color: selected
+              ? Theme.of(context).colorScheme.primary
+              : Theme.of(context).colorScheme.onSurfaceVariant,
+        ),
+      ),
+    );
+  }
+}
+
+String _saveSlotSubtitle(AppLocalizations l10n, SaveSlot save) {
+  final parts = <String>[];
+  if (save.chapterId != null) {
+    parts.add(l10n.chapterLabel(save.chapterId!));
+  }
+  final timePlayed = _formatDurationSeconds(save.timePlayedSeconds);
+  if (timePlayed != '-') {
+    parts.add(timePlayed);
+  }
+  return parts.join(' | ');
+}
+
+String _formatDurationSeconds(double? seconds) {
+  if (seconds == null || seconds.isNaN || seconds.isInfinite) return '-';
+  final totalMinutes = (seconds < 0 ? 0 : seconds / 60).floor();
+  final hours = totalMinutes ~/ 60;
+  final minutes = totalMinutes % 60;
+  if (hours <= 0) return '${minutes}m';
+  if (minutes == 0) return '${hours}h';
+  return '${hours}h ${minutes}m';
+}
+
+String _formatSaveKind(
+  AppLocalizations l10n, {
+  required bool? quickSave,
+  required bool? autoSave,
+}) {
+  if (quickSave == true) return l10n.quickSave;
+  if (autoSave == true) return l10n.autoSave;
+  if (quickSave == false || autoSave == false) return l10n.manualSave;
+  return '-';
+}
+
+class _EditorWorkspace extends StatelessWidget {
+  const _EditorWorkspace({required this.state, required this.notifier});
+
+  final EditorState state;
+  final EditorNotifier notifier;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final l10n = AppLocalizations.of(context);
+    Widget content;
+    if (state.inspection == null) {
+      content = state.error != null
+          ? _MessagePane(
+              icon: Icons.error_outline,
+              title: l10n.errorTitle,
+              body: state.error!,
+            )
+          : _MessagePane(
+              icon: Icons.search,
+              title: l10n.selectASaveTitle,
+              body: l10n.selectASaveBody,
+            );
+    } else {
+      final inspection = state.inspection!;
+      final pendingCount = state.pendingEditCount;
+      content = DefaultTabController(
+        length: 6,
+        child: Column(
+          children: [
+            Container(
+              color: scheme.surfaceContainerLowest,
+              child: Row(
+                children: [
+                  Expanded(
+                    child: TabBar(
+                      isScrollable: true,
+                      // Material 3 defaults a scrollable TabBar to
+                      // TabAlignment.startOffset, which inserts a ~52px empty gap
+                      // before the first (Overview) tab. Pin to the start so the
+                      // tab row begins flush-left with no wasted leading padding.
+                      tabAlignment: TabAlignment.start,
+                      tabs: [
+                        Tab(
+                          icon: const Icon(Icons.dashboard_outlined),
+                          text: l10n.tabOverview,
+                        ),
+                        Tab(
+                          icon: const Icon(Icons.people_outline),
+                          text: l10n.tabCharacters,
+                        ),
+                        Tab(
+                          icon: const Icon(Icons.public),
+                          text: l10n.tabWorld,
+                        ),
+                        Tab(
+                          icon: const Icon(Icons.tune),
+                          text: l10n.tabAllData,
+                        ),
+                        Tab(
+                          icon: const Icon(Icons.history),
+                          text: l10n.tabBackups,
+                        ),
+                        Tab(
+                          icon: const Icon(Icons.settings_outlined),
+                          text: l10n.tabSettings,
+                        ),
+                      ],
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: OutlinedButton.icon(
+                      icon: const Icon(Icons.undo),
+                      label: Text(l10n.reset),
+                      onPressed: pendingCount > 0 && !state.isLoading
+                          ? notifier.refresh
+                          : null,
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.only(right: 12),
+                    child: FilledButton.icon(
+                      icon: const Icon(Icons.save_outlined),
+                      label: Text(
+                        pendingCount == 0
+                            ? l10n.save
+                            : l10n.saveWithCount(pendingCount),
+                      ),
+                      onPressed:
+                          pendingCount > 0 &&
+                              !state.isLoading &&
+                              !state.hasInvalidNpcEdit
+                          ? notifier.saveAllPending
+                          : null,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (state.error != null)
+              MaterialBanner(
+                backgroundColor: scheme.errorContainer,
+                leading: Icon(Icons.error_outline, color: scheme.error),
+                content: Text(state.error!),
+                actions: [
+                  TextButton(
+                    onPressed: notifier.dismissError,
+                    child: Text(l10n.ok),
+                  ),
+                ],
+              ),
+            if (state.lastWriteMessage != null)
+              MaterialBanner(
+                leading: const Icon(Icons.check_circle_outline),
+                content: Text(state.lastWriteMessage!),
+                actions: [
+                  TextButton(
+                    onPressed: notifier.dismissWriteMessage,
+                    child: Text(l10n.ok),
+                  ),
+                ],
+              ),
+            Expanded(
+              child: TabBarView(
+                children: [
+                  _KeepAliveTab(
+                    child: _OverviewPanel(
+                      inspection: inspection,
+                      notifier: notifier,
+                      state: state,
+                    ),
+                  ),
+                  _KeepAliveTab(
+                    child: CharactersTab(
+                      inspection: inspection,
+                      notifier: notifier,
+                      // Private writes recompress the payload, so also require the
+                      // codec to be compress-ready, not just decode-ready — same
+                      // gating the old Attribute tab used.
+                      attributeEditable:
+                          inspection.privateEditable &&
+                          state.codecCompressReady,
+                      // Same value the old Inventory tab received for canCompress.
+                      inventoryCanCompress: state.codecCompressReady,
+                      // Same gating the World tab uses for its quests/factions
+                      // detail panels.
+                      progressionEditable:
+                          inspection.privateEditable &&
+                          inspection.privateTypedVerified &&
+                          state.codecCompressReady,
+                    ),
+                  ),
+                  _KeepAliveTab(
+                    child: WorldTab(
+                      inspection: inspection,
+                      notifier: notifier,
+                      editable:
+                          inspection.privateEditable &&
+                          inspection.privateTypedVerified &&
+                          state.codecCompressReady,
+                    ),
+                  ),
+                  _KeepAliveTab(
+                    child: _AllDataPanel(
+                      inspection: inspection,
+                      notifier: notifier,
+                      // Typed writes recompress the private payload, so require a
+                      // full private decode (not a preview) plus a compress-ready
+                      // codec, matching the Player and Inventory gating.
+                      editable:
+                          inspection.privateEditable &&
+                          state.codecCompressReady,
+                    ),
+                  ),
+                  _KeepAliveTab(
+                    child: _BackupsPanel(state: state, notifier: notifier),
+                  ),
+                  _KeepAliveTab(
+                    child: _SettingsPanel(state: state, notifier: notifier),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Stack(
+      children: [
+        content,
+        if (state.isLoading)
+          Positioned.fill(
+            child: ColoredBox(
+              color: scheme.surface.withValues(alpha: 0.6),
+              child: Center(
+                child: Semantics(
+                  label: l10n.loadingEditorData,
+                  // A multi-step save reports (done, total): show a determinate
+                  // bar with the count so sequential writes read as progress, not
+                  // a hung spinner. Any other load keeps the plain spinner.
+                  child: state.saveProgress != null
+                      ? SizedBox(
+                          width: 240,
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              LinearProgressIndicator(
+                                value: state.saveProgress!.total == 0
+                                    ? null
+                                    : state.saveProgress!.done /
+                                          state.saveProgress!.total,
+                              ),
+                              const SizedBox(height: 12),
+                              Text(
+                                l10n.savingProgress(
+                                  state.saveProgress!.done,
+                                  state.saveProgress!.total,
+                                ),
+                                style: Theme.of(context).textTheme.bodyMedium,
+                              ),
+                            ],
+                          ),
+                        )
+                      : const SizedBox(
+                          width: 44,
+                          height: 44,
+                          child: CircularProgressIndicator(strokeWidth: 3),
+                        ),
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+/// Keeps a tab's widget tree alive when the user switches to another tab so
+/// that unsaved field state (and the matching pending-edit registry entries)
+/// stay consistent. Without this, TabBarView disposes off-screen tabs, which
+/// destroys field controllers while the pending registry still counts those
+/// edits — leading to a visible mismatch where typed text vanishes but the
+/// Save button still shows a non-zero count.
+class _KeepAliveTab extends StatefulWidget {
+  const _KeepAliveTab({required this.child});
+
+  final Widget child;
+
+  @override
+  State<_KeepAliveTab> createState() => _KeepAliveTabState();
+}
+
+class _KeepAliveTabState extends State<_KeepAliveTab>
+    with AutomaticKeepAliveClientMixin {
+  @override
+  bool get wantKeepAlive => true;
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context); // required by AutomaticKeepAliveClientMixin
+    return widget.child;
+  }
+}
+
+class _OverviewPanel extends StatelessWidget {
+  const _OverviewPanel({
+    required this.inspection,
+    required this.notifier,
+    required this.state,
+  });
+
+  final SaveInspection inspection;
+  final EditorNotifier notifier;
+  final EditorState state;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      padding: const EdgeInsets.all(20),
+      children: [
+        _HeaderCard(inspection: inspection, save: state.selectedSave),
+        const SizedBox(height: 16),
+        _MetadataEditor(inspection: inspection, notifier: notifier),
+        const SizedBox(height: 16),
+        _GameTimeCard(
+          inspection: inspection,
+          notifier: notifier,
+          editable:
+              inspection.privateEditable &&
+              inspection.privateTypedVerified &&
+              state.codecCompressReady,
+        ),
+      ],
+    );
+  }
+}
+
+/// Collapsed "Advanced (debug)" section in Settings. Bundles the two
+/// developer-only readouts — the in-process codec self-test and the raw
+/// inspection JSON — that normal editing never needs. Kept for
+/// troubleshooting and bug reports (copy the JSON into an issue).
+class _DebugSection extends StatefulWidget {
+  const _DebugSection({required this.state, required this.notifier});
+
+  final EditorState state;
+  final EditorNotifier notifier;
+
+  @override
+  State<_DebugSection> createState() => _DebugSectionState();
+}
+
+class _DebugSectionState extends State<_DebugSection> {
+  bool _expanded = false;
+  String? _cachedJson;
+  Object? _jsonFor;
+
+  // Pretty-printing the raw inspection map isn't free; cache it per inspection
+  // identity (a refresh/save yields a new instance) so rebuilds and copy taps
+  // don't re-encode.
+  String _json(SaveInspection inspection) {
+    if (!identical(_jsonFor, inspection)) {
+      _cachedJson = inspection.prettyJson();
+      _jsonFor = inspection;
+    }
+    return _cachedJson!;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    final state = widget.state;
+    final notifier = widget.notifier;
+    final inspection = state.inspection;
+    final theme = Theme.of(context);
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _CollapsibleCardHeader(
+              icon: Icons.bug_report_outlined,
+              title: l10n.debugSectionTitle,
+              subtitle: l10n.debugSectionSubtitle,
+              expanded: _expanded,
+              onToggle: () => setState(() => _expanded = !_expanded),
+            ),
+            if (_expanded) ...[
+              const SizedBox(height: 8),
+              // Codec self-test: the in-process pure-Rust codec is effectively
+              // always ready, so this is a capability readout / smoke test.
+              Row(
+                children: [
+                  const Icon(Icons.compress_outlined, size: 20),
+                  const SizedBox(width: 8),
+                  Text(l10n.codecTitle, style: theme.textTheme.titleSmall),
+                  const Spacer(),
+                  OutlinedButton.icon(
+                    icon: const Icon(Icons.refresh),
+                    label: Text(l10n.check),
+                    onPressed: () => notifier.checkCodec(),
+                  ),
+                  const SizedBox(width: 8),
+                  OutlinedButton.icon(
+                    icon: const Icon(Icons.verified_outlined),
+                    label: Text(l10n.roundtrip),
+                    onPressed: state.selectedPath == null || state.isLoading
+                        ? null
+                        : notifier.validateCodecRoundtrip,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              CodecStatusView(
+                codec: state.codecStatus,
+                codecError: state.codecError,
+              ),
+              if (inspection != null) ...[
+                const Divider(height: 24),
+                Row(
+                  children: [
+                    const Icon(Icons.data_object, size: 20),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        l10n.inspectionJsonTitle,
+                        style: theme.textTheme.titleSmall,
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: l10n.copy,
+                      icon: const Icon(Icons.copy),
+                      onPressed: () => Clipboard.setData(
+                        ClipboardData(text: _json(inspection)),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                SelectableText(
+                  _json(inspection),
+                  style: const TextStyle(fontFamily: 'Consolas', fontSize: 12),
+                ),
+              ],
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _HeaderCard extends StatelessWidget {
+  const _HeaderCard({required this.inspection, this.save});
+
+  final SaveInspection inspection;
+  final SaveSlot? save;
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    final screenshot = save?.screenshot ?? inspection.screenshot;
+    final title =
+        save?.displayName ??
+        inspection.playerSaveName ??
+        inspection.slot ??
+        l10n.savegameFallbackTitle;
+    final slot = save?.slot ?? inspection.slot ?? l10n.savegameFallbackTitle;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final compact = constraints.maxWidth < 560;
+            final previewWidth = compact ? 170.0 : 320.0;
+            final previewHeight = previewWidth * 9 / 16;
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SizedBox(
+                  width: previewWidth,
+                  height: previewHeight,
+                  child: _ScreenshotPreview(
+                    screenshot: screenshot,
+                    slot: slot,
+                    compact: compact,
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(
+                            Icons.save_outlined,
+                            size: 28,
+                            color: Theme.of(context).colorScheme.primary,
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              title,
+                              style: Theme.of(context).textTheme.titleLarge,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        inspection.path ?? '',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                      Builder(
+                        builder: (context) {
+                          final pills = <Widget>[
+                            if (inspection.chapterId != null)
+                              _InfoPill(
+                                icon: Icons.flag_outlined,
+                                label: l10n.chapterLabel(inspection.chapterId!),
+                              ),
+                            if (inspection.timePlayedSeconds != null)
+                              _InfoPill(
+                                icon: Icons.timer_outlined,
+                                label: _formatDurationSeconds(
+                                  inspection.timePlayedSeconds,
+                                ),
+                              ),
+                          ];
+                          if (pills.isEmpty) return const SizedBox.shrink();
+                          return Padding(
+                            padding: const EdgeInsets.only(top: 9),
+                            child: Wrap(
+                              spacing: 8,
+                              runSpacing: 8,
+                              children: pills,
+                            ),
+                          );
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+class _ScreenshotPreview extends StatelessWidget {
+  const _ScreenshotPreview({
+    required this.screenshot,
+    required this.slot,
+    this.compact = false,
+  });
+
+  final ScreenshotSummary? screenshot;
+  final String slot;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    final bytes = _decodeScreenshot(screenshot);
+    final radius = BorderRadius.circular(compact ? 6 : 8);
+    final scheme = Theme.of(context).colorScheme;
+    final l10n = AppLocalizations.of(context);
+    final placeholder = ColoredBox(
+      color: scheme.surfaceContainerHighest,
+      child: Center(
+        child: Icon(
+          Icons.image_not_supported_outlined,
+          size: compact ? 22 : 44,
+          color: scheme.onSurfaceVariant,
+        ),
+      ),
+    );
+    return ClipRRect(
+      borderRadius: radius,
+      child: bytes == null
+          ? placeholder
+          : Image.memory(
+              bytes,
+              fit: BoxFit.cover,
+              gaplessPlayback: true,
+              semanticLabel: l10n.screenshotForSlot(slot),
+              errorBuilder: (_, _, _) => placeholder,
+            ),
+    );
+  }
+}
+
+class _InfoPill extends StatelessWidget {
+  const _InfoPill({required this.icon, required this.label});
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: scheme.outlineVariant),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 15, color: scheme.onSurfaceVariant),
+            const SizedBox(width: 5),
+            Text(label, style: Theme.of(context).textTheme.labelMedium),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+Uint8List? _decodeScreenshot(ScreenshotSummary? screenshot) {
+  final encoded = screenshot?.bytesBase64;
+  if (encoded == null || encoded.isEmpty) return null;
+  try {
+    return base64Decode(encoded);
+  } on FormatException {
+    return null;
+  }
+}
+
+class _MetadataEditor extends StatefulWidget {
+  const _MetadataEditor({required this.inspection, required this.notifier});
+
+  final SaveInspection inspection;
+  final EditorNotifier notifier;
+
+  @override
+  State<_MetadataEditor> createState() => _MetadataEditorState();
+}
+
+class _MetadataEditorState extends State<_MetadataEditor> {
+  late final TextEditingController _controller;
+  Object? _inspectionIdentity;
+  String? _path;
+  String? _name;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController();
+    _sync();
+  }
+
+  @override
+  void didUpdateWidget(covariant _MetadataEditor oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _sync();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _sync() {
+    final name = widget.inspection.playerSaveName ?? '';
+    // Re-seed whenever the inspection identity changes (e.g. after a Reset /
+    // refresh that produces a new SaveInspection instance) or when path/name
+    // changes. This ensures that after a Reset the field visually reverts to
+    // the canonical value even if the canonical value itself did not change.
+    final sameIdentity = identical(widget.inspection, _inspectionIdentity);
+    if (sameIdentity && _path == widget.inspection.path && _name == name) {
+      return;
+    }
+    _inspectionIdentity = widget.inspection;
+    _path = widget.inspection.path;
+    _name = name;
+    _controller.text = name;
+    // Do NOT call _updatePending here: refresh() centrally clears all pending
+    // edits in the notifier (event-handler context). Calling clearPendingEdit /
+    // setPendingEdit from initState / didUpdateWidget mutates the provider
+    // during build and throws with flutter_riverpod. The field is re-seeded
+    // from the canonical value above; the next user keystroke (onChanged) will
+    // re-register a pending edit if needed.
+    setState(() => _error = null);
+  }
+
+  void _updatePending(String fieldText) {
+    final value = fieldText.trim();
+    if (value.isEmpty) {
+      final required = AppLocalizations.of(context).required;
+      setState(() => _error = required);
+      widget.notifier.clearPendingEdit('publicName');
+      return;
+    }
+    final original = widget.inspection.playerSaveName ?? '';
+    setState(() => _error = null);
+    if (value == original) {
+      widget.notifier.clearPendingEdit('publicName');
+    } else {
+      widget.notifier.setPendingEdit(
+        'publicName',
+        PendingSaveEdit(
+          edits: [
+            {'path': 'public.m_PlayerSaveName', 'value': value},
+          ],
+          syncPersistentDataList: true,
+        ),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: TextField(
+          controller: _controller,
+          decoration: InputDecoration(
+            labelText: AppLocalizations.of(context).publicSaveName,
+            prefixIcon: const Icon(Icons.edit_outlined),
+            errorText: _error,
+          ),
+          onChanged: _updatePending,
+        ),
+      ),
+    );
+  }
+}
+
+/// Overview-tab editor for the world game clock (the single typed
+/// `DoubleProperty` at `m_GenericData{GameTime} › CurrentTime › TotalSeconds`).
+/// Splits the cumulative TotalSeconds into Day/Hours/Minutes/Seconds fields
+/// (the game counts days from 0). Loads its value lazily via
+/// [EditorNotifier.loadGameTime]; renders nothing when the save has no such
+/// leaf (non-GSAV, undecoded, or absent), so the Overview layout is unaffected.
+///
+/// Edits flow through the same pending-edit registry as every other typed
+/// editor (`private.typed.setValue`, key `gameTime`), so the shared Save button
+/// writes them. [editable] mirrors the Player/All-data gating (decoded, typed-
+/// verified, compress-ready codec); when false the fields show read-only.
+class _GameTimeCard extends StatefulWidget {
+  const _GameTimeCard({
+    required this.inspection,
+    required this.notifier,
+    required this.editable,
+  });
+
+  final SaveInspection inspection;
+  final EditorNotifier notifier;
+  final bool editable;
+
+  @override
+  State<_GameTimeCard> createState() => _GameTimeCardState();
+}
+
+class _GameTimeCardState extends State<_GameTimeCard> {
+  static const _pendingKey = 'gameTime';
+
+  final _day = TextEditingController();
+  final _hour = TextEditingController();
+  final _minute = TextEditingController();
+  final _second = TextEditingController();
+
+  GameTime? _gameTime;
+  bool _loaded = false;
+  // Discards results from superseded reloads (rapid inspection swaps).
+  int _epoch = 0;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void didUpdateWidget(covariant _GameTimeCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(widget.inspection, oldWidget.inspection)) _load();
+  }
+
+  @override
+  void dispose() {
+    _day.dispose();
+    _hour.dispose();
+    _minute.dispose();
+    _second.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    final epoch = ++_epoch;
+    // Drop the cached clock and hide the card synchronously, BEFORE awaiting.
+    // A same-save Reset/refresh/save keeps this card mounted and swaps in a new
+    // SaveInspection (pending cleared centrally); leaving the previous value
+    // shown as editable during the search would let a keystroke re-register a
+    // stale clock against the refreshed save. _load runs only from initState /
+    // didUpdateWidget, each immediately followed by build(), so resetting the
+    // fields directly here is reflected without setState. The global save/
+    // refresh loading overlay masks the brief hide, so there is no flicker.
+    _loaded = false;
+    _gameTime = null;
+    _error = null;
+    final loaded = widget.inspection.privateDecoded
+        ? await widget.notifier.loadGameTime()
+        : null;
+    // Drop stale results; a newer _load already advanced the epoch.
+    if (!mounted || epoch != _epoch) return;
+    setState(() {
+      _gameTime = loaded;
+      _loaded = true;
+      _error = null;
+      if (loaded != null) {
+        final parts = GameTimeParts.fromTotalSeconds(loaded.totalSeconds);
+        _day.text = parts.day.toString();
+        _hour.text = parts.hour.toString();
+        _minute.text = parts.minute.toString();
+        _second.text = parts.second.toString();
+      }
+    });
+    // Do NOT touch the pending registry here: refresh() clears it centrally in
+    // event-handler context. Mutating it from this build-adjacent callback would
+    // throw with flutter_riverpod, exactly as the hero-stats card documents.
+  }
+
+  /// Parse a field as a non-negative int within [0, max]; null when invalid.
+  int? _field(TextEditingController c, int max) {
+    final value = int.tryParse(c.text.trim());
+    if (value == null || value < 0 || value > max) return null;
+    return value;
+  }
+
+  void _onChanged() {
+    if (!widget.editable) return;
+    final gameTime = _gameTime;
+    if (gameTime == null) return;
+    final day = _field(_day, 1 << 30);
+    final hour = _field(_hour, 23);
+    final minute = _field(_minute, 59);
+    final second = _field(_second, 59);
+    if (day == null || hour == null || minute == null || second == null) {
+      setState(() => _error = AppLocalizations.of(context).gameTimeInvalid);
+      widget.notifier.clearPendingEdit(_pendingKey);
+      return;
+    }
+    setState(() => _error = null);
+    final total = GameTimeParts(
+      day: day,
+      hour: hour,
+      minute: minute,
+      second: second,
+    ).toTotalSeconds();
+    // Compare against the truncated original: re-typing the same clock must not
+    // leave a no-op edit that still bumps the Save counter (and would rewrite
+    // away the harmless sub-second fraction for nothing).
+    if (total == gameTime.totalSeconds.floor()) {
+      widget.notifier.clearPendingEdit(_pendingKey);
+      return;
+    }
+    widget.notifier.setPendingEdit(
+      _pendingKey,
+      PendingSaveEdit(
+        edits: [
+          {
+            'path': 'private.typed.setValue',
+            // DoubleProperty: send a float (matches the hero-stats write path).
+            'value': {'path': gameTime.path, 'value': total.toDouble()},
+          },
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Hidden until we know there's a clock to show — keeps the Overview layout
+    // identical for saves without one (and avoids a load flash).
+    if (!_loaded || _gameTime == null) return const SizedBox.shrink();
+
+    final theme = Theme.of(context);
+    final l10n = AppLocalizations.of(context);
+
+    // Caption reflects the live fields when valid, else the canonical value.
+    final day = _field(_day, 1 << 30);
+    final hour = _field(_hour, 23);
+    final minute = _field(_minute, 59);
+    final second = _field(_second, 59);
+    final liveTotal =
+        (day != null && hour != null && minute != null && second != null)
+        ? GameTimeParts(
+            day: day,
+            hour: hour,
+            minute: minute,
+            second: second,
+          ).toTotalSeconds()
+        : _gameTime!.totalSeconds.floor();
+
+    Widget unit(String label, TextEditingController controller) {
+      return SizedBox(
+        width: 96,
+        child: TextField(
+          controller: controller,
+          enabled: widget.editable,
+          onChanged: (_) => _onChanged(),
+          keyboardType: TextInputType.number,
+          decoration: InputDecoration(labelText: label),
+        ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Icon(Icons.schedule_outlined),
+                    const SizedBox(width: 8),
+                    Text(l10n.gameTimeTitle, style: theme.textTheme.titleSmall),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    unit(l10n.gameTimeDay, _day),
+                    const SizedBox(width: 8),
+                    unit(l10n.gameTimeHours, _hour),
+                    const SizedBox(width: 8),
+                    unit(l10n.gameTimeMinutes, _minute),
+                    const SizedBox(width: 8),
+                    unit(l10n.gameTimeSeconds, _second),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  l10n.gameTimeTotal(liveTotal),
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                if (_error != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text(
+                      _error!,
+                      style: TextStyle(color: theme.colorScheme.error),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 16),
+      ],
+    );
+  }
+}
+
+class _CollapsibleCardHeader extends StatelessWidget {
+  const _CollapsibleCardHeader({
+    required this.icon,
+    required this.title,
+    required this.expanded,
+    this.subtitle,
+    this.onToggle,
+  });
+
+  final IconData icon;
+  final String title;
+  final String? subtitle;
+  final bool expanded;
+  final VoidCallback? onToggle;
+
+  @override
+  Widget build(BuildContext context) {
+    final header = Row(
+      children: [
+        Icon(icon),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(title, style: Theme.of(context).textTheme.titleMedium),
+              if (subtitle != null)
+                Text(subtitle!, style: Theme.of(context).textTheme.bodySmall),
+            ],
+          ),
+        ),
+        Icon(expanded ? Icons.expand_less : Icons.expand_more),
+      ],
+    );
+    if (onToggle == null) return header;
+    return InkWell(
+      onTap: onToggle,
+      borderRadius: BorderRadius.circular(8),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: header,
+      ),
+    );
+  }
+}
+
+/// Generic typed property browser: search every property in the decoded
+/// private payload and edit scalars and strings. This is the
+/// "everything is editable" surface — no curated field list, the user finds
+/// any value by name and edits the ones the core can safely patch.
+class _AllDataPanel extends StatefulWidget {
+  const _AllDataPanel({
+    required this.inspection,
+    required this.notifier,
+    required this.editable,
+  });
+
+  final SaveInspection inspection;
+  final EditorNotifier notifier;
+  final bool editable;
+
+  @override
+  State<_AllDataPanel> createState() => _AllDataPanelState();
+}
+
+class _AllDataPanelState extends State<_AllDataPanel> {
+  static const _pageSizes = [25, 50, 100, 250, 500];
+
+  final _controller = TextEditingController();
+  TypedSearchResult? _result;
+  bool _searching = false;
+  int _requestSeq = 0;
+  int _pageSize = 50;
+  String _activeQuery = '';
+  // Tracks the inspection identity so _TypedPropertyRow can reset draft text
+  // when a Reset/refresh produces a new inspection (same path, same values).
+  Object? _inspectionReloadKey;
+  // Unsaved field text keyed by pending-registry key. Rows are disposed when
+  // search/pagination scrolls them out of the result page, but their pending
+  // edits stay registered globally — without this store a returning row would
+  // re-seed from the canonical value and hide an edit the Save button still
+  // writes. Lives alongside the pending registry: entries are added/removed in
+  // _updatePending and the whole map is dropped whenever pending is cleared
+  // centrally (new inspection identity).
+  final Map<String, String> _typedDrafts = {};
+
+  @override
+  void initState() {
+    super.initState();
+    _inspectionReloadKey = widget.inspection;
+    // Empty query lists everything — show the first page as soon as the tab
+    // opens for a decoded save.
+    if (widget.inspection.privateDecoded) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _run(offset: 0);
+      });
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant _AllDataPanel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.inspection.path != oldWidget.inspection.path) {
+      // A different save was selected while this tab stayed mounted. The cached
+      // results belong to the old file; drop them (otherwise they show stale
+      // rows while writes target the newly selected save) and re-list from
+      // page one.
+      _controller.clear();
+      _activeQuery = '';
+      // Invalidate any in-flight search for the previous save.
+      _requestSeq++;
+      _inspectionReloadKey = widget.inspection;
+      // Switching saves clears pending centrally; drop the drafts with it.
+      _typedDrafts.clear();
+      setState(() {
+        _result = null;
+        _searching = false;
+      });
+      if (widget.inspection.privateDecoded) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _run(offset: 0);
+        });
+      }
+    } else if (!identical(widget.inspection, oldWidget.inspection)) {
+      // Same path but a new SaveInspection instance — the save was written and
+      // refreshed (or Reset). Re-run the active query so the All data panel
+      // shows the post-save values; also update the reloadKey so row fields
+      // reseed their draft text to the canonical value.
+      _inspectionReloadKey = widget.inspection;
+      // Save/restore/refresh cleared pending centrally; the drafts mirror it.
+      _typedDrafts.clear();
+      if (widget.inspection.privateDecoded) {
+        final currentOffset = _result?.offset ?? 0;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _run(offset: currentOffset);
+        });
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  /// Run the search at [offset] for the active query and page size. Only an
+  /// explicit new search ([newQuery] true, which also resets to the first page
+  /// via the caller's offset) adopts the field text; pagination, page-size
+  /// changes, and post-save refreshes reuse [_activeQuery] so they cannot query
+  /// uncommitted field text at a stale offset or show mismatched totals.
+  Future<void> _run({required int offset, bool newQuery = false}) async {
+    if (newQuery) _activeQuery = _controller.text.trim();
+    final seq = ++_requestSeq;
+    setState(() => _searching = true);
+    final result = await widget.notifier.searchTypedProperties(
+      _activeQuery,
+      offset: offset,
+      limit: _pageSize,
+    );
+    if (!mounted || seq != _requestSeq) return;
+    setState(() {
+      _result = result;
+      _searching = false;
+    });
+  }
+
+  void _goToPage(int pageIndex) {
+    final result = _result;
+    if (result == null) return;
+    final clamped = pageIndex.clamp(0, result.pageCount - 1);
+    _run(offset: clamped * _pageSize);
+  }
+
+  void _setPageSize(int? size) {
+    if (size == null || size == _pageSize) return;
+    setState(() => _pageSize = size);
+    _run(offset: 0);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    if (!widget.inspection.privateDecoded) {
+      return _MessagePane(
+        icon: Icons.tune,
+        title: l10n.tabAllData,
+        body: l10n.allDataLockedBody,
+      );
+    }
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.all(20),
+      child: Card(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.tune),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      l10n.tabAllData,
+                      style: theme.textTheme.titleMedium,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Text(
+                l10n.allDataDescription,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _controller,
+                decoration: InputDecoration(
+                  labelText: l10n.searchPropertiesLabel,
+                  prefixIcon: const Icon(Icons.search),
+                  suffixIcon: _searching
+                      ? const Padding(
+                          padding: EdgeInsets.all(12),
+                          child: SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                        )
+                      : IconButton(
+                          icon: const Icon(Icons.arrow_forward),
+                          onPressed: () => _run(offset: 0, newQuery: true),
+                        ),
+                ),
+                onSubmitted: (_) => _run(offset: 0, newQuery: true),
+              ),
+              const SizedBox(height: 12),
+              _buildPaginationBar(theme),
+              const SizedBox(height: 8),
+              Expanded(child: _buildResults(theme)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildResults(ThemeData theme) {
+    final l10n = AppLocalizations.of(context);
+    final result = _result;
+    if (result == null) {
+      if (_searching) {
+        return _MessagePane(
+          icon: Icons.hourglass_empty,
+          title: l10n.decodingSaveTitle,
+          body: l10n.decodingSaveBody,
+        );
+      }
+      return _MessagePane(
+        icon: Icons.search,
+        title: l10n.searchTheSaveTitle,
+        body: l10n.searchTheSaveBody,
+      );
+    }
+    if (result.error != null) {
+      return _MessagePane(
+        icon: Icons.error_outline,
+        title: l10n.searchFailedTitle,
+        body: result.error!,
+      );
+    }
+    if (result.results.isEmpty) {
+      return _MessagePane(
+        icon: Icons.search_off,
+        title: l10n.noMatchesTitle,
+        body: l10n.noMatchesBody,
+      );
+    }
+    return ListView.separated(
+      itemCount: result.results.length,
+      separatorBuilder: (_, _) => const Divider(height: 1),
+      itemBuilder: (context, index) {
+        final hit = result.results[index];
+        return _TypedPropertyRow(
+          key: ValueKey(hit.display),
+          hit: hit,
+          editable: widget.editable && hit.editable,
+          notifier: widget.notifier,
+          reloadKey: _inspectionReloadKey,
+          drafts: _typedDrafts,
+        );
+      },
+    );
+  }
+
+  Widget _buildPaginationBar(ThemeData theme) {
+    final l10n = AppLocalizations.of(context);
+    final result = _result;
+    if (result == null || (result.error != null) || result.total == 0) {
+      return const SizedBox.shrink();
+    }
+    final first = result.offset + 1;
+    final last = result.offset + result.results.length;
+    final busy = _searching;
+    final muted = theme.textTheme.bodySmall?.copyWith(
+      color: theme.colorScheme.onSurfaceVariant,
+    );
+    return Wrap(
+      crossAxisAlignment: WrapCrossAlignment.center,
+      spacing: 4,
+      runSpacing: 4,
+      children: [
+        IconButton(
+          tooltip: l10n.firstPage,
+          visualDensity: VisualDensity.compact,
+          icon: const Icon(Icons.first_page),
+          onPressed: busy || !result.hasPrevious ? null : () => _goToPage(0),
+        ),
+        IconButton(
+          tooltip: l10n.previousPage,
+          visualDensity: VisualDensity.compact,
+          icon: const Icon(Icons.chevron_left),
+          onPressed: busy || !result.hasPrevious
+              ? null
+              : () => _goToPage(result.pageIndex - 1),
+        ),
+        IconButton(
+          tooltip: l10n.nextPage,
+          visualDensity: VisualDensity.compact,
+          icon: const Icon(Icons.chevron_right),
+          onPressed: busy || !result.hasNext
+              ? null
+              : () => _goToPage(result.pageIndex + 1),
+        ),
+        IconButton(
+          tooltip: l10n.lastPage,
+          visualDensity: VisualDensity.compact,
+          icon: const Icon(Icons.last_page),
+          onPressed: busy || !result.hasNext
+              ? null
+              : () => _goToPage(result.pageCount - 1),
+        ),
+        const SizedBox(width: 4),
+        Text(
+          l10n.pageOfPages(result.pageIndex + 1, result.pageCount),
+          style: muted,
+        ),
+        const SizedBox(width: 8),
+        Text(l10n.rangeOfTotal(first, last, result.total), style: muted),
+        const SizedBox(width: 8),
+        Text(l10n.perPage, style: muted),
+        DropdownButton<int>(
+          value: _pageSize,
+          isDense: true,
+          underline: const SizedBox.shrink(),
+          onChanged: busy ? null : _setPageSize,
+          items: [
+            for (final size in _pageSizes)
+              DropdownMenuItem(value: size, child: Text('$size')),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _TypedPropertyRow extends StatefulWidget {
+  const _TypedPropertyRow({
+    super.key,
+    required this.hit,
+    required this.editable,
+    required this.notifier,
+    required this.drafts,
+    this.reloadKey,
+  });
+
+  final TypedPropertyHit hit;
+  final bool editable;
+  final EditorNotifier notifier;
+  // Panel-owned store of unsaved field text keyed by pending-registry key.
+  // Rows seed from it on creation and write through it on change, so an edit
+  // survives the row being disposed by search/pagination and stays visible
+  // (instead of becoming a hidden pending edit) when the row comes back.
+  final Map<String, String> drafts;
+  // When provided, a change in identity forces a reseed of the field from the
+  // canonical hit value (e.g. after a Reset that reverts to the same value).
+  final Object? reloadKey;
+
+  @override
+  State<_TypedPropertyRow> createState() => _TypedPropertyRowState();
+}
+
+class _TypedPropertyRowState extends State<_TypedPropertyRow> {
+  late final TextEditingController _controller = TextEditingController(
+    text: widget.drafts[_pendingKey] ?? widget.hit.value,
+  );
+  // Unsaved bool toggle. The switch has no text controller to hold draft
+  // state, so without this it would snap back to the canonical value on the
+  // next rebuild even though the pending edit is registered.
+  bool? _boolDraft;
+  Object? _lastReloadKey;
+
+  @override
+  void initState() {
+    super.initState();
+    _lastReloadKey = widget.reloadKey;
+    final draft = widget.drafts[_pendingKey];
+    if (_isBool && draft != null) {
+      _boolDraft = draft == 'true';
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant _TypedPropertyRow oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Re-seed when the reloadKey identity changes (e.g. after Reset/refresh
+    // that produces a new inspection — same canonical value, draft must go).
+    final newKey = widget.reloadKey;
+    final keyChanged = newKey != null && !identical(newKey, _lastReloadKey);
+    if (keyChanged) {
+      _lastReloadKey = newKey;
+    }
+    // A successful save refreshes the list and rebinds this row to a hit with
+    // the persisted (possibly normalized) value. Sync the field to it so it
+    // stops showing the pre-save text. Only rows whose value actually changed
+    // update, so an unrelated row's save cannot clobber in-progress typing here.
+    if (keyChanged ||
+        (widget.hit.value != oldWidget.hit.value &&
+            _controller.text != widget.hit.value)) {
+      _controller.text = widget.hit.value;
+      _boolDraft = null;
+      // The drafts map is plain panel state (not a provider), so unlike the
+      // pending registry it is safe to drop the stale entry here.
+      widget.drafts.remove(_pendingKey);
+      // No registry mutation here: provider writes are illegal during the
+      // build phase, and every flow that changes the canonical value
+      // (save/restore/refresh) already cleared pending centrally.
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  bool get _isBool => widget.hit.type == 'BoolProperty';
+
+  /// Returns a key string that identifies this property in the pending registry.
+  String get _pendingKey => 'typed:${widget.hit.path.join(' ')}';
+
+  Object? _coerce(String text) {
+    final type = widget.hit.type;
+    if (type == 'StrProperty' || type == 'NameProperty') {
+      // String values are written verbatim — leading/trailing whitespace may
+      // be intentional, so no trim.
+      return text;
+    }
+    if (type == 'ObjectProperty' || type == 'EnumProperty') {
+      return text.trim();
+    }
+    final raw = text.trim();
+    if (type == 'BoolProperty') {
+      // The bool toggle reports 'true'/'false'; anything else is invalid.
+      if (raw == 'true') return true;
+      if (raw == 'false') return false;
+      return null;
+    }
+    if (type == 'FloatProperty' || type == 'DoubleProperty') {
+      return double.tryParse(raw);
+    }
+    if (type == 'ByteProperty') {
+      // Two serialized forms share the tag type: plain byte (number) and
+      // enum-as-FString. Send a number when it parses; otherwise send the
+      // text and let the core validate against the actual form.
+      return int.tryParse(raw) ?? raw;
+    }
+    return int.tryParse(raw);
+  }
+
+  void _updatePending(String text) {
+    if (!widget.editable) return;
+    final value = _coerce(text);
+    if (value == null) {
+      // Invalid / unparseable — don't contribute to pending.
+      widget.drafts.remove(_pendingKey);
+      widget.notifier.clearPendingEdit(_pendingKey);
+      return;
+    }
+    // Revert to original → clear pending.
+    if (text == widget.hit.value ||
+        (widget.hit.type != 'StrProperty' &&
+            widget.hit.type != 'NameProperty' &&
+            text.trim() == widget.hit.value.trim())) {
+      widget.drafts.remove(_pendingKey);
+      widget.notifier.clearPendingEdit(_pendingKey);
+      return;
+    }
+    widget.drafts[_pendingKey] = text;
+    widget.notifier.setPendingEdit(
+      _pendingKey,
+      PendingSaveEdit(
+        edits: [
+          {
+            'path': 'private.typed.setValue',
+            'value': {'path': widget.hit.path, 'value': value},
+          },
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final hit = widget.hit;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SelectableText(hit.display, maxLines: 2),
+                Text(
+                  hit.type,
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: theme.colorScheme.outline,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          if (!widget.editable)
+            SizedBox(
+              width: 220,
+              child: Text(
+                hit.value,
+                textAlign: TextAlign.right,
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+            )
+          else if (_isBool)
+            _BoolEditor(
+              value: _boolDraft ?? (hit.value == 'true'),
+              onChanged: (next) {
+                setState(() => _boolDraft = next);
+                _updatePending(next.toString());
+              },
+            )
+          else
+            SizedBox(
+              width: 220,
+              child: TextField(
+                controller: _controller,
+                onChanged: _updatePending,
+                decoration: InputDecoration(
+                  isDense: true,
+                  labelText: AppLocalizations.of(context).value,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _BoolEditor extends StatelessWidget {
+  const _BoolEditor({required this.value, required this.onChanged});
+
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 220,
+      child: Align(
+        alignment: Alignment.centerRight,
+        child: Switch(value: value, onChanged: onChanged),
+      ),
+    );
+  }
+}
+
+class _BackupsPanel extends StatelessWidget {
+  const _BackupsPanel({required this.state, required this.notifier});
+
+  final EditorState state;
+  final EditorNotifier notifier;
+
+  @override
+  Widget build(BuildContext context) {
+    final backups = state.backups;
+    final companionBackups = state.companionBackups;
+    final l10n = AppLocalizations.of(context);
+    return ListView(
+      padding: const EdgeInsets.all(20),
+      children: [
+        Row(
+          children: [
+            const Icon(Icons.history),
+            const SizedBox(width: 8),
+            Text(
+              l10n.backupsTitle,
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
+            const Spacer(),
+            Tooltip(
+              message: l10n.refreshBackups,
+              child: IconButton(
+                icon: const Icon(Icons.refresh),
+                onPressed: state.isLoading ? null : notifier.refreshBackups,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        if (backups.isEmpty && companionBackups.isEmpty)
+          _InlineNotice(
+            icon: Icons.info_outline,
+            title: l10n.noBackupsTitle,
+            body: l10n.noBackupsBody,
+          ),
+        if (backups.isNotEmpty) ...[
+          Text(
+            l10n.slotBackups,
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          const SizedBox(height: 8),
+          ...backups.map(
+            (backup) => _BackupCard(
+              backup: backup,
+              isLoading: state.isLoading,
+              showRestoreAction: true,
+              onRestore: () => notifier.restoreBackup(backup.path),
+            ),
+          ),
+        ],
+        if (companionBackups.isNotEmpty) ...[
+          if (backups.isNotEmpty) const SizedBox(height: 8),
+          Text(
+            l10n.profileBackups,
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          const SizedBox(height: 8),
+          ...companionBackups.map(
+            (backup) => _BackupCard(
+              backup: backup,
+              isLoading: state.isLoading,
+              showRestoreAction: true,
+              onRestore: () => notifier.restoreCompanionBackup(backup.path),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+class _BackupCard extends StatelessWidget {
+  const _BackupCard({
+    required this.backup,
+    required this.isLoading,
+    required this.showRestoreAction,
+    required this.onRestore,
+  });
+
+  final BackupEntry backup;
+  final bool isLoading;
+  final bool showRestoreAction;
+  final VoidCallback onRestore;
+
+  @override
+  Widget build(BuildContext context) {
+    final canRestore = showRestoreAction && backup.canRestore;
+    final l10n = AppLocalizations.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Card(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(
+                backup.status == 'ok'
+                    ? Icons.restore_page_outlined
+                    : Icons.warning_amber_outlined,
+                color: backup.status == 'ok'
+                    ? Theme.of(context).colorScheme.primary
+                    : Colors.orange.shade800,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      backup.fileName,
+                      style: Theme.of(context).textTheme.titleMedium,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 6),
+                    Wrap(
+                      spacing: 14,
+                      runSpacing: 6,
+                      children: [
+                        _SmallFact(
+                          label: l10n.backupFactName,
+                          value: backup.playerSaveName ?? '-',
+                        ),
+                        if (backup.slotName != null)
+                          _SmallFact(
+                            label: l10n.backupFactSlot,
+                            value: backup.slotName!,
+                          ),
+                        _SmallFact(
+                          label: l10n.backupFactCreated,
+                          value: _formatBackupTime(backup.createdEpoch),
+                        ),
+                        _SmallFact(
+                          label: l10n.backupFactSize,
+                          value: l10n.bytesValue(
+                            _bytes.format(backup.fileSize),
+                          ),
+                        ),
+                        _SmallFact(
+                          label: l10n.backupFactStatus,
+                          value: backup.status,
+                        ),
+                        _SmallFact(
+                          label: l10n.backupFactSha1,
+                          value: _shortSha(backup.sha1),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              if (showRestoreAction) ...[
+                const SizedBox(width: 12),
+                Tooltip(
+                  message: l10n.restoreBackupTooltip(backup.fileName),
+                  child: IconButton.filledTonal(
+                    icon: const Icon(Icons.restore),
+                    onPressed: isLoading || !canRestore ? null : onRestore,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _InlineNotice extends StatelessWidget {
+  const _InlineNotice({
+    required this.icon,
+    required this.title,
+    required this.body,
+  });
+
+  final IconData icon;
+  final String title;
+  final String body;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerLow,
+        border: Border.all(color: scheme.outlineVariant),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(icon),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title, style: Theme.of(context).textTheme.titleMedium),
+                  const SizedBox(height: 4),
+                  Text(body),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SmallFact extends StatelessWidget {
+  const _SmallFact({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 180,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: Theme.of(context).textTheme.labelSmall?.copyWith(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+          ),
+          Text(value, maxLines: 2, overflow: TextOverflow.ellipsis),
+        ],
+      ),
+    );
+  }
+}
+
+String _formatBackupTime(int? epoch) {
+  if (epoch == null) return '-';
+  final dateTime = DateTime.fromMillisecondsSinceEpoch(
+    epoch * 1000,
+    isUtc: true,
+  ).toLocal();
+  return DateFormat.yMd().add_Hms().format(dateTime);
+}
+
+String _shortSha(String sha1) {
+  if (sha1.length <= 12) return sha1;
+  return sha1.substring(0, 12);
+}
+
+class _SettingsPanel extends StatelessWidget {
+  const _SettingsPanel({required this.state, required this.notifier});
+
+  final EditorState state;
+  final EditorNotifier notifier;
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    return ListView(
+      padding: const EdgeInsets.all(20),
+      children: [
+        const AppearanceSettingsCard(),
+        const SizedBox(height: 16),
+        const UpdateSettingsCard(),
+        const SizedBox(height: 16),
+        const LocalizationSettingsCard(),
+        const SizedBox(height: 16),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Icon(Icons.folder_outlined),
+                    const SizedBox(width: 8),
+                    Text(
+                      l10n.savegameDirectoryTitle,
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                _PathSettingRow(
+                  label: l10n.folder,
+                  value: state.saveDir,
+                  onBrowse: notifier.chooseSaveDir,
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 16),
+        _DebugSection(state: state, notifier: notifier),
+      ],
+    );
+  }
+}
+
+class CodecStatusView extends StatelessWidget {
+  const CodecStatusView({
+    super.key,
+    required this.codec,
+    required this.codecError,
+  });
+
+  final CodecStatus? codec;
+  final String? codecError;
+
+  @override
+  Widget build(BuildContext context) {
+    final codec = this.codec;
+    final scheme = Theme.of(context).colorScheme;
+    final l10n = AppLocalizations.of(context);
+    // A codec error (e.g. a failed roundtrip) can coexist with a status, so
+    // render it whenever present -- both when there is no status and alongside
+    // one.
+    final error = codecError;
+    final errorRow = error == null
+        ? null
+        : Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(Icons.error_outline, color: scheme.error, size: 18),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(error, style: TextStyle(color: scheme.error)),
+              ),
+            ],
+          );
+    if (codec == null) {
+      return errorRow ?? Text(l10n.noCodecStatus);
+    }
+    // The in-process codec maps to three states: ready (decode + encode),
+    // decode_only (read but not write), and unavailable.
+    final isReady = codec.status == 'ready' && codec.canCompress;
+    final isDecodeOnly =
+        !isReady && (codec.status == 'decode_only' || codec.canDecompress);
+    final statusColor = isReady
+        ? scheme.primary
+        : isDecodeOnly
+        ? scheme.tertiary
+        : scheme.error;
+    final statusIcon = isReady
+        ? Icons.check_circle_outline
+        : isDecodeOnly
+        ? Icons.warning_amber_rounded
+        : Icons.error_outline;
+    final title = isReady
+        ? l10n.codecReady
+        : isDecodeOnly
+        ? l10n.codecReadOnly
+        : l10n.codecUnavailable;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (errorRow != null) ...[errorRow, const SizedBox(height: 8)],
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(statusIcon, size: 18, color: statusColor),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(
+                title,
+                style: TextStyle(color: isReady ? null : statusColor),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        ExpansionTile(
+          tilePadding: EdgeInsets.zero,
+          childrenPadding: const EdgeInsets.only(bottom: 8),
+          title: Text(l10n.details),
+          children: [
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(l10n.codecStatusLine(codec.status)),
+                  Text(
+                    l10n.codecCapabilityLine(
+                      codec.canDecompress ? l10n.yes : l10n.no,
+                      codec.canCompress ? l10n.yes : l10n.no,
+                    ),
+                  ),
+                  Text(l10n.codecBackendLine(codec.adapter ?? codec.backend)),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _PathSettingRow extends StatelessWidget {
+  const _PathSettingRow({
+    required this.label,
+    required this.value,
+    required this.onBrowse,
+  });
+
+  final String label;
+  final String value;
+  final VoidCallback onBrowse;
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 84,
+          child: Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Text(label, style: Theme.of(context).textTheme.labelLarge),
+          ),
+        ),
+        Expanded(
+          child: Container(
+            constraints: const BoxConstraints(minHeight: 40),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            decoration: BoxDecoration(
+              border: Border.all(
+                color: Theme.of(context).colorScheme.outlineVariant,
+              ),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: SelectableText(
+              value.isEmpty ? '-' : value,
+              maxLines: 2,
+              style: const TextStyle(fontFamily: 'Consolas', fontSize: 12),
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        IconButton(
+          tooltip: l10n.browse,
+          icon: const Icon(Icons.folder_open),
+          onPressed: onBrowse,
+        ),
+      ],
+    );
+  }
+}
+
+class _MessagePane extends StatelessWidget {
+  const _MessagePane({
+    required this.icon,
+    required this.title,
+    required this.body,
+  });
+
+  final IconData icon;
+  final String title;
+  final String body;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 520),
+        child: Card(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  icon,
+                  size: 48,
+                  color: Theme.of(context).colorScheme.primary,
+                ),
+                const SizedBox(height: 12),
+                Text(title, style: Theme.of(context).textTheme.titleLarge),
+                const SizedBox(height: 8),
+                Text(body, textAlign: TextAlign.center),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}

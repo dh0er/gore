@@ -1,0 +1,23 @@
+[package]
+name = "gore-mod"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+gore-modgen = { path = "../gore-modgen" }
+gore-loc = { path = "../gore-loc" }
+gore-fmod = { path = "../gore-fmod" }
+gore-tex = { path = "../gore-tex" }
+gore-as = { path = "../gore-as" }
+image = "0.25"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+tempfile = "3"
+# For building a real encrypted AlkimiaLocalization .lcache fixture in the manager apply tests
+# (mirrors gore-loc's own AES-256-ECB encoding without depending on its private test helpers).
+aes = "0.8"

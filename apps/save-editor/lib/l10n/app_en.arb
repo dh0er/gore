@@ -1,0 +1,770 @@
+{
+  "debugSectionTitle": "Advanced (debug)",
+  "debugSectionSubtitle": "Diagnostics & raw data for bug reports",
+  "@@locale": "en",
+  "appTitle": "GORE Save Editor",
+  "appLogoSemanticLabel": "GORE Save Editor logo",
+  "zoomTooltip": "Press Ctrl +/- to zoom in/out",
+  "switchToLightMode": "Switch to light mode",
+  "switchToDarkMode": "Switch to dark mode",
+  "about": "About",
+  "tabOverview": "Overview",
+  "tabPlayer": "Player",
+  "tabAttribute": "Attributes",
+  "heroGroupSkills": "Skills",
+  "skillsNoneBody": "No skills found for this character.",
+  "skillsUnavailableBody": "Skills can't be edited on this save — the hero has no effect data to modify.",
+  "skillNotLearned": "Not learned",
+  "skillLearn": "Learn",
+  "skillActionLearn": "learn",
+  "skillActionUnlearn": "unlearn",
+  "skillTierUntrained": "Untrained",
+  "skillTierBeginner": "Beginner",
+  "skillTierTrained": "Trained",
+  "skillTierMaster": "Master",
+  "skillTierNovice": "Novice",
+  "skillTierAmateur": "Amateur (Circle 0)",
+  "skillTierLearned": "Learned",
+  "skillTierCircle": "Circle {n}",
+  "@skillTierCircle": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "skillHintBlacksmith1H": "1H weapons",
+  "skillHintBlacksmith2H": "2H weapons",
+  "skillCategoryCombat": "Combat",
+  "skillCategoryCrafting": "Crafting",
+  "skillCategoryHunting": "Hunting",
+  "skillCategoryLanguage": "Language",
+  "skillCategoryMagic": "Magic",
+  "skillCategoryMovement": "Movement",
+  "skillCategoryThievery": "Thievery",
+  "skillNameOneHanded": "One Handed",
+  "skillNameTwoHanded": "Two Handed",
+  "skillNameFists": "Fists",
+  "skillNameBow": "Bow",
+  "skillNameCrossbow": "Crossbow",
+  "skillNameLockpicking": "Lockpicking",
+  "skillNamePickpocketing": "Pickpocketing",
+  "skillNameTakeOrgans": "Extract Organ",
+  "skillNameBreakTeeth": "Extract Teeth",
+  "skillNameTakeClaws": "Extract Claw",
+  "skillNameSkinFur": "Take Fur",
+  "skillNameSkin": "Take Skin",
+  "skillNameTakeFins": "Take Fins",
+  "skillNameTakeStingers": "Extract Stings",
+  "skillNameTakeSecretion": "Extract Secretion",
+  "skillNameTakeSkullPlates": "Take Skull Armor",
+  "skillNameSkinSwampshark": "Take Shark Skin",
+  "skillNameTakeMinecrawlerPlates": "Take Plates",
+  "skillNameTakeScutes": "Take Scutes",
+  "skillNameTakeUluMulu": "Take Ulu-Mulu",
+  "skillNameOrcWeapons": "Orc Weapons",
+  "skillNameMining": "Mining",
+  "skillNameDiving": "Diving",
+  "skillNameTakeMinecrawlerMandibles": "Extract Mandibles",
+  "skillNameTakeShadowbeastHorn": "Take Horn (Shadowbeast)",
+  "skillNameTakeSpines": "Extract Spine",
+  "skillNameBreakSwampsharkTeeth": "Extract Shark Teeth",
+  "skillNameTakeFireTongue": "Take Tongue of Fire",
+  "skillNameTakeTrollHorn": "Take Horn (Troll)",
+  "skillNameAcrobatics": "Acrobatics",
+  "skillNameWallClimbing": "Climbing",
+  "skillNameRiding": "Scavenger Riding",
+  "skillNameSneaking": "Sneaking",
+  "skillNameAlchemy": "Alchemy",
+  "skillNameRuneInscription": "Inscription",
+  "skillNameBlacksmithing": "Smithing",
+  "skillNameMagicCircle": "Magic Circle",
+  "skillNameOrcish": "Orcish",
+  "tabInventory": "Inventory",
+  "tabWorld": "World",
+  "tabCharacters": "Characters",
+  "characterNoActorBody": "This character has no in-world actor, so it has no attributes, inventory, or events.",
+  "characterNoEventsBody": "No events for this character.",
+  "characterOrphanGroup": "Other",
+  "tabAllData": "All data",
+  "tabBackups": "Backups",
+  "tabSettings": "Settings",
+  "reset": "Reset",
+  "save": "Save",
+  "saveWithCount": "Save ({count})",
+  "@saveWithCount": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "ok": "OK",
+  "cancel": "Cancel",
+  "confirm": "Confirm",
+  "close": "Close",
+  "add": "Add",
+  "equippedBadge": "Equipped",
+  "armorUpgradesLabel": "Upgrades",
+  "browse": "Browse",
+  "noSavFilesFound": "No .sav files found",
+  "profile": "Profile",
+  "profileWithSaves": "{name} ({count} saves)",
+  "@profileWithSaves": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      },
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "switchProfile": "Switch profile",
+  "rescanSaveFolder": "Rescan save folder",
+  "discardUnsavedChangesTitle": "Discard unsaved changes?",
+  "rescanDiscardBody": "Rescanning reloads every save and discards your {count} unsaved {count, plural, =1{change} other{changes}}.",
+  "@rescanDiscardBody": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "discardAndRescan": "Discard and rescan",
+  "chapterLabel": "Chapter {id}",
+  "@chapterLabel": {
+    "placeholders": {
+      "id": {
+        "type": "Object"
+      }
+    }
+  },
+  "quickSave": "Quick save",
+  "autoSave": "Auto save",
+  "manualSave": "Manual save",
+  "errorTitle": "Error",
+  "selectASaveTitle": "Select a save",
+  "selectASaveBody": "The save details will appear here.",
+  "bytesValue": "{count} bytes",
+  "@bytesValue": {
+    "placeholders": {
+      "count": {
+        "type": "String"
+      }
+    }
+  },
+  "inspectionJsonTitle": "Inspection JSON",
+  "copy": "Copy",
+  "savegameFallbackTitle": "Savegame",
+  "screenshotForSlot": "Screenshot for {slot}",
+  "@screenshotForSlot": {
+    "placeholders": {
+      "slot": {
+        "type": "String"
+      }
+    }
+  },
+  "publicSaveName": "Public save name",
+  "gameTimeTitle": "Game time",
+  "gameTimeDay": "Day",
+  "gameTimeHours": "Hours",
+  "gameTimeMinutes": "Minutes",
+  "gameTimeSeconds": "Seconds",
+  "gameTimeTotal": "= {seconds} s total",
+  "@gameTimeTotal": {
+    "placeholders": {
+      "seconds": {
+        "type": "int"
+      }
+    }
+  },
+  "gameTimeInvalid": "Enter whole numbers — day ≥ 0, hours 0–23, minutes and seconds 0–59.",
+  "required": "Required",
+  "playerLockedBody": "Private player edits need a compress-ready codec.",
+  "heroTransform": "Position",
+  "locationX": "Location X",
+  "locationY": "Location Y",
+  "locationZ": "Location Z",
+  "rotationPitch": "Rotation pitch",
+  "rotationYaw": "Rotation yaw",
+  "rotationRoll": "Rotation roll",
+  "invalid": "Invalid",
+  "heroAttributes": "Hero attributes",
+  "attributeBase": "{name} base",
+  "@attributeBase": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "attributeCurrent": "{name} current",
+  "@attributeCurrent": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "inventoryTitle": "Inventory",
+  "inventoryEmpty": "This inventory is empty.",
+  "inventoryNeedsDecoded": "Inventory editing needs decoded private payload data from the codec.",
+  "inventoryNoStacks": "No item stacks found in the decoded private payload.",
+  "resetInventoryChanges": "Reset inventory changes",
+  "addItemTooltipPendingAdd": "Save pending changes first — one new item per save",
+  "addItemTooltipPendingRemove": "Save the pending removal first — one structural change per save",
+  "addItemTooltipPendingCount": "Save or reset pending count changes first — a structural edit must be saved on its own",
+  "addItemTooltipDefault": "Add item to inventory",
+  "addItemButton": "Add item",
+  "resetInventoryButton": "Reset inventory",
+  "@resetInventoryButton": { "description": "Button: reset the actor's inventory to the game-start save" },
+  "resetInventoryTooltipDefault": "Replace this inventory with the game-start save's inventory",
+  "@resetInventoryTooltipDefault": {},
+  "resetInventoryTooltipBlocked": "Save or cancel the pending inventory changes first",
+  "@resetInventoryTooltipBlocked": {},
+  "pendingResetTitle": "Reset to game-start inventory",
+  "@pendingResetTitle": {},
+  "pendingResetSubtitle": "Resources level: {level}",
+  "@pendingResetSubtitle": { "placeholders": { "level": { "type": "String" } } },
+  "cancelPendingReset": "Cancel reset",
+  "@cancelPendingReset": {},
+  "pendingAddSubtitle": "×{count} — pending add (not yet saved)",
+  "@pendingAddSubtitle": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "cancelPendingAdd": "Cancel pending add",
+  "pendingRemovalSubtitle": "pending removal (not yet saved)",
+  "cancelPendingRemoval": "Cancel pending removal",
+  "filterItems": "Filter items",
+  "noItemsMatchQuery": "No items match \"{query}\".",
+  "@noItemsMatchQuery": {
+    "placeholders": {
+      "query": {
+        "type": "String"
+      }
+    }
+  },
+  "pendingRemovalHidesAll": "The pending removal hides every item — save to apply it.",
+  "categoryWithCount": "{label} ({count})",
+  "@categoryWithCount": {
+    "placeholders": {
+      "label": {
+        "type": "String"
+      },
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "itemCategoryMeleeWeapon": "Melee weapons",
+  "itemCategoryRangedWeapon": "Ranged weapons",
+  "itemCategoryAmmunition": "Ammunition",
+  "itemCategoryArmor": "Armor",
+  "itemCategoryRune": "Runes",
+  "itemCategoryScroll": "Spell scrolls",
+  "itemCategoryFood": "Food & potions",
+  "itemCategoryMisc": "Miscellaneous",
+  "itemCategoryAmulet": "Amulets",
+  "itemCategoryRing": "Rings",
+  "itemCategoryTrophy": "Animal trophies",
+  "itemCategoryWriting": "Writings",
+  "itemCategoryMission": "Mission items",
+  "itemCategoryKey": "Keys",
+  "itemCategoryOther": "Other",
+  "count": "Count",
+  "min1": "Min 1",
+  "countTimes": "×{count}",
+  "@countTimes": {
+    "placeholders": {
+      "count": {
+        "type": "String"
+      }
+    }
+  },
+  "deleteEquippedTooltip": "Can't delete: this item is likely equipped or assigned to a hotkey slot",
+  "removeBlockedTooltip": "Save or reset your pending inventory changes first — an add or remove must be saved on its own",
+  "removeItemFromInventory": "Remove item from inventory",
+  "progressionLockedBody": "Progression data needs decoded private payload data from the codec.",
+  "progressionNeedsTyped": "Structured progression data needs a fully decoded save with a verified typed parse.",
+  "sectionQuests": "Quests",
+  "sectionKnowledge": "Knowledge",
+  "sectionEvents": "Events",
+  "firstPage": "First page",
+  "previousPage": "Previous page",
+  "nextPage": "Next page",
+  "lastPage": "Last page",
+  "pageOfPages": "Page {page} / {total}",
+  "@pageOfPages": {
+    "placeholders": {
+      "page": {
+        "type": "int"
+      },
+      "total": {
+        "type": "int"
+      }
+    }
+  },
+  "rangeOfTotal": "{first}–{last} of {total}",
+  "@rangeOfTotal": {
+    "placeholders": {
+      "first": {
+        "type": "int"
+      },
+      "last": {
+        "type": "int"
+      },
+      "total": {
+        "type": "int"
+      }
+    }
+  },
+  "perPage": "Per page:",
+  "resetQuestChanges": "Reset quest changes",
+  "searchQuests": "Search quests",
+  "allGroups": "All groups",
+  "groupWithCount": "{group} ({count})",
+  "@groupWithCount": {
+    "placeholders": {
+      "group": {
+        "type": "String"
+      },
+      "count": {
+        "type": "Object"
+      }
+    }
+  },
+  "stateLabelWithCount": "{label} {count}",
+  "@stateLabelWithCount": {
+    "placeholders": {
+      "label": {
+        "type": "String"
+      },
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "questStateNone": "None",
+  "questStateAvailable": "Available",
+  "questStateRunning": "Running",
+  "questStateSucceeded": "Succeeded",
+  "questStateFailed": "Failed",
+  "questStateUnknown": "unknown",
+  "dialogKnowledge": "Dialog Knowledge",
+  "resetKnowledgeChanges": "Reset knowledge changes",
+  "addNpc": "Add NPC",
+  "searchNpcs": "Search NPCs",
+  "npcStatusRowLabel": "Status",
+  "npcStatusAlive": "alive",
+  "npcStatusDead": "dead",
+  "npcStateHp": "HP {hp} / {maxHp}",
+  "@npcStateHp": {
+    "placeholders": {
+      "hp": {
+        "type": "String"
+      },
+      "maxHp": {
+        "type": "String"
+      }
+    }
+  },
+  "npcReviveButton": "Revive",
+  "npcReviveQueued": "Will be revived on save",
+  "entriesForCharacter": "Entries — {name}",
+  "@entriesForCharacter": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "selectNpcToSeeEntries": "Select an NPC to see entries",
+  "addKnowledgeEntry": "Add knowledge entry",
+  "browseCatalog": "Browse catalog",
+  "alreadyExistsForCharacter": "Already exists for this character.",
+  "alreadyInPendingChanges": "Already in pending changes.",
+  "duplicateCheckFailed": "Duplicate check failed — try again: {error}",
+  "@duplicateCheckFailed": {
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "pendingAddsCount": "Pending adds ({count})",
+  "@pendingAddsCount": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "undoAdd": "Undo add",
+  "undoRemove": "Undo remove",
+  "removeEntry": "Remove entry",
+  "selectNpcFromList": "Select an NPC from the list",
+  "characterWithCount": "{name} ({count})",
+  "@characterWithCount": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      },
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "memoryEvents": "Memory Events",
+  "searchCharacters": "Search characters",
+  "eventsForCharacter": "Events — {name}",
+  "@eventsForCharacter": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "selectCharacterToSeeEvents": "Select a character to see events",
+  "noTags": "(no tags)",
+  "eventSubtitle": "t={time}s  {affected}",
+  "@eventSubtitle": {
+    "placeholders": {
+      "time": {
+        "type": "String"
+      },
+      "affected": {
+        "type": "String"
+      }
+    }
+  },
+  "removeEvent": "Remove event",
+  "removeMemoryEventTitle": "Remove memory event?",
+  "removeMemoryEventBody": "Remove this memory event? A backup is written first.",
+  "duplicateEvent": "Duplicate event",
+  "duplicateMemoryEventTitle": "Duplicate memory event?",
+  "duplicateMemoryEventBody": "Duplicate this memory event? A backup is written first.",
+  "selectCharacterFromList": "Select a character from the list",
+  "factionsSidebar": "Factions",
+  "factionsForgiveButton": "Forgive",
+  "factionHostile": "Hostile",
+  "factionFriendly": "Friendly",
+  "crimeMurder": "{count, plural, =1{{count} murder} other{{count} murders}}",
+  "@crimeMurder": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "crimeAssault": "{count, plural, =1{{count} assault} other{{count} assaults}}",
+  "@crimeAssault": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "crimeTheft": "{count, plural, =1{{count} theft} other{{count} thefts}}",
+  "@crimeTheft": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "crimeTrespassing": "{count, plural, =1{{count} trespass} other{{count} trespasses}}",
+  "@crimeTrespassing": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "crimeThreat": "{count, plural, =1{{count} threat} other{{count} threats}}",
+  "@crimeThreat": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "crimeOther": "{count, plural, =1{{count} other crime} other{{count} other crimes}}",
+  "@crimeOther": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "factionsForgiveQueued": "being forgiven…",
+  "factionsEmpty": "No open crimes against factions.",
+  "factionGuildOldCamp": "Old Camp",
+  "factionGuildNewCamp": "New Camp",
+  "factionGuildSwampCamp": "Swamp Camp",
+  "factionGuildOther": "Others / individuals",
+  "allDataLockedBody": "The full property browser needs decoded private payload data from the codec.",
+  "allDataDescription": "Search every typed property by name or path. Scalars, strings, enums and object paths are editable; structs are shown read-only for now.",
+  "searchPropertiesLabel": "Search properties (empty = list everything) — e.g. Health, GameTime",
+  "decodingSaveTitle": "Decoding save…",
+  "decodingSaveBody": "Decoding the full private payload for the first search. This runs once per save, then searches are instant.",
+  "searchTheSaveTitle": "Search the save",
+  "searchTheSaveBody": "Type a property name and press enter. Leave it empty to list everything.",
+  "searchFailedTitle": "Search failed",
+  "noMatchesTitle": "No matches",
+  "noMatchesBody": "No property path contained all of those terms.",
+  "value": "Value",
+  "backupsTitle": "Backups",
+  "refreshBackups": "Refresh backups",
+  "noBackupsTitle": "No backups",
+  "noBackupsBody": "Edited saves create backup files next to the selected slot.",
+  "slotBackups": "Slot backups",
+  "profileBackups": "Profile backups",
+  "backupFactName": "Name",
+  "backupFactSlot": "Slot",
+  "backupFactCreated": "Created",
+  "backupFactSize": "Size",
+  "backupFactStatus": "Status",
+  "backupFactSha1": "SHA-1",
+  "restoreBackupTooltip": "Restore {fileName}",
+  "@restoreBackupTooltip": {
+    "placeholders": {
+      "fileName": {
+        "type": "String"
+      }
+    }
+  },
+  "appearanceTitle": "Appearance",
+  "theme": "Theme",
+  "themeLight": "Light",
+  "themeDark": "Dark",
+  "themeSystem": "System",
+  "uiScale": "UI scale",
+  "resetZoomTooltip": "Reset zoom (Ctrl+0)",
+  "zoomTip": "Tip: Ctrl + / Ctrl - changes the zoom anywhere in the app.",
+  "language": "Language",
+  "updatesTitle": "Updates",
+  "checkForUpdatesAutomatically": "Check for updates automatically",
+  "checkForUpdatesNow": "Check for updates now",
+  "updatesPortableNotice": "The portable version opens the download page in your browser. Replace your existing files with the new download.",
+  "updateAvailableTitle": "Update available",
+  "updateAvailableMessage": "Version {version} is available. You have {current}.",
+  "@updateAvailableMessage": {
+    "placeholders": {
+      "version": {},
+      "current": {}
+    }
+  },
+  "updateDownload": "Download",
+  "updateLater": "Later",
+  "updateUpToDate": "You are using the latest version.",
+  "updateCheckFailed": "Could not check for updates. Please try again later.",
+  "gameTextTitle": "Game text",
+  "gameTextExtractedWithCounts": "Extracted: {ids} ids across {languages} languages.",
+  "@gameTextExtractedWithCounts": {
+    "placeholders": {
+      "ids": {
+        "type": "int"
+      },
+      "languages": {
+        "type": "int"
+      }
+    }
+  },
+  "gameTextExtracted": "Localized game text is extracted.",
+  "gameTextNotExtracted": "Localized game text is not extracted yet.",
+  "extracting": "Extracting…",
+  "extractRefreshLocalizedText": "Extract / refresh localized text",
+  "extractLocalizedTextTitle": "Extract localized game text?",
+  "extractLocalizedTextBody": "Localized game text isn't extracted yet. Extract it now from your game install? (optional)",
+  "notNow": "Not now",
+  "extract": "Extract",
+  "extractionComplete": "Extraction complete",
+  "extractionFailed": "Extraction failed",
+  "localizationCacheFileType": "Localization cache",
+  "savegameDirectoryTitle": "Savegame directory",
+  "folder": "Folder",
+  "codecTitle": "Codec",
+  "check": "Check",
+  "roundtrip": "Roundtrip",
+  "noCodecStatus": "No codec status",
+  "codecReady": "Codec ready",
+  "codecReadOnly": "Codec read-only",
+  "codecUnavailable": "Codec unavailable",
+  "details": "Details",
+  "codecStatusLine": "Status: {status}",
+  "@codecStatusLine": {
+    "placeholders": {
+      "status": {
+        "type": "String"
+      }
+    }
+  },
+  "codecCapabilityLine": "Decompress: {decompress} | Compress: {compress}",
+  "@codecCapabilityLine": {
+    "placeholders": {
+      "decompress": {
+        "type": "String"
+      },
+      "compress": {
+        "type": "String"
+      }
+    }
+  },
+  "codecBackendLine": "Backend: {backend}",
+  "@codecBackendLine": {
+    "placeholders": {
+      "backend": {
+        "type": "String"
+      }
+    }
+  },
+  "yes": "yes",
+  "no": "no",
+  "aboutVersion": "Version {version} ({sha})",
+  "@aboutVersion": {
+    "placeholders": {
+      "version": {
+        "type": "String"
+      },
+      "sha": {
+        "type": "String"
+      }
+    }
+  },
+  "aboutCopyright": "© 2026 GORE contributors",
+  "aboutLicense": "Licensed under the MIT License.",
+  "difficultyTitle": "Difficulty — {profile}",
+  "@difficultyTitle": {
+    "placeholders": {
+      "profile": {
+        "type": "String"
+      }
+    }
+  },
+  "difficultyNoProfile": "No profile",
+  "difficultyNoDifficulty": "No difficulty",
+  "difficultyLabel": "Difficulty",
+  "difficultyTooltipNoProfile": "No profile selected",
+  "difficultyTooltipEdit": "Edit difficulty for this profile",
+  "difficultyTooltipNoEditable": "This profile has no editable difficulty",
+  "preset": "Preset",
+  "presetNovice": "Novice",
+  "presetGothic": "Gothic",
+  "presetHard": "Hard",
+  "presetCustom": "Custom",
+  "unrecognisedPreset": "Stored preset is unrecognised ({preset}). You can still save Flow Helper / Permadeath changes, or pick a preset above to overwrite it.",
+  "@unrecognisedPreset": {
+    "placeholders": {
+      "preset": {
+        "type": "Object"
+      }
+    }
+  },
+  "closeCombatFlowHelper": "Close Combat Flow Helper",
+  "permadeath": "Permadeath",
+  "notAvailableOnNovice": "Not available on Novice",
+  "levelCombat": "Combat",
+  "levelResources": "Resources",
+  "levelProgression": "Progression",
+  "difficultyAppliesToAllSaves": "Difficulty applies to all saves in this profile.",
+  "savingDifficultyFailed": "Saving difficulty failed.",
+  "addItemDialogTitle": "Add item",
+  "searchItems": "Search items",
+  "failedToLoadCatalog": "Failed to load catalog: {error}",
+  "@failedToLoadCatalog": {
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "noItemsAvailableToAdd": "No items available to add",
+  "noItemsMatch": "No items match",
+  "countMustBeAtLeast1": "Must be ≥ 1",
+  "countMustBeAtMost": "Must be ≤ {max}",
+  "@countMustBeAtMost": {
+    "placeholders": {
+      "max": {
+        "type": "int"
+      }
+    }
+  },
+  "addNpcDialogTitle": "Add NPC",
+  "noNpcsAvailableToAdd": "No NPCs available to add",
+  "noNpcsMatch": "No NPCs match",
+  "categoryAll": "All",
+  "allWithCount": "All ({count})",
+  "@allWithCount": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "addKnowledgeEntryDialogTitle": "Add knowledge entry",
+  "searchEntries": "Search entries",
+  "noKnowledgeEntriesAvailableToAdd": "No knowledge entries available to add",
+  "noEntriesMatch": "No entries match",
+  "heroGroupMainStats": "Main stats",
+  "heroGroupCombatSkills": "Combat skills",
+  "heroGroupResistances": "Resistances",
+  "heroGroupThieving": "Thieving",
+  "heroGroupAdvanced": "Advanced",
+  "heroEntryHeroTransform": "Position",
+  "attributeEmpty": "{name} is empty — enter a value or restore the original before saving.",
+  "@attributeEmpty": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "attributeInvalidNumber": "Invalid number for {name}: \"{text}\"",
+  "@attributeInvalidNumber": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      },
+      "text": {
+        "type": "String"
+      }
+    }
+  },
+  "loadingEditorData": "Loading editor data",
+  "savingProgress": "Saving… {done} of {total}",
+  "@savingProgress": {
+    "placeholders": {
+      "done": {
+        "type": "int"
+      },
+      "total": {
+        "type": "int"
+      }
+    }
+  },
+  "localizedTextExtractedCount": "Extracted {idCount} ids across {languageCount} languages",
+  "@localizedTextExtractedCount": {
+    "placeholders": {
+      "idCount": {
+        "type": "int"
+      },
+      "languageCount": {
+        "type": "int"
+      }
+    }
+  },
+  "skillSmithing1H": "One-Hand Smithing",
+  "skillSmithing2H": "Two-Hand Smithing",
+  "skillCircleNovice": "Novice Magician",
+  "skillCircle1": "First Circle of Magic",
+  "skillCircle2": "Second Circle of Magic",
+  "skillCircle3": "Third Circle of Magic",
+  "skillCircle4": "Fourth Circle of Magic",
+  "skillCircle5": "Fifth Circle of Magic",
+  "skillCircle6": "Sixth Circle of Magic"
+}

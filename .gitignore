@@ -10,9 +10,7 @@ outputs/
 .flutter-plugins
 .flutter-plugins-dependencies
 .packages
-apps/goresave/.dart_tool/
-apps/goresave/build/
-apps/goresave/windows/flutter/ephemeral/
+apps/*/windows/flutter/ephemeral/
 
 # FVM
 .fvm/flutter_sdk
@@ -37,10 +35,33 @@ Thumbs.db
 # Local research / reverse-engineering scratch
 work/
 
+# Local texture fixtures (Task 6): the cooked .uasset/.uexp/.ubulk/.usmap under
+# work/tex-fixtures/ are game-derived (copyrighted) bytes -- never commit them; they
+# regenerate on demand. The whole work/ tree is ignored above (so these binaries are
+# already untracked); these explicit lines document the intent. The provenance README
+# is force-added (git add -f work/tex-fixtures/README.md) since work/ is ignored.
+work/tex-fixtures/*.uasset
+work/tex-fixtures/*.uexp
+work/tex-fixtures/*.ubulk
+work/tex-fixtures/*.usmap
+
 # Savegame safety
 *.sav
 *.sav.bak.*
 !fixtures/**/*.sav
 
-# Distribution build output
-/dist/
+# Shipped game-start saves embedded into gore-save for inventory reset (tracked).
+!crates/gore-save/assets/start_saves/*.sav
+
+# Distribution build output (per-project: build.py writes to <project>/dist/)
+dist/
+
+# Local-only Oodle cross-check oracle: compiles a reference C++ Oodle decoder to verify
+# gore-oodle's pure-Rust encoder against genuine Oodle during development. Kept out of the
+# repo on purpose so the tracked crate ships zero C/C++. Run:
+#   cargo test --manifest-path local-oracle/Cargo.toml
+/local-oracle/
+
+# Superpowers design docs / plans / notes: local design-record + agent context, kept out
+# of the tracked repo (no code references them after cleanup).
+/docs/superpowers/
