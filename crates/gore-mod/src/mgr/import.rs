@@ -121,14 +121,33 @@ pub fn import(library_dir: &Path, source: &Path) -> crate::Result<ModEntryMeta> 
     std::fs::write(staging.join(META_FILE), serde_json::to_vec_pretty(&meta)?)
         .map_err(crate::io("writing entry sidecar"))?;
     let entry_dir = library_dir.join(&id);
-    if entry_dir.exists() {
-        // Same source (name + source name) ⇒ same id: re-import replaces the previous copy (an
-        // update). A different source with the same display name hashes to a different id, so it
-        // lands in its own dir here instead of overwriting this one.
-        std::fs::remove_dir_all(&entry_dir).map_err(crate::io("replacing existing entry"))?;
+    // Activate atomically. Same source (name + source name) ⇒ same id, so a re-import replaces the
+    // previous copy (an update); a different source with the same display name hashes to a different
+    // id and lands in its own dir. When an entry already exists, move it ASIDE first, promote the
+    // staged copy, and only then delete the old one — if promotion fails (crash, transient
+    // FS/permission/AV), restore the old entry so a failed update never leaves the library (and the
+    // loadout that references it) pointing at a now-missing mod. The backup is dot-prefixed so
+    // `list()` skips it during the brief window it exists.
+    let backup = if entry_dir.exists() {
+        let bak = library_dir.join(format!(".replacing-{}-{id}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&bak); // clear any stale leftover from a prior crash
+        std::fs::rename(&entry_dir, &bak).map_err(crate::io("moving the previous entry aside"))?;
+        Some(bak)
+    } else {
+        None
+    };
+    if let Err(e) = std::fs::rename(&staging, &entry_dir) {
+        // Promotion failed: restore the previous entry (best effort) before surfacing the error. The
+        // still-armed StagingGuard cleans up the staged copy on drop.
+        if let Some(bak) = &backup {
+            let _ = std::fs::rename(bak, &entry_dir);
+        }
+        return Err(crate::io("activating library entry")(e));
     }
-    std::fs::rename(&staging, &entry_dir).map_err(crate::io("activating library entry"))?;
     guard.0 = None; // staging IS the entry now — nothing to clean
+    if let Some(bak) = backup {
+        let _ = std::fs::remove_dir_all(&bak); // update succeeded — drop the old copy
+    }
     Ok(meta)
 }
 
@@ -1145,6 +1164,14 @@ mod tests {
         let b = import(&lib, &src).unwrap();
         assert_eq!(a.id, b.id);
         assert_eq!(list(&lib).unwrap().len(), 1);
+        // The move-aside backup used for the atomic replace must be cleaned up after a successful
+        // update — no `.replacing-*` dir may linger in the library.
+        let leftovers: Vec<_> = fs::read_dir(&lib)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().starts_with(".replacing-"))
+            .collect();
+        assert!(leftovers.is_empty(), "stale backup dir(s) after replace: {leftovers:?}");
     }
 
     /// [import 11b] Two mods that share a display NAME but come from DIFFERENT sources must get
