@@ -63,7 +63,22 @@ Future<void> saveProject(ModProject project, String path) async {
   if (zip == null) {
     throw const FormatException('failed to encode the project archive');
   }
-  await File(path).writeAsBytes(zip);
+  // Write to a sibling temp file first, then swap it into place — so a failed or partial write
+  // (disk full, interrupted process) can't truncate an existing .goremod before all the zip bytes
+  // are safely on disk.
+  final tmp = File('$path.tmp');
+  await tmp.writeAsBytes(zip);
+  try {
+    await tmp.rename(path);
+  } on FileSystemException {
+    // On Windows, renaming onto an existing file fails; replace it explicitly. The new bytes are
+    // already fully written to tmp, so the brief gap here still can't lose the previous project.
+    final dst = File(path);
+    if (await dst.exists()) {
+      await dst.delete();
+    }
+    await tmp.rename(path);
+  }
 }
 
 /// Load a `.goremod` project from [path]. Embedded WAVs are extracted to a temp dir and the

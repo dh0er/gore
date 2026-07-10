@@ -108,6 +108,11 @@ pub fn apply_loadout(
     let mut scripts: Vec<(String, String, Vec<u8>)> = Vec::new();
 
     // ── PASS 1: additive components + collect rawfile base-overrides ───────────────────────────
+    // A globally-unique index per texture component (NOT the mod slot `l.idx`, which is constant
+    // across a mod's components): `prepare_texture_component` scopes its cook/pack temp dirs and the
+    // output triplet name by this index, so two TexturePatch components in one mod would otherwise
+    // collide and clobber each other's output.
+    let mut tex_comp_idx = 0usize;
     for l in &loaded {
         for comp in &l.meta.components {
             match comp {
@@ -133,24 +138,31 @@ pub fn apply_loadout(
                     plan.ue4ss_dirs.push((src, dst));
                 }
                 ComponentInfo::TexturePatch { rel, .. } => {
-                    // Cook + pack a Zen triplet; `meta.id` gives cross-mod uniqueness of the pak name.
-                    let triplets = crate::prepare_texture_component(&l.dir, rel, &l.meta.id, l.idx, &gp)?;
+                    // Cook + pack a Zen triplet; `meta.id` gives cross-mod uniqueness of the pak name,
+                    // `tex_comp_idx` gives per-component uniqueness within a mod.
+                    let triplets =
+                        crate::prepare_texture_component(&l.dir, rel, &l.meta.id, tex_comp_idx, &gp)?;
                     plan.texture_triplets.extend(triplets);
+                    tex_comp_idx += 1;
                 }
                 ComponentInfo::Triplet { rel_base, .. } => {
                     if !crate::is_safe_rel_path(rel_base) {
                         return Err(ModError::Other(format!("unsafe triplet path: {rel_base:?}")));
                     }
-                    // A mountable triplet needs at least its `.utoc`; require it up front (before the
-                    // deferred undeploy) so an incomplete/corrupt triplet fails here rather than
-                    // mid-copy after the working deployment is already gone.
-                    let utoc = l.dir.join(format!("{rel_base}.utoc"));
-                    if !utoc.is_file() {
-                        return Err(ModError::Other(format!(
-                            "triplet component missing its .utoc in {}: {}",
-                            l.entry.id,
-                            utoc.display()
-                        )));
+                    // A mountable triplet needs BOTH its `.utoc` (table of contents) and `.ucas`
+                    // (the container payload) — the `.utoc` alone is unmountable. Require both up
+                    // front (before the deferred undeploy) so an incomplete/corrupt triplet fails
+                    // here rather than mid-copy after the working deployment is already gone. The
+                    // `.pak` stub is optional and copied below only if present.
+                    for ext in ["utoc", "ucas"] {
+                        let member = l.dir.join(format!("{rel_base}.{ext}"));
+                        if !member.is_file() {
+                            return Err(ModError::Other(format!(
+                                "triplet component missing its .{ext} in {}: {}",
+                                l.entry.id,
+                                member.display()
+                            )));
+                        }
                     }
                     let stem = slot_pak_stem(rel_base, l.idx);
                     for ext in ["utoc", "ucas", "pak"] {

@@ -594,10 +594,27 @@ fn mgr_import(payload: Value) -> Value {
     // Register the new mod in the loadout (disabled) so enable/apply can find it. Skip if an entry
     // with this id already exists (a re-import / update): keep its current enabled state + order.
     let lo_path = mgr_loadout_path(&payload);
-    if let Ok(mut lo) = gore_mod::mgr::loadout::load(&lo_path) {
-        if !lo.entries.iter().any(|e| e.id == entry.id) {
-            lo.entries.push(gore_mod::mgr::LoadoutEntry { id: entry.id.clone(), enabled: false });
-            let _ = gore_mod::mgr::loadout::save(&lo_path, &lo);
+    // Surface a loadout read/write failure instead of returning ok: apply/status/analyze read the
+    // on-disk loadout, so a swallowed error here would leave the imported mod invisible to them. A
+    // missing loadout file loads as an empty default (not an error), so first-time imports still
+    // register normally.
+    match gore_mod::mgr::loadout::load(&lo_path) {
+        Ok(mut lo) => {
+            if !lo.entries.iter().any(|e| e.id == entry.id) {
+                lo.entries.push(gore_mod::mgr::LoadoutEntry { id: entry.id.clone(), enabled: false });
+                if let Err(e) = gore_mod::mgr::loadout::save(&lo_path, &lo) {
+                    return err(
+                        "IO",
+                        format!("imported '{}' into the library but failed to register it in the loadout: {e}", entry.id),
+                    );
+                }
+            }
+        }
+        Err(e) => {
+            return err(
+                "IO",
+                format!("imported '{}' into the library but failed to read the loadout: {e}", entry.id),
+            )
         }
     }
     json!({"ok": true, "entry": serde_json::to_value(&entry).unwrap_or(Value::Null)})
@@ -617,11 +634,25 @@ fn mgr_remove(payload: Value) -> Value {
     // linger as an enabled loadout entry, or a later `mgr_apply` — which reads the on-disk
     // loadout, not the GUI's in-memory reconcile — fails loading the deleted mod's metadata.
     let lo_path = mgr_loadout_path(&payload);
-    if let Ok(mut lo) = gore_mod::mgr::loadout::load(&lo_path) {
-        let before = lo.entries.len();
-        lo.entries.retain(|e| e.id != id);
-        if lo.entries.len() != before {
-            let _ = gore_mod::mgr::loadout::save(&lo_path, &lo);
+    // Surface a loadout read/write failure instead of returning ok: a dropped save error would let
+    // the persisted loadout keep an enabled reference to the now-removed mod, so a later
+    // apply/status/analyze (which read the on-disk loadout) would fail or act on a stale target. A
+    // missing loadout file loads as an empty default (not an error).
+    match gore_mod::mgr::loadout::load(&lo_path) {
+        Ok(mut lo) => {
+            let before = lo.entries.len();
+            lo.entries.retain(|e| e.id != id);
+            if lo.entries.len() != before {
+                if let Err(e) = gore_mod::mgr::loadout::save(&lo_path, &lo) {
+                    return err(
+                        "IO",
+                        format!("removed '{id}' from the library but failed to update the loadout: {e}"),
+                    );
+                }
+            }
+        }
+        Err(e) => {
+            return err("IO", format!("removed '{id}' from the library but failed to read the loadout: {e}"))
         }
     }
     json!({"ok": true, "removed": removed})

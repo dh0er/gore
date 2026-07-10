@@ -8,6 +8,16 @@ pub fn run(mod_name: String, mods_dir: PathBuf) -> Result<()> {
         .with_context(|| format!("invalid mod name '{mod_name}'"))?;
     let mod_dir = mods_dir.join(&mod_name);
     let scripts_dir = mod_dir.join("Scripts");
+    let main_lua_path = scripts_dir.join("main.lua");
+    // Refuse to clobber an existing scaffold: the generated main.lua is explicitly meant to be
+    // edited, so re-running `gore scaffold <ExistingMod>` must not silently truncate the user's
+    // mod code. Bail out and let them delete it or pick a new name.
+    if main_lua_path.exists() {
+        anyhow::bail!(
+            "mod '{mod_name}' already exists at '{}' — refusing to overwrite (delete it or choose a new name)",
+            mod_dir.display()
+        );
+    }
     fs::create_dir_all(&scripts_dir)
         .with_context(|| format!("creating '{}'", scripts_dir.display()))?;
 
@@ -53,7 +63,7 @@ apply()
 "#,
         name = mod_name
     );
-    fs::write(scripts_dir.join("main.lua"), main_lua)
+    fs::write(&main_lua_path, main_lua)
         .context("writing main.lua")?;
 
     println!("Created mod scaffold -> {}", mod_dir.display());

@@ -234,6 +234,14 @@ pub fn build_bundle(spec: &BuildSpec) -> Result<Bundle> {
 
 /// Write a built bundle's files under `dir` (creating parent dirs).
 pub fn write_bundle(dir: &Path, bundle: &Bundle) -> Result<()> {
+    // Rebuild into a clean directory: a prior build of the same bundle may have left files that are
+    // no longer part of it (e.g. a component the user removed). Deploy copies some component dirs
+    // (like `ue4ss/<name>`) wholesale, so stale leftovers would still be shipped/deployed. Clear the
+    // destination first so it holds exactly this bundle.
+    if dir.exists() {
+        std::fs::remove_dir_all(dir)
+            .map_err(io(&format!("clearing bundle dir {}", dir.display())))?;
+    }
     for (rel, bytes) in &bundle.files {
         let path = dir.join(rel);
         if let Some(parent) = path.parent() {
