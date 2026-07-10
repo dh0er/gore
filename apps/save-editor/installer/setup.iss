@@ -53,8 +53,14 @@ Type: files; Name: "{localappdata}\goresave\g1r_codec_host_derived_profiles.json
 Type: files; Name: "{userappdata}\goresave\g1r_codec_host_derived_profiles.json"
 
 [UninstallDelete]
-; Remove goresave's per-user config/data on uninstall (settings.json,
-; ui_settings.json). Save backups live next to the saves, not here.
+; The save editor writes settings.json + ui_settings.json under the shared `gore`
+; umbrella at %LOCALAPPDATA%\gore\gore-save (goreSaveSettingsDir; %APPDATA% is the
+; fallback base). Remove just this app's own subfolder on uninstall — the shared
+; `gore` root holds the loc catalog and the other tools' data, so it must stay
+; intact. Save backups live next to the saves, not here.
+Type: filesandordirs; Name: "{localappdata}\gore\gore-save"
+Type: filesandordirs; Name: "{userappdata}\gore\gore-save"
+; Legacy pre-umbrella settings dir (before the shared-`gore` move); remove it too.
 Type: filesandordirs; Name: "{userappdata}\goresave"
 ; Stale codec-host cache lived under %LOCALAPPDATA%; drop just that file (the
 ; rest of %LOCALAPPDATA%\goresave may belong to a different installer).
