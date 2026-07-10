@@ -90,10 +90,11 @@ pub fn import(library_dir: &Path, source: &Path) -> crate::Result<ModEntryMeta> 
         Some(m) => (m.mod_meta.name.clone(), m.mod_meta.version.clone(), m.mod_meta.author.clone()),
         None => (fallback_name, String::new(), String::new()),
     };
-    let now = std::time::SystemTime::now()
+    let since_epoch = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
+        .unwrap_or_default();
+    let now = since_epoch.as_secs() as i64;
+    let now_micros = since_epoch.subsec_micros();
     // Fold the display name and the FULL canonical source path into the disambiguating hash: a
     // re-import of the same source path resolves to the same id and replaces the entry (update),
     // while two different mods that share a display name AND a bare filename but live in different
@@ -111,7 +112,7 @@ pub fn import(library_dir: &Path, source: &Path) -> crate::Result<ModEntryMeta> 
         name,
         version,
         author,
-        imported_at: format_utc(now),
+        imported_at: format_utc(now, now_micros),
         source: source_name,
         components,
     };
@@ -651,12 +652,15 @@ fn slug(s: &str) -> String {
 }
 
 /// `secs` since the Unix epoch as `YYYY-MM-DDTHH:MM:SSZ` (UTC, RFC 3339) — std-only.
-fn format_utc(secs: i64) -> String {
+fn format_utc(secs: i64, micros: u32) -> String {
     let days = secs.div_euclid(86_400);
     let rem = secs.rem_euclid(86_400);
     let (h, mi, s) = (rem / 3600, (rem % 3600) / 60, rem % 60);
     let (y, mo, d) = civil_from_days(days);
-    format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}Z")
+    // Microsecond precision matters: `imported_at` folds into the entry fingerprint, so a re-import
+    // within the same SECOND (identical component descriptors, only changed payload bytes) must
+    // still get a distinct timestamp — otherwise mgr_status could report InSync over changed bytes.
+    format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}.{micros:06}Z")
 }
 
 /// Days since 1970-01-01 → (year, month, day). Howard Hinnant's `civil_from_days`.
@@ -1295,9 +1299,12 @@ mod tests {
     /// The epoch→RFC3339 formatter, incl. a leap day and a modern date.
     #[test]
     fn utc_timestamp_formats_correctly() {
-        assert_eq!(format_utc(0), "1970-01-01T00:00:00Z");
-        assert_eq!(format_utc(1_000_000_000), "2001-09-09T01:46:40Z");
-        assert_eq!(format_utc(951_782_400), "2000-02-29T00:00:00Z");
-        assert_eq!(format_utc(1_767_225_600), "2026-01-01T00:00:00Z");
+        assert_eq!(format_utc(0, 0), "1970-01-01T00:00:00.000000Z");
+        assert_eq!(format_utc(1_000_000_000, 0), "2001-09-09T01:46:40.000000Z");
+        assert_eq!(format_utc(951_782_400, 0), "2000-02-29T00:00:00.000000Z");
+        assert_eq!(format_utc(1_767_225_600, 123_456), "2026-01-01T00:00:00.123456Z");
+        // Same second, different microseconds → distinct timestamps, so an entry re-imported within
+        // the same second still gets a fingerprint-distinguishing `imported_at`.
+        assert_ne!(format_utc(1_767_225_600, 100), format_utc(1_767_225_600, 200));
     }
 }

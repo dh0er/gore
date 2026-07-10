@@ -30,8 +30,10 @@ pub struct ModEntryMeta {
 
 impl ModEntryMeta {
     /// A content fingerprint that changes when the mod is re-imported as an update (same id, new
-    /// components/bytes). `imported_at` alone changes on re-import; hashing it with the serialized
-    /// components makes it robust to same-second re-imports with different content.
+    /// components/bytes). `imported_at` is microsecond-resolution (set at import), so it differs on
+    /// every re-import — even within the same second, with unchanged component descriptors and only
+    /// changed payload bytes — giving mgr_status a reliable "content changed" signal. The serialized
+    /// components are folded in too, so a structural change flips the fingerprint on its own.
     pub fn fingerprint(&self) -> String {
         let body = serde_json::to_string(&self.components).unwrap_or_default();
         crate::name_hash(&format!("{}|{}", self.imported_at, body))
