@@ -505,9 +505,11 @@ python build.py <project> installer  # dist + Windows installer
 python build.py <project> test       # run the project's test suite
 ```
 
-`python test.py all` runs the full suite (Rust `cargo test`, Python tools,
-Flutter `analyze` + `test`) — this is what CI executes. Per-project build/run
-details live in each component's own README (e.g.
+`python build.py all test` runs every project's suite (Rust `cargo test`, Python
+tools, Flutter `analyze` + `test`). CI runs the equivalent checks via
+[`apps/save-editor/test.py`](apps/save-editor/test.py) (invoked from that
+directory) plus the mod-studio/mod-manager `analyze` + `test` steps. Per-project
+build/run details live in each component's own README (e.g.
 [`apps/save-editor/README.md`](apps/save-editor/README.md)).
 
 ## Versioning
