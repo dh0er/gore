@@ -339,8 +339,10 @@ def build_project(project: str, release: bool, dry: bool) -> None:
     run(f"cargo build {crate} ({mode})", cargo_cmd, dry=dry)
 
     flutter_cmd = [FLUTTER, "build", "windows", f"--{mode}"]
-    if project == "gore-save":
-        flutter_cmd.append(f"--dart-define=GIT_SHA={resolve_git_sha()}")
+    # Every Flutter app's About dialog reads GIT_SHA (String.fromEnvironment, defaultValue 'dev').
+    # Only rust projects returned early above, so every project reaching here is a Flutter app —
+    # supply the SHA to all of them, or released mod-studio / mod-manager binaries show 'dev'.
+    flutter_cmd.append(f"--dart-define=GIT_SHA={resolve_git_sha()}")
     run(f"flutter build {project} ({mode})", flutter_cmd, cwd=pdir(project), dry=dry)
 
     if dry:
