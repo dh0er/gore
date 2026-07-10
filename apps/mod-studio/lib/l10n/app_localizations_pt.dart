@@ -161,6 +161,20 @@ class AppLocalizationsPt extends AppLocalizations {
   String get close => 'Fechar';
 
   @override
+  String get about => 'Sobre';
+
+  @override
+  String aboutVersion(String version, String sha) {
+    return 'Version $version ($sha)';
+  }
+
+  @override
+  String get aboutCopyright => '© 2026 colaboradores do GORE';
+
+  @override
+  String get aboutLicense => 'Licenciado sob a Licença MIT.';
+
+  @override
   String get categoryMeleeWeapons => 'Armas corpo a corpo';
 
   @override
@@ -479,6 +493,20 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
 
   @override
   String get close => 'Fechar';
+
+  @override
+  String get about => 'Sobre';
+
+  @override
+  String aboutVersion(String version, String sha) {
+    return 'Version $version ($sha)';
+  }
+
+  @override
+  String get aboutCopyright => '© 2026 colaboradores do GORE';
+
+  @override
+  String get aboutLicense => 'Licenciado sob a Licença MIT.';
 
   @override
   String get categoryMeleeWeapons => 'Armas corpo a corpo';

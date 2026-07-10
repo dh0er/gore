@@ -59,6 +59,27 @@ pub enum AsCmd {
         #[arg(long, default_value_t = 20)]
         max: usize,
     },
+    /// Compile AngelScript into a precompiled cache by driving the game's own
+    /// `-as-generate-precompiled-data` flag. With no SRC, recompiles the loose `.as` already under
+    /// `<game>/G1R/Script/`; with SRC, stages that tree first. With `-o`, writes the cache there and
+    /// leaves the install untouched; without `-o`, installs the fresh cache in place (backing the
+    /// previous one up to `*.gore-bak`). All the backup / stage / restore file handling is internal.
+    Compile {
+        /// Source `.as` tree (a directory) to compile. Omit to recompile the loose `.as` already
+        /// installed under `<game>/G1R/Script/`.
+        src: Option<PathBuf>,
+        /// Write the compiled cache here and leave the game install untouched. Omit to install the
+        /// fresh cache in place under `Script/`.
+        #[arg(short, long)]
+        out: Option<PathBuf>,
+        /// Game install root (the folder containing `G1R/`). Falls back to the configured game
+        /// path, then Steam auto-detect.
+        #[arg(long)]
+        game: Option<PathBuf>,
+        /// When installing in place, do NOT back up the previous cache.
+        #[arg(long)]
+        no_backup: bool,
+    },
     /// Replace an existing module (by name) in a base cache with a mini-cache's module.
     Replace {
         base: PathBuf,
@@ -398,6 +419,20 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                 n += 1;
             }
             eprintln!("({n} function(s))");
+        }
+        AsCmd::Compile { src, out, game, no_backup } => {
+            let game = gore_loc::config::game_root(game).context("resolving game path")?;
+            let opts = gore_as::compile::PrecompileOpts {
+                game_dir: game,
+                src,
+                out,
+                backup: !no_backup,
+            };
+            let cache = gore_as::compile::precompile(&opts).map_err(anyhow::Error::msg)?;
+            match std::fs::metadata(&cache) {
+                Ok(m) => println!("compiled -> {} ({} bytes)", cache.display(), m.len()),
+                Err(_) => println!("game ran, but no cache found at {}", cache.display()),
+            }
         }
         AsCmd::Replace { base, mini, target, out } => {
             let base_b = std::fs::read(&base).with_context(|| format!("reading {}", base.display()))?;

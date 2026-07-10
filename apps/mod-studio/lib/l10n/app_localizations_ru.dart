@@ -162,6 +162,20 @@ class AppLocalizationsRu extends AppLocalizations {
   String get close => 'Закрыть';
 
   @override
+  String get about => 'О программе';
+
+  @override
+  String aboutVersion(String version, String sha) {
+    return 'Version $version ($sha)';
+  }
+
+  @override
+  String get aboutCopyright => '© 2026 участники проекта GORE';
+
+  @override
+  String get aboutLicense => 'Распространяется по лицензии MIT.';
+
+  @override
   String get categoryMeleeWeapons => 'Оружие ближнего боя';
 
   @override

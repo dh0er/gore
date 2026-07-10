@@ -139,7 +139,7 @@ shared catalog; `gore loc status` shows what's loaded.
 
 The game's sounds and music are encrypted FMOD `.bank` files at
 `$GAME/G1R/Content/FMOD/Desktop/*.bank`. `gore audio` reads and replaces samples
-in pure Rust (no FMOD install needed); the Gothic encryption key is built in.
+in pure Rust (no FMOD install needed).
 
 ```sh
 gore audio list    --bank "$GAME/.../SFX.bank"               # name, codec, rate, channels, length
@@ -194,9 +194,37 @@ gore as emit-all   PrecompiledScript_Shipping.Cache out_as/    # all modules as 
 gore as disasm     PrecompiledScript_Shipping.Cache <needle>   # asBC bytecode listing
 ```
 
-To actually change behavior: edit a module's `.as`, regenerate a cache with the
-game's own `-as-generate-precompiled-data`, then splice just your edited module
-into the vanilla cache:
+### Recompiling: the game is the compiler
+
+There is no standalone AngelScript compiler — the shipping game **is** the
+compiler. Its executable takes a command-line flag,
+**`-as-generate-precompiled-data`**, which makes it read the loose `.as` scripts
+under `<install>/G1R/Script/`, compile them, and (over)write
+`PrecompiledScript_Shipping.Cache` in that same folder.
+
+`gore as compile` wraps that flag as an ordinary compiler: give it a source tree
+and (optionally) an output path, and it does the file juggling — backup, staging
+into `Script/`, launching the game, then restoring the install — itself. The
+install is resolved from `--game`, else the configured game path / Steam
+auto-detect.
+
+```sh
+# dump the vanilla modules as an editable .as tree:
+gore as emit-all "$GAME/G1R/Script/PrecompiledScript_Shipping.Cache" out_as/
+# …edit modules in out_as/ …
+
+# compile the tree to a cache file, leaving the install untouched:
+gore as compile out_as/ -o regen.Cache --game "$GAME"
+# …or install the fresh cache in place (previous one saved to *.gore-bak):
+gore as compile out_as/ --game "$GAME"
+# with no source tree, recompile whatever `.as` are already in Script/:
+gore as compile --game "$GAME"
+```
+
+The `-o` form leaves the install exactly as it was, so the live
+`PrecompiledScript_Shipping.Cache` is still the pristine `vanilla.Cache` below.
+Rather than shipping the whole regenerated cache, splice just your edited module
+back into the vanilla one:
 
 ```sh
 # existing module — remap refs to the vanilla cache, then replace in place:
@@ -252,7 +280,7 @@ Every subcommand of the `gore` binary:
 | `loc` | `extract` · `status` · `export` · `import` | Read/edit localized text & dialogs in the encrypted `.lcache`. |
 | `audio` | `list` · `extract` · `replace` · `restore` · `export-patch` · `apply-patch` | Read/replace FMOD `.bank` audio (PCM injection, `*.gore-bak`). |
 | `texture` | `list` · `extract` · `replace` · `pack` · `deploy` · `index` · `undeploy` | Extract/replace IoStore textures → Zen triplet in `~mods`. |
-| `as` | `info` · `decode-header` · `walk` · `decompile` · `disasm` · `emit` · `emit-all` · `replace` · `splice` · `extract` · `extract-remap` | AngelScript precompiled-cache tooling (experimental). |
+| `as` | `compile` · `info` · `decode-header` · `walk` · `decompile` · `disasm` · `emit` · `emit-all` · `replace` · `splice` · `extract` · `extract-remap` | AngelScript precompiled-cache tooling: recompile `.as` via the game, decode/emit/decompile/splice modules (experimental). |
 | `catalog` | `--kind item\|npc\|knowledge` | Generate a catalog JSON from a UE4SS object dump. |
 | `dump` | — | Parse a UE4SS SDK header dump into a reflection model JSON. |
 | `stubs` | — | Emit LuaLS/EmmyLua type stubs from `model.json`. |

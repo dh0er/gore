@@ -63,6 +63,20 @@
   "restore": "Restore",
   "maximize": "Maximize",
   "close": "Close",
+  "about": "About",
+  "aboutVersion": "Version {version} ({sha})",
+  "@aboutVersion": {
+    "placeholders": {
+      "version": {
+        "type": "String"
+      },
+      "sha": {
+        "type": "String"
+      }
+    }
+  },
+  "aboutCopyright": "© 2026 GORE contributors",
+  "aboutLicense": "Licensed under the MIT License.",
   "categoryMeleeWeapons": "Melee weapons",
   "categoryRangedWeapons": "Ranged weapons",
   "categoryAmmunition": "Ammunition",

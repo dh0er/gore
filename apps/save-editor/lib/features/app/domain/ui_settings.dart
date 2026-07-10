@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
+import 'package:goresave/loc/game_lang.dart';
 import 'package:goresave/utils/gore_tools_paths.dart';
 import 'package:path/path.dart' as p;
 
@@ -15,7 +16,7 @@ class UiSettings {
     this.windowMaximized = false,
     this.autoUpdateCheck = true,
     this.locExtractPrompted = false,
-    this.appLocale = 'en',
+    this.appLocale,
   });
 
   factory UiSettings.fromJson(Map<String, Object?> json) {
@@ -26,10 +27,11 @@ class UiSettings {
         _ => ThemeMode.light,
       },
       appLocale: switch (json['appLocale']) {
-        // Store the trimmed code so a persisted " de " still matches kGameLangs
-        // instead of silently falling back to English.
+        // A missing or blank value stays null ("never chosen") so the app
+        // follows the device language until the user picks one; a stored code
+        // is trimmed so " de " still matches kGameLangs.
         final String code when code.trim().isNotEmpty => code.trim(),
-        _ => 'en',
+        _ => null,
       },
       uiScale: switch (json['uiScale']) {
         final num value => UiScaleNotifier.clampScale(value.toDouble()),
@@ -61,10 +63,11 @@ class UiSettings {
   /// the manual Settings button stays available regardless.
   final bool locExtractPrompted;
 
-  /// Selected UI + game-text language code (one of [kGameLangs], default 'en').
-  /// Drives both the MaterialApp locale and which extracted game-text names
-  /// (items, NPCs, knowledge) are shown.
-  final String appLocale;
+  /// Selected UI + game-text language code (one of [kGameLangs]). Drives both
+  /// the MaterialApp locale and which extracted game-text names (items, NPCs,
+  /// knowledge) are shown. Null means "never chosen" — the app then follows the
+  /// device language.
+  final String? appLocale;
 
   UiSettings copyWith({
     ThemeMode? themeMode,
@@ -100,7 +103,7 @@ class UiSettings {
     'windowMaximized': windowMaximized,
     'autoUpdateCheck': autoUpdateCheck,
     'locExtractPrompted': locExtractPrompted,
-    'appLocale': appLocale,
+    'appLocale': ?appLocale,
   };
 }
 
@@ -113,7 +116,7 @@ class NoopUiSettingsStore implements UiSettingsStore {
   const NoopUiSettingsStore();
 
   @override
-  UiSettings read() => const UiSettings();
+  UiSettings read() => const UiSettings(appLocale: 'en');
 
   @override
   void write(UiSettings settings) {}
@@ -209,7 +212,13 @@ final localeProvider = StateNotifierProvider<LocaleNotifier, String>((ref) {
 });
 
 class LocaleNotifier extends StateNotifier<String> {
-  LocaleNotifier(this._store) : super(_store.read().appLocale);
+  LocaleNotifier(this._store)
+      : super(
+          _store.read().appLocale ??
+              deviceLanguageCode(
+                WidgetsBinding.instance.platformDispatcher.locales,
+              ),
+        );
 
   final UiSettingsStore _store;
 

@@ -13,6 +13,9 @@ import 'gore_manager_app.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Recover settings/loc caches left behind by the gore-tools → gore rename,
+  // before any settings or window state are read.
+  migrateLegacyUmbrellaDirForPlatform();
   if (windowChromeEnabled) {
     await windowManager.ensureInitialized();
     final settingsStore = JsonFileUiSettingsStore.defaultForPlatform();

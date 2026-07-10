@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'app/domain/asset_entry_tracker.dart';
 import 'app/domain/ui_settings.dart';
 import 'app/game_paths.dart';
+import 'app/ui/about_dialog.dart';
 import 'app/ui/game_path_scope.dart';
 import 'app/ui/keep_alive_tab.dart';
 import 'app/ui/tab_entry_listener.dart';
@@ -245,6 +246,8 @@ class _HomePageState extends ConsumerState<HomePage>
           child: Row(
             children: [
               const SizedBox(width: 16),
+              Image.asset('assets/gore_studio_icon.png', height: 32),
+              const SizedBox(width: 10),
               const Text('GORE Mod Studio'),
               const Expanded(child: SizedBox()),
             ],
@@ -293,6 +296,14 @@ class _HomePageState extends ConsumerState<HomePage>
                       builder: (_) => const BuildDeployDialog(),
                     )
                   : null,
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.info_outline),
+            tooltip: l10n.about,
+            onPressed: () => showDialog<void>(
+              context: context,
+              builder: (_) => const GoreStudioAboutDialog(),
             ),
           ),
           const WindowControls(),

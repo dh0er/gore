@@ -108,7 +108,7 @@ void main() {
 
     final l10n = await AppLocalizations.delegate.load(const Locale('en'));
     // Before tapping, only the app-bar title carries the product name.
-    expect(find.text('gore-manager'), findsOneWidget);
+    expect(find.text('GORE Mod Manager'), findsOneWidget);
 
     await tester.tap(find.widgetWithIcon(IconButton, Icons.info_outline));
     await tester.pumpAndSettle();
@@ -117,7 +117,7 @@ void main() {
     // and the product name now appears a second time (title + dialog).
     expect(find.text(l10n.aboutCopyright), findsOneWidget);
     expect(find.text(l10n.aboutLicense), findsOneWidget);
-    expect(find.text('gore-manager'), findsNWidgets(2));
+    expect(find.text('GORE Mod Manager'), findsNWidgets(2));
     expect(tester.takeException(), isNull);
   });
 }
