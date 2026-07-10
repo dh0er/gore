@@ -526,7 +526,7 @@ impl DeployPlan {
 /// First dst path that two entries of `plan` share (UE4SS dirs + texture triplets + manager paks),
 /// compared with `same_path` semantics; `None` if all dsts are distinct. Used to reject a
 /// self-colliding plan before any game write.
-fn first_duplicate_dst(plan: &DeployPlan) -> Option<String> {
+pub(crate) fn first_duplicate_dst(plan: &DeployPlan) -> Option<String> {
     let dsts: Vec<String> = plan
         .ue4ss_dirs
         .iter()

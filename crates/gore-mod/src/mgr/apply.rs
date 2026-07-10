@@ -396,6 +396,15 @@ pub fn apply_loadout(
     //     to commit_plan: the undeploy just removed the old record + backups, so the post-undeploy
     //     live is pristine and there is no leftover for commit_plan to reconcile. commit_plan rejects
     //     self-colliding dsts and mirrors the manager footprint into the legacy record fields.
+    //
+    // Validate self-colliding deploy targets BEFORE the destructive undeploy: commit_plan rejects a
+    // duplicate-dst plan, but only AFTER this point, so without this pre-check a plan where two
+    // enabled components map to the same dst would tear down the active deployment and THEN fail —
+    // turning a rejected apply into a destructive one. Catch it here so a failed apply stays
+    // non-destructive (commit_plan still re-checks for its other callers / the empty-live case).
+    if let Some(dup) = crate::first_duplicate_dst(&plan) {
+        return Err(ModError::Other(format!("duplicate deploy target: {dup}")));
+    }
     crate::undeploy(game_root)?;
     let record = DeployRecord {
         owner: "manager".into(),
@@ -931,6 +940,46 @@ mod tests {
         assert!(b_dst.is_file(), "slot-1 pak missing: {}", b_dst.display());
         assert_eq!(fs::read(&a_dst).unwrap(), b"PAK-A");
         assert_eq!(fs::read(&b_dst).unwrap(), b"PAK-B");
+    }
+
+    /// A self-colliding new loadout (two components mapping to the SAME deploy dst) must be rejected
+    /// BEFORE the active deployment is torn down, so a failed apply stays non-destructive.
+    #[test]
+    fn self_colliding_apply_rejected_without_undeploying_active() {
+        let g = FakeGame::new();
+        // A clean deployment we expect to survive the later failed apply.
+        let a = g.add_pak_mod("mod-a", "Alpha", "alpha_P", b"PAK-A");
+        apply_loadout(&g.root, &g.lib, &loadout(&[(&a, true)])).unwrap();
+        let a_dst = g.mods().join("zzz_gm000_alpha_P.pak");
+        assert!(a_dst.is_file(), "precondition: slot-0 pak deployed");
+
+        // A mod with two loose paks whose file stems collide → both map to zzz_gm000_dup_P.pak.
+        let c = g.add_mod(
+            "mod-c",
+            "Clash",
+            vec![
+                ComponentInfo::LoosePak { rel: "x/dup.pak".into(), targets: vec![] },
+                ComponentInfo::LoosePak { rel: "y/dup.pak".into(), targets: vec![] },
+            ],
+            |dir| {
+                fs::create_dir_all(dir.join("x")).unwrap();
+                fs::create_dir_all(dir.join("y")).unwrap();
+                fs::write(dir.join("x/dup.pak"), b"DUP-X").unwrap();
+                fs::write(dir.join("y/dup.pak"), b"DUP-Y").unwrap();
+            },
+        );
+
+        let err = apply_loadout(&g.root, &g.lib, &loadout(&[(&c, true)])).unwrap_err();
+        assert!(
+            err.to_string().contains("duplicate deploy target"),
+            "expected a duplicate-target rejection, got: {err}"
+        );
+        // The previous deployment must be intact — the rejected apply must not have undeployed it.
+        assert!(
+            a_dst.is_file(),
+            "active deployment was torn down by a rejected apply: {}",
+            a_dst.display()
+        );
     }
 
     /// The deploy record is manager-owned, snapshots the enabled loadout (ids, all enabled), and
