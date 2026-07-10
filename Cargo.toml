@@ -1,5 +1,9 @@
 [workspace]
 members = ["crates/*"]
+# retoc is a vendored fork used only as gore-tex's path dependency; its upstream test
+# suite needs large game-asset fixtures we don't ship (vendor/retoc/tests/*), so it must
+# not be a workspace member or `cargo test` would run — and fail — those fixture tests.
+exclude = ["vendor/retoc"]
 resolver = "2"
 
 [workspace.package]

@@ -1321,12 +1321,25 @@ fn disasm_fail(name: &str, which: &str, err: String, v_ops: usize, r_ops: usize)
 mod tests {
     use super::*;
 
-    fn sample(name: &str) -> Vec<u8> {
-        std::fs::read(format!(
-            "{}/../../work/reversing/gore-as/samples/{name}",
-            env!("CARGO_MANIFEST_DIR")
-        ))
-        .unwrap_or_else(|_| panic!("read sample {name}"))
+    /// Load a gitignored RE sample from the local scratch tree
+    /// (`work/reversing/gore-as/samples`), or SKIP the calling test when it's absent — e.g. on CI,
+    /// where `work/` isn't checked out. Mirrors `real_pair`'s `.ok()?` skip for the big samples so
+    /// these fast gates still run locally without breaking a portable `cargo test`.
+    macro_rules! sample_or_skip {
+        ($name:expr) => {{
+            let p = format!(
+                "{}/../../work/reversing/gore-as/samples/{}",
+                env!("CARGO_MANIFEST_DIR"),
+                $name
+            );
+            match std::fs::read(&p) {
+                Ok(bytes) => bytes,
+                Err(_) => {
+                    eprintln!("[skip] RE sample {} not present at {p}", $name);
+                    return;
+                }
+            }
+        }};
     }
 
     /// Self-identity on a small real cache: a cache vs itself must be PERFECTLY identical —
@@ -1334,7 +1347,7 @@ mod tests {
     /// gate for N1/N3/N4.
     #[test]
     fn self_identity_richtest() {
-        let b = sample("PrecompiledScript.richtest.Cache");
+        let b = sample_or_skip!("PrecompiledScript.richtest.Cache");
         let rep = run(&b, &b, &NormOpts::default(), &Filters::default(), 6).expect("run");
         assert_eq!(rep.count(Verdict::Benign), 0, "self-diff must have 0 BENIGN");
         assert_eq!(rep.count(Verdict::Semantic), 0, "self-diff must have 0 SEMANTIC");
@@ -1349,7 +1362,7 @@ mod tests {
     /// actually short-circuits, but assert the N2 path doesn't regress).
     #[test]
     fn self_identity_richtest_with_n2() {
-        let b = sample("PrecompiledScript.richtest.Cache");
+        let b = sample_or_skip!("PrecompiledScript.richtest.Cache");
         let mut opts = NormOpts::default();
         opts.n2_slots = true;
         let rep = run(&b, &b, &opts, &Filters::default(), 6).expect("run");
@@ -1360,7 +1373,7 @@ mod tests {
 
     #[test]
     fn self_identity_visproof() {
-        let b = sample("PrecompiledScript.visproof.Cache");
+        let b = sample_or_skip!("PrecompiledScript.visproof.Cache");
         let rep = run(&b, &b, &NormOpts::default(), &Filters::default(), 6).expect("run");
         assert_eq!(rep.count(Verdict::Semantic), 0);
         assert_eq!(rep.count(Verdict::Benign), 0);
@@ -1389,10 +1402,13 @@ mod tests {
     // opcodes (from isa.rs): JMP=11, JZ=12, SUSPEND=63, RET=10 (W_ARG),
     // PshC8=47 (QW), PshV4=3 (rW), PopPtr=0 (NO_ARG), TZ=18 (NO_ARG).
 
-    fn side() -> Side {
-        // N3/N4/N2 don't need real tail tables; a tiny sample gives a valid RefResolver/RefIdentity.
-        let b = sample("PrecompiledScript.richtest.Cache");
-        Side::build(&b).expect("side")
+    /// Build a `Side` scaffold from the richtest sample, or SKIP the calling test when it's absent.
+    /// N3/N4/N2 don't need real tail tables; a tiny sample gives a valid RefResolver/RefIdentity.
+    macro_rules! side_or_skip {
+        () => {{
+            let b = sample_or_skip!("PrecompiledScript.richtest.Cache");
+            Side::build(&b).expect("side")
+        }};
     }
 
     /// Build a normalized instruction list from raw bytecode (test helper).
@@ -1407,7 +1423,7 @@ mod tests {
     /// jump operand compare EQUAL (the control-flow edge is preserved).
     #[test]
     fn n3_jump_index_equal_despite_offset_shift() {
-        let side = side();
+        let side = side_or_skip!();
         let opts = NormOpts::default();
         // Layout (both sides, 4 instructions): [const][JMP -> RET][TZ][RET].
         // Side A uses PshC4 (2 dwords); Side B uses PshC8 (3 dwords) — one dword bigger. The JMP's
@@ -1446,7 +1462,7 @@ mod tests {
     /// instruction) stays a real difference — the operands are NOT equal.
     #[test]
     fn n3_jump_to_different_index_differs() {
-        let side = side();
+        let side = side_or_skip!();
         let opts = NormOpts::default();
         // A: JMP skips 0 ops (targets the very next). B: JMP skips 1 op (targets one later).
         let mut a = Vec::new();
@@ -1467,7 +1483,7 @@ mod tests {
     /// mainly asserts we decode + compare the qword, not a raw pass-through that could mis-handle.)
     #[test]
     fn n4_float_const_by_value() {
-        let side = side();
+        let side = side_or_skip!();
         let opts = NormOpts::default();
         let same_a = norm(&qw_arg(47, 3.5f64.to_bits()), &side, &opts);
         let same_b = norm(&qw_arg(47, 3.5f64.to_bits()), &side, &opts);
@@ -1480,7 +1496,7 @@ mod tests {
     /// N4: a 32-bit integer immediate (PshC4=2, DW_ARG) compares by decoded value.
     #[test]
     fn n4_int_const_by_value() {
-        let side = side();
+        let side = side_or_skip!();
         let opts = NormOpts::default();
         let a = norm(&dw_arg(2, 42), &side, &opts);
         let b = norm(&dw_arg(2, 42), &side, &opts);
@@ -1494,7 +1510,7 @@ mod tests {
     /// order canonicalize to identical ordinals. With N2 OFF they differ; with N2 ON they match.
     #[test]
     fn n2_slot_renumber_first_use() {
-        let side = side();
+        let side = side_or_skip!();
         // A uses slots 5 then 8; B uses slots 2 then 9 — same first-use ORDER.
         let mut a = Vec::new();
         a.extend(rw_arg(3, 5)); // PshV4 v5
@@ -1526,7 +1542,7 @@ mod tests {
     /// `#[ignore]`d real-cache regression `gap_b_static_name_index_benign`.)
     #[test]
     fn gap_b_lone_pshc4_stays_int_const() {
-        let side = side();
+        let side = side_or_skip!();
         let opts = NormOpts::default();
         // PshC4 4369 followed by TZ (opcode 18, NOT __STATIC_NAME) — a real integer literal.
         let mut code = Vec::new();
@@ -1546,7 +1562,7 @@ mod tests {
     /// requires the opCast, not merely a large id.
     #[test]
     fn gap_c_typeid_without_opcast_stays_primitive() {
-        let side = side();
+        let side = side_or_skip!();
         let opts = NormOpts::default();
         // TYPEID (opcode 76, DW_ARG) with a large runtime id, followed only by RET — no opCast.
         let big_a = 1207972964u32 as i32;

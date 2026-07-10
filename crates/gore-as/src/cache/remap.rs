@@ -1199,11 +1199,19 @@ mod bytediff_n1_tests {
     /// function name — the exact make-or-break for the bytediff oracle. Uses the richtest sample.
     #[test]
     fn n1_resolves_callsys_ptr_to_named_identity() {
-        let bytes = std::fs::read(concat!(
+        // Skip on CI / any checkout without the gitignored `work/` scratch tree (mirrors the
+        // bytediff sample gates): the richtest sample lives under work/reversing/gore-as/samples.
+        let path = concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../work/reversing/gore-as/samples/PrecompiledScript.richtest.Cache"
-        ))
-        .expect("read richtest sample");
+        );
+        let bytes = match std::fs::read(path) {
+            Ok(b) => b,
+            Err(_) => {
+                eprintln!("[skip] RE sample not present at {path}");
+                return;
+            }
+        };
         let ident = RefIdentity::build(&bytes).expect("build RefIdentity");
         // Find any T3 func ptr key and confirm resolve_ptr yields a Named identity containing
         // the function's Name (the identity is module|ns|owner|name|is_method|params|ret).
