@@ -68,17 +68,30 @@ Future<void> saveProject(ModProject project, String path) async {
   // are safely on disk.
   final tmp = File('$path.tmp');
   await tmp.writeAsBytes(zip);
+  final dst = File(path);
+  if (!await dst.exists()) {
+    // Fresh save: no existing project to protect, so a plain rename is enough.
+    await tmp.rename(path);
+    return;
+  }
+  // Replace an existing project without ever leaving it deleted-but-not-yet-replaced. Dart has no
+  // atomic replace and on Windows a rename onto an existing file fails, so move the current project
+  // ASIDE, move the new one in, then drop the backup — restoring the original if the swap fails.
+  // This way an interrupted/failed replace (crash, AV, file lock, permissions) never destroys the
+  // user's last good project.
+  final backup = File('$path.bak');
+  if (await backup.exists()) {
+    await backup.delete();
+  }
+  await dst.rename(backup.path);
   try {
     await tmp.rename(path);
-  } on FileSystemException {
-    // On Windows, renaming onto an existing file fails; replace it explicitly. The new bytes are
-    // already fully written to tmp, so the brief gap here still can't lose the previous project.
-    final dst = File(path);
-    if (await dst.exists()) {
-      await dst.delete();
-    }
-    await tmp.rename(path);
+  } catch (_) {
+    // Swap failed — restore the original project before surfacing the error.
+    await backup.rename(path);
+    rethrow;
   }
+  await backup.delete();
 }
 
 /// Load a `.goremod` project from [path]. Embedded WAVs are extracted to a temp dir and the

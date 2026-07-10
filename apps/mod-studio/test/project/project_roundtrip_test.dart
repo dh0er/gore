@@ -61,4 +61,22 @@ void main() {
     expect((spec['audio'] as List).length, 1);
     expect((spec['loc_edits'] as Map).isNotEmpty, true);
   });
+
+  test('saveProject over an existing project replaces it and leaves no temp/backup', () async {
+    final tmp = await Directory.systemTemp.createTemp('goremod_overwrite_');
+    addTearDown(() => tmp.delete(recursive: true));
+    final out = '${tmp.path}/proj.goremod';
+
+    await saveProject(ModProject(name: 'First', version: '1.0'), out);
+    // Overwrite the existing project with different content.
+    await saveProject(ModProject(name: 'Second', version: '2.0'), out);
+
+    final loaded = await loadProject(out);
+    expect(loaded.name, 'Second');
+    expect(loaded.version, '2.0');
+
+    // The move-aside replace must clean up after itself — no leftover temp/backup siblings.
+    expect(File('$out.bak').existsSync(), false, reason: 'backup left behind');
+    expect(File('$out.tmp').existsSync(), false, reason: 'temp file left behind');
+  });
 }
