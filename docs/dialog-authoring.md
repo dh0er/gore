@@ -153,10 +153,11 @@ both the choice and render arrays and record the
 
 Any missing class/hook, unreadable or malformed array, participant-name failure,
 identity/class split, duplicate, or changed conversation object fails closed.
-Class/context failures skip that registration for the current attempt;
-independent registrations for other NPCs or conversation states remain
-available. Classes are resolved at the natural callback rather than loader
-startup because they may load lazily.
+All declared authored and sentinel classes are preflighted as one batch before
+the first mutation; a class failure prevents every registration from mutating.
+Conversation-local context mismatches skip the current attempt. Classes are
+resolved at the natural callback rather than loader startup because they may
+load lazily.
 The runtime never selects or removes a topic, scans global objects, starts a
 conversation, uses a timer or console command, grants/activates an ability, or
 writes a save/quest/knowledge field.
@@ -167,6 +168,11 @@ Production authoring can use either integration path:
    is verified for the target NPC.
 2. Declare a generated `dialog_topics` adapter with explicit participant,
    authored-class, and sentinel-class identities, managed by the bundle engine.
+
+Mod Studio's Dialogs tab stages the second form through explicit fields and
+persists it in `.goremod` projects; the JSON build spec remains available for
+terminal and CI workflows. Neither surface infers an NPC or sentinel from a
+class name.
 
 Do not replace this with a global object scan, delayed injection, console
 command, dynamic ability grant, or direct ability activation. The latter was
@@ -194,8 +200,6 @@ therefore be tested on a disposable save with semantic before/after inspection.
 ## Current limits
 
 - Automatic discovery for a new module remains unproven.
-- Mod Studio does not yet expose `dialog_topics`; use a build spec and the CLI
-  for generated registration.
 - The controlled visual proof currently covers Gothic 1 Remake 1.0.3 with
   UE4SS 3.0.1. It used the reviewed v0.4 fixture; the parameterized production
   generator preserves and hardens those rules under hermetic Lua tests, but its

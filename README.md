@@ -344,6 +344,9 @@ The check reports executable SHA-256, raw match count, matched RVA(s), and callb
 verification. An advanced, explicitly trusted helper override is available through
 `--diagnostics-hook DLL` or
 `GORE_AS_DIAGNOSTICS_HOOK`; the embedded/sibling release helper is SHA-256 verified.
+The currently embedded helper has passed both a full-tree positive compile and an intentional
+compiler-error run on the installed 1.0.3 executable. Archived 1.0.0--1.0.3 executables pass the
+same offline signature and structure audit; only installed 1.0.3 has been runtime-injected.
 
 The `-o` form leaves the install exactly as it was, so the live
 `PrecompiledScript_Shipping.Cache` is still the pristine `vanilla.Cache` below.
@@ -484,14 +487,16 @@ modding with live previews and `.goremod` project files. Auto-updates on launch
 **It can:**
 - Edit **item/stat values** by browsing the categorized item catalog and editing
   fields (the override domain).
-- Edit **localized text and dialog-line IDs**. Selectable topic registration is
-  currently declared through `BuildSpec.dialog_topics` and the CLI, not the GUI.
+- Edit **localized text and dialog-line IDs**, and stage selectable runtime
+  topics with explicit participant, authored AngelScript class, and vanilla
+  sentinel identities. The GUI preserves their insertion order and emits the
+  same `BuildSpec.dialog_topics` contract as the CLI without inference.
 - Replace **audio** — browse a bank's samples, preview, and swap in your own.
 - Replace **textures** — pick an asset, preview, drop in a PNG.
 - Edit **AngelScript** — stage a module, compile, and splice it into the game's
   script cache (experimental).
 - **Build a bundle** and **deploy/undeploy** it to your game install
-  (overrides + loc + audio + textures + scripts, with backups), or **export a
+  (overrides + loc + audio + textures + scripts + dialog topics, with backups), or **export a
   standalone Lua override mod** to share.
 
 **It can not:**

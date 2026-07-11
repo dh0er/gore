@@ -102,10 +102,14 @@ requires reconstructing its body manually or first extending the decompiler.
    offsets verify, and automatically falls back to the unhooked compiler when either gate is absent
    or injection cannot be confirmed. Controlled runs with the predecessor capture helper exposed
    concrete generic emitter residues, compiled the corrected whole tree successfully, and surfaced
-   the expected normalized error for an intentional failure. The final structure-hardened helper is
-   offline verified against archived 1.0.0 through 1.0.3 executables, but still needs one positive
-   and one intentional-negative runtime compile on installed 1.0.3 before that exact DLL is
-   requalified. The callback-capture path itself remains runtime-proven only on installed 1.0.3.
+   the expected normalized error for an intentional failure. The exact shipped
+   structure-hardened helper (`17E0AD3033C31ADD311E3C25BA63615E481C83DCF8E96E83D9B3AC088E55C01C`)
+   has now repeated both gates on installed 1.0.3: the corrected whole tree compiled to a
+   structurally complete 91,321,157-byte cache, while an intentional unknown-symbol compile
+   returned the normal `file:line:column: error` diagnostic and accepted no output. Both runs
+   preserved the complete loose-source and JIT trees byte-for-byte. Archived 1.0.0 through 1.0.3
+   executables pass the same offline structural check; runtime injection remains proven only on
+   the installed 1.0.3 executable.
 
 The mixed-RVO switch in `MakeNewCrimeRegisterData` is now recovered with a per-exit proof: each
 early bare-RET edge must contain exactly one resolved RVO store, and removing that store in the
