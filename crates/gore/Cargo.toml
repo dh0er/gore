@@ -17,6 +17,7 @@ gore-as = { path = "../gore-as" }
 gore-fmod = { path = "../gore-fmod" }
 gore-mod = { path = "../gore-mod" }
 gore-tex = { path = "../gore-tex" }
+gore-vo = { path = "../gore-vo" }
 image = "0.25"
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
@@ -75,3 +76,7 @@ path = "tests/integration/mgr.rs"
 [[test]]
 name = "config_test"
 path = "tests/integration/config_test.rs"
+
+[[test]]
+name = "voice_test"
+path = "tests/integration/voice_test.rs"

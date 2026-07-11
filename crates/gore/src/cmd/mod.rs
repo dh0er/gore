@@ -15,6 +15,7 @@ pub mod scaffold;
 pub mod stubs;
 pub mod sync;
 pub mod texture;
+pub mod voice;
 
 /// Validate that `name` is a safe single-component mod name that can be
 /// appended to a path without escaping the parent directory.

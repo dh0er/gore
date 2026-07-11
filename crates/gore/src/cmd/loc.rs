@@ -15,18 +15,51 @@ use std::{collections::BTreeMap, fs, path::PathBuf};
 
 type LocMap = BTreeMap<String, BTreeMap<String, String>>;
 
+struct PendingLoc {
+    /// Most recently encountered spelling of this case-insensitive id.
+    id: String,
+    /// Folded language -> (most recent spelling, text).
+    values: BTreeMap<String, (String, String)>,
+}
+
+/// JSON object keys are case-sensitive, while lcache ids and language names are not. Collapse all
+/// aliases before touching the cache so a newly-added id receives the union of its translations in
+/// one atomic `add_key` call. BTreeMap traversal keeps duplicate-alias resolution deterministic.
+fn fold_loc_aliases(edits: LocMap) -> BTreeMap<String, PendingLoc> {
+    let mut folded = BTreeMap::new();
+    for (id, languages) in edits {
+        let pending = folded
+            .entry(id.to_ascii_lowercase())
+            .or_insert_with(|| PendingLoc {
+                id: id.clone(),
+                values: BTreeMap::new(),
+            });
+        pending.id = id;
+        for (language, text) in languages {
+            pending
+                .values
+                .insert(language.to_ascii_lowercase(), (language, text));
+        }
+    }
+    folded
+}
+
 /// Auto-detect (or use `--lcache`) the game's localization cache and write the
 /// shared `gore/loc_catalog.json`. Prompts for confirmation unless `--yes`.
 pub fn extract(lcache: Option<PathBuf>, yes: bool) -> Result<()> {
-    let resolved = resolve_extract_lcache(lcache)
-        .ok_or_else(|| anyhow::anyhow!(
+    let resolved = resolve_extract_lcache(lcache).ok_or_else(|| {
+        anyhow::anyhow!(
             "no AlkimiaLocalization .lcache found (tried --lcache, the configured \
              game path, then Steam auto-detect). Pass --lcache <path-to-.lcache or game dir>."
-        ))?;
+        )
+    })?;
 
     if !yes {
         println!("Extract localized text from:\n  {}", resolved.display());
-        println!("into shared catalog:\n  {}", paths::loc_catalog_path().display());
+        println!(
+            "into shared catalog:\n  {}",
+            paths::loc_catalog_path().display()
+        );
         print!("Proceed? [y/N] ");
         std::io::stdout().flush().ok();
         let mut line = String::new();
@@ -91,7 +124,11 @@ pub fn status() -> Result<()> {
         Some(m) => {
             println!("loc catalog: present");
             println!("  ids:        {}", m.id_count);
-            println!("  languages:  {} [{}]", m.languages.len(), m.languages.join(", "));
+            println!(
+                "  languages:  {} [{}]",
+                m.languages.len(),
+                m.languages.join(", ")
+            );
             println!("  source:     {} ({} bytes)", m.source_path, m.source_bytes);
             println!("  extracted:  {} (unix)", m.extracted_at);
             println!("  path:       {}", m.catalog_path);
@@ -107,8 +144,8 @@ pub fn status() -> Result<()> {
 }
 
 pub fn export(lcache: PathBuf, out: PathBuf, keep_empty: bool) -> Result<()> {
-    let enc = fs::read(&lcache)
-        .with_context(|| format!("reading lcache '{}'", lcache.display()))?;
+    let enc =
+        fs::read(&lcache).with_context(|| format!("reading lcache '{}'", lcache.display()))?;
     let lc = Lcache::decode(&enc).context("decoding lcache")?;
     let map = lc.export(keep_empty);
     fs::write(&out, serde_json::to_vec(&map).context("serializing")?)
@@ -123,19 +160,40 @@ pub fn export(lcache: PathBuf, out: PathBuf, keep_empty: bool) -> Result<()> {
     Ok(())
 }
 
-pub fn import(lcache: PathBuf, edits: PathBuf, out: Option<PathBuf>) -> Result<()> {
-    let enc = fs::read(&lcache)
-        .with_context(|| format!("reading lcache '{}'", lcache.display()))?;
+pub fn import(
+    lcache: PathBuf,
+    edits: PathBuf,
+    out: Option<PathBuf>,
+    add_missing: bool,
+) -> Result<()> {
+    let enc =
+        fs::read(&lcache).with_context(|| format!("reading lcache '{}'", lcache.display()))?;
     let mut lc = Lcache::decode(&enc).context("decoding lcache")?;
 
     let edits_json = fs::read_to_string(&edits)
         .with_context(|| format!("reading edits '{}'", edits.display()))?;
     let edits: LocMap = serde_json::from_str(&edits_json)
         .context("parsing edits (expected {\"id\":{\"lang\":\"text\"}})")?;
+    let edits = fold_loc_aliases(edits);
 
     let mut applied = 0usize;
-    for (key, langs) in &edits {
-        for (lang, text) in langs {
+    for pending in edits.values() {
+        let key = &pending.id;
+        let langs: BTreeMap<String, String> = pending
+            .values
+            .values()
+            .map(|(language, text)| (language.clone(), text.clone()))
+            .collect();
+        if add_missing && !langs.is_empty() && !lc.has_key(key) {
+            // Add a new id atomically with all of its translations. This keeps
+            // the file's header language order and prevents a bad language late
+            // in the map from leaving a partially-built record in memory.
+            lc.add_key(key, &langs)
+                .with_context(|| format!("adding {key}"))?;
+            applied += langs.len();
+            continue;
+        }
+        for (lang, text) in &langs {
             lc.set_value(key, lang, text)
                 .with_context(|| format!("editing {key}/{lang}"))?;
             applied += 1;
@@ -150,4 +208,80 @@ pub fn import(lcache: PathBuf, edits: PathBuf, out: Option<PathBuf>) -> Result<(
         .with_context(|| format!("writing '{}'", out_path.display()))?;
     println!("Applied {applied} edit(s) -> {}", out_path.display());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aes::cipher::{generic_array::GenericArray, BlockEncrypt, KeyInit};
+    use aes::Aes256;
+
+    const TEST_LCACHE_AES_KEY: &[u8; 32] = b"8f93ff6fa254d9c536ad88c1ff1d812b";
+
+    fn fstring(text: &str) -> Vec<u8> {
+        if text.is_empty() {
+            return 0i32.to_le_bytes().to_vec();
+        }
+        let mut bytes = text.as_bytes().to_vec();
+        bytes.push(0);
+        let mut out = (bytes.len() as i32).to_le_bytes().to_vec();
+        out.extend_from_slice(&bytes);
+        out
+    }
+
+    fn empty_lcache() -> Vec<u8> {
+        let mut plain = Vec::new();
+        plain.push(0);
+        plain.extend_from_slice(&(b"LCACHE".len() as i32).to_le_bytes());
+        plain.extend_from_slice(b"LCACHE");
+        plain.extend_from_slice(&2i32.to_le_bytes());
+        plain.extend_from_slice(&fstring("german"));
+        plain.extend_from_slice(&fstring("english"));
+        plain.extend_from_slice(&0i32.to_le_bytes());
+        let pad = (16 - plain.len() % 16) % 16;
+        plain.extend(std::iter::repeat_n(0u8, pad));
+
+        let cipher = Aes256::new(GenericArray::from_slice(TEST_LCACHE_AES_KEY));
+        for block in plain.chunks_mut(16) {
+            cipher.encrypt_block(GenericArray::from_mut_slice(block));
+        }
+        plain
+    }
+
+    #[test]
+    fn import_add_missing_folds_id_and_language_aliases_before_insert() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("base.lcache");
+        let edits = dir.path().join("edits.json");
+        let output = dir.path().join("edited.lcache");
+        fs::write(&input, empty_lcache()).unwrap();
+        fs::write(
+            &edits,
+            serde_json::to_vec(&serde_json::json!({
+                "GOREMOD_CASE_ID": {"German": "Erste Zeile"},
+                "goremod_case_id": {
+                    "english": "English line",
+                    "german": "Zweite Zeile"
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        super::import(input, edits, Some(output.clone()), true).unwrap();
+
+        let decoded = Lcache::decode(&fs::read(output).unwrap()).unwrap();
+        let exported = decoded.export(false);
+        let matches: Vec<_> = exported
+            .iter()
+            .filter(|(id, _)| id.eq_ignore_ascii_case("goremod_case_id"))
+            .collect();
+        assert_eq!(
+            matches.len(),
+            1,
+            "case aliases must create one lcache group"
+        );
+        assert_eq!(matches[0].1["german"], "Zweite Zeile");
+        assert_eq!(matches[0].1["english"], "English line");
+    }
 }

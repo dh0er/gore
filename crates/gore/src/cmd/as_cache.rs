@@ -32,10 +32,7 @@ pub enum AsCmd {
         max: usize,
     },
     /// Emit ALL modules as recompilable .as into <outdir>, mirroring ScriptRelativeFilename.
-    EmitAll {
-        file: PathBuf,
-        outdir: PathBuf,
-    },
+    EmitAll { file: PathBuf, outdir: PathBuf },
     /// Emit recompilable .as for modules whose name contains <needle>.
     Emit {
         file: PathBuf,
@@ -59,6 +56,16 @@ pub enum AsCmd {
         #[arg(long, default_value_t = 20)]
         max: usize,
     },
+    /// Offline-check whether the optional diagnostics hook has one safe AOB match. Does not launch
+    /// the game or change the installation.
+    DiagnosticsCheck {
+        /// Exact executable to scan (supports non-Steam/custom layouts).
+        #[arg(long, conflicts_with = "game")]
+        exe: Option<PathBuf>,
+        /// Game install root. Falls back to configured path, then Steam auto-detect.
+        #[arg(long)]
+        game: Option<PathBuf>,
+    },
     /// Compile AngelScript into a precompiled cache by driving the game's own
     /// `-as-generate-precompiled-data` flag. With no SRC, recompiles the loose `.as` already under
     /// `<game>/G1R/Script/`; with SRC, stages that tree first. With `-o`, writes the cache there and
@@ -79,6 +86,66 @@ pub enum AsCmd {
         /// When installing in place, do NOT back up the previous cache.
         #[arg(long)]
         no_backup: bool,
+        /// Disable the optional runtime compiler-diagnostic hook and use the normal generator.
+        #[arg(long, conflicts_with = "diagnostics_hook")]
+        no_diagnostics: bool,
+        /// Explicit `gore-as-diagnostics-hook.dll`; otherwise use environment, sibling, then the
+        /// integrity-checked embedded helper.
+        #[arg(long, value_name = "DLL")]
+        diagnostics_hook: Option<PathBuf>,
+        /// Delay between game launch and diagnostics injection (loader warm-up).
+        #[arg(
+            long,
+            default_value_t = 2000,
+            value_name = "MS",
+            value_parser = clap::value_parser!(u64).range(0..=30_000)
+        )]
+        diagnostics_inject_delay_ms: u64,
+    },
+    /// Compile one authored module into a deployable 1-module mini-cache. This wraps the complete
+    /// Studio pipeline: emit the pristine source tree, overlay one `.as` file, drive the game
+    /// compiler, extract the resulting module, and remap it back to the pristine cache.
+    CompileModule {
+        /// `add` for a new module or `edit` for an existing module.
+        #[arg(long, value_parser = ["add", "edit"])]
+        op: String,
+        /// Expected module name. For `add`, the compiler-detected module name is reported and used.
+        #[arg(long)]
+        module: String,
+        /// Safe path of the authored file relative to the game's `Script/` tree.
+        #[arg(long)]
+        rel_path: String,
+        /// Authored `.as` source file to overlay.
+        #[arg(long)]
+        source: PathBuf,
+        /// Persistent compiler workspace used for the emitted tree and intermediate regen cache.
+        #[arg(long)]
+        work_dir: PathBuf,
+        /// Explicitly retain minimal rows for classes/functions/names absent from the pristine
+        /// cache. Normally used with `--op add`; strict remapping remains the default.
+        #[arg(long)]
+        allow_new_symbols: bool,
+        /// Output path for the remapped 1-module mini-cache.
+        #[arg(short, long)]
+        out: PathBuf,
+        /// Game install root. Falls back to configured path, then Steam auto-detect.
+        #[arg(long)]
+        game: Option<PathBuf>,
+        /// Disable the optional runtime compiler-diagnostic hook and use the normal generator.
+        #[arg(long, conflicts_with = "diagnostics_hook")]
+        no_diagnostics: bool,
+        /// Explicit `gore-as-diagnostics-hook.dll`; otherwise use environment, sibling, then the
+        /// integrity-checked embedded helper.
+        #[arg(long, value_name = "DLL")]
+        diagnostics_hook: Option<PathBuf>,
+        /// Delay between game launch and diagnostics injection (loader warm-up).
+        #[arg(
+            long,
+            default_value_t = 2000,
+            value_name = "MS",
+            value_parser = clap::value_parser!(u64).range(0..=30_000)
+        )]
+        diagnostics_inject_delay_ms: u64,
     },
     /// Replace an existing module (by name) in a base cache with a mini-cache's module.
     Replace {
@@ -111,9 +178,9 @@ pub enum AsCmd {
         out: PathBuf,
     },
     /// Extract one module from a regen cache AND remap its bytecode refs to a base (vanilla)
-    /// cache's keys, emitting a 1-module mini with EMPTY tail tables. The result can be
-    /// Replace'd into the base without growing the cache (no duplicate global tables). This is
-    /// the key step for editing EXISTING modules. See work/reversing/gore-as/specs/ref-remap.md.
+    /// cache's keys, normally emitting a 1-module mini with EMPTY tail tables. With
+    /// --allow-new-symbols, the mini instead carries only the genuinely-new rows required by the
+    /// module. The result can be Replace'd into the base without copying the regen's full tables.
     ExtractRemap {
         /// Regen cache (full-tree -as-generate-precompiled-data output) containing the edit.
         regen_cache: PathBuf,
@@ -121,7 +188,11 @@ pub enum AsCmd {
         module: String,
         /// Base (vanilla) cache whose keys the module's refs are rewritten to.
         base_cache: PathBuf,
-        /// Output path for the remapped 1-module mini-cache (empty tail tables).
+        /// Explicitly carry minimal tail-table rows for symbols absent from the base. Existing
+        /// symbols still remap to vanilla; pointer/id collisions are re-keyed deterministically.
+        #[arg(long)]
+        allow_new_symbols: bool,
+        /// Output path for the remapped 1-module mini-cache.
         #[arg(short, long)]
         out: PathBuf,
     },
@@ -186,14 +257,20 @@ fn load_native_api(cache_file: &std::path::Path) -> Option<gore_as::cache::binds
     api
 }
 
-fn class_hierarchy(mods: &[gore_as::cache::model::Module]) -> std::collections::HashMap<String, String> {
+fn class_hierarchy(
+    mods: &[gore_as::cache::model::Module],
+) -> std::collections::HashMap<String, String> {
     let mut h = std::collections::HashMap::new();
     for m in mods {
         for c in &m.classes {
             // Record EVERY script class so `is_script_class` recognizes it; a root class with
             // no super maps to "" (is_subclass stops there). Omitting no-super classes made
             // them look like engine types, skipping script-class casts/subclass checks.
-            let super_name = c.super_class.clone().filter(|s| !s.is_empty()).unwrap_or_default();
+            let super_name = c
+                .super_class
+                .clone()
+                .filter(|s| !s.is_empty())
+                .unwrap_or_default();
             h.insert(c.name.clone(), super_name);
         }
     }
@@ -220,8 +297,11 @@ fn class_fields(
     let mut out: HashMap<String, HashMap<String, String>> = HashMap::new();
     for m in mods {
         for c in &m.classes {
-            let fields: HashMap<String, String> =
-                c.fields.iter().map(|f| (f.name.clone(), f.ty.base_name(refs))).collect();
+            let fields: HashMap<String, String> = c
+                .fields
+                .iter()
+                .map(|f| (f.name.clone(), f.ty.base_name(refs)))
+                .collect();
             out.insert(c.name.clone(), fields);
         }
     }
@@ -252,10 +332,14 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             println!("modules  : {}", module_count(&bytes));
             println!("tail_off : {:#x}", tail);
             println!("eof      : {:#x}", bytes.len());
-            println!("tail_len : {} bytes (global ref tables)", bytes.len() - tail);
+            println!(
+                "tail_len : {} bytes (global ref tables)",
+                bytes.len() - tail
+            );
         }
         AsCmd::Decompile { file, needle, max } => {
-            let bytes = std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?;
+            let bytes =
+                std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?;
             let mut refs = gore_as::cache::refs::RefResolver::build(&bytes).context("resolver")?;
             // Mirror `emit`/`emit-all`: load the class hierarchy and native arity table so
             // decompile output matches emitted source (subclass casts, native-call trimming).
@@ -267,7 +351,8 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             if let Some(api) = load_native_api(&file) {
                 refs.set_native_api(api);
             }
-            let funcs = gore_as::cache::walk_modules::collect_function_bytecodes(&bytes).context("walk")?;
+            let funcs =
+                gore_as::cache::walk_modules::collect_function_bytecodes(&bytes).context("walk")?;
             let mut n = 0;
             for f in funcs.iter().filter(|f| f.func.contains(&needle)) {
                 if n >= max {
@@ -279,7 +364,8 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             eprintln!("({n} function(s))");
         }
         AsCmd::EmitAll { file, outdir } => {
-            let bytes = std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?;
+            let bytes =
+                std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?;
             let mut refs = gore_as::cache::refs::RefResolver::build(&bytes).context("resolver")?;
             let mods = gore_as::cache::model::parse_modules(&bytes).context("parse modules")?;
             refs.set_class_hierarchy(class_hierarchy(&mods));
@@ -306,15 +392,20 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                 for f in &m.functions {
                     // generated factory accessors are skipped at emit (not free-emitted) — never
                     // rename them, or free CALLS to the native binding would be broken.
-                    if matches!(f.name.as_str(),
-                        "Spawn" | "Get" | "GetOrCreate" | "Create" | "GetG1R" | "StaticClass") {
+                    if matches!(
+                        f.name.as_str(),
+                        "Spawn" | "Get" | "GetOrCreate" | "Create" | "GetG1R" | "StaticClass"
+                    ) {
                         continue;
                     }
                     // precise signature (render, not base_name) so only GENUINE same-signature
                     // collisions are flagged — a coarse match falsely flags distinct overloads and
                     // would rename (and break) functions that are validly called cross-module.
                     let ptys: Vec<String> = f.params.iter().map(|p| p.ty.render(&refs)).collect();
-                    sig_mods.entry(format!("{}({})", f.name, ptys.join(","))).or_default().insert(i);
+                    sig_mods
+                        .entry(format!("{}({})", f.name, ptys.join(",")))
+                        .or_default()
+                        .insert(i);
                 }
             }
             // A name is safe to file-locally rename in a module only if EVERY emittable free
@@ -333,8 +424,10 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             for (i, m) in mods.iter().enumerate() {
                 let mut sigs_by_name: HashMap<&str, Vec<String>> = HashMap::new();
                 for f in &m.functions {
-                    if matches!(f.name.as_str(),
-                        "Spawn" | "Get" | "GetOrCreate" | "Create" | "GetG1R" | "StaticClass") {
+                    if matches!(
+                        f.name.as_str(),
+                        "Spawn" | "Get" | "GetOrCreate" | "Create" | "GetG1R" | "StaticClass"
+                    ) {
                         continue;
                     }
                     let ptys: Vec<String> = f.params.iter().map(|p| p.ty.render(&refs)).collect();
@@ -368,11 +461,19 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             refs.set_free_fn_renames(&rename_map);
             let stats = gore_as::cache::emit_all::emit_all_tree(&mods, &refs, &outdir)
                 .with_context(|| format!("emitting to {}", outdir.display()))?;
-            eprintln!("emitted {} modules to {} ({} contain a stubbed function)",
-                stats.written, outdir.display(), stats.stubbed);
+            eprintln!(
+                "emitted {} modules / {} body-bearing functions to {} ({} cache function records; {} modules / {} functions contain a stubbed body)",
+                stats.written,
+                stats.functions,
+                outdir.display(),
+                stats.cache_function_records,
+                stats.stubbed,
+                stats.stubbed_functions
+            );
         }
         AsCmd::Emit { file, needle, max } => {
-            let bytes = std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?;
+            let bytes =
+                std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?;
             let mut refs = gore_as::cache::refs::RefResolver::build(&bytes).context("resolver")?;
             let mods = gore_as::cache::model::parse_modules(&bytes).context("parse modules")?;
             refs.set_class_hierarchy(class_hierarchy(&mods));
@@ -393,10 +494,15 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             eprintln!("({n} module(s))");
         }
         AsCmd::StaticNames { file, indices } => {
-            let bytes = std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?;
+            let bytes =
+                std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?;
             let refs = gore_as::cache::refs::RefResolver::build(&bytes).context("resolver")?;
             println!("StaticNames count: {}", refs.static_name_count());
-            let show: Vec<i64> = if indices.is_empty() { (0..10).collect() } else { indices };
+            let show: Vec<i64> = if indices.is_empty() {
+                (0..10).collect()
+            } else {
+                indices
+            };
             for i in show {
                 match refs.static_name(i) {
                     Some(n) => println!("  [{i}] {n:?}"),
@@ -405,8 +511,10 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             }
         }
         AsCmd::Disasm { file, needle, max } => {
-            let bytes = std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?;
-            let funcs = gore_as::cache::walk_modules::collect_function_bytecodes(&bytes).context("walk")?;
+            let bytes =
+                std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?;
+            let funcs =
+                gore_as::cache::walk_modules::collect_function_bytecodes(&bytes).context("walk")?;
             let mut n = 0;
             for f in funcs.iter().filter(|f| f.func.contains(&needle)) {
                 if n >= max {
@@ -420,7 +528,48 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             }
             eprintln!("({n} function(s))");
         }
-        AsCmd::Compile { src, out, game, no_backup } => {
+        AsCmd::DiagnosticsCheck { exe, game } => {
+            let exe = match exe {
+                Some(exe) => exe,
+                None => {
+                    let root = gore_loc::config::game_root(game).context("resolving game path")?;
+                    let g1r = if root.file_name().is_some_and(|name| name == "G1R") {
+                        root
+                    } else {
+                        root.join("G1R")
+                    };
+                    g1r.join("Binaries")
+                        .join("Win64")
+                        .join("G1R-Win64-Shipping.exe")
+                }
+            };
+            let probe = gore_as::diagnostics::probe_executable(&exe)
+                .map_err(anyhow::Error::msg)
+                .with_context(|| format!("scanning {}", exe.display()))?;
+            println!("exe: {}", exe.display());
+            println!("sha256: {}", probe.sha256);
+            println!("signature matches: {}", probe.match_count);
+            for rva in &probe.matched_rvas {
+                println!("matched RVA: 0x{rva:x}");
+            }
+            if probe.match_count != 1 {
+                anyhow::bail!(
+                    "diagnostics hook unavailable: signature matched {} times in {} (need exactly 1; normal `gore as compile` will fall back)",
+                    probe.match_count,
+                    exe.display()
+                );
+            }
+            println!("diagnostics hook compatible");
+        }
+        AsCmd::Compile {
+            src,
+            out,
+            game,
+            no_backup,
+            no_diagnostics,
+            diagnostics_hook,
+            diagnostics_inject_delay_ms,
+        } => {
             let game = gore_loc::config::game_root(game).context("resolving game path")?;
             let opts = gore_as::compile::PrecompileOpts {
                 game_dir: game,
@@ -428,21 +577,92 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                 out,
                 backup: !no_backup,
             };
-            let cache = gore_as::compile::precompile(&opts).map_err(anyhow::Error::msg)?;
+            let diagnostics = gore_as::diagnostics::DiagnosticsOptions {
+                disabled: no_diagnostics,
+                hook_dll: diagnostics_hook,
+                inject_delay: std::time::Duration::from_millis(diagnostics_inject_delay_ms),
+            };
+            let cache = gore_as::compile::precompile_with_diagnostics(&opts, &diagnostics)
+                .map_err(anyhow::Error::msg)?;
             match std::fs::metadata(&cache) {
                 Ok(m) => println!("compiled -> {} ({} bytes)", cache.display(), m.len()),
                 Err(_) => println!("game ran, but no cache found at {}", cache.display()),
             }
         }
-        AsCmd::Replace { base, mini, target, out } => {
-            let base_b = std::fs::read(&base).with_context(|| format!("reading {}", base.display()))?;
-            let mini_b = std::fs::read(&mini).with_context(|| format!("reading {}", mini.display()))?;
+        AsCmd::CompileModule {
+            op,
+            module,
+            rel_path,
+            source,
+            work_dir,
+            allow_new_symbols,
+            out,
+            game,
+            no_diagnostics,
+            diagnostics_hook,
+            diagnostics_inject_delay_ms,
+        } => {
+            let game = gore_loc::config::game_root(game).context("resolving game path")?;
+            let base_override = gore_mod::pristine_script_cache(&game)
+                .context("reading the drift-aware pristine script cache")?;
+            let opts = gore_as::compile::CompileOpts {
+                game_dir: game,
+                op,
+                module_name: module,
+                rel_path,
+                as_path: source,
+                work_dir,
+                allow_new_symbols,
+                base_override: Some(base_override),
+            };
+            let diagnostics = gore_as::diagnostics::DiagnosticsOptions {
+                disabled: no_diagnostics,
+                hook_dll: diagnostics_hook,
+                inject_delay: std::time::Duration::from_millis(diagnostics_inject_delay_ms),
+            };
+            let compiled = gore_as::compile::compile_module(&opts, |game, tree| {
+                gore_as::compile::game_run_regen_with_diagnostics(game, tree, &diagnostics)
+            })
+            .context("compiling module")?;
+            let mini = std::fs::read(&compiled.mini_path).with_context(|| {
+                format!(
+                    "reading compiled mini-cache {}",
+                    compiled.mini_path.display()
+                )
+            })?;
+            if let Some(parent) = out.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+                std::fs::create_dir_all(parent)
+                    .with_context(|| format!("creating {}", parent.display()))?;
+            }
+            std::fs::write(&out, &mini).with_context(|| format!("writing {}", out.display()))?;
+            println!(
+                "compiled module {:?} -> {} ({} bytes)",
+                compiled.module_name,
+                out.display(),
+                mini.len()
+            );
+        }
+        AsCmd::Replace {
+            base,
+            mini,
+            target,
+            out,
+        } => {
+            let base_b =
+                std::fs::read(&base).with_context(|| format!("reading {}", base.display()))?;
+            let mini_b =
+                std::fs::read(&mini).with_context(|| format!("reading {}", mini.display()))?;
             let n = module_count(&base_b);
-            let res = gore_as::cache::splice::replace_module(&base_b, &mini_b, &target).context("replace")?;
+            let res = gore_as::cache::splice::replace_module(&base_b, &mini_b, &target)
+                .context("replace")?;
             std::fs::write(&out, &res).with_context(|| format!("writing {}", out.display()))?;
             println!(
                 "replaced {:?}: {} modules (unchanged) ; {} -> {} bytes ; wrote {}",
-                target, n, base_b.len(), res.len(), out.display()
+                target,
+                n,
+                base_b.len(),
+                res.len(),
+                out.display()
             );
         }
         AsCmd::Splice { base, mini, out } => {
@@ -463,37 +683,58 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             );
         }
         AsCmd::Extract { cache, module, out } => {
-            let b = std::fs::read(&cache).with_context(|| format!("reading {}", cache.display()))?;
+            let b =
+                std::fs::read(&cache).with_context(|| format!("reading {}", cache.display()))?;
             let n = module_count(&b);
             let mini = gore_as::cache::splice::extract_module(&b, &module).context("extract")?;
             std::fs::write(&out, &mini).with_context(|| format!("writing {}", out.display()))?;
             println!(
                 "extracted {:?} from {} modules -> 1-module mini ; {} bytes ; wrote {}",
-                module, n, mini.len(), out.display()
+                module,
+                n,
+                mini.len(),
+                out.display()
             );
         }
-        AsCmd::ExtractRemap { regen_cache, module, base_cache, out } => {
+        AsCmd::ExtractRemap {
+            regen_cache,
+            module,
+            base_cache,
+            allow_new_symbols,
+            out,
+        } => {
             let regen_b = std::fs::read(&regen_cache)
                 .with_context(|| format!("reading {}", regen_cache.display()))?;
             let base_b = std::fs::read(&base_cache)
                 .with_context(|| format!("reading {}", base_cache.display()))?;
             let n = module_count(&regen_b);
-            let mini = gore_as::cache::splice::extract_module(&regen_b, &module)
-                .context("extract")?;
-            let (remapped, counts) =
-                gore_as::cache::remap::remap_module_to_base(&mini, &base_b)
-                    .context("remap")?;
+            let mini =
+                gore_as::cache::splice::extract_module(&regen_b, &module).context("extract")?;
+            let (remapped, counts) = gore_as::cache::remap::remap_module_to_base_with_options(
+                &mini,
+                &base_b,
+                gore_as::cache::remap::RemapOptions { allow_new_symbols },
+            )
+            .context("remap")?;
             std::fs::write(&out, &remapped)
                 .with_context(|| format!("writing {}", out.display()))?;
             println!(
                 "extract-remap {:?} from {} modules -> remapped 1-module mini ; {} bytes ; wrote {}",
-                module, n, remapped.len(), out.display()
+                module,
+                n,
+                remapped.len(),
+                out.display()
             );
             println!(
                 "refs remapped: {} total (bytecode: global={} func_ptr={} type_ptr={} func_id={} type_id={} ; embedded: type_ptr={} func_id={})",
                 counts.total(),
-                counts.global_ptr, counts.func_ptr, counts.type_ptr, counts.func_id, counts.type_id,
-                counts.embed_type_ptr, counts.embed_func_id
+                counts.global_ptr,
+                counts.func_ptr,
+                counts.type_ptr,
+                counts.func_id,
+                counts.type_id,
+                counts.embed_type_ptr,
+                counts.embed_func_id
             );
         }
         AsCmd::Bytediff {
@@ -516,14 +757,19 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             let r_bytes = std::fs::read(&regen)
                 .with_context(|| format!("reading regen {}", regen.display()))?;
 
-            let mut opts = NormOpts::default();
-            opts.n2_slots = norm_slots;
-            opts.n5_scope = !no_norm_scope;
-            opts.n6_reguard = !no_norm_reguard;
-            let filters = Filters { module: module.clone(), func: func.clone() };
+            let opts = NormOpts {
+                n2_slots: norm_slots,
+                n5_scope: !no_norm_scope,
+                n6_reguard: !no_norm_reguard,
+                ..Default::default()
+            };
+            let filters = Filters {
+                module: module.clone(),
+                func: func.clone(),
+            };
 
-            let report = bytediff::run(&v_bytes, &r_bytes, &opts, &filters, context)
-                .context("bytediff")?;
+            let report =
+                bytediff::run(&v_bytes, &r_bytes, &opts, &filters, context).context("bytediff")?;
 
             // Verdict filter for per-function output (empty = show all).
             let want = |v: Verdict| -> bool {
@@ -549,7 +795,10 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                 match d.verdict {
                     Verdict::Identical => {
                         if show_identical_lines {
-                            println!("{}  IDENTICAL  (v={} ops, r={} ops)", d.name, d.v_ops, d.r_ops);
+                            println!(
+                                "{}  IDENTICAL  (v={} ops, r={} ops)",
+                                d.name, d.v_ops, d.r_ops
+                            );
                         }
                     }
                     Verdict::Benign => {
@@ -557,7 +806,10 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                         if show_benign {
                             println!(
                                 "{}  BENIGN-DIFF  [{}]  (v={} ops, r={} ops)",
-                                d.name, labels.join(" "), d.v_ops, d.r_ops
+                                d.name,
+                                labels.join(" "),
+                                d.v_ops,
+                                d.r_ops
                             );
                         }
                     }
@@ -645,7 +897,10 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                         let hint = d.hint.as_deref().unwrap_or("");
                         sem_list.push_str(&format!(
                             "{{\"name\":\"{}\",\"v_ops\":{},\"r_ops\":{},\"hint\":\"{}\"}}",
-                            esc(&d.name), d.v_ops, d.r_ops, esc(hint)
+                            esc(&d.name),
+                            d.v_ops,
+                            d.r_ops,
+                            esc(hint)
                         ));
                     }
                 }

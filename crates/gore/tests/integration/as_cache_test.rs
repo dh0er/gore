@@ -2,7 +2,11 @@ use assert_cmd::Command;
 use predicates::str::contains;
 
 fn fixture_path() -> String {
-    concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/cache_head_8k.bin").to_string()
+    concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/cache_head_8k.bin"
+    )
+    .to_string()
 }
 
 #[test]

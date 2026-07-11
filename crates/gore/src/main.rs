@@ -133,7 +133,12 @@ enum Commands {
         #[command(subcommand)]
         action: AudioAction,
     },
-    /// Build / deploy / undeploy a unified mod bundle (overrides + loc + audio + textures + scripts)
+    /// Inspect, extract, and copy-on-write edit voice-over ZIP archives
+    Voice {
+        #[command(subcommand)]
+        action: cmd::voice::VoiceAction,
+    },
+    /// Build/deploy a unified bundle (overrides + loc + audio + voice ZIPs + textures + scripts)
     Mod {
         #[command(subcommand)]
         action: ModAction,
@@ -293,6 +298,9 @@ enum LocAction {
         /// Output .lcache (defaults to overwriting --lcache)
         #[arg(short = 'o', long)]
         out: Option<PathBuf>,
+        /// Add ids absent from the input .lcache (default: reject them)
+        #[arg(long)]
+        add_missing: bool,
     },
 }
 
@@ -302,28 +310,65 @@ fn main() {
         Commands::Dump { sdk_dir, out } => cmd::dump::run(sdk_dir, out),
         Commands::Stubs { model, out, filter } => cmd::stubs::run(model, out, filter),
         Commands::Catalog { kind, dump, out } => cmd::catalog::run(kind, dump, out),
-        Commands::GuiModel { model, catalog, out } => cmd::gui_model::run(model, catalog, out),
+        Commands::GuiModel {
+            model,
+            catalog,
+            out,
+        } => cmd::gui_model::run(model, catalog, out),
         Commands::Sync { dump, catalog, out } => cmd::sync::run(dump, catalog, out),
-        Commands::DumpMod { model, catalog, out } => cmd::dump_mod::run(model, catalog, out),
+        Commands::DumpMod {
+            model,
+            catalog,
+            out,
+        } => cmd::dump_mod::run(model, catalog, out),
         Commands::Loc { action } => match action {
             LocAction::Extract { lcache, yes } => cmd::loc::extract(lcache, yes),
             LocAction::Status => cmd::loc::status(),
-            LocAction::Export { lcache, out, keep_empty } => cmd::loc::export(lcache, out, keep_empty),
-            LocAction::Import { lcache, edits, out } => cmd::loc::import(lcache, edits, out),
+            LocAction::Export {
+                lcache,
+                out,
+                keep_empty,
+            } => cmd::loc::export(lcache, out, keep_empty),
+            LocAction::Import {
+                lcache,
+                edits,
+                out,
+                add_missing,
+            } => cmd::loc::import(lcache, edits, out, add_missing),
         },
         Commands::Scaffold { mod_name, out } => cmd::scaffold::run(mod_name, out),
-        Commands::Gen { overrides, out, model } => cmd::gen::run(overrides, out, model),
+        Commands::Gen {
+            overrides,
+            out,
+            model,
+        } => cmd::gen::run(overrides, out, model),
         Commands::DeployShared { src, game } => cmd::deploy_shared::run(src, game),
         Commands::As { cmd } => cmd::as_cache::run(cmd),
         Commands::Package { mod_dir, out } => cmd::package::run(mod_dir, out),
         Commands::Audio { action } => match action {
             AudioAction::List { bank, key } => cmd::audio::list(bank, key),
-            AudioAction::Extract { bank, out, sample, key } => cmd::audio::extract(bank, out, sample, key),
-            AudioAction::Replace { map, bank, out, key } => cmd::audio::replace(map, bank, out, key),
+            AudioAction::Extract {
+                bank,
+                out,
+                sample,
+                key,
+            } => cmd::audio::extract(bank, out, sample, key),
+            AudioAction::Replace {
+                map,
+                bank,
+                out,
+                key,
+            } => cmd::audio::replace(map, bank, out, key),
             AudioAction::Restore { bank } => cmd::audio::restore(bank),
             AudioAction::ExportPatch { map, out } => cmd::audio::export_patch(map, out),
-            AudioAction::ApplyPatch { patch, bank, out, key } => cmd::audio::apply_patch(patch, bank, out, key),
+            AudioAction::ApplyPatch {
+                patch,
+                bank,
+                out,
+                key,
+            } => cmd::audio::apply_patch(patch, bank, out, key),
         },
+        Commands::Voice { action } => cmd::voice::run(action),
         Commands::Mod { action } => match action {
             ModAction::Build { spec, out } => cmd::modcmd::build(spec, out),
             ModAction::Deploy { bundle, game } => cmd::modcmd::deploy(bundle, game),
@@ -336,5 +381,312 @@ fn main() {
     if let Err(e) = result {
         eprintln!("error: {e:#}");
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod loc_cli_tests {
+    use super::*;
+
+    fn parse_import_add_missing(extra: &[&str]) -> bool {
+        let mut args = vec![
+            "gore",
+            "loc",
+            "import",
+            "--lcache",
+            "base.lcache",
+            "--edits",
+            "edits.json",
+        ];
+        args.extend_from_slice(extra);
+        let cli = Cli::try_parse_from(args).unwrap();
+        let Commands::Loc {
+            action: LocAction::Import { add_missing, .. },
+        } = cli.command
+        else {
+            panic!("expected loc import command");
+        };
+        add_missing
+    }
+
+    #[test]
+    fn loc_import_add_missing_is_opt_in() {
+        assert!(!parse_import_add_missing(&[]));
+        assert!(parse_import_add_missing(&["--add-missing"]));
+    }
+}
+
+#[cfg(test)]
+mod voice_cli_tests {
+    use super::*;
+
+    #[test]
+    fn voice_list_and_index_alias_parse_with_json() {
+        for command in ["list", "index"] {
+            let cli = Cli::try_parse_from([
+                "gore",
+                "voice",
+                command,
+                "--archive",
+                "voices.zip",
+                "--json",
+            ])
+            .unwrap();
+            assert!(matches!(
+                cli.command,
+                Commands::Voice {
+                    action: cmd::voice::VoiceAction::List { json: true, .. }
+                }
+            ));
+        }
+    }
+
+    #[test]
+    fn voice_entry_selector_requires_exactly_one_mode() {
+        let base = [
+            "gore",
+            "voice",
+            "extract",
+            "--archive",
+            "voices.zip",
+            "--out",
+            "extracted",
+        ];
+        assert!(Cli::try_parse_from(base).is_err());
+
+        let mut basename = base.to_vec();
+        basename.extend(["--basename", "line.ogg"]);
+        assert!(Cli::try_parse_from(basename).is_ok());
+
+        let mut path = base.to_vec();
+        path.extend(["--path", "NPC/Line.ogg"]);
+        assert!(Cli::try_parse_from(path).is_ok());
+
+        let mut both = base.to_vec();
+        both.extend(["--basename", "line.ogg", "--path", "NPC/Line.ogg"]);
+        assert!(Cli::try_parse_from(both).is_err());
+    }
+
+    #[test]
+    fn voice_mutations_require_a_new_output_path() {
+        let no_output = [
+            "gore",
+            "voice",
+            "add",
+            "--archive",
+            "voices.zip",
+            "--path",
+            "NPC/New.ogg",
+            "--ogg",
+            "new.ogg",
+        ];
+        assert!(Cli::try_parse_from(no_output).is_err());
+    }
+
+    #[test]
+    fn voice_apply_manifest_and_alias_parse() {
+        for command in ["apply-manifest", "apply"] {
+            let cli = Cli::try_parse_from([
+                "gore",
+                "voice",
+                command,
+                "--archive",
+                "voices.zip",
+                "--manifest",
+                "voice-manifest.json",
+                "--out",
+                "modded.zip",
+            ])
+            .unwrap();
+            assert!(matches!(
+                cli.command,
+                Commands::Voice {
+                    action: cmd::voice::VoiceAction::ApplyManifest { .. }
+                }
+            ));
+        }
+
+        assert!(Cli::try_parse_from([
+            "gore",
+            "voice",
+            "apply-manifest",
+            "--archive",
+            "voices.zip",
+            "--manifest",
+            "voice-manifest.json",
+        ])
+        .is_err());
+    }
+}
+
+#[cfg(test)]
+mod as_cli_tests {
+    use super::*;
+
+    fn parse_extract_remap_allow_new_symbols(extra: &[&str]) -> bool {
+        let mut args = vec![
+            "gore",
+            "as",
+            "extract-remap",
+            "regen.cache",
+            "MyModule",
+            "base.cache",
+            "--out",
+            "mini.cache",
+        ];
+        args.extend_from_slice(extra);
+        let cli = Cli::try_parse_from(args).unwrap();
+        let Commands::As {
+            cmd:
+                cmd::as_cache::AsCmd::ExtractRemap {
+                    allow_new_symbols, ..
+                },
+        } = cli.command
+        else {
+            panic!("expected as extract-remap command");
+        };
+        allow_new_symbols
+    }
+
+    #[test]
+    fn as_extract_remap_new_symbols_are_opt_in() {
+        assert!(!parse_extract_remap_allow_new_symbols(&[]));
+        assert!(parse_extract_remap_allow_new_symbols(&[
+            "--allow-new-symbols"
+        ]));
+    }
+
+    fn parse_compile_module(extra: &[&str]) -> (String, String, bool) {
+        let mut args = vec![
+            "gore",
+            "as",
+            "compile-module",
+            "--op",
+            "add",
+            "--module",
+            "GoreMods.Example",
+            "--rel-path",
+            "GoreMods/Example.as",
+            "--source",
+            "Example.as",
+            "--work-dir",
+            "work",
+            "--out",
+            "Example.mini.Cache",
+        ];
+        args.extend_from_slice(extra);
+        let cli = Cli::try_parse_from(args).unwrap();
+        let Commands::As {
+            cmd:
+                cmd::as_cache::AsCmd::CompileModule {
+                    op,
+                    module,
+                    allow_new_symbols,
+                    ..
+                },
+        } = cli.command
+        else {
+            panic!("expected as compile-module command");
+        };
+        (op, module, allow_new_symbols)
+    }
+
+    #[test]
+    fn as_compile_module_exposes_complete_pipeline_with_strict_default() {
+        assert_eq!(
+            parse_compile_module(&[]),
+            ("add".into(), "GoreMods.Example".into(), false)
+        );
+        assert!(parse_compile_module(&["--allow-new-symbols"]).2);
+    }
+
+    #[test]
+    fn as_compile_module_rejects_unknown_operation() {
+        let args = [
+            "gore",
+            "as",
+            "compile-module",
+            "--op",
+            "remove",
+            "--module",
+            "M",
+            "--rel-path",
+            "M.as",
+            "--source",
+            "M.as",
+            "--work-dir",
+            "work",
+            "--out",
+            "M.cache",
+        ];
+        assert!(Cli::try_parse_from(args).is_err());
+    }
+
+    #[test]
+    fn as_compile_exposes_diagnostics_controls() {
+        let cli = Cli::try_parse_from([
+            "gore",
+            "as",
+            "compile",
+            "scripts",
+            "--diagnostics-hook",
+            "custom.dll",
+            "--diagnostics-inject-delay-ms",
+            "2500",
+        ])
+        .unwrap();
+        let Commands::As {
+            cmd:
+                cmd::as_cache::AsCmd::Compile {
+                    no_diagnostics,
+                    diagnostics_hook,
+                    diagnostics_inject_delay_ms,
+                    ..
+                },
+        } = cli.command
+        else {
+            panic!("expected as compile command");
+        };
+        assert!(!no_diagnostics);
+        assert_eq!(diagnostics_hook, Some(PathBuf::from("custom.dll")));
+        assert_eq!(diagnostics_inject_delay_ms, 2500);
+
+        assert!(Cli::try_parse_from([
+            "gore",
+            "as",
+            "compile",
+            "--no-diagnostics",
+            "--diagnostics-hook",
+            "custom.dll",
+        ])
+        .is_err());
+        assert!(Cli::try_parse_from([
+            "gore",
+            "as",
+            "compile",
+            "--diagnostics-inject-delay-ms",
+            "30001",
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn as_diagnostics_check_accepts_an_explicit_nonsteam_exe() {
+        let cli = Cli::try_parse_from([
+            "gore",
+            "as",
+            "diagnostics-check",
+            "--exe",
+            "D:/Custom/G1R.exe",
+        ])
+        .unwrap();
+        let Commands::As {
+            cmd: cmd::as_cache::AsCmd::DiagnosticsCheck { exe, game },
+        } = cli.command
+        else {
+            panic!("expected as diagnostics-check command");
+        };
+        assert_eq!(exe, Some(PathBuf::from("D:/Custom/G1R.exe")));
+        assert!(game.is_none());
     }
 }
