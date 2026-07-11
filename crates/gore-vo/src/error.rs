@@ -1,0 +1,97 @@
+use std::path::PathBuf;
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("ZIP error: {0}")]
+    Zip(#[from] zip::result::ZipError),
+    #[error("resource limit exceeded for {kind}: {actual} > {limit}")]
+    LimitExceeded {
+        kind: &'static str,
+        actual: u64,
+        limit: u64,
+    },
+    #[error("entry not found: {query:?}")]
+    NotFound { query: String },
+    #[error("entry selector {query:?} is ambiguous: {candidates:?}")]
+    Ambiguous {
+        query: String,
+        candidates: Vec<String>,
+    },
+    #[error("unsafe archive path {path:?}: {reason}")]
+    UnsafePath { path: String, reason: &'static str },
+    #[error("archive contains an encrypted entry that cannot be processed safely: {0:?}")]
+    EncryptedEntry(String),
+    #[error("archive contains a symbolic-link entry that cannot be extracted safely: {0:?}")]
+    SymlinkEntry(String),
+    #[error("input and output refer to the same path: {0}")]
+    InputOutputSame(PathBuf),
+    #[error("output already exists (refusing to overwrite it): {0}")]
+    OutputExists(PathBuf),
+    #[error("archive entry already exists: {0:?}")]
+    EntryAlreadyExists(String),
+    #[error("edit batch is empty")]
+    EmptyEditBatch,
+    #[error("conflicting edits target the same case-insensitive path: {first:?} and {second:?}")]
+    ConflictingEdits { first: String, second: String },
+    #[error("voice archive edits require an .ogg entry, got {0:?}")]
+    NotOggPath(String),
+    #[error("unsupported compression method for replacement entry {path:?}: {method:?}")]
+    UnsupportedCompression {
+        path: String,
+        method: zip::CompressionMethod,
+    },
+    #[error("archive changed after it was indexed")]
+    ArchiveChanged,
+    #[error("output verification failed: {0}")]
+    Verification(String),
+    #[error(transparent)]
+    InvalidOgg(#[from] OggError),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum OggError {
+    #[error("Ogg stream is empty")]
+    Empty,
+    #[error("truncated Ogg page at byte {offset}")]
+    Truncated { offset: usize },
+    #[error("invalid Ogg capture pattern at byte {offset}")]
+    Capture { offset: usize },
+    #[error("unsupported Ogg page version {version} at byte {offset}")]
+    Version { offset: usize, version: u8 },
+    #[error("invalid Ogg header flags 0x{flags:02x} at byte {offset}")]
+    HeaderFlags { offset: usize, flags: u8 },
+    #[error("Ogg checksum mismatch at byte {offset}")]
+    Checksum { offset: usize },
+    #[error("logical stream {serial} does not begin with a valid BOS page")]
+    MissingBos { serial: u32 },
+    #[error("logical stream {serial} contains an unexpected second BOS page")]
+    UnexpectedBos { serial: u32 },
+    #[error("logical stream {serial} has unexpected page sequence {actual}, expected {expected}")]
+    Sequence {
+        serial: u32,
+        actual: u32,
+        expected: u32,
+    },
+    #[error("logical stream {serial} has an invalid continuation flag")]
+    Continuation { serial: u32 },
+    #[error("logical stream {serial} contains data after EOS")]
+    AfterEos { serial: u32 },
+    #[error("logical stream {serial} ends without an EOS page")]
+    MissingEos { serial: u32 },
+    #[error("logical stream {serial} ends with an incomplete packet")]
+    IncompletePacket { serial: u32 },
+    #[error("Ogg identification packet is malformed: {0}")]
+    Identification(&'static str),
+    #[error("multiple recognized audio logical streams are not supported")]
+    MultipleAudioStreams,
+    #[error("Ogg resource limit exceeded for {kind}: {actual} > {limit}")]
+    LimitExceeded {
+        kind: &'static str,
+        actual: usize,
+        limit: usize,
+    },
+}
+
+pub type Result<T> = std::result::Result<T, Error>;
