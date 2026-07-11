@@ -2,10 +2,13 @@
 
 A no-code Windows GUI for *authoring* one Gothic 1 Remake mod, over the same
 Rust mod engine as the [`gore` CLI](../../README.md#modding-with-the-gore-cli)
-(via a `dart:ffi` bridge, `gore_ffi.dll`). Edit item/stat values, localized
-text, audio, textures, and AngelScript modules, then build a bundle and
-deploy/undeploy it to your install. See the [repo README](../../README.md#gore-mod-studio)
-for the full capability list.
+(via a `dart:ffi` bridge, `gore_ffi.dll`). Edit item/stat values, localization
+IDs and dialog lines, audio, textures, and AngelScript modules, then build a
+bundle and deploy/undeploy it to your install. Selectable conversation-topic
+registration is currently declared with `BuildSpec.dialog_topics` through the
+CLI; the Dialog view alone edits localization and does not register a topic.
+See the [repo README](../../README.md#gore-mod-studio) for the full capability
+list.
 
 ## Bundled CLI
 

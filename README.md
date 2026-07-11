@@ -143,6 +143,11 @@ add operation. In Mod Studio's Dialogs tab, the add button creates a new
 Helpers: `gore loc extract` auto-detects the game and writes the shared catalog;
 `gore loc status` shows what's loaded.
 
+Localization supplies captions and spoken lines; it does not by itself create a
+selectable conversation topic. Compile the topic class and declare its guarded
+runtime registration as described in
+[AngelScript dialog authoring](docs/dialog-authoring.md).
+
 ## Audio
 
 The game's sounds and music are encrypted FMOD `.bank` files at
@@ -268,12 +273,16 @@ exact `.uexp` export ranges plus package footer. A UE5.4-G1R envelope API now
 validates those boundaries and retains every class-native suffix opaquely. The
 apparent four-byte prefix was actually two legal empty unversioned-header
 fragments; the decoder now accepts and round-trips them. The first real non-zero
-properties are complex `Map`/`Struct` values. A read-only, resource-bounded
+properties are complex `Map`/`Struct` values. A resource-bounded
 span walker now follows the USMAP recursively for the wire forms proven by those
 fixtures (`Map`, nested G1R structs, names/object references, `LinearColor`,
 `Vector4`, and required primitives), returning exact borrowed byte ranges and a
-consumed count. Unknown forms fail typed before any size is guessed. Complex
-payload writes remain intentionally unsupported.
+consumed count. A snapshot-sealed `FixedLeafPatch` can replace proven
+same-width numeric/Bool leaves by semantic property path, with full-pair drift
+checks, exact-schema rewalks, compare-and-swap mutation, and verified rollback.
+Reference edits, map keys, variable-width values, and structural collection or
+header changes remain intentionally unsupported. Unknown forms fail typed
+before any size is guessed.
 
 ## Scripts (AngelScript) — experimental
 
@@ -318,10 +327,12 @@ gore as compile --game "$GAME"
 ```
 
 On Windows, compile automatically attempts the embedded, temporary x86-64 diagnostics hook. When
-the selected AMD64 executable has exactly one masked callback match, errors are printed like a normal
-compiler (`file:line:column: error: message`), with candidate signatures retained as notes. The
-helper is never installed into the game. A missing/changed/ambiguous signature or confirmed hook
-failure falls back to the unchanged generator; use `--no-diagnostics` for a silent explicit opt-out.
+the selected AMD64 executable has exactly one raw masked callback match and its sparse
+`asSMessageInfo` structure fingerprint verifies, errors are printed like a normal compiler
+(`file:line:column: error: message`), with candidate signatures retained as notes. The helper is
+never installed into the game. A missing/changed/ambiguous signature, structural mismatch, or
+confirmed hook failure falls back to the unchanged generator; use `--no-diagnostics` for a silent
+explicit opt-out.
 Compatibility can be audited without launching the game, including custom/non-Steam executables:
 
 ```sh
@@ -329,8 +340,9 @@ gore as diagnostics-check --game "$GAME"
 gore as diagnostics-check --exe "D:/Custom/G1R/Binaries/Win64/G1R-Win64-Shipping.exe"
 ```
 
-The check reports executable SHA-256, match count, and matched RVA(s). An advanced, explicitly
-trusted helper override is available through `--diagnostics-hook DLL` or
+The check reports executable SHA-256, raw match count, matched RVA(s), and callback-structure
+verification. An advanced, explicitly trusted helper override is available through
+`--diagnostics-hook DLL` or
 `GORE_AS_DIAGNOSTICS_HOOK`; the embedded/sibling release helper is SHA-256 verified.
 
 The `-o` form leaves the install exactly as it was, so the live
@@ -366,12 +378,19 @@ not exist there are retained, with collision checks before deployment. Mod
 Studio defaults it on for a **New module** and off for an edit; an existing-module
 edit can enable it explicitly when it intentionally adds a class or function.
 
+The complete new-dialog visual path has been validated in game with a reviewed
+fixture, and the same guarded rules now have a declarative production generator.
+The exact generated adapter still awaits one clean live requalification. See
+[AngelScript dialog authoring](docs/dialog-authoring.md) for the compiled topic
+template, runtime evidence, safe test order, and the important boundary between
+a renderable new class and automatic topic discovery.
+
 Decompilation/emit resolve native-call arities from a `Binds.Cache` placed next
 to the input cache (or `GORE_AS_BINDS`).
 
 ## Bundling & deploying
 
-Combine overrides + text + audio + voice archives + textures + scripts into one mod, then
+Combine overrides + text + audio + voice archives + textures + scripts/dialog topics into one mod, then
 deploy/undeploy it against your install. Write a build spec (`spec.json`):
 
 ```json
@@ -382,7 +401,8 @@ deploy/undeploy it against your install. Write a build spec (`spec.json`):
   "audio":   [ { "bank": "SFX.bank", "sample": "Foo", "wav_path": "foo.wav" } ],
   "voice":   [ { "archive": "german_new.zip", "op": "replace", "archive_path": "NPC/Hero/DIA_Foo.ogg", "ogg_path": "DIA_Foo.ogg" } ],
   "texture": [ { "asset": "/Game/UI/.../T_Foo", "image_path": "foo.png" } ],
-  "scripts": [ { "op": "add", "module_name": "MyModule", "mini_cache": "MyModule.cache" } ]
+  "scripts": [ { "op": "add", "module_name": "MyModule", "mini_cache": "MyModule.cache" } ],
+  "dialog_topics": [ { "id": "viper-test", "participant_name": "om_stt_viper_302", "topic_class": "/Script/Angelscript.ChoiceMyViper", "sentinel_class": "/Script/Angelscript.ChoiceStt302ViperExit" } ]
 }
 ```
 
@@ -433,7 +453,7 @@ Every subcommand of the `gore` binary:
 |---------|-----------|---------|
 | `config` | `set` · `get` · `unset` · `list` · `path` · `detect` | Persist shared settings (the game path) so other commands can omit `--game`. |
 | `gen` | — | Compile `overrides.toml` → a UE4SS Lua override mod. |
-| `mod` | `build` · `deploy` · `undeploy` | Build/deploy/undeploy a unified bundle (overrides + loc + audio + voice ZIPs + textures + scripts). |
+| `mod` | `build` · `deploy` · `undeploy` | Build/deploy/undeploy a unified bundle (overrides + loc + audio + voice ZIPs + textures + scripts + guarded dialog-topic registration). |
 | `mgr` | `import` · `list` · `enable` · `disable` · `order` · `analyze` · `apply` · `status` · `reset` · `remove` | Multi-mod manager: library, load order, conflict analysis, composed deploy (the CLI behind mod-manager). |
 | `loc` | `extract` · `status` · `export` · `import` | Read/edit localized text & dialogs in the encrypted `.lcache`. |
 | `audio` | `list` · `extract` · `replace` · `restore` · `export-patch` · `apply-patch` | Read/replace FMOD `.bank` audio (PCM injection, `*.gore-bak`). |
@@ -464,7 +484,8 @@ modding with live previews and `.goremod` project files. Auto-updates on launch
 **It can:**
 - Edit **item/stat values** by browsing the categorized item catalog and editing
   fields (the override domain).
-- Edit **localized text & dialogs**.
+- Edit **localized text and dialog-line IDs**. Selectable topic registration is
+  currently declared through `BuildSpec.dialog_topics` and the CLI, not the GUI.
 - Replace **audio** — browse a bank's samples, preview, and swap in your own.
 - Replace **textures** — pick an asset, preview, drop in a PNG.
 - Edit **AngelScript** — stage a module, compile, and splice it into the game's
