@@ -15,8 +15,8 @@ use crate::{Error, Result};
 
 /// The decoded normalized symbol/weight lists.
 struct TansData {
-    a: Vec<u8>,        // weight == 1 symbols
-    b: Vec<u32>,       // (symbol<<16) | weight, weight >= 2
+    a: Vec<u8>,  // weight == 1 symbols
+    b: Vec<u32>, // (symbol<<16) | weight, weight >= 2
 }
 
 /// One decode LUT entry: state transition plus its output symbol.
@@ -339,8 +339,8 @@ fn decode_table(br: &mut BitReader, l_bits: u32) -> Result<TansData> {
                 if nextra > 15 {
                     return Err(Error::Corrupt("tans: nextra>15"));
                 }
-                let mut v = br.read_bits_no_refill_zero(nextra as u32) as i32 + (1 << nextra)
-                    - (1 << q);
+                let mut v =
+                    br.read_bits_no_refill_zero(nextra as u32) as i32 + (1 << nextra) - (1 << q);
                 let average_div4 = average >> 2;
                 let mut limit = 2 * average_div4;
                 if v <= limit {

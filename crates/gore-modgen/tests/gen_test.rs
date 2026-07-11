@@ -28,7 +28,10 @@ fn gen_lua_contains_static_find_object_pattern() {
     let lua = gen_lua(&apple_config());
     // The CDO path is built at runtime from the per-override module, so check
     // the StaticFindObject call + the runtime path template.
-    assert!(lua.contains("StaticFindObject"), "must use StaticFindObject");
+    assert!(
+        lua.contains("StaticFindObject"),
+        "must use StaticFindObject"
+    );
     assert!(
         lua.contains(r#"".Default__" .. o.class"#),
         "must build the CDO path from the module + class at runtime"
@@ -46,7 +49,10 @@ fn gen_lua_contains_overrides_table() {
 #[test]
 fn gen_lua_mod_name_in_log() {
     let lua = gen_lua(&apple_config());
-    assert!(lua.contains("TestBalanceMod"), "mod name must appear in log strings");
+    assert!(
+        lua.contains("TestBalanceMod"),
+        "mod name must appear in log strings"
+    );
 }
 
 #[test]
@@ -55,8 +61,14 @@ fn gen_lua_no_delay_uses_direct_call() {
     // delay_ms=0: the startup invocation is a direct tryApply(), not delayed.
     // (The retry loop itself still uses ExecuteWithDelay to re-poll for CDOs
     // that load lazily, so ExecuteWithDelay appears regardless.)
-    assert!(lua.contains("\ntryApply()\n"), "delay_ms=0 must call tryApply() directly");
-    assert!(!lua.contains("ExecuteWithDelay(0"), "startup call must not be delayed");
+    assert!(
+        lua.contains("\ntryApply()\n"),
+        "delay_ms=0 must call tryApply() directly"
+    );
+    assert!(
+        !lua.contains("ExecuteWithDelay(0"),
+        "startup call must not be delayed"
+    );
     assert!(lua.contains("apply()"), "apply() must be invoked");
 }
 
@@ -65,7 +77,10 @@ fn gen_lua_with_delay() {
     let mut cfg = apple_config();
     cfg.meta.delay_ms = 500;
     let lua = gen_lua(&cfg);
-    assert!(lua.contains("ExecuteWithDelay"), "delay_ms>0 must emit ExecuteWithDelay");
+    assert!(
+        lua.contains("ExecuteWithDelay"),
+        "delay_ms>0 must emit ExecuteWithDelay"
+    );
     assert!(lua.contains("500"), "delay value must appear");
 }
 

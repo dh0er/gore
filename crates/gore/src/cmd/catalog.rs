@@ -23,8 +23,7 @@ pub fn run(kind: CatalogKind, dump: PathBuf, out: PathBuf) -> Result<()> {
     // UE4SS object dumps can contain non-UTF-8 bytes in unrelated object names;
     // decode lossily (like the original Python builders) so one bad byte doesn't
     // abort catalog generation. The `ASClass` lines we scan are ASCII.
-    let bytes = fs::read(&dump)
-        .with_context(|| format!("reading dump '{}'", dump.display()))?;
+    let bytes = fs::read(&dump).with_context(|| format!("reading dump '{}'", dump.display()))?;
     let text = String::from_utf8_lossy(&bytes);
     let lines: Vec<&str> = text.lines().collect();
 
@@ -38,8 +37,7 @@ pub fn run(kind: CatalogKind, dump: PathBuf, out: PathBuf) -> Result<()> {
                 }
             }
             let count = entries.len();
-            let j = pipeline::to_catalog_json(&entries)
-                .context("serialising item catalog")?;
+            let j = pipeline::to_catalog_json(&entries).context("serialising item catalog")?;
             eprintln!("wrote {count} items to {}", out.display());
             j
         }
@@ -52,16 +50,14 @@ pub fn run(kind: CatalogKind, dump: PathBuf, out: PathBuf) -> Result<()> {
                 }
             }
             let count = entries.len();
-            let j = pipeline::to_catalog_json(&entries)
-                .context("serialising npc catalog")?;
+            let j = pipeline::to_catalog_json(&entries).context("serialising npc catalog")?;
             eprintln!("wrote {count} npcs to {}", out.display());
             j
         }
         CatalogKind::Knowledge => {
             let entries = pipeline::build_knowledge_catalog(&lines);
             let count = entries.len();
-            let j = pipeline::to_catalog_json(&entries)
-                .context("serialising knowledge catalog")?;
+            let j = pipeline::to_catalog_json(&entries).context("serialising knowledge catalog")?;
             eprintln!("wrote {count} knowledge tokens to {}", out.display());
             j
         }

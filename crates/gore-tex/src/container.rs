@@ -22,7 +22,7 @@ use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use retoc::asset_conversion::{FZenPackageContext, build_legacy};
+use retoc::asset_conversion::{build_legacy, FZenPackageContext};
 use retoc::iostore;
 use retoc::logging::Log;
 use retoc::script_objects::FPackageObjectIndex;
@@ -49,7 +49,11 @@ const TEXTURE2D_CLASS_PATH: &str = "/Script/Engine.Texture2D";
 /// Note: `usmap` is accepted for API symmetry with the rest of `gore-tex`; class
 /// resolution here is driven by the container's own script-object table (which is
 /// exact for the cooked class name) and does not require usmap property parsing.
-pub fn list_textures(utoc: &Path, _usmap: &Path, filter: Option<&str>) -> Result<Vec<TextureEntry>> {
+pub fn list_textures(
+    utoc: &Path,
+    _usmap: &Path,
+    filter: Option<&str>,
+) -> Result<Vec<TextureEntry>> {
     // The script-import index UE assigns to the Texture2D class. Computed the same
     // way the cooker does (cityhash of the normalised path) so we can match it
     // without the engine's global script-object table.
@@ -109,8 +113,7 @@ fn collect_package_paths(
         // matching package, `None` for a non-match or any handled failure; a caught
         // panic is treated exactly like the previous `Err(_) => continue` path.
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let chunk_id =
-                FIoChunkId::from_package_id(pkg_id, 0, EIoChunkType::ExportBundleData);
+            let chunk_id = FIoChunkId::from_package_id(pkg_id, 0, EIoChunkType::ExportBundleData);
 
             // Some package entries may not have a readable export-bundle chunk; skip
             // them rather than failing the whole listing.
@@ -220,8 +223,7 @@ pub fn unpack_asset(
     for pkg in store.packages() {
         let pkg_id = pkg.id();
         let matches = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let chunk_id =
-                FIoChunkId::from_package_id(pkg_id, 0, EIoChunkType::ExportBundleData);
+            let chunk_id = FIoChunkId::from_package_id(pkg_id, 0, EIoChunkType::ExportBundleData);
             let data = match store.read(chunk_id) {
                 Ok(d) => d,
                 Err(_) => return false,
@@ -342,7 +344,7 @@ pub fn repack_to_zen(
     use retoc::legacy_asset::FSerializedAssetBundle;
     use retoc::version::EngineVersion;
     use retoc::zen_asset_conversion::build_zen_asset;
-    use retoc::{UEPath, UEPathBuf, build_verse_cell_store};
+    use retoc::{build_verse_cell_store, UEPath, UEPathBuf};
 
     let ver = EngineVersion::UE5_4;
     let toc_version = ver.toc_version();
@@ -579,8 +581,12 @@ pub fn undeploy(game_dir: &Path, name: &str) -> Result<()> {
     }
 
     let json = std::fs::read_to_string(&record_path)?;
-    let record: DeployRecord = serde_json::from_str(&json)
-        .map_err(|e| TexError::Retoc(anyhow::anyhow!("parsing deploy record {}: {e}", record_path.display())))?;
+    let record: DeployRecord = serde_json::from_str(&json).map_err(|e| {
+        TexError::Retoc(anyhow::anyhow!(
+            "parsing deploy record {}: {e}",
+            record_path.display()
+        ))
+    })?;
 
     for f in &record.files {
         match std::fs::remove_file(f) {
@@ -627,7 +633,10 @@ fn read_opt(path: &Path) -> Result<Option<Vec<u8>>> {
 /// Replace a path's final extension with a compound one (e.g. `T_X.uasset` ->
 /// `T_X.m.ubulk`).
 fn with_double_ext(path: &Path, compound_ext: &str) -> PathBuf {
-    let stem = path.file_stem().map(|s| s.to_os_string()).unwrap_or_default();
+    let stem = path
+        .file_stem()
+        .map(|s| s.to_os_string())
+        .unwrap_or_default();
     let mut name = stem;
     name.push(".");
     name.push(compound_ext);
@@ -794,7 +803,10 @@ mod tests {
         let err = deploy(&v2, &base, "zzz_mod_tex_P");
         assert!(err.is_err(), "expected redeploy to fail on missing src");
 
-        assert!(dst_utoc.exists(), "redeploy failure deleted the existing triplet");
+        assert!(
+            dst_utoc.exists(),
+            "redeploy failure deleted the existing triplet"
+        );
         assert_eq!(
             std::fs::read(&dst_utoc).unwrap(),
             v1_utoc,
@@ -867,9 +879,14 @@ mod tests {
             uasset,
             std::fs::metadata(&uasset).unwrap().len(),
             uexp.exists(),
-            uexp.exists().then(|| std::fs::metadata(&uexp).unwrap().len()).unwrap_or(0),
+            uexp.exists()
+                .then(|| std::fs::metadata(&uexp).unwrap().len())
+                .unwrap_or(0),
             ubulk.exists(),
-            ubulk.exists().then(|| std::fs::metadata(&ubulk).unwrap().len()).unwrap_or(0),
+            ubulk
+                .exists()
+                .then(|| std::fs::metadata(&ubulk).unwrap().len())
+                .unwrap_or(0),
         );
     }
 
@@ -897,7 +914,10 @@ mod tests {
         let files = list_pak_files(&pak_path).unwrap();
         assert_eq!(
             files,
-            vec!["G1R/Content/A.txt".to_string(), "G1R/Content/B.txt".to_string()]
+            vec![
+                "G1R/Content/A.txt".to_string(),
+                "G1R/Content/B.txt".to_string()
+            ]
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -933,13 +953,20 @@ mod tests {
         for p in all.iter().take(20) {
             eprintln!("  {p}");
         }
-        assert!(all.len() > 1000, "expected many packages, got {}", all.len());
+        assert!(
+            all.len() > 1000,
+            "expected many packages, got {}",
+            all.len()
+        );
         assert!(
             all.iter().any(|p| p.starts_with("/Game/")),
             "expected at least one /Game/ package path"
         );
         // Sorted + deduped contract.
-        assert!(all.windows(2).all(|w| w[0] < w[1]), "paths not sorted/deduped");
+        assert!(
+            all.windows(2).all(|w| w[0] < w[1]),
+            "paths not sorted/deduped"
+        );
     }
 
     /// The real-container test above needs the game installed; this fast test pins
@@ -985,7 +1012,8 @@ mod tests {
     /// and leaves `~mods` empty.
     #[test]
     fn deploy_then_undeploy_roundtrip() {
-        let base = std::env::temp_dir().join(format!("gore-tex-deploy-test-{}", std::process::id()));
+        let base =
+            std::env::temp_dir().join(format!("gore-tex-deploy-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let game = base.join("game");
         let src = base.join("src");
@@ -1107,7 +1135,10 @@ mod tests {
             "container_flags={flags} (expect 8); {} compressed blocks",
             comp_offsets.len()
         );
-        assert_eq!(flags, 8, "container_flags must be Indexed only (8) for the uncompressed default");
+        assert_eq!(
+            flags, 8,
+            "container_flags must be Indexed only (8) for the uncompressed default"
+        );
         assert!(
             comp_offsets.is_empty(),
             "uncompressed default must have no compressed blocks (method != 0)"

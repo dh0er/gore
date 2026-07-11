@@ -141,9 +141,8 @@ fn fuzz_sizes_and_distributions() {
 
     // Sizes clustered around chunk/quantum boundaries plus a spread of odd values.
     let mut sizes: Vec<usize> = vec![
-        2, 3, 7, 8, 9, 15, 16, 31, 127, 128, 129, 130, 255, 256, 257, 1000, 4096,
-        0x1FFFF, 0x20000, 0x20001, 0x20002, 0x3FFFE, 0x3FFFF, 0x40000, 0x40001, 0x40008,
-        0x60000, 0x60001,
+        2, 3, 7, 8, 9, 15, 16, 31, 127, 128, 129, 130, 255, 256, 257, 1000, 4096, 0x1FFFF, 0x20000,
+        0x20001, 0x20002, 0x3FFFE, 0x3FFFF, 0x40000, 0x40001, 0x40008, 0x60000, 0x60001,
     ];
     for _ in 0..8 {
         sizes.push((next() as usize % 0x50000) + 1);
@@ -165,7 +164,11 @@ fn fuzz_sizes_and_distributions() {
                     .map(|_| {
                         s = s.wrapping_mul(1664525).wrapping_add(1013904223);
                         let r = (s >> 24) as u8;
-                        if r < 220 { 0u8 } else { r }
+                        if r < 220 {
+                            0u8
+                        } else {
+                            r
+                        }
                     })
                     .collect()
             },

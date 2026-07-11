@@ -8,9 +8,21 @@ fn make_model() -> ReflectionModel {
         name: "ItFo_Apple".to_string(),
         parent: None,
         properties: vec![
-            Property { name: "m_Value".to_string(), prop_type: PropType::Int, offset: None },
-            Property { name: "m_Weight".to_string(), prop_type: PropType::Float, offset: None },
-            Property { name: "m_Buoyancy".to_string(), prop_type: PropType::Bool, offset: None },
+            Property {
+                name: "m_Value".to_string(),
+                prop_type: PropType::Int,
+                offset: None,
+            },
+            Property {
+                name: "m_Weight".to_string(),
+                prop_type: PropType::Float,
+                offset: None,
+            },
+            Property {
+                name: "m_Buoyancy".to_string(),
+                prop_type: PropType::Bool,
+                offset: None,
+            },
         ],
     });
     m
@@ -18,7 +30,10 @@ fn make_model() -> ReflectionModel {
 
 fn make_config(overrides: Vec<SingleOverride>) -> OverridesConfig {
     OverridesConfig {
-        meta: MetaConfig { name: "Test".to_string(), delay_ms: 0 },
+        meta: MetaConfig {
+            name: "Test".to_string(),
+            delay_ms: 0,
+        },
         overrides,
     }
 }
@@ -46,7 +61,9 @@ fn unknown_class_error() {
         value: OverrideValue::Int(1),
     }]);
     let errors = validate_config(&cfg, &model);
-    assert!(errors.iter().any(|e| matches!(e, ValidationError::UnknownClass { class, .. } if class == "NonExistentClass")));
+    assert!(errors.iter().any(
+        |e| matches!(e, ValidationError::UnknownClass { class, .. } if class == "NonExistentClass")
+    ));
 }
 
 #[test]
@@ -59,7 +76,9 @@ fn unknown_field_error() {
         value: OverrideValue::Int(1),
     }]);
     let errors = validate_config(&cfg, &model);
-    assert!(errors.iter().any(|e| matches!(e, ValidationError::UnknownField { field, .. } if field == "m_NoSuchField")));
+    assert!(errors.iter().any(
+        |e| matches!(e, ValidationError::UnknownField { field, .. } if field == "m_NoSuchField")
+    ));
 }
 
 #[test]
@@ -69,11 +88,13 @@ fn type_mismatch_int_on_float_field_error() {
         module: "Angelscript".to_string(),
         class: "ItFo_Apple".to_string(),
         field: "m_Weight".to_string(), // Float field
-        value: OverrideValue::Int(5),   // Int value — mismatch
+        value: OverrideValue::Int(5),  // Int value — mismatch
     }]);
     let errors = validate_config(&cfg, &model);
     assert!(
-        errors.iter().any(|e| matches!(e, ValidationError::TypeMismatch { .. })),
+        errors
+            .iter()
+            .any(|e| matches!(e, ValidationError::TypeMismatch { .. })),
         "expected TypeMismatch, got: {errors:?}"
     );
 }
@@ -84,11 +105,13 @@ fn type_mismatch_float_on_bool_field_error() {
     let cfg = make_config(vec![SingleOverride {
         module: "Angelscript".to_string(),
         class: "ItFo_Apple".to_string(),
-        field: "m_Buoyancy".to_string(), // Bool field
+        field: "m_Buoyancy".to_string(),  // Bool field
         value: OverrideValue::Float(1.0), // Float value — mismatch
     }]);
     let errors = validate_config(&cfg, &model);
-    assert!(errors.iter().any(|e| matches!(e, ValidationError::TypeMismatch { .. })));
+    assert!(errors
+        .iter()
+        .any(|e| matches!(e, ValidationError::TypeMismatch { .. })));
 }
 
 #[test]

@@ -1,8 +1,8 @@
 //! Auto-resolve the game container + .usmap from an install dir.
 
+use crate::error::{Result, TexError};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use crate::error::{Result, TexError};
 
 static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -49,7 +49,11 @@ pub fn read_optional(path: &Path) -> std::io::Result<Vec<u8>> {
 /// Given a game install dir, return the main IoStore container `.utoc`.
 pub fn main_container(game_dir: &Path) -> Result<PathBuf> {
     let p = game_dir.join("G1R/Content/Paks/G1R-Windows.utoc");
-    if p.exists() { Ok(p) } else { Err(TexError::ContainerNotFound(p)) }
+    if p.exists() {
+        Ok(p)
+    } else {
+        Err(TexError::ContainerNotFound(p))
+    }
 }
 
 /// Given a game install dir, return the `.usmap` mappings file. When several exist, the
@@ -63,7 +67,10 @@ pub fn usmap(game_dir: &Path) -> Result<PathBuf> {
         .filter(|p| p.extension().is_some_and(|x| x == "usmap"))
         .collect();
     found.sort();
-    found.into_iter().next().ok_or_else(|| TexError::UsmapNotFound(dir))
+    found
+        .into_iter()
+        .next()
+        .ok_or_else(|| TexError::UsmapNotFound(dir))
 }
 
 /// Map a UE virtual asset path to its physical content-relative path inside a

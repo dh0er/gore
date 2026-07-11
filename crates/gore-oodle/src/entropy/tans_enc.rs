@@ -45,7 +45,8 @@ pub(crate) fn encode_tans_array(symbols: &[u8], _level: Level) -> Option<Vec<u8>
     }
 
     let mut weights = [0u32; ALPHABET];
-    let used_symbols = normalize_counts(&mut weights, l, &histo, (src_size - 5) as u32, weights_size);
+    let used_symbols =
+        normalize_counts(&mut weights, l, &histo, (src_size - 5) as u32, weights_size);
     if used_symbols <= 1 {
         return None;
     }
@@ -141,7 +142,10 @@ fn normalize_counts(
             let (_s, index) = pop_min_heap(&mut heap);
             lookup[index] -= 1;
             if lookup[index] > 1 {
-                push_min_heap(&mut heap, (histo[index] as f32 * log_factor_down(lookup[index]), index));
+                push_min_heap(
+                    &mut heap,
+                    (histo[index] as f32 * log_factor_down(lookup[index]), index),
+                );
             }
             d += 1;
         }
@@ -149,7 +153,10 @@ fn normalize_counts(
         while d != 0 {
             let (_s, index) = pop_min_heap(&mut heap);
             lookup[index] += 1;
-            push_min_heap(&mut heap, (histo[index] as f32 * log_factor_up(lookup[index]), index));
+            push_min_heap(
+                &mut heap,
+                (histo[index] as f32 * log_factor_up(lookup[index]), index),
+            );
             d -= 1;
         }
     }
@@ -158,7 +165,11 @@ fn normalize_counts(
 
 fn double_to_uint_round_pow2(v: f64) -> u32 {
     let u = v as u32;
-    u + if v * v > (u as f64) * (u as f64 + 1.0) { 1 } else { 0 }
+    u + if v * v > (u as f64) * (u as f64 + 1.0) {
+        1
+    } else {
+        0
+    }
 }
 
 fn log_factor_up(value: u32) -> f32 {

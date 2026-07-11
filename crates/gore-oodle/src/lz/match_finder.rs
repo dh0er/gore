@@ -300,14 +300,29 @@ mod tests {
     fn assert_roundtrip(src: &[u8], level: Level) {
         let toks = find_raw(src, level);
         let rebuilt = cover(src, &toks);
-        assert_eq!(rebuilt, src, "cover != src (len {}, {:?})", src.len(), level);
+        assert_eq!(
+            rebuilt,
+            src,
+            "cover != src (len {}, {:?})",
+            src.len(),
+            level
+        );
         // Every match must be decoder-legal: offset >= MIN_OFFSET and within window.
         let mut p = 0usize;
         for t in &toks {
             p += t.lit_len as usize;
             if t.match_len > 0 {
-                assert!(t.offset as usize >= MIN_OFFSET, "offset {} < MIN_OFFSET", t.offset);
-                assert!(t.offset as usize <= p, "offset {} past output {}", t.offset, p);
+                assert!(
+                    t.offset as usize >= MIN_OFFSET,
+                    "offset {} < MIN_OFFSET",
+                    t.offset
+                );
+                assert!(
+                    t.offset as usize <= p,
+                    "offset {} past output {}",
+                    t.offset,
+                    p
+                );
             }
             p += t.match_len as usize;
         }

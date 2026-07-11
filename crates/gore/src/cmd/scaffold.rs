@@ -4,8 +4,7 @@ use std::{fs, path::PathBuf};
 use crate::cmd::validate_mod_name;
 
 pub fn run(mod_name: String, mods_dir: PathBuf) -> Result<()> {
-    validate_mod_name(&mod_name)
-        .with_context(|| format!("invalid mod name '{mod_name}'"))?;
+    validate_mod_name(&mod_name).with_context(|| format!("invalid mod name '{mod_name}'"))?;
     let mod_dir = mods_dir.join(&mod_name);
     let scripts_dir = mod_dir.join("Scripts");
     let main_lua_path = scripts_dir.join("main.lua");
@@ -22,8 +21,7 @@ pub fn run(mod_name: String, mods_dir: PathBuf) -> Result<()> {
         .with_context(|| format!("creating '{}'", scripts_dir.display()))?;
 
     // enabled.txt — UE4SS requires this file to load the mod
-    fs::write(mod_dir.join("enabled.txt"), "")
-        .context("writing enabled.txt")?;
+    fs::write(mod_dir.join("enabled.txt"), "").context("writing enabled.txt")?;
 
     // main.lua — template with CDO pattern
     let main_lua = format!(
@@ -63,8 +61,7 @@ apply()
 "#,
         name = mod_name
     );
-    fs::write(&main_lua_path, main_lua)
-        .context("writing main.lua")?;
+    fs::write(&main_lua_path, main_lua).context("writing main.lua")?;
 
     println!("Created mod scaffold -> {}", mod_dir.display());
     Ok(())

@@ -456,7 +456,13 @@ mod tests {
         assert_eq!(r.remaining(), 0);
 
         let q = classify(&h, &[], 1).unwrap();
-        assert_eq!(q, Quantum::Memset { value: 0x5a, out_len: 1 });
+        assert_eq!(
+            q,
+            Quantum::Memset {
+                value: 0x5a,
+                out_len: 1
+            }
+        );
     }
 
     #[test]
@@ -519,8 +525,15 @@ mod tests {
     fn write_then_parse_compressed_recovers_size() {
         // The largest encodable payload is MAX_QUANTUM_PAYLOAD (= QUANTUM_LEN - 1);
         // QUANTUM_LEN itself is not representable (its size field hits the sentinel).
-        for &len in &[1usize, 2, 85, 159, 0x1234, MAX_QUANTUM_PAYLOAD - 1, MAX_QUANTUM_PAYLOAD]
-        {
+        for &len in &[
+            1usize,
+            2,
+            85,
+            159,
+            0x1234,
+            MAX_QUANTUM_PAYLOAD - 1,
+            MAX_QUANTUM_PAYLOAD,
+        ] {
             let mut w = ByteWriter::new();
             write_compressed_header(&mut w, len);
             assert_eq!(w.len(), 3, "non-checksum compressed header is 3 bytes");
@@ -687,7 +700,13 @@ mod tests {
         let out_len = 1usize;
         let h = parse_quantum_header(&mut r, out_len, sh.use_checksum).unwrap();
         let q = classify(&h, &data[r.pos()..], out_len).unwrap();
-        assert_eq!(q, Quantum::Memset { value: 0x5a, out_len });
+        assert_eq!(
+            q,
+            Quantum::Memset {
+                value: 0x5a,
+                out_len
+            }
+        );
     }
 
     #[test]
@@ -705,7 +724,10 @@ mod tests {
         assert!(body.len() >= h.compressed_size as usize);
         let q = classify(&h, body, out_len).unwrap();
         match q {
-            Quantum::Compressed { payload, out_len: ol } => {
+            Quantum::Compressed {
+                payload,
+                out_len: ol,
+            } => {
                 assert_eq!(payload.len(), 85);
                 assert_eq!(ol, out_len);
             }

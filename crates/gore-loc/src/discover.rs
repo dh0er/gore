@@ -218,13 +218,18 @@ mod tests {
 }
 "#;
         let paths = vdf_paths(vdf);
-        assert_eq!(paths, vec![r"C:\Program Files (x86)\Steam", r"D:\SteamLibrary"]);
+        assert_eq!(
+            paths,
+            vec![r"C:\Program Files (x86)\Steam", r"D:\SteamLibrary"]
+        );
     }
 
     #[test]
     fn is_lcache_matches_only_the_localization_cache() {
         assert!(is_lcache(Path::new("AlkimiaLocalization_00000000.lcache")));
-        assert!(is_lcache(Path::new("/x/AlkimiaLocalization_00000000.lcache")));
+        assert!(is_lcache(Path::new(
+            "/x/AlkimiaLocalization_00000000.lcache"
+        )));
         assert!(!is_lcache(Path::new("Other.lcache")));
         assert!(!is_lcache(Path::new("AlkimiaLocalization_00000000.txt")));
     }
@@ -241,10 +246,8 @@ mod tests {
         // Build a temporary game tree and point the hint at the .exe deep inside
         // it; resolution should walk ancestors up to the game root and find the
         // cache under G1R/Story/Cache.
-        let base = std::env::temp_dir().join(format!(
-            "gore_discover_test_{}_exe",
-            std::process::id()
-        ));
+        let base =
+            std::env::temp_dir().join(format!("gore_discover_test_{}_exe", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let root = base.join(GAME_FOLDER);
         let cache_dir = join(&root, CACHE_SUBDIR);

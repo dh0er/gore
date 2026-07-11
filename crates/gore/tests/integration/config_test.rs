@@ -46,8 +46,14 @@ fn config_path_prints_config_json_under_gore() {
 #[test]
 fn unset_clears_the_value() {
     let tmp = TempDir::new().unwrap();
-    gore(tmp.path()).args(["config", "set", "game-path", "X"]).assert().success();
-    gore(tmp.path()).args(["config", "unset", "game-path"]).assert().success();
+    gore(tmp.path())
+        .args(["config", "set", "game-path", "X"])
+        .assert()
+        .success();
+    gore(tmp.path())
+        .args(["config", "unset", "game-path"])
+        .assert()
+        .success();
     gore(tmp.path())
         .args(["config", "get", "game-path"])
         .assert()

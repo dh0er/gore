@@ -46,8 +46,7 @@ pub fn run(dump_path: PathBuf, catalog_path: PathBuf, out: PathBuf) -> Result<()
         }
     }
     let json = serde_json::to_string_pretty(&model)?;
-    fs::write(&out, format!("{json}\n"))
-        .with_context(|| format!("writing '{}'", out.display()))?;
+    fs::write(&out, format!("{json}\n")).with_context(|| format!("writing '{}'", out.display()))?;
     println!(
         "Synced GUI model for {} classes -> {}",
         model.classes.len(),

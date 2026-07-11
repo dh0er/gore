@@ -219,7 +219,9 @@ pub fn parse(uasset: &[u8], uexp: &[u8], ubulk: &[u8], _usmap: &[u8]) -> Result<
     let expected = mip_byte_size(&pd.format, pd.size_x, pd.size_y)
         .ok_or_else(|| corrupt("no block size for format"))?;
     if mip0_entry.data.len() as u64 != expected {
-        return Err(corrupt("mip0 length does not match format/dimension block math"));
+        return Err(corrupt(
+            "mip0 length does not match format/dimension block math",
+        ));
     }
 
     Ok(TexInfo {
@@ -256,9 +258,7 @@ pub fn parse(uasset: &[u8], uexp: &[u8], ubulk: &[u8], _usmap: &[u8]) -> Result<
 /// letting such a texture fail only later at cook.
 pub fn replace_supported(info: &TexInfo) -> bool {
     if info.is_virtual {
-        info.vt_layers == Some(1)
-            && !info.vt_legacy
-            && crate::encode::supports_format(&info.format)
+        info.vt_layers == Some(1) && !info.vt_legacy && crate::encode::supports_format(&info.format)
     } else {
         crate::encode::supports_format(&info.format)
     }
@@ -478,8 +478,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
 
-        let uasset_path =
-            crate::container::unpack_asset(&utoc, &usmap_path, asset, &tmp).unwrap();
+        let uasset_path = crate::container::unpack_asset(&utoc, &usmap_path, asset, &tmp).unwrap();
         let uexp_path = uasset_path.with_extension("uexp");
         let ubulk_path = uasset_path.with_extension("ubulk");
 
@@ -492,7 +491,11 @@ mod tests {
         let info = parse(&uasset, &uexp, &ubulk, &usmap).unwrap();
         eprintln!(
             "T_Water_N: {}x{} {} mip0={} bytes (ubulk={} bytes)",
-            info.width, info.height, info.format, info.mip0.len(), ubulk.len()
+            info.width,
+            info.height,
+            info.format,
+            info.mip0.len(),
+            ubulk.len()
         );
         assert_eq!(info.width, 1024);
         assert_eq!(info.height, 1024);
@@ -798,34 +801,45 @@ mod tests {
     #[test]
     #[ignore = "slow: unpacks from real container; needs game + cached index"]
     fn decode_real_b8g8r8a8_default_alpha_texture() {
-        let Some((info, px)) =
-            extract("/Engine/EditorLandscapeResources/DefaultAlphaTexture", "DefaultAlphaTexture")
-        else {
+        let Some((info, px)) = extract(
+            "/Engine/EditorLandscapeResources/DefaultAlphaTexture",
+            "DefaultAlphaTexture",
+        ) else {
             eprintln!("skip: game or cached index absent");
             return;
         };
         eprintln!(
             "DefaultAlphaTexture: {}x{} {} px={}",
-            info.width, info.height, info.format, px.len()
+            info.width,
+            info.height,
+            info.format,
+            px.len()
         );
         assert_eq!(info.format, "PF_B8G8R8A8");
         assert!(info.width >= 1 && info.height >= 1 && info.width <= 16384 && info.height <= 16384);
         assert_eq!(px.len(), (info.width * info.height) as usize);
-        assert!(is_real_image(&px), "B8G8R8A8 decoded to a flat/identical image");
+        assert!(
+            is_real_image(&px),
+            "B8G8R8A8 decoded to a flat/identical image"
+        );
     }
 
     #[test]
     #[ignore = "slow: unpacks from real container; needs game + cached index"]
     fn decode_real_g8_roboto_distance_field() {
-        let Some((info, px)) =
-            extract("/Engine/EngineFonts/RobotoDistanceField", "RobotoDistanceField")
-        else {
+        let Some((info, px)) = extract(
+            "/Engine/EngineFonts/RobotoDistanceField",
+            "RobotoDistanceField",
+        ) else {
             eprintln!("skip: game or cached index absent");
             return;
         };
         eprintln!(
             "RobotoDistanceField: {}x{} {} px={}",
-            info.width, info.height, info.format, px.len()
+            info.width,
+            info.height,
+            info.format,
+            px.len()
         );
         assert_eq!(info.format, "PF_G8");
         assert!(info.width >= 1 && info.height >= 1 && info.width <= 16384 && info.height <= 16384);
@@ -845,7 +859,10 @@ mod tests {
         };
         eprintln!(
             "T_MeatBug_Crushed_EyeMask: {}x{} {} px={}",
-            info.width, info.height, info.format, px.len()
+            info.width,
+            info.height,
+            info.format,
+            px.len()
         );
         assert_eq!(info.format, "PF_BC4");
         assert!(info.width >= 1 && info.height >= 1 && info.width <= 16384 && info.height <= 16384);
@@ -872,11 +889,13 @@ mod tests {
         let utoc = crate::paths::main_container(&g).unwrap();
         let usmap = crate::paths::usmap(&g).unwrap();
         let leaf = asset.rsplit('/').next().unwrap_or(&asset);
-        let (info, px) =
-            crate::index::extract_by_package_id(&utoc, &usmap, pid, leaf).unwrap();
+        let (info, px) = crate::index::extract_by_package_id(&utoc, &usmap, pid, leaf).unwrap();
         eprintln!(
             "Black_1x1_EXR_Texture_VT ({asset}): {}x{} {} px={}",
-            info.width, info.height, info.format, px.len()
+            info.width,
+            info.height,
+            info.format,
+            px.len()
         );
         assert_eq!(info.format, "PF_FloatRGBA");
         assert!(info.width >= 1 && info.height >= 1 && info.width <= 16384 && info.height <= 16384);
@@ -904,8 +923,7 @@ mod tests {
             eprintln!("skip: game not installed");
             return;
         };
-        let Some(idx) =
-            crate::index::TextureIndex::load(&crate::paths::texture_index_path()).ok()
+        let Some(idx) = crate::index::TextureIndex::load(&crate::paths::texture_index_path()).ok()
         else {
             eprintln!("skip: cached index absent");
             return;
@@ -932,15 +950,16 @@ mod tests {
         for (asset, &pid) in candidates.into_iter().take(400) {
             scanned += 1;
             let leaf = asset.rsplit('/').next().unwrap_or(asset);
-            let Ok((info, px)) =
-                crate::index::extract_by_package_id(&utoc, &usmap, pid, leaf)
+            let Ok((info, px)) = crate::index::extract_by_package_id(&utoc, &usmap, pid, leaf)
             else {
                 continue;
             };
             if info.format == "PF_BC6H" {
                 eprintln!(
                     "BC6H asset found after {scanned} candidates: {asset} {}x{} px={}",
-                    info.width, info.height, px.len()
+                    info.width,
+                    info.height,
+                    px.len()
                 );
                 assert_eq!(px.len(), (info.width * info.height) as usize);
                 assert!(is_real_image(&px), "BC6H decoded to a flat/identical image");

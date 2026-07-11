@@ -275,8 +275,16 @@ pub fn decode_layer0(
     let grid_h = mip.height;
     let grid_px_w = grid_w * tile_size;
     let grid_px_h = grid_h * tile_size;
-    let out_w = if vt.width == 0 { grid_px_w } else { vt.width.min(grid_px_w) };
-    let out_h = if vt.height == 0 { grid_px_h } else { vt.height.min(grid_px_h) };
+    let out_w = if vt.width == 0 {
+        grid_px_w
+    } else {
+        vt.width.min(grid_px_w)
+    };
+    let out_h = if vt.height == 0 {
+        grid_px_h
+    } else {
+        vt.height.min(grid_px_h)
+    };
     let mut bitmap = vec![0u32; (out_w as usize) * (out_h as usize)];
 
     // Per-tile size for the PHYSICAL (bordered) tile. Block-compressed: block
@@ -292,10 +300,10 @@ pub fn decode_layer0(
 
     // Per-tile stride across all layers (== TileDataOffsetPerLayer[NumLayers]);
     // layer 0's intra-tile offset is TileDataOffsetPerLayer[0] == 0.
-    let per_tile_stride = *vt
-        .tile_data_offset_per_layer
-        .last()
-        .ok_or_else(|| corrupt("VT TileDataOffsetPerLayer is empty"))? as u64;
+    let per_tile_stride =
+        *vt.tile_data_offset_per_layer
+            .last()
+            .ok_or_else(|| corrupt("VT TileDataOffsetPerLayer is empty"))? as u64;
     let layer0_offset: u64 = 0;
 
     let is_legacy = vt.is_legacy();
@@ -330,9 +338,8 @@ pub fn decode_layer0(
                 .tile_offset_in_chunk
                 .get(tile_index as usize)
                 .ok_or_else(|| corrupt("legacy VT: TileOffsetInChunk index out of range"))?;
-            let off = in_chunk as u64
-                + mip.get_offset(addr).map(|_| 0u64).unwrap_or(0)
-                + layer0_offset;
+            let off =
+                in_chunk as u64 + mip.get_offset(addr).map(|_| 0u64).unwrap_or(0) + layer0_offset;
             (chunk, off)
         } else {
             // Non-legacy (UE5.0+): ChunkIndexPerMip + BaseOffsetPerMip +
@@ -386,8 +393,7 @@ pub fn decode_layer0(
             }
             let src_row = (y + b) * phys + b;
             let dst_row = dy * ow + tile_x;
-            bitmap[dst_row..dst_row + copy_w]
-                .copy_from_slice(&decoded[src_row..src_row + copy_w]);
+            bitmap[dst_row..dst_row + copy_w].copy_from_slice(&decoded[src_row..src_row + copy_w]);
         }
     }
 
@@ -450,7 +456,13 @@ fn build_mip_pyramid(rgba: &[u8], w: u32, h: u32, num_mips: u32) -> Vec<(u32, u3
 /// SHA-1 of the chunk's raw bytes (matches CUE4Parse `FSHAHash`/UE `FSHA1`).
 /// Self-contained to avoid a new crate dependency for one hash.
 fn sha1(data: &[u8]) -> [u8; 20] {
-    let mut h: [u32; 5] = [0x6745_2301, 0xEFCD_AB89, 0x98BA_DCFE, 0x1032_5476, 0xC3D2_E1F0];
+    let mut h: [u32; 5] = [
+        0x6745_2301,
+        0xEFCD_AB89,
+        0x98BA_DCFE,
+        0x1032_5476,
+        0xC3D2_E1F0,
+    ];
     let ml = (data.len() as u64).wrapping_mul(8);
 
     // Pad: 0x80, then zeros, then 64-bit big-endian bit length, to a 64-byte mult.
@@ -639,8 +651,7 @@ pub fn retile(
                 let in_ty = (py as isize - border as isize).clamp(0, ts as isize - 1) as usize;
                 let src_y = (tile_y + in_ty).min(mh.saturating_sub(1));
                 for px in 0..phys {
-                    let in_tx =
-                        (px as isize - border as isize).clamp(0, ts as isize - 1) as usize;
+                    let in_tx = (px as isize - border as isize).clamp(0, ts as isize - 1) as usize;
                     let src_x = (tile_x + in_tx).min(mw.saturating_sub(1));
                     let s = (src_y * mw + src_x) * 4;
                     let d = (py * phys + px) * 4;
@@ -649,7 +660,8 @@ pub fn retile(
             }
 
             // BC-encode the bordered tile; result must be exactly packed_size.
-            let packed = crate::encode::encode_tile(&bordered, phys as u32, phys as u32, layer0_format)?;
+            let packed =
+                crate::encode::encode_tile(&bordered, phys as u32, phys as u32, layer0_format)?;
             if packed.len() != packed_size {
                 return Err(TexError::VirtualTexture(format!(
                     "VT re-tile: encoded tile is {} bytes, expected {packed_size}",
@@ -693,8 +705,8 @@ pub fn retile(
     for (ch, buf) in new_vt.chunks.iter_mut().zip(chunk_bytes.iter()) {
         ch.size_in_bytes = buf.len() as u32; // == template's (asserted above)
         ch.bulk_data_hash = sha1(buf); // SHA-1 over the chunk's raw bytes
-        // codec_payload_size, codec (per-layer entries), data_resource_index all
-        // kept from the template (identical dims/format/tile config).
+                                       // codec_payload_size, codec (per-layer entries), data_resource_index all
+                                       // kept from the template (identical dims/format/tile config).
     }
 
     Ok((new_vt, chunk_bytes))
@@ -959,10 +971,7 @@ mod tests {
             "2fd4e1c67a2d28fced849ee1bb76e7391b93eb12"
         );
         // A 64-byte input exercises the multi-block padding boundary.
-        assert_eq!(
-            hex(&[b'a'; 64]),
-            "0098ba824b5c16427bd7a1122a5a442a25ec644d"
-        );
+        assert_eq!(hex(&[b'a'; 64]), "0098ba824b5c16427bd7a1122a5a442a25ec644d");
     }
 
     /// Build a tiny self-consistent single-layer VT template (1 mip, 1 tile,
@@ -1036,7 +1045,10 @@ mod tests {
         assert_eq!(new_vt.chunks[0].size_in_bytes, packed as u32);
         // Hash recomputed (no longer the all-zero placeholder).
         assert_ne!(new_vt.chunks[0].bulk_data_hash, [0u8; 20]);
-        assert_eq!(new_vt.chunks[0].bulk_data_hash, super::sha1(&chunk_bytes[0]));
+        assert_eq!(
+            new_vt.chunks[0].bulk_data_hash,
+            super::sha1(&chunk_bytes[0])
+        );
 
         // Decode the re-tiled VT back and check the center pixel ~ the color.
         let (dw, dh, px) = decode_layer0(&new_vt, &chunk_bytes, "PF_DXT1").unwrap();
@@ -1204,8 +1216,7 @@ mod tests {
         let utoc = crate::paths::main_container(&game).unwrap();
         let usmap = crate::paths::usmap(&game).unwrap();
 
-        let asset =
-            "/Game/Assets/Characters/Creatures/Biter/Model/Armor/Textures/T_Biter_Armor_D";
+        let asset = "/Game/Assets/Characters/Creatures/Biter/Model/Armor/Textures/T_Biter_Armor_D";
         let tmp = std::env::temp_dir().join("gore-tex-vt-decode-test");
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
@@ -1220,7 +1231,11 @@ mod tests {
         let rgba = crate::decode::to_rgba8(&info).unwrap();
         eprintln!(
             "Biter VT: {}x{} {} is_virtual={} pixels={}",
-            info.width, info.height, info.format, info.is_virtual, rgba.len()
+            info.width,
+            info.height,
+            info.format,
+            info.is_virtual,
+            rgba.len()
         );
 
         assert!(info.is_virtual);
@@ -1244,8 +1259,7 @@ mod tests {
         );
 
         // Debug artifact for visual inspection vs work/vt_spike_preview.png.
-        let png = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../work/vt_t2_decode.png");
+        let png = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../work/vt_t2_decode.png");
         write_png(&png, info.width, info.height, &rgba);
         eprintln!("wrote debug PNG: {}", png.display());
     }
@@ -1268,8 +1282,7 @@ mod tests {
         let utoc = crate::paths::main_container(&game).unwrap();
         let usmap = crate::paths::usmap(&game).unwrap();
 
-        let asset =
-            "/Game/Assets/Characters/Creatures/Biter/Model/Armor/Textures/T_Biter_Armor_D";
+        let asset = "/Game/Assets/Characters/Creatures/Biter/Model/Armor/Textures/T_Biter_Armor_D";
         let tmp = std::env::temp_dir().join("gore-tex-vt-retile-test");
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
@@ -1284,7 +1297,10 @@ mod tests {
         let fmt = vt.layer_types[0].clone();
         eprintln!(
             "Biter VT template: {}x{} {fmt} mips={} chunks={}",
-            vt.width, vt.height, vt.num_mips, vt.chunks.len()
+            vt.width,
+            vt.height,
+            vt.num_mips,
+            vt.chunks.len()
         );
 
         // Same-dims solid-color RGBA8 (R,G,B,A byte order — encode input order).
@@ -1308,7 +1324,11 @@ mod tests {
         }
         eprintln!(
             "chunk sizes OK: {:?}",
-            new_vt.chunks.iter().map(|c| c.size_in_bytes).collect::<Vec<_>>()
+            new_vt
+                .chunks
+                .iter()
+                .map(|c| c.size_in_bytes)
+                .collect::<Vec<_>>()
         );
 
         // (b) Decode the re-tiled VT back; the whole image should be ~the color.
@@ -1325,6 +1345,9 @@ mod tests {
         }
         eprintln!("max per-channel deviation from solid: R{max_dr} G{max_dg} B{max_db}");
         // BC1 565 quantization; a solid color stays well within a small band.
-        assert!(max_dr <= 12 && max_dg <= 12 && max_db <= 12, "re-tiled solid drifted");
+        assert!(
+            max_dr <= 12 && max_dg <= 12 && max_db <= 12,
+            "re-tiled solid drifted"
+        );
     }
 }

@@ -29,9 +29,10 @@ pub fn validate_config(cfg: &OverridesConfig, model: &ReflectionModel) -> Vec<Va
         //    or the bare AngelScript name (`ItMi_Orenugget`, as some SDK fixtures
         //    parse), and the override may use either, so try the name as-is, with
         //    a `U` added, and with a leading `U` stripped.
-        let stripped = o.class.strip_prefix('U').filter(|r| {
-            r.chars().next().is_some_and(|c| c.is_ascii_uppercase())
-        });
+        let stripped = o
+            .class
+            .strip_prefix('U')
+            .filter(|r| r.chars().next().is_some_and(|c| c.is_ascii_uppercase()));
         let candidates = [
             o.class.clone(),
             format!("U{}", o.class),
@@ -139,7 +140,10 @@ mod validate_tests {
 
     fn make_config(class: &str, field: &str, value: OverrideValue) -> OverridesConfig {
         OverridesConfig {
-            meta: MetaConfig { name: "TestMod".to_string(), delay_ms: 0 },
+            meta: MetaConfig {
+                name: "TestMod".to_string(),
+                delay_ms: 0,
+            },
             overrides: vec![SingleOverride {
                 module: "Angelscript".to_string(),
                 class: class.to_string(),
@@ -167,7 +171,10 @@ mod validate_tests {
         let model = make_model_with_u_prefix();
         let cfg = make_config("UItMi_Orenugget", "m_Value", OverrideValue::Int(100));
         let errors = validate_config(&cfg, &model);
-        assert!(errors.is_empty(), "expected no errors for U-prefixed override: {errors:?}");
+        assert!(
+            errors.is_empty(),
+            "expected no errors for U-prefixed override: {errors:?}"
+        );
     }
 
     #[test]
@@ -176,7 +183,9 @@ mod validate_tests {
         let cfg = make_config("DoesNotExist", "m_Value", OverrideValue::Int(1));
         let errors = validate_config(&cfg, &model);
         assert!(
-            errors.iter().any(|e| matches!(e, ValidationError::UnknownClass { .. })),
+            errors
+                .iter()
+                .any(|e| matches!(e, ValidationError::UnknownClass { .. })),
             "expected UnknownClass error, got: {errors:?}"
         );
     }

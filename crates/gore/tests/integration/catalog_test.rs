@@ -3,13 +3,11 @@ use std::path::PathBuf;
 use tempfile::TempDir;
 
 fn sdk_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/integration/fixtures/sdk")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/integration/fixtures/sdk")
 }
 
 fn fixture_dump() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/integration/fixtures/object_dump.txt")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/integration/fixtures/object_dump.txt")
 }
 
 /// Build a minimal object dump fixture that exercises all three catalog kinds.
@@ -39,9 +37,11 @@ fn catalog_item_produces_json() {
         .unwrap()
         .args([
             "catalog",
-            "--kind", "item",
+            "--kind",
+            "item",
             fixture_dump().to_str().unwrap(),
-            "-o", out.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
         ])
         .assert()
         .success();
@@ -50,11 +50,19 @@ fn catalog_item_produces_json() {
     let content = std::fs::read_to_string(&out).unwrap();
     let items: Vec<serde_json::Value> = serde_json::from_str(&content).unwrap();
     assert!(items.iter().any(|e| e["id"].as_str() == Some("ItFo_Apple")));
-    assert!(items.iter().any(|e| e["id"].as_str() == Some("ItMi_Orenugget")));
+    assert!(items
+        .iter()
+        .any(|e| e["id"].as_str() == Some("ItMi_Orenugget")));
     // Verify field order matches sort_keys=True (category < id < path)
-    let apple = items.iter().find(|e| e["id"].as_str() == Some("ItFo_Apple")).unwrap();
+    let apple = items
+        .iter()
+        .find(|e| e["id"].as_str() == Some("ItFo_Apple"))
+        .unwrap();
     assert_eq!(apple["category"].as_str(), Some("food"));
-    assert_eq!(apple["path"].as_str(), Some("/Script/Angelscript.ItFo_Apple"));
+    assert_eq!(
+        apple["path"].as_str(),
+        Some("/Script/Angelscript.ItFo_Apple")
+    );
 }
 
 #[test]
@@ -66,9 +74,11 @@ fn catalog_npc_produces_json() {
         .unwrap()
         .args([
             "catalog",
-            "--kind", "npc",
+            "--kind",
+            "npc",
             fixture_dump().to_str().unwrap(),
-            "-o", out.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
         ])
         .assert()
         .success();
@@ -76,8 +86,12 @@ fn catalog_npc_produces_json() {
     assert!(out.exists());
     let content = std::fs::read_to_string(&out).unwrap();
     let npcs: Vec<serde_json::Value> = serde_json::from_str(&content).unwrap();
-    assert!(npcs.iter().any(|e| e["id"].as_str() == Some("OC_STT_Diego")));
-    assert!(npcs.iter().any(|e| e["id"].as_str() == Some("Creature_Biter")));
+    assert!(npcs
+        .iter()
+        .any(|e| e["id"].as_str() == Some("OC_STT_Diego")));
+    assert!(npcs
+        .iter()
+        .any(|e| e["id"].as_str() == Some("Creature_Biter")));
 }
 
 #[test]
@@ -89,9 +103,11 @@ fn catalog_knowledge_produces_json() {
         .unwrap()
         .args([
             "catalog",
-            "--kind", "knowledge",
+            "--kind",
+            "knowledge",
             fixture_dump().to_str().unwrap(),
-            "-o", out.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
         ])
         .assert()
         .success();
@@ -99,9 +115,15 @@ fn catalog_knowledge_produces_json() {
     assert!(out.exists());
     let content = std::fs::read_to_string(&out).unwrap();
     let tokens: Vec<serde_json::Value> = serde_json::from_str(&content).unwrap();
-    assert!(tokens.iter().any(|e| e["id"].as_str() == Some("Topic_Diego_209799")));
-    assert!(tokens.iter().any(|e| e["category"].as_str() == Some("info")));
-    assert!(tokens.iter().any(|e| e["category"].as_str() == Some("choice")));
+    assert!(tokens
+        .iter()
+        .any(|e| e["id"].as_str() == Some("Topic_Diego_209799")));
+    assert!(tokens
+        .iter()
+        .any(|e| e["category"].as_str() == Some("info")));
+    assert!(tokens
+        .iter()
+        .any(|e| e["category"].as_str() == Some("choice")));
 }
 
 /// The old catalog command used model.json as input; verify the new command
@@ -115,16 +137,21 @@ fn catalog_item_entry_has_correct_fields() {
         .unwrap()
         .args([
             "catalog",
-            "--kind", "item",
+            "--kind",
+            "item",
             fixture_dump().to_str().unwrap(),
-            "-o", out.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
         ])
         .assert()
         .success();
 
     let content = std::fs::read_to_string(&out).unwrap();
     let items: Vec<serde_json::Value> = serde_json::from_str(&content).unwrap();
-    let apple = items.iter().find(|e| e["id"].as_str() == Some("ItFo_Apple")).unwrap();
+    let apple = items
+        .iter()
+        .find(|e| e["id"].as_str() == Some("ItFo_Apple"))
+        .unwrap();
     // Verify the three fields id/path/category are all present
     assert!(apple.get("id").is_some());
     assert!(apple.get("path").is_some());
@@ -145,7 +172,12 @@ fn gui_model_produces_valid_json() {
     let model_out = tmp.path().join("model.json");
     Command::cargo_bin("gore")
         .unwrap()
-        .args(["dump", sdk_dir().to_str().unwrap(), "-o", model_out.to_str().unwrap()])
+        .args([
+            "dump",
+            sdk_dir().to_str().unwrap(),
+            "-o",
+            model_out.to_str().unwrap(),
+        ])
         .assert()
         .success();
 
@@ -154,9 +186,12 @@ fn gui_model_produces_valid_json() {
     Command::cargo_bin("gore")
         .unwrap()
         .args([
-            "catalog", "--kind", "item",
+            "catalog",
+            "--kind",
+            "item",
             fixture_dump().to_str().unwrap(),
-            "-o", catalog_out.to_str().unwrap(),
+            "-o",
+            catalog_out.to_str().unwrap(),
         ])
         .assert()
         .success();
@@ -167,9 +202,12 @@ fn gui_model_produces_valid_json() {
         .unwrap()
         .args([
             "gui-model",
-            "--model", model_out.to_str().unwrap(),
-            "--catalog", catalog_out.to_str().unwrap(),
-            "-o", gui_out.to_str().unwrap(),
+            "--model",
+            model_out.to_str().unwrap(),
+            "--catalog",
+            catalog_out.to_str().unwrap(),
+            "-o",
+            gui_out.to_str().unwrap(),
         ])
         .assert()
         .success();

@@ -10,7 +10,9 @@ const DEFAULT_DIR: &str =
     r"D:\SteamLibrary\steamapps\common\Gothic 1 Remake\G1R\Content\FMOD\Desktop";
 
 fn main() {
-    let dir = std::env::args().nth(1).unwrap_or_else(|| DEFAULT_DIR.to_string());
+    let dir = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| DEFAULT_DIR.to_string());
     let banks = [
         "Master.bank",
         "Music.bank",

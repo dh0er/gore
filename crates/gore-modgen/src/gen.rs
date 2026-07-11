@@ -329,7 +329,10 @@ mod gen_tests {
     #[test]
     fn gen_lua_doubles_percent_in_mod_name_format_template() {
         let cfg = OverridesConfig {
-            meta: MetaConfig { name: "100%Balance".to_string(), delay_ms: 0 },
+            meta: MetaConfig {
+                name: "100%Balance".to_string(),
+                delay_ms: 0,
+            },
             overrides: vec![SingleOverride {
                 module: "Angelscript".to_string(),
                 class: "ItFo_Apple".to_string(),
@@ -340,14 +343,23 @@ mod gen_tests {
         let lua = gen_lua(&cfg);
         // In the string.format template the % must be doubled (%%); the plain
         // concat ("gave up") keeps the single %.
-        assert!(lua.contains("[100%%Balance] %s.%s"), "format template must double %: {lua}");
-        assert!(lua.contains(r#"[100%Balance] gave up"#), "concat keeps single %: {lua}");
+        assert!(
+            lua.contains("[100%%Balance] %s.%s"),
+            "format template must double %: {lua}"
+        );
+        assert!(
+            lua.contains(r#"[100%Balance] gave up"#),
+            "concat keeps single %: {lua}"
+        );
     }
 
     #[test]
     fn gen_lua_escapes_mod_name_in_log_strings() {
         let cfg = OverridesConfig {
-            meta: MetaConfig { name: r#"Bad"Mod"#.to_string(), delay_ms: 0 },
+            meta: MetaConfig {
+                name: r#"Bad"Mod"#.to_string(),
+                delay_ms: 0,
+            },
             overrides: vec![SingleOverride {
                 module: "Angelscript".to_string(),
                 class: "ItFo_Apple".to_string(),
@@ -357,14 +369,23 @@ mod gen_tests {
         };
         let lua = gen_lua(&cfg);
         // The raw unescaped delimiter must not appear; the escaped form must.
-        assert!(lua.contains(r#"[Bad\"Mod]"#), "mod name must be Lua-escaped: {lua}");
-        assert!(!lua.contains(r#"[Bad"Mod]"#), "raw quote must not leak: {lua}");
+        assert!(
+            lua.contains(r#"[Bad\"Mod]"#),
+            "mod name must be Lua-escaped: {lua}"
+        );
+        assert!(
+            !lua.contains(r#"[Bad"Mod]"#),
+            "raw quote must not leak: {lua}"
+        );
     }
 
     #[test]
     fn gen_lua_emits_bare_class_name_for_u_prefixed_override() {
         let cfg = OverridesConfig {
-            meta: MetaConfig { name: "M".to_string(), delay_ms: 0 },
+            meta: MetaConfig {
+                name: "M".to_string(),
+                delay_ms: 0,
+            },
             overrides: vec![SingleOverride {
                 module: "Angelscript".to_string(),
                 class: "UItMi_Orenugget".to_string(),
@@ -373,8 +394,14 @@ mod gen_tests {
             }],
         };
         let lua = gen_lua(&cfg);
-        assert!(lua.contains(r#"class="ItMi_Orenugget""#), "must emit bare name: {lua}");
-        assert!(!lua.contains("UItMi_Orenugget"), "must not emit U-prefixed name: {lua}");
+        assert!(
+            lua.contains(r#"class="ItMi_Orenugget""#),
+            "must emit bare name: {lua}"
+        );
+        assert!(
+            !lua.contains("UItMi_Orenugget"),
+            "must not emit U-prefixed name: {lua}"
+        );
     }
 
     // ── Bug 1: lua_escape ────────────────────────────────────────────────────
@@ -404,7 +431,10 @@ mod gen_tests {
     #[test]
     fn gen_lua_escapes_value_str_with_special_chars() {
         let cfg = OverridesConfig {
-            meta: MetaConfig { name: "TestMod".to_string(), delay_ms: 0 },
+            meta: MetaConfig {
+                name: "TestMod".to_string(),
+                delay_ms: 0,
+            },
             overrides: vec![SingleOverride {
                 module: "Angelscript".to_string(),
                 class: "SomeClass".to_string(),
@@ -421,7 +451,10 @@ mod gen_tests {
     #[test]
     fn gen_lua_escapes_class_and_field_names() {
         let cfg = OverridesConfig {
-            meta: MetaConfig { name: "TestMod".to_string(), delay_ms: 0 },
+            meta: MetaConfig {
+                name: "TestMod".to_string(),
+                delay_ms: 0,
+            },
             overrides: vec![SingleOverride {
                 module: "Angelscript".to_string(),
                 class: r#"Evil"Class"#.to_string(),

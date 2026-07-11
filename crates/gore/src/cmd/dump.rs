@@ -1,15 +1,13 @@
 use anyhow::{Context, Result};
-use gore_reflect::{
-    model::ReflectionModel,
-    parser::parse_hpp_file,
-};
-use std::{
-    fs,
-    path::PathBuf,
-};
+use gore_reflect::{model::ReflectionModel, parser::parse_hpp_file};
+use std::{fs, path::PathBuf};
 
 pub fn run(sdk_dir: PathBuf, out: PathBuf) -> Result<()> {
-    anyhow::ensure!(sdk_dir.is_dir(), "sdk-dir '{}' is not a directory", sdk_dir.display());
+    anyhow::ensure!(
+        sdk_dir.is_dir(),
+        "sdk-dir '{}' is not a directory",
+        sdk_dir.display()
+    );
 
     let mut merged = ReflectionModel::default();
 
@@ -24,8 +22,8 @@ pub fn run(sdk_dir: PathBuf, out: PathBuf) -> Result<()> {
     hpp_paths.sort();
 
     for path in &hpp_paths {
-        let partial = parse_hpp_file(path)
-            .with_context(|| format!("parsing '{}'", path.display()))?;
+        let partial =
+            parse_hpp_file(path).with_context(|| format!("parsing '{}'", path.display()))?;
         merged.classes.extend(partial.classes);
         merged.enums.extend(partial.enums);
     }
@@ -43,9 +41,13 @@ pub fn run(sdk_dir: PathBuf, out: PathBuf) -> Result<()> {
         }
     }
     let json = serde_json::to_string_pretty(&merged)?;
-    fs::write(&out, json)
-        .with_context(|| format!("writing '{}'", out.display()))?;
+    fs::write(&out, json).with_context(|| format!("writing '{}'", out.display()))?;
 
-    println!("Wrote {} classes, {} enums -> {}", merged.classes.len(), merged.enums.len(), out.display());
+    println!(
+        "Wrote {} classes, {} enums -> {}",
+        merged.classes.len(),
+        merged.enums.len(),
+        out.display()
+    );
     Ok(())
 }

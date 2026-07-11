@@ -342,7 +342,11 @@ pub fn parse_fsb5(b: &[u8]) -> Result<Fsb5, String> {
         // A corrupt/user-modified bank could have non-monotonic offsets or an offset past the data
         // section; validate the range before subtracting so it returns a decode error instead of
         // underflowing (debug panic / release huge size that reads the wrong byte range).
-        let end = if i + 1 == n { data_size } else { raws[i + 1].data_off };
+        let end = if i + 1 == n {
+            data_size
+        } else {
+            raws[i + 1].data_off
+        };
         if end > data_size || r.data_off > end {
             return Err("FSB5 sample offsets out of range (corrupt bank)".into());
         }
@@ -451,7 +455,10 @@ pub fn wav_pcm16(rate: u32, channels: u32, pcm: &[i16]) -> Vec<u8> {
 /// Extract one Vorbis sample (by index in FSB5 #0) to a playable Ogg Vorbis byte buffer.
 pub fn extract_ogg(block: &[u8], fsb: &Fsb5, index: usize) -> Result<Vec<u8>, String> {
     if fsb.codec != Codec::Vorbis {
-        return Err(format!("extract_ogg only supports Vorbis (codec {:?})", fsb.codec));
+        return Err(format!(
+            "extract_ogg only supports Vorbis (codec {:?})",
+            fsb.codec
+        ));
     }
     let s = fsb.samples.get(index).ok_or("sample index out of range")?;
     let crc = s.vorbis_crc32.ok_or("sample has no Vorbis setup CRC32")?;
@@ -494,7 +501,9 @@ pub fn read_wav_pcm16(b: &[u8]) -> Result<(u32, u32, Vec<i16>), String> {
         return Err("WAV has zero channels".into());
     }
     if bits != 16 {
-        return Err(format!("WAV not 16-bit (got {bits}); convert to PCM16 first"));
+        return Err(format!(
+            "WAV not 16-bit (got {bits}); convert to PCM16 first"
+        ));
     }
     let data = data.ok_or("WAV missing data chunk")?;
     let samples = data
@@ -565,7 +574,12 @@ pub struct Pcm16Sample {
 }
 
 /// Build an UNENCRYPTED FSB5 v1 holding one PCM16 sample.
-pub fn build_fsb5_pcm16(name: &str, freq: u32, channels: u32, pcm: &[i16]) -> Result<Vec<u8>, String> {
+pub fn build_fsb5_pcm16(
+    name: &str,
+    freq: u32,
+    channels: u32,
+    pcm: &[i16],
+) -> Result<Vec<u8>, String> {
     build_fsb5_pcm16_multi(&[Pcm16Sample {
         name: name.to_string(),
         freq,

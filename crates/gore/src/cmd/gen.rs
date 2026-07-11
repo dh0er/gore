@@ -12,19 +12,18 @@ pub fn run(overrides_path: PathBuf, mods_dir: PathBuf, model_path: Option<PathBu
     // 1. Parse overrides.toml
     let toml_str = fs::read_to_string(&overrides_path)
         .with_context(|| format!("reading overrides '{}'", overrides_path.display()))?;
-    let cfg: OverridesConfig = toml::from_str(&toml_str)
-        .with_context(|| "parsing overrides.toml")?;
+    let cfg: OverridesConfig =
+        toml::from_str(&toml_str).with_context(|| "parsing overrides.toml")?;
 
     // 1b. Validate mod name is safe (no path traversal)
-    validate_mod_name(&cfg.meta.name)
-        .with_context(|| "invalid mod name in overrides.toml")?;
+    validate_mod_name(&cfg.meta.name).with_context(|| "invalid mod name in overrides.toml")?;
 
     // 2. Optionally validate against reflection model
     if let Some(model_path) = model_path {
         let json = fs::read_to_string(&model_path)
             .with_context(|| format!("reading model.json '{}'", model_path.display()))?;
-        let model: ReflectionModel = serde_json::from_str(&json)
-            .with_context(|| "parsing model.json")?;
+        let model: ReflectionModel =
+            serde_json::from_str(&json).with_context(|| "parsing model.json")?;
 
         let errors = validate_config(&cfg, &model);
         if !errors.is_empty() {
@@ -46,10 +45,8 @@ pub fn run(overrides_path: PathBuf, mods_dir: PathBuf, model_path: Option<PathBu
     fs::create_dir_all(&scripts_dir)
         .with_context(|| format!("creating mod dir '{}'", scripts_dir.display()))?;
 
-    fs::write(mod_dir.join("enabled.txt"), "")
-        .context("writing enabled.txt")?;
-    fs::write(scripts_dir.join("main.lua"), &lua)
-        .context("writing main.lua")?;
+    fs::write(mod_dir.join("enabled.txt"), "").context("writing enabled.txt")?;
+    fs::write(scripts_dir.join("main.lua"), &lua).context("writing main.lua")?;
 
     println!("Generated mod '{}' -> {}", cfg.meta.name, mod_dir.display());
     Ok(())

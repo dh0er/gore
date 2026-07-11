@@ -377,8 +377,7 @@ fn decode_multi_array(src: &[u8], out: &mut [u8], array_count: usize) -> Result<
         let lenlog2_chunksize = num_indexes - array_count;
         let (_, used1) = decode_array_exact(&src[p..], &mut interval_indexes, num_indexes)?;
         p += used1;
-        let (_, used2) =
-            decode_array_exact(&src[p..], &mut interval_lenlog2, lenlog2_chunksize)?;
+        let (_, used2) = decode_array_exact(&src[p..], &mut interval_lenlog2, lenlog2_chunksize)?;
         p += used2;
         for &b in &interval_lenlog2[..lenlog2_chunksize] {
             if b > 16 {
@@ -483,9 +482,8 @@ fn block_size(src: &[u8], capacity: usize) -> Result<(usize, usize)> {
 fn decode_intervals(src: &[u8], lenlog2: &[u8], num_lens: usize) -> Result<Vec<u32>> {
     const BITMASKS: [u32; 32] = [
         0x1, 0x3, 0x7, 0xf, 0x1f, 0x3f, 0x7f, 0xff, 0x1ff, 0x3ff, 0x7ff, 0xfff, 0x1fff, 0x3fff,
-        0x7fff, 0xffff, 0x1ffff, 0x3ffff, 0x7ffff, 0xfffff, 0x1fffff, 0x3fffff, 0x7fffff,
-        0xffffff, 0x1ffffff, 0x3ffffff, 0x7ffffff, 0xfffffff, 0x1fffffff, 0x3fffffff, 0x7fffffff,
-        0xffffffff,
+        0x7fff, 0xffff, 0x1ffff, 0x3ffff, 0x7ffff, 0xfffff, 0x1fffff, 0x3fffff, 0x7fffff, 0xffffff,
+        0x1ffffff, 0x3ffffff, 0x7ffffff, 0xfffffff, 0x1fffffff, 0x3fffffff, 0x7fffffff, 0xffffffff,
     ];
     let mut out = vec![0u32; num_lens];
     let n = src.len();
@@ -575,11 +573,7 @@ fn read_u16(src: &[u8], idx: usize) -> u32 {
 // ---------------------------------------------------------------------------------------
 
 /// Encode `symbols` into `dst` choosing the smallest mode; returns bytes written.
-pub(crate) fn encode_array(
-    symbols: &[u8],
-    dst: &mut ByteWriter,
-    level: Level,
-) -> Result<usize> {
+pub(crate) fn encode_array(symbols: &[u8], dst: &mut ByteWriter, level: Level) -> Result<usize> {
     if symbols.len() > 0x3FFFF {
         return Err(Error::InputTooLarge(symbols.len()));
     }
@@ -650,7 +644,13 @@ mod tests {
         for _ in 0..40_000 {
             seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
             let r = (seed >> 24) as u8;
-            data.push(if r < 200 { b'a' } else if r < 240 { b' ' } else { b'a' + (r % 26) });
+            data.push(if r < 200 {
+                b'a'
+            } else if r < 240 {
+                b' '
+            } else {
+                b'a' + (r % 26)
+            });
         }
         for &len in &[40_000usize, 0x20000.min(data.len())] {
             roundtrip(&data[..len]);
@@ -688,7 +688,12 @@ mod tests {
         assert_eq!(buf.len(), n, "encode_array returned wrong length");
         let mut out = vec![0u8; data.len()];
         let used = decode_array(&buf, &mut out).unwrap();
-        assert_eq!(used, n, "decode consumed != produced for len {}", data.len());
+        assert_eq!(
+            used,
+            n,
+            "decode consumed != produced for len {}",
+            data.len()
+        );
         assert_eq!(out, data, "roundtrip mismatch for len {}", data.len());
         buf
     }
@@ -706,7 +711,11 @@ mod tests {
             let data = vec![0xABu8; n];
             let buf = roundtrip(&data);
             if n >= 6 {
-                assert!(buf.len() < n + 3, "all-same len {n} did not shrink: {}", buf.len());
+                assert!(
+                    buf.len() < n + 3,
+                    "all-same len {n} did not shrink: {}",
+                    buf.len()
+                );
             }
         }
     }
@@ -714,7 +723,9 @@ mod tests {
     #[test]
     fn roundtrip_two_symbols_5050() {
         for &n in SIZES {
-            let data: Vec<u8> = (0..n).map(|i| if i % 2 == 0 { 7u8 } else { 200u8 }).collect();
+            let data: Vec<u8> = (0..n)
+                .map(|i| if i % 2 == 0 { 7u8 } else { 200u8 })
+                .collect();
             roundtrip(&data);
         }
     }
@@ -824,7 +835,8 @@ mod tests {
         for (name, gen) in cases {
             for &n in &[32usize, 64, 256, 4096, 70_000] {
                 let data = gen(n);
-                if let Some(arr) = super::super::tans_enc::encode_tans_array(&data, Level::Default) {
+                if let Some(arr) = super::super::tans_enc::encode_tans_array(&data, Level::Default)
+                {
                     let mut out = vec![0u8; n];
                     let used = decode_array(&arr, &mut out)
                         .unwrap_or_else(|e| panic!("tans decode {name} n={n}: {e:?}"));

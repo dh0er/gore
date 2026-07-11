@@ -58,13 +58,25 @@ pub fn list(bank: PathBuf, key: Option<String>) -> Result<()> {
         .context("decoding bank")?;
     println!("{} samples, codec {:?}", f0.samples.len(), f0.codec);
     for (i, s) in f0.samples.iter().enumerate() {
-        let secs = if s.freq > 0 { s.num_samples as f64 / s.freq as f64 } else { 0.0 };
-        println!("#{i:<5} {:6}Hz {}ch {:6.2}s  {}", s.freq, s.channels, secs, s.name);
+        let secs = if s.freq > 0 {
+            s.num_samples as f64 / s.freq as f64
+        } else {
+            0.0
+        };
+        println!(
+            "#{i:<5} {:6}Hz {}ch {:6.2}s  {}",
+            s.freq, s.channels, secs, s.name
+        );
     }
     Ok(())
 }
 
-pub fn extract(bank: PathBuf, out: PathBuf, sample: Option<String>, key: Option<String>) -> Result<()> {
+pub fn extract(
+    bank: PathBuf,
+    out: PathBuf,
+    sample: Option<String>,
+    key: Option<String>,
+) -> Result<()> {
     let bytes = std::fs::read(&bank).with_context(|| format!("reading '{}'", bank.display()))?;
     let (block, fsb) = gore_fmod::decrypt_fsb0(&bytes, &key_bytes(key))
         .map_err(|e| anyhow::anyhow!("{e}"))
@@ -98,17 +110,31 @@ pub fn extract(bank: PathBuf, out: PathBuf, sample: Option<String>, key: Option<
             }
         }
     }
-    println!("extracted {ok} wav file(s) to {} ({skipped} skipped)", out.display());
+    println!(
+        "extracted {ok} wav file(s) to {} ({skipped} skipped)",
+        out.display()
+    );
     Ok(())
 }
 
 fn sanitize(name: &str) -> String {
     name.chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
-pub fn replace(map: PathBuf, bank: PathBuf, out: Option<PathBuf>, key: Option<String>) -> Result<()> {
+pub fn replace(
+    map: PathBuf,
+    bank: PathBuf,
+    out: Option<PathBuf>,
+    key: Option<String>,
+) -> Result<()> {
     let key = key_bytes(key);
     let bytes = read_pristine_bank(&bank)?;
 
@@ -121,17 +147,25 @@ pub fn replace(map: PathBuf, bank: PathBuf, out: Option<PathBuf>, key: Option<St
     }
 
     // resolve WAV paths relative to the map file's directory
-    let base = map.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
+    let base = map
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
     let mut replacements = Vec::with_capacity(entries.len());
     for (name, wav_rel) in &entries {
         let wav_path = resolve(&base, wav_rel);
         let wav = std::fs::read(&wav_path)
             .with_context(|| format!("reading wav '{}'", wav_path.display()))?;
-        let (rate, channels, pcm) = gore_fmod::read_wav_pcm16(&wav)
-            .map_err(|e| anyhow::anyhow!("{wav_rel}: {e}"))?;
+        let (rate, channels, pcm) =
+            gore_fmod::read_wav_pcm16(&wav).map_err(|e| anyhow::anyhow!("{wav_rel}: {e}"))?;
         replacements.push((
             name.clone(),
-            gore_fmod::Pcm16Sample { name: name.clone(), freq: rate, channels, pcm },
+            gore_fmod::Pcm16Sample {
+                name: name.clone(),
+                freq: rate,
+                channels,
+                pcm,
+            },
         ));
     }
     let count = entries.len();
@@ -157,7 +191,8 @@ fn write_result(bank: &Path, new_bank: &[u8], out: Option<PathBuf>, count: usize
             // the live bank while a stale pre-update *.gore-bak lingered — without this, that stale
             // backup would survive and a later `restore` would write it over the updated bank. When
             // the live bank is already injected, an existing backup is the true pristine: keep it.
-            let live = std::fs::read(bank).with_context(|| format!("reading '{}'", bank.display()))?;
+            let live =
+                std::fs::read(bank).with_context(|| format!("reading '{}'", bank.display()))?;
             if gore_fmod::is_pristine_bank(&live) {
                 std::fs::write(&bak, &live)
                     .with_context(|| format!("backing up to '{}'", bak.display()))?;
@@ -183,9 +218,13 @@ pub fn export_patch(map: PathBuf, out: PathBuf) -> Result<()> {
     if entries.is_empty() {
         bail!("map is empty");
     }
-    let base = map.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
+    let base = map
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
 
-    let file = std::fs::File::create(&out).with_context(|| format!("creating '{}'", out.display()))?;
+    let file =
+        std::fs::File::create(&out).with_context(|| format!("creating '{}'", out.display()))?;
     let mut zip = zip::ZipWriter::new(file);
     let opts: zip::write::FileOptions<()> =
         zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
@@ -201,23 +240,36 @@ pub fn export_patch(map: PathBuf, out: PathBuf) -> Result<()> {
         zip.write_all(&wav).context("zip write")?;
         manifest.insert(name.clone(), entry);
     }
-    zip.start_file("manifest.json", opts).context("zip manifest")?;
+    zip.start_file("manifest.json", opts)
+        .context("zip manifest")?;
     zip.write_all(&serde_json::to_vec_pretty(&manifest)?)?;
     zip.finish().context("finishing zip")?;
-    println!("wrote patch {} ({} sample(s))", out.display(), entries.len());
+    println!(
+        "wrote patch {} ({} sample(s))",
+        out.display(),
+        entries.len()
+    );
     Ok(())
 }
 
 /// Apply a patch zip (from `export-patch`) to a bank.
-pub fn apply_patch(patch: PathBuf, bank: PathBuf, out: Option<PathBuf>, key: Option<String>) -> Result<()> {
+pub fn apply_patch(
+    patch: PathBuf,
+    bank: PathBuf,
+    out: Option<PathBuf>,
+    key: Option<String>,
+) -> Result<()> {
     let key = key_bytes(key);
     let bytes = read_pristine_bank(&bank)?;
 
-    let file = std::fs::File::open(&patch).with_context(|| format!("opening '{}'", patch.display()))?;
+    let file =
+        std::fs::File::open(&patch).with_context(|| format!("opening '{}'", patch.display()))?;
     let mut zip = zip::ZipArchive::new(file).context("reading patch zip")?;
 
     let manifest: BTreeMap<String, String> = {
-        let mut f = zip.by_name("manifest.json").context("patch missing manifest.json")?;
+        let mut f = zip
+            .by_name("manifest.json")
+            .context("patch missing manifest.json")?;
         let mut s = String::new();
         f.read_to_string(&mut s)?;
         serde_json::from_str(&s).context("parsing manifest.json")?
@@ -236,11 +288,16 @@ pub fn apply_patch(patch: PathBuf, bank: PathBuf, out: Option<PathBuf>, key: Opt
             f.read_to_end(&mut buf)?;
             buf
         };
-        let (rate, channels, pcm) = gore_fmod::read_wav_pcm16(&wav)
-            .map_err(|e| anyhow::anyhow!("{name}: {e}"))?;
+        let (rate, channels, pcm) =
+            gore_fmod::read_wav_pcm16(&wav).map_err(|e| anyhow::anyhow!("{name}: {e}"))?;
         replacements.push((
             name.clone(),
-            gore_fmod::Pcm16Sample { name: name.clone(), freq: rate, channels, pcm },
+            gore_fmod::Pcm16Sample {
+                name: name.clone(),
+                freq: rate,
+                channels,
+                pcm,
+            },
         ));
     }
     let count = replacements.len();

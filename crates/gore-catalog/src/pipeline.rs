@@ -54,10 +54,29 @@ fn is_armor_item_class(name: &str) -> bool {
     }
     // Non-item families that contain "Armor"/"Armory"/"SuperArmor".
     const NON_ITEM_PREFIXES: &[&str] = &[
-        "GE_", "GA_", "GC_", "GVL_", "CS_", "Choice", "Document", "Conversation",
-        "DailyRoutine", "Module_", "AIAgent", "CharacterDefinition",
-        "CharacterVisuals", "AllArmors", "Quest", "Memory", "Spawner",
-        "Glossary", "Gothic", "Hit_", "SpawnAIAgent", "SpawnMeshes", "OC_",
+        "GE_",
+        "GA_",
+        "GC_",
+        "GVL_",
+        "CS_",
+        "Choice",
+        "Document",
+        "Conversation",
+        "DailyRoutine",
+        "Module_",
+        "AIAgent",
+        "CharacterDefinition",
+        "CharacterVisuals",
+        "AllArmors",
+        "Quest",
+        "Memory",
+        "Spawner",
+        "Glossary",
+        "Gothic",
+        "Hit_",
+        "SpawnAIAgent",
+        "SpawnMeshes",
+        "OC_",
     ];
     if NON_ITEM_PREFIXES.iter().any(|p| name.starts_with(p)) {
         return false;
@@ -292,10 +311,11 @@ pub fn build_knowledge_catalog(lines: &[&str]) -> Vec<KnowledgeEntry> {
                 "topic"
             } else if name.starts_with("Info_") {
                 "info"
-            } else if name
-                .strip_prefix("Choice")
-                .is_some_and(|r| r.chars().next().is_some_and(|c| c.is_ascii_alphanumeric() || c == '_'))
-            {
+            } else if name.strip_prefix("Choice").is_some_and(|r| {
+                r.chars()
+                    .next()
+                    .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
+            }) {
                 // Python pattern was `Choice[A-Za-z0-9_]+`: a bare abstract
                 // `Choice` class (no trailing word char) is NOT a token.
                 "choice"
@@ -359,7 +379,10 @@ mod tests {
         let by_id: std::collections::HashMap<&str, &ItemEntry> =
             entries.iter().map(|e| (e.id.as_str(), e)).collect();
         assert_eq!(by_id["ItMi_Orenugget"].category, "misc");
-        assert_eq!(by_id["ItMi_Orenugget"].path, "/Script/Angelscript.ItMi_Orenugget");
+        assert_eq!(
+            by_id["ItMi_Orenugget"].path,
+            "/Script/Angelscript.ItMi_Orenugget"
+        );
         assert_eq!(by_id["ItAr_Rune_FireBall"].category, "rune");
         assert_eq!(by_id["ItAr_Scroll_Charm"].category, "scroll");
         assert_eq!(by_id["ItKeyDefault"].category, "key");
@@ -398,7 +421,10 @@ mod tests {
         let by_id: std::collections::HashMap<&str, &NpcEntry> =
             entries.iter().map(|e| (e.id.as_str(), e)).collect();
         assert_eq!(by_id["OC_STT_Diego"].category, "human");
-        assert_eq!(by_id["OC_STT_Diego"].class, "CharacterDefinition_Human_OC_STT_Diego");
+        assert_eq!(
+            by_id["OC_STT_Diego"].class,
+            "CharacterDefinition_Human_OC_STT_Diego"
+        );
     }
 
     #[test]
@@ -445,8 +471,13 @@ mod tests {
         let mut sorted = ids.clone();
         sorted.sort_unstable();
         assert_eq!(ids, sorted);
-        assert_eq!(ids.iter().filter(|&&id| id == "Topic_Diego_209799").count(), 1);
-        assert!(!ids.iter().any(|id| id.contains("Sword") || id.contains("CharacterDefinition")));
+        assert_eq!(
+            ids.iter().filter(|&&id| id == "Topic_Diego_209799").count(),
+            1
+        );
+        assert!(!ids
+            .iter()
+            .any(|id| id.contains("Sword") || id.contains("CharacterDefinition")));
     }
 
     #[test]
@@ -458,7 +489,10 @@ mod tests {
         let entries = build_knowledge_catalog(&lines);
         let ids: Vec<&str> = entries.iter().map(|e| e.id.as_str()).collect();
         assert!(ids.contains(&"ChoiceDiegoStart"), "got: {ids:?}");
-        assert!(!ids.contains(&"Choice"), "bare Choice must be excluded: {ids:?}");
+        assert!(
+            !ids.contains(&"Choice"),
+            "bare Choice must be excluded: {ids:?}"
+        );
     }
 
     #[test]
@@ -475,7 +509,9 @@ mod tests {
 
         // Visual-definition companions and bases -> rejected.
         assert!(!is_armor_item_class("Ore_Armor_H_VisualsDefinition"));
-        assert!(!is_armor_item_class("Armor_OC_EBR_Gomez_100_VisualDefinition"));
+        assert!(!is_armor_item_class(
+            "Armor_OC_EBR_Gomez_100_VisualDefinition"
+        ));
         assert!(!is_armor_item_class("BaseArmorDefinition"));
         assert!(!is_armor_item_class("ArmorVisualsDefinition_Human"));
 
@@ -487,10 +523,10 @@ mod tests {
         assert!(!is_armor_item_class("GE_Crw_Armor_H"));
         assert!(!is_armor_item_class("GothicAchievement_Armor_01"));
         assert!(!is_armor_item_class("OC_Armory_Door"));
-    // An "Armory" segment (room/building) is not an armor item, even with a
-    // short prefix not covered by NON_ITEM_PREFIXES.
-    assert!(!is_armor_item_class("NC_Armory_Door"));
-    assert!(!is_armor_item_class("Vlk_Armory"));
+        // An "Armory" segment (room/building) is not an armor item, even with a
+        // short prefix not covered by NON_ITEM_PREFIXES.
+        assert!(!is_armor_item_class("NC_Armory_Door"));
+        assert!(!is_armor_item_class("Vlk_Armory"));
         assert!(!is_armor_item_class("Spawner_OC_Castle_Armory_Misc_01"));
         assert!(!is_armor_item_class("Hit_SuperArmor_Player"));
         assert!(!is_armor_item_class("CharacterVisualsDefinition_OreArmor"));

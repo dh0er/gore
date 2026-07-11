@@ -15,7 +15,10 @@ fn absurd_output_size_errors() {
 #[test]
 fn zero_len_is_empty() {
     assert_eq!(decompress(&[], 0).unwrap(), Vec::<u8>::new());
-    assert_eq!(decompress(&[0xff, 0xff, 0xff], 0).unwrap(), Vec::<u8>::new());
+    assert_eq!(
+        decompress(&[0xff, 0xff, 0xff], 0).unwrap(),
+        Vec::<u8>::new()
+    );
 }
 
 /// Truncated stream header / quantum.

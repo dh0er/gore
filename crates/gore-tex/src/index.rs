@@ -27,15 +27,25 @@ pub struct TextureIndex {
 
 impl TextureIndex {
     pub fn to_json(&self) -> Result<Vec<u8>> {
-        serde_json::to_vec(self).map_err(|e| crate::error::TexError::Io(
-            std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())))
+        serde_json::to_vec(self).map_err(|e| {
+            crate::error::TexError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                e.to_string(),
+            ))
+        })
     }
     pub fn from_json(bytes: &[u8]) -> Result<Self> {
-        serde_json::from_slice(bytes).map_err(|e| crate::error::TexError::Io(
-            std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())))
+        serde_json::from_slice(bytes).map_err(|e| {
+            crate::error::TexError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                e.to_string(),
+            ))
+        })
     }
     pub fn save(&self, path: &Path) -> Result<()> {
-        if let Some(p) = path.parent() { std::fs::create_dir_all(p)?; }
+        if let Some(p) = path.parent() {
+            std::fs::create_dir_all(p)?;
+        }
         std::fs::write(path, self.to_json()?)?;
         Ok(())
     }
@@ -47,7 +57,9 @@ impl TextureIndex {
     /// match `expected_build_id` (e.g. a game patch changed the .usmap) — so a stale
     /// cache mapping asset paths to outdated package ids is never trusted.
     pub fn load_current(path: &Path, expected_build_id: &str) -> Option<Self> {
-        Self::load(path).ok().filter(|i| i.build_id == expected_build_id)
+        Self::load(path)
+            .ok()
+            .filter(|i| i.build_id == expected_build_id)
     }
 }
 
@@ -57,7 +69,10 @@ impl TextureIndex {
 /// rewrites it invalidates the cache even when the `.usmap` keeps the same name. (`fs::metadata`
 /// is a cheap stat — no file read.)
 pub fn build_id_for(utoc: &Path, usmap: &Path) -> String {
-    let name = usmap.file_name().and_then(|n| n.to_str()).unwrap_or("unknown");
+    let name = usmap
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("unknown");
     let (len, mtime) = std::fs::metadata(utoc)
         .ok()
         .map(|m| {
@@ -126,7 +141,10 @@ pub fn build_index(utoc: &Path, build_id: &str) -> Result<TextureIndex> {
 
 /// Extract a texture to RGBA by package id (fast: no scan). Returns (TexInfo, rgba u32 px).
 pub fn extract_by_package_id(
-    utoc: &Path, usmap: &Path, package_id: u64, leaf: &str,
+    utoc: &Path,
+    usmap: &Path,
+    package_id: u64,
+    leaf: &str,
 ) -> Result<(crate::decode::TexInfo, Vec<u32>)> {
     // Unique per-call temp dir so overlapping extracts don't clobber each other's cooked files.
     let tmp = crate::paths::unique_temp_dir("gore-tex-idx-extract")?;
@@ -137,8 +155,11 @@ pub fn extract_by_package_id(
         let uexp = uasset.with_extension("uexp");
         let ubulk = uasset.with_extension("ubulk");
         let info = crate::decode::parse(
-            &std::fs::read(&uasset)?, &std::fs::read(&uexp)?,
-            &crate::paths::read_optional(&ubulk)?, &std::fs::read(usmap)?)?;
+            &std::fs::read(&uasset)?,
+            &std::fs::read(&uexp)?,
+            &crate::paths::read_optional(&ubulk)?,
+            &std::fs::read(usmap)?,
+        )?;
         let px = crate::decode::to_rgba8(&info)?;
         Ok((info, px))
     })();
@@ -151,8 +172,12 @@ mod tests {
     use super::*;
     #[test]
     fn index_json_roundtrips() {
-        let mut idx = TextureIndex { build_id: "G1R-5.4.3".into(), entries: BTreeMap::new() };
-        idx.entries.insert("/Game/UI/T_X".into(), 0x1122334455667788);
+        let mut idx = TextureIndex {
+            build_id: "G1R-5.4.3".into(),
+            entries: BTreeMap::new(),
+        };
+        idx.entries
+            .insert("/Game/UI/T_X".into(), 0x1122334455667788);
         let back = TextureIndex::from_json(&idx.to_json().unwrap()).unwrap();
         assert_eq!(idx, back);
     }
@@ -162,7 +187,10 @@ mod tests {
         let dir = std::env::temp_dir().join("gore-tex-idx-stale");
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join("texture_index.json");
-        let idx = TextureIndex { build_id: "G1R-5.4.3-old.usmap".into(), entries: BTreeMap::new() };
+        let idx = TextureIndex {
+            build_id: "G1R-5.4.3-old.usmap".into(),
+            entries: BTreeMap::new(),
+        };
         idx.save(&path).unwrap();
         // Matching build id -> Some; mismatched (game patched) -> None; absent -> None.
         assert!(TextureIndex::load_current(&path, "G1R-5.4.3-old.usmap").is_some());
@@ -196,17 +224,24 @@ mod tests {
     #[test]
     #[ignore = "slow: unpack from real container"]
     fn id_extract_matches_path_extract() {
-        let Some(g) = game_dir() else { eprintln!("skip"); return; };
+        let Some(g) = game_dir() else {
+            eprintln!("skip");
+            return;
+        };
         let utoc = crate::paths::main_container(&g).unwrap();
         let usmap = crate::paths::usmap(&g).unwrap();
         let asset = "/Game/UI/Textures/Common/T_HardwareCursor";
         let tmp = std::env::temp_dir().join("gore-tex-ref");
-        let _ = std::fs::remove_dir_all(&tmp); std::fs::create_dir_all(&tmp).unwrap();
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
         let ua = crate::container::unpack_asset(&utoc, &usmap, asset, &tmp).unwrap();
         let ref_info = crate::decode::parse(
-            &std::fs::read(&ua).unwrap(), &std::fs::read(ua.with_extension("uexp")).unwrap(),
+            &std::fs::read(&ua).unwrap(),
+            &std::fs::read(ua.with_extension("uexp")).unwrap(),
             &std::fs::read(ua.with_extension("ubulk")).unwrap_or_default(),
-            &std::fs::read(&usmap).unwrap()).unwrap();
+            &std::fs::read(&usmap).unwrap(),
+        )
+        .unwrap();
         let ref_px = crate::decode::to_rgba8(&ref_info).unwrap();
         let idx = build_index(&utoc, "t").unwrap();
         let pid = *idx.entries.get(asset).unwrap();

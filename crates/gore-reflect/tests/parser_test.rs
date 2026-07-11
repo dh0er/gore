@@ -29,7 +29,9 @@ fn model_lookup_by_name() {
     };
     model.classes.push(cls);
 
-    let found = model.find_class("UItemDefinition").expect("should find class");
+    let found = model
+        .find_class("UItemDefinition")
+        .expect("should find class");
     assert_eq!(found.name, "UItemDefinition");
     assert_eq!(found.properties.len(), 2);
     assert!(found.find_property("m_Value").is_some());
@@ -77,7 +79,9 @@ fn parse_snippet_class_count() {
 #[test]
 fn parse_snippet_class_parent() {
     let model = parse_hpp_file(&fixture_path("snippet.hpp")).unwrap();
-    let item_def = model.find_class("UItemDefinition").expect("class must exist");
+    let item_def = model
+        .find_class("UItemDefinition")
+        .expect("class must exist");
     assert_eq!(item_def.parent.as_deref(), Some("UGothicObjectDefinition"));
 }
 

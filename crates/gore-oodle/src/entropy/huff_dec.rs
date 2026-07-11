@@ -81,8 +81,7 @@ pub(crate) fn decode_huff(src: &[u8], out: &mut [u8], huff_type: u32) -> Result<
             return Err(Error::Truncated);
         }
         let half = (out_len + 1) >> 1;
-        let split_mid =
-            u32::from_le_bytes([src[p], src[p + 1], src[p + 2], 0]) as usize;
+        let split_mid = u32::from_le_bytes([src[p], src[p + 1], src[p + 2], 0]) as usize;
         p += 3;
         if split_mid > src.len() - p {
             return Err(Error::Corrupt("huff: split_mid"));

@@ -7,7 +7,10 @@ fn category_food() {
 
 #[test]
 fn category_weapon_melee() {
-    assert_eq!(category_for_id("ItMw_1H_Sword_01"), ItemCategory::MeleeWeapon);
+    assert_eq!(
+        category_for_id("ItMw_1H_Sword_01"),
+        ItemCategory::MeleeWeapon
+    );
 }
 
 #[test]
@@ -30,7 +33,10 @@ fn category_amulet() {
 
 #[test]
 fn category_rune() {
-    assert_eq!(category_for_id("ItAr_Rune_Fireball"), ItemCategory::RuneOrScroll);
+    assert_eq!(
+        category_for_id("ItAr_Rune_Fireball"),
+        ItemCategory::RuneOrScroll
+    );
 }
 
 #[test]
@@ -50,5 +56,8 @@ fn category_armor_for_armor_classes() {
 
 #[test]
 fn category_unknown_for_unrecognized() {
-    assert_eq!(category_for_id("TotallyUnknownClass"), ItemCategory::Unknown);
+    assert_eq!(
+        category_for_id("TotallyUnknownClass"),
+        ItemCategory::Unknown
+    );
 }

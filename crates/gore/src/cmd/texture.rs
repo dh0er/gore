@@ -152,14 +152,11 @@ pub fn run(action: TextureAction) -> Result<()> {
             let ubulk = uasset.with_extension("ubulk");
 
             let info = gore_tex::decode::parse(
-                &std::fs::read(&uasset)
-                    .with_context(|| format!("reading {}", uasset.display()))?,
-                &std::fs::read(&uexp)
-                    .with_context(|| format!("reading {}", uexp.display()))?,
+                &std::fs::read(&uasset).with_context(|| format!("reading {}", uasset.display()))?,
+                &std::fs::read(&uexp).with_context(|| format!("reading {}", uexp.display()))?,
                 &gore_tex::paths::read_optional(&ubulk)
                     .with_context(|| format!("reading {}", ubulk.display()))?,
-                &std::fs::read(&usmap)
-                    .with_context(|| format!("reading {}", usmap.display()))?,
+                &std::fs::read(&usmap).with_context(|| format!("reading {}", usmap.display()))?,
             )
             .with_context(|| format!("decoding texture {asset}"))?;
 
@@ -173,12 +170,7 @@ pub fn run(action: TextureAction) -> Result<()> {
             // to_rgba8 returns 0xAARRGGBB pixels; pack to [R, G, B, A] byte order.
             let mut buf = Vec::with_capacity(px.len() * 4);
             for p in px {
-                buf.extend_from_slice(&[
-                    (p >> 16) as u8,
-                    (p >> 8) as u8,
-                    p as u8,
-                    (p >> 24) as u8,
-                ]);
+                buf.extend_from_slice(&[(p >> 16) as u8, (p >> 8) as u8, p as u8, (p >> 24) as u8]);
             }
 
             image::save_buffer(&out, &buf, info.width, info.height, image::ColorType::Rgba8)
@@ -235,8 +227,13 @@ pub fn run(action: TextureAction) -> Result<()> {
             // replaces don't accumulate cooked payloads in the system temp dir.
             let _ = std::fs::remove_dir_all(&tmp);
 
-            let info = gore_tex::decode::parse(&orig_uasset, &orig_uexp, &orig_ubulk, &std::fs::read(&usmap)?)
-                .with_context(|| format!("decoding original texture {asset}"))?;
+            let info = gore_tex::decode::parse(
+                &orig_uasset,
+                &orig_uexp,
+                &orig_ubulk,
+                &std::fs::read(&usmap)?,
+            )
+            .with_context(|| format!("decoding original texture {asset}"))?;
             let format = info.format.clone();
 
             // 2. Load the replacement PNG -> RGBA8 bytes + dims.
@@ -262,8 +259,7 @@ pub fn run(action: TextureAction) -> Result<()> {
 
             // 4. Write the rewritten triplet under the asset's mount path in mod_dir.
             let dir = mount_dir(&mod_dir, &asset)?;
-            std::fs::create_dir_all(&dir)
-                .with_context(|| format!("creating {}", dir.display()))?;
+            std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
             let leaf = asset.rsplit('/').next().unwrap_or(&asset);
             let out_uasset = dir.join(format!("{leaf}.uasset"));
             let out_uexp = dir.join(format!("{leaf}.uexp"));
@@ -307,8 +303,9 @@ pub fn run(action: TextureAction) -> Result<()> {
         } => {
             let game = gore_loc::config::game_root(game)?;
             validate_triplet_name(&name)?;
-            let triplet = gore_tex::container::repack_to_zen(&mod_dir, &name, &out, &game, compress)
-                .with_context(|| format!("packing {} into {name}", mod_dir.display()))?;
+            let triplet =
+                gore_tex::container::repack_to_zen(&mod_dir, &name, &out, &game, compress)
+                    .with_context(|| format!("packing {} into {name}", mod_dir.display()))?;
             println!("wrote triplet:");
             for p in &triplet {
                 println!("  {}", p.display());

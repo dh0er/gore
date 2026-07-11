@@ -353,10 +353,10 @@ impl PlatformData {
                 ));
             }
             o += 4; // consume bIsVirtual
-            // Parse the FVirtualTextureBuiltData block byte-faithfully so the
-            // region re-serializes losslessly. The VT chunk bytes live in
-            // `.ubulk` (legacy data-resource indices), so parse only touches
-            // `.uexp` here.
+                    // Parse the FVirtualTextureBuiltData block byte-faithfully so the
+                    // region re-serializes losslessly. The VT chunk bytes live in
+                    // `.ubulk` (legacy data-resource indices), so parse only touches
+                    // `.uexp` here.
             let vt = crate::vt::parse(uexp, &mut o)?;
             let region_end = find_package_tag(uexp, o)
                 .ok_or_else(|| corrupt("package magic not found after VT block"))?;
@@ -410,9 +410,7 @@ impl PlatformData {
             let peek_x = rd_i32(uexp, o)?;
             let peek_y = rd_i32(uexp, o + 4)?;
             let peek_z = rd_i32(uexp, o + 8)?;
-            let looks_streamed = peek_x == mip_w as i32
-                && peek_y == mip_h as i32
-                && peek_z == 1;
+            let looks_streamed = peek_x == mip_w as i32 && peek_y == mip_h as i32 && peek_z == 1;
 
             let (inline, data) = if looks_streamed {
                 // Streamed: payload is in .ubulk, in mip order, mip0 at offset 0.
@@ -566,7 +564,7 @@ impl PlatformData {
     fn mip_serial_layout(&self) -> Result<Vec<(i64, i64, bool)>> {
         // Region-relative running offset, mirroring `serialize_region`.
         let mut rel: usize = 4 + 4 + 4; // SizeX + SizeY + PackedData
-        // format FString: i32 len + (len) bytes (ASCII + NUL).
+                                        // format FString: i32 len + (len) bytes (ASCII + NUL).
         rel += 4 + (self.format.len() + 1);
         if self.opt_data.is_some() {
             rel += 8; // FOptTexturePlatformData: ExtData + NumMipsInTail
@@ -648,7 +646,12 @@ pub fn replace_texture_image(
     // single mip0 surface via `encode_tile` (multiple-of-4 only). Otherwise
     // BC-encode the full power-of-two mip pyramid via `encode_mips`.
     let mips = if orig.mips.len() == 1 {
-        vec![crate::encode::encode_tile(new_rgba, new_w, new_h, orig_format)?]
+        vec![crate::encode::encode_tile(
+            new_rgba,
+            new_w,
+            new_h,
+            orig_format,
+        )?]
     } else {
         crate::encode::encode_mips(new_rgba, new_w, new_h, orig_format)?
     };
@@ -707,9 +710,12 @@ fn replace_texture_vt(
 
     // 1. Re-tile the image into the cooked VT format (single-layer + dims guards
     //    live in retile). chunk_bytes[c] is parallel to template.chunks.
-    let (new_vt, chunk_bytes) = crate::vt::retile(new_rgba, new_w, new_h, template, &layer0_format)?;
+    let (new_vt, chunk_bytes) =
+        crate::vt::retile(new_rgba, new_w, new_h, template, &layer0_format)?;
     if chunk_bytes.len() != template.chunks.len() {
-        return Err(corrupt("VT retile returned a different chunk count than the template"));
+        return Err(corrupt(
+            "VT retile returned a different chunk count than the template",
+        ));
     }
 
     // 2. Re-serialize the platform-data region with the new VtData.
@@ -787,21 +793,32 @@ fn write_vt_chunk_bytes(
 
     let fallback = EngineVersion::UE5_4.package_file_version();
     let header = FLegacyPackageHeader::deserialize(&mut Cursor::new(uasset), Some(fallback))
-        .map_err(|e| corrupt(&format!("could not parse .uasset summary for VT chunk write: {e}")))?;
+        .map_err(|e| {
+            corrupt(&format!(
+                "could not parse .uasset summary for VT chunk write: {e}"
+            ))
+        })?;
 
     for (c, (chunk, bytes)) in vt.chunks.iter().zip(chunk_bytes.iter()).enumerate() {
         let dr_index = chunk.data_resource_index;
         if dr_index < 0 {
-            return Err(corrupt(&format!("VT chunk {c} has negative data-resource index {dr_index}")));
+            return Err(corrupt(&format!(
+                "VT chunk {c} has negative data-resource index {dr_index}"
+            )));
         }
-        let dr = header.data_resources.get(dr_index as usize).ok_or_else(|| {
-            corrupt(&format!(
-                "VT chunk {c} data-resource index {dr_index} out of range ({} entries)",
-                header.data_resources.len()
-            ))
-        })?;
+        let dr = header
+            .data_resources
+            .get(dr_index as usize)
+            .ok_or_else(|| {
+                corrupt(&format!(
+                    "VT chunk {c} data-resource index {dr_index} out of range ({} entries)",
+                    header.data_resources.len()
+                ))
+            })?;
         if dr.serial_offset < 0 || dr.serial_size < 0 {
-            return Err(corrupt(&format!("VT chunk {c} data-resource has negative serial_offset/size")));
+            return Err(corrupt(&format!(
+                "VT chunk {c} data-resource has negative serial_offset/size"
+            )));
         }
         // Same-dims invariant: the rebuilt chunk must be exactly the recorded size.
         if bytes.len() as i64 != dr.serial_size {
@@ -817,11 +834,12 @@ fn write_vt_chunk_bytes(
             .checked_add(bytes.len())
             .ok_or_else(|| corrupt("VT chunk write slice overflow"))?;
 
-        let dst: &mut Vec<u8> = if dr.legacy_bulk_data_flags & BULKDATA_PAYLOAD_IN_SEPERATE_FILE != 0 {
-            ubulk // streamed: offsets are `.ubulk`-relative
-        } else {
-            uexp // inline in the export body
-        };
+        let dst: &mut Vec<u8> =
+            if dr.legacy_bulk_data_flags & BULKDATA_PAYLOAD_IN_SEPERATE_FILE != 0 {
+                ubulk // streamed: offsets are `.ubulk`-relative
+            } else {
+                uexp // inline in the export body
+            };
         let slot = dst
             .get_mut(off..end)
             .ok_or_else(|| corrupt(&format!("VT chunk {c} bytes run past end of cooked file")))?;
@@ -888,7 +906,9 @@ pub fn replace_texture(
         return Err(TexError::VirtualTexture(orig.format));
     }
     if orig.first_mip != 0 {
-        return Err(corrupt("FirstMipToSerialize != 0 is not supported for rewrite"));
+        return Err(corrupt(
+            "FirstMipToSerialize != 0 is not supported for rewrite",
+        ));
     }
     let format = orig.format.clone();
 
@@ -1049,11 +1069,7 @@ pub fn replace_texture(
     let prop_block = new_uexp
         .get_mut(..orig.region.start)
         .ok_or_else(|| corrupt("region start runs past end of .uexp"))?;
-    let patched = patch_imported_size(
-        prop_block,
-        (orig.size_x, orig.size_y),
-        (new_w, new_h),
-    )?;
+    let patched = patch_imported_size(prop_block, (orig.size_x, orig.size_y), (new_w, new_h))?;
     if patched == 0 {
         eprintln!(
             "gore-tex: ImportedSize ({},{}) not found in property block -- skipping (non-fatal; \
@@ -1149,7 +1165,11 @@ fn rebuild_data_resources(
     // Parse the (already SerialSize-patched) .uasset to locate the array + version.
     let fallback = EngineVersion::UE5_4.package_file_version();
     let header = FLegacyPackageHeader::deserialize(&mut Cursor::new(new_uasset), Some(fallback))
-        .map_err(|e| corrupt(&format!("could not parse .uasset summary for data-resource rebuild: {e}")))?;
+        .map_err(|e| {
+            corrupt(&format!(
+                "could not parse .uasset summary for data-resource rebuild: {e}"
+            ))
+        })?;
 
     if header.data_resources.is_empty() {
         // No legacy data-resource array (some textures emit none). The
@@ -1166,7 +1186,12 @@ fn rebuild_data_resources(
             orig.mips.len()
         )));
     }
-    for (i, (dr, m)) in header.data_resources.iter().zip(orig.mips.iter()).enumerate() {
+    for (i, (dr, m)) in header
+        .data_resources
+        .iter()
+        .zip(orig.mips.iter())
+        .enumerate()
+    {
         let want = block_math(&orig.format, m.width, m.height)? as i64;
         if dr.serial_size != want {
             return Err(corrupt(&format!(
@@ -1227,7 +1252,9 @@ fn rebuild_data_resources(
     // and count i32 precede the entries; entries run to the end of the header.
     let dr_offset = header.summary.data_resource_offset;
     if dr_offset <= 0 {
-        return Err(corrupt("data_resource_offset non-positive but data-resources parsed"));
+        return Err(corrupt(
+            "data_resource_offset non-positive but data-resources parsed",
+        ));
     }
     let count_field_at = dr_offset as usize + 4; // after version u32
     let array_start = count_field_at + 4; // after count i32
@@ -1243,7 +1270,11 @@ fn rebuild_data_resources(
     }
     // Sanity: the old span length must equal old_count * old_stride.
     let old_count = header.data_resources.len();
-    let cooked_len = if version >= EObjectDataResourceVersion::AddedCookedIndex { 1 } else { 0 };
+    let cooked_len = if version >= EObjectDataResourceVersion::AddedCookedIndex {
+        1
+    } else {
+        0
+    };
     let entry_stride = 4 + cooked_len + 8 + 8 + 8 + 8 + 4 + 4;
     if array_end - array_start != old_count * entry_stride {
         return Err(corrupt(&format!(
@@ -1305,11 +1336,17 @@ pub(crate) fn resolve_data_resource_bytes(
     use std::io::Cursor;
 
     if dr_index < 0 {
-        return Err(corrupt(&format!("negative VT data-resource index {dr_index}")));
+        return Err(corrupt(&format!(
+            "negative VT data-resource index {dr_index}"
+        )));
     }
     let fallback = EngineVersion::UE5_4.package_file_version();
     let header = FLegacyPackageHeader::deserialize(&mut Cursor::new(uasset), Some(fallback))
-        .map_err(|e| corrupt(&format!("could not parse .uasset summary for VT chunk resolve: {e}")))?;
+        .map_err(|e| {
+            corrupt(&format!(
+                "could not parse .uasset summary for VT chunk resolve: {e}"
+            ))
+        })?;
 
     let dr = header
         .data_resources
@@ -1398,7 +1435,8 @@ fn patch_total_header_size_and_export_offset(
     if export_count == 0 {
         return Err(corrupt("no exports to patch SerialOffset"));
     }
-    let entry_span = depends_offset.checked_sub(exports_offset)
+    let entry_span = depends_offset
+        .checked_sub(exports_offset)
         .ok_or_else(|| corrupt("export-map span underflow"))?;
     if entry_span == 0 || entry_span % export_count != 0 {
         return Err(corrupt("implausible export-map span"));
@@ -1449,11 +1487,7 @@ fn patch_total_header_size_and_export_offset(
 /// So zero occurrences is a NON-FATAL `Ok(0)` (the caller logs it), not an error.
 /// When `orig == new` (same-dims replace) the scan still runs and overwrites
 /// identical bytes (no-op).
-fn patch_imported_size(
-    prop_block: &mut [u8],
-    orig: (u32, u32),
-    new: (u32, u32),
-) -> Result<usize> {
+fn patch_imported_size(prop_block: &mut [u8], orig: (u32, u32), new: (u32, u32)) -> Result<usize> {
     let mut needle = [0u8; 8];
     needle[0..4].copy_from_slice(&(orig.0 as i32).to_le_bytes());
     needle[4..8].copy_from_slice(&(orig.1 as i32).to_le_bytes());
@@ -1653,7 +1687,11 @@ mod tests {
         let mut uexp2 = ue.clone();
         pd.serialize_into_uexp(&mut uexp2, &ua).unwrap();
         assert_eq!(uexp2, ue, "re-serialized .uexp must be byte-identical");
-        assert_eq!(pd.serialize_ubulk(), ub, "re-serialized .ubulk must be byte-identical");
+        assert_eq!(
+            pd.serialize_ubulk(),
+            ub,
+            "re-serialized .ubulk must be byte-identical"
+        );
     }
 
     // Gated/slow: the streamed real texture. Mark #[ignore] like other slow tests.
@@ -1685,8 +1723,15 @@ mod tests {
         assert_eq!(pd.format, "PF_BC5");
         let mut ue2 = ue.clone();
         pd.serialize_into_uexp(&mut ue2, &ua).unwrap();
-        assert_eq!(ue2, ue, "streamed .uexp region must re-serialize byte-identically");
-        assert_eq!(pd.serialize_ubulk(), ub, "streamed .ubulk must re-serialize byte-identically");
+        assert_eq!(
+            ue2, ue,
+            "streamed .uexp region must re-serialize byte-identically"
+        );
+        assert_eq!(
+            pd.serialize_ubulk(),
+            ub,
+            "streamed .ubulk must re-serialize byte-identically"
+        );
     }
 
     /// Gated/slow byte-faithful VT oracle. `T_Biter_Armor_D` is a cooked
@@ -1706,8 +1751,7 @@ mod tests {
         }
         let utoc = crate::paths::main_container(&g).unwrap();
         let usmap = crate::paths::usmap(&g).unwrap();
-        let asset =
-            "/Game/Assets/Characters/Creatures/Biter/Model/Armor/Textures/T_Biter_Armor_D";
+        let asset = "/Game/Assets/Characters/Creatures/Biter/Model/Armor/Textures/T_Biter_Armor_D";
         let leaf = "T_Biter_Armor_D";
         let tmp = std::env::temp_dir().join("gore-tex-td-vt");
         let _ = std::fs::remove_dir_all(&tmp);
@@ -1730,7 +1774,10 @@ mod tests {
         let ub = std::fs::read(uasset.with_extension("ubulk")).unwrap_or_default();
 
         let pd = PlatformData::parse(&ua, &ue, &ub).unwrap();
-        assert!(pd.vt.is_some(), "Biter armor diffuse must parse as a virtual texture");
+        assert!(
+            pd.vt.is_some(),
+            "Biter armor diffuse must parse as a virtual texture"
+        );
         assert_eq!(pd.format, "PF_DXT1", "VT format should be the real PF_DXT1");
         assert_eq!(pd.size_x, 4096);
         assert_eq!(pd.size_y, 4096);
@@ -1782,12 +1829,18 @@ mod tests {
         // The fixture is a single full-size mip; expected_num_mips for 128x128 is
         // 8, so only run this when the original mip count matches the full chain.
         if pd.mips.len() != new_mips.len() {
-            eprintln!("skip: fixture is not a full mip chain ({} mips)", pd.mips.len());
+            eprintln!(
+                "skip: fixture is not a full mip chain ({} mips)",
+                pd.mips.len()
+            );
             return;
         }
         let (na, _ne, _nb) =
             replace_texture(&ua, &ue, &ub, pd.size_x, pd.size_y, new_mips).unwrap();
-        assert_eq!(na, ua, "same-dims replace must leave .uasset byte-identical");
+        assert_eq!(
+            na, ua,
+            "same-dims replace must leave .uasset byte-identical"
+        );
     }
 
     /// FAST: the property-block ImportedSize patch in isolation (no game).
@@ -1884,7 +1937,11 @@ mod tests {
         //   SizeX+SizeY+Packed = 12; format "PF_DXT5"=7 -> FString 4+8=12 (incl NUL);
         //   FirstMip+NumMips = 8; mip flags = 4. Total = 36. Payload at region+36.
         // "PF_DXT5" is 7 chars + NUL = 8 -> FString len i32(4) + 8 = 12.
-        assert_eq!(off, 88 + 12 + 12 + 8 + 4, "inline payload absolute uexp offset");
+        assert_eq!(
+            off,
+            88 + 12 + 12 + 8 + 4,
+            "inline payload absolute uexp offset"
+        );
     }
 
     /// FAST: `mip_serial_layout` for a STREAMED multi-mip chain -- streamed mips
@@ -1913,7 +1970,10 @@ mod tests {
         // Inline mips: absolute uexp offsets, increasing; sizes correct.
         assert!(layout[4].2 && layout[4].1 == 4096);
         assert!(layout[5].2 && layout[5].1 == 1024);
-        assert!(layout[5].0 > layout[4].0, "inline payloads advance in .uexp");
+        assert!(
+            layout[5].0 > layout[4].0,
+            "inline payloads advance in .uexp"
+        );
     }
 
     /// The upscale oracle: rewrite the cursor to 256x256 magenta, repack through
@@ -2023,7 +2083,8 @@ mod tests {
 
         let out = tmp.join("out");
         std::fs::create_dir_all(&out).unwrap();
-        let triplet = crate::container::repack_to_zen(&tmp, "UpscaleTest_P", &out, &g, false).unwrap();
+        let triplet =
+            crate::container::repack_to_zen(&tmp, "UpscaleTest_P", &out, &g, false).unwrap();
         for p in &triplet {
             assert!(p.exists() && std::fs::metadata(p).unwrap().len() > 0);
         }
@@ -2064,7 +2125,11 @@ mod tests {
             &std::fs::read(rb_uasset.with_extension("ubulk")).unwrap_or_default(),
         )
         .unwrap();
-        assert_eq!(rb_pd.mips.len(), 1, "NoMipmaps source must stay single-mip after upscale");
+        assert_eq!(
+            rb_pd.mips.len(),
+            1,
+            "NoMipmaps source must stay single-mip after upscale"
+        );
 
         // `to_rgba8` returns packed 0xAARRGGBB u32s. Spot-check a few are ~magenta.
         let px = crate::decode::to_rgba8(&rb).unwrap();
@@ -2074,7 +2139,10 @@ mod tests {
             let r = (p >> 16) & 0xff;
             let gch = (p >> 8) & 0xff;
             let bch = p & 0xff;
-            assert!(r > 200 && gch < 60 && bch > 200, "pixel not magenta: {r},{gch},{bch}");
+            assert!(
+                r > 200 && gch < 60 && bch > 200,
+                "pixel not magenta: {r},{gch},{bch}"
+            );
         }
         eprintln!("OK: read back 256x256 PF_DXT5 magenta from the triplet");
     }
@@ -2144,7 +2212,10 @@ mod tests {
         let new_pd = PlatformData::parse(&na, &ne, &nb).unwrap();
         let new_region_len = new_pd.region.end - new_pd.region.start;
         let delta = new_region_len as i64 - old_region_len as i64;
-        assert_ne!(delta, 0, "upscale must change the platform-data region length");
+        assert_ne!(
+            delta, 0,
+            "upscale must change the platform-data region length"
+        );
         // orig_n > 1: the rewrite must emit the FULL pyramid for the new dims.
         assert_eq!(
             new_pd.mips.len(),
@@ -2152,7 +2223,11 @@ mod tests {
             "chain source must keep a full mip pyramid after upscale"
         );
         // The upscaled .ubulk is large (2048x2048 BC5 mip0 alone is ~4MB).
-        assert!(nb.len() > 4_000_000, "expected a large streamed .ubulk, got {}", nb.len());
+        assert!(
+            nb.len() > 4_000_000,
+            "expected a large streamed .ubulk, got {}",
+            nb.len()
+        );
         eprintln!(
             "region delta = {delta} (old {old_region_len} -> new {new_region_len}); .ubulk = {} bytes",
             nb.len()
@@ -2222,7 +2297,10 @@ mod tests {
         // (Indexed|Compressed) AND every compressed-block offset is 16-aligned.
         let (flags, comp_offsets) =
             retoc::iostore_writer::dump_compressed_layout(&triplet[0]).unwrap();
-        assert_eq!(flags, 9, "container_flags must be Indexed|Compressed (9) with compress=true");
+        assert_eq!(
+            flags, 9,
+            "container_flags must be Indexed|Compressed (9) with compress=true"
+        );
         assert!(
             !comp_offsets.is_empty(),
             "expected at least one compressed block with compress=true"
@@ -2276,7 +2354,9 @@ mod tests {
             assert!(r >= 248, "R not high (not red): {r} at idx {idx}");
             assert!(gch <= 8, "G not low (not red): {gch} at idx {idx}");
         }
-        eprintln!("OK: read back 2048x2048 PF_BC5 red from the streamed-upscale triplet (delta={delta})");
+        eprintln!(
+            "OK: read back 2048x2048 PF_BC5 red from the streamed-upscale triplet (delta={delta})"
+        );
 
         // COMPRESSION SIZE ORACLE: the writer now Oodle-compresses .ucas blocks.
         // This asset's mip0 alone is a ~4MB solid-red BC5 surface (highly
@@ -2314,16 +2394,13 @@ mod tests {
         }
         let utoc = crate::paths::main_container(&g).unwrap();
         let usmap = crate::paths::usmap(&g).unwrap();
-        let asset =
-            "/Game/Assets/Characters/Creatures/Biter/Model/Armor/Textures/T_Biter_Armor_D";
+        let asset = "/Game/Assets/Characters/Creatures/Biter/Model/Armor/Textures/T_Biter_Armor_D";
         let leaf = "T_Biter_Armor_D";
 
         let tmp = std::env::temp_dir().join("gore-tex-vt-replace-rt");
         let _ = std::fs::remove_dir_all(&tmp);
         // Cook-like mount layout: /Game/... -> G1R/Content/...
-        let cooked = tmp.join(
-            "G1R/Content/Assets/Characters/Creatures/Biter/Model/Armor/Textures",
-        );
+        let cooked = tmp.join("G1R/Content/Assets/Characters/Creatures/Biter/Model/Armor/Textures");
         std::fs::create_dir_all(&cooked).unwrap();
 
         // Prefer the cached index for a fast by-id unpack; fall back to a scan.
@@ -2342,13 +2419,19 @@ mod tests {
 
         // Confirm the source is the 4096² PF_DXT1 single-layer VT we expect.
         let src_pd = PlatformData::parse(&ua, &ue, &ub).unwrap();
-        let vt = src_pd.vt.as_ref().expect("Biter armor diffuse must parse as a VT");
+        let vt = src_pd
+            .vt
+            .as_ref()
+            .expect("Biter armor diffuse must parse as a VT");
         assert_eq!((src_pd.size_x, src_pd.size_y), (4096, 4096), "source dims");
         assert_eq!(vt.num_layers, 1, "single-layer VT");
         let fmt = vt.layer_types[0].clone();
         eprintln!(
             "Biter VT: {}x{} {fmt} mips={} chunks={}",
-            vt.width, vt.height, vt.num_mips, vt.chunks.len()
+            vt.width,
+            vt.height,
+            vt.num_mips,
+            vt.chunks.len()
         );
 
         // Same-dims OBVIOUS test image: solid magenta (R=255,G=0,B=255,A=255).
@@ -2356,17 +2439,34 @@ mod tests {
         let rgba: Vec<u8> = (0..w * h).flat_map(|_| [255u8, 0, 255, 255]).collect();
 
         // Route through the unified entry (auto-detects VT -> retile path).
-        let (na, ne, nb) =
-            replace_texture_image(&ua, &ue, &ub, &rgba, w, h, &fmt).unwrap();
+        let (na, ne, nb) = replace_texture_image(&ua, &ue, &ub, &rgba, w, h, &fmt).unwrap();
 
         // Same-dims VT must keep the cooked sizes constant (no resize anywhere).
-        assert_eq!(na.len(), ua.len(), ".uasset length must be unchanged (same-dims VT)");
-        assert_eq!(ne.len(), ue.len(), ".uexp length must be unchanged (same-dims VT)");
-        assert_eq!(nb.len(), ub.len(), ".ubulk length must be unchanged (same-dims VT)");
+        assert_eq!(
+            na.len(),
+            ua.len(),
+            ".uasset length must be unchanged (same-dims VT)"
+        );
+        assert_eq!(
+            ne.len(),
+            ue.len(),
+            ".uexp length must be unchanged (same-dims VT)"
+        );
+        assert_eq!(
+            nb.len(),
+            ub.len(),
+            ".ubulk length must be unchanged (same-dims VT)"
+        );
         // The .uasset header is byte-identical (delta == 0 -> no SerialSize/header fixup).
-        assert_eq!(na, ua, "same-dims VT replace must leave .uasset byte-identical");
+        assert_eq!(
+            na, ua,
+            "same-dims VT replace must leave .uasset byte-identical"
+        );
         // The .uexp must DIFFER (chunk hashes + any inline chunk bytes changed).
-        assert_ne!(ne, ue, ".uexp must change (new VT chunk hashes / inline bytes)");
+        assert_ne!(
+            ne, ue,
+            ".uexp must change (new VT chunk hashes / inline bytes)"
+        );
 
         // SANITY: re-parse the rewritten triple and re-resolve the VT chunk bytes
         // from it, then decode locally. This proves the chunk-byte write landed at
@@ -2376,8 +2476,9 @@ mod tests {
             let vt2 = pd2.vt.as_ref().unwrap();
             let mut chunk_bytes = Vec::with_capacity(vt2.chunks.len());
             for c in &vt2.chunks {
-                chunk_bytes
-                    .push(resolve_data_resource_bytes(&na, &ne, &nb, c.data_resource_index).unwrap());
+                chunk_bytes.push(
+                    resolve_data_resource_bytes(&na, &ne, &nb, c.data_resource_index).unwrap(),
+                );
             }
             let (dw, dh, px) = crate::vt::decode_layer0(vt2, &chunk_bytes, &fmt).unwrap();
             assert_eq!((dw, dh), (4096, 4096), "re-resolved VT decodes at 4096²");
@@ -2385,9 +2486,14 @@ mod tests {
             for idx in [0usize, px.len() / 2, px.len() - 1] {
                 let p = px[idx];
                 let (r, gch, bch) = ((p >> 16) & 0xff, (p >> 8) & 0xff, p & 0xff);
-                assert!(r > 200 && gch < 60 && bch > 200, "pre-repack pixel not magenta: {r},{gch},{bch}");
+                assert!(
+                    r > 200 && gch < 60 && bch > 200,
+                    "pre-repack pixel not magenta: {r},{gch},{bch}"
+                );
             }
-            eprintln!("OK: rewritten triple re-resolves + decodes to magenta at 4096² (pre-repack)");
+            eprintln!(
+                "OK: rewritten triple re-resolves + decodes to magenta at 4096² (pre-repack)"
+            );
         }
 
         // Write the rewritten triple back into the cooked tree.
@@ -2431,7 +2537,10 @@ mod tests {
             &std::fs::read(&usmap).unwrap(),
         )
         .unwrap();
-        assert!(rb.is_virtual, "read-back asset must still be a virtual texture");
+        assert!(
+            rb.is_virtual,
+            "read-back asset must still be a virtual texture"
+        );
         assert_eq!(rb.width, 4096, "width should stay 4096");
         assert_eq!(rb.height, 4096, "height should stay 4096");
         assert_eq!(rb.format, fmt, "VT layer format should be preserved");
@@ -2448,7 +2557,9 @@ mod tests {
             max_dg = max_dg.max((gch - 0).abs());
             max_db = max_db.max((bch - 255).abs());
         }
-        eprintln!("max per-channel deviation from magenta after readback: R{max_dr} G{max_dg} B{max_db}");
+        eprintln!(
+            "max per-channel deviation from magenta after readback: R{max_dr} G{max_dg} B{max_db}"
+        );
         // BC1 565 quantization tolerance for a solid color.
         assert!(
             max_dr <= 12 && max_dg <= 12 && max_db <= 12,

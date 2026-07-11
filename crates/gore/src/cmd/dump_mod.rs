@@ -200,8 +200,7 @@ pub fn run(model_path: PathBuf, catalog_path: PathBuf, out: PathBuf) -> Result<(
 
     let mod_dir = out.join("gore-dump");
     let scripts = mod_dir.join("Scripts");
-    fs::create_dir_all(&scripts)
-        .with_context(|| format!("creating '{}'", scripts.display()))?;
+    fs::create_dir_all(&scripts).with_context(|| format!("creating '{}'", scripts.display()))?;
     fs::write(mod_dir.join("enabled.txt"), "")?;
     fs::write(mod_dir.join("README.md"), README)?;
     fs::write(scripts.join("main.lua"), MAIN_LUA)?;
@@ -312,7 +311,9 @@ mod tests {
     fn main_lua_dumps_the_fmod_encryption_key() {
         // The FMOD key is read from the live UFMODSettings CDO and written to
         // its own file so it stays independent of the item-default dump.
-        assert!(MAIN_LUA.contains(r#"StaticFindObject("/Script/FMODStudio.Default__FMODSettings")"#));
+        assert!(
+            MAIN_LUA.contains(r#"StaticFindObject("/Script/FMODStudio.Default__FMODSettings")"#)
+        );
         // this game's FMOD fork names the key field StudioBankKey, not EncryptionKey
         assert!(MAIN_LUA.contains(r#"read_str(cdo, "StudioBankKey")"#));
         // UE4SS returns FString props as userdata -> must call :ToString()

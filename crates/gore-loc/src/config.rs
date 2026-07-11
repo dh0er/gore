@@ -145,7 +145,10 @@ mod tests {
     fn save_then_load_round_trips() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.json");
-        let cfg = Config { game_path: Some("D:/Games/G1R".to_string()), ..Default::default() };
+        let cfg = Config {
+            game_path: Some("D:/Games/G1R".to_string()),
+            ..Default::default()
+        };
         save_to(&path, &cfg).unwrap();
         let read = load_from(&path);
         assert_eq!(read.game_path.as_deref(), Some("D:/Games/G1R"));
@@ -159,7 +162,8 @@ mod tests {
 
         // Seed a config file that carries an unmodeled key.
         let mut seed = Config::default();
-        seed.extra.insert("future_key".to_string(), serde_json::json!(42));
+        seed.extra
+            .insert("future_key".to_string(), serde_json::json!(42));
         seed.game_path = Some("x".to_string());
         save_to(&path, &seed).unwrap(); // also proves parent-dir creation
 
@@ -252,7 +256,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         std::fs::create_dir_all(root.join("G1R")).unwrap();
-        let exe = root.join("G1R").join("Binaries").join("Win64").join("G1R-Win64-Shipping.exe");
+        let exe = root
+            .join("G1R")
+            .join("Binaries")
+            .join("Win64")
+            .join("G1R-Win64-Shipping.exe");
         std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
         std::fs::write(&exe, b"x").unwrap();
         assert_eq!(normalize_root(&exe), root.to_path_buf());
@@ -268,6 +276,9 @@ mod tests {
 
     #[test]
     fn normalize_best_effort_when_no_g1r() {
-        assert_eq!(normalize_root(Path::new("/no/such/place")), PathBuf::from("/no/such/place"));
+        assert_eq!(
+            normalize_root(Path::new("/no/such/place")),
+            PathBuf::from("/no/such/place")
+        );
     }
 }

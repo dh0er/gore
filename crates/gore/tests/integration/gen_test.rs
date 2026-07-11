@@ -17,13 +17,21 @@ fn gen_creates_mod_dir_and_main_lua() {
 
     Command::cargo_bin("gore")
         .unwrap()
-        .args(["gen", overrides.to_str().unwrap(), "-o", tmp.path().to_str().unwrap()])
+        .args([
+            "gen",
+            overrides.to_str().unwrap(),
+            "-o",
+            tmp.path().to_str().unwrap(),
+        ])
         .assert()
         .success();
 
     let mod_dir = tmp.path().join("IntegrationTestMod");
     assert!(mod_dir.is_dir(), "mod directory must be created");
-    assert!(mod_dir.join("enabled.txt").exists(), "enabled.txt must exist");
+    assert!(
+        mod_dir.join("enabled.txt").exists(),
+        "enabled.txt must exist"
+    );
 
     let main_lua = mod_dir.join("Scripts").join("main.lua");
     assert!(main_lua.exists(), "Scripts/main.lua must exist");
@@ -44,13 +52,17 @@ fn gen_round_trip_lua_shape() {
 
     Command::cargo_bin("gore")
         .unwrap()
-        .args(["gen", overrides.to_str().unwrap(), "-o", tmp.path().to_str().unwrap()])
+        .args([
+            "gen",
+            overrides.to_str().unwrap(),
+            "-o",
+            tmp.path().to_str().unwrap(),
+        ])
         .assert()
         .success();
 
-    let lua = std::fs::read_to_string(
-        tmp.path().join("IntegrationTestMod/Scripts/main.lua")
-    ).unwrap();
+    let lua =
+        std::fs::read_to_string(tmp.path().join("IntegrationTestMod/Scripts/main.lua")).unwrap();
     // Both overrides present
     assert!(lua.contains("m_Value"));
     assert!(lua.contains("m_Weight"));
@@ -66,16 +78,24 @@ fn gen_with_valid_model_succeeds() {
     let model = tmp.path().join("model.json");
     Command::cargo_bin("gore")
         .unwrap()
-        .args(["dump", sdk_dir().to_str().unwrap(), "-o", model.to_str().unwrap()])
+        .args([
+            "dump",
+            sdk_dir().to_str().unwrap(),
+            "-o",
+            model.to_str().unwrap(),
+        ])
         .assert()
         .success();
 
     Command::cargo_bin("gore")
         .unwrap()
         .args([
-            "gen", fixtures().join("overrides.toml").to_str().unwrap(),
-            "-o", tmp.path().to_str().unwrap(),
-            "--model", model.to_str().unwrap(),
+            "gen",
+            fixtures().join("overrides.toml").to_str().unwrap(),
+            "-o",
+            tmp.path().to_str().unwrap(),
+            "--model",
+            model.to_str().unwrap(),
         ])
         .assert()
         .success();
@@ -87,7 +107,12 @@ fn gen_with_unknown_class_fails_validation() {
     let model = tmp.path().join("model.json");
     Command::cargo_bin("gore")
         .unwrap()
-        .args(["dump", sdk_dir().to_str().unwrap(), "-o", model.to_str().unwrap()])
+        .args([
+            "dump",
+            sdk_dir().to_str().unwrap(),
+            "-o",
+            model.to_str().unwrap(),
+        ])
         .assert()
         .success();
 
@@ -100,9 +125,12 @@ fn gen_with_unknown_class_fails_validation() {
     Command::cargo_bin("gore")
         .unwrap()
         .args([
-            "gen", bad_toml.to_str().unwrap(),
-            "-o", tmp.path().join("mods").to_str().unwrap(),
-            "--model", model.to_str().unwrap(),
+            "gen",
+            bad_toml.to_str().unwrap(),
+            "-o",
+            tmp.path().join("mods").to_str().unwrap(),
+            "--model",
+            model.to_str().unwrap(),
         ])
         .assert()
         .failure()

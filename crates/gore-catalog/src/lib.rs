@@ -206,15 +206,36 @@ mod tests {
 
     #[test]
     fn maps_known_prefixes() {
-        assert_eq!(item_category_from_id("ItMw_1H_Sword_01"), ItemCategory::MeleeWeapon);
-        assert_eq!(item_category_from_id("ItRw_Bow_Diego"), ItemCategory::RangedWeapon);
-        assert_eq!(item_category_from_id("ItAm_Arrow"), ItemCategory::Ammunition);
-        assert_eq!(item_category_from_id("ItAr_Rune_FireBall"), ItemCategory::Rune);
-        assert_eq!(item_category_from_id("ItAr_Scroll_Charm"), ItemCategory::Scroll);
+        assert_eq!(
+            item_category_from_id("ItMw_1H_Sword_01"),
+            ItemCategory::MeleeWeapon
+        );
+        assert_eq!(
+            item_category_from_id("ItRw_Bow_Diego"),
+            ItemCategory::RangedWeapon
+        );
+        assert_eq!(
+            item_category_from_id("ItAm_Arrow"),
+            ItemCategory::Ammunition
+        );
+        assert_eq!(
+            item_category_from_id("ItAr_Rune_FireBall"),
+            ItemCategory::Rune
+        );
+        assert_eq!(
+            item_category_from_id("ItAr_Scroll_Charm"),
+            ItemCategory::Scroll
+        );
         assert_eq!(item_category_from_id("ItFo_Apple"), ItemCategory::Food);
         assert_eq!(item_category_from_id("ItMi_Orenugget"), ItemCategory::Misc);
-        assert_eq!(item_category_from_id("ItAt_Amulet_OfDeath"), ItemCategory::Amulet);
-        assert_eq!(item_category_from_id("ItAt_Ring_OfLife"), ItemCategory::Ring);
+        assert_eq!(
+            item_category_from_id("ItAt_Amulet_OfDeath"),
+            ItemCategory::Amulet
+        );
+        assert_eq!(
+            item_category_from_id("ItAt_Ring_OfLife"),
+            ItemCategory::Ring
+        );
         assert_eq!(item_category_from_id("ItAt_Wolf_Fur"), ItemCategory::Trophy);
         assert_eq!(item_category_from_id("ItWr_Map"), ItemCategory::Writing);
         assert_eq!(item_category_from_id("ItMs_Ashes"), ItemCategory::Mission);
@@ -226,7 +247,10 @@ mod tests {
     #[test]
     fn unknown_ids_map_to_other() {
         assert_eq!(item_category_from_id(""), ItemCategory::Other);
-        assert_eq!(item_category_from_id("ItIg_Worldsplitter"), ItemCategory::Other);
+        assert_eq!(
+            item_category_from_id("ItIg_Worldsplitter"),
+            ItemCategory::Other
+        );
     }
 
     #[test]
