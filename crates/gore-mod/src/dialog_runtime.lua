@@ -2,7 +2,7 @@
 -- bundle must not require a separately installed shared Lua library.
 do
 local PREFIX = "[GoreDialogRuntime]"
-local VERSION = "1"
+local VERSION = "2"
 local MOD_NAME = __GORE_DIALOG_MOD_NAME__
 local REGISTRATIONS = {
 __GORE_DIALOG_REGISTRATIONS__}
@@ -271,6 +271,18 @@ local function add_or_reuse_topic(context, topic_class)
     return added, "added"
 end
 
+local function verify_topic_membership(context, topic_class, expected_topic_address)
+    local current, state = find_topic_instance(context.topic_set, topic_class)
+    if state ~= "found" then
+        return false, "topic-" .. tostring(state)
+    end
+    local current_address = address_of(current)
+    if current_address == nil or current_address ~= expected_topic_address then
+        return false, "topic-identity-changed"
+    end
+    return true, nil
+end
+
 local function on_show_conversation(context_param)
     active_session = nil
     pending_render_session = nil
@@ -317,15 +329,24 @@ local function on_show_conversation(context_param)
         if topic_address == nil then
             log(registration.id, attempt_id, "FAIL", "reason=" .. tostring(add_result))
         else
-            entries[#entries + 1] = {
-                registration_index = candidate.registration_index,
-                group_address = candidate.context.group_address,
-                topic_set_address = candidate.context.topic_set_address,
-                topic_class_address = candidate.topic_class_address,
-                topic_address = topic_address,
-                add_result = add_result,
-            }
-            log(registration.id, attempt_id, "ARMED", "mutation=" .. add_result)
+            local membership_ok, membership_error = verify_topic_membership(
+                candidate.context,
+                candidate.topic_class,
+                topic_address
+            )
+            if not membership_ok then
+                log(registration.id, attempt_id, "FAIL", "reason=post-mutation-membership:" .. tostring(membership_error))
+            else
+                entries[#entries + 1] = {
+                    registration_index = candidate.registration_index,
+                    group_address = candidate.context.group_address,
+                    topic_set_address = candidate.context.topic_set_address,
+                    topic_class_address = candidate.topic_class_address,
+                    topic_address = topic_address,
+                    add_result = add_result,
+                }
+                log(registration.id, attempt_id, "ARMED", "mutation=" .. add_result)
+            end
         end
     end
     if #entries ~= 0 then
@@ -340,7 +361,7 @@ end
 local function inspect_visible_topic(expected, available_topics_param)
     local array, expected_count, array_error =
         checked_array(available_topics_param, MAX_VISIBLE_TOPICS)
-    if array == nil then return false, array_error end
+    if array == nil then return "invalid", array_error, nil end
 
     local invalid = 0
     local identity_count = 0
@@ -363,16 +384,22 @@ local function inspect_visible_topic(expected, available_topics_param)
         end
     end
     if invalid ~= 0 then
-        return false, "invalid-topics:" .. tostring(invalid), expected_count
+        return "invalid", "invalid-topics:" .. tostring(invalid), expected_count
     end
-    local passed = identity_count == 1 and class_count == 1 and exact_count == 1
-    return passed, string.format(
+    local detail = string.format(
         "topics=%d identity_count=%d class_count=%d exact_count=%d",
         expected_count,
         identity_count,
         class_count,
         exact_count
-    ), expected_count
+    )
+    if identity_count == 0 and class_count == 0 and exact_count == 0 then
+        return "hidden", detail, expected_count
+    end
+    if identity_count == 1 and class_count == 1 and exact_count == 1 then
+        return "visible", detail, expected_count
+    end
+    return "invalid", detail, expected_count
 end
 
 local function on_show_choice(context_param, available_topics_param)
@@ -393,6 +420,7 @@ local function on_show_choice(context_param, available_topics_param)
     end
 
     local topic_count = nil
+    local visible_entries = {}
     for _, entry in ipairs(expected.entries) do
         local registration = REGISTRATIONS[entry.registration_index]
         local context, context_error = resolve_context(ability, registration)
@@ -405,22 +433,48 @@ local function on_show_choice(context_param, available_topics_param)
             log(registration.id, expected.attempt_id, "FAIL", "stage=choice reason=context-identity-changed")
             return
         end
-        local passed, detail, count = inspect_visible_topic(entry, available_topics_param)
-        if not passed then
-            log(registration.id, expected.attempt_id, "FAIL", "stage=choice mutation=" .. entry.add_result .. " " .. tostring(detail))
+        local current_topic_class = find_class(registration.topic_class_path)
+        if address_of(current_topic_class) ~= entry.topic_class_address then
+            log(registration.id, expected.attempt_id, "FAIL", "stage=choice reason=topic-class-changed")
             return
         end
+        local membership_ok, membership_error = verify_topic_membership(
+            context,
+            current_topic_class,
+            entry.topic_address
+        )
+        if not membership_ok then
+            log(registration.id, expected.attempt_id, "FAIL", "stage=choice reason=topic-set-membership:" .. tostring(membership_error))
+            return
+        end
+        local visibility, detail, count =
+            inspect_visible_topic(entry, available_topics_param)
         if topic_count ~= nil and topic_count ~= count then
             log(registration.id, expected.attempt_id, "FAIL", "stage=choice reason=count-inconsistent")
             return
         end
         topic_count = count
-        log(registration.id, expected.attempt_id, "CHOICE_PASS", "mutation=" .. entry.add_result .. " " .. tostring(detail))
+        if visibility == "visible" then
+            visible_entries[#visible_entries + 1] = entry
+            log(registration.id, expected.attempt_id, "CHOICE_PASS", "mutation=" .. entry.add_result .. " " .. tostring(detail))
+        elseif visibility == "hidden" and registration.allow_hidden == true then
+            log(registration.id, expected.attempt_id, "HIDDEN", "stage=choice mutation=" .. entry.add_result .. " " .. tostring(detail))
+        else
+            local reason = visibility == "hidden" and "required-topic-hidden" or
+                "visible-topic-invalid"
+            log(registration.id, expected.attempt_id, "FAIL", "stage=choice reason=" .. reason .. " mutation=" .. entry.add_result .. " " .. tostring(detail))
+            return
+        end
     end
 
-    expected.widget_address = widget_address
-    expected.choice_topic_count = topic_count
-    pending_render_session = expected
+    if #visible_entries ~= 0 then
+        expected.widget_address = widget_address
+        expected.choice_topic_count = topic_count
+        expected.entries = visible_entries
+        pending_render_session = expected
+    else
+        log_global("CHOICE_EMPTY", "attempt=" .. expected.attempt_id .. " conditional-topics-hidden")
+    end
 end
 
 local function on_render_topics(widget_context_param, topics_to_show_param)
@@ -434,9 +488,10 @@ local function on_render_topics(widget_context_param, topics_to_show_param)
 
     for _, entry in ipairs(expected.entries) do
         local registration = REGISTRATIONS[entry.registration_index]
-        local passed, detail, topic_count = inspect_visible_topic(entry, topics_to_show_param)
-        if not passed then
-            log(registration.id, expected.attempt_id, "FAIL", "stage=render mutation=" .. entry.add_result .. " " .. tostring(detail))
+        local visibility, detail, topic_count =
+            inspect_visible_topic(entry, topics_to_show_param)
+        if visibility ~= "visible" then
+            log(registration.id, expected.attempt_id, "FAIL", "stage=render reason=visible-topic-" .. tostring(visibility) .. " mutation=" .. entry.add_result .. " " .. tostring(detail))
             return
         end
         if topic_count ~= expected.choice_topic_count then

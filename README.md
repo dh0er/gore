@@ -432,6 +432,11 @@ deploy/undeploy it against your install. Write a build spec (`spec.json`):
 }
 ```
 
+For a state-dependent AngelScript choice, add `"allow_hidden": true`; a clean
+zero-match after `IsVisible_Implementation` is then accepted as conditional,
+while duplicates and mixed identity/class matches still fail closed. The
+default remains strict: the registered topic must reach both UI proof stages.
+
 ```sh
 gore mod build   --spec spec.json -o build/            # → build/MyMod/ (gore-mod.json manifest + payloads)
 gore mod deploy  --bundle build/MyMod --game "$GAME"   # overrides→Mods, loc/audio/voice in place (*.gore-bak), textures→~mods

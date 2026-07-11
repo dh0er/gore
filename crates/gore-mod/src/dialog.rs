@@ -3,8 +3,9 @@
 //! The generated UE4SS Lua is deliberately self-contained. It does not request conversations or
 //! select topics; it only adds an already-compiled AngelScript topic at the natural
 //! `ClientShowConversationUI` boundary after proving an exact participant and an exact vanilla
-//! sentinel in that conversation's own topic set. Two later read-only hooks prove that the same
-//! object reaches the choice array and the rendered widget array.
+//! sentinel in that conversation's own topic set. Two later read-only hooks prove that each
+//! visible object reaches the choice array and the rendered widget array; state-dependent topics
+//! may opt into a separately logged clean-hidden state.
 
 use std::collections::BTreeSet;
 
@@ -20,8 +21,10 @@ const REGISTRATIONS_MARKER: &str = "__GORE_DIALOG_REGISTRATIONS__";
 /// `topic_class` and `sentinel_class` are exact reflected UClass paths such as
 /// `/Script/Angelscript.ChoiceMyTopic`. `participant_name` is compared case-insensitively with the
 /// result of `ConversationGroup.GetParticipantName` and must use its stable identifier form.
-/// Registration proves delivery to the rendered root-topic list; it does not make the authored
-/// topic's selection behavior or automatic knowledge/`ActedTopics` persistence save-neutral.
+/// Strict registration proves delivery to the rendered root-topic list. Conditional registration
+/// can instead report that the engine cleanly hid a topic in the current state. Neither mode makes
+/// the authored topic's selection behavior or automatic knowledge/`ActedTopics` persistence
+/// save-neutral.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DialogTopicSpec {
     /// Stable, human-readable identifier used only in diagnostic log records.
@@ -32,6 +35,18 @@ pub struct DialogTopicSpec {
     pub topic_class: String,
     /// Exact vanilla topic UClass path proving that the live topic set belongs to the target.
     pub sentinel_class: String,
+    /// Allow this topic to be absent from the current visible-topic array after registration.
+    ///
+    /// Use this for state-dependent AngelScript topics whose `IsVisible_Implementation` is
+    /// intentionally false on some conversation openings. A topic that is present is still held
+    /// to the same exact object/class identity proof; this only turns a clean zero-match into a
+    /// diagnostic `HIDDEN` result instead of a failure.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub allow_hidden: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 /// Validate and render the self-contained UE4SS runtime for `topics`.
@@ -98,6 +113,8 @@ pub(crate) fn render_dialog_runtime(
         rows.push_str(&lua_string(&topic.topic_class));
         rows.push_str(", sentinel_class_path = ");
         rows.push_str(&lua_string(&topic.sentinel_class));
+        rows.push_str(", allow_hidden = ");
+        rows.push_str(if topic.allow_hidden { "true" } else { "false" });
         rows.push_str(" },\n");
     }
 
@@ -219,6 +236,7 @@ mod tests {
             participant_name: "om_test_target_001".into(),
             topic_class: TOPIC_PATH.into(),
             sentinel_class: SENTINEL_PATH.into(),
+            allow_hidden: false,
         }
     }
 
@@ -277,10 +295,28 @@ mod tests {
             participant_name: "om_test_target_001".into(),
             topic_class: "/Script/Angelscript.ChoiceSecond".into(),
             sentinel_class: TOPIC_PATH.into(),
+            allow_hidden: false,
         };
         assert!(render_dialog_runtime("M", &[first, second])
             .unwrap_err()
             .contains("also used as a sentinel"));
+    }
+
+    #[test]
+    fn allow_hidden_is_opt_in_and_default_specs_stay_compact() {
+        let legacy_json = serde_json::json!({
+            "id": "legacy",
+            "participant_name": "om_test_target_001",
+            "topic_class": TOPIC_PATH,
+            "sentinel_class": SENTINEL_PATH,
+        });
+        let mut parsed: DialogTopicSpec = serde_json::from_value(legacy_json).unwrap();
+        assert!(!parsed.allow_hidden);
+        let strict = serde_json::to_value(&parsed).unwrap();
+        assert!(strict.get("allow_hidden").is_none());
+
+        parsed.allow_hidden = true;
+        assert_eq!(serde_json::to_value(&parsed).unwrap()["allow_hidden"], true);
     }
 
     #[test]
@@ -503,8 +539,12 @@ mod tests {
                 r#"
                     gore_test_setup("om_test_target_001", true)
                     local original_find = gore_test_topic_set.FindTopicInstanceOfClass
+                    local probe_lookup_count = 0
                     gore_test_topic_set.FindTopicInstanceOfClass = function(self, wanted)
-                        if wanted == gore_test_probe_class then {lookup_body} end
+                        if wanted == gore_test_probe_class then
+                            probe_lookup_count = probe_lookup_count + 1
+                            if probe_lookup_count == 1 then {lookup_body} end
+                        end
                         return original_find(self, wanted)
                     end
                     gore_test_open()
@@ -526,6 +566,7 @@ mod tests {
             participant_name: "om_test_target_001".into(),
             topic_class: "/Script/Angelscript.ChoiceSecondFixture".into(),
             sentinel_class: "/Script/Angelscript.ChoiceSecondSentinel".into(),
+            allow_hidden: false,
         };
         let runtime = render_dialog_runtime("Dialog Test", &[first, second]).unwrap();
         let lua = mock_lua(
@@ -765,7 +806,10 @@ mod tests {
             "#,
         );
         let output = logs(&split);
-        assert!(output.contains("exact_count=0"), "{output}");
+        assert!(
+            output.contains("topic-set-membership:topic-identity-changed"),
+            "{output}"
+        );
         assert!(!output.contains("status=RENDER_PASS"), "{output}");
     }
 
@@ -777,6 +821,7 @@ mod tests {
             participant_name: "om_test_target_001".into(),
             topic_class: "/Script/Angelscript.ChoiceSecondFixture".into(),
             sentinel_class: SENTINEL_PATH.into(),
+            allow_hidden: false,
         };
         let runtime = render_dialog_runtime("Dialog Test", &[first, second]).unwrap();
         let lua = mock_lua(
@@ -792,6 +837,195 @@ mod tests {
         assert_eq!(output.matches("status=ARMED").count(), 2, "{output}");
         assert_eq!(output.matches("status=CHOICE_PASS").count(), 2, "{output}");
         assert_eq!(output.matches("status=RENDER_PASS").count(), 2, "{output}");
+    }
+
+    #[test]
+    fn conditional_hidden_topic_does_not_block_visible_sibling_proof() {
+        let first = topic("visible");
+        let second_path = "/Script/Angelscript.ChoiceConditionalFixture";
+        let second = DialogTopicSpec {
+            id: "conditional".into(),
+            participant_name: "om_test_target_001".into(),
+            topic_class: second_path.into(),
+            sentinel_class: SENTINEL_PATH.into(),
+            allow_hidden: true,
+        };
+        let runtime = render_dialog_runtime("Dialog Test", &[first, second]).unwrap();
+        let lua = mock_lua(
+            &runtime,
+            &format!(
+                r#"
+                    gore_test_setup("om_test_target_001", true)
+                    gore_test_hidden_class = gore_test_class({second_path:?})
+                    gore_test_open()
+                "#
+            ),
+        );
+        assert_eq!(lua.globals().get::<i64>("gore_test_add_calls").unwrap(), 2);
+        let output = logs(&lua);
+        assert_eq!(output.matches("status=ARMED").count(), 2, "{output}");
+        assert_eq!(output.matches("status=CHOICE_PASS").count(), 1, "{output}");
+        assert_eq!(output.matches("status=HIDDEN").count(), 1, "{output}");
+        assert_eq!(output.matches("status=RENDER_PASS").count(), 1, "{output}");
+        assert!(!output.contains("status=FAIL"), "{output}");
+    }
+
+    #[test]
+    fn a_lone_conditional_topic_can_be_cleanly_hidden() {
+        let mut conditional = topic("conditional");
+        conditional.allow_hidden = true;
+        let lua = mock_lua(
+            &loader(conditional),
+            r#"
+                gore_test_setup("om_test_target_001", true)
+                gore_test_hidden_class = gore_test_probe_class
+                gore_test_open()
+            "#,
+        );
+        let output = logs(&lua);
+        assert!(output.contains("status=HIDDEN stage=choice"), "{output}");
+        assert!(output.contains("status=CHOICE_EMPTY"), "{output}");
+        assert!(!output.contains("status=FAIL"), "{output}");
+        assert!(!output.contains("status=RENDER_PASS"), "{output}");
+    }
+
+    #[test]
+    fn a_required_topic_still_fails_when_hidden() {
+        let lua = mock_lua(
+            &loader(topic("required")),
+            r#"
+                gore_test_setup("om_test_target_001", true)
+                gore_test_hidden_class = gore_test_probe_class
+                gore_test_open()
+            "#,
+        );
+        let output = logs(&lua);
+        assert!(output.contains("reason=required-topic-hidden"), "{output}");
+        assert!(!output.contains("status=RENDER_PASS"), "{output}");
+    }
+
+    #[test]
+    fn conditional_topic_must_be_the_exact_member_returned_by_add_topic() {
+        let mut conditional = topic("conditional");
+        conditional.allow_hidden = true;
+        for add_body in [
+            r#"
+                gore_test_add_calls = gore_test_add_calls + 1
+                return gore_test_object(991, wanted)
+            "#,
+            r#"
+                gore_test_add_calls = gore_test_add_calls + 1
+                local inserted = gore_test_object(992, wanted)
+                table.insert(self._topics, inserted)
+                local wrong_class = gore_test_class("/Script/Angelscript.ChoiceWrongReturn")
+                return gore_test_object(993, wrong_class)
+            "#,
+        ] {
+            let scenario = format!(
+                r#"
+                    gore_test_setup("om_test_target_001", true)
+                    gore_test_topic_set.AddTopic = function(self, wanted, _replacement)
+                        {add_body}
+                    end
+                    gore_test_open()
+                "#
+            );
+            let lua = mock_lua(&loader(conditional.clone()), &scenario);
+            let output = logs(&lua);
+            assert!(
+                output.contains("status=FAIL reason=post-mutation-membership:topic-"),
+                "{output}"
+            );
+            assert!(!output.contains("status=ARMED"), "{output}");
+            assert!(!output.contains("status=HIDDEN"), "{output}");
+        }
+    }
+
+    #[test]
+    fn conditional_topic_removed_before_choice_fails_membership_gate() {
+        let mut conditional = topic("conditional");
+        conditional.allow_hidden = true;
+        let lua = mock_lua(
+            &loader(conditional),
+            r#"
+                gore_test_setup("om_test_target_001", true)
+                gore_test_open_show_only()
+                table.remove(gore_test_topic_set._topics, #gore_test_topic_set._topics)
+                gore_test_finish_open()
+            "#,
+        );
+        let output = logs(&lua);
+        assert!(output.contains("status=ARMED"), "{output}");
+        assert!(
+            output.contains("stage=choice reason=topic-set-membership:topic-missing"),
+            "{output}"
+        );
+        assert!(!output.contains("status=HIDDEN"), "{output}");
+        assert!(!output.contains("status=RENDER_PASS"), "{output}");
+    }
+
+    #[test]
+    fn conditional_duplicate_or_malformed_choice_array_stays_fail_closed() {
+        let mut conditional = topic("conditional");
+        conditional.allow_hidden = true;
+        let duplicate = mock_lua(
+            &loader(conditional.clone()),
+            r#"
+                gore_test_setup("om_test_target_001", true)
+                gore_test_open_show_only()
+                gore_test_duplicate_probe()
+                gore_test_finish_open()
+            "#,
+        );
+        let output = logs(&duplicate);
+        assert!(output.contains("reason=visible-topic-invalid"), "{output}");
+        assert!(output.contains("class_count=2"), "{output}");
+        assert!(!output.contains("status=HIDDEN"), "{output}");
+
+        let malformed = mock_lua(
+            &loader(conditional),
+            r#"
+                gore_test_setup("om_test_target_001", true)
+                gore_test_open_show_only()
+                local choice = "/Script/G1R.GameplayAbilityConversationV2WithUI:ClientShowChoiceUI"
+                gore_test_hooks[choice](gore_test_wrap(gore_test_ability), nil)
+            "#,
+        );
+        let output = logs(&malformed);
+        assert!(output.contains("reason=visible-topic-invalid"), "{output}");
+        assert!(output.contains("nil-array"), "{output}");
+        assert!(!output.contains("status=HIDDEN"), "{output}");
+    }
+
+    #[test]
+    fn choice_visible_topic_must_remain_exact_at_render() {
+        let mut conditional = topic("conditional");
+        conditional.allow_hidden = true;
+        for render_change in [
+            r#"
+                gore_test_hidden_class = gore_test_probe_class
+                gore_test_refresh_render_topics()
+            "#,
+            r#"
+                gore_test_duplicate_probe()
+                gore_test_refresh_render_topics()
+            "#,
+        ] {
+            let scenario = format!(
+                r#"
+                    gore_test_setup("om_test_target_001", true)
+                    gore_test_open_show_only()
+                    gore_test_finish_choice_only()
+                    {render_change}
+                    gore_test_finish_render_only()
+                "#
+            );
+            let lua = mock_lua(&loader(conditional.clone()), &scenario);
+            let output = logs(&lua);
+            assert!(output.contains("status=CHOICE_PASS"), "{output}");
+            assert!(output.contains("status=FAIL stage=render"), "{output}");
+            assert!(!output.contains("status=RENDER_PASS"), "{output}");
+        }
     }
 
     #[test]
@@ -870,6 +1104,7 @@ mod tests {
         gore_test_add_calls = 0
         gore_test_next_address = 100
         gore_test_fail_hook = nil
+        gore_test_hidden_class = nil
         EFindName = { FNAME_Find = 1 }
 
         function print(value)
@@ -998,10 +1233,26 @@ mod tests {
             gore_test_finish_render_only()
         end
 
+        function gore_test_current_visible_topics()
+            local visible_topics = {}
+            for _, topic in ipairs(gore_test_topic_set._topics) do
+                if topic:GetClass() ~= gore_test_hidden_class then
+                    table.insert(visible_topics, topic)
+                end
+            end
+            return gore_test_array(visible_topics)
+        end
+
         function gore_test_finish_choice_only()
-            local topics = gore_test_array(gore_test_topic_set._topics)
-            gore_test_last_visible_topics = topics
-            gore_test_hooks[CHOICE](gore_test_wrap(gore_test_ability), gore_test_wrap(topics))
+            gore_test_last_visible_topics = gore_test_current_visible_topics()
+            gore_test_hooks[CHOICE](
+                gore_test_wrap(gore_test_ability),
+                gore_test_wrap(gore_test_last_visible_topics)
+            )
+        end
+
+        function gore_test_refresh_render_topics()
+            gore_test_last_visible_topics = gore_test_current_visible_topics()
         end
 
         function gore_test_finish_render_only()

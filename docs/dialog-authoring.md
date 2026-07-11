@@ -155,6 +155,15 @@ Later hooks require the same object identity and exact class exactly once in
 both the choice and render arrays and record the
 `ARMED -> CHOICE_PASS -> RENDER_PASS` proof.
 
+State-dependent topics can declare `"allow_hidden": true`. A clean zero-match
+after the engine evaluates `IsVisible_Implementation` is then logged as
+`HIDDEN` and does not block a visible sibling topic. Any partial identity/class
+match or duplicate still fails closed, and only topics proven visible in the
+choice array advance to the render proof. Omit the field for topics that must be
+visible on every matching conversation opening; that strict behavior remains
+the default. Mutually exclusive start/finish choices should normally set it on
+both registrations.
+
 Any missing class/hook, unreadable or malformed array, participant-name failure,
 identity/class split, duplicate, or changed conversation object fails closed.
 All declared authored and sentinel classes are preflighted as one batch before
@@ -189,9 +198,14 @@ already shown to enter native conversation code with an invalid internal state.
    function before deployment.
 3. Deploy through the bundle engine and confirm the class/CDO is resident.
 4. Open the NPC menu naturally on a backed-up or disposable save.
-5. Require one `registration` and `attempt` sequence that reaches `ARMED`, then
-   `CHOICE_PASS`, then `RENDER_PASS`, with one matching object identity and exact
-   class in both observed arrays.
+5. For a topic expected to be visible in that state, require one `registration`
+   and `attempt` sequence that reaches `ARMED`, then `CHOICE_PASS`, then
+   `RENDER_PASS`, with one matching object identity and exact class in both
+   observed arrays. A conditional topic may instead end at `HIDDEN`; if every
+   armed topic is conditional and hidden, the batch also logs `CHOICE_EMPTY`.
+   That proves exact topic-set membership plus a clean UI zero-match, not visual
+   delivery. The same topic must still reach both PASS stages on a later state
+   where it is expected to be visible.
 6. Confirm the caption visually, select nothing, exit the game, and undeploy.
 7. Verify the pristine cache hash, absence of deployment residue, and compare
    saves to the pre-run snapshot.
