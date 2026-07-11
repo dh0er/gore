@@ -259,21 +259,37 @@ containers are what currently load reliably in-game.)
 
 ### Cooked DataAsset foundation
 
-`gore-asset` is the conservative backend for a future generic cooked-DataAsset
-editor. It can resolve and flatten class schemas from a `.usmap`, decode and
-re-encode Unreal unversioned-property headers, and edit fixed-width primitive
-properties without changing unrelated bytes. Its package carrier loads a split
-`.uasset`/`.uexp` pair, permits only bounds-checked same-length replacement, and
-writes a verified new pair without overwriting the input or an existing output.
+`gore-asset` is the conservative backend for cooked-DataAsset inspection and
+fixed-leaf editing. It can resolve and flatten class schemas from a `.usmap`,
+decode and re-encode Unreal unversioned-property headers, and edit proven
+fixed-width leaves without changing unrelated bytes. Its package carrier loads
+a split `.uasset`/`.uexp` pair, permits only bounds-checked same-length
+replacement, and writes a verified new pair without overwriting the input or an
+existing output.
 
-There is intentionally no guessed property-stream offset and no general CLI
-edit command yet. Against the current hotfix, three native `UPrimaryDataAsset`
-packages reproduce byte-identically and their Zen/legacy export maps prove the
-exact `.uexp` export ranges plus package footer. A UE5.4-G1R envelope API now
-validates those boundaries and retains every class-native suffix opaquely. The
-apparent four-byte prefix was actually two legal empty unversioned-header
-fragments; the decoder now accepts and round-trips them. The first real non-zero
-properties are complex `Map`/`Struct` values. A resource-bounded
+The public CLI deliberately exposes only an offset-free inspection path and one
+snapshot-bound raw-wire edit:
+
+```text
+gore asset inspect     --uasset INPUT.uasset --usmap MAPPINGS.usmap --json
+gore asset patch-fixed --uasset INPUT.uasset --usmap MAPPINGS.usmap \
+  --selector SELECTOR.json --expected-hex HEX --replacement-hex HEX \
+  --out OUTPUT.uasset --json
+```
+
+See [Cooked DataAsset fixed-leaf workflow](docs/dataasset-authoring.md) for the
+selector extraction, compare-and-swap, re-inspection, safety limits, and raw
+little-endian wire-value requirements. `editable=true` is structural proof, not
+gameplay/domain validation; this is not a generic DataAsset serializer.
+
+There is intentionally no guessed property-stream offset. Against the current
+hotfix, three native `UPrimaryDataAsset` packages reproduce byte-identically and
+their Zen/legacy export maps prove the exact `.uexp` export ranges plus package
+footer. A UE5.4-G1R envelope API validates those boundaries and retains every
+class-native suffix opaquely. The apparent four-byte prefix was actually two
+legal empty unversioned-header fragments; the decoder accepts and round-trips
+them. The first real non-zero properties are complex `Map`/`Struct` values. A
+resource-bounded
 span walker now follows the USMAP recursively for the wire forms proven by those
 fixtures (`Map`, nested G1R structs, names/object references, `LinearColor`,
 `Vector4`, and required primitives), returning exact borrowed byte ranges and a
@@ -283,6 +299,13 @@ checks, exact-schema rewalks, compare-and-swap mutation, and verified rollback.
 Reference edits, map keys, variable-width values, and structural collection or
 header changes remain intentionally unsupported. Unknown forms fail typed
 before any size is guessed.
+
+A tracked synthetic end-to-end test proves the public inspect -> selector ->
+patch -> reopen path, source preservation, stale-selector rejection, in-place
+rejection, and existing-pair no-clobber behavior. Lower-level carrier tests
+exercise partial-publication cleanup. The current real Wolf fixture also
+reopens after a `Vector4` edit with its `.uasset` byte-identical and exactly one
+changed `.uexp` byte.
 
 ## Scripts (AngelScript) — experimental
 

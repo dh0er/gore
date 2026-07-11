@@ -12,7 +12,15 @@ exact Unreal package version:
 - same-length range replacement, preserving every byte outside that range;
 - same-length compare-and-swap replacement that fails on the first drift byte;
 - staging, syncing, reopening, hashing, and no-clobber publication to a new
-  output pair.
+  output pair;
+- `.uexp`-first / `.uasset`-last publication, retained file-identity evidence,
+  and conditional cleanup that refuses a changed destination.
+
+The second read pass makes sequential point checks (`.uexp`, then `.uasset`); it
+is not an atomic pair snapshot. Callers must ensure no source writer runs
+concurrently. A change overlapping an observation fails closed, but two already
+stable opaque vanilla files cannot be proven to share a semantic generation
+because the legacy pair has no shared generation manifest.
 
 ## Proven G1R UE5.4 export envelope
 
@@ -110,6 +118,20 @@ four-byte zero suffix immediately before each package footer.
 
 ## Snapshot-bound fixed-leaf patches
 
+`FixedLeafSelector` is the public, serializable, offset-free identity for one
+walked leaf. `describe_fixed_leaves` constructs selectors only from a
+`SchemaDb::from_usmap` database, whose exact raw-source SHA-256 is retained
+internally. Resolution accepts neither an offset nor a caller-asserted USMAP
+digest: it checks the full package pair, raw USMAP source, export identity/hash,
+stable local wire-type path, map-key identity, role, kind, and expected bytes,
+then performs its own schema walk.
+
+Format 1 does not serialize the external `usmap::PropertyInner` representation.
+It uses an exhaustive local `FixedLeafWireType` contract with explicit names and
+strict unknown-field rejection. Duplicate equal map keys make every descendant
+selector advisory-non-editable and resolve as ambiguous rather than falling
+back to an entry index.
+
 `FixedLeafPatch::plan` promotes one non-referential `FixedValueSpan` into an
 owned compare-and-swap plan. It accepts no absolute offset from the caller. The
 export, property block, and leaf must all borrow from the same carrier, and the
@@ -148,9 +170,24 @@ reopens, reparses, and rewalks the new pair successfully.
 
 An existing destination is never overwritten, and a loaded source pair cannot
 be selected as its own output. Both output files are fully staged and verified
-before publication. Each file is published atomically; because ordinary
-filesystems cannot rename two files as one transaction, a second-file publish
-failure triggers removal of the first file.
+before publication. The `.uexp` payload is published first and `.uasset` last as
+the commit marker. Ordinary process termination between those operations can
+leave an orphan `.uexp`; `.uasset` is attempted only after `.uexp` succeeds.
+Directory sync is best-effort, so power-loss durability remains platform- and
+filesystem-dependent. A second-file publish failure conditionally removes the
+first only while its retained identity, length, and hash still match. Cleanup
+preserves verification/I/O errors rather than misreporting all failures as
+drift. If commit-marker cleanup fails or is refused, dependent `.uexp` cleanup is
+not attempted, preserving the visible pair rather than deleting its payload.
+
+SHA-256 is checked during cleanup and file identity is checked again immediately
+before removal. Final removal is still a path-based unlink, so any concurrent
+writer or renamer can race the last identity check. Output directories are a
+trusted local boundary and must have no concurrent writer, hostile or benign.
+
+The public `gore asset inspect` / `gore asset patch-fixed` workflow and its raw
+wire-value limits are documented in
+[`docs/dataasset-authoring.md`](../../docs/dataasset-authoring.md).
 
 ## Still deliberately unknown
 
