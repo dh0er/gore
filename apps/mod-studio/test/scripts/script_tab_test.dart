@@ -15,27 +15,36 @@ import 'package:path/path.dart' as p;
 /// empty `file` (exercises the `<name>.as` root-leaf fallback), and one whose
 /// name does NOT appear in its path (exercises name-only search matching).
 List<ScriptModuleInfo> _fakeModules() => [
-      ScriptModuleInfo(name: 'Foo', file: 'Gameplay/Foo.as'),
-      ScriptModuleInfo(name: 'Baz', file: 'Gameplay/Baz.as'),
-      ScriptModuleInfo(name: 'Bar', file: ''), // fallback → 'Bar.as' at the root
-      ScriptModuleInfo(name: 'Quux', file: 'Misc/Other.as'),
-    ];
+  ScriptModuleInfo(name: 'Foo', file: 'Gameplay/Foo.as'),
+  ScriptModuleInfo(name: 'Baz', file: 'Gameplay/Baz.as'),
+  ScriptModuleInfo(name: 'Bar', file: ''), // fallback → 'Bar.as' at the root
+  ScriptModuleInfo(name: 'Quux', file: 'Misc/Other.as'),
+];
 
 ScriptMod _stagedBar() => const ScriptMod(
-    op: ScriptOp.edit, moduleName: 'Bar', relPath: 'Bar.as', asPath: '');
+  op: ScriptOp.edit,
+  moduleName: 'Bar',
+  relPath: 'Bar.as',
+  asPath: '',
+);
 
-Future<void> _pumpTab(WidgetTester tester,
-    {ScriptMod? staged, bool onlyStaged = false}) async {
+Future<void> _pumpTab(
+  WidgetTester tester, {
+  ScriptMod? staged,
+  bool onlyStaged = false,
+}) async {
   await tester.pumpWidget(
     ProviderScope(
       overrides: [
         scriptModulesProvider.overrideWith((ref) async => _fakeModules()),
         if (staged != null)
-          scriptModsProvider
-              .overrideWith((ref) => ScriptModsNotifier()..setMod(staged)),
+          scriptModsProvider.overrideWith(
+            (ref) => ScriptModsNotifier()..setMod(staged),
+          ),
       ],
       child: MaterialApp(
-          home: Scaffold(body: ScriptTab(onlyStaged: onlyStaged))),
+        home: Scaffold(body: ScriptTab(onlyStaged: onlyStaged)),
+      ),
     ),
   );
   // Resolve the modules future (loading spinner → data).
@@ -44,6 +53,37 @@ Future<void> _pumpTab(WidgetTester tester,
 }
 
 void main() {
+  testWidgets('existing-module edit can explicitly opt in to new symbols', (
+    tester,
+  ) async {
+    const staged = ScriptMod(
+      op: ScriptOp.edit,
+      moduleName: 'Bar',
+      relPath: 'Bar.as',
+      asPath: 'Bar.as',
+      miniPath: 'old.cache',
+      compiledHash: 'old-hash',
+    );
+    await _pumpTab(tester, staged: staged);
+
+    await tester.tap(find.text('Bar.as').first);
+    await tester.pump();
+    final toggle = tester.widget<SwitchListTile>(find.byType(SwitchListTile));
+    expect(toggle.value, isFalse);
+
+    await tester.tap(find.text('Allow new symbols'));
+    await tester.pump();
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(ScriptTab)),
+      listen: false,
+    );
+    final updated = container.read(scriptModsProvider).entries.single;
+    expect(updated.allowNewSymbols, isTrue);
+    expect(updated.miniPath, isEmpty);
+    expect(updated.compiledHash, isEmpty);
+    expect(find.text('Symbol policy changed — compile again.'), findsOneWidget);
+  });
+
   testWidgets('tree shows folders + root leaf, staged leaf is check-marked, '
       'expanding a folder reveals its scripts', (tester) async {
     await _pumpTab(tester, staged: _stagedBar());
@@ -60,9 +100,13 @@ void main() {
 
     // The staged module's tree leaf carries the check marker.
     final barTile = find.ancestor(
-        of: find.text('Bar.as'), matching: find.byType(ListTile));
-    expect(find.descendant(of: barTile, matching: find.byIcon(Icons.check)),
-        findsOneWidget);
+      of: find.text('Bar.as'),
+      matching: find.byType(ListTile),
+    );
+    expect(
+      find.descendant(of: barTile, matching: find.byIcon(Icons.check)),
+      findsOneWidget,
+    );
 
     // Expanding 'Gameplay' reveals its two scripts.
     await tester.tap(find.text('Gameplay'));
@@ -91,14 +135,17 @@ void main() {
     expect(find.text('Vanilla module — not staged'), findsOneWidget);
     expect(
       find.ancestor(
-          of: find.text('Edit'),
-          matching: find.byWidgetPredicate((w) => w is FilledButton)),
+        of: find.text('Edit'),
+        matching: find.byWidgetPredicate((w) => w is FilledButton),
+      ),
       findsOneWidget,
     );
     // Left pane: the flat hit's subtitle shows the path.
     expect(
       find.descendant(
-          of: find.byType(ListTile), matching: find.text('Misc/Other.as')),
+        of: find.byType(ListTile),
+        matching: find.text('Misc/Other.as'),
+      ),
       findsOneWidget,
     );
     // Right pane: the detail's Path row echoes it (the only occurrence that is
@@ -120,9 +167,7 @@ void main() {
     ];
     await tester.pumpWidget(
       ProviderScope(
-        overrides: [
-          scriptModulesProvider.overrideWith((ref) async => modules),
-        ],
+        overrides: [scriptModulesProvider.overrideWith((ref) async => modules)],
         child: const MaterialApp(home: Scaffold(body: ScriptTab())),
       ),
     );
@@ -151,8 +196,9 @@ void main() {
     await tester.tap(find.text('Edit'));
     await tester.pumpAndSettle();
     final container = ProviderScope.containerOf(
-        tester.element(find.byType(ScriptTab)),
-        listen: false);
+      tester.element(find.byType(ScriptTab)),
+      listen: false,
+    );
     final staged = container.read(scriptModsProvider).items;
     expect(staged.keys.single, 'Foo.as');
     expect(staged.values.single.moduleName, 'Bar');
@@ -164,17 +210,26 @@ void main() {
     // share (their staging keys collide for such data) — so the check marker
     // shows on every leaf whose real relPath is staged, disambiguated or not.
     for (final leaf in ['Foo.as', 'Foo (2).as']) {
-      final tile =
-          find.ancestor(of: find.text(leaf), matching: find.byType(ListTile));
-      expect(find.descendant(of: tile, matching: find.byIcon(Icons.check)),
-          findsOneWidget, reason: 'leaf $leaf should be check-marked');
+      final tile = find.ancestor(
+        of: find.text(leaf),
+        matching: find.byType(ListTile),
+      );
+      expect(
+        find.descendant(of: tile, matching: find.byIcon(Icons.check)),
+        findsOneWidget,
+        reason: 'leaf $leaf should be check-marked',
+      );
     }
     // The selection (the staged mod's REAL relPath) highlights its first
     // owning leaf in the tree.
     expect(
       tester
-          .widget<ListTile>(find.ancestor(
-              of: find.text('Foo.as'), matching: find.byType(ListTile)))
+          .widget<ListTile>(
+            find.ancestor(
+              of: find.text('Foo.as'),
+              matching: find.byType(ListTile),
+            ),
+          )
           .selected,
       isTrue,
     );
@@ -186,19 +241,31 @@ void main() {
     for (final leaf in ['Foo (2).as', 'Foo.as']) {
       // Tap the TREE leaf specifically — the staged detail's Path row echoes
       // 'Foo.as' as plain text too, which would make a bare text tap ambiguous.
-      await tester.tap(find.descendant(
-          of: find.byType(ListTile), matching: find.text(leaf)));
+      await tester.tap(
+        find.descendant(of: find.byType(ListTile), matching: find.text(leaf)),
+      );
       await tester.pump();
-      expect(find.text('Edit existing module'), findsOneWidget,
-          reason: 'leaf $leaf should show the staged detail');
-      expect(find.text('Vanilla module — not staged'), findsNothing,
-          reason: 'leaf $leaf must not claim vanilla');
-      expect(find.text('Edit'), findsNothing,
-          reason: 'leaf $leaf must not offer a vanilla Edit');
+      expect(
+        find.text('Edit existing module'),
+        findsOneWidget,
+        reason: 'leaf $leaf should show the staged detail',
+      );
+      expect(
+        find.text('Vanilla module — not staged'),
+        findsNothing,
+        reason: 'leaf $leaf must not claim vanilla',
+      );
+      expect(
+        find.text('Edit'),
+        findsNothing,
+        reason: 'leaf $leaf must not offer a vanilla Edit',
+      );
     }
     // The staged mod survived untouched (an overwrite would re-stage 'Foo').
-    expect(container.read(scriptModsProvider).items.values.single.moduleName,
-        'Bar');
+    expect(
+      container.read(scriptModsProvider).items.values.single.moduleName,
+      'Bar',
+    );
 
     // The flat search list uses the same real-relPath marker semantics: both
     // hits (matched via their tree paths) carry the staged check.
@@ -206,14 +273,17 @@ void main() {
     await tester.pump();
     expect(
       find.descendant(
-          of: find.byType(ListTile), matching: find.byIcon(Icons.check)),
+        of: find.byType(ListTile),
+        matching: find.byIcon(Icons.check),
+      ),
       findsNWidgets(2),
     );
   });
 
   testWidgets('staged panel lists the mod with compile status, tapping selects '
-      'it, delete unstages and the detail falls back to vanilla',
-      (tester) async {
+      'it, delete unstages and the detail falls back to vanilla', (
+    tester,
+  ) async {
     await _pumpTab(tester, staged: _stagedBar());
 
     // Header shows the staged count plus the Add entry point.
@@ -227,7 +297,9 @@ void main() {
     expect(find.text('Bar'), findsOneWidget);
     // An uncompiled mod surfaces a "not compiled" affordance.
     expect(
-        find.textContaining('not compiled', findRichText: true), findsWidgets);
+      find.textContaining('not compiled', findRichText: true),
+      findsWidgets,
+    );
 
     // Tapping the row selects the mod → staged detail pane.
     await tester.tap(find.text('Bar'));
@@ -242,15 +314,19 @@ void main() {
     expect(find.text('Vanilla module — not staged'), findsOneWidget);
   });
 
-  testWidgets('staged panel scrolls long lists instead of overflowing the tab',
-      (tester) async {
+  testWidgets('staged panel scrolls long lists instead of overflowing the tab', (
+    tester,
+  ) async {
     final notifier = ScriptModsNotifier();
     for (var i = 0; i < 30; i++) {
-      notifier.setMod(ScriptMod(
+      notifier.setMod(
+        ScriptMod(
           op: ScriptOp.add,
           moduleName: 'Mod$i',
           relPath: 'Mods/Mod$i.as',
-          asPath: ''));
+          asPath: '',
+        ),
+      );
     }
     await tester.pumpWidget(
       ProviderScope(
@@ -278,14 +354,18 @@ void main() {
     // the scrollable finder on a row widget — rows unbuild as they scroll out,
     // which would empty the finder mid-scroll. With the browser showing the
     // no-modules hint, the panel's ListView is the only Scrollable here.)
-    await tester.scrollUntilVisible(find.text('Mod29'), 80,
-        scrollable: find.byType(Scrollable).first);
+    await tester.scrollUntilVisible(
+      find.text('Mod29'),
+      80,
+      scrollable: find.byType(Scrollable).first,
+    );
     expect(find.text('Mod29'), findsOneWidget);
   });
 
   testWidgets('onlyStaged: browser shows only staged leaves, search filters '
-      'within them, un-staging empties live and re-staging restores',
-      (tester) async {
+      'within them, un-staging empties live and re-staging restores', (
+    tester,
+  ) async {
     await _pumpTab(tester, staged: _stagedBar(), onlyStaged: true);
 
     // Only the staged module's leaf renders — vanilla folders/leaves are out,
@@ -310,13 +390,16 @@ void main() {
     // Un-stage through the container (as any outside action would): the
     // browser empties LIVE to the hint while the staged panel follows.
     final container = ProviderScope.containerOf(
-        tester.element(find.byType(ScriptTab)),
-        listen: false);
+      tester.element(find.byType(ScriptTab)),
+      listen: false,
+    );
     container.read(scriptModsProvider.notifier).remove('Bar.as');
     await tester.pump();
     expect(find.text('Bar.as'), findsNothing);
-    expect(find.textContaining('No staged edits of vanilla modules'),
-        findsOneWidget);
+    expect(
+      find.textContaining('No staged edits of vanilla modules'),
+      findsOneWidget,
+    );
     expect(find.text('Staged script mods (0)'), findsOneWidget);
 
     // Re-staging brings the leaf back (fresh filtered-list identity → the
@@ -331,16 +414,22 @@ void main() {
       'browser but in the panel; a folder-nested staged edit shows only its '
       'own leaf', (tester) async {
     final notifier = ScriptModsNotifier()
-      ..setMod(const ScriptMod(
+      ..setMod(
+        const ScriptMod(
           op: ScriptOp.edit,
           moduleName: 'Foo',
           relPath: 'Gameplay/Foo.as',
-          asPath: ''))
-      ..setMod(const ScriptMod(
+          asPath: '',
+        ),
+      )
+      ..setMod(
+        const ScriptMod(
           op: ScriptOp.add,
           moduleName: 'New',
           relPath: 'Mods/New.as',
-          asPath: ''));
+          asPath: '',
+        ),
+      );
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
@@ -348,7 +437,8 @@ void main() {
           scriptModsProvider.overrideWith((ref) => notifier),
         ],
         child: const MaterialApp(
-            home: Scaffold(body: ScriptTab(onlyStaged: true))),
+          home: Scaffold(body: ScriptTab(onlyStaged: true)),
+        ),
       ),
     );
     await tester.pump();
@@ -368,9 +458,13 @@ void main() {
     expect(find.text('Foo.as'), findsOneWidget);
     expect(find.text('Baz.as'), findsNothing);
     final fooTile = find.ancestor(
-        of: find.text('Foo.as'), matching: find.byType(ListTile));
-    expect(find.descendant(of: fooTile, matching: find.byIcon(Icons.check)),
-        findsOneWidget);
+      of: find.text('Foo.as'),
+      matching: find.byType(ListTile),
+    );
+    expect(
+      find.descendant(of: fooTile, matching: find.byIcon(Icons.check)),
+      findsOneWidget,
+    );
 
     // The add remains reachable via the staged panel.
     expect(find.text('Staged script mods (2)'), findsOneWidget);
@@ -385,16 +479,20 @@ void main() {
     // One container across both mounts — like the real app, where the main
     // Scripts tab (kept alive) and the ChangesTab embed share the app-scoped
     // selection provider.
-    final container = ProviderContainer(overrides: [
-      scriptModulesProvider.overrideWith((ref) async => _fakeModules()),
-    ]);
+    final container = ProviderContainer(
+      overrides: [
+        scriptModulesProvider.overrideWith((ref) async => _fakeModules()),
+      ],
+    );
     addTearDown(container.dispose);
 
     Future<void> pumpTab(Widget tab) async {
-      await tester.pumpWidget(UncontrolledProviderScope(
-        container: container,
-        child: MaterialApp(home: Scaffold(body: tab)),
-      ));
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: MaterialApp(home: Scaffold(body: tab)),
+        ),
+      );
       await tester.pump();
       await tester.pump();
     }
@@ -412,8 +510,10 @@ void main() {
     // a vanilla editor for an entry the filtered browser doesn't list would
     // contradict the view.
     await pumpTab(const ScriptTab(onlyStaged: true));
-    expect(find.textContaining('No staged edits of vanilla modules'),
-        findsOneWidget);
+    expect(
+      find.textContaining('No staged edits of vanilla modules'),
+      findsOneWidget,
+    );
     expect(find.text('Select or add a script mod'), findsOneWidget);
     expect(find.text('Vanilla module — not staged'), findsNothing);
 
@@ -425,8 +525,12 @@ void main() {
     expect(find.text('Edit existing module'), findsOneWidget);
     expect(
       tester
-          .widget<ListTile>(find.ancestor(
-              of: find.text('Bar.as'), matching: find.byType(ListTile)))
+          .widget<ListTile>(
+            find.ancestor(
+              of: find.text('Bar.as'),
+              matching: find.byType(ListTile),
+            ),
+          )
           .selected,
       isTrue,
     );
@@ -445,18 +549,23 @@ void main() {
     // One container across both mounts. The user visits Changes>Scripts and
     // selects a staged module BEFORE the main Scripts tab has ever built —
     // the first main-tab mount must NOT clobber the shared selection.
-    final container = ProviderContainer(overrides: [
-      scriptModulesProvider.overrideWith((ref) async => _fakeModules()),
-      scriptModsProvider
-          .overrideWith((ref) => ScriptModsNotifier()..setMod(_stagedBar())),
-    ]);
+    final container = ProviderContainer(
+      overrides: [
+        scriptModulesProvider.overrideWith((ref) async => _fakeModules()),
+        scriptModsProvider.overrideWith(
+          (ref) => ScriptModsNotifier()..setMod(_stagedBar()),
+        ),
+      ],
+    );
     addTearDown(container.dispose);
 
     Future<void> pumpTab(Widget tab) async {
-      await tester.pumpWidget(UncontrolledProviderScope(
-        container: container,
-        child: MaterialApp(home: Scaffold(body: tab)),
-      ));
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: MaterialApp(home: Scaffold(body: tab)),
+        ),
+      );
       await tester.pump();
       await tester.pump();
     }
@@ -477,8 +586,12 @@ void main() {
     expect(find.text('Select or add a script mod'), findsNothing);
     expect(
       tester
-          .widget<ListTile>(find.ancestor(
-              of: find.text('Bar.as'), matching: find.byType(ListTile)))
+          .widget<ListTile>(
+            find.ancestor(
+              of: find.text('Bar.as'),
+              matching: find.byType(ListTile),
+            ),
+          )
           .selected,
       isTrue,
     );
@@ -495,11 +608,14 @@ void main() {
       ScriptModuleInfo(name: 'Baz', file: 'Foo (2).as'),
     ];
     final notifier = ScriptModsNotifier()
-      ..setMod(const ScriptMod(
+      ..setMod(
+        const ScriptMod(
           op: ScriptOp.edit,
           moduleName: 'Baz',
           relPath: 'Foo (2).as',
-          asPath: ''));
+          asPath: '',
+        ),
+      );
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
@@ -526,15 +642,20 @@ void main() {
     // ACTUAL leaf, not on Bar's same-text generated leaf, and the detail is
     // the staged mod (not Bar's vanilla card).
     expect(find.text('Edit existing module'), findsOneWidget);
-    ListTile tileOf(String label) => tester.widget<ListTile>(find.ancestor(
-        of: find.text(label), matching: find.byType(ListTile)));
+    ListTile tileOf(String label) => tester.widget<ListTile>(
+      find.ancestor(of: find.text(label), matching: find.byType(ListTile)),
+    );
     expect(tileOf('Foo (2) (2).as').selected, isTrue);
     expect(tileOf('Foo (2).as').selected, isFalse);
     // The staged check marker agrees (real-relPath keyed): Baz's leaf only.
     final bazTile = find.ancestor(
-        of: find.text('Foo (2) (2).as'), matching: find.byType(ListTile));
-    expect(find.descendant(of: bazTile, matching: find.byIcon(Icons.check)),
-        findsOneWidget);
+      of: find.text('Foo (2) (2).as'),
+      matching: find.byType(ListTile),
+    );
+    expect(
+      find.descendant(of: bazTile, matching: find.byIcon(Icons.check)),
+      findsOneWidget,
+    );
   });
 
   testWidgets('game-path change: after remount + module reload a selection '
@@ -546,16 +667,20 @@ void main() {
     // mount-time selection reset (it would clobber valid cross-view
     // selections) — a stale selection is neutralized by the render guards.
     var modules = _fakeModules();
-    final container = ProviderContainer(overrides: [
-      scriptModulesProvider.overrideWith((ref) async => modules),
-    ]);
+    final container = ProviderContainer(
+      overrides: [scriptModulesProvider.overrideWith((ref) async => modules)],
+    );
     addTearDown(container.dispose);
 
     Future<void> pumpTab(Key key) async {
-      await tester.pumpWidget(UncontrolledProviderScope(
-        container: container,
-        child: MaterialApp(home: Scaffold(body: ScriptTab(key: key))),
-      ));
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: MaterialApp(
+            home: Scaffold(body: ScriptTab(key: key)),
+          ),
+        ),
+      );
       await tester.pump();
       await tester.pump();
     }
@@ -583,18 +708,39 @@ void main() {
   test('loadProject drops script mods with an unsafe relPath', () async {
     final tmp = await Directory.systemTemp.createTemp('goremod_relpath_test_');
     addTearDown(() => tmp.deleteSync(recursive: true));
-    final asFile = File(p.join(tmp.path, 'New.as'))..writeAsStringSync('void Foo(){}');
+    final asFile = File(p.join(tmp.path, 'New.as'))
+      ..writeAsStringSync('void Foo(){}');
     final project = ModProject(
       name: 'M',
       scripts: [
         // Safe sibling — must survive the load.
-        ScriptMod(op: ScriptOp.add, moduleName: 'Good', relPath: 'AI/Good.as', asPath: asFile.path),
+        ScriptMod(
+          op: ScriptOp.add,
+          moduleName: 'Good',
+          relPath: 'AI/Good.as',
+          asPath: asFile.path,
+        ),
         // Escapes the staged tree — must be dropped.
-        ScriptMod(op: ScriptOp.add, moduleName: 'Esc', relPath: '../evil.as', asPath: asFile.path),
+        ScriptMod(
+          op: ScriptOp.add,
+          moduleName: 'Esc',
+          relPath: '../evil.as',
+          asPath: asFile.path,
+        ),
         // Absolute — must be dropped.
-        ScriptMod(op: ScriptOp.add, moduleName: 'Abs', relPath: '/etc/evil.as', asPath: asFile.path),
+        ScriptMod(
+          op: ScriptOp.add,
+          moduleName: 'Abs',
+          relPath: '/etc/evil.as',
+          asPath: asFile.path,
+        ),
         // Empty — must be dropped.
-        ScriptMod(op: ScriptOp.add, moduleName: 'Empty', relPath: '', asPath: asFile.path),
+        ScriptMod(
+          op: ScriptOp.add,
+          moduleName: 'Empty',
+          relPath: '',
+          asPath: asFile.path,
+        ),
       ],
     );
     final out = p.join(tmp.path, 'm.goremod');

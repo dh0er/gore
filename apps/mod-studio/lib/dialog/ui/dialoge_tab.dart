@@ -1,4 +1,5 @@
 import 'package:collection/collection.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
@@ -38,8 +39,7 @@ class DialogeTab extends ConsumerWidget {
     return catalogAsync.when(
       loading: () => const Center(child: CircularProgressIndicator()),
       error: (e, _) => Center(child: Text('Failed to load localization: $e')),
-      data: (catalog) {
-        if (catalog.isEmpty) return const _EmptyHint();
+      data: (_) {
         return Row(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -49,37 +49,6 @@ class DialogeTab extends ConsumerWidget {
           ],
         );
       },
-    );
-  }
-}
-
-class _EmptyHint extends StatelessWidget {
-  const _EmptyHint();
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(32),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.forum_outlined,
-                size: 48, color: theme.colorScheme.onSurfaceVariant),
-            const SizedBox(height: 16),
-            Text('No dialog lines yet', style: theme.textTheme.titleMedium),
-            const SizedBox(height: 8),
-            Text(
-              'Extract the localization catalog first to browse and edit '
-              'dialog and bark lines.',
-              textAlign: TextAlign.center,
-              style: theme.textTheme.bodyMedium
-                  ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-            ),
-          ],
-        ),
-      ),
     );
   }
 }
@@ -100,6 +69,95 @@ String _speakerLabel(String speaker) {
   return speaker[0].toUpperCase() + speaker.substring(1);
 }
 
+class _NewDialogLine {
+  const _NewDialogLine(this.id, this.text);
+
+  final String id;
+  final String text;
+}
+
+class _AddDialogLineDialog extends StatefulWidget {
+  const _AddDialogLineDialog({required this.existingIds});
+
+  final Set<String> existingIds;
+
+  @override
+  State<_AddDialogLineDialog> createState() => _AddDialogLineDialogState();
+}
+
+class _AddDialogLineDialogState extends State<_AddDialogLineDialog> {
+  final TextEditingController _idController = TextEditingController();
+  final TextEditingController _textController = TextEditingController();
+  String? _error;
+
+  @override
+  void dispose() {
+    _idController.dispose();
+    _textController.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final id = _idController.text.trim().toLowerCase();
+    final text = _textController.text.trim();
+    final validId = RegExp(
+      r'^(info|dia|gvl|svm)_[a-z0-9][a-z0-9_]*$',
+    ).hasMatch(id);
+    final message = !validId
+        ? 'Use info_, dia_, gvl_, or svm_ followed by letters, digits, and underscores.'
+        : widget.existingIds.contains(id)
+        ? 'This localization ID already exists.'
+        : text.isEmpty
+        ? 'Enter text for the current language.'
+        : null;
+    if (message != null) {
+      setState(() => _error = message);
+      return;
+    }
+    Navigator.pop(context, _NewDialogLine(id, text));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Add localized dialog line'),
+      content: SizedBox(
+        width: 520,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: _idController,
+              autofocus: true,
+              decoration: InputDecoration(
+                labelText: 'Localization ID',
+                hintText: 'info_viper_gore_01',
+                errorText: _error,
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _textController,
+              minLines: 2,
+              maxLines: 5,
+              decoration: const InputDecoration(
+                labelText: 'Text in the current game language',
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(onPressed: _submit, child: const Text('Add')),
+      ],
+    );
+  }
+}
+
 class _DialogBrowserState extends ConsumerState<_DialogBrowser> {
   final TextEditingController _searchController = TextEditingController();
   String _query = '';
@@ -107,6 +165,11 @@ class _DialogBrowserState extends ConsumerState<_DialogBrowser> {
   /// Memoizes the filtered row build (see [DialogRowsMemo]) so per-keystroke
   /// rebuilds while editing inside the Changes tab don't re-scan the catalog.
   final DialogRowsMemo _rowsMemo = DialogRowsMemo();
+
+  /// Stable-identity set of staged dialog IDs absent from the extracted catalog. Text edits emit
+  /// a new LocEditsState on every keystroke, but row grouping only needs rebuilding when this key
+  /// set actually changes.
+  Set<String> _additionalIds = const {};
 
   /// Key of the speaker group shown in the line list while not searching
   /// (see [DialogGroupRow.groupKey]). Null / vanished keys fall back to the
@@ -117,6 +180,43 @@ class _DialogBrowserState extends ConsumerState<_DialogBrowser> {
   void dispose() {
     _searchController.dispose();
     super.dispose();
+  }
+
+  Set<String> _stableAdditionalIds(
+    Map<String, Map<String, String>> catalog,
+    Iterable<String> editedIds,
+  ) {
+    final next = <String>{
+      for (final id in editedIds)
+        if (isDialogLocId(id.toLowerCase()) &&
+            !catalog.containsKey(id.toLowerCase()))
+          id.toLowerCase(),
+    };
+    if (!setEquals(next, _additionalIds)) {
+      _additionalIds = Set.unmodifiable(next);
+    }
+    return _additionalIds;
+  }
+
+  Future<void> _addDialogLine() async {
+    final catalog = ref.read(locCatalogProvider).value ?? const {};
+    final staged = ref.read(locEditsProvider).edits;
+    final existingIds = Set<String>.unmodifiable({
+      ...catalog.keys.map((id) => id.toLowerCase()),
+      ...staged.keys.map((id) => id.toLowerCase()),
+    });
+    final line = await showDialog<_NewDialogLine>(
+      context: context,
+      builder: (_) => _AddDialogLineDialog(existingIds: existingIds),
+    );
+    if (line == null || !mounted) return;
+
+    final lang = gameLangByCode(ref.read(localeProvider));
+    ref
+        .read(locEditsProvider.notifier)
+        .setEdit(line.id, lang.locSets.first, line.text);
+    ref.read(selectedDialogIdProvider.notifier).state = line.id;
+    setState(() => _selectedGroupKey = null);
   }
 
   /// Whether [id]'s catalog entry matches [query] by id substring or by any of
@@ -143,16 +243,19 @@ class _DialogBrowserState extends ConsumerState<_DialogBrowser> {
     final theme = Theme.of(context);
     final l10n = AppLocalizations.of(context);
     final catalog = ref.watch(locCatalogProvider).value ?? const {};
+    final editedIds = ref.watch(locEditsProvider).edits;
+    final additionalIds = _stableAdditionalIds(catalog, editedIds.keys);
     // Filtered views derive their rows locally (memoized on input identity)
     // so the shared unfiltered provider path stays untouched (and
     // un-invalidated) for the main tab.
     final onlyIds = widget.onlyIds;
-    final allRows = onlyIds == null
-        ? ref.watch(dialogRowsProvider)
-        : _rowsMemo.rowsFor(catalog, onlyIds);
+    final allRows = _rowsMemo.rowsFor(
+      catalog,
+      onlyIds,
+      additionalIds: onlyIds ?? additionalIds,
+    );
     final query = _query.trim().toLowerCase();
     final searching = query.isNotEmpty;
-    final editedIds = ref.watch(locEditsProvider).edits;
 
     final groups = allRows.whereType<DialogGroupRow>().toList();
     final lines = allRows.whereType<DialogLineRow>();
@@ -164,7 +267,8 @@ class _DialogBrowserState extends ConsumerState<_DialogBrowser> {
     // search after picking a hit), then fall back to the first group.
     var selectedKey = _selectedGroupKey;
     if (!groups.any((g) => g.groupKey == selectedKey)) {
-      selectedKey = lines.firstWhereOrNull((l) => l.id == selectedId)?.groupKey ??
+      selectedKey =
+          lines.firstWhereOrNull((l) => l.id == selectedId)?.groupKey ??
           (groups.isEmpty ? null : groups.first.groupKey);
     }
 
@@ -179,24 +283,38 @@ class _DialogBrowserState extends ConsumerState<_DialogBrowser> {
       children: [
         Padding(
           padding: const EdgeInsets.all(12),
-          child: TextField(
-            controller: _searchController,
-            decoration: InputDecoration(
-              labelText: 'Search dialog (id or text)',
-              prefixIcon: const Icon(Icons.search),
-              isDense: true,
-              suffixIcon: _query.isEmpty
-                  ? null
-                  : IconButton(
-                      icon: const Icon(Icons.clear),
-                      tooltip: 'Clear',
-                      onPressed: () {
-                        _searchController.clear();
-                        setState(() => _query = '');
-                      },
-                    ),
-            ),
-            onChanged: (v) => setState(() => _query = v),
+          child: Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _searchController,
+                  decoration: InputDecoration(
+                    labelText: 'Search dialog (id or text)',
+                    prefixIcon: const Icon(Icons.search),
+                    isDense: true,
+                    suffixIcon: _query.isEmpty
+                        ? null
+                        : IconButton(
+                            icon: const Icon(Icons.clear),
+                            tooltip: 'Clear',
+                            onPressed: () {
+                              _searchController.clear();
+                              setState(() => _query = '');
+                            },
+                          ),
+                  ),
+                  onChanged: (v) => setState(() => _query = v),
+                ),
+              ),
+              if (onlyIds == null) ...[
+                const SizedBox(width: 8),
+                IconButton.filledTonal(
+                  onPressed: _addDialogLine,
+                  icon: const Icon(Icons.add),
+                  tooltip: 'Add localized dialog line',
+                ),
+              ],
+            ],
           ),
         ),
         Expanded(
@@ -221,7 +339,9 @@ class _DialogBrowserState extends ConsumerState<_DialogBrowser> {
                                       ? Icons.campaign_outlined
                                       : Icons.forum_outlined,
                                   label: l10n.categoryWithCount(
-                                      _speakerLabel(g.speaker), g.lineCount),
+                                    _speakerLabel(g.speaker),
+                                    g.lineCount,
+                                  ),
                                   selected: g.groupKey == selectedKey,
                                   onTap: () {
                                     // Don't leave a line from ANOTHER group
@@ -238,14 +358,18 @@ class _DialogBrowserState extends ConsumerState<_DialogBrowser> {
                                     final selLine = selectedId == null
                                         ? null
                                         : lines.firstWhereOrNull(
-                                            (l) => l.id == selectedId);
+                                            (l) => l.id == selectedId,
+                                          );
                                     if (onlyIds == null &&
                                         selectedId != null &&
                                         selLine?.groupKey != g.groupKey) {
                                       ref
-                                          .read(selectedDialogIdProvider
-                                              .notifier)
-                                          .state = null;
+                                              .read(
+                                                selectedDialogIdProvider
+                                                    .notifier,
+                                              )
+                                              .state =
+                                          null;
                                     }
                                     setState(() {
                                       _selectedGroupKey = g.groupKey;
@@ -276,12 +400,16 @@ class _DialogBrowserState extends ConsumerState<_DialogBrowser> {
                                 // list preview shows what editing/deploy actually change; a line
                                 // empty in the current language shows no preview (like its editor
                                 // field), instead of misleading English copy.
-                                final set =
-                                    primarySetFor(catalog, line.id, lang);
+                                final set = primarySetFor(
+                                  catalog,
+                                  line.id,
+                                  lang,
+                                );
                                 final stagedText = editedIds[line.id]?[set];
                                 final langValue =
                                     catalog[line.id.toLowerCase()]?[set];
-                                final preview = stagedText ??
+                                final preview =
+                                    stagedText ??
                                     ((langValue != null &&
                                             langValue.trim().isNotEmpty)
                                         ? langValue
@@ -292,28 +420,35 @@ class _DialogBrowserState extends ConsumerState<_DialogBrowser> {
                                   selectedTileColor:
                                       theme.colorScheme.primaryContainer,
                                   leading: editedIds.containsKey(line.id)
-                                      ? Icon(Icons.circle,
+                                      ? Icon(
+                                          Icons.circle,
                                           size: 10,
-                                          color: theme.colorScheme.primary)
+                                          color: theme.colorScheme.primary,
+                                        )
                                       : const SizedBox(width: 10),
-                                  title: Text(line.id,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis),
+                                  title: Text(
+                                    line.id,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
                                   subtitle: preview == null
                                       ? null
-                                      : Text(preview,
+                                      : Text(
+                                          preview,
                                           maxLines: 1,
-                                          overflow: TextOverflow.ellipsis),
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
                                   onTap: () {
                                     ref
-                                        .read(
-                                            selectedDialogIdProvider.notifier)
-                                        .state = line.id;
+                                        .read(selectedDialogIdProvider.notifier)
+                                        .state = line
+                                        .id;
                                     // Keep the sidebar in sync with the picked
                                     // line, so clearing a search lands on its
                                     // group (no-op in group view).
-                                    setState(() =>
-                                        _selectedGroupKey = line.groupKey);
+                                    setState(
+                                      () => _selectedGroupKey = line.groupKey,
+                                    );
                                   },
                                 );
                               },
@@ -345,14 +480,15 @@ class _DialogEditor extends ConsumerWidget {
     final filter = onlyIds;
     final id =
         (filter != null && selectedId != null && !filter.contains(selectedId))
-            ? null
-            : selectedId;
+        ? null
+        : selectedId;
     if (id == null) {
       return Center(
         child: Text(
           'Select a dialog line to edit',
-          style: theme.textTheme.bodyMedium
-              ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+          style: theme.textTheme.bodyMedium?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
         ),
       );
     }
@@ -363,9 +499,7 @@ class _DialogEditor extends ConsumerWidget {
           children: [
             const Icon(Icons.translate, size: 20),
             const SizedBox(width: 8),
-            Expanded(
-              child: Text(id, style: theme.textTheme.titleMedium),
-            ),
+            Expanded(child: Text(id, style: theme.textTheme.titleMedium)),
             TextButton.icon(
               onPressed: () =>
                   ref.read(locEditsProvider.notifier).clearForId(id),

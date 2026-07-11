@@ -22,10 +22,11 @@ void main() {
         'text_menu_001': {'de_A': 'excluded'},
       });
       final groups = rows.whereType<DialogGroupRow>().toList();
-      expect(
-        groups.map((g) => '${g.isBark}:${g.speaker}').toList(),
-        ['false:alice', 'false:bob', 'true:zed'],
-      );
+      expect(groups.map((g) => '${g.isBark}:${g.speaker}').toList(), [
+        'false:alice',
+        'false:bob',
+        'true:zed',
+      ]);
       expect(groups.first.lineCount, 2);
       // Lines are id-sorted within their group.
       final aliceIds = rows
@@ -134,6 +135,52 @@ void main() {
     });
   });
 
+  group('buildDialogRows with additionalIds', () {
+    const catalog = <String, Map<String, String>>{
+      'info_aaron_001': {'de_A': 'Hallo'},
+      'info_bob_001': {'de_A': 'Moin'},
+    };
+
+    test('groups a new dialog id absent from an empty catalog', () {
+      final rows = buildDialogRows(
+        const {},
+        additionalIds: const {'info_viper_gore_01'},
+      );
+
+      final group = rows.whereType<DialogGroupRow>().single;
+      expect(group.speaker, 'viper');
+      expect(group.lineCount, 1);
+      expect(rows.whereType<DialogLineRow>().single.id, 'info_viper_gore_01');
+    });
+
+    test('onlyIds can select a new id while excluding catalog entries', () {
+      final rows = buildDialogRows(
+        catalog,
+        onlyIds: const {'dia_newcomer_001'},
+        additionalIds: const {'dia_newcomer_001'},
+      );
+
+      expect(rows.whereType<DialogLineRow>().map((line) => line.id), const [
+        'dia_newcomer_001',
+      ]);
+      expect(rows.whereType<DialogGroupRow>().single.speaker, 'newcomer');
+    });
+
+    test('deduplicates an additional id already present in the catalog', () {
+      final rows = buildDialogRows(
+        catalog,
+        additionalIds: const {'INFO_AARON_001'},
+      );
+
+      expect(
+        rows.whereType<DialogLineRow>().where(
+          (line) => line.id == 'info_aaron_001',
+        ),
+        hasLength(1),
+      );
+    });
+  });
+
   group('isDialogLocId', () {
     test('accepts dialog/bark prefixes, rejects everything else', () {
       expect(isDialogLocId('info_aaron_001'), isTrue);
@@ -152,10 +199,9 @@ void main() {
         'svm_guard_001': {'de_A': 'Halt!'},
         'itfo_apple_name': {'de_A': 'Apfel'},
       };
-      final included = buildDialogRows(catalog)
-          .whereType<DialogLineRow>()
-          .map((l) => l.id)
-          .toSet();
+      final included = buildDialogRows(
+        catalog,
+      ).whereType<DialogLineRow>().map((l) => l.id).toSet();
       for (final id in catalog.keys) {
         expect(isDialogLocId(id), included.contains(id), reason: id);
       }
@@ -197,6 +243,25 @@ void main() {
       final c = memo.rowsFor(catalog, aaronOnly);
       expect(identical(a, c), isFalse);
       expect(c.whereType<DialogLineRow>().single.id, 'info_aaron_001');
+    });
+
+    test('changing additional ids invalidates the memo', () {
+      final memo = DialogRowsMemo();
+      const extra = {'info_viper_gore_01'};
+      final a = memo.rowsFor(catalog, null, additionalIds: extra);
+      final b = memo.rowsFor(catalog, null, additionalIds: extra);
+      final c = memo.rowsFor(
+        catalog,
+        null,
+        additionalIds: const {'info_viper_gore_02'},
+      );
+
+      expect(identical(a, b), isTrue);
+      expect(identical(b, c), isFalse);
+      expect(
+        c.whereType<DialogLineRow>().map((line) => line.id),
+        contains('info_viper_gore_02'),
+      );
     });
   });
 }

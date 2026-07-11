@@ -17,10 +17,10 @@ use serde_json::{json, Value};
 
 use std::path::PathBuf;
 
-use gore_modgen::gen::{gen_lua, OverridesConfig};
-use gore_reflect::model::ReflectionModel;
-use gore_modgen::validate::validate_config;
 use gore_loc::{loc_store, paths};
+use gore_modgen::gen::{gen_lua, OverridesConfig};
+use gore_modgen::validate::validate_config;
+use gore_reflect::model::ReflectionModel;
 
 /// # Safety
 /// `request_json` must be null or a valid, NUL-terminated C string pointer that
@@ -124,7 +124,10 @@ fn loc_status() -> Value {
 
 /// `{ok, found, path?}` — auto-detect (or resolve `payload.lcache`) the .lcache.
 fn loc_find(payload: Value) -> Value {
-    let hint = payload.get("lcache").and_then(Value::as_str).map(PathBuf::from);
+    let hint = payload
+        .get("lcache")
+        .and_then(Value::as_str)
+        .map(PathBuf::from);
     let found = loc_store::resolve_lcache(hint.as_deref());
     json!({
         "ok": true,
@@ -135,7 +138,10 @@ fn loc_find(payload: Value) -> Value {
 
 /// Extract to the shared catalog. `payload.lcache` is an optional path hint.
 fn loc_extract(payload: Value) -> Value {
-    let hint = payload.get("lcache").and_then(Value::as_str).map(PathBuf::from);
+    let hint = payload
+        .get("lcache")
+        .and_then(Value::as_str)
+        .map(PathBuf::from);
     match loc_store::extract(hint.as_deref()) {
         Ok(meta) => json!({ "ok": true, "meta": meta }),
         Err(gore_loc::loc_store::LocStoreError::NotFound) => err(
@@ -170,7 +176,10 @@ fn find_game() -> Value {
 fn resolve_fmod_key_for_bank(bank: &str) -> Vec<u8> {
     // bank == <...>/G1R/Content/FMOD/Desktop/<file>.bank; G1R is 4 levels up, then Binaries/Win64.
     if let Some(g1r) = std::path::Path::new(bank).ancestors().nth(4) {
-        let key_file = g1r.join("Binaries").join("Win64").join("gore_fmod_key.json");
+        let key_file = g1r
+            .join("Binaries")
+            .join("Win64")
+            .join("gore_fmod_key.json");
         if let Ok(bytes) = std::fs::read(&key_file) {
             if let Ok(v) = serde_json::from_slice::<Value>(&bytes) {
                 if v.get("found").and_then(Value::as_bool).unwrap_or(false) {
@@ -223,7 +232,7 @@ fn audio_list(payload: Value) -> Value {
         Err(e) => return err("IO", format!("reading bank: {e}")),
     };
     let key = match payload.get("key").and_then(Value::as_str) {
-        Some(k) if k.is_empty() => return err("BAD_KEY", "encryption key must not be empty"),
+        Some("") => return err("BAD_KEY", "encryption key must not be empty"),
         Some(k) => k.as_bytes().to_vec(),
         None => resolve_fmod_key_for_bank(bank),
     };
@@ -256,7 +265,7 @@ fn audio_extract(payload: Value) -> Value {
         Err(e) => return err("IO", format!("reading bank: {e}")),
     };
     let key = match payload.get("key").and_then(Value::as_str) {
-        Some(k) if k.is_empty() => return err("BAD_KEY", "encryption key must not be empty"),
+        Some("") => return err("BAD_KEY", "encryption key must not be empty"),
         Some(k) => k.as_bytes().to_vec(),
         None => resolve_fmod_key_for_bank(bank),
     };
@@ -275,7 +284,16 @@ fn audio_extract(payload: Value) -> Value {
     if let Err(e) = std::fs::create_dir_all(&dir) {
         return err("IO", format!("temp dir: {e}"));
     }
-    let safe: String = sample.chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' }).collect();
+    let safe: String = sample
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
     let path = dir.join(format!("{safe}.wav"));
     if let Err(e) = std::fs::write(&path, &wav) {
         return err("IO", format!("writing wav: {e}"));
@@ -290,23 +308,36 @@ fn texture_index(payload: Value) -> Value {
         Some(g) => std::path::PathBuf::from(g),
         None => return err("BAD_REQUEST", "missing game"),
     };
-    let rebuild = payload.get("rebuild").and_then(Value::as_bool).unwrap_or(false);
+    let rebuild = payload
+        .get("rebuild")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let cache = gore_tex::paths::texture_index_path();
     let usmap = match gore_tex::paths::usmap(&game) {
-        Ok(p) => p, Err(e) => return err("USMAP", e.to_string()) };
+        Ok(p) => p,
+        Err(e) => return err("USMAP", e.to_string()),
+    };
     let utoc = match gore_tex::paths::main_container(&game) {
-        Ok(p) => p, Err(e) => return err("CONTAINER", e.to_string()) };
+        Ok(p) => p,
+        Err(e) => return err("CONTAINER", e.to_string()),
+    };
     let build_id = gore_tex::index::build_id_for(&utoc, &usmap);
     // Only reuse the cache when it's current for THIS game build; build_id keys on the .usmap
     // name AND the container's identity, so a game patch (even one keeping the .usmap name) that
     // rewrites the container invalidates a cache mapping paths to outdated package ids.
-    let cached = if rebuild { None } else { gore_tex::index::TextureIndex::load_current(&cache, &build_id) };
+    let cached = if rebuild {
+        None
+    } else {
+        gore_tex::index::TextureIndex::load_current(&cache, &build_id)
+    };
     let mut cache_saved = true; // a loaded cache is, by definition, already persisted
     let idx = match cached {
         Some(i) => i,
         None => {
             let i = match gore_tex::index::build_index(&utoc, &build_id) {
-                Ok(i) => i, Err(e) => return err("INDEX_BUILD", e.to_string()) };
+                Ok(i) => i,
+                Err(e) => return err("INDEX_BUILD", e.to_string()),
+            };
             // Don't silently ignore a failed persist: the index is usable in-memory this call,
             // but a failed write means every later load rebuilds. Surface it (warning + flag)
             // instead of reporting unqualified success.
@@ -317,8 +348,11 @@ fn texture_index(payload: Value) -> Value {
             i
         }
     };
-    let entries: serde_json::Map<String, Value> = idx.entries.iter()
-        .map(|(k, v)| (k.clone(), Value::String(v.to_string()))).collect();
+    let entries: serde_json::Map<String, Value> = idx
+        .entries
+        .iter()
+        .map(|(k, v)| (k.clone(), Value::String(v.to_string())))
+        .collect();
     json!({ "ok": true, "build_id": idx.build_id, "count": idx.entries.len(), "cache_saved": cache_saved, "entries": entries })
 }
 
@@ -326,39 +360,87 @@ fn texture_index(payload: Value) -> Value {
 /// and either `payload.package_id` (string) or `payload.asset` (path).
 fn texture_extract(payload: Value) -> Value {
     let game = match payload.get("game").and_then(Value::as_str) {
-        Some(g) => std::path::PathBuf::from(g), None => return err("BAD_REQUEST", "missing game") };
+        Some(g) => std::path::PathBuf::from(g),
+        None => return err("BAD_REQUEST", "missing game"),
+    };
     let utoc = match gore_tex::paths::main_container(&game) {
-        Ok(p) => p, Err(e) => return err("CONTAINER", e.to_string()) };
+        Ok(p) => p,
+        Err(e) => return err("CONTAINER", e.to_string()),
+    };
     let usmap = match gore_tex::paths::usmap(&game) {
-        Ok(p) => p, Err(e) => return err("USMAP", e.to_string()) };
+        Ok(p) => p,
+        Err(e) => return err("USMAP", e.to_string()),
+    };
     let asset = payload.get("asset").and_then(Value::as_str).unwrap_or("");
     let leaf = asset.rsplit('/').next().unwrap_or("texture").to_string();
-    let (info, px) = if let Some(pid) = payload.get("package_id").and_then(Value::as_str).and_then(|s| s.parse::<u64>().ok()) {
+    let (info, px) = if let Some(pid) = payload
+        .get("package_id")
+        .and_then(Value::as_str)
+        .and_then(|s| s.parse::<u64>().ok())
+    {
         match gore_tex::index::extract_by_package_id(&utoc, &usmap, pid, &leaf) {
-            Ok(x) => x, Err(e) => return err("EXTRACT", e.to_string()) }
+            Ok(x) => x,
+            Err(e) => return err("EXTRACT", e.to_string()),
+        }
     } else if !asset.is_empty() {
         let tmp = match gore_tex::paths::unique_temp_dir("gore-tex-ffi-extract") {
-            Ok(t) => t, Err(_) => return err("IO", "tmp") };
+            Ok(t) => t,
+            Err(_) => return err("IO", "tmp"),
+        };
         let ua = match gore_tex::container::unpack_asset(&utoc, &usmap, asset, &tmp) {
-            Ok(p) => p, Err(e) => { let _ = std::fs::remove_dir_all(&tmp); return err("UNPACK", e.to_string()) } };
+            Ok(p) => p,
+            Err(e) => {
+                let _ = std::fs::remove_dir_all(&tmp);
+                return err("UNPACK", e.to_string());
+            }
+        };
         // Surface read failures instead of defaulting to empty bytes (which would yield a
         // misleading PARSE/DECODE error). `.ubulk` is legitimately optional (inline-mip textures).
-        macro_rules! read_or_err { ($p:expr) => { match std::fs::read($p) {
-            Ok(b) => b, Err(e) => { let _ = std::fs::remove_dir_all(&tmp); return err("READ", e.to_string()) } } }; }
+        macro_rules! read_or_err {
+            ($p:expr) => {
+                match std::fs::read($p) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        let _ = std::fs::remove_dir_all(&tmp);
+                        return err("READ", e.to_string());
+                    }
+                }
+            };
+        }
         let ua_bytes = read_or_err!(&ua);
         let uexp_bytes = read_or_err!(ua.with_extension("uexp"));
         let usmap_bytes = read_or_err!(&usmap);
         let ubulk_bytes = match gore_tex::paths::read_optional(&ua.with_extension("ubulk")) {
-            Ok(b) => b, Err(e) => { let _ = std::fs::remove_dir_all(&tmp); return err("READ", e.to_string()) } };
-        let info = match gore_tex::decode::parse(&ua_bytes, &uexp_bytes, &ubulk_bytes, &usmap_bytes) {
-            Ok(i) => i, Err(e) => { let _ = std::fs::remove_dir_all(&tmp); return err("PARSE", e.to_string()) } };
+            Ok(b) => b,
+            Err(e) => {
+                let _ = std::fs::remove_dir_all(&tmp);
+                return err("READ", e.to_string());
+            }
+        };
+        let info = match gore_tex::decode::parse(&ua_bytes, &uexp_bytes, &ubulk_bytes, &usmap_bytes)
+        {
+            Ok(i) => i,
+            Err(e) => {
+                let _ = std::fs::remove_dir_all(&tmp);
+                return err("PARSE", e.to_string());
+            }
+        };
         let px = match gore_tex::decode::to_rgba8(&info) {
-            Ok(p) => p, Err(e) => { let _ = std::fs::remove_dir_all(&tmp); return err("DECODE", e.to_string()) } };
+            Ok(p) => p,
+            Err(e) => {
+                let _ = std::fs::remove_dir_all(&tmp);
+                return err("DECODE", e.to_string());
+            }
+        };
         let _ = std::fs::remove_dir_all(&tmp);
         (info, px)
-    } else { return err("BAD_REQUEST", "need package_id or asset"); };
+    } else {
+        return err("BAD_REQUEST", "need package_id or asset");
+    };
     let mut buf = Vec::with_capacity(px.len() * 4);
-    for p in px { buf.extend_from_slice(&[(p >> 16) as u8, (p >> 8) as u8, p as u8, (p >> 24) as u8]); }
+    for p in px {
+        buf.extend_from_slice(&[(p >> 16) as u8, (p >> 8) as u8, p as u8, (p >> 24) as u8]);
+    }
     // Unique per-request output path: a deterministic name would let two
     // extractions of the same texture (e.g. a stale request finishing after a
     // game/index change) race on one file. Each call owns its own PNG and the UI
@@ -386,11 +468,17 @@ fn texture_extract(payload: Value) -> Value {
 }
 
 /// Build the class name -> super name map so emitted source gets subclass casts right.
-fn as_class_hierarchy(mods: &[gore_as::cache::model::Module]) -> std::collections::HashMap<String, String> {
+fn as_class_hierarchy(
+    mods: &[gore_as::cache::model::Module],
+) -> std::collections::HashMap<String, String> {
     let mut h = std::collections::HashMap::new();
     for m in mods {
         for c in &m.classes {
-            let sup = c.super_class.clone().filter(|s| !s.is_empty()).unwrap_or_default();
+            let sup = c
+                .super_class
+                .clone()
+                .filter(|s| !s.is_empty())
+                .unwrap_or_default();
             h.insert(c.name.clone(), sup);
         }
     }
@@ -405,7 +493,9 @@ fn as_native_api(cache_file: &std::path::Path) -> Option<gore_as::cache::binds::
         Some(p) => std::path::PathBuf::from(p),
         None => cache_file.parent()?.join("Binds.Cache"),
     };
-    if !path.exists() { return None; }
+    if !path.exists() {
+        return None;
+    }
     gore_as::cache::binds::NativeApi::load(&path)
 }
 
@@ -422,7 +512,8 @@ fn script_list_modules(payload: Value) -> Value {
         Ok(m) => m,
         Err(e) => return err("PARSE", format!("parsing cache: {e}")),
     };
-    let modules: Vec<Value> = mods.iter()
+    let modules: Vec<Value> = mods
+        .iter()
         .map(|m| json!({"name": m.name, "file": m.file}))
         .collect();
     json!({"ok": true, "modules": modules})
@@ -460,17 +551,38 @@ fn script_emit_module(payload: Value) -> Value {
 }
 
 /// `{game_dir, op, module_name, rel_path, as_path, work_dir}` → `{ok, mini_path, module}`.
+/// `allow_new_symbols` is an explicit opt-in and defaults to false when omitted.
 fn script_compile(payload: Value) -> Value {
     let g = |k: &str| payload.get(k).and_then(Value::as_str).map(str::to_string);
-    let (Some(game_dir), Some(op), Some(module_name), Some(rel_path), Some(as_path), Some(work_dir)) =
-        (g("game_dir"), g("op"), g("module_name"), g("rel_path"), g("as_path"), g("work_dir"))
+    let (
+        Some(game_dir),
+        Some(op),
+        Some(module_name),
+        Some(rel_path),
+        Some(as_path),
+        Some(work_dir),
+    ) = (
+        g("game_dir"),
+        g("op"),
+        g("module_name"),
+        g("rel_path"),
+        g("as_path"),
+        g("work_dir"),
+    )
     else {
-        return err("BAD_REQUEST", "missing one of game_dir/op/module_name/rel_path/as_path/work_dir");
+        return err(
+            "BAD_REQUEST",
+            "missing one of game_dir/op/module_name/rel_path/as_path/work_dir",
+        );
     };
     // Use gore-mod's drift-aware pristine resolver for the emit/remap base, so the compile base is
     // exactly the bytes deploy will splice against (honoring a `*.gore-bak` gone stale after a game
     // update). `None` on failure → compile falls back to its own on-disk read.
     let base_override = gore_mod::pristine_script_cache(std::path::Path::new(&game_dir)).ok();
+    let allow_new_symbols = payload
+        .get("allow_new_symbols")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let opts = gore_as::compile::CompileOpts {
         game_dir: PathBuf::from(game_dir),
         op,
@@ -478,10 +590,13 @@ fn script_compile(payload: Value) -> Value {
         rel_path,
         as_path: PathBuf::from(as_path),
         work_dir: PathBuf::from(work_dir),
+        allow_new_symbols,
         base_override,
     };
     match gore_as::compile::compile_module(&opts, gore_as::compile::game_run_regen) {
-        Ok(out) => json!({"ok": true, "mini_path": out.mini_path.display().to_string(), "module": out.module_name}),
+        Ok(out) => {
+            json!({"ok": true, "mini_path": out.mini_path.display().to_string(), "module": out.module_name})
+        }
         Err(e) => err("COMPILE_FAILED", e.to_string()),
     }
 }
@@ -520,7 +635,10 @@ fn mod_deploy(payload: Value) -> Value {
     ) else {
         return err("BAD_REQUEST", "missing 'bundle_dir' or 'game_root'");
     };
-    match gore_mod::deploy(std::path::Path::new(bundle_dir), std::path::Path::new(game_root)) {
+    match gore_mod::deploy(
+        std::path::Path::new(bundle_dir),
+        std::path::Path::new(game_root),
+    ) {
         Ok(rec) => json!({"ok": true, "record": serde_json::to_value(rec).unwrap_or(Value::Null)}),
         Err(e) => err("DEPLOY_FAILED", e.to_string()),
     }
@@ -601,7 +719,10 @@ fn mgr_import(payload: Value) -> Value {
     match gore_mod::mgr::loadout::load(&lo_path) {
         Ok(mut lo) => {
             if !lo.entries.iter().any(|e| e.id == entry.id) {
-                lo.entries.push(gore_mod::mgr::LoadoutEntry { id: entry.id.clone(), enabled: false });
+                lo.entries.push(gore_mod::mgr::LoadoutEntry {
+                    id: entry.id.clone(),
+                    enabled: false,
+                });
                 if let Err(e) = gore_mod::mgr::loadout::save(&lo_path, &lo) {
                     return err(
                         "IO",
@@ -613,7 +734,10 @@ fn mgr_import(payload: Value) -> Value {
         Err(e) => {
             return err(
                 "IO",
-                format!("imported '{}' into the library but failed to read the loadout: {e}", entry.id),
+                format!(
+                    "imported '{}' into the library but failed to read the loadout: {e}",
+                    entry.id
+                ),
             )
         }
     }
@@ -646,13 +770,18 @@ fn mgr_remove(payload: Value) -> Value {
                 if let Err(e) = gore_mod::mgr::loadout::save(&lo_path, &lo) {
                     return err(
                         "IO",
-                        format!("removed '{id}' from the library but failed to update the loadout: {e}"),
+                        format!(
+                            "removed '{id}' from the library but failed to update the loadout: {e}"
+                        ),
                     );
                 }
             }
         }
         Err(e) => {
-            return err("IO", format!("removed '{id}' from the library but failed to read the loadout: {e}"))
+            return err(
+                "IO",
+                format!("removed '{id}' from the library but failed to read the loadout: {e}"),
+            )
         }
     }
     json!({"ok": true, "removed": removed})
@@ -705,7 +834,9 @@ fn mgr_apply(payload: Value) -> Value {
         Err(e) => return err("APPLY_FAILED", e.to_string()),
     };
     match gore_mod::mgr::apply::apply_loadout(std::path::Path::new(game_root), &lib, &loadout) {
-        Ok(report) => json!({"ok": true, "report": serde_json::to_value(&report).unwrap_or(Value::Null)}),
+        Ok(report) => {
+            json!({"ok": true, "report": serde_json::to_value(&report).unwrap_or(Value::Null)})
+        }
         Err(e) => {
             let msg = e.to_string();
             // The apply engine signals a blocking studio deployment as `STUDIO_DEPLOY_ACTIVE:<name>`;
@@ -732,7 +863,9 @@ fn mgr_status(payload: Value) -> Value {
         Err(e) => return err("STATUS_FAILED", e.to_string()),
     };
     match gore_mod::mgr::status::status(std::path::Path::new(game_root), &lib, &loadout) {
-        Ok(status) => json!({"ok": true, "status": serde_json::to_value(&status).unwrap_or(Value::Null)}),
+        Ok(status) => {
+            json!({"ok": true, "status": serde_json::to_value(&status).unwrap_or(Value::Null)})
+        }
         Err(e) => err("STATUS_FAILED", e.to_string()),
     }
 }
@@ -818,7 +951,8 @@ mod tests {
     fn script_list_modules_requires_cache() {
         let v: Value = serde_json::from_str(&execute_json(
             r#"{"command":"script_list_modules","payload":{}}"#,
-        )).unwrap();
+        ))
+        .unwrap();
         assert_eq!(v["ok"], false);
         assert_eq!(v["error"]["code"], "BAD_REQUEST");
     }
@@ -827,7 +961,8 @@ mod tests {
     fn script_emit_module_requires_args() {
         let v: Value = serde_json::from_str(&execute_json(
             r#"{"command":"script_emit_module","payload":{"cache":"x"}}"#,
-        )).unwrap();
+        ))
+        .unwrap();
         assert_eq!(v["ok"], false);
         assert_eq!(v["error"]["code"], "BAD_REQUEST");
     }
@@ -848,7 +983,11 @@ mod tests {
         use gore_mod::{build_bundle, BuildSpec, ModMeta};
         use gore_modgen::gen::{OverrideValue, SingleOverride};
         let spec = BuildSpec {
-            meta: ModMeta { name: name.into(), version: "1.0".into(), author: "t".into() },
+            meta: ModMeta {
+                name: name.into(),
+                version: "1.0".into(),
+                author: "t".into(),
+            },
             delay_ms: 0,
             overrides: vec![SingleOverride {
                 class: "ItFo_Apple".into(),
@@ -860,6 +999,7 @@ mod tests {
             audio: vec![],
             texture: vec![],
             scripts: vec![],
+            voice: vec![],
         };
         let bundle = build_bundle(&spec).unwrap();
         let dir = root.join(name);
@@ -919,7 +1059,10 @@ mod tests {
         let entries = list["loadout"]["entries"].as_array().unwrap();
         assert_eq!(entries.len(), 1, "import must add a loadout entry: {list}");
         assert_eq!(entries[0]["id"], id);
-        assert_eq!(entries[0]["enabled"], false, "new mod is registered DISABLED");
+        assert_eq!(
+            entries[0]["enabled"], false,
+            "new mod is registered DISABLED"
+        );
     }
 
     /// BUG 3, focused: `mgr_import` appends exactly one disabled loadout slot for the new id, and a
@@ -978,9 +1121,16 @@ mod tests {
             json!({"library_dir": lib.display().to_string(), "loadout_path": lo.display().to_string()}),
         );
         let entries = after_reimport["loadout"]["entries"].as_array().unwrap();
-        assert_eq!(entries.len(), 1, "re-import must not duplicate the loadout slot: {after_reimport}");
+        assert_eq!(
+            entries.len(),
+            1,
+            "re-import must not duplicate the loadout slot: {after_reimport}"
+        );
         assert_eq!(entries[0]["id"], id);
-        assert_eq!(entries[0]["enabled"], true, "re-import preserves the existing enabled state");
+        assert_eq!(
+            entries[0]["enabled"], true,
+            "re-import preserves the existing enabled state"
+        );
     }
 
     #[test]
@@ -1047,7 +1197,11 @@ mod tests {
             json!({"library_dir": lib.display().to_string(), "loadout_path": lo.display().to_string()}),
         );
         let entries = list["loadout"]["entries"].as_array().unwrap();
-        assert_eq!(entries.len(), 1, "removed id must be gone from loadout: {list}");
+        assert_eq!(
+            entries.len(),
+            1,
+            "removed id must be gone from loadout: {list}"
+        );
         assert_eq!(entries[0]["id"], "mod-b");
     }
 

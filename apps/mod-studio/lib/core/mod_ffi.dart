@@ -5,7 +5,10 @@ class ModFfi {
   ModFfi(this._core);
   final GoreCoreFfiService _core;
 
-  Future<Map<String, Object?>> _call(String cmd, Map<String, Object?> payload) async {
+  Future<Map<String, Object?>> _call(
+    String cmd,
+    Map<String, Object?> payload,
+  ) async {
     final r = await _core.execute(cmd, payload: payload);
     if (r['ok'] != true) {
       final e = r['error'];
@@ -51,14 +54,21 @@ class ModFfi {
   }
 
   /// Load (or build, if absent/`rebuild`) the texture index. Returns {assetPath: packageIdString}.
-  Future<Map<String, String>> textureIndex(String game, {bool rebuild = false}) async {
+  Future<Map<String, String>> textureIndex(
+    String game, {
+    bool rebuild = false,
+  }) async {
     final r = await _call('texture_index', {'game': game, 'rebuild': rebuild});
     final entries = (r['entries'] as Map).cast<String, Object?>();
     return entries.map((k, v) => MapEntry(k, v as String));
   }
 
   /// Extract a texture to a temp PNG; returns the FFI result map (png_path, width, height, format).
-  Future<Map<String, Object?>> textureExtract(String game, {String? asset, String? packageId}) async {
+  Future<Map<String, Object?>> textureExtract(
+    String game, {
+    String? asset,
+    String? packageId,
+  }) async {
     final payload = <String, Object?>{'game': game};
     if (asset != null) payload['asset'] = asset;
     if (packageId != null) payload['package_id'] = packageId;
@@ -84,7 +94,10 @@ class ModFfi {
 
   /// Emit recompilable .as source for one module.
   Future<String> scriptEmitModule(String cache, String module) async {
-    final r = await _call('script_emit_module', {'cache': cache, 'module': module});
+    final r = await _call('script_emit_module', {
+      'cache': cache,
+      'module': module,
+    });
     return r['source'] as String;
   }
 
@@ -96,15 +109,16 @@ class ModFfi {
     required String relPath,
     required String asPath,
     required String workDir,
-  }) =>
-      _call('script_compile', {
-        'game_dir': gameDir,
-        'op': op,
-        'module_name': moduleName,
-        'rel_path': relPath,
-        'as_path': asPath,
-        'work_dir': workDir,
-      });
+    bool allowNewSymbols = false,
+  }) => _call('script_compile', {
+    'game_dir': gameDir,
+    'op': op,
+    'module_name': moduleName,
+    'rel_path': relPath,
+    'as_path': asPath,
+    'work_dir': workDir,
+    'allow_new_symbols': allowNewSymbols,
+  });
 }
 
 class ModFfiException implements Exception {
@@ -129,18 +143,20 @@ class AudioSampleInfo {
   final double seconds;
 
   factory AudioSampleInfo.fromJson(Map<String, Object?> j) => AudioSampleInfo(
-        index: (j['index'] as num).toInt(),
-        name: j['name'] as String,
-        freq: (j['freq'] as num).toInt(),
-        channels: (j['channels'] as num).toInt(),
-        seconds: (j['seconds'] as num).toDouble(),
-      );
+    index: (j['index'] as num).toInt(),
+    name: j['name'] as String,
+    freq: (j['freq'] as num).toInt(),
+    channels: (j['channels'] as num).toInt(),
+    seconds: (j['seconds'] as num).toDouble(),
+  );
 }
 
 class ScriptModuleInfo {
   ScriptModuleInfo({required this.name, required this.file});
   final String name;
   final String file;
-  factory ScriptModuleInfo.fromJson(Map<String, Object?> j) =>
-      ScriptModuleInfo(name: j['name'] as String, file: (j['file'] as String?) ?? '');
+  factory ScriptModuleInfo.fromJson(Map<String, Object?> j) => ScriptModuleInfo(
+    name: j['name'] as String,
+    file: (j['file'] as String?) ?? '',
+  );
 }

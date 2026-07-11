@@ -12,7 +12,6 @@ import '../../catalog/ui/sidebar_tile.dart';
 import '../../dialog/domain/dialog_catalog_provider.dart';
 import '../../dialog/ui/dialoge_tab.dart';
 import '../../l10n/app_localizations.dart';
-import '../../loc/domain/loc_catalog_provider.dart';
 import '../../loc/domain/loc_edits_notifier.dart';
 import '../../scripts/domain/script_mods_notifier.dart';
 import '../../scripts/domain/script_modules_provider.dart';
@@ -41,8 +40,9 @@ enum ChangesAssetSection { textures, scripts }
 /// re-entering it later would keep showing a stale texture index / script
 /// module list after a deploy, undeploy, or game patch until the user
 /// manually switched sections.
-final changesAssetSectionProvider =
-    StateProvider<ChangesAssetSection?>((ref) => null);
+final changesAssetSectionProvider = StateProvider<ChangesAssetSection?>(
+  (ref) => null,
+);
 
 /// The Änderungen/Changes main tab: a 230px sidebar with one entry per
 /// change domain (plus "All") and a content pane showing either the flat
@@ -104,25 +104,16 @@ class _ChangesTabState extends ConsumerState<ChangesTab> {
   /// field editor) are excluded from this section and stay reviewable under
   /// "All", and an id edited in several languages counts once.
   ///
-  /// Intersected with the loaded loc catalog: the embedded [DialogeTab] can
-  /// only render ids the catalog carries (its [buildDialogRows] iterates
-  /// catalog keys), so a staged dialog id absent from the catalog — or any
-  /// dialog edit while the catalog is still loading/empty — must not inflate
-  /// the badge past the browsable rows. Such edits stay reviewable under "All".
-  ///
   /// Cached in state behind a content compare: [locEditsProvider] emits a
   /// new edits map per keystroke even when the edited ID SET is unchanged,
   /// and a stable set identity lets the dialog browser's [DialogRowsMemo]
   /// skip re-scanning the catalog on those rebuilds.
   Set<String> _dialogIds = const {};
 
-  Set<String> _dialogIdsFor(
-    LocEditsState locState,
-    Map<String, Map<String, String>> catalog,
-  ) {
+  Set<String> _dialogIdsFor(LocEditsState locState) {
     final ids = <String>{
       for (final id in locState.edits.keys)
-        if (isDialogLocId(id) && catalog.containsKey(id)) id,
+        if (isDialogLocId(id)) id,
     };
     if (!setEquals(ids, _dialogIds)) _dialogIds = ids;
     return _dialogIds;
@@ -132,15 +123,14 @@ class _ChangesTabState extends ConsumerState<ChangesTab> {
   Widget build(BuildContext context) {
     final overridesState = ref.watch(overridesProvider);
     final locState = ref.watch(locEditsProvider);
-    final locCatalog =
-        ref.watch(locCatalogProvider).value ?? const <String, Map<String, String>>{};
-    final dialogIds = _dialogIdsFor(locState, locCatalog);
+    final dialogIds = _dialogIdsFor(locState);
     final audioState = ref.watch(audioReplacementsProvider);
     final textureState = ref.watch(textureReplacementsProvider);
     final scriptState = ref.watch(scriptModsProvider);
 
     // Same arithmetic as the OverridesPanel header count.
-    final total = overridesState.count +
+    final total =
+        overridesState.count +
         locState.entryCount +
         audioState.count +
         textureState.count +
@@ -149,49 +139,45 @@ class _ChangesTabState extends ConsumerState<ChangesTab> {
     final theme = Theme.of(context);
     final l10n = AppLocalizations.of(context);
 
-    final entries = <({
-      _ChangesSection section,
-      IconData icon,
-      String label,
-      int count,
-    })>[
-      (
-        section: _ChangesSection.all,
-        icon: Icons.pending_actions_outlined,
-        label: l10n.changesAll,
-        count: total,
-      ),
-      (
-        section: _ChangesSection.items,
-        icon: Icons.inventory_2_outlined,
-        label: l10n.tabItems,
-        count: overridesState.count,
-      ),
-      (
-        section: _ChangesSection.dialogs,
-        icon: Icons.forum_outlined,
-        label: l10n.tabDialogs,
-        count: dialogIds.length,
-      ),
-      (
-        section: _ChangesSection.audio,
-        icon: Icons.audiotrack_outlined,
-        label: l10n.tabAudio,
-        count: audioState.count,
-      ),
-      (
-        section: _ChangesSection.textures,
-        icon: Icons.texture,
-        label: l10n.tabTextures,
-        count: textureState.count,
-      ),
-      (
-        section: _ChangesSection.scripts,
-        icon: Icons.code,
-        label: l10n.tabScripts,
-        count: scriptState.count,
-      ),
-    ];
+    final entries =
+        <({_ChangesSection section, IconData icon, String label, int count})>[
+          (
+            section: _ChangesSection.all,
+            icon: Icons.pending_actions_outlined,
+            label: l10n.changesAll,
+            count: total,
+          ),
+          (
+            section: _ChangesSection.items,
+            icon: Icons.inventory_2_outlined,
+            label: l10n.tabItems,
+            count: overridesState.count,
+          ),
+          (
+            section: _ChangesSection.dialogs,
+            icon: Icons.forum_outlined,
+            label: l10n.tabDialogs,
+            count: dialogIds.length,
+          ),
+          (
+            section: _ChangesSection.audio,
+            icon: Icons.audiotrack_outlined,
+            label: l10n.tabAudio,
+            count: audioState.count,
+          ),
+          (
+            section: _ChangesSection.textures,
+            icon: Icons.texture,
+            label: l10n.tabTextures,
+            count: textureState.count,
+          ),
+          (
+            section: _ChangesSection.scripts,
+            icon: Icons.code,
+            label: l10n.tabScripts,
+            count: scriptState.count,
+          ),
+        ];
 
     return Row(
       crossAxisAlignment: CrossAxisAlignment.stretch,

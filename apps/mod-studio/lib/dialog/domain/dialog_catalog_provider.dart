@@ -102,25 +102,34 @@ String _speakerToken(String id) {
 /// then bark groups, each alphabetical by speaker. Lines within a group are
 /// sorted by id.
 ///
-/// When [onlyIds] is non-null, only catalog entries whose (lowercased) id is
-/// in the set are considered — the restriction happens BEFORE grouping, so
-/// group membership and [DialogGroupRow.lineCount] reflect only the filtered
-/// lines. An empty set yields no rows.
+/// [additionalIds] supplies staged, newly-created loc ids that are not in the
+/// extracted catalog yet. When [onlyIds] is non-null, only ids in that set are
+/// considered — the restriction happens BEFORE grouping, so group membership
+/// and [DialogGroupRow.lineCount] reflect only the filtered lines. An empty set
+/// yields no rows.
 List<DialogRow> buildDialogRows(
   Map<String, Map<String, String>> catalog, {
   Set<String>? onlyIds,
+  Set<String> additionalIds = const {},
 }) {
-  if (catalog.isEmpty) return const [];
+  if (catalog.isEmpty && additionalIds.isEmpty) return const [];
 
   // group by (isBark, speaker)
   final groups = <String, _DialogGroup>{};
-  for (final id in catalog.keys) {
+  final ids = <String>{
+    for (final id in catalog.keys) id.toLowerCase(),
+    for (final id in additionalIds) id.toLowerCase(),
+  };
+  for (final id in ids) {
     if (onlyIds != null && !onlyIds.contains(id)) continue;
     if (!isDialogLocId(id)) continue;
     final isBark = _kBarkPrefixes.contains(_leadingToken(id));
     final speaker = _speakerToken(id);
     final key = _encodeGroupKey(isBark, speaker);
-    (groups[key] ??= _DialogGroup(speaker: speaker, isBark: isBark)).ids.add(id);
+    (groups[key] ??= _DialogGroup(
+      speaker: speaker,
+      isBark: isBark,
+    )).ids.add(id);
   }
 
   final sorted = groups.values.toList()
@@ -133,11 +142,13 @@ List<DialogRow> buildDialogRows(
   final rows = <DialogRow>[];
   for (final g in sorted) {
     g.ids.sort();
-    rows.add(DialogGroupRow(
-      speaker: g.speaker,
-      isBark: g.isBark,
-      lineCount: g.ids.length,
-    ));
+    rows.add(
+      DialogGroupRow(
+        speaker: g.speaker,
+        isBark: g.isBark,
+        lineCount: g.ids.length,
+      ),
+    );
     for (final id in g.ids) {
       rows.add(DialogLineRow(id: id, speaker: g.speaker, isBark: g.isBark));
     }
@@ -157,18 +168,27 @@ List<DialogRow> buildDialogRows(
 class DialogRowsMemo {
   Map<String, Map<String, String>>? _catalog;
   Set<String>? _onlyIds;
+  Set<String>? _additionalIds;
   List<DialogRow>? _rows;
 
-  /// Rows for ([catalog], [onlyIds]); returns the previously built list
-  /// instance when both arguments are identical to the last call's.
+  /// Rows for ([catalog], [onlyIds], [additionalIds]); returns the previously
+  /// built list instance when all arguments are identical to the last call's.
   List<DialogRow> rowsFor(
     Map<String, Map<String, String>> catalog,
-    Set<String> onlyIds,
-  ) {
-    if (!identical(catalog, _catalog) || !identical(onlyIds, _onlyIds)) {
+    Set<String>? onlyIds, {
+    Set<String> additionalIds = const {},
+  }) {
+    if (!identical(catalog, _catalog) ||
+        !identical(onlyIds, _onlyIds) ||
+        !identical(additionalIds, _additionalIds)) {
       _catalog = catalog;
       _onlyIds = onlyIds;
-      _rows = buildDialogRows(catalog, onlyIds: onlyIds);
+      _additionalIds = additionalIds;
+      _rows = buildDialogRows(
+        catalog,
+        onlyIds: onlyIds,
+        additionalIds: additionalIds,
+      );
     }
     return _rows!;
   }

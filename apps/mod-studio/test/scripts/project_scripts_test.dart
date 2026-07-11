@@ -11,13 +11,28 @@ void main() {
     final p = ModProject(
       name: 'M',
       scripts: const [
-        ScriptMod(op: ScriptOp.add, moduleName: 'New', relPath: 'New.as', asPath: '/a/New.as', miniPath: '/a/new.cache'),
-        ScriptMod(op: ScriptOp.edit, moduleName: 'AI.Foo', relPath: 'AI/Foo.as', asPath: '/a/Foo.as', miniPath: '/a/foo.cache'),
+        ScriptMod(
+          op: ScriptOp.add,
+          moduleName: 'New',
+          relPath: 'New.as',
+          asPath: '/a/New.as',
+          miniPath: '/a/new.cache',
+        ),
+        ScriptMod(
+          op: ScriptOp.edit,
+          moduleName: 'AI.Foo',
+          relPath: 'AI/Foo.as',
+          asPath: '/a/Foo.as',
+          allowNewSymbols: true,
+          miniPath: '/a/foo.cache',
+        ),
       ],
     );
     final back = ModProject.fromJson(p.toJson());
     expect(back.scripts.length, 2);
     expect(back.scripts.first.moduleName, 'New');
+    expect(back.scripts.first.allowNewSymbols, isTrue);
+    expect(back.scripts.last.allowNewSymbols, isTrue);
 
     final spec = p.toBuildSpec();
     final scripts = spec['scripts'] as List;
@@ -29,13 +44,20 @@ void main() {
 
   test('saveProject/loadProject embeds and restores script .as + mini', () async {
     final tmp = await Directory.systemTemp.createTemp('goremod_scripts_test_');
-    final asFile = File(p.join(tmp.path, 'New.as'))..writeAsStringSync('void Foo(){}');
-    final miniFile = File(p.join(tmp.path, 'new.cache'))..writeAsBytesSync([1, 2, 3]);
+    final asFile = File(p.join(tmp.path, 'New.as'))
+      ..writeAsStringSync('void Foo(){}');
+    final miniFile = File(p.join(tmp.path, 'new.cache'))
+      ..writeAsBytesSync([1, 2, 3]);
     final project = ModProject(
       name: 'M',
       scripts: [
-        ScriptMod(op: ScriptOp.add, moduleName: 'New', relPath: 'New.as',
-            asPath: asFile.path, miniPath: miniFile.path),
+        ScriptMod(
+          op: ScriptOp.add,
+          moduleName: 'New',
+          relPath: 'New.as',
+          asPath: asFile.path,
+          miniPath: miniFile.path,
+        ),
       ],
     );
     final out = p.join(tmp.path, 'm.goremod');
