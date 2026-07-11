@@ -865,6 +865,7 @@ dependencies = [
  "gore-modgen",
  "gore-reflect",
  "gore-tex",
+ "gore-vo",
  "image",
  "predicates 2.1.5",
  "serde",
@@ -880,7 +881,20 @@ name = "gore-as"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "sha2",
  "thiserror 2.0.18",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "gore-asset"
+version = "0.0.0"
+dependencies = [
+ "retoc",
+ "sha2",
+ "tempfile",
+ "thiserror 1.0.69",
+ "usmap",
 ]
 
 [[package]]
@@ -937,11 +951,15 @@ dependencies = [
  "gore-loc",
  "gore-modgen",
  "gore-tex",
+ "gore-vo",
  "image",
+ "libc",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "thiserror 2.0.18",
+ "windows-sys 0.61.2",
  "zip",
 ]
 
@@ -1006,6 +1024,16 @@ dependencies = [
  "sha2",
  "texture2ddecoder",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "gore-vo"
+version = "0.0.0"
+dependencies = [
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.18",
+ "zip",
 ]
 
 [[package]]
@@ -2564,6 +2592,23 @@ name = "unit-prefix"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "81e544489bf3d8ef66c953931f56617f423cd4b5494be343d9b9d3dda037b9a3"
+
+[[package]]
+name = "usmap"
+version = "0.1.1"
+source = "git+https://github.com/trumank/jmap.git?rev=909bce98a33e7d1932941404af7865514249f6be#909bce98a33e7d1932941404af7865514249f6be"
+dependencies = [
+ "anyhow",
+ "byteorder",
+ "clap",
+ "ser-hex",
+ "serde",
+ "serde_json",
+ "serde_with",
+ "strum",
+ "tracing",
+ "zstd",
+]
 
 [[package]]
 name = "utf8parse"
