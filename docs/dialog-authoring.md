@@ -8,7 +8,8 @@ selection are separate concerns described below.
 
 ## Proven runtime boundary
 
-The controlled Viper fixture validated this chain:
+The controlled Viper fixture and the public `BuildSpec.dialog_topics` generator
+both validated this chain:
 
 ```text
 new UChoice subclass
@@ -30,16 +31,19 @@ status=CHOICE_PASS topics=3 identity_count=1 class_count=1 exact_count=1
 status=RENDER_PASS topics=3 identity_count=1 class_count=1 exact_count=1
 ```
 
-The user independently confirmed the caption `[Gore probe] UI fixture`. The
-same object address and exact class occurred once in both observed arrays, and
-the render callback belonged to the same widget. No topic was selected.
+For the final production-generated run, the user independently confirmed the
+caption `[Gore probe] UI fixture`. The same object address and exact class
+occurred once in both observed arrays, and the render callback belonged to the
+same widget. No topic was selected.
 
 Afterwards `gore mod undeploy` restored the 123,394,250-byte shipping cache to
 SHA-256
 `1018F1CFE6B99A650EECB33AFB96752D691D2088EAD27808971B812F04ECB4C2`.
 The loader, deployment record, backup, and isolation markers were absent, all
-pre-existing mods were restored, and every ordinary slot save remained
-byte-identical.
+eight pre-existing mods were restored, and 92 of 93 save files remained
+byte-identical. The only difference was three ASCII digits in the already-known
+`/Engine/Transient.GothicScreenshotsSave_*` object name in
+`PersistentDataList.sav`; its other bytes and every slot save were unchanged.
 
 ## Minimal compiled topic
 
@@ -201,9 +205,8 @@ therefore be tested on a disposable save with semantic before/after inspection.
 
 - Automatic discovery for a new module remains unproven.
 - The controlled visual proof currently covers Gothic 1 Remake 1.0.3 with
-  UE4SS 3.0.1. It used the reviewed v0.4 fixture; the parameterized production
-  generator preserves and hardens those rules under hermetic Lua tests, but its
-  exact emitted adapter still needs one clean live visual requalification.
+  UE4SS 3.0.1. Both the reviewed v0.4 fixture and the exact adapter emitted by
+  the parameterized production generator completed the clean live visual proof.
   Other runtime combinations remain to be qualified.
 - Topic selection, authored knowledge/quest changes, recorded voice, and
   selection-side save effects are not certified by the insertion proof.

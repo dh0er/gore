@@ -381,9 +381,9 @@ not exist there are retained, with collision checks before deployment. Mod
 Studio defaults it on for a **New module** and off for an edit; an existing-module
 edit can enable it explicitly when it intentionally adds a class or function.
 
-The complete new-dialog visual path has been validated in game with a reviewed
-fixture, and the same guarded rules now have a declarative production generator.
-The exact generated adapter still awaits one clean live requalification. See
+The complete new-dialog visual path has been validated in game with both the
+reviewed fixture and the exact adapter emitted by the declarative production
+generator. See
 [AngelScript dialog authoring](docs/dialog-authoring.md) for the compiled topic
 template, runtime evidence, safe test order, and the important boundary between
 a renderable new class and automatic topic discovery.
