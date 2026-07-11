@@ -497,6 +497,28 @@ mod tests {
     }
 
     #[test]
+    fn lua_nil_topic_results_are_also_treated_as_missing() {
+        for lookup_body in ["return nil", "return gore_test_wrap(nil)"] {
+            let scenario = format!(
+                r#"
+                    gore_test_setup("om_test_target_001", true)
+                    local original_find = gore_test_topic_set.FindTopicInstanceOfClass
+                    gore_test_topic_set.FindTopicInstanceOfClass = function(self, wanted)
+                        if wanted == gore_test_probe_class then {lookup_body} end
+                        return original_find(self, wanted)
+                    end
+                    gore_test_open()
+                "#
+            );
+            let lua = mock_lua(&loader(topic("fixture")), &scenario);
+            assert_eq!(lua.globals().get::<i64>("gore_test_add_calls").unwrap(), 1);
+            let output = logs(&lua);
+            assert!(output.contains("status=ARMED mutation=added"), "{output}");
+            assert!(output.contains("status=RENDER_PASS"), "{output}");
+        }
+    }
+
+    #[test]
     fn batch_preflights_all_sentinels_before_any_topic_mutation() {
         let first = topic("first");
         let second = DialogTopicSpec {
@@ -646,14 +668,42 @@ mod tests {
 
     #[test]
     fn authored_topic_lookup_error_or_invalid_result_never_mutates() {
-        for lookup_body in [
-            r#"error("lookup failed")"#,
-            r#"
+        for (lookup_body, expected_reason) in [
+            (r#"error("lookup failed")"#, "topic-lookup-error"),
+            (
+                r#"return {
+                    type = function() return "RemoteUnrealParam" end,
+                    get = function() error("wrapper unreadable") end
+                }"#,
+                "topic-lookup-unreadable-wrapper",
+            ),
+            (
+                r#"
                 local invalid = gore_test_object(999, gore_test_probe_class)
                 invalid.IsValid = function() return false end
                 return invalid
             "#,
-            r#"return gore_test_object(998, gore_test_sentinel_class)"#,
+                "topic-lookup-invalid-result",
+            ),
+            (
+                r#"return gore_test_object(998, gore_test_sentinel_class)"#,
+                "topic-lookup-class-mismatch",
+            ),
+            (
+                r#"return {
+                    type = function() return "UnknownWrapper" end,
+                    get = function() return gore_test_null_object() end
+                }"#,
+                "topic-lookup-unexpected-result-type",
+            ),
+            (
+                r#"
+                    local direct = gore_test_object(997, gore_test_sentinel_class)
+                    direct.get = function() return gore_test_null_object() end
+                    return direct
+                "#,
+                "topic-lookup-class-mismatch",
+            ),
         ] {
             let scenario = format!(
                 r#"
@@ -670,7 +720,7 @@ mod tests {
             assert_eq!(lua.globals().get::<i64>("gore_test_add_calls").unwrap(), 0);
             let output = logs(&lua);
             assert!(
-                output.contains("status=FAIL reason=topic-lookup-"),
+                output.contains(&format!("status=FAIL reason={expected_reason}")),
                 "{output}"
             );
             assert!(!output.contains("status=ARMED"), "{output}");
@@ -848,6 +898,7 @@ mod tests {
                 IsValid = function() return true end,
                 GetAddress = function(self) return self._address end,
                 GetClass = function(self) return self._class end,
+                type = function() return "UObject" end,
             }
         end
 
@@ -872,7 +923,16 @@ mod tests {
         end
 
         function gore_test_wrap(value)
-            return { get = function() return value end }
+            return {
+                type = function() return "RemoteUnrealParam" end,
+                get = function() return value end,
+            }
+        end
+
+        function gore_test_null_object()
+            local null_object = gore_test_object(0, nil)
+            null_object.IsValid = function() return false end
+            return null_object
         end
 
         function gore_test_setup(participant_name, include_sentinel)
@@ -896,9 +956,13 @@ mod tests {
             end
             gore_test_topic_set.FindTopicInstanceOfClass = function(self, wanted)
                 for _, topic_object in ipairs(self._topics) do
-                    if topic_object:GetClass() == wanted then return topic_object end
+                    if topic_object:GetClass() == wanted then
+                        return gore_test_wrap(topic_object)
+                    end
                 end
-                return nil
+                -- Match the live UE4SS ABI: nullable UObject returns arrive as
+                -- a RemoteUnrealParam containing UObject(nullptr), not Lua nil.
+                return gore_test_wrap(gore_test_null_object())
             end
             gore_test_topic_set.AddTopic = function(self, wanted, _replacement)
                 gore_test_add_calls = gore_test_add_calls + 1

@@ -58,6 +58,12 @@ local function is_valid(value)
     return ok and result == true
 end
 
+local function has_zero_address(value)
+    if value == nil then return false end
+    local ok, address = pcall(function() return value:GetAddress() end)
+    return ok and type(address) == "number" and address == 0
+end
+
 local function address_of(value)
     value = unwrap(value)
     if not is_valid(value) then return nil end
@@ -156,8 +162,32 @@ local function find_topic_instance(topic_set, topic_class)
     end)
     if not ok then return nil, "error" end
     if raw_topic == nil then return nil, "missing" end
-    local topic = unwrap(raw_topic)
-    if not is_valid(topic) then return nil, "invalid-result" end
+
+    -- Reflected UObject returns arrive as RemoteUnrealParam. UE4SS materializes
+    -- a null UObject as an empty UObject wrapper (GetAddress() == 0), although
+    -- some call paths can still yield Lua nil. Both are definite absence. A
+    -- known parameter wrapper that cannot be read remains a fail-closed error.
+    local type_ok, raw_type = pcall(function() return raw_topic:type() end)
+    if not type_ok or type(raw_type) ~= "string" then
+        return nil, "result-type-unreadable"
+    end
+    if raw_type == "RemoteUnrealParam" then
+        local wrapped_ok, wrapped_topic = pcall(function() return raw_topic:get() end)
+        if not wrapped_ok then return nil, "unreadable-wrapper" end
+        raw_topic = wrapped_topic
+        if raw_topic == nil then return nil, "missing" end
+        local payload_type_ok, payload_type = pcall(function() return raw_topic:type() end)
+        if not payload_type_ok or payload_type ~= "UObject" then
+            return nil, "unexpected-payload-type"
+        end
+    elseif raw_type ~= "UObject" then
+        return nil, "unexpected-result-type"
+    end
+    if has_zero_address(raw_topic) then return nil, "missing" end
+
+    local topic = raw_topic
+    local valid_ok, valid = pcall(function() return topic:IsValid() end)
+    if not valid_ok or valid ~= true then return nil, "invalid-result" end
     local actual_class = nil
     local class_ok = pcall(function() actual_class = topic:GetClass() end)
     if not class_ok then return nil, "class-unreadable" end
