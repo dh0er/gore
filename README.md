@@ -128,12 +128,19 @@ All UI text and NPC dialog lines live in the encrypted AlkimiaLocalization
 gore loc export --lcache "$GAME/.../AlkimiaLocalization_Game.lcache" -o loc.json
 # edit loc.json:  { "some_text_id": { "german": "Neuer Text", "english": "New text" }, … }
 gore loc import --lcache "$GAME/.../AlkimiaLocalization_Game.lcache" --edits loc.json
+# Explicitly allow IDs that are not in the original cache (needed by new dialogs/quests):
+gore loc import --lcache "$GAME/.../AlkimiaLocalization_Game.lcache" \
+                --edits new-dialog.json --add-missing
 ```
 
 `gore loc import` overwrites the cache in place (pass `-o` to write elsewhere) —
 keep a copy first, or use the [bundle](#bundling--deploying) path, which backs up
-to `*.gore-bak`. Helpers: `gore loc extract` auto-detects the game and writes the
-shared catalog; `gore loc status` shows what's loaded.
+to `*.gore-bak`. Unknown IDs are rejected unless `--add-missing` is present;
+bundle/Mod Studio projects treat a newly authored localization ID as an explicit
+add operation. In Mod Studio's Dialogs tab, the add button creates a new
+`info_`/`dia_`/`gvl_`/`svm_` line in the currently selected game language.
+Helpers: `gore loc extract` auto-detects the game and writes the shared catalog;
+`gore loc status` shows what's loaded.
 
 ## Audio
 
@@ -158,6 +165,71 @@ gore audio export-patch --map map.json -o patch.zip
 gore audio apply-patch  --patch patch.zip --bank "$GAME/.../SFX.bank"
 ```
 
+### Voice-over ZIP archives
+
+Localized dialog recordings are Ogg files in language ZIPs under
+`$GAME/G1R/Story/VoiceOver` (for example `german_new.zip`). `gore voice` can
+index them, safely extract one recording, or create a new archive with one Ogg
+added/replaced:
+
+```sh
+VO="$GAME/G1R/Story/VoiceOver/german_new.zip"
+gore voice list --archive "$VO"                         # `index` is an alias
+gore voice list --archive "$VO" --json                  # machine-readable index
+gore voice extract --archive "$VO" --basename DIA_X.ogg -o extracted/
+# Real archives contain duplicate basenames; select those by their case-sensitive full path:
+gore voice extract --archive "$VO" --path "NPC/Quest/DIA_X.ogg" -o extracted/
+gore voice replace --archive "$VO" --path "NPC/Quest/DIA_X.ogg" \
+                   --ogg new.ogg -o german_replaced.zip
+gore voice add --archive "$VO" --path "GoreMods/MyMod/DIA_NEW.ogg" \
+               --ogg new.ogg -o german_added.zip
+```
+
+For a distributable multi-file patch, use the versioned manifest format. A
+format-1 manifest contains an ordered, non-empty `edits` array:
+
+```json
+{
+  "format": 1,
+  "edits": [
+    {
+      "op": "replace",
+      "path": "NPC/Quest/DIA_X.ogg",
+      "ogg": "files/DIA_X.ogg"
+    },
+    {
+      "op": "add",
+      "path": "GoreMods/MyMod/DIA_NEW.ogg",
+      "ogg": "files/DIA_NEW.ogg"
+    }
+  ]
+}
+```
+
+```sh
+gore voice apply-manifest --archive "$VO" --manifest voice-patch.json \
+                          -o german_patched.zip
+# `gore voice apply` is a shorter alias.
+```
+
+Manifest `path` values are complete archive paths. Replacements match them
+exactly and case-sensitively; basename selectors are intentionally unavailable
+in manifests. Each `ogg` value is a portable `/`-separated path relative to the
+manifest. Absolute paths, empty/`.`/`..` components, backslashes, symlinks,
+Windows reparse points, and paths escaping the manifest directory are rejected.
+The command rejects unknown format versions/operations and case-insensitive
+duplicate targets, then reads and validates every Ogg before applying the whole
+ordered batch in one verified archive pass. Replacements keep their original
+slots; additions are appended in manifest order. Any error publishes no output.
+
+`--basename` is case-insensitive but succeeds only when it is unique;
+`--path` is an exact, case-sensitive archive path. Extract never overwrites an
+existing file. Add/replace never modify their input and require a new `--out`
+path that does not exist. They validate the Ogg stream and the completed ZIP
+before publishing it, and reject unsafe paths, symlinks, encrypted entries, and
+resource-limit violations. These commands create an archive; they do not install
+it into the game.
+
 ## Textures
 
 Replace any `Texture2D` packed in the UE5 IoStore container. Output is an
@@ -178,6 +250,29 @@ gore texture undeploy --game "$GAME" --name zzz_MyMod_P            # remove it
 (`gore texture index` builds/caches the asset→package-id map used to resolve
 assets. Compression is opt-in via `--compress` on `pack`, but uncompressed
 containers are what currently load reliably in-game.)
+
+### Cooked DataAsset foundation
+
+`gore-asset` is the conservative backend for a future generic cooked-DataAsset
+editor. It can resolve and flatten class schemas from a `.usmap`, decode and
+re-encode Unreal unversioned-property headers, and edit fixed-width primitive
+properties without changing unrelated bytes. Its package carrier loads a split
+`.uasset`/`.uexp` pair, permits only bounds-checked same-length replacement, and
+writes a verified new pair without overwriting the input or an existing output.
+
+There is intentionally no guessed property-stream offset and no general CLI
+edit command yet. Against the current hotfix, three native `UPrimaryDataAsset`
+packages reproduce byte-identically and their Zen/legacy export maps prove the
+exact `.uexp` export ranges plus package footer. A UE5.4-G1R envelope API now
+validates those boundaries and retains every class-native suffix opaquely. The
+apparent four-byte prefix was actually two legal empty unversioned-header
+fragments; the decoder now accepts and round-trips them. The first real non-zero
+properties are complex `Map`/`Struct` values. A read-only, resource-bounded
+span walker now follows the USMAP recursively for the wire forms proven by those
+fixtures (`Map`, nested G1R structs, names/object references, `LinearColor`,
+`Vector4`, and required primitives), returning exact borrowed byte ranges and a
+consumed count. Unknown forms fail typed before any size is guessed. Complex
+payload writes remain intentionally unsupported.
 
 ## Scripts (AngelScript) — experimental
 
@@ -221,25 +316,61 @@ gore as compile out_as/ --game "$GAME"
 gore as compile --game "$GAME"
 ```
 
+On Windows, compile automatically attempts the embedded, temporary x86-64 diagnostics hook. When
+the selected AMD64 executable has exactly one masked callback match, errors are printed like a normal
+compiler (`file:line:column: error: message`), with candidate signatures retained as notes. The
+helper is never installed into the game. A missing/changed/ambiguous signature or confirmed hook
+failure falls back to the unchanged generator; use `--no-diagnostics` for a silent explicit opt-out.
+Compatibility can be audited without launching the game, including custom/non-Steam executables:
+
+```sh
+gore as diagnostics-check --game "$GAME"
+gore as diagnostics-check --exe "D:/Custom/G1R/Binaries/Win64/G1R-Win64-Shipping.exe"
+```
+
+The check reports executable SHA-256, match count, and matched RVA(s). An advanced, explicitly
+trusted helper override is available through `--diagnostics-hook DLL` or
+`GORE_AS_DIAGNOSTICS_HOOK`; the embedded/sibling release helper is SHA-256 verified.
+
 The `-o` form leaves the install exactly as it was, so the live
 `PrecompiledScript_Shipping.Cache` is still the pristine `vanilla.Cache` below.
-Rather than shipping the whole regenerated cache, splice just your edited module
-back into the vanilla one:
+For the normal one-file authoring workflow, let the high-level command perform
+the emit/overlay/compile/extract/remap chain and return a deployable mini-cache:
+
+```sh
+gore as compile-module --op add --module MyMod.Dialog \
+  --rel-path MyMod/Dialog.as --source Dialog.as --work-dir .gore-as-work \
+  --allow-new-symbols -o MyMod.Dialog.mini.Cache --game "$GAME"
+```
+
+`compile-module` is the CLI equivalent of Mod Studio's Compile action and
+restores the game install after the compiler run. For debugging or custom
+pipelines, the same stages remain available as low-level commands. Rather than
+shipping a whole regenerated cache, splice just the edited module back into the
+vanilla one:
 
 ```sh
 # existing module — remap refs to the vanilla cache, then replace in place:
 gore as extract-remap regen.Cache <Module> vanilla.Cache -o mini.Cache
 gore as replace       vanilla.Cache mini.Cache <Module>  -o modded.Cache
-# new primitive-only module — splice directly:
+# new class/function-bearing module — carry only genuinely new symbol rows:
+gore as extract-remap regen.Cache <Module> vanilla.Cache \
+                      --allow-new-symbols -o mini.Cache
 gore as splice        vanilla.Cache mini.Cache -o modded.Cache
 ```
+
+`--allow-new-symbols` is deliberately opt-in. Existing references are still
+mapped back to the vanilla cache; only rows for classes/functions/names that do
+not exist there are retained, with collision checks before deployment. Mod
+Studio defaults it on for a **New module** and off for an edit; an existing-module
+edit can enable it explicitly when it intentionally adds a class or function.
 
 Decompilation/emit resolve native-call arities from a `Binds.Cache` placed next
 to the input cache (or `GORE_AS_BINDS`).
 
 ## Bundling & deploying
 
-Combine overrides + text + audio + textures + scripts into one mod, then
+Combine overrides + text + audio + voice archives + textures + scripts into one mod, then
 deploy/undeploy it against your install. Write a build spec (`spec.json`):
 
 ```json
@@ -248,6 +379,7 @@ deploy/undeploy it against your install. Write a build spec (`spec.json`):
   "overrides": [ { "class": "ItFo_Apple", "field": "m_Value", "value_int": 500 } ],
   "loc_edits": { "some_text_id": { "german": "…" } },
   "audio":   [ { "bank": "SFX.bank", "sample": "Foo", "wav_path": "foo.wav" } ],
+  "voice":   [ { "archive": "german_new.zip", "op": "replace", "archive_path": "NPC/Hero/DIA_Foo.ogg", "ogg_path": "DIA_Foo.ogg" } ],
   "texture": [ { "asset": "/Game/UI/.../T_Foo", "image_path": "foo.png" } ],
   "scripts": [ { "op": "add", "module_name": "MyModule", "mini_cache": "MyModule.cache" } ]
 }
@@ -255,9 +387,34 @@ deploy/undeploy it against your install. Write a build spec (`spec.json`):
 
 ```sh
 gore mod build   --spec spec.json -o build/            # → build/MyMod/ (gore-mod.json manifest + payloads)
-gore mod deploy  --bundle build/MyMod --game "$GAME"   # overrides→Mods, loc/audio in place(*.gore-bak), textures→~mods
+gore mod deploy  --bundle build/MyMod --game "$GAME"   # overrides→Mods, loc/audio/voice in place (*.gore-bak), textures→~mods
 gore mod undeploy --game "$GAME"                       # restore everything
 ```
+
+Voice entries are packaged into a versioned format-1 `voice/manifest.json` with
+bundle-relative validated Ogg payloads. `archive` must be one `.zip` filename
+under `G1R/Story/VoiceOver`; `archive_path` is a forward-slash `.ogg` member.
+`replace` requires that member's exact case-sensitive stored path; `add` requires
+it not to exist. Exact-path replacement is mechanically verified by archive and
+transactional deploy tests. `add` is archive-safe, but whether the game resolves
+a brand-new voice path is still runtime-dependent; replacements are the
+established deployment path.
+Direct deploy and manager apply group edits into one verified rewrite per ZIP
+and always rebuild from the pristine/prior-backup archive. Manager collisions
+on `(archive, archive_path)` are case-insensitive, soft, order-dependent, and
+later-wins while retaining the winning spelling and operation. A referenced
+archive missing from the install is a hard preflight error: deployment refuses
+to create a partial voice patch. All manifests, payload paths, files, and Oggs
+are validated before an active manager loadout is transactionally replaced.
+
+Each candidate ZIP is composed in memory so validation can finish before the
+transaction starts; patching several large language archives therefore requires
+roughly their combined output size in available RAM. One deployment has a 4-GiB
+aggregate pending-write cap, while rollback snapshots are kept in durable
+same-directory temporary files rather than duplicating old archives in RAM.
+The game volume therefore also needs temporary free space comparable to the
+archives being replaced; insufficient space fails during staging before a live
+archive is changed.
 
 This is the same engine [`mod-studio`](#gore-mod-studio) drives. Other helpers:
 
@@ -275,12 +432,13 @@ Every subcommand of the `gore` binary:
 |---------|-----------|---------|
 | `config` | `set` · `get` · `unset` · `list` · `path` · `detect` | Persist shared settings (the game path) so other commands can omit `--game`. |
 | `gen` | — | Compile `overrides.toml` → a UE4SS Lua override mod. |
-| `mod` | `build` · `deploy` · `undeploy` | Build/deploy/undeploy a unified bundle (overrides + loc + audio + textures + scripts). |
+| `mod` | `build` · `deploy` · `undeploy` | Build/deploy/undeploy a unified bundle (overrides + loc + audio + voice ZIPs + textures + scripts). |
 | `mgr` | `import` · `list` · `enable` · `disable` · `order` · `analyze` · `apply` · `status` · `reset` · `remove` | Multi-mod manager: library, load order, conflict analysis, composed deploy (the CLI behind mod-manager). |
 | `loc` | `extract` · `status` · `export` · `import` | Read/edit localized text & dialogs in the encrypted `.lcache`. |
 | `audio` | `list` · `extract` · `replace` · `restore` · `export-patch` · `apply-patch` | Read/replace FMOD `.bank` audio (PCM injection, `*.gore-bak`). |
+| `voice` | `list` (`index`) · `extract` · `add` · `replace` · `apply-manifest` (`apply`) | Index/extract/copy-on-write edit localized voice-over ZIP archives. |
 | `texture` | `list` · `extract` · `replace` · `pack` · `deploy` · `index` · `undeploy` | Extract/replace IoStore textures → Zen triplet in `~mods`. |
-| `as` | `compile` · `info` · `decode-header` · `walk` · `decompile` · `disasm` · `emit` · `emit-all` · `replace` · `splice` · `extract` · `extract-remap` | AngelScript precompiled-cache tooling: recompile `.as` via the game, decode/emit/decompile/splice modules (experimental). |
+| `as` | `compile` · `compile-module` · `diagnostics-check` · `info` · `decode-header` · `walk` · `decompile` · `disasm` · `emit` · `emit-all` · `replace` · `splice` · `extract` · `extract-remap` | AngelScript precompiled-cache tooling: recompile `.as` via the game, capture compiler diagnostics when safely available, decode/emit/decompile/splice modules (experimental). |
 | `catalog` | `--kind item\|npc\|knowledge` | Generate a catalog JSON from a UE4SS object dump. |
 | `dump` | — | Parse a UE4SS SDK header dump into a reflection model JSON. |
 | `stubs` | — | Emit LuaLS/EmmyLua type stubs from `model.json`. |
@@ -439,6 +597,8 @@ gore/
 │  ├─ gore-modgen/         overrides.toml → UE4SS Lua mod generation + validation
 │  ├─ gore-mod/            unified mod-bundle engine (overrides + loc + audio + textures)
 │  ├─ gore-fmod/           FMOD .bank decrypt/parse + Vorbis (audio backend, pure Rust)
+│  ├─ gore-vo/             safe voice ZIP index/extract/copy-on-write editor
+│  ├─ gore-asset/          USMAP + unversioned-property + lossless package primitives
 │  ├─ gore-tex/            UE5 IoStore texture extract/replace (Zen .utoc/.ucas/.pak)
 │  ├─ gore-ffi/            cdylib dart:ffi bridge for mod-studio (gore_ffi.dll)
 │  ├─ gore-save/           GSAV savegame parse/edit core + its cdylib (gore_save.dll)
@@ -467,6 +627,8 @@ gore/
 | [`gore-modgen`](crates/gore-modgen) | Rust lib | `overrides.toml` → UE4SS Lua mod generation + field-level validation. |
 | [`gore-mod`](crates/gore-mod) | Rust lib | Unified bundle engine: `BuildSpec` → bundle (manifest + payloads) → deploy/undeploy. |
 | [`gore-fmod`](crates/gore-fmod) | Rust lib | FMOD `.bank` decrypt/parse + Vorbis decode (audio backend; pure Rust). |
+| [`gore-vo`](crates/gore-vo) | Rust lib | Safe voice ZIP indexing/extraction and verified copy-on-write Ogg add/replace. |
+| [`gore-asset`](crates/gore-asset) | Rust lib | USMAP flattening, bounded read-only complex-property spans, unversioned primitive codec, and verified `.uasset`/`.uexp` carrier. |
 | [`gore-tex`](crates/gore-tex) | Rust lib | IoStore texture extract/replace; cooks + packs a Zen triplet. Built on vendored [`retoc`](vendor/retoc) + `gore-oodle`. |
 | [`gore-ffi`](crates/gore-ffi) | Rust cdylib | `dart:ffi` bridge for mod-studio (`gore_ffi.dll`) over the full mod engine. |
 | [`gore-save`](crates/gore-save) | Rust lib + cdylib | GSAV savegame parse/edit core (`gore_save.dll`). |
