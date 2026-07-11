@@ -39,6 +39,8 @@ pub enum ConflictKind {
     Cdo,
     /// AngelScript module splices, target = module name.
     ScriptModule,
+    /// Voice ZIP member edit, target `"<archive>|<member path>"` (case-insensitive later-wins).
+    VoiceArchive,
     /// Wholesale live-file replacement (`"lcache"` / `"bank:<name>"` / `"script_cache"`).
     RawFile,
 }
@@ -68,12 +70,24 @@ pub fn analyze(mods: &[&ModEntryMeta], loadout: &Loadout) -> Vec<Conflict> {
             match c {
                 ComponentInfo::LocPatch { targets, .. } => {
                     for t in targets {
-                        note(&mut buckets, ConflictKind::Loc, t.clone(), Severity::Soft, &m.id);
+                        note(
+                            &mut buckets,
+                            ConflictKind::Loc,
+                            t.clone(),
+                            Severity::Soft,
+                            &m.id,
+                        );
                     }
                 }
                 ComponentInfo::AudioPatch { targets, .. } => {
                     for t in targets {
-                        note(&mut buckets, ConflictKind::Audio, t.clone(), Severity::Soft, &m.id);
+                        note(
+                            &mut buckets,
+                            ConflictKind::Audio,
+                            t.clone(),
+                            Severity::Soft,
+                            &m.id,
+                        );
                     }
                 }
                 // Texture patches, foreign triplets and loose paks all mount cooked packages,
@@ -82,10 +96,18 @@ pub fn analyze(mods: &[&ModEntryMeta], loadout: &Loadout) -> Vec<Conflict> {
                 | ComponentInfo::Triplet { targets, .. }
                 | ComponentInfo::LoosePak { targets, .. } => {
                     for t in targets {
-                        note(&mut buckets, ConflictKind::Asset, norm_asset(t), Severity::Soft, &m.id);
+                        note(
+                            &mut buckets,
+                            ConflictKind::Asset,
+                            norm_asset(t),
+                            Severity::Soft,
+                            &m.id,
+                        );
                     }
                 }
-                ComponentInfo::Ue4ssLua { targets, opaque, .. } => {
+                ComponentInfo::Ue4ssLua {
+                    targets, opaque, ..
+                } => {
                     // No dir-name conflict: manager apply deploys each mod to its OWN
                     // `gm{idx:03}_{name}` dir, so two mods sharing a script name never overwrite
                     // each other. Only their CDO targets (Class.Field) can genuinely clash.
@@ -93,13 +115,36 @@ pub fn analyze(mods: &[&ModEntryMeta], loadout: &Loadout) -> Vec<Conflict> {
                     // below instead of participating in CDO overlap.
                     if !opaque {
                         for t in targets {
-                            note(&mut buckets, ConflictKind::Cdo, t.clone(), Severity::Soft, &m.id);
+                            note(
+                                &mut buckets,
+                                ConflictKind::Cdo,
+                                t.clone(),
+                                Severity::Soft,
+                                &m.id,
+                            );
                         }
                     }
                 }
                 ComponentInfo::AngelScriptPatch { targets, .. } => {
                     for t in targets {
-                        note(&mut buckets, ConflictKind::ScriptModule, t.clone(), Severity::Hard, &m.id);
+                        note(
+                            &mut buckets,
+                            ConflictKind::ScriptModule,
+                            t.clone(),
+                            Severity::Hard,
+                            &m.id,
+                        );
+                    }
+                }
+                ComponentInfo::VoiceArchivePatch { targets, .. } => {
+                    for t in targets {
+                        note(
+                            &mut buckets,
+                            ConflictKind::VoiceArchive,
+                            norm_voice(t),
+                            Severity::Soft,
+                            &m.id,
+                        );
                     }
                 }
                 // Raw files need cross-matching against patch components; handled below.
@@ -123,26 +168,49 @@ pub fn analyze(mods: &[&ModEntryMeta], loadout: &Loadout) -> Vec<Conflict> {
         }
     }
     for rt in &raw_targets {
-        let members: Vec<&str> =
-            enabled.iter().filter(|m| touches_raw(m, rt)).map(|m| m.id.as_str()).collect();
+        let members: Vec<&str> = enabled
+            .iter()
+            .filter(|m| touches_raw(m, rt))
+            .map(|m| m.id.as_str())
+            .collect();
         if members.len() >= 2 {
             for id in members {
-                note(&mut buckets, ConflictKind::RawFile, raw_key(rt), Severity::Hard, id);
+                note(
+                    &mut buckets,
+                    ConflictKind::RawFile,
+                    raw_key(rt),
+                    Severity::Hard,
+                    id,
+                );
             }
         }
     }
 
     // One info badge per enabled mod with any opaque UE4SS script: we cannot see what it edits.
     for m in &enabled {
-        if m.components.iter().any(|c| matches!(c, ComponentInfo::Ue4ssLua { opaque: true, .. })) {
-            note(&mut buckets, ConflictKind::Cdo, format!("{}:opaque", m.id), Severity::Info, &m.id);
+        if m.components
+            .iter()
+            .any(|c| matches!(c, ComponentInfo::Ue4ssLua { opaque: true, .. }))
+        {
+            note(
+                &mut buckets,
+                ConflictKind::Cdo,
+                format!("{}:opaque", m.id),
+                Severity::Info,
+                &m.id,
+            );
         }
     }
 
     buckets
         .into_iter()
         .filter(|(_, (severity, ids))| ids.len() >= 2 || *severity == Severity::Info)
-        .map(|((kind, target), (severity, mods))| Conflict { kind, target, mods, severity })
+        .map(|((kind, target), (severity, mods))| Conflict {
+            kind,
+            target,
+            mods,
+            severity,
+        })
         .collect()
 }
 
@@ -170,7 +238,9 @@ fn note(
     severity: Severity,
     id: &str,
 ) {
-    let (sev, ids) = buckets.entry((kind, target)).or_insert_with(|| (severity, Vec::new()));
+    let (sev, ids) = buckets
+        .entry((kind, target))
+        .or_insert_with(|| (severity, Vec::new()));
     if rank(severity) > rank(*sev) {
         *sev = severity;
     }
@@ -191,6 +261,10 @@ fn rank(s: Severity) -> u8 {
 /// texture-patch asset path and a foreign triplet package path CAN collide.
 fn norm_asset(t: &str) -> String {
     t.trim().replace('\\', "/")
+}
+
+fn norm_voice(t: &str) -> String {
+    t.trim().replace('\\', "/").to_lowercase()
 }
 
 /// Stable bucket key for a raw-file replacement target.
@@ -241,7 +315,10 @@ mod tests {
             format: 1,
             entries: entries
                 .iter()
-                .map(|(id, enabled)| LoadoutEntry { id: (*id).into(), enabled: *enabled })
+                .map(|(id, enabled)| LoadoutEntry {
+                    id: (*id).into(),
+                    enabled: *enabled,
+                })
                 .collect(),
         }
     }
@@ -251,22 +328,46 @@ mod tests {
     }
 
     fn loc(targets: &[&str]) -> ComponentInfo {
-        ComponentInfo::LocPatch { rel: "loc.json".into(), targets: strs(targets) }
+        ComponentInfo::LocPatch {
+            rel: "loc.json".into(),
+            targets: strs(targets),
+        }
     }
     fn audio(targets: &[&str]) -> ComponentInfo {
-        ComponentInfo::AudioPatch { rel: "audio".into(), targets: strs(targets) }
+        ComponentInfo::AudioPatch {
+            rel: "audio".into(),
+            targets: strs(targets),
+        }
     }
     fn tex(targets: &[&str]) -> ComponentInfo {
-        ComponentInfo::TexturePatch { rel: "texture".into(), targets: strs(targets) }
+        ComponentInfo::TexturePatch {
+            rel: "texture".into(),
+            targets: strs(targets),
+        }
     }
     fn triplet(targets: &[&str]) -> ComponentInfo {
-        ComponentInfo::Triplet { rel_base: "paks/zzz_X_P".into(), targets: strs(targets) }
+        ComponentInfo::Triplet {
+            rel_base: "paks/zzz_X_P".into(),
+            targets: strs(targets),
+        }
     }
     fn pak(targets: &[&str]) -> ComponentInfo {
-        ComponentInfo::LoosePak { rel: "paks/x.pak".into(), targets: strs(targets) }
+        ComponentInfo::LoosePak {
+            rel: "paks/x.pak".into(),
+            targets: strs(targets),
+        }
     }
     fn as_patch(targets: &[&str]) -> ComponentInfo {
-        ComponentInfo::AngelScriptPatch { rel: "scripts".into(), targets: strs(targets) }
+        ComponentInfo::AngelScriptPatch {
+            rel: "scripts".into(),
+            targets: strs(targets),
+        }
+    }
+    fn voice(targets: &[&str]) -> ComponentInfo {
+        ComponentInfo::VoiceArchivePatch {
+            rel: "voice".into(),
+            targets: strs(targets),
+        }
     }
     fn lua(name: &str, targets: &[&str], opaque: bool) -> ComponentInfo {
         ComponentInfo::Ue4ssLua {
@@ -277,11 +378,19 @@ mod tests {
         }
     }
     fn raw(target_file: RawTarget) -> ComponentInfo {
-        ComponentInfo::RawFile { rel: "raw/x".into(), target_file }
+        ComponentInfo::RawFile {
+            rel: "raw/x".into(),
+            target_file,
+        }
     }
 
     fn conflict(kind: ConflictKind, target: &str, mods: &[&str], severity: Severity) -> Conflict {
-        Conflict { kind, target: target.into(), mods: strs(mods), severity }
+        Conflict {
+            kind,
+            target: target.into(),
+            mods: strs(mods),
+            severity,
+        }
     }
 
     /// Two enabled mods patching the same loc string overlap softly; ids follow loadout order
@@ -321,6 +430,22 @@ mod tests {
             vec![conflict(
                 ConflictKind::Audio,
                 "SFX.bank|whoosh",
+                &["mod-a", "mod-b"],
+                Severity::Soft
+            )]
+        );
+    }
+
+    #[test]
+    fn voice_overlap_is_case_insensitive_soft_and_loadout_ordered() {
+        let a = meta("mod-a", vec![voice(&["German.zip|NPC/Hero/Hello.ogg"])]);
+        let b = meta("mod-b", vec![voice(&["german.ZIP|npc\\hero\\HELLO.OGG"])]);
+        let out = analyze(&[&b, &a], &loadout_of(&[("mod-a", true), ("mod-b", true)]));
+        assert_eq!(
+            out,
+            vec![conflict(
+                ConflictKind::VoiceArchive,
+                "german.zip|npc/hero/hello.ogg",
                 &["mod-a", "mod-b"],
                 Severity::Soft
             )]
@@ -388,7 +513,12 @@ mod tests {
         let out = analyze(&[&a, &b], &loadout_of(&[("mod-a", true), ("mod-b", true)]));
         assert_eq!(
             out,
-            vec![conflict(ConflictKind::RawFile, "lcache", &["mod-a", "mod-b"], Severity::Hard)]
+            vec![conflict(
+                ConflictKind::RawFile,
+                "lcache",
+                &["mod-a", "mod-b"],
+                Severity::Hard
+            )]
         );
     }
 
@@ -399,7 +529,12 @@ mod tests {
         let out = analyze(&[&a, &b], &loadout_of(&[("mod-a", true), ("mod-b", true)]));
         assert_eq!(
             out,
-            vec![conflict(ConflictKind::RawFile, "lcache", &["mod-a", "mod-b"], Severity::Hard)]
+            vec![conflict(
+                ConflictKind::RawFile,
+                "lcache",
+                &["mod-a", "mod-b"],
+                Severity::Hard
+            )]
         );
     }
 
@@ -407,11 +542,19 @@ mod tests {
     /// `"<name>|"` prefix), not with patches of other banks.
     #[test]
     fn rawfile_bank_only_conflicts_same_bank_name() {
-        let rawm = meta("mod-raw", vec![raw(RawTarget::Bank { name: "SFX.bank".into() })]);
+        let rawm = meta(
+            "mod-raw",
+            vec![raw(RawTarget::Bank {
+                name: "SFX.bank".into(),
+            })],
+        );
         let hit = meta("mod-hit", vec![audio(&["SFX.bank|whoosh"])]);
         let miss = meta("mod-miss", vec![audio(&["Music.bank|theme"])]);
 
-        let out = analyze(&[&rawm, &hit], &loadout_of(&[("mod-raw", true), ("mod-hit", true)]));
+        let out = analyze(
+            &[&rawm, &hit],
+            &loadout_of(&[("mod-raw", true), ("mod-hit", true)]),
+        );
         assert_eq!(
             out,
             vec![conflict(
@@ -422,7 +565,10 @@ mod tests {
             )]
         );
 
-        let out = analyze(&[&rawm, &miss], &loadout_of(&[("mod-raw", true), ("mod-miss", true)]));
+        let out = analyze(
+            &[&rawm, &miss],
+            &loadout_of(&[("mod-raw", true), ("mod-miss", true)]),
+        );
         assert!(out.is_empty(), "different bank must not conflict: {out:?}");
     }
 
@@ -443,14 +589,22 @@ mod tests {
     fn opaque_ue4ss_emits_info_once_per_mod() {
         let a = meta(
             "mod-a",
-            vec![lua("DirA", &["ADamageData.Health"], true), lua("DirA2", &[], true)],
+            vec![
+                lua("DirA", &["ADamageData.Health"], true),
+                lua("DirA2", &[], true),
+            ],
         );
         let b = meta("mod-b", vec![lua("DirB", &["ADamageData.Health"], false)]);
         let out = analyze(&[&a, &b], &loadout_of(&[("mod-a", true), ("mod-b", true)]));
         // No Cdo/"ADamageData.Health" conflict: mod-a's claim is opaque, so only mod-b holds it.
         assert_eq!(
             out,
-            vec![conflict(ConflictKind::Cdo, "mod-a:opaque", &["mod-a"], Severity::Info)]
+            vec![conflict(
+                ConflictKind::Cdo,
+                "mod-a:opaque",
+                &["mod-a"],
+                Severity::Info
+            )]
         );
     }
 
@@ -459,11 +613,19 @@ mod tests {
     fn deterministic_output_sorted() {
         let a = meta(
             "mod-a",
-            vec![loc(&["z_late|de", "a_early|de"]), lua("SharedDir", &[], false), raw(RawTarget::Lcache)],
+            vec![
+                loc(&["z_late|de", "a_early|de"]),
+                lua("SharedDir", &[], false),
+                raw(RawTarget::Lcache),
+            ],
         );
         let b = meta(
             "mod-b",
-            vec![loc(&["a_early|de", "z_late|de"]), lua("SharedDir", &[], false), raw(RawTarget::Lcache)],
+            vec![
+                loc(&["a_early|de", "z_late|de"]),
+                lua("SharedDir", &[], false),
+                raw(RawTarget::Lcache),
+            ],
         );
         let lo = loadout_of(&[("mod-a", true), ("mod-b", true)]);
 
@@ -471,9 +633,24 @@ mod tests {
         assert_eq!(
             out,
             vec![
-                conflict(ConflictKind::Loc, "a_early|de", &["mod-a", "mod-b"], Severity::Soft),
-                conflict(ConflictKind::Loc, "z_late|de", &["mod-a", "mod-b"], Severity::Soft),
-                conflict(ConflictKind::RawFile, "lcache", &["mod-a", "mod-b"], Severity::Hard),
+                conflict(
+                    ConflictKind::Loc,
+                    "a_early|de",
+                    &["mod-a", "mod-b"],
+                    Severity::Soft
+                ),
+                conflict(
+                    ConflictKind::Loc,
+                    "z_late|de",
+                    &["mod-a", "mod-b"],
+                    Severity::Soft
+                ),
+                conflict(
+                    ConflictKind::RawFile,
+                    "lcache",
+                    &["mod-a", "mod-b"],
+                    Severity::Hard
+                ),
                 // The shared-name `lua("SharedDir", …)` on both mods yields NO conflict (distinct
                 // deploy dirs), so it does not appear here.
             ]
@@ -498,7 +675,9 @@ mod tests {
                 loc(&["itfo_cheese|german"]), // same target twice within the same mod
                 raw(RawTarget::Lcache),
                 audio(&["SFX.bank|whoosh"]),
-                raw(RawTarget::Bank { name: "SFX.bank".into() }),
+                raw(RawTarget::Bank {
+                    name: "SFX.bank".into(),
+                }),
                 as_patch(&["CombatTweaks"]),
                 raw(RawTarget::ScriptCache),
                 tex(&["/Game/UI/T_X"]),
@@ -508,6 +687,9 @@ mod tests {
             ],
         );
         let out = analyze(&[&a], &loadout_of(&[("mod-a", true)]));
-        assert!(out.is_empty(), "a mod must not conflict with itself: {out:?}");
+        assert!(
+            out.is_empty(),
+            "a mod must not conflict with itself: {out:?}"
+        );
     }
 }

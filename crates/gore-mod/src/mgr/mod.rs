@@ -6,12 +6,12 @@
 //! pipeline: [`model`] (cross-tool metadata contract), [`paths`] (shared on-disk layout),
 //! [`loadout`] (enable/order state), then [`import`] → [`analyze`] → [`apply`] → [`status`].
 
-pub mod model;
-pub mod paths;
-pub mod loadout;
-pub mod import;
 pub mod analyze;
 pub mod apply;
+pub mod import;
+pub mod loadout;
+pub mod model;
+pub mod paths;
 pub mod status;
 
 pub use loadout::{Loadout, LoadoutEntry};

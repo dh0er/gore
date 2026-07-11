@@ -1,4 +1,4 @@
-//! `gore mod` — build / deploy / undeploy a unified mod bundle (overrides + loc + audio).
+//! `gore mod` — build/deploy a unified bundle (overrides + loc + audio + voice ZIPs + more).
 //! Thin CLI over the `gore-mod` crate; same engine the mod-studio GUI uses via FFI.
 
 use anyhow::{Context, Result};
@@ -25,7 +25,11 @@ pub fn build(spec: PathBuf, out: PathBuf) -> Result<()> {
 pub fn deploy(bundle: PathBuf, game: Option<PathBuf>) -> Result<()> {
     let game = gore_loc::config::game_root(game)?;
     let rec = gore_mod::deploy(&bundle, &game).map_err(|e| anyhow::anyhow!("{e}"))?;
-    println!("deployed '{}' ({} backup(s))", rec.mod_name, rec.backups.len());
+    println!(
+        "deployed '{}' ({} backup(s))",
+        rec.mod_name,
+        rec.backups.len()
+    );
     Ok(())
 }
 
@@ -33,7 +37,11 @@ pub fn deploy(bundle: PathBuf, game: Option<PathBuf>) -> Result<()> {
 pub fn undeploy(game: Option<PathBuf>) -> Result<()> {
     let game = gore_loc::config::game_root(game)?;
     match gore_mod::undeploy(&game).map_err(|e| anyhow::anyhow!("{e}"))? {
-        Some(rec) => println!("undeployed '{}' ({} restored)", rec.mod_name, rec.backups.len()),
+        Some(rec) => println!(
+            "undeployed '{}' ({} restored)",
+            rec.mod_name,
+            rec.backups.len()
+        ),
         None => println!("nothing deployed"),
     }
     Ok(())

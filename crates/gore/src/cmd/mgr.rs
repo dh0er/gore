@@ -126,7 +126,11 @@ fn loadout_of(arg: Option<PathBuf>) -> PathBuf {
 
 pub fn run(action: MgrAction) -> Result<()> {
     match action {
-        MgrAction::Import { path, library, loadout } => {
+        MgrAction::Import {
+            path,
+            library,
+            loadout,
+        } => {
             let lib = library_of(library);
             let ld_path = loadout_of(loadout);
 
@@ -139,7 +143,10 @@ pub fn run(action: MgrAction) -> Result<()> {
             // / update): keep its current enabled state and position.
             let mut ld = loadout::load(&ld_path).map_err(|e| anyhow::anyhow!("{e}"))?;
             if !ld.entries.iter().any(|e| e.id == entry.id) {
-                ld.entries.push(LoadoutEntry { id: entry.id.clone(), enabled: false });
+                ld.entries.push(LoadoutEntry {
+                    id: entry.id.clone(),
+                    enabled: false,
+                });
                 loadout::save(&ld_path, &ld).map_err(|e| anyhow::anyhow!("{e}"))?;
             }
 
@@ -156,7 +163,10 @@ pub fn run(action: MgrAction) -> Result<()> {
 
             // One row per loadout entry (in loadout order), joined to its metadata
             // by id; library mods not in the loadout are appended after.
-            println!("{:<3} {:<28} {:<26} {:<14} {}", "on", "id", "name", "kind", "comps");
+            println!(
+                "{:<3} {:<28} {:<26} {:<14} comps",
+                "on", "id", "name", "kind"
+            );
             let mut shown: Vec<&str> = Vec::new();
             for e in &ld.entries {
                 let meta = mods.iter().find(|m| m.id == e.id);
@@ -189,7 +199,11 @@ pub fn run(action: MgrAction) -> Result<()> {
             Ok(())
         }
 
-        MgrAction::Remove { id, library, loadout } => {
+        MgrAction::Remove {
+            id,
+            library,
+            loadout,
+        } => {
             let lib = library_of(library);
             let ld_path = loadout_of(loadout);
 
@@ -210,7 +224,9 @@ pub fn run(action: MgrAction) -> Result<()> {
         MgrAction::Enable { id, loadout, .. } => set_enabled(&id, true, loadout),
         MgrAction::Disable { id, loadout, .. } => set_enabled(&id, false, loadout),
 
-        MgrAction::Order { id, pos, loadout, .. } => {
+        MgrAction::Order {
+            id, pos, loadout, ..
+        } => {
             let ld_path = loadout_of(loadout);
             let mut ld = loadout::load(&ld_path).map_err(|e| anyhow::anyhow!("{e}"))?;
 
@@ -254,7 +270,11 @@ pub fn run(action: MgrAction) -> Result<()> {
             Ok(())
         }
 
-        MgrAction::Apply { game, library, loadout } => {
+        MgrAction::Apply {
+            game,
+            library,
+            loadout,
+        } => {
             let game = gore_loc::config::game_root(game)?;
             let lib = library_of(library);
             let ld_path = loadout_of(loadout);
@@ -292,7 +312,11 @@ pub fn run(action: MgrAction) -> Result<()> {
             Ok(())
         }
 
-        MgrAction::Status { game, library, loadout } => {
+        MgrAction::Status {
+            game,
+            library,
+            loadout,
+        } => {
             let game = gore_loc::config::game_root(game)?;
             let lib = library_of(library);
             let ld_path = loadout_of(loadout);
@@ -335,6 +359,9 @@ fn set_enabled(id: &str, enabled: bool, loadout: Option<PathBuf>) -> Result<()> 
 fn describe_status(st: &ManagerStatus) -> String {
     match st {
         ManagerStatus::NothingDeployed => "nothing deployed".to_string(),
+        ManagerStatus::RecoveryRequired => {
+            "recovery required: previous apply was interrupted (run undeploy first)".to_string()
+        }
         ManagerStatus::StudioDeployActive { mod_name } => {
             format!("studio deploy active: {mod_name} (manager won't touch it)")
         }
