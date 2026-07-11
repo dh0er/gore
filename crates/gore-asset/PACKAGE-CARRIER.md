@@ -25,14 +25,24 @@ UE5.4 fallback, then requires all of the following before exposing an export:
 - the `.uexp` ends in the four-byte package-file magic;
 - every `SerialOffset - total_header_size` / `SerialSize` range is inside the
   pre-footer `.uexp` region;
-- export ranges do not overlap.
+- export ranges do not overlap;
+- every export class index and its import/export outer chain are non-null,
+  in-bounds, acyclic, and no deeper than 128 objects.
 
 The result exposes exact `ExportBoundary` values and borrowed `ExportEnvelope`
-bytes. It does not resolve a class-specific property end. Once a schema-aware
-codec has returned an exact consumed count, `split_decoded_prefix` retains the
-remaining class-native suffix opaquely. `decode_primitive_properties` is a
-convenience for primitive-only UObject exports and still rejects the first
-non-zero complex property without guessing its size.
+bytes. Each boundary also exposes the exact qualified class path recovered from
+the export's package-map class reference. `resolve_class_schema(&schemas)` binds
+that path to a class in the USMAP; short-name guessing is not involved. It does
+not resolve a class-specific property end. Once a schema-aware codec has
+returned an exact consumed count, `split_decoded_prefix` retains the remaining
+class-native suffix opaquely. `decode_primitive_properties` is a convenience
+for primitive-only UObject exports and still rejects the first non-zero complex
+property without guessing its size.
+
+Package-index arithmetic is performed on the raw signed value in a widened
+integer. The resolver does not use retoc's asserting index-conversion helpers,
+so malformed `i32::MIN`, null, out-of-range, cyclic, and over-depth references
+become typed errors rather than panics or unbounded traversal.
 
 This boundary was checked against byte-identical double extractions from the
 current G1R container for `PhysicMaterialsColor` and two `FootstepTag` assets.
@@ -111,8 +121,11 @@ infer any other complex layout. The three native PrimaryDataAsset fixtures have
 a four-byte zero suffix after their fully walked property data, but its
 class-native meaning has not been proven and no generic suffix size is encoded
 in the API. Blueprint-generated DataAssets also require their generated `_C`
-schemas, which the installed USMAP does not contain.
+schemas, which the installed USMAP does not contain. A local generated class is
+bound only when that exact package-qualified `_C` schema exists. Otherwise
+`LocalGeneratedClassSchemaMissing` is returned; the resolver never substitutes
+`PrimaryDataAsset` or another parent schema.
 
-Accordingly, callers must select a known UObject export, use a schema that
-matches its actual class, and pass only a decoder-proven consumed count. Unknown
+Accordingly, callers must select a known UObject export, bind its boundary to
+the exact USMAP class, and pass only a decoder-proven consumed count. Unknown
 bytes remain untouched; there is no `export_start + 4` heuristic.

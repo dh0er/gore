@@ -7,24 +7,30 @@
 //! retain any class-native suffix opaquely.
 
 use std::any::Any;
+use std::collections::HashSet;
 use std::io::Cursor;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use retoc::legacy_asset::{EPackageFlags, FLegacyPackageFileSummary, FLegacyPackageHeader};
 use retoc::version::EngineVersion;
+use retoc::zen::FPackageIndex;
 use thiserror::Error;
 
 use crate::{
     PackageCarrier, PackageComponent, PrimitiveError, PrimitivePropertyBlock, PropertySlot,
+    SchemaDb, SchemaError, SchemaId,
 };
 
 const PACKAGE_FOOTER_BYTES: usize = 4;
+const MAX_CLASS_OUTER_DEPTH: usize = 128;
 
 /// One export range resolved from the cooked legacy header.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExportBoundary {
     export_index: usize,
     object_name: String,
+    class_path: String,
+    local_generated_class: bool,
     component: PackageComponent,
     offset: usize,
     length: usize,
@@ -37,6 +43,33 @@ impl ExportBoundary {
 
     pub fn object_name(&self) -> &str {
         &self.object_name
+    }
+
+    /// Exact class path obtained from this export's package-map class index.
+    pub fn class_path(&self) -> &str {
+        &self.class_path
+    }
+
+    /// Bind the exact export class to a class schema.
+    ///
+    /// A locally exported generated class is never replaced by one of its
+    /// native parents. If its `_C` schema is absent, callers receive the typed
+    /// `LocalGeneratedClassSchemaMissing` error instead.
+    pub fn resolve_class_schema(&self, schemas: &SchemaDb) -> Result<SchemaId, ExportSchemaError> {
+        match schemas.resolve_class(&self.class_path) {
+            Ok(schema_id) => Ok(schema_id),
+            Err(SchemaError::SchemaNotFound { .. }) if self.local_generated_class => {
+                Err(ExportSchemaError::LocalGeneratedClassSchemaMissing {
+                    export_index: self.export_index,
+                    class_path: self.class_path.clone(),
+                })
+            }
+            Err(source) => Err(ExportSchemaError::Schema {
+                export_index: self.export_index,
+                class_path: self.class_path.clone(),
+                source,
+            }),
+        }
     }
 
     pub fn component(&self) -> PackageComponent {
@@ -176,9 +209,12 @@ impl<'a> LegacyPackageEnvelope<'a> {
                     message: error.to_string(),
                 })?
                 .into_owned();
+            let resolved_class = resolve_export_class(&parsed, export_index)?;
             exports.push(ExportBoundary {
                 export_index,
                 object_name,
+                class_path: resolved_class.path,
+                local_generated_class: resolved_class.local_generated,
                 component: PackageComponent::Uexp,
                 offset,
                 length,
@@ -304,6 +340,223 @@ pub struct PrimitiveExportEnvelope<'a> {
     pub native_suffix: &'a [u8],
 }
 
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum ExportSchemaError {
+    #[error(
+        "export {export_index} uses local generated class {class_path:?}, but that exact class schema is missing; refusing a parent-class fallback"
+    )]
+    LocalGeneratedClassSchemaMissing {
+        export_index: usize,
+        class_path: String,
+    },
+    #[error("export {export_index} class {class_path:?} cannot be bound to USMAP: {source}")]
+    Schema {
+        export_index: usize,
+        class_path: String,
+        #[source]
+        source: SchemaError,
+    },
+}
+
+#[derive(Debug)]
+struct ResolvedExportClass {
+    path: String,
+    local_generated: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum PackageObjectRef {
+    Import(usize),
+    Export(usize),
+}
+
+impl PackageObjectRef {
+    fn kind(self) -> &'static str {
+        match self {
+            Self::Import(_) => "import",
+            Self::Export(_) => "export",
+        }
+    }
+
+    fn index(self) -> usize {
+        match self {
+            Self::Import(index) | Self::Export(index) => index,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ResolvedObjectNode {
+    object_ref: PackageObjectRef,
+    name: String,
+}
+
+fn resolve_export_class(
+    package: &FLegacyPackageHeader,
+    export_index: usize,
+) -> Result<ResolvedExportClass, EnvelopeError> {
+    let export = package
+        .exports
+        .get(export_index)
+        .ok_or(EnvelopeError::ExportIndexOutOfRange {
+            export_index,
+            export_count: package.exports.len(),
+        })?;
+    let Some(mut current) = checked_package_object_ref(package, export_index, export.class_index)?
+    else {
+        return Err(EnvelopeError::NullExportClass { export_index });
+    };
+    let class_is_local_export = matches!(current, PackageObjectRef::Export(_));
+    let mut seen = HashSet::new();
+    let mut leaf_to_root = Vec::new();
+
+    for _ in 0..MAX_CLASS_OUTER_DEPTH {
+        if !seen.insert(current) {
+            return Err(EnvelopeError::ClassOuterCycle {
+                export_index,
+                referenced_kind: current.kind(),
+                referenced_index: current.index(),
+            });
+        }
+
+        let (name_index, outer_index) = match current {
+            PackageObjectRef::Import(index) => {
+                let object = &package.imports[index];
+                (object.object_name, object.outer_index)
+            }
+            PackageObjectRef::Export(index) => {
+                let object = &package.exports[index];
+                (object.object_name, object.outer_index)
+            }
+        };
+        let name = package
+            .name_map
+            .get(name_index)
+            .map_err(|error| EnvelopeError::ClassObjectName {
+                export_index,
+                referenced_kind: current.kind(),
+                referenced_index: current.index(),
+                message: error.to_string(),
+            })?
+            .into_owned();
+        if name.is_empty() {
+            return Err(EnvelopeError::InvalidClassPath {
+                export_index,
+                reason: format!(
+                    "{} {} has an empty object name",
+                    current.kind(),
+                    current.index()
+                ),
+            });
+        }
+        leaf_to_root.push(ResolvedObjectNode {
+            object_ref: current,
+            name,
+        });
+
+        let Some(outer) = checked_package_object_ref(package, export_index, outer_index)? else {
+            let path = build_class_path(package, export_index, &leaf_to_root)?;
+            let local_generated = class_is_local_export
+                && leaf_to_root
+                    .first()
+                    .is_some_and(|node| node.name.ends_with("_C"));
+            return Ok(ResolvedExportClass {
+                path,
+                local_generated,
+            });
+        };
+        current = outer;
+    }
+
+    Err(EnvelopeError::ClassOuterDepthExceeded {
+        export_index,
+        limit: MAX_CLASS_OUTER_DEPTH,
+    })
+}
+
+fn checked_package_object_ref(
+    package: &FLegacyPackageHeader,
+    export_index: usize,
+    package_index: FPackageIndex,
+) -> Result<Option<PackageObjectRef>, EnvelopeError> {
+    let raw = i64::from(package_index.index);
+    let (kind, index, count) = if raw > 0 {
+        (
+            "export",
+            usize::try_from(raw - 1).map_err(|_| EnvelopeError::RangeArithmetic)?,
+            package.exports.len(),
+        )
+    } else if raw < 0 {
+        // Work in i64 so even an attacker-controlled i32::MIN is ordinary
+        // bounded input. retoc's `to_import_index` asserts and negates i32.
+        (
+            "import",
+            usize::try_from(-raw - 1).map_err(|_| EnvelopeError::RangeArithmetic)?,
+            package.imports.len(),
+        )
+    } else {
+        return Ok(None);
+    };
+
+    if index >= count {
+        return Err(EnvelopeError::ClassObjectOutOfBounds {
+            export_index,
+            referenced_kind: kind,
+            referenced_index: index,
+            object_count: count,
+        });
+    }
+    Ok(Some(if raw > 0 {
+        PackageObjectRef::Export(index)
+    } else {
+        PackageObjectRef::Import(index)
+    }))
+}
+
+fn build_class_path(
+    package: &FLegacyPackageHeader,
+    export_index: usize,
+    leaf_to_root: &[ResolvedObjectNode],
+) -> Result<String, EnvelopeError> {
+    let root = leaf_to_root
+        .last()
+        .ok_or_else(|| EnvelopeError::InvalidClassPath {
+            export_index,
+            reason: "empty outer chain".to_owned(),
+        })?;
+    let mut object_names: Vec<&str> = leaf_to_root
+        .iter()
+        .rev()
+        .map(|node| node.name.as_str())
+        .collect();
+
+    let module = match root.object_ref {
+        PackageObjectRef::Import(_) => {
+            if object_names.len() < 2 || !root.name.starts_with('/') {
+                return Err(EnvelopeError::InvalidClassPath {
+                    export_index,
+                    reason: format!(
+                        "import outer root {:?} does not identify a package plus class",
+                        root.name
+                    ),
+                });
+            }
+            object_names.remove(0)
+        }
+        PackageObjectRef::Export(_) => {
+            if package.summary.package_name.is_empty() {
+                return Err(EnvelopeError::InvalidClassPath {
+                    export_index,
+                    reason: "local class has an empty package name".to_owned(),
+                });
+            }
+            package.summary.package_name.as_str()
+        }
+    };
+
+    Ok(format!("{module}.{}", object_names.join(".")))
+}
+
 #[derive(Debug, Error)]
 pub enum EnvelopeError {
     #[error("retoc panicked while parsing the legacy package header: {0}")]
@@ -356,6 +609,38 @@ pub enum EnvelopeError {
         export_index: usize,
         export_count: usize,
     },
+    #[error("export {export_index} has a null class reference")]
+    NullExportClass { export_index: usize },
+    #[error(
+        "export {export_index} class outer chain references {referenced_kind} {referenced_index}, but that map has only {object_count} entries"
+    )]
+    ClassObjectOutOfBounds {
+        export_index: usize,
+        referenced_kind: &'static str,
+        referenced_index: usize,
+        object_count: usize,
+    },
+    #[error(
+        "export {export_index} class outer chain cycles at {referenced_kind} {referenced_index}"
+    )]
+    ClassOuterCycle {
+        export_index: usize,
+        referenced_kind: &'static str,
+        referenced_index: usize,
+    },
+    #[error("export {export_index} class outer chain exceeds the {limit}-object safety limit")]
+    ClassOuterDepthExceeded { export_index: usize, limit: usize },
+    #[error(
+        "export {export_index} class outer chain {referenced_kind} {referenced_index} has an invalid object name: {message}"
+    )]
+    ClassObjectName {
+        export_index: usize,
+        referenced_kind: &'static str,
+        referenced_index: usize,
+        message: String,
+    },
+    #[error("export {export_index} class path is invalid: {reason}")]
+    InvalidClassPath { export_index: usize, reason: String },
     #[error("decoded prefix length {consumed} exceeds export length {export_length}")]
     DecodedPrefixOutOfBounds {
         consumed: usize,
@@ -382,7 +667,7 @@ fn panic_message(panic: Box<dyn Any + Send>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use retoc::legacy_asset::FObjectExport;
+    use retoc::legacy_asset::{FMinimalName, FObjectExport, FObjectImport};
     use retoc::logging::Log;
 
     fn bool_slot(schema_index: usize, name: &str) -> PropertySlot {
@@ -411,6 +696,14 @@ mod tests {
         exports: &[(&str, &[u8], i64)],
         package_flags: u32,
     ) -> PackageCarrier {
+        package_with_exports_configured(exports, package_flags, |_| {})
+    }
+
+    fn package_with_exports_configured(
+        exports: &[(&str, &[u8], i64)],
+        package_flags: u32,
+        configure: impl FnOnce(&mut FLegacyPackageHeader),
+    ) -> PackageCarrier {
         let mut package = FLegacyPackageHeader::default();
         package.summary.versioning_info.package_file_version =
             EngineVersion::UE5_4.package_file_version();
@@ -418,10 +711,13 @@ mod tests {
         package.summary.package_name = "/Game/EnvelopeFixture".to_owned();
         package.summary.package_flags = package_flags;
 
+        let class_index = add_imported_class(&mut package, "/Script/Test", "Fixture");
+
         let mut uexp_data = Vec::new();
         for (name, bytes, relative_offset) in exports {
             let object_name = package.name_map.store(name);
             package.exports.push(FObjectExport {
+                class_index,
                 object_name,
                 serial_offset: *relative_offset,
                 serial_size: bytes.len() as i64,
@@ -433,6 +729,7 @@ mod tests {
             }
             uexp_data[offset..offset + bytes.len()].copy_from_slice(bytes);
         }
+        configure(&mut package);
 
         let mut uasset = Cursor::new(Vec::new());
         package
@@ -445,6 +742,81 @@ mod tests {
             crate::PackageLimits::default(),
         )
         .unwrap()
+    }
+
+    fn add_imported_class(
+        package: &mut FLegacyPackageHeader,
+        module: &str,
+        class: &str,
+    ) -> FPackageIndex {
+        let core_uobject = package.name_map.store("/Script/CoreUObject");
+        let package_class = package.name_map.store("Package");
+        let class_class = package.name_map.store("Class");
+        let module_name = package.name_map.store(module);
+        let class_name = package.name_map.store(class);
+
+        let module_index = package.imports.len();
+        package.imports.push(FObjectImport {
+            class_package: core_uobject,
+            class_name: package_class,
+            object_name: module_name,
+            ..FObjectImport::default()
+        });
+        let class_index = package.imports.len();
+        package.imports.push(FObjectImport {
+            class_package: core_uobject,
+            class_name: class_class,
+            outer_index: FPackageIndex::create_import(module_index as u32),
+            object_name: class_name,
+            ..FObjectImport::default()
+        });
+        FPackageIndex::create_import(class_index as u32)
+    }
+
+    fn schema_db(entries: &[(&str, &str, usmap::FlagsType)]) -> SchemaDb {
+        let schemas = entries
+            .iter()
+            .map(|(name, _, _)| usmap::Struct {
+                name: (*name).to_owned(),
+                super_struct: None,
+                properties: Vec::new(),
+            })
+            .collect();
+        let modules = entries
+            .iter()
+            .map(|(_, module, _)| (*module).to_owned())
+            .collect();
+        let flags = entries
+            .iter()
+            .map(|(_, _, kind)| usmap::StructFlags {
+                type_: *kind,
+                value: 0,
+                prop_flags: Vec::new(),
+            })
+            .collect();
+        SchemaDb::from_parsed(usmap::Usmap {
+            enums: Vec::new(),
+            structs: schemas,
+            cext: None,
+            ppth: Some(usmap::ExtPpth {
+                version: 0,
+                enums: Vec::new(),
+                structs: modules,
+            }),
+            eatr: Some(usmap::ExtEatr {
+                version: 0,
+                enum_flags: Vec::new(),
+                struct_flags: flags,
+            }),
+            envp: None,
+        })
+        .unwrap()
+    }
+
+    fn cooked_flags() -> u32 {
+        EPackageFlags::Cooked as u32
+            | EPackageFlags::FilterEditorOnly as u32
+            | EPackageFlags::UsesUnversionedProperties as u32
     }
 
     #[test]
@@ -465,6 +837,8 @@ mod tests {
             [ExportBoundary {
                 export_index: 0,
                 object_name: "Asset".to_owned(),
+                class_path: "/Script/Test.Fixture".to_owned(),
+                local_generated_class: false,
                 component: PackageComponent::Uexp,
                 offset: 0,
                 length: export.len(),
@@ -485,6 +859,300 @@ mod tests {
                 .unwrap(),
             export[..8]
         );
+    }
+
+    #[test]
+    fn binds_native_export_class_to_its_exact_qualified_schema() {
+        let bytes = [0x00, 0x01];
+        let carrier =
+            package_with_exports_configured(&[("Asset", &bytes, 0)], cooked_flags(), |package| {
+                package.imports.clear();
+                package.exports[0].class_index =
+                    add_imported_class(package, "/Script/G1R", "PhysicMaterialsColor");
+            });
+        let package = LegacyPackageEnvelope::parse_g1r_ue5_4(&carrier).unwrap();
+        let boundary = &package.exports()[0];
+        assert_eq!(boundary.class_path(), "/Script/G1R.PhysicMaterialsColor");
+
+        // A same-named foreign class proves the package map supplied the
+        // module qualification instead of relying on ambiguous short names.
+        let schemas = schema_db(&[
+            (
+                "PhysicMaterialsColor",
+                "/Script/Other",
+                usmap::FlagsType::Class,
+            ),
+            (
+                "PhysicMaterialsColor",
+                "/Script/G1R",
+                usmap::FlagsType::Class,
+            ),
+        ]);
+        let schema_id = boundary.resolve_class_schema(&schemas).unwrap();
+        assert_eq!(
+            schemas.schema(schema_id).unwrap().qualified_name(),
+            "/Script/G1R.PhysicMaterialsColor"
+        );
+    }
+
+    #[test]
+    fn local_generated_class_requires_its_exact_c_schema_without_parent_fallback() {
+        let asset = [0x00, 0x01];
+        let generated_class = [0x00, 0x01];
+        let carrier = package_with_exports_configured(
+            &[("Asset", &asset, 0), ("BP_Fixture_C", &generated_class, 2)],
+            cooked_flags(),
+            |package| {
+                package.exports[0].class_index = FPackageIndex::create_export(1);
+            },
+        );
+        let package = LegacyPackageEnvelope::parse_g1r_ue5_4(&carrier).unwrap();
+        let boundary = &package.exports()[0];
+        assert_eq!(boundary.class_path(), "/Game/EnvelopeFixture.BP_Fixture_C");
+
+        let parent_only = schema_db(&[(
+            "PrimaryDataAsset",
+            "/Script/Engine",
+            usmap::FlagsType::Class,
+        )]);
+        assert_eq!(
+            boundary.resolve_class_schema(&parent_only),
+            Err(ExportSchemaError::LocalGeneratedClassSchemaMissing {
+                export_index: 0,
+                class_path: "/Game/EnvelopeFixture.BP_Fixture_C".to_owned(),
+            })
+        );
+
+        let exact = schema_db(&[(
+            "BP_Fixture_C",
+            "/Game/EnvelopeFixture",
+            usmap::FlagsType::Class,
+        )]);
+        assert_eq!(boundary.resolve_class_schema(&exact), Ok(0));
+    }
+
+    #[test]
+    fn reports_missing_ambiguous_and_non_class_usmap_bindings() {
+        let bytes = [0x00, 0x01];
+        let carrier = package_with_exports(&[("Asset", &bytes, 0)]);
+        let package = LegacyPackageEnvelope::parse_g1r_ue5_4(&carrier).unwrap();
+        let boundary = &package.exports()[0];
+
+        let missing = schema_db(&[]);
+        assert!(matches!(
+            boundary.resolve_class_schema(&missing),
+            Err(ExportSchemaError::Schema {
+                source: SchemaError::SchemaNotFound { .. },
+                ..
+            })
+        ));
+
+        let ambiguous = schema_db(&[
+            ("Fixture", "/Script/Test", usmap::FlagsType::Class),
+            ("Fixture", "/Script/Test", usmap::FlagsType::Class),
+        ]);
+        assert!(matches!(
+            boundary.resolve_class_schema(&ambiguous),
+            Err(ExportSchemaError::Schema {
+                source: SchemaError::SchemaAmbiguous { .. },
+                ..
+            })
+        ));
+
+        let not_a_class = schema_db(&[("Fixture", "/Script/Test", usmap::FlagsType::Struct)]);
+        assert!(matches!(
+            boundary.resolve_class_schema(&not_a_class),
+            Err(ExportSchemaError::Schema {
+                source: SchemaError::NotAClass(_),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn imported_generated_class_also_refuses_a_primary_dataasset_fallback() {
+        let bytes = [0x00, 0x01];
+        let carrier =
+            package_with_exports_configured(&[("Asset", &bytes, 0)], cooked_flags(), |package| {
+                package.imports.clear();
+                package.exports[0].class_index = add_imported_class(
+                    package,
+                    "/Game/Blueprints/BP_ImportedFixture",
+                    "BP_ImportedFixture_C",
+                );
+            });
+        let package = LegacyPackageEnvelope::parse_g1r_ue5_4(&carrier).unwrap();
+        let boundary = &package.exports()[0];
+        assert_eq!(
+            boundary.class_path(),
+            "/Game/Blueprints/BP_ImportedFixture.BP_ImportedFixture_C"
+        );
+
+        let parent_only = schema_db(&[(
+            "PrimaryDataAsset",
+            "/Script/Engine",
+            usmap::FlagsType::Class,
+        )]);
+        assert!(matches!(
+            boundary.resolve_class_schema(&parent_only),
+            Err(ExportSchemaError::Schema {
+                source: SchemaError::SchemaNotFound { .. },
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn malformed_class_names_and_import_roots_are_typed_errors() {
+        let bytes = [0x00, 0x01];
+        let bad_name =
+            package_with_exports_configured(&[("Asset", &bytes, 0)], cooked_flags(), |package| {
+                let class_import = package.exports[0].class_index;
+                let class_index = usize::try_from(-i64::from(class_import.index) - 1).unwrap();
+                package.imports[class_index].object_name = FMinimalName {
+                    index: i32::MAX,
+                    number: 0,
+                };
+            });
+        assert!(matches!(
+            LegacyPackageEnvelope::parse_g1r_ue5_4(&bad_name),
+            Err(EnvelopeError::ClassObjectName {
+                export_index: 0,
+                referenced_kind: "import",
+                ..
+            })
+        ));
+
+        let bad_root =
+            package_with_exports_configured(&[("Asset", &bytes, 0)], cooked_flags(), |package| {
+                let invalid_root = package.name_map.store("Not/A/PackagePath");
+                package.imports[0].object_name = invalid_root;
+            });
+        assert!(matches!(
+            LegacyPackageEnvelope::parse_g1r_ue5_4(&bad_root),
+            Err(EnvelopeError::InvalidClassPath {
+                export_index: 0,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn rejects_null_and_both_kinds_of_out_of_bounds_class_references() {
+        let bytes = [0x00, 0x01];
+        let null =
+            package_with_exports_configured(&[("Asset", &bytes, 0)], cooked_flags(), |package| {
+                package.exports[0].class_index = FPackageIndex::create_null()
+            });
+        assert!(matches!(
+            LegacyPackageEnvelope::parse_g1r_ue5_4(&null),
+            Err(EnvelopeError::NullExportClass { export_index: 0 })
+        ));
+
+        let import_oob =
+            package_with_exports_configured(&[("Asset", &bytes, 0)], cooked_flags(), |package| {
+                package.exports[0].class_index = FPackageIndex { index: i32::MIN }
+            });
+        assert!(matches!(
+            LegacyPackageEnvelope::parse_g1r_ue5_4(&import_oob),
+            Err(EnvelopeError::ClassObjectOutOfBounds {
+                export_index: 0,
+                referenced_kind: "import",
+                ..
+            })
+        ));
+
+        let export_oob =
+            package_with_exports_configured(&[("Asset", &bytes, 0)], cooked_flags(), |package| {
+                package.exports[0].class_index = FPackageIndex { index: i32::MAX }
+            });
+        assert!(matches!(
+            LegacyPackageEnvelope::parse_g1r_ue5_4(&export_oob),
+            Err(EnvelopeError::ClassObjectOutOfBounds {
+                export_index: 0,
+                referenced_kind: "export",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn rejects_import_and_export_outer_cycles() {
+        let bytes = [0x00, 0x01];
+        let import_cycle =
+            package_with_exports_configured(&[("Asset", &bytes, 0)], cooked_flags(), |package| {
+                let first_name = package.name_map.store("First");
+                let second_name = package.name_map.store("Second");
+                package.imports = vec![
+                    FObjectImport {
+                        outer_index: FPackageIndex::create_import(1),
+                        object_name: first_name,
+                        ..FObjectImport::default()
+                    },
+                    FObjectImport {
+                        outer_index: FPackageIndex::create_import(0),
+                        object_name: second_name,
+                        ..FObjectImport::default()
+                    },
+                ];
+                package.exports[0].class_index = FPackageIndex::create_import(0);
+            });
+        assert!(matches!(
+            LegacyPackageEnvelope::parse_g1r_ue5_4(&import_cycle),
+            Err(EnvelopeError::ClassOuterCycle {
+                export_index: 0,
+                referenced_kind: "import",
+                ..
+            })
+        ));
+
+        let local_class = [0x00, 0x01];
+        let export_cycle = package_with_exports_configured(
+            &[("Asset", &bytes, 0), ("BP_Fixture_C", &local_class, 2)],
+            cooked_flags(),
+            |package| {
+                package.exports[0].class_index = FPackageIndex::create_export(1);
+                package.exports[1].outer_index = FPackageIndex::create_export(1);
+            },
+        );
+        assert!(matches!(
+            LegacyPackageEnvelope::parse_g1r_ue5_4(&export_cycle),
+            Err(EnvelopeError::ClassOuterCycle {
+                export_index: 0,
+                referenced_kind: "export",
+                referenced_index: 1,
+            })
+        ));
+    }
+
+    #[test]
+    fn rejects_class_outer_chains_beyond_the_fixed_depth_limit() {
+        let bytes = [0x00, 0x01];
+        let carrier =
+            package_with_exports_configured(&[("Asset", &bytes, 0)], cooked_flags(), |package| {
+                package.imports.clear();
+                for index in 0..=MAX_CLASS_OUTER_DEPTH {
+                    let object_name = package.name_map.store(&format!("Node{index}"));
+                    let outer_index = if index < MAX_CLASS_OUTER_DEPTH {
+                        FPackageIndex::create_import((index + 1) as u32)
+                    } else {
+                        FPackageIndex::create_null()
+                    };
+                    package.imports.push(FObjectImport {
+                        outer_index,
+                        object_name,
+                        ..FObjectImport::default()
+                    });
+                }
+                package.exports[0].class_index = FPackageIndex::create_import(0);
+            });
+        assert!(matches!(
+            LegacyPackageEnvelope::parse_g1r_ue5_4(&carrier),
+            Err(EnvelopeError::ClassOuterDepthExceeded {
+                export_index: 0,
+                limit: MAX_CLASS_OUTER_DEPTH,
+            })
+        ));
     }
 
     #[test]

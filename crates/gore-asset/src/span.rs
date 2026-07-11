@@ -1512,7 +1512,8 @@ mod tests {
             let package = LegacyPackageEnvelope::parse_g1r_ue5_4(&carrier).unwrap();
             let export = package.export(0).unwrap();
             assert_eq!(export.bytes().len(), export_end);
-            let schema_id = db.resolve_class(schema_name).unwrap();
+            assert_eq!(export.boundary().class_path(), schema_name);
+            let schema_id = export.boundary().resolve_class_schema(&db).unwrap();
             let block = walker.walk(export.bytes(), schema_id).unwrap();
             assert_eq!(block.header().len(), 6);
             assert_eq!(block.consumed(), property_end);

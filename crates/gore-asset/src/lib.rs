@@ -12,8 +12,8 @@ pub mod span;
 pub mod unversioned;
 
 pub use envelope::{
-    EnvelopeError, ExportBoundary, ExportEnvelope, ExportSegments, LegacyPackageEnvelope,
-    PrimitiveExportEnvelope,
+    EnvelopeError, ExportBoundary, ExportEnvelope, ExportSchemaError, ExportSegments,
+    LegacyPackageEnvelope, PrimitiveExportEnvelope,
 };
 pub use package::{
     ComponentDigest, PackageCarrier, PackageComponent, PackageError, PackageLimits, PackagePaths,
