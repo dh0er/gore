@@ -21,8 +21,15 @@ pub struct Instr {
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum DisasmError {
-    UnknownOpcode { offset_dw: usize, opcode: u8 },
-    Truncated { offset_dw: usize, need: usize, have: usize },
+    UnknownOpcode {
+        offset_dw: usize,
+        opcode: u8,
+    },
+    Truncated {
+        offset_dw: usize,
+        need: usize,
+        have: usize,
+    },
 }
 
 impl std::fmt::Display for DisasmError {
@@ -31,8 +38,15 @@ impl std::fmt::Display for DisasmError {
             DisasmError::UnknownOpcode { offset_dw, opcode } => {
                 write!(f, "unknown opcode {opcode} at dword {offset_dw}")
             }
-            DisasmError::Truncated { offset_dw, need, have } => {
-                write!(f, "truncated instruction at dword {offset_dw}: need {need} dwords, have {have}")
+            DisasmError::Truncated {
+                offset_dw,
+                need,
+                have,
+            } => {
+                write!(
+                    f,
+                    "truncated instruction at dword {offset_dw}: need {need} dwords, have {have}"
+                )
             }
         }
     }
@@ -47,7 +61,10 @@ pub fn disassemble(bytecode: &[i32]) -> Result<Vec<Instr>, DisasmError> {
         let opcode = (bytecode[i] as u32 & 0xFF) as u8;
         let op = OPCODES
             .get(opcode as usize)
-            .ok_or(DisasmError::UnknownOpcode { offset_dw: i, opcode })?;
+            .ok_or(DisasmError::UnknownOpcode {
+                offset_dw: i,
+                opcode,
+            })?;
         let size = op.size_dwords as usize;
         if size == 0 || i + size > bytecode.len() {
             return Err(DisasmError::Truncated {
@@ -105,7 +122,13 @@ pub fn disassemble(bytecode: &[i32]) -> Result<Vec<Instr>, DisasmError> {
                 dwords.push(g(2));
             }
         }
-        out.push(Instr { offset_dw: i, op, words, dwords, qwords });
+        out.push(Instr {
+            offset_dw: i,
+            op,
+            words,
+            dwords,
+            qwords,
+        });
         i += size;
     }
     Ok(out)

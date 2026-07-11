@@ -12,7 +12,11 @@ use thiserror::Error;
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum WireError {
     #[error("unexpected end of data at pos {pos}: needed {need} more bytes, have {have}")]
-    Eof { pos: usize, need: usize, have: usize },
+    Eof {
+        pos: usize,
+        need: usize,
+        have: usize,
+    },
     #[error("implausible length {len} at pos {pos} (field {field})")]
     BadLen {
         pos: usize,
@@ -152,11 +156,7 @@ impl<'a> Cursor<'a> {
     }
 
     /// Skip a `TArray<T>` whose element is a fixed `elem` bytes wide.
-    pub fn skip_tarray_fixed(
-        &mut self,
-        elem: usize,
-        field: &'static str,
-    ) -> Result<(), WireError> {
+    pub fn skip_tarray_fixed(&mut self, elem: usize, field: &'static str) -> Result<(), WireError> {
         let n = self.read_count(field)?;
         self.skip(n * elem)
     }

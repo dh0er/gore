@@ -1,7 +1,10 @@
 use gore_as::cache::disasm::disassemble;
 use gore_as::cache::walk_modules::collect_function_bytecodes;
 
-const SAMPLES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../work/reversing/gore-as/samples");
+const SAMPLES: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../work/reversing/gore-as/samples"
+);
 
 fn read_sample(name: &str) -> Option<Vec<u8>> {
     std::fs::read(format!("{SAMPLES}/{name}")).ok()
@@ -85,5 +88,8 @@ fn real_cache_functions_disassemble() {
         eprintln!("  ERR {e}");
     }
     // Expect the vast majority to disassemble; a perfect ISA gives 100%.
-    assert!(ok * 100 / total.max(1) >= 99, "clean rate too low: {ok}/{total}");
+    assert!(
+        ok * 100 / total.max(1) >= 99,
+        "clean rate too low: {ok}/{total}"
+    );
 }

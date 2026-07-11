@@ -217,7 +217,7 @@ fn read_function(c: &mut Cursor) -> Result<Func, WireError> {
     let bytecode = c.read_tarray_i32("ByteCode")?;
     c.skip_tarray_fixed(4, "ByteCodeReferences")?;
     c.skip(4)?; // VariableSpace
-    // ObjVariableTypes: TArray<int64 ref>; ObjVariablePos: TArray<int32>
+                // ObjVariableTypes: TArray<int64 ref>; ObjVariablePos: TArray<int32>
     let nobj = c.read_count("ObjVariableTypes")?;
     let mut obj_types = Vec::with_capacity(nobj);
     for _ in 0..nobj {
@@ -253,7 +253,16 @@ fn read_function(c: &mut Cursor) -> Result<Func, WireError> {
         });
     }
     let obj_locals = obj_pos.into_iter().zip(obj_types).collect();
-    Ok(Func { name, namespace, ret, params, bytecode, obj_locals, is_ufunction, traits })
+    Ok(Func {
+        name,
+        namespace,
+        ret,
+        params,
+        bytecode,
+        obj_locals,
+        is_ufunction,
+        traits,
+    })
 }
 
 fn read_property(c: &mut Cursor) -> Result<Field, WireError> {
@@ -278,7 +287,11 @@ fn read_property(c: &mut Cursor) -> Result<Field, WireError> {
         c.skip(4)?; // bInterp
         c.skip(4)?; // bAssetRegistrySearchable
     }
-    Ok(Field { name, ty, is_uproperty })
+    Ok(Field {
+        name,
+        ty,
+        is_uproperty,
+    })
 }
 
 fn read_class(c: &mut Cursor) -> Result<Class, WireError> {
@@ -321,7 +334,14 @@ fn read_class(c: &mut Cursor) -> Result<Class, WireError> {
         c.skip_tarray_sia("Class.MetaValues")?;
         c.read_sia()?; // ComposeOntoClassName
     }
-    Ok(Class { name, super_class, fields, methods, ctors, flags })
+    Ok(Class {
+        name,
+        super_class,
+        fields,
+        methods,
+        ctors,
+        flags,
+    })
 }
 
 fn read_enum(c: &mut Cursor) -> Result<EnumDef, WireError> {
@@ -397,5 +417,12 @@ fn read_module(c: &mut Cursor) -> Result<Module, WireError> {
     c.skip_tarray_sia("Module.DeclaredDelegates")?;
     let file = c.read_sia()?; // ScriptRelativeFilename
     c.skip_tarray_sia("Module.PostInitFunctions")?;
-    Ok(Module { name, file, functions, classes, enums, globals })
+    Ok(Module {
+        name,
+        file,
+        functions,
+        classes,
+        enums,
+        globals,
+    })
 }

@@ -138,11 +138,23 @@ pub fn parse_tail_tables(bytes: &[u8], start: usize) -> Result<TailTables, WireE
     let mut tables = Vec::with_capacity(N_TABLES);
     tables.push(read_i64_map(&mut c, "TypeReferences", read_type_reference)?);
     tables.push(read_id_ptr_map(&mut c, "TypeIdReferenceToPointer")?);
-    tables.push(read_i64_map(&mut c, "FunctionReferences", read_function_reference)?);
+    tables.push(read_i64_map(
+        &mut c,
+        "FunctionReferences",
+        read_function_reference,
+    )?);
     tables.push(read_id_ptr_map(&mut c, "FunctionIdReferenceToPointer")?);
-    tables.push(read_i64_map(&mut c, "GlobalReferences", read_global_reference)?);
+    tables.push(read_i64_map(
+        &mut c,
+        "GlobalReferences",
+        read_global_reference,
+    )?);
     tables.push(read_static_names(&mut c)?);
-    tables.push(read_i64_map(&mut c, "PropertyReferences", read_property_reference)?);
+    tables.push(read_i64_map(
+        &mut c,
+        "PropertyReferences",
+        read_property_reference,
+    )?);
     Ok(TailTables {
         start,
         end: c.pos(),

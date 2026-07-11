@@ -82,8 +82,11 @@ pub fn build(instrs: &[Instr]) -> Cfg {
         return Cfg { blocks: Vec::new() };
     }
     // index instrs by their dword offset
-    let off_to_idx: std::collections::HashMap<usize, usize> =
-        instrs.iter().enumerate().map(|(i, x)| (x.offset_dw, i)).collect();
+    let off_to_idx: std::collections::HashMap<usize, usize> = instrs
+        .iter()
+        .enumerate()
+        .map(|(i, x)| (x.offset_dw, i))
+        .collect();
 
     // 1) leaders
     let mut leaders: BTreeSet<usize> = BTreeSet::new();
@@ -137,7 +140,10 @@ pub fn build(instrs: &[Instr]) -> Cfg {
             // (in selector-value order). Unverified shape: none (prior behavior — the
             // structurer's marker/stub path still catches the uncovered transfer).
             if let Some(rows) = jmpp_rows(instrs, hi - 1) {
-                succs = rows.into_iter().filter(|r| off_to_idx.contains_key(r)).collect();
+                succs = rows
+                    .into_iter()
+                    .filter(|r| off_to_idx.contains_key(r))
+                    .collect();
             }
         } else if is_return(n) {
             // none
@@ -155,7 +161,12 @@ pub fn build(instrs: &[Instr]) -> Cfg {
         } else if let Some(&fall) = leader_vec.get(li + 1) {
             succs.push(fall);
         }
-        blocks.push(BasicBlock { start_dw: start, instr_lo: lo, instr_hi: hi, succs });
+        blocks.push(BasicBlock {
+            start_dw: start,
+            instr_lo: lo,
+            instr_hi: hi,
+            succs,
+        });
     }
     Cfg { blocks }
 }

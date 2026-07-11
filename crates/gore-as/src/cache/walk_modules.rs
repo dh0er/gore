@@ -25,7 +25,7 @@ pub fn module_region_end(bytes: &[u8]) -> Result<usize, WireError> {
         });
     }
     let mut c = Cursor::at(bytes, CacheHeader::SIZE); // skip FGuid+magic+count (0x18)
-    // Re-read the count from its known offset (0x14) rather than trusting header parse.
+                                                      // Re-read the count from its known offset (0x14) rather than trusting header parse.
     let count = module_count(bytes) as usize;
     for _ in 0..count {
         // Modules is TMap<FString key, FAngelscriptPrecompiledModule value>.
@@ -373,7 +373,7 @@ fn read_global(c: &mut Cursor) -> Result<(), WireError> {
 
 fn read_function_import(c: &mut Cursor) -> Result<(), WireError> {
     c.read_sia()?; // ImportedFromModule
-    // FAngelscriptPrecompiledFunctionSignature
+                   // FAngelscriptPrecompiledFunctionSignature
     c.read_sia()?; // Name
     c.read_sia()?; // Namespace
     c.skip_tarray_fixed(DATA_TYPE_SIZE, "Import.ParameterTypes")?;

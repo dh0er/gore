@@ -50,9 +50,7 @@ fn callee_name<'a>(ins: &Instr, side: &'a Side) -> Option<&'a str> {
         "CALLSYS" | "FuncPtr" | "Thiscall1" => {
             side.refs.func_by_ptr(instr_first_qword(ins)? as i64)
         }
-        "CALL" | "CALLBND" | "CALLINTF" => {
-            side.refs.func_by_id(*ins.dwords.first()? as i32)
-        }
+        "CALL" | "CALLBND" | "CALLINTF" => side.refs.func_by_id(*ins.dwords.first()? as i32),
         _ => None,
     }
 }
@@ -75,7 +73,9 @@ fn feeds_matching_opcast(instrs: &[Instr], pos: usize, side: &Side) -> bool {
     // Window kept tight (the opCast is 1–3 ops after the TYPEID in every observed case).
     const WINDOW: usize = 4;
     for k in 1..=WINDOW {
-        let Some(nx) = instrs.get(pos + k) else { return false };
+        let Some(nx) = instrs.get(pos + k) else {
+            return false;
+        };
         let is_call = matches!(nx.op.name, "CALLSYS" | "CALL" | "CALLBND" | "CALLINTF");
         if is_call {
             // The FIRST call after the TYPEID must be the opCast that consumes it.
@@ -94,7 +94,10 @@ enum Operand {
     /// A plain word arg that is neither a slot nor a ref (e.g. RET pop-size, GETOBJ offset).
     Word(u16),
     /// An integer immediate compared by decoded value (N4). `width` disambiguates 1/2/4/8-byte.
-    IntConst { value: i64, width: u8 },
+    IntConst {
+        value: i64,
+        width: u8,
+    },
     /// A float immediate compared bit-exactly by decoded f64 (N4, floatIsFloat64 build).
     FloatConst(u64),
     /// A jump target as an instruction index into the (normalized) list (N3). `None` = a target
@@ -186,19 +189,18 @@ fn read_qw(code: &[i32], dw: usize) -> u64 {
 
 /// Build the offset->instruction-index map for N3 jump canonicalization.
 fn offset_index_map(instrs: &[Instr]) -> HashMap<usize, usize> {
-    instrs.iter().enumerate().map(|(i, ins)| (ins.offset_dw, i)).collect()
+    instrs
+        .iter()
+        .enumerate()
+        .map(|(i, ins)| (ins.offset_dw, i))
+        .collect()
 }
 
 /// Normalize one function's disassembled instructions into `NormInstr`s.
 ///
 /// This applies N1 (refs->identity), N3 (jumps->index), N4 (consts by value; STR/__STATIC_NAME
 /// by string). N2 (slot renumber) is applied afterwards on the whole list if enabled.
-fn normalize(
-    code: &[i32],
-    instrs: &[Instr],
-    side: &Side,
-    opts: &NormOpts,
-) -> Vec<NormInstr> {
+fn normalize(code: &[i32], instrs: &[Instr], side: &Side, opts: &NormOpts) -> Vec<NormInstr> {
     let off_to_idx = offset_index_map(instrs);
     let mut out = Vec::with_capacity(instrs.len());
 
@@ -219,7 +221,8 @@ fn normalize(
                         if base + 1 >= code.len() {
                             continue;
                         }
-                        side.ident.resolve_ptr(site.kind, read_qw(code, base) as i64)
+                        side.ident
+                            .resolve_ptr(site.kind, read_qw(code, base) as i64)
                     }
                     RefKind::FuncId | RefKind::TypeId => {
                         side.ident.resolve_id(site.kind, code[base])
@@ -229,7 +232,8 @@ fn normalize(
             }
         }
 
-        let operands = normalize_operands(name, ins, &ref_at_dw, &off_to_idx, side, opts, instrs, pos);
+        let operands =
+            normalize_operands(name, ins, &ref_at_dw, &off_to_idx, side, opts, instrs, pos);
         out.push(NormInstr { op: name, operands });
     }
 
@@ -286,7 +290,8 @@ fn normalize_operands(
         // N3 jump target?
         if opts.n3_jumps && is_jump_op(name) {
             // Target byte(dword) offset is relative to the END of the jump instruction.
-            let target_off = (ins.offset_dw as i64 + ins.op.size_dwords as i64 + raw as i32 as i64) as usize;
+            let target_off =
+                (ins.offset_dw as i64 + ins.op.size_dwords as i64 + raw as i32 as i64) as usize;
             out.push(Operand::JumpIndex(off_to_idx.get(&target_off).copied()));
             continue;
         }
@@ -296,14 +301,20 @@ fn normalize_operands(
         // and compare by string (mirror the `STR` handling below). The tight next-instruction gate
         // keeps a real integer literal (not feeding __STATIC_NAME) comparing by value.
         if opts.n4_consts && name == "PshC4" && next_is_static_name(instrs, pos, side) {
-            let s = side.refs.static_name(raw as i32 as i64).map(|s| s.to_string());
+            let s = side
+                .refs
+                .static_name(raw as i32 as i64)
+                .map(|s| s.to_string());
             out.push(Operand::StaticName(s));
             continue;
         }
         // N4 constant?
         match const_dword_role(name, dop) {
             DwordRole::Int(width) => {
-                out.push(Operand::IntConst { value: raw as i32 as i64, width });
+                out.push(Operand::IntConst {
+                    value: raw as i32 as i64,
+                    width,
+                });
             }
             DwordRole::None => out.push(Operand::RawDw(raw)),
         }
@@ -348,14 +359,14 @@ fn push_word_operands(name: &str, ins: &Instr, out: &mut Vec<Operand>) {
     use BcType::*;
     // (is_slot?) per word position, in the order `disasm` collected them.
     let roles: &[bool] = match ins.op.fmt {
-        W_ARG => &[false],            // plain word (e.g. RET size, ChkNullS var-is-actually-slot)
-        wW_ARG | rW_ARG => &[true],   // one slot
+        W_ARG => &[false], // plain word (e.g. RET size, ChkNullS var-is-actually-slot)
+        wW_ARG | rW_ARG => &[true], // one slot
         wW_rW_ARG | rW_rW_ARG => &[true, true],
         wW_W_ARG => &[true, false],
         W_rW_ARG => &[false, true],
         wW_rW_rW_ARG => &[true, true, true],
         rW_DW_ARG | wW_DW_ARG | rW_QW_ARG | wW_QW_ARG => &[true], // leading slot, then DW/QW
-        W_DW_ARG => &[false],        // leading plain word (ADDSi/LoadThisR: word=offset), then DW
+        W_DW_ARG => &[false], // leading plain word (ADDSi/LoadThisR: word=offset), then DW
         wW_rW_DW_ARG | rW_W_DW_ARG => &[true, true],
         rW_DW_DW_ARG => &[true],
         // no word operands:
@@ -576,7 +587,11 @@ fn is_benign_only_op(name: &str) -> bool {
 /// not force SEMANTIC). Returns the filtered list; the caller notes it fired only if it changed
 /// the length.
 fn strip_jitentry(instrs: &[NormInstr]) -> Vec<NormInstr> {
-    instrs.iter().filter(|ni| !is_benign_only_op(ni.op)).cloned().collect()
+    instrs
+        .iter()
+        .filter(|ni| !is_benign_only_op(ni.op))
+        .cloned()
+        .collect()
 }
 
 // =================================================================================================
@@ -594,7 +609,10 @@ fn strip_jitentry(instrs: &[NormInstr]) -> Vec<NormInstr> {
 /// func-ptr drifts across builds; the resolved owner+method does not — mirrors GAP-B/GAP-C keying
 /// on `callee_name`). Returns `None` for a non-call op or an unresolved callee.
 fn callsys_owner_method(ni: &NormInstr) -> Option<(&str, &str)> {
-    if !matches!(ni.op, "CALLSYS" | "CALL" | "CALLBND" | "CALLINTF" | "Thiscall1" | "FuncPtr") {
+    if !matches!(
+        ni.op,
+        "CALLSYS" | "CALL" | "CALLBND" | "CALLINTF" | "Thiscall1" | "FuncPtr"
+    ) {
         return None;
     }
     ni.operands.iter().find_map(|o| match o {
@@ -786,7 +804,9 @@ fn slot_of(ni: &NormInstr) -> Option<i32> {
 /// a matching guard, the re-guard is NOT dominated (clause 3 fails) → return false (leave SEMANTIC).
 fn dominating_guard_exists(v: &[NormInstr], pos: usize, src: &ReguardSrc) -> bool {
     // The slot whose non-null-ness must be preserved (for the intervening-write scan).
-    let ReguardSrc::Push(Operand::Slot(guard_slot)) = src else { return false };
+    let ReguardSrc::Push(Operand::Slot(guard_slot)) = src else {
+        return false;
+    };
     let guard_slot = *guard_slot;
 
     let mut j = pos;
@@ -887,8 +907,16 @@ fn classify(
     // #2 (scope strip) BEFORE #1 (re-guard fold) per §B.3 (disjoint, but scope-first keeps the
     // re-guard scanner's contiguous windows intact). Each only ever SHORTENS the vanilla side, so
     // neither can pad a match into existence.
-    let scope_fired = if opts.n5_scope { strip_benign_scopes(&mut v_cmp) > 0 } else { false };
-    let reguard_fired = if opts.n6_reguard { fold_dominated_reguards(&mut v_cmp) > 0 } else { false };
+    let scope_fired = if opts.n5_scope {
+        strip_benign_scopes(&mut v_cmp) > 0
+    } else {
+        false
+    };
+    let reguard_fired = if opts.n6_reguard {
+        fold_dominated_reguards(&mut v_cmp) > 0
+    } else {
+        false
+    };
 
     let norm_identical = !n2_slot_mismatch
         && v_cmp.len() == r_cmp.len()
@@ -985,9 +1013,12 @@ fn semantic_hint(
         let near = |list: &[NormInstr], idx: usize| -> bool {
             let lo = idx.saturating_sub(2);
             let hi = (idx + 2).min(list.len());
-            list[lo..hi]
-                .iter()
-                .any(|n| matches!(n.op, "CHKREF" | "ChkNullV" | "ChkNullS" | "CmpPtrNull" | "ChkRefS"))
+            list[lo..hi].iter().any(|n| {
+                matches!(
+                    n.op,
+                    "CHKREF" | "ChkNullV" | "ChkNullS" | "CmpPtrNull" | "ChkRefS"
+                )
+            })
         };
         if near(v, i) != near(r, i.min(r.len())) {
             return "extra/missing null-guard (CHKREF/ChkNullV/CmpPtrNull) near divergence — \
@@ -999,8 +1030,21 @@ fn semantic_hint(
         let is_conv = |n: &&NormInstr| {
             matches!(
                 n.op,
-                "sbTOi" | "swTOi" | "ubTOi" | "uwTOi" | "iTOb" | "iTOw" | "iTOf" | "fTOi"
-                    | "dTOf" | "fTOd" | "iTOd" | "dTOi" | "i64TOi" | "iTOi64" | "Cast"
+                "sbTOi"
+                    | "swTOi"
+                    | "ubTOi"
+                    | "uwTOi"
+                    | "iTOb"
+                    | "iTOw"
+                    | "iTOf"
+                    | "fTOi"
+                    | "dTOf"
+                    | "fTOd"
+                    | "iTOd"
+                    | "dTOi"
+                    | "i64TOi"
+                    | "iTOi64"
+                    | "Cast"
             )
         };
         let vc = v.iter().filter(is_conv).count();
@@ -1019,12 +1063,7 @@ fn semantic_hint(
 }
 
 /// Render both sides' ±context window around the first divergence, operands as resolved names.
-fn render_window(
-    v: &[NormInstr],
-    r: &[NormInstr],
-    first: Option<usize>,
-    context: usize,
-) -> String {
+fn render_window(v: &[NormInstr], r: &[NormInstr], first: Option<usize>, context: usize) -> String {
     let center = first.unwrap_or(0);
     let lo = center.saturating_sub(context);
     let mut s = String::new();
@@ -1039,7 +1078,11 @@ fn render_side(s: &mut String, list: &[NormInstr], lo: usize, hi: usize) {
     let hi = hi.min(list.len());
     for (i, ni) in list.iter().enumerate().take(hi).skip(lo) {
         let ops: Vec<String> = ni.operands.iter().map(render_operand).collect();
-        s.push_str(&format!("      [{i:04}] {:<14} {}\n", ni.op, ops.join(", ")));
+        s.push_str(&format!(
+            "      [{i:04}] {:<14} {}\n",
+            ni.op,
+            ops.join(", ")
+        ));
     }
     if lo >= list.len() {
         s.push_str("      <past end>\n");
@@ -1087,7 +1130,8 @@ fn which_normalizers_fired(
                     // A ref matched after N1. Did the RAW operand differ? If the raw dwords/qwords
                     // of these instructions differ, N1 was responsible.
                     if opts.n1_refs
-                        && (v_raw[i].qwords != r_raw[i].qwords || raw_id_differs(&v_raw[i], &r_raw[i]))
+                        && (v_raw[i].qwords != r_raw[i].qwords
+                            || raw_id_differs(&v_raw[i], &r_raw[i]))
                     {
                         fired.n1_refs = true;
                     }
@@ -1227,15 +1271,24 @@ pub fn run(
 
     // Substring filters (module = a substring of the display prefix; func = substring of display).
     let want_v = |fc: &super::walk_modules::FuncCode| -> bool {
-        filters.module.as_ref().map_or(true, |m| fc.func.contains(m.as_str()))
-            && filters.func.as_ref().map_or(true, |f| fc.func.contains(f.as_str()))
+        filters
+            .module
+            .as_ref()
+            .map_or(true, |m| fc.func.contains(m.as_str()))
+            && filters
+                .func
+                .as_ref()
+                .map_or(true, |f| fc.func.contains(f.as_str()))
     };
 
     // Index regen functions by alignment key (dup keys -> ordered Vec, consumed positionally so
     // N overloads on each side pair up 1:1).
     let mut r_index: HashMap<String, Vec<&super::walk_modules::FuncCode>> = HashMap::new();
     for fc in &r_fns {
-        r_index.entry(func_key(fc, &r_side.refs)).or_default().push(fc);
+        r_index
+            .entry(func_key(fc, &r_side.refs))
+            .or_default()
+            .push(fc);
     }
     let mut r_used: HashMap<String, usize> = HashMap::new();
 
@@ -1251,7 +1304,15 @@ pub fn run(
         });
         match rfc {
             Some(rfc) => {
-                let d = diff_one(&vfc.func, &vfc.bytecode, &rfc.bytecode, &v_side, &r_side, opts, context);
+                let d = diff_one(
+                    &vfc.func,
+                    &vfc.bytecode,
+                    &rfc.bytecode,
+                    &v_side,
+                    &r_side,
+                    opts,
+                    context,
+                );
                 report.diffs.push(d);
             }
             None => report.only_in_vanilla_funcs.push(vfc.func.clone()),
@@ -1301,7 +1362,15 @@ fn diff_one(
     };
     let v_norm = normalize(v_code, &v_raw, v_side, opts);
     let r_norm = normalize(r_code, &r_raw, r_side, opts);
-    classify(name.to_string(), &v_raw, &r_raw, &v_norm, &r_norm, opts, context)
+    classify(
+        name.to_string(),
+        &v_raw,
+        &r_raw,
+        &v_norm,
+        &r_norm,
+        opts,
+        context,
+    )
 }
 
 fn disasm_fail(name: &str, which: &str, err: String, v_ops: usize, r_ops: usize) -> FuncDiff {
@@ -1349,10 +1418,24 @@ mod tests {
     fn self_identity_richtest() {
         let b = sample_or_skip!("PrecompiledScript.richtest.Cache");
         let rep = run(&b, &b, &NormOpts::default(), &Filters::default(), 6).expect("run");
-        assert_eq!(rep.count(Verdict::Benign), 0, "self-diff must have 0 BENIGN");
-        assert_eq!(rep.count(Verdict::Semantic), 0, "self-diff must have 0 SEMANTIC");
-        assert!(rep.only_in_vanilla_funcs.is_empty(), "no dropped fns in self-diff");
-        assert!(rep.only_in_regen_funcs.is_empty(), "no added fns in self-diff");
+        assert_eq!(
+            rep.count(Verdict::Benign),
+            0,
+            "self-diff must have 0 BENIGN"
+        );
+        assert_eq!(
+            rep.count(Verdict::Semantic),
+            0,
+            "self-diff must have 0 SEMANTIC"
+        );
+        assert!(
+            rep.only_in_vanilla_funcs.is_empty(),
+            "no dropped fns in self-diff"
+        );
+        assert!(
+            rep.only_in_regen_funcs.is_empty(),
+            "no added fns in self-diff"
+        );
         assert!(!rep.diffs.is_empty(), "richtest has at least one function");
         assert_eq!(rep.count(Verdict::Identical), rep.diffs.len());
     }
@@ -1437,7 +1520,7 @@ mod tests {
         a.extend(dw_arg(11, 1)); // JMP @ dw2 size2 off1 -> dw5 = RET (index 3)
         a.extend(no_arg(18)); // TZ @ dw4
         a.push(10); // RET @ dw5
-        // B: PshC8 dw0..2 (3 dwords); JMP dw3..4; TZ dw5; RET dw6. off = 6 - (3+2) = 1.
+                    // B: PshC8 dw0..2 (3 dwords); JMP dw3..4; TZ dw5; RET dw6. off = 6 - (3+2) = 1.
         let mut b = Vec::new();
         b.extend(qw_arg(47, 7)); // PshC8 7 @ dw0 (3 dwords)
         b.extend(dw_arg(11, 1)); // JMP @ dw3 size2 off1 -> dw6 = RET (index 3)
@@ -1455,7 +1538,10 @@ mod tests {
         // origin (A off computed from dw2, B from dw3).
         assert_eq!(a_jmp.operands[0], Operand::JumpIndex(Some(3)));
         assert_eq!(b_jmp.operands[0], Operand::JumpIndex(Some(3)));
-        assert_eq!(a_jmp.operands, b_jmp.operands, "jump edge preserved across size shift");
+        assert_eq!(
+            a_jmp.operands, b_jmp.operands,
+            "jump edge preserved across size shift"
+        );
     }
 
     /// N3 guard: a jump whose target INDEX differs (branches to a structurally different
@@ -1475,7 +1561,10 @@ mod tests {
         b.push(10); // RET @ dw3
         let na = norm(&a, &side, &opts);
         let nb = norm(&b, &side, &opts);
-        assert_ne!(na[0].operands, nb[0].operands, "different jump target index must differ");
+        assert_ne!(
+            na[0].operands, nb[0].operands,
+            "different jump target index must differ"
+        );
     }
 
     /// N4: a 64-bit float constant compares by DECODED value (bit pattern). Same value => equal;
@@ -1490,7 +1579,10 @@ mod tests {
         assert_eq!(same_a[0].operands, same_b[0].operands);
         assert_eq!(same_a[0].operands[0], Operand::FloatConst(3.5f64.to_bits()));
         let diff = norm(&qw_arg(47, 4.5f64.to_bits()), &side, &opts);
-        assert_ne!(same_a[0].operands, diff[0].operands, "different float value must differ");
+        assert_ne!(
+            same_a[0].operands, diff[0].operands,
+            "different float value must differ"
+        );
     }
 
     /// N4: a 32-bit integer immediate (PshC4=2, DW_ARG) compares by decoded value.
@@ -1501,7 +1593,13 @@ mod tests {
         let a = norm(&dw_arg(2, 42), &side, &opts);
         let b = norm(&dw_arg(2, 42), &side, &opts);
         assert_eq!(a[0].operands, b[0].operands);
-        assert_eq!(a[0].operands[0], Operand::IntConst { value: 42, width: 4 });
+        assert_eq!(
+            a[0].operands[0],
+            Operand::IntConst {
+                value: 42,
+                width: 4
+            }
+        );
         let c = norm(&dw_arg(2, 43), &side, &opts);
         assert_ne!(a[0].operands, c[0].operands);
     }
@@ -1522,13 +1620,19 @@ mod tests {
         let off = NormOpts::default();
         let na = norm(&a, &side, &off);
         let nb = norm(&b, &side, &off);
-        assert_ne!(na[0].operands, nb[0].operands, "raw slots differ with N2 off");
+        assert_ne!(
+            na[0].operands, nb[0].operands,
+            "raw slots differ with N2 off"
+        );
 
         let mut on = NormOpts::default();
         on.n2_slots = true;
         let na = norm(&a, &side, &on);
         let nb = norm(&b, &side, &on);
-        assert_eq!(na[0].operands, nb[0].operands, "first-use order maps to same ordinal");
+        assert_eq!(
+            na[0].operands, nb[0].operands,
+            "first-use order maps to same ordinal"
+        );
         assert_eq!(na[1].operands, nb[1].operands);
         assert_eq!(na[0].operands[0], Operand::Slot(0));
         assert_eq!(na[1].operands[0], Operand::Slot(1));
@@ -1551,7 +1655,10 @@ mod tests {
         let n = norm(&code, &side, &opts);
         assert_eq!(
             n[0].operands[0],
-            Operand::IntConst { value: 4369, width: 4 },
+            Operand::IntConst {
+                value: 4369,
+                width: 4
+            },
             "PshC4 not feeding __STATIC_NAME must stay an integer literal"
         );
     }
@@ -1596,7 +1703,10 @@ mod tests {
     // KNOWN real bug STAYS semantic.
 
     fn real_pair() -> Option<(Vec<u8>, Vec<u8>)> {
-        let base = format!("{}/../../work/reversing/gore-as/samples", env!("CARGO_MANIFEST_DIR"));
+        let base = format!(
+            "{}/../../work/reversing/gore-as/samples",
+            env!("CARGO_MANIFEST_DIR")
+        );
         let v = std::fs::read(format!("{base}/cache_A.Cache")).ok()?;
         let r = std::fs::read(format!("{base}/regen_batch36.Cache")).ok()?;
         Some((v, r))
@@ -1607,9 +1717,15 @@ mod tests {
         // so a pure first-use slot renumber (a separate benign class) doesn't mask the gap flip.
         let mut opts = NormOpts::default();
         opts.n2_slots = true;
-        let filters = Filters { module: None, func: Some(func.to_string()) };
+        let filters = Filters {
+            module: None,
+            func: Some(func.to_string()),
+        };
         let rep = run(v, r, &opts, &filters, 3).expect("run");
-        rep.diffs.iter().map(|d| (d.name.clone(), d.verdict)).collect()
+        rep.diffs
+            .iter()
+            .map(|d| (d.name.clone(), d.verdict))
+            .collect()
     }
 
     /// GAP-A: the `GenericVoiclines::StaticClass` family (vanilla ns `G1R::GenericVoiceline`,
@@ -1645,9 +1761,14 @@ mod tests {
     fn gap_c_opcast_typeid_benign() {
         let Some((v, r)) = real_pair() else { return };
         let vs = verdict_of(&v, &r, "AIAgentConfig_Biter::Spawn");
-        assert!(vs.iter().any(|(n, _)| n.contains("Spawn")), "expected Spawn, got {vs:?}");
         assert!(
-            vs.iter().filter(|(n, _)| n.contains("AIAgentConfig_Biter::Spawn")).all(|(_, verd)| *verd != Verdict::Semantic),
+            vs.iter().any(|(n, _)| n.contains("Spawn")),
+            "expected Spawn, got {vs:?}"
+        );
+        assert!(
+            vs.iter()
+                .filter(|(n, _)| n.contains("AIAgentConfig_Biter::Spawn"))
+                .all(|(_, verd)| *verd != Verdict::Semantic),
             "GAP-C opCast type-id drift must be benign, got {vs:?}"
         );
     }
@@ -1681,11 +1802,17 @@ mod tests {
 
     /// A NO-operand normalized instruction (e.g. TNZ, PshRPtr).
     fn ni(op: &'static str) -> NormInstr {
-        NormInstr { op, operands: vec![] }
+        NormInstr {
+            op,
+            operands: vec![],
+        }
     }
     /// A normalized instruction addressing a single frame slot.
     fn ni_slot(op: &'static str, slot: i32) -> NormInstr {
-        NormInstr { op, operands: vec![Operand::Slot(slot)] }
+        NormInstr {
+            op,
+            operands: vec![Operand::Slot(slot)],
+        }
     }
     /// A normalized CALLSYS whose callee resolves to `owner::method` (via the remap test ctor).
     fn ni_callsys(owner: &str, method: &str) -> NormInstr {
@@ -1740,7 +1867,10 @@ mod tests {
         v.extend(s1_reguard(3, 7)); // re-guard on slot 3 -> must NOT fold (not dominated)
         let before = v.len();
         let folded = fold_dominated_reguards(&mut v);
-        assert_eq!(folded, 0, "an intervening write to the guarded slot blocks the fold");
+        assert_eq!(
+            folded, 0,
+            "an intervening write to the guarded slot blocks the fold"
+        );
         assert_eq!(v.len(), before, "nothing removed");
     }
 
@@ -1753,7 +1883,10 @@ mod tests {
         v.extend(s1_reguard(3, 7)); // only guard on slot 3, nothing earlier -> not dominated
         let before = v.len();
         let folded = fold_dominated_reguards(&mut v);
-        assert_eq!(folded, 0, "a re-guard with no dominating earlier guard must stay");
+        assert_eq!(
+            folded, 0,
+            "a re-guard with no dominating earlier guard must stay"
+        );
         assert_eq!(v.len(), before);
     }
 
@@ -1787,7 +1920,10 @@ mod tests {
         v.push(ni("TNZ"));
         let before = v.len();
         let folded = fold_dominated_reguards(&mut v);
-        assert_eq!(folded, 0, "a re-stored S2 slot is a fresh value, never dominated");
+        assert_eq!(
+            folded, 0,
+            "a re-stored S2 slot is a fresh value, never dominated"
+        );
         assert_eq!(v.len(), before);
     }
 
@@ -1802,7 +1938,10 @@ mod tests {
         v.push(ni_slot("CpyVtoV4", 2)); // writes slot 2 (NOT slot 5) — irrelevant
         v.extend(s1_reguard(5, 1)); // re-guard on slot 5 -> dominated, folds
         let folded = fold_dominated_reguards(&mut v);
-        assert_eq!(folded, 1, "S1 re-guard on slot 5 dominated by the earlier head guard folds");
+        assert_eq!(
+            folded, 1,
+            "S1 re-guard on slot 5 dominated by the earlier head guard folds"
+        );
     }
 
     /// N5: the `FScopeCycleCounter` RAII ctor/dtor pair + `FStatID` temp dtor strip; the kept-on-
@@ -1816,7 +1955,7 @@ mod tests {
             ni_callsys("FScopeCycleCounter", "$beh0"), // strip (with its PSF)
             ni_slot("PSF", 0),
             ni_callsys("FStatID", "$beh2"), // strip (with its PSF)
-            ni("PshRPtr"), // body op
+            ni("PshRPtr"),                  // body op
             ni_slot("PSF", 1),
             ni_callsys("FScopeCycleCounter", "$beh2"), // strip (with its PSF)
             ni("RET"),
@@ -1824,9 +1963,15 @@ mod tests {
         let removed = strip_benign_scopes(&mut v);
         assert_eq!(removed, 3, "three inert scope CALLSYS ops removed");
         // Each removed CALLSYS took its paired PSF too: 3 pairs = 6 ops gone; 10 -> 4.
-        assert_eq!(v.len(), 4, "the FStatID::$beh0 ctor + its PSF + body + RET survive");
+        assert_eq!(
+            v.len(),
+            4,
+            "the FStatID::$beh0 ctor + its PSF + body + RET survive"
+        );
         // The kept ctor is still present.
-        assert!(v.iter().any(|n| callsys_owner_method(n) == Some(("FStatID", "$beh0"))));
+        assert!(v
+            .iter()
+            .any(|n| callsys_owner_method(n) == Some(("FStatID", "$beh0"))));
         // No FScopeCycleCounter / FStatID::$beh2 op survives.
         assert!(!v.iter().any(|n| matches!(
             callsys_owner_method(n),
@@ -1853,21 +1998,37 @@ mod tests {
     #[test]
     #[ignore = "reads large gitignored sample caches; run with --ignored"]
     fn self_identity_with_n5_n6() {
-        let base = format!("{}/../../work/reversing/gore-as/samples", env!("CARGO_MANIFEST_DIR"));
-        let Ok(b) = std::fs::read(format!("{base}/cache_A.Cache")) else { return };
+        let base = format!(
+            "{}/../../work/reversing/gore-as/samples",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let Ok(b) = std::fs::read(format!("{base}/cache_A.Cache")) else {
+            return;
+        };
         // Default opts have N5/N6 ON; also assert with N2 on (the --norm-slots config).
         for n2 in [false, true] {
             let mut opts = NormOpts::default();
             opts.n2_slots = n2;
             let rep = run(&b, &b, &opts, &Filters::default(), 6).expect("run");
-            assert_eq!(rep.count(Verdict::Semantic), 0, "self-diff SEMANTIC must be 0 (n2={n2})");
-            assert_eq!(rep.count(Verdict::Benign), 0, "self-diff BENIGN must be 0 (n2={n2})");
+            assert_eq!(
+                rep.count(Verdict::Semantic),
+                0,
+                "self-diff SEMANTIC must be 0 (n2={n2})"
+            );
+            assert_eq!(
+                rep.count(Verdict::Benign),
+                0,
+                "self-diff BENIGN must be 0 (n2={n2})"
+            );
             assert_eq!(rep.count(Verdict::Identical), rep.diffs.len());
         }
     }
 
     fn real_pair_47() -> Option<(Vec<u8>, Vec<u8>)> {
-        let base = format!("{}/../../work/reversing/gore-as/samples", env!("CARGO_MANIFEST_DIR"));
+        let base = format!(
+            "{}/../../work/reversing/gore-as/samples",
+            env!("CARGO_MANIFEST_DIR")
+        );
         let v = std::fs::read(format!("{base}/cache_A.Cache")).ok()?;
         let r = std::fs::read(format!("{base}/regen_batch47.Cache")).ok()?;
         Some((v, r))
@@ -1882,9 +2043,9 @@ mod tests {
         let Some((v, r)) = real_pair_47() else { return };
         for f in [
             "LoadOrCreateDataGame_Implementation", // op-count divergence
-            "UCBT_CompleteSequence::Tick",          // 104->2 force-stub (has a dropped scope!)
-            "OnGracefulExitRequested",              // dropped this.<field>=true member-store
-            "DoWhenEventStarted",                   // documented dead-loop
+            "UCBT_CompleteSequence::Tick",         // 104->2 force-stub (has a dropped scope!)
+            "OnGracefulExitRequested",             // dropped this.<field>=true member-store
+            "DoWhenEventStarted",                  // documented dead-loop
         ] {
             let vs = verdict_of(&v, &r, f);
             assert!(!vs.is_empty(), "expected functions matching {f:?}");
@@ -1934,12 +2095,23 @@ mod tests {
                 )
             })
             .count();
-        assert!(scope_ops >= 2, "UCBT_Inverter::Tick has ≥2 inert scope callees, found {scope_ops}");
+        assert!(
+            scope_ops >= 2,
+            "UCBT_Inverter::Tick has ≥2 inert scope callees, found {scope_ops}"
+        );
         let before = norm.len();
         let removed = strip_benign_scopes(&mut norm);
-        assert_eq!(removed, scope_ops, "strip removes exactly the resolved scope callees");
-        assert!(norm.len() < before, "the strip shortened the vanilla stream");
+        assert_eq!(
+            removed, scope_ops,
+            "strip removes exactly the resolved scope callees"
+        );
+        assert!(
+            norm.len() < before,
+            "the strip shortened the vanilla stream"
+        );
         // The kept FStatID::$beh0 ctor survives.
-        assert!(norm.iter().any(|n| callsys_owner_method(n) == Some(("FStatID", "$beh0"))));
+        assert!(norm
+            .iter()
+            .any(|n| callsys_owner_method(n) == Some(("FStatID", "$beh0"))));
     }
 }

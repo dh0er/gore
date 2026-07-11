@@ -1,7 +1,10 @@
 use gore_as::cache::tables::parse_tail_tables;
 use gore_as::cache::walk_modules::module_region_end;
 
-const SAMPLES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../work/reversing/gore-as/samples");
+const SAMPLES: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../work/reversing/gore-as/samples"
+);
 
 fn read_sample(name: &str) -> Option<Vec<u8>> {
     std::fs::read(format!("{SAMPLES}/{name}")).ok()
@@ -35,8 +38,16 @@ fn real_cache_tail_tables_parse_to_eof() {
     let tail = module_region_end(&b).expect("walk modules");
     let tt = parse_tail_tables(&b, tail).expect("parse real tail tables");
     let counts: Vec<u32> = tt.tables.iter().map(|t| t.count).collect();
-    eprintln!("real tail tables: counts={counts:?}, end={:#x}, eof={:#x}", tt.end, b.len());
-    assert_eq!(tt.end, b.len(), "real tail tables must consume exactly to EOF");
+    eprintln!(
+        "real tail tables: counts={counts:?}, end={:#x}, eof={:#x}",
+        tt.end,
+        b.len()
+    );
+    assert_eq!(
+        tt.end,
+        b.len(),
+        "real tail tables must consume exactly to EOF"
+    );
 }
 
 #[test]

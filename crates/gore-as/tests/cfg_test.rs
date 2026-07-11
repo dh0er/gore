@@ -2,7 +2,10 @@ use gore_as::cache::cfg;
 use gore_as::cache::disasm::disassemble;
 use gore_as::cache::walk_modules::collect_function_bytecodes;
 
-const SAMPLES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../work/reversing/gore-as/samples");
+const SAMPLES: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../work/reversing/gore-as/samples"
+);
 
 fn read_sample(name: &str) -> Option<Vec<u8>> {
     std::fs::read(format!("{SAMPLES}/{name}")).ok()
@@ -14,7 +17,10 @@ fn method1_is_single_block_no_loop() {
         return;
     };
     let funcs = collect_function_bytecodes(&b).unwrap();
-    let m = funcs.iter().find(|f| f.func.ends_with("::method1")).unwrap();
+    let m = funcs
+        .iter()
+        .find(|f| f.func.ends_with("::method1"))
+        .unwrap();
     let instrs = disassemble(&m.bytecode).unwrap();
     let g = cfg::build(&instrs);
     assert_eq!(g.blocks.len(), 1, "straight-line method1 = 1 block");
@@ -36,7 +42,12 @@ fn levelformula_has_loop() {
         .expect("a LevelFormula function");
     let instrs = disassemble(&f.bytecode).unwrap();
     let g = cfg::build(&instrs);
-    eprintln!("{}: {} blocks, back_edge={}", f.func, g.blocks.len(), g.has_back_edge());
+    eprintln!(
+        "{}: {} blocks, back_edge={}",
+        f.func,
+        g.blocks.len(),
+        g.has_back_edge()
+    );
     assert!(g.blocks.len() > 1, "multi-block");
     assert!(g.has_back_edge(), "for-loop -> back-edge");
 }

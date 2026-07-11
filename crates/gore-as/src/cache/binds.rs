@@ -55,6 +55,24 @@ pub struct NativeApi {
 }
 
 impl NativeApi {
+    #[cfg(test)]
+    pub(crate) fn from_test_arities(
+        exact: &[(&str, &str, usize)],
+        by_name: &[(&str, Option<usize>)],
+    ) -> NativeApi {
+        NativeApi {
+            by_class: exact
+                .iter()
+                .map(|(class, name, arity)| ((class.to_string(), name.to_string()), *arity))
+                .collect(),
+            by_name: by_name
+                .iter()
+                .map(|(name, arity)| (name.to_string(), *arity))
+                .collect(),
+            field_types: HashMap::new(),
+        }
+    }
+
     /// Parse `Binds.Cache`. Returns `None` on any IO/parse failure (caller treats absence as
     /// "no data").
     pub fn load(path: &Path) -> Option<NativeApi> {
@@ -68,7 +86,11 @@ impl NativeApi {
         if by_name.is_empty() && by_class.is_empty() {
             return None;
         }
-        Some(NativeApi { by_class, by_name, field_types })
+        Some(NativeApi {
+            by_class,
+            by_name,
+            field_types,
+        })
     }
 
     /// Exact `(class, name)` arity if known and unambiguous.
@@ -240,9 +262,9 @@ fn record_end(data: &[u8], o: usize) -> Option<usize> {
             break;
         }
         q += 4 + nl; // past bare name
-        // Re-sync over the variable-width metadata slot to the next field decl. For the last
-        // field this lands on the next record's type name (also a u32-len + cstr), i.e. the
-        // record end.
+                     // Re-sync over the variable-width metadata slot to the next field decl. For the last
+                     // field this lands on the next record's type name (also a u32-len + cstr), i.e. the
+                     // record end.
         let limit = (q + 512).min(n);
         let mut nxt = q;
         let mut found = None;
@@ -295,7 +317,10 @@ fn find_record_starts(data: &[u8]) -> Vec<usize> {
 /// dropping any conflicting keys from either map.
 fn parse_records(
     data: &[u8],
-) -> (HashMap<(String, String), usize>, HashMap<(String, String), String>) {
+) -> (
+    HashMap<(String, String), usize>,
+    HashMap<(String, String), String>,
+) {
     let n = data.len();
     let starts = find_record_starts(data);
     let start_set: std::collections::HashSet<usize> = starts.iter().copied().collect();
@@ -319,7 +344,9 @@ fn parse_records(
             None => continue,
         };
         let mut p = o + 4;
-        let tn = String::from_utf8_lossy(&data[p..p + tl]).trim_end_matches('\0').to_string();
+        let tn = String::from_utf8_lossy(&data[p..p + tl])
+            .trim_end_matches('\0')
+            .to_string();
         p += tl;
         let pl = match read_u32(data, p) {
             Some(v) => v as usize,
@@ -544,8 +571,14 @@ mod tests {
         );
 
         // (class,name) exact lookups from the record parse.
-        assert_eq!(api.arity("UGameplayAbility_CharacterAI", "AssessEvent"), Some(2));
-        assert_eq!(api.arity("UGameplayAbility", "GetAvatarActorFromActorInfo"), Some(0));
+        assert_eq!(
+            api.arity("UGameplayAbility_CharacterAI", "AssessEvent"),
+            Some(2)
+        );
+        assert_eq!(
+            api.arity("UGameplayAbility", "GetAvatarActorFromActorInfo"),
+            Some(0)
+        );
     }
 
     /// batch-25a: the in-crate `refs::native_field_type` table must MATCH the shipped
@@ -560,22 +593,81 @@ mod tests {
             return;
         }
         let api = NativeApi::load(path).expect("load Binds.Cache");
-        eprintln!("distinct (class,field) type entries: {}", api.field_type_count());
+        eprintln!(
+            "distinct (class,field) type entries: {}",
+            api.field_type_count()
+        );
         // mirror of refs.rs KNOWN_NATIVE_FIELD_TYPES (keep in sync)
         for (cls, field, want) in [
-            ("FWidgetAlignment", "VerticalAlignment", "EVerticalAlignment"),
-            ("FWidgetAlignment", "HorizontalAlignment", "EHorizontalAlignment"),
+            (
+                "FWidgetAlignment",
+                "VerticalAlignment",
+                "EVerticalAlignment",
+            ),
+            (
+                "FWidgetAlignment",
+                "HorizontalAlignment",
+                "EHorizontalAlignment",
+            ),
             ("FPerceivedAgent", "Relationship", "ERelationship"),
             ("FPerceivedAgent", "Hostility", "ERelationshipHostility"),
-            ("FPerceivedAgent", "RelativeRank", "ERelationshipRelativeRank"),
-            ("FFXPerceptionSoundArea", "PerceptionLoudness", "EPerceptionNoiseLoudness"),
-            ("FALoadingScreenSettings", "Layout", "EAsyncLoadingScreenLayout"),
-            ("FALoadingScreenSettings", "PlaybackType", "EMoviePlaybackType"),
+            (
+                "FPerceivedAgent",
+                "RelativeRank",
+                "ERelationshipRelativeRank",
+            ),
+            (
+                "FFXPerceptionSoundArea",
+                "PerceptionLoudness",
+                "EPerceptionNoiseLoudness",
+            ),
+            (
+                "FALoadingScreenSettings",
+                "Layout",
+                "EAsyncLoadingScreenLayout",
+            ),
+            (
+                "FALoadingScreenSettings",
+                "PlaybackType",
+                "EMoviePlaybackType",
+            ),
             ("FTextAppearance", "Justification", "ETextJustify"),
-            ("FInteractionAnimTransition", "TransitionKind", "EInteractionInputKind"),
+            (
+                "FInteractionAnimTransition",
+                "TransitionKind",
+                "EInteractionInputKind",
+            ),
             ("FWeatherSaveGame", "CurrentWeather", "EWeather"),
-            ("FLetterboxLayoutSettings", "VerticalLoadingWidgetPosition", "EVerticalAlignment"),
-            ("FLetterboxLayoutSettings", "VerticalTipWidgetPosition", "EVerticalAlignment"),
+            (
+                "FCrimeVictimPersonHandle",
+                "RelationshipTowardsPerson",
+                "ERelationship",
+            ),
+            (
+                "FCrimeVictimPersonHandle",
+                "RelativeRankTowardsPerson",
+                "ERelationshipRelativeRank",
+            ),
+            (
+                "FCrimeVictimGuildHandle",
+                "RelationshipTowardsGuild",
+                "ERelationship",
+            ),
+            (
+                "FCrimeVictimGuildHandle",
+                "RelativeRankTowardsGuild",
+                "ERelationshipRelativeRank",
+            ),
+            (
+                "FLetterboxLayoutSettings",
+                "VerticalLoadingWidgetPosition",
+                "EVerticalAlignment",
+            ),
+            (
+                "FLetterboxLayoutSettings",
+                "VerticalTipWidgetPosition",
+                "EVerticalAlignment",
+            ),
         ] {
             assert_eq!(
                 api.field_type(cls, field),
@@ -600,7 +692,11 @@ mod tests {
         let api = NativeApi::load(path).expect("load Binds.Cache");
         // mirror of refs.rs KNOWN_NATIVE_FLOAT_FIELDS (keep in sync)
         for (cls, field, want) in [
-            ("FALoadingScreenSettings", "MinimumLoadingScreenDisplayTime", "float32"),
+            (
+                "FALoadingScreenSettings",
+                "MinimumLoadingScreenDisplayTime",
+                "float32",
+            ),
             ("FAlphaBlendArgs", "BlendTime", "float32"),
             ("FCameraBehaviour", "m_ArmLength", "float32"),
             ("FCameraBehaviour", "m_LagSpeed", "float32"),
@@ -612,16 +708,52 @@ mod tests {
             ("FFreezeParams", "m_FreezeDuration", "float32"),
             ("FGameplayCueParameters", "NormalizedMagnitude", "float32"),
             ("FGameplayCueParameters", "RawMagnitude", "float32"),
-            ("FGameplayEffectContext_HitResponse", "BowStretch", "float32"),
-            ("FGameplayEffectContext_HitResponse", "MultiplierSuperArmor", "float32"),
-            ("FGothicFlyDiveSettings", "AdaptToCollisionSampleZDistance", "float32"),
-            ("FGothicFlyDiveSettings", "CharacterZDivergeOffset", "float32"),
-            ("FGothicFlyDiveSettings", "GroundedMoveBeforeGoalDistance", "float32"),
+            (
+                "FGameplayEffectContext_HitResponse",
+                "BowStretch",
+                "float32",
+            ),
+            (
+                "FGameplayEffectContext_HitResponse",
+                "MultiplierSuperArmor",
+                "float32",
+            ),
+            (
+                "FGothicFlyDiveSettings",
+                "AdaptToCollisionSampleZDistance",
+                "float32",
+            ),
+            (
+                "FGothicFlyDiveSettings",
+                "CharacterZDivergeOffset",
+                "float32",
+            ),
+            (
+                "FGothicFlyDiveSettings",
+                "GroundedMoveBeforeGoalDistance",
+                "float32",
+            ),
             ("FGothicFlyDiveSettings", "UseFlyDiveMinDistance", "float32"),
-            ("FGothicPathfollowSettings", "AgentRadiusMultiplier", "float32"),
-            ("FGothicPathfollowSettings", "CrowdAgentRadiusMultiplier", "float32"),
-            ("FGothicPathfollowSettings", "CrowdAgentSeparationWeight", "float32"),
-            ("FInteractionAnimTransition", "BlockOtherTransitionsForSeconds", "float32"),
+            (
+                "FGothicPathfollowSettings",
+                "AgentRadiusMultiplier",
+                "float32",
+            ),
+            (
+                "FGothicPathfollowSettings",
+                "CrowdAgentRadiusMultiplier",
+                "float32",
+            ),
+            (
+                "FGothicPathfollowSettings",
+                "CrowdAgentSeparationWeight",
+                "float32",
+            ),
+            (
+                "FInteractionAnimTransition",
+                "BlockOtherTransitionsForSeconds",
+                "float32",
+            ),
             ("FInteractionAnimTransition", "CooldownSeconds", "float32"),
             ("FInteractionAnimTransition", "Probability", "float32"),
             ("FInteractionAnimTransition", "Weight", "float32"),
@@ -633,10 +765,26 @@ mod tests {
             ("FLightValues", "SourceHeight", "float32"),
             ("FLightValues", "SourceWidth", "float32"),
             ("FMemorizedEvent", "Magnitude", "float32"),
-            ("FPathfollowModifyAvoidVelocitySettings", "FastSpeedVelocityMultiplier", "float32"),
-            ("FPathfollowModifyAvoidVelocitySettings", "MediumRangeVelocityMultiplier", "float32"),
-            ("FPathfollowModifyAvoidVelocitySettings", "ShortRangeVelocityMultiplier", "float32"),
-            ("FPathfollowMoveFocusSettings", "FocalPointHeightMultiplier", "float32"),
+            (
+                "FPathfollowModifyAvoidVelocitySettings",
+                "FastSpeedVelocityMultiplier",
+                "float32",
+            ),
+            (
+                "FPathfollowModifyAvoidVelocitySettings",
+                "MediumRangeVelocityMultiplier",
+                "float32",
+            ),
+            (
+                "FPathfollowModifyAvoidVelocitySettings",
+                "ShortRangeVelocityMultiplier",
+                "float32",
+            ),
+            (
+                "FPathfollowMoveFocusSettings",
+                "FocalPointHeightMultiplier",
+                "float32",
+            ),
             ("FPerceptionHandler", "DelaySeconds", "float32"),
             ("FRelativeCrimeDataEntry", "BaseSeverity", "float32"),
             ("FRememberedPerception", "Magnitude", "float32"),

@@ -158,7 +158,11 @@ pub fn decompile_function(f: &FuncCode, refs: &RefResolver) -> String {
         // Genuinely unmapped negative slot (variadic/defaulted tail the signature undercounts):
         // fall back to a stable `arg{N}` derived from the linear position so the same offset
         // always renders the same identifier.
-        let idx = if f.is_method { (-off - AS_PTR_SIZE) as usize } else { (-off) as usize };
+        let idx = if f.is_method {
+            (-off - AS_PTR_SIZE) as usize
+        } else {
+            (-off) as usize
+        };
         match f.param_names.get(idx) {
             Some(n) if !n.is_empty() => Expr::Var(n.clone()),
             _ => Expr::Var(format!("arg{idx}")),
@@ -226,7 +230,7 @@ pub fn decompile_function(f: &FuncCode, refs: &RefResolver) -> String {
                 slots.insert(dst, Expr::Const(c));
             }
             "PshC4" => arg_stack.push(Expr::Const(
-                ins.dwords.first().copied().unwrap_or(0) as i32 as i64,
+                ins.dwords.first().copied().unwrap_or(0) as i32 as i64
             )),
             "PshV4" | "PshV8" | "PSF" | "PshVPtr" => {
                 arg_stack.push(get(&slots, s16(ins.words.first().copied().unwrap_or(0))))
@@ -267,16 +271,14 @@ pub fn decompile_function(f: &FuncCode, refs: &RefResolver) -> String {
                 value_reg = Some(Expr::Call(callee, args));
             }
             // --- returns ---
-            "RET" => {
-                match &value_reg {
-                    Some(v) => {
-                        let _ = writeln!(body, "    return {};", v.render());
-                    }
-                    None => {
-                        let _ = writeln!(body, "    return;");
-                    }
+            "RET" => match &value_reg {
+                Some(v) => {
+                    let _ = writeln!(body, "    return {};", v.render());
                 }
-            }
+                None => {
+                    let _ = writeln!(body, "    return;");
+                }
+            },
             // --- ignore frame/flow housekeeping silently ---
             "SUSPEND" | "JitEntry" | "PopPtr" | "ClrHi" | "SwapPtr" => {}
             // --- everything else: annotate (don't fail) ---
@@ -290,9 +292,20 @@ pub fn decompile_function(f: &FuncCode, refs: &RefResolver) -> String {
         .param_names
         .iter()
         .enumerate()
-        .map(|(i, n)| if n.is_empty() { format!("arg{i}") } else { n.clone() })
+        .map(|(i, n)| {
+            if n.is_empty() {
+                format!("arg{i}")
+            } else {
+                n.clone()
+            }
+        })
         .collect();
-    format!("// {}\nfunction({})\n{{\n{}}}\n", f.func, params.join(", "), body)
+    format!(
+        "// {}\nfunction({})\n{{\n{}}}\n",
+        f.func,
+        params.join(", "),
+        body
+    )
 }
 
 fn bin_op(name: &str) -> Option<&'static str> {

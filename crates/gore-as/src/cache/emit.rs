@@ -24,7 +24,12 @@ fn force_stub_set() -> &'static HashSet<String> {
         std::env::var("GORE_AS_STUBLIST")
             .ok()
             .and_then(|p| std::fs::read_to_string(p).ok())
-            .map(|s| s.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect())
+            .map(|s| {
+                s.lines()
+                    .map(|l| l.trim().to_string())
+                    .filter(|l| !l.is_empty())
+                    .collect()
+            })
             .unwrap_or_default()
     })
 }
@@ -83,11 +88,67 @@ use super::structure::{body_statements_ctor, CONSTSTORE, RVODEF};
 use super::types::token_keyword;
 use super::walk_modules::FuncCode;
 
+/// Exact number of source functions for which [`emit_module`] writes a body.
+///
+/// This deliberately follows the same generated-accessor, generated-default,
+/// delegate-wrapper, and duplicate-signature filters as the emitter. Counting
+/// raw cache records would overstate the denominator because those records are
+/// not represented by editable function bodies in the emitted source.
+pub(crate) fn emitted_body_count(m: &Module, refs: &RefResolver) -> usize {
+    let class_names: HashSet<&str> = m.classes.iter().map(|c| c.name.as_str()).collect();
+    let class_members: HashMap<&str, HashSet<&str>> = m
+        .classes
+        .iter()
+        .map(|c| {
+            let members = c
+                .methods
+                .iter()
+                .chain(c.ctors.iter())
+                .map(|f| f.name.as_str())
+                .collect();
+            (c.name.as_str(), members)
+        })
+        .collect();
+
+    let mut total = 0usize;
+    for class in &m.classes {
+        // A generated delegate wrapper is reconstructed as one declaration with
+        // no source body; none of its cached implementation methods are emitted.
+        if delegate_wrapper_decl(class, refs).is_some() {
+            continue;
+        }
+        total += class.ctors.len();
+        let mut seen = HashSet::new();
+        total += class
+            .methods
+            .iter()
+            .filter(|method| !method.name.starts_with("__"))
+            .filter(|method| seen.insert(format!("{}({})", method.name, param_sig(method, refs))))
+            .count();
+    }
+
+    let mut seen_free = HashSet::new();
+    total
+        + m.functions
+            .iter()
+            .filter(|function| {
+                !is_generated(function, &class_names, &class_members)
+                    && !is_generated_spawn(function, refs)
+            })
+            .filter(|function| {
+                seen_free.insert(format!("{}({})", function.name, param_sig(function, refs)))
+            })
+            .count()
+}
+
 /// Emit a whole module as recompilable AngelScript.
 pub fn emit_module(m: &Module, refs: &RefResolver) -> String {
     let mut s = String::new();
     let _ = writeln!(s, "// gore-as decompiled module: {} ({})", m.name, m.file);
-    let _ = writeln!(s, "// NOTE: local names + string literals are not stored in the cache.\n");
+    let _ = writeln!(
+        s,
+        "// NOTE: local names + string literals are not stored in the cache.\n"
+    );
 
     for e in &m.enums {
         let _ = writeln!(s, "enum {}", e.name);
@@ -239,9 +300,7 @@ fn delegate_wrapper_decl(c: &Class, refs: &RefResolver) -> Option<String> {
         return None;
     }
     let (kw, carrier) = match field.ty.base_name(refs).as_str() {
-        "_FMulticastScriptDelegate" => {
-            ("event", c.methods.iter().find(|f| f.name == "Broadcast")?)
-        }
+        "_FMulticastScriptDelegate" => ("event", c.methods.iter().find(|f| f.name == "Broadcast")?),
         "_FScriptDelegate" => (
             "delegate",
             // prefer `Execute` (carries a RetVal delegate's return type); `ExecuteIfBound`
@@ -253,8 +312,16 @@ fn delegate_wrapper_decl(c: &Class, refs: &RefResolver) -> Option<String> {
         ),
         _ => return None,
     };
-    let ret = carrier.ret.render(refs).trim_start_matches("const ").to_string();
-    Some(format!("{kw} {ret} {}({});\n\n", c.name, render_params(carrier, refs)))
+    let ret = carrier
+        .ret
+        .render(refs)
+        .trim_start_matches("const ")
+        .to_string();
+    Some(format!(
+        "{kw} {ret} {}({});\n\n",
+        c.name,
+        render_params(carrier, refs)
+    ))
 }
 
 fn emit_class(s: &mut String, c: &Class, refs: &RefResolver) {
@@ -271,7 +338,11 @@ fn emit_class(s: &mut String, c: &Class, refs: &RefResolver) {
     // compiler generates the const&in opAssign, matching the native-struct behaviour) and
     // is the byte-faithful vanilla keyword. Value types here never carry a super class,
     // and delegate/event wrappers (also VALUE-flagged) take the one-liner path above.
-    let kw = if c.flags & 0x2 != 0 { "struct" } else { "class" };
+    let kw = if c.flags & 0x2 != 0 {
+        "struct"
+    } else {
+        "class"
+    };
     match &c.super_class {
         Some(sup) if !sup.is_empty() => {
             let _ = writeln!(s, "{kw} {} : {}", c.name, sup);
@@ -296,8 +367,11 @@ fn emit_class(s: &mut String, c: &Class, refs: &RefResolver) {
     }
     let super_name = c.super_class.as_deref().filter(|s| !s.is_empty());
     // field name -> base type name, so the decompiler can cast `this.field = <int>` assignments.
-    let mut field_types: HashMap<String, String> =
-        c.fields.iter().map(|f| (f.name.clone(), f.ty.base_name(refs))).collect();
+    let mut field_types: HashMap<String, String> = c
+        .fields
+        .iter()
+        .map(|f| (f.name.clone(), f.ty.base_name(refs)))
+        .collect();
     // Batch-21 Class B residue: fold in INHERITED fields by walking the script hierarchy —
     // the own-fields map left e.g. `this.RoleCategoryContainers.opIndex(<int>)` (field declared
     // on the super class) untyped, so the container-subtype enum-key wrap never fired. Own
@@ -313,7 +387,17 @@ fn emit_class(s: &mut String, c: &Class, refs: &RefResolver) {
         cur = refs.class_super_of(&sup).map(|s| s.to_string());
     }
     for ctor in &c.ctors {
-        emit_function_ctor(s, ctor, refs, true, true, 1, super_name, Some(&field_types), Some(&c.name));
+        emit_function_ctor(
+            s,
+            ctor,
+            refs,
+            true,
+            true,
+            1,
+            super_name,
+            Some(&field_types),
+            Some(&c.name),
+        );
     }
     // Dedup methods by name+parameters: the cache can carry two entries that render to the same
     // signature (e.g. a const- and non-const-return overload that collapse once the meaningless
@@ -331,17 +415,44 @@ fn emit_class(s: &mut String, c: &Class, refs: &RefResolver) {
         if !seen_sigs.insert(format!("{}({})", m.name, param_sig(m, refs))) {
             continue; // duplicate signature
         }
-        emit_function_ctor(s, m, refs, true, false, 1, None, Some(&field_types), Some(&c.name));
+        emit_function_ctor(
+            s,
+            m,
+            refs,
+            true,
+            false,
+            1,
+            None,
+            Some(&field_types),
+            Some(&c.name),
+        );
     }
     let _ = writeln!(s, "}}\n");
 }
 
-fn emit_function(s: &mut String, f: &Func, refs: &RefResolver, is_method: bool, is_ctor: bool, depth: usize) {
+fn emit_function(
+    s: &mut String,
+    f: &Func,
+    refs: &RefResolver,
+    is_method: bool,
+    is_ctor: bool,
+    depth: usize,
+) {
     emit_function_ctor(s, f, refs, is_method, is_ctor, depth, None, None, None);
 }
 
 #[allow(clippy::too_many_arguments)]
-fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: bool, is_ctor: bool, depth: usize, super_ctor: Option<&str>, fields: Option<&HashMap<String, String>>, class_name: Option<&str>) {
+fn emit_function_ctor(
+    s: &mut String,
+    f: &Func,
+    refs: &RefResolver,
+    is_method: bool,
+    is_ctor: bool,
+    depth: usize,
+    super_ctor: Option<&str>,
+    fields: Option<&HashMap<String, String>>,
+    class_name: Option<&str>,
+) {
     let ind = "    ".repeat(depth);
     // Strip a leading `const` from the return type: a return-by-value `const` is meaningless in
     // AngelScript, and the cache sets the const flag inconsistently between a base method and its
@@ -361,10 +472,20 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
     };
     let param_types: Vec<String> = f.params.iter().map(|p| p.ty.base_name(refs)).collect();
     // object-local slot -> type name, so the decompiler can insert downcasts on stores.
-    let mut local_types: HashMap<i32, String> = f.obj_locals.iter().map(|(slot, tinfo)| {
-        let ty = super::types::DataType { token: 5, type_info: *tinfo, is_object_handle: true, ..Default::default() }.base_name(refs);
-        (*slot, ty)
-    }).collect();
+    let mut local_types: HashMap<i32, String> = f
+        .obj_locals
+        .iter()
+        .map(|(slot, tinfo)| {
+            let ty = super::types::DataType {
+                token: 5,
+                type_info: *tinfo,
+                is_object_handle: true,
+                ..Default::default()
+            }
+            .base_name(refs);
+            (*slot, ty)
+        })
+        .collect();
     // batch-30a (C6c): snapshot the cache's own (vanilla) object-local types before any
     // override mutates the map — the member-override gate below compares against these.
     let vanilla_obj_types = local_types.clone();
@@ -383,17 +504,20 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
     // not, correctly rejecting the AActor widen (AInvulnerableVisual::SetUpCollisions,
     // ARagdollFallingActor::Initialize, UGA_Death_Meatbug — `.CapsuleComponent` off AActor).
     let member_widen_below = |slot: &i32, cand: &String| {
-        let Some(lb) = member_overrides.get(slot) else { return false };
-        let Some(vanilla) = vanilla_obj_types.get(slot) else { return false };
-        cand != lb
-            && refs.is_subclass(vanilla, lb)
-            && !refs.is_subclass(cand, lb)
+        let Some(lb) = member_overrides.get(slot) else {
+            return false;
+        };
+        let Some(vanilla) = vanilla_obj_types.get(slot) else {
+            return false;
+        };
+        cand != lb && refs.is_subclass(vanilla, lb) && !refs.is_subclass(cand, lb)
     };
     // consumer-side override: never-written arg slots get the type their callee expects (fixes
     // mis-typed default/optional-arg slots — FName->UAIState_DailyRoutine, TSubclassOf<X>->X).
     // outref_overrides: PSF slots feeding float-family REFERENCE params (declaration-only, below).
     // float_args/keep_ints (batch-25g): numeric BY-VALUE arg slots — see structure::ArgSlotHints.
-    let (slot_overrides, outref_overrides, float_args, keep_ints, int_refs, small_args) = infer_slot_types(f, refs);
+    let (slot_overrides, outref_overrides, float_args, keep_ints, int_refs, small_args) =
+        infer_slot_types(f, refs);
     // batch-28 (specs/batch27-floatwarnings.md §2): unified numeric-kind dataflow pass.
     // Anti-seed imports: slots value-pushed into int-family params (keep_ints), PSF-bound to
     // int-family reference params (int_refs), or bool&-bound (outref "bool") hold int/bool
@@ -411,7 +535,15 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
                 .map(|(s, _)| *s),
         )
         .collect();
-    let numkinds = infer_float_flow(f, &fc, refs, fields, &float_args, &outref_overrides, &num_anti);
+    let numkinds = infer_float_flow(
+        f,
+        &fc,
+        refs,
+        fields,
+        &float_args,
+        &outref_overrides,
+        &num_anti,
+    );
     for (slot, ty) in &slot_overrides {
         // batch-29c (C2, specs/batch29-errortail.md §2): never let an ARGLESS template head
         // (the $beh0 construct OWNER / a copy-ctor param whose DataType carries no SubTypes —
@@ -559,11 +691,27 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
         float_slots: float_args
             .keys()
             .copied()
-            .chain(numkinds.iter().filter(|(_, k)| !matches!(k, NumKind::I64)).map(|(s, _)| *s))
+            .chain(
+                numkinds
+                    .iter()
+                    .filter(|(_, k)| !matches!(k, NumKind::I64))
+                    .map(|(s, _)| *s),
+            )
             .collect(),
         keep_ints,
     };
-    let body = body_statements_ctor(&fc, refs, depth + 1, super_ctor, Some(&f.ret), fields, Some(&param_types), class_name, Some(&local_types), Some(&hints));
+    let body = body_statements_ctor(
+        &fc,
+        refs,
+        depth + 1,
+        super_ctor,
+        Some(&f.ret),
+        fields,
+        Some(&param_types),
+        class_name,
+        Some(&local_types),
+        Some(&hints),
+    );
     // batch-30c (C9 accessor-ambiguity, specs/batch29-errortail.md §9): the recovered ctor
     // default-writes `this.WalkSpeed = ...;` collide with the class's inherited SetWalkSpeed
     // property accessor ("Assigned property also has a SetWalkSpeed accessor declared. Write
@@ -573,7 +721,10 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
     // corpus-proven compiling form (`this.SetWalkSpeed(...)` call sites). Exact-keyed to the
     // two captured ctors — a per-site fix, not a mechanism.
     let body = if is_ctor
-        && matches!(class_name, Some("UAIState_Warning" | "UAIState_Warning_Crime"))
+        && matches!(
+            class_name,
+            Some("UAIState_Warning" | "UAIState_Warning_Crime")
+        )
         && body.contains("this.WalkSpeed = ")
     {
         body.lines()
@@ -619,11 +770,17 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
             let mut grew = false;
             for l in body.lines() {
                 let t = l.trim();
-                let Some(rest) = t.strip_suffix(';') else { continue };
-                let Some((lhs, rhs)) = rest.split_once(" = ") else { continue };
+                let Some(rest) = t.strip_suffix(';') else {
+                    continue;
+                };
+                let Some((lhs, rhs)) = rest.split_once(" = ") else {
+                    continue;
+                };
                 let (Some(m), Some(n)) = (
-                    lhs.strip_prefix("local_").and_then(|d| d.parse::<i32>().ok()),
-                    rhs.strip_prefix("local_").and_then(|d| d.parse::<i32>().ok()),
+                    lhs.strip_prefix("local_")
+                        .and_then(|d| d.parse::<i32>().ok()),
+                    rhs.strip_prefix("local_")
+                        .and_then(|d| d.parse::<i32>().ok()),
                 ) else {
                     continue;
                 };
@@ -808,8 +965,10 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
     // arg slots the bytecode reads beyond the declared parameter list (the signature parse
     // undercounts some value-type / defaulted params). Declare them as `int` locals so the
     // body compiles instead of stubbing wholesale; a wrong type the in-game loop force-stubs.
-    let mut oor_args: Vec<i32> =
-        used_idents(&body, "arg").into_iter().filter(|&n| n as usize >= f.params.len()).collect();
+    let mut oor_args: Vec<i32> = used_idents(&body, "arg")
+        .into_iter()
+        .filter(|&n| n as usize >= f.params.len())
+        .collect();
     oor_args.sort_unstable();
     // §3.3 safety net: an unmapped `argN` (signature undercount / RVO-return slot) declared as
     // `int` breaks any member/operator use on it ("Illegal operation on 'int'"). Type it from
@@ -844,12 +1003,15 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
     // dozens of caller stubs). Keep the `&` signature and return a typed non-temporary:
     // `return OnSensedOther(<PerceptionParam>);` — semantically degenerate (like every stub)
     // but signature-faithful, so callers compile.
-    let percep_stub_param = (ref_ret
-        && f.ret.base_name(refs) == "FPerceptionHandler")
+    let percep_stub_param = (ref_ret && f.ret.base_name(refs) == "FPerceptionHandler")
         .then(|| {
             f.params.iter().enumerate().find_map(|(i, p)| {
                 (p.ty.base_name(refs) == "UCharacterPerceptionComponent").then(|| {
-                    if p.name.is_empty() { format!("arg{i}") } else { p.name.clone() }
+                    if p.name.is_empty() {
+                        format!("arg{i}")
+                    } else {
+                        p.name.clone()
+                    }
                 })
             })
         })
@@ -925,7 +1087,10 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
         // hoist local declarations; primitives must be initialized (AngelScript errors on
         // "may not be initialized"), objects/structs/handles default-construct themselves.
         for (slot, ty) in &locals {
-            if suppressed.contains(slot) || na_suppressed.contains(slot) || iter_suppressed.contains(slot) {
+            if suppressed.contains(slot)
+                || na_suppressed.contains(slot)
+                || iter_suppressed.contains(slot)
+            {
                 continue; // declared at its (rewritten) assignment/Iterator() site instead
             }
             if is_primitive(ty) {
@@ -986,7 +1151,11 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
         }
     } else {
         // stub fallback so the module still compiles (reason recorded for aggregation)
-        let _ = writeln!(s, "{ind}    // body not fully recovered — stub [{}]", reason.unwrap());
+        let _ = writeln!(
+            s,
+            "{ind}    // body not fully recovered — stub [{}]",
+            reason.unwrap()
+        );
         // constructors must NOT return a value; everything else returns a default. An object
         // handle return defaults to `nullptr` (no default-constructor for engine object types;
         // `nullptr` is this build's null-handle literal — `null` parses as undeclared).
@@ -1045,7 +1214,11 @@ fn render_params(f: &Func, refs: &RefResolver) -> String {
             } else {
                 ""
             };
-            let nm = if p.name.is_empty() { format!("arg{i}") } else { p.name.clone() };
+            let nm = if p.name.is_empty() {
+                format!("arg{i}")
+            } else {
+                p.name.clone()
+            };
             format!("{ty} {amp}{nm}")
         })
         .collect::<Vec<_>>()
@@ -1088,11 +1261,22 @@ fn strip_const_store_markers(body: &str) -> (String, HashSet<i32>) {
 /// error that aborts the module's parse, so such a function falls back to a clean stub.
 /// Returns `None` if the body is recoverable, else `Some(reason)` for the first gap found —
 /// the reason string is emitted in the stub comment so the stub causes can be aggregated.
-fn stub_reason(body: &str, locals: &BTreeMap<i32, String>, param_count: usize, ret_is_void: bool) -> Option<String> {
+fn stub_reason(
+    body: &str,
+    locals: &BTreeMap<i32, String>,
+    param_count: usize,
+    ret_is_void: bool,
+) -> Option<String> {
     // an ARGMISMATCH sentinel (\u{2}<code>) — extract its cause code for aggregation.
     if let Some(i) = body.find('\u{2}') {
-        let code: String = body[i + 1..].chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '_').collect();
-        return Some(format!("argmismatch:{}", if code.is_empty() { "?" } else { &code }));
+        let code: String = body[i + 1..]
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect();
+        return Some(format!(
+            "argmismatch:{}",
+            if code.is_empty() { "?" } else { &code }
+        ));
     }
     for l in body.lines() {
         let t = l.trim_start();
@@ -1132,15 +1316,18 @@ fn used_idents(body: &str, prefix: &str) -> HashSet<i32> {
     let is_ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
     let mut i = 0;
     while i + pl < b.len() {
-        if &b[i..i + pl] == prefix.as_bytes()
-            && (i == 0 || !is_ident(b[i - 1]))
-        {
+        if &b[i..i + pl] == prefix.as_bytes() && (i == 0 || !is_ident(b[i - 1])) {
             let mut j = i + pl;
             let start = j;
-            while j < b.len() && b[j].is_ascii_digit() { j += 1; }
+            while j < b.len() && b[j].is_ascii_digit() {
+                j += 1;
+            }
             if j > start && (j >= b.len() || !is_ident(b[j])) {
-                if let Ok(n) = body[start..j].parse::<i32>() { out.insert(n); }
-                i = j; continue;
+                if let Ok(n) = body[start..j].parse::<i32>() {
+                    out.insert(n);
+                }
+                i = j;
+                continue;
             }
         }
         i += 1;
@@ -1184,7 +1371,10 @@ fn used_locals(body: &str) -> HashSet<i32> {
 /// out-slot (`F*` engine struct, `T*` template value like TSubclassOf). Enums/primitives/objects
 /// return in a register, not an out-slot, so they are excluded.
 fn ret_is_struct(ty: &str) -> bool {
-    matches!(ty.split('<').next().unwrap_or(ty).bytes().next(), Some(b'F') | Some(b'T'))
+    matches!(
+        ty.split('<').next().unwrap_or(ty).bytes().next(),
+        Some(b'F') | Some(b'T')
+    )
 }
 
 /// Returns (consumer-typed object-slot overrides, out-ref primitive DECLARATION overrides).
@@ -1201,21 +1391,47 @@ fn ret_is_struct(ty: &str) -> bool {
 fn infer_slot_types(
     f: &Func,
     refs: &RefResolver,
-) -> (HashMap<i32, String>, HashMap<i32, String>, HashMap<i32, String>, HashSet<i32>, HashSet<i32>, HashMap<i32, String>) {
+) -> (
+    HashMap<i32, String>,
+    HashMap<i32, String>,
+    HashMap<i32, String>,
+    HashSet<i32>,
+    HashSet<i32>,
+    HashMap<i32, String>,
+) {
     let instrs = match disassemble(&f.bytecode) {
         Ok(i) => i,
         Err(_) => {
-            return (HashMap::new(), HashMap::new(), HashMap::new(), HashSet::new(), HashSet::new(), HashMap::new())
+            return (
+                HashMap::new(),
+                HashMap::new(),
+                HashMap::new(),
+                HashSet::new(),
+                HashSet::new(),
+                HashMap::new(),
+            );
         }
     };
     let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32);
     let writes = |op: &str| {
-        op.starts_with("SetV") || op.starts_with("CpyVtoV") || op.starts_with("CpyRtoV")
-            || op.starts_with("RDR") || op.contains("TO") || op == "STOREOBJ" || op == "PopRPtr"
-            || op.starts_with("ADD") || op.starts_with("SUB") || op.starts_with("MUL")
-            || op.starts_with("DIV") || op.starts_with("MOD") || op.starts_with("NEG")
-            || op.starts_with("Inc") || op.starts_with("Dec") || op == "NOT"
-            || op.starts_with("B") || op == "ALLOC"
+        op.starts_with("SetV")
+            || op.starts_with("CpyVtoV")
+            || op.starts_with("CpyRtoV")
+            || op.starts_with("RDR")
+            || op.contains("TO")
+            || op == "STOREOBJ"
+            || op == "PopRPtr"
+            || op.starts_with("ADD")
+            || op.starts_with("SUB")
+            || op.starts_with("MUL")
+            || op.starts_with("DIV")
+            || op.starts_with("MOD")
+            || op.starts_with("NEG")
+            || op.starts_with("Inc")
+            || op.starts_with("Dec")
+            || op == "NOT"
+            || op.starts_with("B")
+            || op == "ALLOC"
     };
     let mut written: HashSet<i32> = HashSet::new();
     for ins in &instrs {
@@ -1232,11 +1448,11 @@ fn infer_slot_types(
     let mut ostack: Vec<Option<(i32, bool)>> = Vec::new();
     let mut cand: HashMap<i32, Option<String>> = HashMap::new(); // slot -> Some(type) | None(conflict)
     let mut outref: HashMap<i32, Option<String>> = HashMap::new(); // PSF slot -> float-ref param type
-    // batch-25g: numeric BY-VALUE argument slots (see structure::ArgSlotHints). A slot
-    // VALUE-pushed (never PSF) into a float-family param is float-typed in the VM — the
-    // compiler inserts the int->float conversion BEFORE the push, so any direct PshV4 into a
-    // float param proves the slot holds float bits. Int-family pairs only earn the retain
-    // keep flag (no retype). Conflicts (differing float kws, or float+int for one slot) drop.
+                                                                   // batch-25g: numeric BY-VALUE argument slots (see structure::ArgSlotHints). A slot
+                                                                   // VALUE-pushed (never PSF) into a float-family param is float-typed in the VM — the
+                                                                   // compiler inserts the int->float conversion BEFORE the push, so any direct PshV4 into a
+                                                                   // float param proves the slot holds float bits. Int-family pairs only earn the retain
+                                                                   // keep flag (no retype). Conflicts (differing float kws, or float+int for one slot) drop.
     let mut farg: HashMap<i32, Option<String>> = HashMap::new();
     let mut ikeep: HashSet<i32> = HashSet::new();
     // batch-28: PSF slots bound to an INT-family reference param — int lvalues; anti-seeds
@@ -1250,13 +1466,21 @@ fn infer_slot_types(
     let mut sarg: HashMap<i32, Option<String>> = HashMap::new();
     // shared numeric BY-VALUE channel (used by both ordinary-call pairing and the $beh0
     // ctor-arg pairing): float params -> farg, int-family params -> ikeep (+ sarg small-ints).
-    let val_arg = |s: i32, pt: &super::types::DataType, farg: &mut HashMap<i32, Option<String>>, ikeep: &mut HashSet<i32>, sarg: &mut HashMap<i32, Option<String>>| {
+    let val_arg = |s: i32,
+                   pt: &super::types::DataType,
+                   farg: &mut HashMap<i32, Option<String>>,
+                   ikeep: &mut HashSet<i32>,
+                   sarg: &mut HashMap<i32, Option<String>>| {
         match pt.token {
             0x50 | 0x51 | 0x5E => {
                 let kw = super::types::token_keyword(pt.token).to_string();
                 match farg.get(&s) {
-                    None => { farg.insert(s, Some(kw)); }
-                    Some(Some(prev)) if *prev != kw => { farg.insert(s, None); }
+                    None => {
+                        farg.insert(s, Some(kw));
+                    }
+                    Some(Some(prev)) if *prev != kw => {
+                        farg.insert(s, None);
+                    }
                     _ => {}
                 }
             }
@@ -1264,8 +1488,12 @@ fn infer_slot_types(
                 ikeep.insert(s);
                 let kw = super::types::token_keyword(pt.token).to_string();
                 match sarg.get(&s) {
-                    None => { sarg.insert(s, Some(kw)); }
-                    Some(Some(prev)) if *prev != kw => { sarg.insert(s, None); }
+                    None => {
+                        sarg.insert(s, Some(kw));
+                    }
+                    Some(Some(prev)) if *prev != kw => {
+                        sarg.insert(s, None);
+                    }
                     _ => {}
                 }
             }
@@ -1298,8 +1526,20 @@ fn infer_slot_types(
             _ => {}
         }
     };
-    let pair = |ostack: &mut Vec<Option<(i32, bool)>>, params: Option<&[super::types::DataType]>, is_method: bool, ret_struct: bool, cand: &mut HashMap<i32, Option<String>>, outref: &mut HashMap<i32, Option<String>>, farg: &mut HashMap<i32, Option<String>>, ikeep: &mut HashSet<i32>, iref: &mut HashSet<i32>, sarg: &mut HashMap<i32, Option<String>>| {
-        let Some(params) = params else { ostack.clear(); return; };
+    let pair = |ostack: &mut Vec<Option<(i32, bool)>>,
+                params: Option<&[super::types::DataType]>,
+                is_method: bool,
+                ret_struct: bool,
+                cand: &mut HashMap<i32, Option<String>>,
+                outref: &mut HashMap<i32, Option<String>>,
+                farg: &mut HashMap<i32, Option<String>>,
+                ikeep: &mut HashSet<i32>,
+                iref: &mut HashSet<i32>,
+                sarg: &mut HashMap<i32, Option<String>>| {
+        let Some(params) = params else {
+            ostack.clear();
+            return;
+        };
         // A method returning a struct BY VALUE (F/T/E) carries a hidden RVO out-slot pushed as the
         // last user arg (just before the receiver); count it so it is consumed, but exclude it from
         // pairing (it is NOT params[last] — pairing it would shift every real arg one param over and
@@ -1311,7 +1551,11 @@ fn infer_slot_types(
         // obj_locals type (FInGameTime) and blinding build_call's free-RVO probe ("Can't
         // implicitly convert from 'UObject' to 'FInGameTime'" x144 in-game).
         let rvo = ret_struct as usize;
-        let total = if is_method { params.len() + 1 + rvo } else { params.len() + rvo };
+        let total = if is_method {
+            params.len() + 1 + rvo
+        } else {
+            params.len() + rvo
+        };
         let take = total.min(ostack.len());
         let popped = ostack.split_off(ostack.len() - take);
         // method: top popped entry is the receiver -> drop it (plus the RVO out-slot just below);
@@ -1360,8 +1604,12 @@ fn infer_slot_types(
                     }
                     let ty = pt.base_name(refs);
                     match cand.get(s) {
-                        None => { cand.insert(*s, Some(ty)); }
-                        Some(Some(prev)) if *prev != ty => { cand.insert(*s, None); }
+                        None => {
+                            cand.insert(*s, Some(ty));
+                        }
+                        Some(Some(prev)) if *prev != ty => {
+                            cand.insert(*s, None);
+                        }
                         _ => {}
                     }
                     // out-ref float pass: a PSF'd (address-pushed) slot feeding a float-family
@@ -1372,8 +1620,12 @@ fn infer_slot_types(
                     if *is_psf && pt.is_reference && matches!(pt.token, 0x41 | 0x50 | 0x51 | 0x5E) {
                         let kw = super::types::token_keyword(pt.token).to_string();
                         match outref.get(s) {
-                            None => { outref.insert(*s, Some(kw)); }
-                            Some(Some(prev)) if *prev != kw => { outref.insert(*s, None); }
+                            None => {
+                                outref.insert(*s, Some(kw));
+                            }
+                            Some(Some(prev)) if *prev != kw => {
+                                outref.insert(*s, None);
+                            }
                             _ => {}
                         }
                     }
@@ -1398,8 +1650,12 @@ fn infer_slot_types(
                             && ty.as_bytes().get(1).is_some_and(|c| c.is_ascii_uppercase());
                         if super::structure::is_enum_name(&ty) || f_struct {
                             match outref.get(s) {
-                                None => { outref.insert(*s, Some(ty)); }
-                                Some(Some(prev)) if *prev != ty => { outref.insert(*s, None); }
+                                None => {
+                                    outref.insert(*s, Some(ty));
+                                }
+                                Some(Some(prev)) if *prev != ty => {
+                                    outref.insert(*s, None);
+                                }
                                 _ => {}
                             }
                         }
@@ -1407,7 +1663,10 @@ fn infer_slot_types(
                     // batch-28: int-family reference binding — see `iref` above.
                     if *is_psf
                         && pt.is_reference
-                        && matches!(pt.token, 0x44 | 0x45 | 0x46 | 0x47 | 0x4B | 0x4C | 0x4D | 0x4E)
+                        && matches!(
+                            pt.token,
+                            0x44 | 0x45 | 0x46 | 0x47 | 0x4B | 0x4C | 0x4D | 0x4E
+                        )
                     {
                         iref.insert(*s);
                     }
@@ -1428,7 +1687,11 @@ fn infer_slot_types(
                 // batch-31c (N1): param slots (negative offsets) enter the model too — the
                 // pair() body routes them into the keep-only channel. Slot 0 (`this`) stays
                 // opaque.
-                ostack.push(if s != 0 { Some((s, ins.op.name == "PSF")) } else { None });
+                ostack.push(if s != 0 {
+                    Some((s, ins.op.name == "PSF"))
+                } else {
+                    None
+                });
             }
             "PshC4" | "PshC8" | "PshNull" | "PGA" | "PshGPtr" | "PshG4" | "PshRPtr" | "STR"
             | "TYPEID" | "OBJTYPE" | "PshListElmnt" => ostack.push(None),
@@ -1455,8 +1718,22 @@ fn infer_slot_types(
             }
             "CALL" | "CALLINTF" | "CALLBND" => {
                 let id = ins.dwords.first().copied().unwrap_or(0) as i32;
-                let rs = refs.func_ret_by_id(id).map(|d| !d.is_reference && ret_is_struct(&d.base_name(refs))).unwrap_or(false);
-                pair(&mut ostack, refs.func_params_by_id(id), refs.is_method_by_id(id), rs, &mut cand, &mut outref, &mut farg, &mut ikeep, &mut iref, &mut sarg);
+                let rs = refs
+                    .func_ret_by_id(id)
+                    .map(|d| !d.is_reference && ret_is_struct(&d.base_name(refs)))
+                    .unwrap_or(false);
+                pair(
+                    &mut ostack,
+                    refs.func_params_by_id(id),
+                    refs.is_method_by_id(id),
+                    rs,
+                    &mut cand,
+                    &mut outref,
+                    &mut farg,
+                    &mut ikeep,
+                    &mut iref,
+                    &mut sarg,
+                );
             }
             "CALLSYS" | "Thiscall1" => {
                 let ptr = ins.qwords.first().copied().unwrap_or(0) as i64;
@@ -1474,8 +1751,12 @@ fn infer_slot_types(
                         if let Some(ty) = owner.filter(|_| rslot > 0) {
                             if !ty.is_empty() {
                                 match cand.get(&rslot) {
-                                    None => { cand.insert(rslot, Some(ty)); }
-                                    Some(Some(prev)) if *prev != ty => { cand.insert(rslot, None); }
+                                    None => {
+                                        cand.insert(rslot, Some(ty));
+                                    }
+                                    Some(Some(prev)) if *prev != ty => {
+                                        cand.insert(rslot, None);
+                                    }
                                     _ => {}
                                 }
                             }
@@ -1490,7 +1771,8 @@ fn infer_slot_types(
                     if let Some(params) = refs.func_params_by_ptr(ptr) {
                         let args_end = ostack.len().saturating_sub(1); // receiver on top
                         let take = params.len().min(args_end);
-                        for (i, slot) in ostack[args_end - take..args_end].iter().rev().enumerate() {
+                        for (i, slot) in ostack[args_end - take..args_end].iter().rev().enumerate()
+                        {
                             if let (Some((s, is_psf)), Some(pt)) = (slot, params.get(i)) {
                                 // batch-31c: locals only — negative (param) slots must not
                                 // reach the farg/sarg retype maps.
@@ -1519,21 +1801,44 @@ fn infer_slot_types(
                     ostack.truncate(ostack.len() - drop_n);
                     continue;
                 }
-                let rs = refs.func_ret_by_ptr(ptr).map(|d| !d.is_reference && ret_is_struct(&d.base_name(refs))).unwrap_or(false);
-                pair(&mut ostack, refs.func_params_by_ptr(ptr), refs.is_method_by_ptr(ptr), rs, &mut cand, &mut outref, &mut farg, &mut ikeep, &mut iref, &mut sarg);
+                let rs = refs
+                    .func_ret_by_ptr(ptr)
+                    .map(|d| !d.is_reference && ret_is_struct(&d.base_name(refs)))
+                    .unwrap_or(false);
+                pair(
+                    &mut ostack,
+                    refs.func_params_by_ptr(ptr),
+                    refs.is_method_by_ptr(ptr),
+                    rs,
+                    &mut cand,
+                    &mut outref,
+                    &mut farg,
+                    &mut ikeep,
+                    &mut iref,
+                    &mut sarg,
+                );
             }
             _ => {}
         }
     }
-    let obj = cand.into_iter()
+    let obj = cand
+        .into_iter()
         .filter_map(|(slot, ty)| match ty {
-            Some(t) if !written.contains(&slot) && !is_primitive(t.trim_end_matches('@')) && t != "void" && !t.is_empty() => Some((slot, t)),
+            Some(t)
+                if !written.contains(&slot)
+                    && !is_primitive(t.trim_end_matches('@'))
+                    && t != "void"
+                    && !t.is_empty() =>
+            {
+                Some((slot, t))
+            }
             _ => None,
         })
         .collect();
     // out-ref float slots ARE written (the callee's whole point is to write them; typically a
     // `SetV4 slot, 0` init precedes) — no never-written filter. Conflicts already dropped.
-    let outref = outref.into_iter()
+    let outref = outref
+        .into_iter()
         .filter_map(|(slot, ty)| ty.map(|t| (slot, t)))
         .collect();
     // batch-25g: resolve the numeric value-arg candidates. A slot paired with BOTH an
@@ -1542,7 +1847,11 @@ fn infer_slot_types(
         .into_iter()
         .filter_map(|(slot, ty)| ty.map(|t| (slot, t)))
         .collect();
-    let both: Vec<i32> = float_args.keys().copied().filter(|s| ikeep.contains(s)).collect();
+    let both: Vec<i32> = float_args
+        .keys()
+        .copied()
+        .filter(|s| ikeep.contains(s))
+        .collect();
     for s in both {
         float_args.remove(&s);
         ikeep.remove(&s);
@@ -1576,7 +1885,9 @@ fn infer_slot_types(
             let n = ins.op.name;
             for (wi, &wd) in ins.words.iter().enumerate() {
                 let s = wd as i16 as i32;
-                let Some(kw) = small_args.get(&s) else { continue };
+                let Some(kw) = small_args.get(&s) else {
+                    continue;
+                };
                 let ok = match n {
                     "SetV1" | "SetV2" | "SetV4" => {
                         wi == 0 && fits(kw, ins.dwords.first().copied().unwrap_or(0))
@@ -1633,7 +1944,10 @@ fn infer_slot_types_from_members(
                 cand.insert(slot, Some(ty));
             }
             Some(Some(prev)) if *prev != ty => {
-                let (ph, nh) = (prev.split('<').next().unwrap_or(prev), ty.split('<').next().unwrap_or(&ty));
+                let (ph, nh) = (
+                    prev.split('<').next().unwrap_or(prev),
+                    ty.split('<').next().unwrap_or(&ty),
+                );
                 let merged = if ph == nh {
                     match (prev.contains('<'), ty.contains('<')) {
                         (true, false) => Some(prev.clone()),
@@ -1723,7 +2037,9 @@ fn infer_slot_types_from_members(
             _ => {}
         }
     }
-    cand.into_iter().filter_map(|(s, t)| t.map(|t| (s, t))).collect()
+    cand.into_iter()
+        .filter_map(|(s, t)| t.map(|t| (s, t)))
+        .collect()
 }
 
 /// A1 (illegal-op-round2.md): subtype inference for iterator locals. An `Iterator()` call
@@ -1760,7 +2076,13 @@ fn infer_iterator_types(
         .obj_locals
         .iter()
         .map(|(slot, tinfo)| {
-            let ty = super::types::DataType { token: 5, type_info: *tinfo, is_object_handle: true, ..Default::default() }.base_name(refs);
+            let ty = super::types::DataType {
+                token: 5,
+                type_info: *tinfo,
+                is_object_handle: true,
+                ..Default::default()
+            }
+            .base_name(refs);
             (*slot, ty)
         })
         .collect();
@@ -1795,16 +2117,23 @@ fn infer_iterator_types(
     let mut cand: HashMap<i32, Option<String>> = HashMap::new();
     // per-call consumption, mirroring `infer_slot_types::pair`: params + receiver + RVO
     // out-slot for methods; unknown param info -> clear (conservative: drop pending slots).
-    let consume = |stack: &mut Vec<Ent>, params: Option<usize>, is_method: bool, ret_struct: bool| {
-        let Some(n) = params else { stack.clear(); return; };
-        let rvo = (ret_struct && is_method) as usize;
-        let total = if is_method { n + 1 + rvo } else { n };
-        stack.truncate(stack.len() - total.min(stack.len()));
-    };
+    let consume =
+        |stack: &mut Vec<Ent>, params: Option<usize>, is_method: bool, ret_struct: bool| {
+            let Some(n) = params else {
+                stack.clear();
+                return;
+            };
+            let rvo = (ret_struct && is_method) as usize;
+            let total = if is_method { n + 1 + rvo } else { n };
+            stack.truncate(stack.len() - total.min(stack.len()));
+        };
     for ins in &instrs {
         match ins.op.name {
             "PshVPtr" | "PSF" => {
-                stack.push(Ent::Slot { slot: w0(ins), psf: ins.op.name == "PSF" });
+                stack.push(Ent::Slot {
+                    slot: w0(ins),
+                    psf: ins.op.name == "PSF",
+                });
             }
             "PshV4" | "PshV8" | "PshC4" | "PshC8" | "PshNull" | "PGA" | "PshGPtr" | "PshG4"
             | "PshRPtr" | "STR" | "TYPEID" | "OBJTYPE" | "PshListElmnt" => stack.push(Ent::Other),
@@ -1828,8 +2157,16 @@ fn infer_iterator_types(
             }
             "CALL" | "CALLINTF" | "CALLBND" => {
                 let id = ins.dwords.first().copied().unwrap_or(0) as i32;
-                let rs = refs.func_ret_by_id(id).map(|d| !d.is_reference && ret_is_struct(&d.base_name(refs))).unwrap_or(false);
-                consume(&mut stack, refs.func_params_by_id(id).map(|p| p.len()), refs.is_method_by_id(id), rs);
+                let rs = refs
+                    .func_ret_by_id(id)
+                    .map(|d| !d.is_reference && ret_is_struct(&d.base_name(refs)))
+                    .unwrap_or(false);
+                consume(
+                    &mut stack,
+                    refs.func_params_by_id(id).map(|p| p.len()),
+                    refs.is_method_by_id(id),
+                    rs,
+                );
             }
             "CALLSYS" | "Thiscall1" => {
                 let ptr = ins.qwords.first().copied().unwrap_or(0) as i64;
@@ -1849,17 +2186,31 @@ fn infer_iterator_types(
                         Ent::Member(c) => c.clone(),
                         Ent::Other => None,
                     };
-                    if let Ent::Slot { slot: out_slot, psf: true } = *out {
+                    if let Ent::Slot {
+                        slot: out_slot,
+                        psf: true,
+                    } = *out
+                    {
                         record_iterator_candidate(refs, known, &mut cand, out_slot, ptr, container);
                     }
                 }
-                let rs = refs.func_ret_by_ptr(ptr).map(|d| !d.is_reference && ret_is_struct(&d.base_name(refs))).unwrap_or(false);
-                consume(&mut stack, refs.func_params_by_ptr(ptr).map(|p| p.len()), refs.is_method_by_ptr(ptr), rs);
+                let rs = refs
+                    .func_ret_by_ptr(ptr)
+                    .map(|d| !d.is_reference && ret_is_struct(&d.base_name(refs)))
+                    .unwrap_or(false);
+                consume(
+                    &mut stack,
+                    refs.func_params_by_ptr(ptr).map(|p| p.len()),
+                    refs.is_method_by_ptr(ptr),
+                    rs,
+                );
             }
             _ => {}
         }
     }
-    cand.into_iter().filter_map(|(s, t)| t.map(|t| (s, t))).collect()
+    cand.into_iter()
+        .filter_map(|(s, t)| t.map(|t| (s, t)))
+        .collect()
 }
 
 /// Compose + record one iterator out-slot candidate (see [`infer_iterator_types`]).
@@ -1881,7 +2232,9 @@ fn record_iterator_candidate(
     // head = the Iterator() return type. Iterator INSTANCES usually serialize BARE (then the
     // container's `<...>` subtype list is appended), but some (TMap) compose fully — use
     // those directly, no container needed.
-    let Some(head) = refs.func_ret_by_ptr(ptr).map(|d| d.base_name(refs)) else { return };
+    let Some(head) = refs.func_ret_by_ptr(ptr).map(|d| d.base_name(refs)) else {
+        return;
+    };
     if !head.starts_with('T') || !head.contains("Iterator") {
         return;
     }
@@ -1890,7 +2243,9 @@ fn record_iterator_candidate(
     } else {
         // the container must itself be a subtyped template (`TArray<AGothicCharacter>`).
         let Some(c) = container else { return };
-        let (Some(lt), Some(gt)) = (c.find('<'), c.rfind('>')) else { return };
+        let (Some(lt), Some(gt)) = (c.find('<'), c.rfind('>')) else {
+            return;
+        };
         if gt <= lt + 1 {
             return;
         }
@@ -1954,11 +2309,15 @@ fn infer_sole_call_store_types(f: &Func, refs: &RefResolver) -> HashMap<i32, Str
             .and_then(|prev| match prev.op.name {
                 "CALL" | "CALLINTF" | "CALLBND" => {
                     let id = prev.dwords.first().copied().unwrap_or(0) as i32;
-                    refs.func_ret_by_id(id).filter(|d| d.token == 5).map(|d| d.base_name(refs))
+                    refs.func_ret_by_id(id)
+                        .filter(|d| d.token == 5)
+                        .map(|d| d.base_name(refs))
                 }
                 "CALLSYS" | "Thiscall1" => {
                     let ptr = prev.qwords.first().copied().unwrap_or(0) as i64;
-                    refs.func_ret_by_ptr(ptr).filter(|d| d.token == 5).map(|d| d.base_name(refs))
+                    refs.func_ret_by_ptr(ptr)
+                        .filter(|d| d.token == 5)
+                        .map(|d| d.base_name(refs))
                 }
                 _ => None,
             });
@@ -1972,7 +2331,9 @@ fn infer_sole_call_store_types(f: &Func, refs: &RefResolver) -> HashMap<i32, Str
             }
         }
     }
-    cand.into_iter().filter_map(|(s, t)| t.map(|t| (s, t))).collect()
+    cand.into_iter()
+        .filter_map(|(s, t)| t.map(|t| (s, t)))
+        .collect()
 }
 
 fn infer_call_result_types(
@@ -1989,11 +2350,20 @@ fn infer_call_result_types(
     // adopt an object type for them. ADDSi is excluded: its first word is a member OFFSET.
     let writes_other = |op: &str| {
         op != "ADDSi"
-            && (op.starts_with("SetV") || op.starts_with("CpyVtoV") || op.starts_with("RDR")
-                || op.contains("TO") || op == "PopRPtr"
-                || op.starts_with("ADD") || op.starts_with("SUB") || op.starts_with("MUL")
-                || op.starts_with("DIV") || op.starts_with("MOD") || op.starts_with("NEG")
-                || op.starts_with("Inc") || op.starts_with("Dec") || op == "NOT")
+            && (op.starts_with("SetV")
+                || op.starts_with("CpyVtoV")
+                || op.starts_with("RDR")
+                || op.contains("TO")
+                || op == "PopRPtr"
+                || op.starts_with("ADD")
+                || op.starts_with("SUB")
+                || op.starts_with("MUL")
+                || op.starts_with("DIV")
+                || op.starts_with("MOD")
+                || op.starts_with("NEG")
+                || op.starts_with("Inc")
+                || op.starts_with("Dec")
+                || op == "NOT")
     };
     let mut disq: HashSet<i32> = HashSet::new();
     for ins in &instrs {
@@ -2006,12 +2376,16 @@ fn infer_call_result_types(
     }
     let obj: HashSet<i32> = f.obj_locals.iter().map(|(s, _)| *s).collect();
     // per-call operand-stack consumption, mirroring `infer_slot_types`.
-    let consume = |stack: &mut Vec<Option<i32>>, params: Option<usize>, is_method: bool, ret_struct: bool| {
-        let Some(n) = params else { stack.clear(); return; };
-        let rvo = (ret_struct && is_method) as usize;
-        let total = if is_method { n + 1 + rvo } else { n };
-        stack.truncate(stack.len() - total.min(stack.len()));
-    };
+    let consume =
+        |stack: &mut Vec<Option<i32>>, params: Option<usize>, is_method: bool, ret_struct: bool| {
+            let Some(n) = params else {
+                stack.clear();
+                return;
+            };
+            let rvo = (ret_struct && is_method) as usize;
+            let total = if is_method { n + 1 + rvo } else { n };
+            stack.truncate(stack.len() - total.min(stack.len()));
+        };
     // rendered return type + receiver slot of the just-completed call (None once anything
     // non-benign executes, so a later CpyRtoV can't adopt a stale type).
     let mut last: Option<(String, Option<i32>)> = None;
@@ -2071,10 +2445,22 @@ fn infer_call_result_types(
             "CALL" | "CALLINTF" | "CALLBND" => {
                 let id = ins.dwords.first().copied().unwrap_or(0) as i32;
                 let is_m = refs.is_method_by_id(id);
-                let recv = if is_m { ostack.last().copied().flatten() } else { None };
+                let recv = if is_m {
+                    ostack.last().copied().flatten()
+                } else {
+                    None
+                };
                 let ret = refs.func_ret_by_id(id).map(|d| d.base_name(refs));
-                let rs = refs.func_ret_by_id(id).map(|d| !d.is_reference && ret_is_struct(&d.base_name(refs))).unwrap_or(false);
-                consume(&mut ostack, refs.func_params_by_id(id).map(|p| p.len()), is_m, rs);
+                let rs = refs
+                    .func_ret_by_id(id)
+                    .map(|d| !d.is_reference && ret_is_struct(&d.base_name(refs)))
+                    .unwrap_or(false);
+                consume(
+                    &mut ostack,
+                    refs.func_params_by_id(id).map(|p| p.len()),
+                    is_m,
+                    rs,
+                );
                 last = ret.map(|t| (t, recv));
             }
             "CALLSYS" | "Thiscall1" => {
@@ -2088,10 +2474,22 @@ fn infer_call_result_types(
                     continue;
                 }
                 let is_m = refs.is_method_by_ptr(ptr);
-                let recv = if is_m { ostack.last().copied().flatten() } else { None };
+                let recv = if is_m {
+                    ostack.last().copied().flatten()
+                } else {
+                    None
+                };
                 let ret = refs.func_ret_by_ptr(ptr).map(|d| d.base_name(refs));
-                let rs = refs.func_ret_by_ptr(ptr).map(|d| !d.is_reference && ret_is_struct(&d.base_name(refs))).unwrap_or(false);
-                consume(&mut ostack, refs.func_params_by_ptr(ptr).map(|p| p.len()), is_m, rs);
+                let rs = refs
+                    .func_ret_by_ptr(ptr)
+                    .map(|d| !d.is_reference && ret_is_struct(&d.base_name(refs)))
+                    .unwrap_or(false);
+                consume(
+                    &mut ostack,
+                    refs.func_params_by_ptr(ptr).map(|p| p.len()),
+                    is_m,
+                    rs,
+                );
                 last = ret.map(|t| (t, recv));
             }
             "CpyRtoV4" | "CpyRtoV8" => {
@@ -2122,7 +2520,9 @@ fn infer_call_result_types(
             }
         }
     }
-    cand.into_iter().filter_map(|(s, t)| t.map(|t| (s, t))).collect()
+    cand.into_iter()
+        .filter_map(|(s, t)| t.map(|t| (s, t)))
+        .collect()
 }
 
 /// Filter/compose one A3 return-type candidate (see [`infer_call_result_types`]):
@@ -2130,11 +2530,18 @@ fn infer_call_result_types(
 /// template head (`TMapIteratorPair` with no `<...>` in its T1 entry) is composed from the
 /// receiver iterator's inferred instantiation, or rejected when that isn't available either.
 fn usable_ret_type(ty: String, recv: Option<i32>, known: &HashMap<i32, String>) -> Option<String> {
-    if ty.is_empty() || ty == "void" || ty == "?" || ty == "auto" || is_primitive(&ty) || is_enum(&ty) {
+    if ty.is_empty()
+        || ty == "void"
+        || ty == "?"
+        || ty == "auto"
+        || is_primitive(&ty)
+        || is_enum(&ty)
+    {
         return None;
     }
     let b = ty.as_bytes();
-    let bare_template = !ty.contains('<') && b.len() >= 2 && b[0] == b'T' && b[1].is_ascii_uppercase();
+    let bare_template =
+        !ty.contains('<') && b.len() >= 2 && b[0] == b'T' && b[1].is_ascii_uppercase();
     if !bare_template {
         return Some(ty);
     }
@@ -2199,6 +2606,35 @@ fn nk_apply(
     }
 }
 
+/// Recover the numeric value behind the VM's explicit local-address dereference idiom:
+/// `PshVPtr slot; PopRPtr; RDRx value` reads `slot` into `value`, while the corresponding
+/// `WRTVx value` writes it back. The address itself may previously have travelled through a
+/// `CpyRtoV8` (iterator `Proceed()` returning `T&`), so the ordinary width-copy pass sees only
+/// an opaque 8-byte pointer and otherwise declares the pointee slot as `int`.
+///
+/// Requiring the exact adjacent three-op shape is the safety gate: a pushed pointer used as a
+/// call argument/member base is not numeric evidence. The resulting edge is symmetric because
+/// RDR/WRTV both prove that the local and the value-register slot have the same pointee kind;
+/// the existing anti-seed/width-conflict propagation still poisons reused or contradictory slots.
+fn indirect_numeric_edges(instrs: &[super::disasm::Instr]) -> Vec<(i32, i32, bool)> {
+    instrs
+        .windows(3)
+        .filter_map(|w| {
+            if w[0].op.name != "PshVPtr" || w[1].op.name != "PopRPtr" {
+                return None;
+            }
+            let is8 = match w[2].op.name {
+                "RDR4" | "WRTV4" => false,
+                "RDR8" | "WRTV8" => true,
+                _ => return None,
+            };
+            let addr = w[0].words.first().map(|v| *v as i16 as i32).unwrap_or(0);
+            let value = w[2].words.first().map(|v| *v as i16 as i32).unwrap_or(0);
+            Some((addr, value, is8))
+        })
+        .collect()
+}
+
 /// batch-28: unified numeric-kind dataflow (spec §2.3). The VM never converts implicitly —
 /// every numeric conversion is an explicit `*TO*` opcode and `SetV*`/`CpyVtoV*`/`CpyRtoV*`/
 /// `RDR*`/`WRTV*` are TYPELESS width copies — so a slot's numeric kind is statically
@@ -2228,7 +2664,8 @@ fn nk_apply(
 /// conversions, CMPi/CMPu(64)/CMPIi/CMPIu operands, NOT slots, TZ/TNZ-tested register
 /// payloads, plus the imported `anti` set (int-family value args / `int&` / `bool&` bindings).
 ///
-/// Propagation to fixed point over CpyVtoV edges: 8-byte edges carry {F64, I64} (an F32
+/// Propagation to fixed point over CpyVtoV edges and exact local-address RDR/WRTV edges:
+/// 8-byte edges carry {F64, I64} (an F32
 /// endpoint is a width conflict -> poison both); 4-byte edges carry {F32} (an F64 endpoint ->
 /// poison both). A poisoned endpoint poisons its copy partner — the copy pair must agree, or
 /// the retype would CREATE a new float->int warning on the copy line (batch-9 class).
@@ -2253,13 +2690,15 @@ fn infer_float_flow(
     let mut anti: HashSet<i32> = anti_imports.clone();
     let mut poison: HashSet<i32> = HashSet::new();
     let mut seeds: Vec<(i32, NumKind)> = Vec::new();
-    let mut edges: Vec<(i32, i32, bool)> = Vec::new(); // (dst, src, is_8_byte)
+    let mut edges = indirect_numeric_edges(&instrs); // (dst, src, is_8_byte)
 
     // (e) by-value param slots: float tokens seed, int-family tokens anti-seed (params are
     // never declared by us — they matter as propagation sources across CpyVtoV copies).
     let (param_offs, _rvo) = super::decompile::build_param_off_map_rvo(fc, &instrs, refs);
     for (off, idx) in &param_offs {
-        let Some(pt) = fc.param_types.get(*idx) else { continue };
+        let Some(pt) = fc.param_types.get(*idx) else {
+            continue;
+        };
         if pt.is_reference {
             continue; // the frame offset holds a pointer, not the value
         }
@@ -2306,9 +2745,14 @@ fn infer_float_flow(
             "RDR4" | "RDR8" | "WRTV4" | "WRTV8" => {
                 if let Some((tid, moff, own)) = ref_field {
                     let fty = refs.member(tid, moff).and_then(|name| {
-                        let own_ty = if own { fields.and_then(|m| m.get(name)) } else { None };
+                        let own_ty = if own {
+                            fields.and_then(|m| m.get(name))
+                        } else {
+                            None
+                        };
                         own_ty.map(String::as_str).or_else(|| {
-                            refs.type_by_id(tid).and_then(|cls| refs.field_type_by_class(cls, name))
+                            refs.type_by_id(tid)
+                                .and_then(|cls| refs.field_type_by_class(cls, name))
                         })
                     });
                     let is8 = n.ends_with('8');
@@ -2412,24 +2856,34 @@ fn infer_float_flow(
         last_ret = match n {
             "CALL" | "CALLINTF" | "CALLBND" => {
                 let id = ins.dwords.first().copied().unwrap_or(0) as i32;
-                refs.func_ret_by_id(id).filter(|d| !d.is_reference).map(|d| d.token)
+                refs.func_ret_by_id(id)
+                    .filter(|d| !d.is_reference)
+                    .map(|d| d.token)
             }
             "CALLSYS" | "Thiscall1" => {
                 let ptr = ins.qwords.first().copied().unwrap_or(0) as i64;
                 if refs.func_by_ptr(ptr) == Some("$beh0") {
                     None
                 } else {
-                    refs.func_ret_by_ptr(ptr).filter(|d| !d.is_reference).map(|d| d.token)
+                    refs.func_ret_by_ptr(ptr)
+                        .filter(|d| !d.is_reference)
+                        .map(|d| d.token)
                 }
             }
             "SUSPEND" => last_ret,
             _ => None,
         };
         ref_field = match n {
-            "LoadThisR" => Some((ins.dwords.first().copied().unwrap_or(0) as i32, w0(ins), true)),
-            "LoadRObjR" | "LoadVObjR" => {
-                Some((ins.dwords.first().copied().unwrap_or(0) as i32, w1(ins), false))
-            }
+            "LoadThisR" => Some((
+                ins.dwords.first().copied().unwrap_or(0) as i32,
+                w0(ins),
+                true,
+            )),
+            "LoadRObjR" | "LoadVObjR" => Some((
+                ins.dwords.first().copied().unwrap_or(0) as i32,
+                w1(ins),
+                false,
+            )),
             "CHKREF" | "ChkRefS" | "ChkNullV" | "SUSPEND" => ref_field,
             _ => None,
         };
@@ -2527,14 +2981,20 @@ fn infer_oor_arg_types(
         let t = line.trim();
         let t = t.strip_prefix("return ").unwrap_or(t);
         // parse `argN = RHS;`
-        let Some(rest) = t.strip_prefix("arg") else { continue };
+        let Some(rest) = t.strip_prefix("arg") else {
+            continue;
+        };
         let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-        let Ok(n) = digits.parse::<i32>() else { continue };
+        let Ok(n) = digits.parse::<i32>() else {
+            continue;
+        };
         if !oor_args.contains(&n) {
             continue;
         }
         let after = rest[digits.len()..].trim_start();
-        let Some(rhs) = after.strip_prefix("= ") else { continue };
+        let Some(rhs) = after.strip_prefix("= ") else {
+            continue;
+        };
         let rhs = rhs.trim().trim_end_matches(';').trim();
         // `this.<field>` (single member hop) -> the field's type.
         if let Some(field) = rhs.strip_prefix("this.") {
@@ -2577,7 +3037,10 @@ fn infer_oor_arg_types(
 /// sites of the same type. Any future site with reads keeps the hoist (status-quo error,
 /// never a wrong rewrite).
 fn has_no_default_ctor(ty: &str) -> bool {
-    matches!(ty, "FStatID" | "FScopeCycleCounter" | "FAngelscriptGameThreadScopeWorldContext")
+    matches!(
+        ty,
+        "FStatID" | "FScopeCycleCounter" | "FAngelscriptGameThreadScopeWorldContext"
+    )
 }
 
 /// batch-25i: net brace delta of an emitted body line. The structurer/emitter only produce
@@ -2896,11 +3359,21 @@ fn rewrite_no_assign_residual_assigns(
 /// initialized (the original per-case iterators). ANY reference that doesn't fit this shape
 /// (read before assign, a bare read outside every assign's block) keeps the hoisted
 /// declaration — the status-quo error, never a broken reference.
-fn rewrite_iterator_decl_init(body: &str, locals: &BTreeMap<i32, String>) -> (String, HashSet<i32>) {
+fn rewrite_iterator_decl_init(
+    body: &str,
+    locals: &BTreeMap<i32, String>,
+) -> (String, HashSet<i32>) {
     let is_iter = |ty: &str| {
         let h = ty.split('<').next().unwrap_or(ty);
-        matches!(h, "TArrayIterator" | "TArrayConstIterator" | "TSetIterator" | "TSetConstIterator"
-            | "TMapIterator" | "TMapConstIterator")
+        matches!(
+            h,
+            "TArrayIterator"
+                | "TArrayConstIterator"
+                | "TSetIterator"
+                | "TSetConstIterator"
+                | "TMapIterator"
+                | "TMapConstIterator"
+        )
     };
     let mut suppressed: HashSet<i32> = HashSet::new();
     let mut out = body.to_string();
@@ -3100,7 +3573,9 @@ fn infer_locals(f: &Func, refs: &RefResolver) -> BTreeMap<i32, String> {
                 if ins.op.name != op {
                     continue;
                 }
-                let Some(dst) = ins.words.first().map(|w| *w as i16 as i32) else { continue };
+                let Some(dst) = ins.words.first().map(|w| *w as i16 as i32) else {
+                    continue;
+                };
                 if dst <= 0 {
                     continue;
                 }
@@ -3121,28 +3596,40 @@ fn infer_locals(f: &Func, refs: &RefResolver) -> BTreeMap<i32, String> {
 }
 
 fn writes_int(n: &str) -> bool {
-    matches!(n, "SetV4" | "SetV1" | "ADDi" | "SUBi" | "MULi" | "DIVi" | "MODi" | "IncVi" | "DecVi"
+    matches!(
+        n,
+        "SetV4" | "SetV1" | "ADDi" | "SUBi" | "MULi" | "DIVi" | "MODi" | "IncVi" | "DecVi"
         | "NEGi" | "BAND" | "BOR" | "BXOR" | "BSLL" | "BSRA" | "ADDIi" | "SUBIi" | "MULIi"
         | "CpyVtoR4" | "RDR4" | "CpyRtoV4"
         // conversions whose RESULT is a 32-bit int/uint (*TO i/u/b/w)
         | "fTOi" | "fTOu" | "sbTOi" | "swTOi" | "ubTOi" | "uwTOi" | "dTOi" | "dTOu"
-        | "iTOb" | "iTOw" | "i64TOi")
+        | "iTOb" | "iTOw" | "i64TOi"
+    )
 }
 fn writes_float(n: &str) -> bool {
-    matches!(n, "ADDf" | "SUBf" | "MULf" | "DIVf" | "MODf" | "NEGf" | "IncVf" | "DecVf"
+    matches!(
+        n,
+        "ADDf" | "SUBf" | "MULf" | "DIVf" | "MODf" | "NEGf" | "IncVf" | "DecVf"
         | "ADDIf" | "SUBIf" | "MULIf"
         // conversions whose RESULT is float (*TO f)
-        | "iTOf" | "uTOf" | "dTOf" | "i64TOf" | "u64TOf")
+        | "iTOf" | "uTOf" | "dTOf" | "i64TOf" | "u64TOf"
+    )
 }
 fn writes_double(n: &str) -> bool {
-    matches!(n, "ADDd" | "SUBd" | "MULd" | "DIVd" | "MODd" | "NEGd"
+    matches!(
+        n,
+        "ADDd" | "SUBd" | "MULd" | "DIVd" | "MODd" | "NEGd"
         // conversions whose RESULT is double (*TO d)
-        | "iTOd" | "uTOd" | "fTOd" | "i64TOd" | "u64TOd")
+        | "iTOd" | "uTOd" | "fTOd" | "i64TOd" | "u64TOd"
+    )
 }
 fn writes_int64(n: &str) -> bool {
-    matches!(n, "SetV8" | "ADDi64" | "SUBi64" | "MULi64" | "DIVi64"
+    matches!(
+        n,
+        "SetV8" | "ADDi64" | "SUBi64" | "MULi64" | "DIVi64"
         // conversions whose RESULT is a 64-bit int/uint (*TO i64/u64)
-        | "uTOi64" | "iTOi64" | "fTOi64" | "dTOi64" | "fTOu64" | "dTOu64")
+        | "uTOi64" | "iTOi64" | "fTOi64" | "dTOi64" | "fTOu64" | "dTOu64"
+    )
 }
 
 /// Heuristic: a UE enum type name (`E` + uppercase), which is int-castable like a primitive.
@@ -3153,9 +3640,21 @@ fn is_enum(ty: &str) -> bool {
 
 /// True for AngelScript primitive scalar types (need an explicit initializer).
 fn is_primitive(ty: &str) -> bool {
-    matches!(ty,
-        "bool" | "int" | "int8" | "int16" | "int64" | "uint" | "uint8" | "uint16" | "uint64"
-        | "float" | "float32" | "double")
+    matches!(
+        ty,
+        "bool"
+            | "int"
+            | "int8"
+            | "int16"
+            | "int64"
+            | "uint"
+            | "uint8"
+            | "uint16"
+            | "uint64"
+            | "float"
+            | "float32"
+            | "double"
+    )
 }
 
 /// A default initializer literal for a base type.
@@ -3179,7 +3678,13 @@ fn render_const(ty: &str, v: u64) -> String {
         // Matches structure.rs's `fmt_float` (no suffix for 64-bit).
         "float" | "double" => format!("{}", f64::from_bits(v)),
         "float32" => format!("{}f", f32::from_bits(v as u32)),
-        "bool" => if v != 0 { "true".into() } else { "false".into() },
+        "bool" => {
+            if v != 0 {
+                "true".into()
+            } else {
+                "false".into()
+            }
+        }
         // Render integers per their actual width AND signedness: an unsigned type must not be
         // emitted negative (e.g. uint64 0xffff…ffff as -1), and signed types sign-extend from
         // their own width (the value lives in the low bits of the stored u64).
@@ -3210,4 +3715,52 @@ fn is_generated(
     class_members
         .get(f.namespace.as_str())
         .is_some_and(|members| members.contains(f.name.as_str()))
+}
+
+#[cfg(test)]
+mod indirect_numeric_edge_tests {
+    use super::indirect_numeric_edges;
+    use crate::cache::disasm::disassemble;
+
+    fn word_op(opcode: u8, slot: u16) -> i32 {
+        ((slot as u32) << 16 | opcode as u32) as i32
+    }
+
+    #[test]
+    fn exact_local_address_reads_and_writes_form_width_typed_edges() {
+        let read = disassemble(&[
+            word_op(48, 20), // PshVPtr w20
+            58,              // PopRPtr
+            word_op(94, 2),  // RDR4 w2
+        ])
+        .expect("read shape");
+        assert_eq!(indirect_numeric_edges(&read), vec![(20, 2, false)]);
+
+        let write = disassemble(&[
+            word_op(48, 24), // PshVPtr w24
+            58,              // PopRPtr
+            word_op(91, 6),  // WRTV8 w6
+        ])
+        .expect("write shape");
+        assert_eq!(indirect_numeric_edges(&write), vec![(24, 6, true)]);
+    }
+
+    #[test]
+    fn non_adjacent_or_non_local_pointer_shapes_do_not_form_edges() {
+        let interrupted = disassemble(&[
+            word_op(48, 20), // PshVPtr w20
+            49,              // RDSPtr: no exact local-address transfer
+            58,              // PopRPtr
+            word_op(94, 2),  // RDR4 w2
+        ])
+        .expect("interrupted shape");
+        assert!(indirect_numeric_edges(&interrupted).is_empty());
+
+        let no_transfer = disassemble(&[
+            word_op(48, 20), // ordinary pointer push
+            word_op(94, 2),  // no PopRPtr
+        ])
+        .expect("non-transfer shape");
+        assert!(indirect_numeric_edges(&no_transfer).is_empty());
+    }
 }

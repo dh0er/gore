@@ -5,11 +5,12 @@
 //! the `Modules` count at 0x14 by one. The load path has no integrity check (§6), so no
 //! checksum/GUID fix is needed.
 //!
-//! This implements the **case-(b)** path only: the mini module must reference no global
-//! types (its 7 tail tables empty = 28 zero bytes). Class-bearing / type-referencing
-//! modules need the case-(a) global-table merge (§9.7) — not yet implemented.
+//! [`splice`] is the strict **case-(b)** fast path: the mini module references no global
+//! types (its 7 tail tables are 28 zero bytes). [`splice_auto`] also supports **case-(a)**
+//! class-/native-reference-bearing modules by merging their minimal tail-table rows with
+//! collision checks.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use super::header::CacheHeader;
 use super::tables::{parse_tail_tables, TailTables, N_TABLES};
@@ -23,7 +24,7 @@ pub enum SpliceError {
     Wire(#[from] WireError),
     #[error("mini-cache must contain exactly 1 module, found {0}")]
     MiniNotSingle(u32),
-    #[error("mini-cache has non-empty global tables ({0} trailing bytes): it references global types/functions — needs the case-(a) table merge (not yet implemented). Keep the seed script to free, primitive-only functions (no classes).")]
+    #[error("mini-cache has non-empty global tables ({0} trailing bytes): strict splice only accepts referenceless modules; use splice_auto for a remapped class/function-bearing mini")]
     MiniHasGlobalRefs(usize),
     #[error("module name {0:?} already exists in the base cache (splicing would overwrite it)")]
     NameCollision(String),
@@ -31,7 +32,9 @@ pub enum SpliceError {
     NameNotFound(String),
     #[error("module name {0:?} is ambiguous: it matches one module's TMap key and a different module's inner name — pass the exact TMap key")]
     AmbiguousTarget(String),
-    #[error("tail tables of {which} don't end at EOF (ended {got:#x}, len {len:#x}) — parse desync")]
+    #[error(
+        "tail tables of {which} don't end at EOF (ended {got:#x}, len {len:#x}) — parse desync"
+    )]
     TailNotAtEof {
         which: &'static str,
         got: usize,
@@ -39,6 +42,130 @@ pub enum SpliceError {
     },
     #[error("OldReference key collision in table {table} ({key:#x}) — would need rekeying")]
     KeyCollision { table: usize, key: i64 },
+    #[error(
+        "cannot compose mini-caches: tail table {table} key {key:#x} was already contributed by an earlier mini"
+    )]
+    SequentialKeyCollision { table: usize, key: i64 },
+    #[error("cannot rebase sequential StaticNames: {0}")]
+    StaticNameRebase(#[from] super::remap::RemapError),
+}
+
+/// Stateful preflight for folding independently compiled mini-caches onto one running cache.
+///
+/// Each mini was remapped against a pristine base. A later mini must therefore never reuse a
+/// keyed T1–T5/T7 row contributed by an earlier mini: `mini wins` would retarget the earlier
+/// module. T6 is identity-by-text, so later pools are instead deduplicated and their absolute
+/// bytecode indices are rebased onto the names contributed by preceding minis. All validation is
+/// completed before the guard records a mini, keeping retry state atomic on error.
+#[derive(Debug)]
+pub struct SequentialMiniGuard {
+    /// Key -> canonical serialized row. An exact repeat is the same identity with the same fully
+    /// remapped dependencies and is safe to deduplicate; a different row at that key is a hard
+    /// hash/raw collision.
+    contributed_rows: [HashMap<i64, Vec<u8>>; N_TABLES],
+    /// T1/T3/T5 OldReference keys share one runtime-pointer domain even though they live in
+    /// separate serialized TMaps. A cross-table reuse is therefore just as unsafe as a collision
+    /// within one table.
+    contributed_ptr_tables: HashMap<i64, usize>,
+    static_context: super::remap::StaticNameRebaseContext,
+    contributed_static_names: Vec<String>,
+}
+
+impl SequentialMiniGuard {
+    /// Bind the guard to the exact base all incoming minis were independently remapped against.
+    pub fn new(base: &[u8]) -> Result<Self, SpliceError> {
+        Ok(Self {
+            contributed_rows: std::array::from_fn(|_| HashMap::new()),
+            contributed_ptr_tables: HashMap::new(),
+            static_context: super::remap::StaticNameRebaseContext::build(base)?,
+            contributed_static_names: Vec::new(),
+        })
+    }
+
+    /// Validate `mini`, return the StaticNames-rebased bytes, and record its rows atomically.
+    /// Callers must splice/replace with the returned bytes, not the input mini.
+    pub fn check_and_record(&mut self, mini: &[u8]) -> Result<Vec<u8>, SpliceError> {
+        let count = module_count(mini);
+        if count != 1 {
+            return Err(SpliceError::MiniNotSingle(count));
+        }
+        let tail = module_region_end(mini)?;
+        let tables = parse_tail_tables(mini, tail)?;
+        if tables.end != mini.len() {
+            return Err(SpliceError::TailNotAtEof {
+                which: "mini",
+                got: tables.end,
+                len: mini.len(),
+            });
+        }
+
+        // Preflight without mutating state so a rejected mini does not poison a retry.
+        const STATIC_NAMES: usize = 5;
+        let mut within_ptr_domain = HashMap::new();
+        for (table, rows) in tables.tables.iter().enumerate() {
+            if table == STATIC_NAMES {
+                continue;
+            }
+            let mut within_mini = HashSet::new();
+            for (row_index, &key) in rows.keys.iter().enumerate() {
+                if !within_mini.insert(key) {
+                    return Err(SpliceError::SequentialKeyCollision { table, key });
+                }
+                if matches!(table, 0 | 2 | 4) {
+                    let cross_table_within = within_ptr_domain
+                        .insert(key, table)
+                        .is_some_and(|prior| prior != table);
+                    let cross_table_prior = self
+                        .contributed_ptr_tables
+                        .get(&key)
+                        .is_some_and(|&prior| prior != table);
+                    if cross_table_within || cross_table_prior {
+                        return Err(SpliceError::SequentialKeyCollision { table, key });
+                    }
+                }
+                if let Some(prior) = self.contributed_rows[table].get(&key) {
+                    let start = rows.entry_starts[row_index];
+                    let end = rows
+                        .entry_starts
+                        .get(row_index + 1)
+                        .copied()
+                        .unwrap_or(rows.entries_end);
+                    if prior.as_slice() != &mini[start..end] {
+                        return Err(SpliceError::SequentialKeyCollision { table, key });
+                    }
+                }
+            }
+        }
+
+        // Rebase before mutating either collision state or the accumulated T6 pool. A malformed
+        // operand therefore leaves this guard reusable for a corrected mini.
+        let (rebased, appended_names) = super::remap::rebase_static_names_for_composition(
+            mini,
+            &self.static_context,
+            &self.contributed_static_names,
+        )?;
+
+        for (table, rows) in tables.tables.iter().enumerate() {
+            if table != STATIC_NAMES {
+                for (row_index, &key) in rows.keys.iter().enumerate() {
+                    let start = rows.entry_starts[row_index];
+                    let end = rows
+                        .entry_starts
+                        .get(row_index + 1)
+                        .copied()
+                        .unwrap_or(rows.entries_end);
+                    self.contributed_rows[table]
+                        .entry(key)
+                        .or_insert_with(|| mini[start..end].to_vec());
+                    if matches!(table, 0 | 2 | 4) {
+                        self.contributed_ptr_tables.entry(key).or_insert(table);
+                    }
+                }
+            }
+        }
+        self.contributed_static_names.extend(appended_names);
+        Ok(rebased)
+    }
 }
 
 /// Append `mini`'s single (primitive-only) module to `base`, returning the new cache bytes.
@@ -220,9 +347,23 @@ pub fn extract_module(cache: &[u8], target_name: &str) -> Result<Vec<u8>, Splice
 /// ship empty tables so the merge adds nothing and the cache stays vanilla-sized.
 ///
 /// Returns the remapped mini bytes. Any ref whose symbol is not present in `base` is a HARD
-/// ERROR (the module introduces a NEW symbol — minimal-row fallback is a later phase).
-pub fn remap_module_to_base(extracted_mini: &[u8], base: &[u8]) -> Result<Vec<u8>, super::remap::RemapError> {
+/// ERROR; use [`remap_module_to_base_with_options`] for the explicit minimal-row opt-in.
+pub fn remap_module_to_base(
+    extracted_mini: &[u8],
+    base: &[u8],
+) -> Result<Vec<u8>, super::remap::RemapError> {
     super::remap::remap_module_to_base(extracted_mini, base).map(|(bytes, _counts)| bytes)
+}
+
+/// Option-bearing variant of [`remap_module_to_base`]. See
+/// [`super::remap::RemapOptions::allow_new_symbols`] for the explicit minimal-row opt-in.
+pub fn remap_module_to_base_with_options(
+    extracted_mini: &[u8],
+    base: &[u8],
+    options: super::remap::RemapOptions,
+) -> Result<Vec<u8>, super::remap::RemapError> {
+    super::remap::remap_module_to_base_with_options(extracted_mini, base, options)
+        .map(|(bytes, _counts)| bytes)
 }
 
 /// Replace an existing module in `base` with `new_mini`'s single module, keeping the
@@ -291,7 +432,10 @@ pub fn replace_module(
     // own key matching is an in-place replace) — `target_name` may be the inner ModuleName,
     // not the TMap key, so comparing against it would miss the self-match. Mirrors the
     // `splice_case_a` collision guard.
-    let new_name = module_names(new_mini)?.into_iter().next().unwrap_or_default();
+    let new_name = module_names(new_mini)?
+        .into_iter()
+        .next()
+        .unwrap_or_default();
     if module_names(base)?
         .iter()
         .enumerate()
@@ -325,8 +469,7 @@ pub fn replace_module(
 
     // out = base[0..target_start] ++ MOD_BYTES ++ base[target_end..base_tail] ++ MERGED.
     // Header (incl. Modules count @0x14) stays byte-identical: count is unchanged.
-    let mut out =
-        Vec::with_capacity(base.len() + mod_bytes.len() + (new_mini.len() - mini_tail));
+    let mut out = Vec::with_capacity(base.len() + mod_bytes.len() + (new_mini.len() - mini_tail));
     out.extend_from_slice(&base[..target_start]); // header + modules before target
     out.extend_from_slice(mod_bytes); // replacement module
     out.extend_from_slice(&base[target_end..base_tail]); // modules after target

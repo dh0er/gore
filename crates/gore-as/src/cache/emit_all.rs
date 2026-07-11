@@ -10,7 +10,15 @@ use super::refs::RefResolver;
 
 pub struct EmitAllStats {
     pub written: usize,
+    /// Functions with an editable body actually written to the source tree.
+    pub functions: usize,
+    /// Raw function/method/constructor records parsed from the cache, including generated
+    /// accessors/default initializers and duplicate records intentionally omitted by the emitter.
+    pub cache_function_records: usize,
+    /// Number of modules containing at least one signature-preserving fallback body.
     pub stubbed: usize,
+    /// Exact number of signature-preserving fallback bodies across all modules.
+    pub stubbed_functions: usize,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -42,7 +50,7 @@ pub fn rename_free_fn(src: &str, name: &str, newname: &str) -> String {
 }
 
 /// Emit every module in `mods` to `outdir`, using `refs` for type/native resolution. Returns
-/// how many files were written and how many contain a stubbed (not-fully-recovered) function.
+/// module/function totals and how many contain a stubbed (not-fully-recovered) body.
 pub fn emit_all_tree(
     mods: &[Module],
     refs: &RefResolver,
@@ -70,15 +78,20 @@ pub fn emit_all_tree(
         for f in &m.functions {
             // generated factory accessors are skipped at emit (not free-emitted) — never
             // rename them, or free CALLS to the native binding would be broken.
-            if matches!(f.name.as_str(),
-                "Spawn" | "Get" | "GetOrCreate" | "Create" | "GetG1R" | "StaticClass") {
+            if matches!(
+                f.name.as_str(),
+                "Spawn" | "Get" | "GetOrCreate" | "Create" | "GetG1R" | "StaticClass"
+            ) {
                 continue;
             }
             // precise signature (render, not base_name) so only GENUINE same-signature
             // collisions are flagged — a coarse match falsely flags distinct overloads and
             // would rename (and break) functions that are validly called cross-module.
             let ptys: Vec<String> = f.params.iter().map(|p| p.ty.render(refs)).collect();
-            sig_mods.entry(format!("{}({})", f.name, ptys.join(","))).or_default().insert(i);
+            sig_mods
+                .entry(format!("{}({})", f.name, ptys.join(",")))
+                .or_default()
+                .insert(i);
         }
     }
     // A name is safe to file-locally rename in a module only if EVERY emittable free
@@ -97,8 +110,10 @@ pub fn emit_all_tree(
     for (i, m) in mods.iter().enumerate() {
         let mut sigs_by_name: HashMap<&str, Vec<String>> = HashMap::new();
         for f in &m.functions {
-            if matches!(f.name.as_str(),
-                "Spawn" | "Get" | "GetOrCreate" | "Create" | "GetG1R" | "StaticClass") {
+            if matches!(
+                f.name.as_str(),
+                "Spawn" | "Get" | "GetOrCreate" | "Create" | "GetG1R" | "StaticClass"
+            ) {
                 continue;
             }
             let ptys: Vec<String> = f.params.iter().map(|p| p.ty.render(refs)).collect();
@@ -115,18 +130,36 @@ pub fn emit_all_tree(
             }
         }
     }
-    let (mut written, mut stubbed) = (0usize, 0usize);
+    let (
+        mut written,
+        mut functions,
+        mut cache_function_records,
+        mut stubbed,
+        mut stubbed_functions,
+    ) = (0usize, 0usize, 0usize, 0usize, 0usize);
     for (mi, m) in mods.iter().enumerate() {
         let mut src = super::emit::emit_module(m, refs);
+        functions += super::emit::emitted_body_count(m, refs);
+        cache_function_records += m.functions.len()
+            + m.classes
+                .iter()
+                .map(|class| class.methods.len() + class.ctors.len())
+                .sum::<usize>();
         if let Some(names) = colliding_in.get(&mi) {
             for name in names {
                 src = rename_free_fn(&src, name, &format!("{name}_g{mi}"));
             }
         }
-        if src.contains("not fully recovered") {
+        let module_stubs = src.matches("body not fully recovered — stub [").count();
+        if module_stubs != 0 {
             stubbed += 1;
+            stubbed_functions += module_stubs;
         }
-        let rel = if m.file.is_empty() { format!("{}.as", m.name) } else { m.file.clone() };
+        let rel = if m.file.is_empty() {
+            format!("{}.as", m.name)
+        } else {
+            m.file.clone()
+        };
         let rel = rel.replace('\\', "/");
         // A cache entry's relative filename is untrusted: reject `..`, absolute, or
         // drive-prefixed components so output can never escape `outdir`.
@@ -150,16 +183,25 @@ pub fn emit_all_tree(
             }
         }
         if let Some(link) = symlinked {
-            eprintln!("skipping {}: symlinked path component {}", m.name, link.display());
+            eprintln!(
+                "skipping {}: symlinked path component {}",
+                m.name,
+                link.display()
+            );
             continue;
         }
         let path = outdir.join(&rel);
         if let Some(p) = path.parent() {
-            std::fs::create_dir_all(p)
-                .map_err(io(&format!("creating {}", p.display())))?;
+            std::fs::create_dir_all(p).map_err(io(&format!("creating {}", p.display())))?;
         }
         std::fs::write(&path, src).map_err(io(&format!("writing {}", path.display())))?;
         written += 1;
     }
-    Ok(EmitAllStats { written, stubbed })
+    Ok(EmitAllStats {
+        written,
+        functions,
+        cache_function_records,
+        stubbed,
+        stubbed_functions,
+    })
 }
