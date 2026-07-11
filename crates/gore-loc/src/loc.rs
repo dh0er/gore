@@ -43,6 +43,14 @@ pub enum LcacheError {
     DirtyTail,
     #[error("key '{0}' not found")]
     KeyNotFound(String),
+    #[error("key '{0}' already exists")]
+    DuplicateKey(String),
+    #[error("localization key must not be empty")]
+    EmptyKey,
+    #[error("language '{0}' is not declared in the lcache header")]
+    UnknownLanguage(String),
+    #[error("language '{0}' was specified more than once (case-insensitively)")]
+    DuplicateLanguage(String),
     #[error("language '{lang}' not found for key '{key}'")]
     LangNotFound { key: String, lang: String },
 }
@@ -74,6 +82,14 @@ struct FString {
 }
 
 impl FString {
+    fn new(text: impl Into<String>) -> Self {
+        Self {
+            raw: Vec::new(),
+            text: text.into(),
+            changed: true,
+        }
+    }
+
     fn to_bytes(&self) -> Vec<u8> {
         if self.changed {
             encode_fstring(&self.text)
@@ -199,9 +215,17 @@ impl<'a> Reader<'a> {
             }
             let bytes = &self.data[self.off..self.off + n];
             self.off += n;
-            let trimmed = if bytes.last() == Some(&0) { &bytes[..n - 1] } else { bytes };
+            let trimmed = if bytes.last() == Some(&0) {
+                &bytes[..n - 1]
+            } else {
+                bytes
+            };
             let text = String::from_utf8_lossy(trimmed).into_owned();
-            Ok(FString { raw: self.data[start..self.off].to_vec(), text, changed: false })
+            Ok(FString {
+                raw: self.data[start..self.off].to_vec(),
+                text,
+                changed: false,
+            })
         } else {
             // `count.unsigned_abs()` avoids the `-count` overflow when count is
             // i32::MIN (which would panic in debug builds).
@@ -220,7 +244,11 @@ impl<'a> Reader<'a> {
                 u16s.pop();
             }
             let text = String::from_utf16_lossy(&u16s);
-            Ok(FString { raw: self.data[start..self.off].to_vec(), text, changed: false })
+            Ok(FString {
+                raw: self.data[start..self.off].to_vec(),
+                text,
+                changed: false,
+            })
         }
     }
 
@@ -247,7 +275,10 @@ impl Lcache {
         if plain.len() < 16 {
             return Err(LcacheError::Invalid("file too small"));
         }
-        let mut r = Reader { data: &plain, off: 0 };
+        let mut r = Reader {
+            data: &plain,
+            off: 0,
+        };
         let prefix = plain[0..1].to_vec();
         r.off = 1;
         let magic = r.read_raw_string()?;
@@ -332,6 +363,12 @@ impl Lcache {
         self.groups.len()
     }
 
+    /// Return whether `key` exists, using the same exact-then-ASCII-case-insensitive
+    /// matching as [`Self::set_value`].
+    pub fn has_key(&self, key: &str) -> bool {
+        self.find_key(key).is_some()
+    }
+
     /// Flatten to `{ text_id: { language: value } }`, dropping empty values
     /// (and, when `keep_empty` is false, ids with no values at all).
     pub fn export(&self, keep_empty: bool) -> BTreeMap<String, BTreeMap<String, String>> {
@@ -355,9 +392,177 @@ impl Lcache {
     /// The key is matched exactly first, then case-insensitively: the editor/catalog canonicalizes
     /// loc ids to lowercase while the `.lcache` keeps each record's original casing, so a lowercased
     /// id must still update a mixed-case record rather than silently failing.
+    /// Language names use the same exact-then-case-insensitive lookup while retaining the cache's
+    /// canonical spelling on disk.
     pub fn set_value(&mut self, key: &str, lang: &str, text: &str) -> Result<(), LcacheError> {
         let idx = self
+            .find_key(key)
+            .ok_or_else(|| LcacheError::KeyNotFound(key.to_string()))?;
+        let group = &mut self.groups[idx];
+        let pair_idx = group
+            .main
+            .pairs
+            .iter()
+            .position(|p| p.lang.text == lang)
+            .or_else(|| {
+                group
+                    .main
+                    .pairs
+                    .iter()
+                    .position(|p| p.lang.text.eq_ignore_ascii_case(lang))
+            })
+            .ok_or_else(|| LcacheError::LangNotFound {
+                key: key.to_string(),
+                lang: lang.to_string(),
+            })?;
+        let pair = &mut group.main.pairs[pair_idx];
+        pair.value.text = text.to_string();
+        pair.value.changed = true;
+        self.dirty = true;
+        Ok(())
+    }
+
+    /// Insert a new localization id with the supplied language values.
+    ///
+    /// The id and language names are matched case-insensitively for validation.
+    /// ASCII casing in new ids is canonicalized to the shipped cache's lowercase form,
+    /// while stored language names use the canonical spelling and order declared
+    /// by the file header. Languages without a supplied value are omitted, which
+    /// mirrors the shape of the shipped cache. Validation is all-or-nothing: on
+    /// error, the cache is left unchanged.
+    pub fn add_key(
+        &mut self,
+        key: &str,
+        values: &BTreeMap<String, String>,
+    ) -> Result<(), LcacheError> {
+        if key.is_empty() {
+            return Err(LcacheError::EmptyKey);
+        }
+        let canonical_key = key.to_ascii_lowercase();
+        if self.has_key(&canonical_key) {
+            return Err(LcacheError::DuplicateKey(key.to_string()));
+        }
+        if self
             .groups
+            .windows(2)
+            .any(|pair| pair[0].main.key.text.as_str() > pair[1].main.key.text.as_str())
+        {
+            return Err(LcacheError::Invalid("localization id order"));
+        }
+
+        // Resolve every requested name before mutating `self`. A BTreeMap may
+        // contain differently-cased spellings of the same language, so reject
+        // that ambiguity explicitly instead of silently choosing one value.
+        let mut resolved: BTreeMap<usize, &String> = BTreeMap::new();
+        for (requested, value) in values {
+            let lang_idx = self
+                .find_language(requested)
+                .ok_or_else(|| LcacheError::UnknownLanguage(requested.clone()))?;
+            if resolved.insert(lang_idx, value).is_some() {
+                return Err(LcacheError::DuplicateLanguage(requested.clone()));
+            }
+        }
+
+        let pairs = resolved
+            .into_iter()
+            .map(|(lang_idx, value)| Pair {
+                lang: FString::new(self.languages[lang_idx].text.clone()),
+                value: FString::new(value.clone()),
+            })
+            .collect();
+        let new_group_count = self
+            .groups
+            .len()
+            .checked_add(1)
+            .and_then(|count| i32::try_from(count).ok())
+            .ok_or(LcacheError::Invalid("group count"))?;
+        let group = Group {
+            main: Record {
+                key: FString::new(canonical_key.clone()),
+                pairs,
+            },
+            // New text ids do not need optional metadata such as `Expression`;
+            // real ordinary groups use an empty meta record.
+            meta: Record {
+                key: FString::new(""),
+                pairs: Vec::new(),
+            },
+        };
+
+        // The shipped cache is sorted by text id, and the runtime lookup relies on that ordering
+        // (an otherwise well-formed id appended after `zombie` decodes offline but resolves as a
+        // missing string-table entry in game). Keep the on-disk groups in the same ordinal order;
+        // the existing records themselves remain byte-identical and are only shifted as a unit.
+        let insert_at = self
+            .groups
+            .partition_point(|existing| existing.main.key.text.as_str() < canonical_key.as_str());
+        self.groups.insert(insert_at, group);
+        self.group_count = new_group_count;
+        self.dirty = true;
+        Ok(())
+    }
+
+    /// Update an existing `(key, language)` pair, insert a missing language pair
+    /// into an existing key, or append a new key when the id is absent.
+    pub fn set_or_add_value(
+        &mut self,
+        key: &str,
+        lang: &str,
+        text: &str,
+    ) -> Result<(), LcacheError> {
+        let lang_idx = self
+            .find_language(lang)
+            .ok_or_else(|| LcacheError::UnknownLanguage(lang.to_string()))?;
+        let Some(group_idx) = self.find_key(key) else {
+            let mut values = BTreeMap::new();
+            values.insert(self.languages[lang_idx].text.clone(), text.to_string());
+            return self.add_key(key, &values);
+        };
+
+        let canonical_lang = self.languages[lang_idx].text.clone();
+        let group = &mut self.groups[group_idx];
+        if let Some(pair) = group
+            .main
+            .pairs
+            .iter_mut()
+            .find(|p| p.lang.text.eq_ignore_ascii_case(&canonical_lang))
+        {
+            pair.value.text = text.to_string();
+            pair.value.changed = true;
+        } else {
+            // Pair order follows header order. Preserve any unusual/unknown
+            // existing pairs after the declared languages rather than dropping
+            // or rewriting them.
+            let header_order: BTreeMap<String, usize> = self
+                .languages
+                .iter()
+                .enumerate()
+                .map(|(idx, language)| (language.text.to_ascii_lowercase(), idx))
+                .collect();
+            let insert_at = group
+                .main
+                .pairs
+                .iter()
+                .position(|pair| {
+                    header_order
+                        .get(&pair.lang.text.to_ascii_lowercase())
+                        .is_some_and(|&idx| idx > lang_idx)
+                })
+                .unwrap_or(group.main.pairs.len());
+            group.main.pairs.insert(
+                insert_at,
+                Pair {
+                    lang: FString::new(canonical_lang),
+                    value: FString::new(text),
+                },
+            );
+        }
+        self.dirty = true;
+        Ok(())
+    }
+
+    fn find_key(&self, key: &str) -> Option<usize> {
+        self.groups
             .iter()
             .position(|g| g.main.key.text == key)
             .or_else(|| {
@@ -365,21 +570,17 @@ impl Lcache {
                     .iter()
                     .position(|g| g.main.key.text.eq_ignore_ascii_case(key))
             })
-            .ok_or_else(|| LcacheError::KeyNotFound(key.to_string()))?;
-        let group = &mut self.groups[idx];
-        let pair = group
-            .main
-            .pairs
-            .iter_mut()
-            .find(|p| p.lang.text == lang)
-            .ok_or_else(|| LcacheError::LangNotFound {
-                key: key.to_string(),
-                lang: lang.to_string(),
-            })?;
-        pair.value.text = text.to_string();
-        pair.value.changed = true;
-        self.dirty = true;
-        Ok(())
+    }
+
+    fn find_language(&self, lang: &str) -> Option<usize> {
+        self.languages
+            .iter()
+            .position(|language| language.text == lang)
+            .or_else(|| {
+                self.languages
+                    .iter()
+                    .position(|language| language.text.eq_ignore_ascii_case(lang))
+            })
     }
 }
 
@@ -437,7 +638,8 @@ mod tests {
     #[test]
     fn edit_round_trips_through_encrypt() {
         let mut lc = Lcache::decode(&synthetic()).unwrap();
-        lc.set_value("itfo_cheese", "english", "Stinky Cheese").unwrap();
+        lc.set_value("itfo_cheese", "english", "Stinky Cheese")
+            .unwrap();
         let re = Lcache::decode(&lc.encode().unwrap()).unwrap();
         assert_eq!(re.export(false)["itfo_cheese"]["english"], "Stinky Cheese");
         // untouched value preserved
@@ -461,8 +663,12 @@ mod tests {
         // A length-changing edit must not accrete trailing padding blocks when
         // the file is decoded and re-encoded again (dropping the stale tail).
         let mut lc = Lcache::decode(&synthetic()).unwrap();
-        lc.set_value("itfo_cheese", "english", "A considerably longer cheese name")
-            .unwrap();
+        lc.set_value(
+            "itfo_cheese",
+            "english",
+            "A considerably longer cheese name",
+        )
+        .unwrap();
         let once = lc.encode().unwrap();
         let twice = Lcache::decode(&once).unwrap().encode().unwrap();
         assert_eq!(once, twice, "re-importing must not grow or alter the file");
@@ -490,5 +696,365 @@ mod tests {
         lc.set_value("ITFO_Cheese", "english", "Gouda").unwrap();
         let re = Lcache::decode(&lc.encode().unwrap()).unwrap();
         assert_eq!(re.export(false)["itfo_cheese"]["english"], "Gouda");
+    }
+
+    #[test]
+    fn set_value_matches_language_case_insensitively() {
+        let mut lc = Lcache::decode(&synthetic()).unwrap();
+        lc.set_value("itfo_cheese", "English", "Gouda").unwrap();
+        let re = Lcache::decode(&lc.encode().unwrap()).unwrap();
+        assert_eq!(re.export(false)["itfo_cheese"]["english"], "Gouda");
+    }
+
+    fn values(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(lang, value)| (lang.to_string(), value.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn add_key_round_trips_and_preserves_existing_values() {
+        let mut lc = Lcache::decode(&synthetic()).unwrap();
+        lc.add_key(
+            "itfo_bread",
+            &values(&[("english", "Bread"), ("german", "Brötchen")]),
+        )
+        .unwrap();
+
+        let re = Lcache::decode(&lc.encode().unwrap()).unwrap();
+        let map = re.export(false);
+        assert_eq!(re.key_count(), 2);
+        assert_eq!(map["itfo_bread"]["english"], "Bread");
+        assert_eq!(map["itfo_bread"]["german"], "Brötchen");
+        assert_eq!(map["itfo_cheese"]["english"], "Cheese");
+    }
+
+    /// Adding a group changes only the group count and inserts one record at its sorted position;
+    /// the original header and group records stay byte-identical.
+    #[test]
+    fn add_key_inserts_sorted_without_rewriting_existing_records() {
+        let enc = synthetic();
+        let lc0 = Lcache::decode(&enc).unwrap();
+        let plain0 = aes_ecb(&enc, false).unwrap();
+        let count_offset = 1
+            + lc0.magic_raw.len()
+            + lc0.lang_count_raw.len()
+            + lc0
+                .languages
+                .iter()
+                .map(|language| language.raw.len())
+                .sum::<usize>();
+        let groups_end = plain0.len() - lc0.tail.len();
+        let original_groups = &plain0[count_offset + 4..groups_end];
+
+        let mut lc = Lcache::decode(&enc).unwrap();
+        lc.add_key("itfo_bread", &values(&[("german", "Brot")]))
+            .unwrap();
+        let plain1 = aes_ecb(&lc.encode().unwrap(), false).unwrap();
+        let decoded = Lcache::decode(&lc.encode().unwrap()).unwrap();
+        let inserted_len =
+            decoded.groups[0].main.to_bytes().len() + decoded.groups[0].meta.to_bytes().len();
+
+        assert_eq!(&plain1[..count_offset], &plain0[..count_offset]);
+        assert_eq!(
+            i32::from_le_bytes(plain1[count_offset..count_offset + 4].try_into().unwrap()),
+            2
+        );
+        assert_eq!(
+            &plain1[count_offset + 4 + inserted_len
+                ..count_offset + 4 + inserted_len + original_groups.len()],
+            original_groups
+        );
+        assert_eq!(
+            decoded
+                .groups
+                .iter()
+                .map(|group| group.main.key.text.as_str())
+                .collect::<Vec<_>>(),
+            vec!["itfo_bread", "itfo_cheese"]
+        );
+        assert_eq!(plain1.len() % 16, 0);
+    }
+
+    #[test]
+    fn add_key_keeps_global_order_across_multiple_insert_positions() {
+        let mut lc = Lcache::decode(&synthetic()).unwrap();
+        lc.add_key("zzz_probe", &values(&[("english", "last")]))
+            .unwrap();
+        lc.add_key("aaa_probe", &values(&[("english", "first")]))
+            .unwrap();
+
+        let re = Lcache::decode(&lc.encode().unwrap()).unwrap();
+        assert_eq!(
+            re.groups
+                .iter()
+                .map(|group| group.main.key.text.as_str())
+                .collect::<Vec<_>>(),
+            vec!["aaa_probe", "itfo_cheese", "zzz_probe"]
+        );
+    }
+
+    #[test]
+    fn add_key_rejects_unsorted_input_before_mutating() {
+        let mut lc = Lcache::decode(&synthetic()).unwrap();
+        lc.add_key("zzz_probe", &values(&[("english", "last")]))
+            .unwrap();
+        lc.groups.swap(0, 1);
+        let before = lc.groups.len();
+
+        assert!(matches!(
+            lc.add_key("aaa_probe", &values(&[("english", "first")])),
+            Err(LcacheError::Invalid("localization id order"))
+        ));
+        assert_eq!(lc.groups.len(), before);
+        assert!(!lc.has_key("aaa_probe"));
+    }
+
+    #[test]
+    fn add_key_uses_empty_meta_and_only_supplied_languages() {
+        let mut lc = Lcache::decode(&synthetic()).unwrap();
+        lc.add_key("itfo_bread", &values(&[("german", "Brot")]))
+            .unwrap();
+
+        let re = Lcache::decode(&lc.encode().unwrap()).unwrap();
+        let group = re
+            .groups
+            .iter()
+            .find(|group| group.main.key.text == "itfo_bread")
+            .unwrap();
+        assert_eq!(group.main.key.text, "itfo_bread");
+        assert_eq!(group.main.pairs.len(), 1);
+        assert_eq!(group.main.pairs[0].lang.text, "german");
+        assert_eq!(group.meta.key.text, "");
+        assert!(group.meta.pairs.is_empty());
+    }
+
+    #[test]
+    fn add_key_orders_pairs_by_header_not_map_order() {
+        fn fstr(s: &str) -> Vec<u8> {
+            super::encode_fstring(s)
+        }
+        let mut plain = Vec::new();
+        plain.push(0u8);
+        plain.extend_from_slice(&(MAGIC.len() as i32).to_le_bytes());
+        plain.extend_from_slice(MAGIC);
+        plain.extend_from_slice(&2i32.to_le_bytes());
+        plain.extend_from_slice(&fstr("german"));
+        plain.extend_from_slice(&fstr("english"));
+        plain.extend_from_slice(&0i32.to_le_bytes());
+        let pad = (16 - (plain.len() % 16)) % 16;
+        plain.extend(std::iter::repeat(0u8).take(pad));
+
+        let mut lc = Lcache::decode(&aes_ecb(&plain, true).unwrap()).unwrap();
+        lc.add_key(
+            "itfo_bread",
+            &values(&[("english", "Bread"), ("german", "Brot")]),
+        )
+        .unwrap();
+        let re = Lcache::decode(&lc.encode().unwrap()).unwrap();
+        let langs: Vec<&str> = re.groups[0]
+            .main
+            .pairs
+            .iter()
+            .map(|pair| pair.lang.text.as_str())
+            .collect();
+        assert_eq!(langs, vec!["german", "english"]);
+    }
+
+    #[test]
+    fn add_key_validates_before_mutating() {
+        let mut lc = Lcache::decode(&synthetic()).unwrap();
+        assert!(matches!(
+            lc.add_key(
+                "itfo_bread",
+                &values(&[("english", "Bread"), ("klingon", "Qapla")])
+            ),
+            Err(LcacheError::UnknownLanguage(language)) if language == "klingon"
+        ));
+        assert!(!lc.has_key("itfo_bread"));
+        assert_eq!(lc.key_count(), 1);
+    }
+
+    #[test]
+    fn add_key_rejects_empty_duplicate_key_and_duplicate_language_aliases() {
+        let mut lc = Lcache::decode(&synthetic()).unwrap();
+        assert!(matches!(
+            lc.add_key("", &values(&[("english", "x")])),
+            Err(LcacheError::EmptyKey)
+        ));
+        assert!(matches!(
+            lc.add_key("ITFO_Cheese", &values(&[("english", "x")])),
+            Err(LcacheError::DuplicateKey(_))
+        ));
+        assert!(matches!(
+            lc.add_key(
+                "itfo_bread",
+                &values(&[("german", "eins"), ("GERMAN", "zwei")])
+            ),
+            Err(LcacheError::DuplicateLanguage(_))
+        ));
+        assert_eq!(lc.key_count(), 1);
+    }
+
+    #[test]
+    fn add_key_canonicalizes_id_and_language_case_and_reimport_is_stable() {
+        let mut lc = Lcache::decode(&synthetic()).unwrap();
+        lc.add_key("ITFO_Bread", &values(&[("German", "Brot")]))
+            .unwrap();
+        let once = lc.encode().unwrap();
+        let decoded = Lcache::decode(&once).unwrap();
+        assert_eq!(decoded.export(false)["itfo_bread"]["german"], "Brot");
+        assert_eq!(decoded.encode().unwrap(), once);
+    }
+
+    #[test]
+    fn has_key_matches_case_insensitively() {
+        let lc = Lcache::decode(&synthetic()).unwrap();
+        assert!(lc.has_key("itfo_cheese"));
+        assert!(lc.has_key("ITFO_CHEESE"));
+        assert!(!lc.has_key("itfo_bread"));
+    }
+
+    #[test]
+    fn set_or_add_value_updates_existing_and_creates_missing_key() {
+        let mut lc = Lcache::decode(&synthetic()).unwrap();
+        lc.set_or_add_value("itfo_cheese", "english", "Gouda")
+            .unwrap();
+        lc.set_or_add_value("itfo_bread", "german", "Brot").unwrap();
+
+        let re = Lcache::decode(&lc.encode().unwrap()).unwrap();
+        assert_eq!(re.export(false)["itfo_cheese"]["english"], "Gouda");
+        assert_eq!(re.export(false)["itfo_bread"]["german"], "Brot");
+        assert_eq!(
+            re.groups
+                .iter()
+                .find(|group| group.main.key.text == "itfo_bread")
+                .unwrap()
+                .main
+                .pairs
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn set_or_add_value_inserts_missing_language_in_header_order() {
+        let mut lc = Lcache::decode(&synthetic()).unwrap();
+        lc.add_key("itfo_bread", &values(&[("german", "Brot")]))
+            .unwrap();
+        lc.set_or_add_value("itfo_bread", "english", "Bread")
+            .unwrap();
+
+        let re = Lcache::decode(&lc.encode().unwrap()).unwrap();
+        let group = re
+            .groups
+            .iter()
+            .find(|group| group.main.key.text == "itfo_bread")
+            .unwrap();
+        let langs: Vec<&str> = group
+            .main
+            .pairs
+            .iter()
+            .map(|pair| pair.lang.text.as_str())
+            .collect();
+        assert_eq!(langs, vec!["english", "german"]);
+    }
+
+    #[test]
+    fn set_or_add_value_rejects_unknown_language_without_adding_key() {
+        let mut lc = Lcache::decode(&synthetic()).unwrap();
+        assert!(matches!(
+            lc.set_or_add_value("itfo_bread", "klingon", "Qapla"),
+            Err(LcacheError::UnknownLanguage(_))
+        ));
+        assert!(!lc.has_key("itfo_bread"));
+    }
+
+    /// Optional read-only smoke test against the shipped game cache. The live
+    /// file is read into memory and never modified.
+    #[test]
+    fn real_lcache_add_key_survives_round_trip() {
+        let Ok(path) = std::env::var("GORE_LOC_REAL_LCACHE") else {
+            eprintln!("GORE_LOC_REAL_LCACHE not set; skipping real-file test");
+            return;
+        };
+        let encrypted = std::fs::read(path).unwrap();
+        let original = Lcache::decode(&encrypted).unwrap();
+        assert_eq!(original.encode().unwrap(), encrypted);
+        assert!(original
+            .groups
+            .windows(2)
+            .all(|pair| pair[0].main.key.text.as_str() <= pair[1].main.key.text.as_str()));
+
+        // Keep a compact diagnostic for reverse-engineering optional metadata.
+        // It is emitted only when the real-file environment gate is enabled.
+        let mut meta_keys: BTreeMap<String, usize> = BTreeMap::new();
+        let mut meta_pair_names: BTreeMap<String, usize> = BTreeMap::new();
+        let mut meta_pair_examples: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
+        let mut meta_examples = Vec::new();
+        for group in &original.groups {
+            if !group.meta.key.text.is_empty() {
+                *meta_keys.entry(group.meta.key.text.clone()).or_default() += 1;
+            }
+            for pair in &group.meta.pairs {
+                *meta_pair_names.entry(pair.lang.text.clone()).or_default() += 1;
+                let examples = meta_pair_examples
+                    .entry(pair.lang.text.clone())
+                    .or_default();
+                if examples.len() < 12 {
+                    examples.push((group.main.key.text.clone(), pair.value.text.clone()));
+                }
+            }
+            if meta_examples.len() < 20
+                && (!group.meta.key.text.is_empty() || !group.meta.pairs.is_empty())
+            {
+                meta_examples.push((
+                    group.main.key.text.clone(),
+                    group.meta.key.text.clone(),
+                    group
+                        .meta
+                        .pairs
+                        .iter()
+                        .map(|pair| (pair.lang.text.clone(), pair.value.text.clone()))
+                        .collect::<Vec<_>>(),
+                ));
+            }
+        }
+        eprintln!(
+            "real lcache metadata: groups={}, meta_keys={meta_keys:?}, \
+             pair_names={meta_pair_names:?}, pair_examples={meta_pair_examples:?}, \
+             examples={meta_examples:?}",
+            original.groups.len()
+        );
+
+        let key = "goremod_test_added_key";
+        assert!(
+            !original.has_key(key),
+            "test key unexpectedly exists in game cache"
+        );
+        let before = original.export(true);
+        let mut edited = Lcache::decode(&encrypted).unwrap();
+        edited
+            .add_key(
+                key,
+                &values(&[
+                    ("english", "Added by gore-loc"),
+                    ("german", "Von gore-loc hinzugefügt"),
+                ]),
+            )
+            .unwrap();
+        let encoded = edited.encode().unwrap();
+        let decoded = Lcache::decode(&encoded).unwrap();
+        assert!(decoded
+            .groups
+            .windows(2)
+            .all(|pair| pair[0].main.key.text.as_str() <= pair[1].main.key.text.as_str()));
+
+        let mut after = decoded.export(true);
+        assert_eq!(after[key]["english"], "Added by gore-loc");
+        assert_eq!(after[key]["german"], "Von gore-loc hinzugefügt");
+        after.remove(key);
+        assert_eq!(after, before, "pre-existing localization semantics changed");
     }
 }
