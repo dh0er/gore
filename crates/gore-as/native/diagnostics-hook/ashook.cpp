@@ -1,9 +1,9 @@
 // Temporary G1R AngelScript diagnostic capture helper.
 //
 // Hooks only the UE-AngelScript per-message callback. The Rust launcher independently scans this
-// same masked AOB offline and injects the DLL only when exactly one match exists. The DLL repeats
-// that uniqueness check in the mapped .text section and reports `ready` only after MinHook enables
-// the callback. No game file is patched and no DLL is installed permanently.
+// same masked AOB and sparse callback-body fingerprint offline and injects the DLL only when both
+// are valid. The DLL repeats those checks in the mapped .text section and reports `ready` only
+// after MinHook enables the callback. No game file is patched and no DLL is installed permanently.
 
 #include <windows.h>
 #include <cstdint>
@@ -16,6 +16,22 @@
 static const char* kLogErrSig =
     "40 55 56 57 48 8D AC 24 60 FF FF FF 48 81 EC A0 01 00 00 48 8B 05 ?? ?? ?? ?? "
     "48 33 C4 48 89 85 80 00 00 00 8B 15 ?? ??";
+
+// Sparse callback-body fingerprint, kept byte-for-byte equivalent to diagnostics.rs. It proves
+// the first argument and all five asSMessageInfo field offsets without hashing relocations, call
+// targets, branch displacements or local stack destinations.
+struct ShapeClause {
+    size_t offset;
+    const char* signature;
+};
+
+static const size_t kCallbackShapeSpan = 0x244;
+static const ShapeClause kCallbackShape[] = {
+    {0x02a, "48 8B F9"},
+    {0x09a, "48 8B 17"},
+    {0x119, "44 39 6F 0C 75 ?? 44 39 6F 08 75 ?? 48 8B 57 18"},
+    {0x233, "8B 47 08 89 44 24 ?? 8B 47 0C 89 44 24 ?? 8B 47 10"},
+};
 
 struct asMsgInfo {
     const char* section;
@@ -187,6 +203,10 @@ static bool get_text(uint8_t** base, size_t* size) {
     if (dos->e_magic != IMAGE_DOS_SIGNATURE || dos->e_lfanew <= 0) return false;
     IMAGE_NT_HEADERS64* nt = reinterpret_cast<IMAGE_NT_HEADERS64*>(image + dos->e_lfanew);
     if (!readable(nt, sizeof *nt) || nt->Signature != IMAGE_NT_SIGNATURE) return false;
+    if (nt->FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64 ||
+        nt->FileHeader.SizeOfOptionalHeader < sizeof(WORD) ||
+        nt->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC)
+        return false;
     IMAGE_SECTION_HEADER* section = IMAGE_FIRST_SECTION(nt);
     if (!readable(section, nt->FileHeader.NumberOfSections * sizeof *section)) return false;
     static const uint8_t text_name[IMAGE_SIZEOF_SHORT_NAME] = {
@@ -229,6 +249,29 @@ static uint8_t* find_unique_sig(const char* signature, uint8_t* base, size_t siz
     return *count == 1 ? found : nullptr;
 }
 
+static bool callback_shape_matches(uint8_t* callback, uint8_t* text, size_t text_size) {
+    const uintptr_t callback_addr = reinterpret_cast<uintptr_t>(callback);
+    const uintptr_t text_addr = reinterpret_cast<uintptr_t>(text);
+    if (!callback || !text || callback_addr < text_addr) return false;
+    const uintptr_t relative_addr = callback_addr - text_addr;
+    const size_t relative = static_cast<size_t>(relative_addr);
+    if (relative > text_size || kCallbackShapeSpan > text_size - relative) return false;
+
+    for (const ShapeClause& clause : kCallbackShape) {
+        uint8_t pattern[64];
+        bool mask[64];
+        size_t length = 0;
+        if (!parse_sig(clause.signature, pattern, mask, &length) ||
+            clause.offset > kCallbackShapeSpan ||
+            length > kCallbackShapeSpan - clause.offset)
+            return false;
+        const uint8_t* actual = callback + clause.offset;
+        for (size_t i = 0; i < length; ++i)
+            if (mask[i] && actual[i] != pattern[i]) return false;
+    }
+    return true;
+}
+
 static DWORD WINAPI init_thread(LPVOID) {
     InitializeCriticalSection(&g_cs);
     uint8_t* text = nullptr;
@@ -243,6 +286,10 @@ static DWORD WINAPI init_thread(LPVOID) {
         char status[96];
         snprintf(status, sizeof status, "unavailable: signature matches=%d", count);
         report_status(status);
+        return 0;
+    }
+    if (!callback_shape_matches(callback, text, text_size)) {
+        report_status("unavailable: callback shape mismatch");
         return 0;
     }
     if (MH_Initialize() != MH_OK ||

@@ -96,14 +96,16 @@ requires reconstructing its body manually or first extending the decompiler.
    quest and class-default data and need a separate faithful representation before full asset
    authoring can be claimed.
 3. **Whole-tree compiler gate -- passed for the current 1.0.3 hotfix.** The shipping build suppresses AngelScript diagnostics from
-   stdout and UE file logs, so `gore as compile` now uses a hotfix-safe signature scan to attach to
-   the per-error `asSMessageInfo` callback. It prints normal file/line/column diagnostics when the
-   signature is unique and automatically falls back to the unhooked compiler when it is absent or
-   injection cannot be confirmed. The first controlled hooked run exposed concrete generic emitter
-   residues and those are fixed. The hardened final helper subsequently compiled the corrected
-   whole tree successfully, and an intentional failure surfaced the expected normalized error.
-   Offline unique-signature gates also pass archived 1.0.0, 1.0.1 and 1.0.2 executables, while
-   runtime injection remains proven only on installed 1.0.3.
+   stdout and UE file logs, so `gore as compile` now uses a hotfix-safe signature scan plus a sparse
+   callback-body fingerprint to attach to the per-error `asSMessageInfo` callback. It prints normal
+   file/line/column diagnostics only when the raw signature is unique and all five message-field
+   offsets verify, and automatically falls back to the unhooked compiler when either gate is absent
+   or injection cannot be confirmed. Controlled runs with the predecessor capture helper exposed
+   concrete generic emitter residues, compiled the corrected whole tree successfully, and surfaced
+   the expected normalized error for an intentional failure. The final structure-hardened helper is
+   offline verified against archived 1.0.0 through 1.0.3 executables, but still needs one positive
+   and one intentional-negative runtime compile on installed 1.0.3 before that exact DLL is
+   requalified. The callback-capture path itself remains runtime-proven only on installed 1.0.3.
 
 The mixed-RVO switch in `MakeNewCrimeRegisterData` is now recovered with a per-exit proof: each
 early bare-RET edge must contain exactly one resolved RVO store, and removing that store in the

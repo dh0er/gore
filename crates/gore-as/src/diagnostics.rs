@@ -1,10 +1,11 @@
 //! Optional, fail-closed capture of the shipping game's AngelScript diagnostics.
 //!
 //! The game remains the compiler. This module only preflights a version-tolerant masked byte
-//! signature in the selected executable, temporarily injects a small capture DLL early in the
-//! compiler process, and parses the bounded text stream it produces. A missing helper, unsupported
-//! platform, zero/multiple signature matches, or a confirmed injection failure is an availability
-//! problem, not a compile failure: callers transparently launch the normal generator instead.
+//! signature plus a sparse callback-body fingerprint in the selected executable, temporarily
+//! injects a small capture DLL early in the compiler process, and parses the bounded text stream it
+//! produces. A missing helper, unsupported platform, zero/multiple signature matches, structural
+//! mismatch, or a confirmed injection failure is an availability problem, not a compile failure:
+//! callers transparently launch the normal generator instead.
 
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -13,7 +14,7 @@ use std::path::{Path, PathBuf};
 /// by the UE-AngelScript fork. It was observed at RVA `0x467f5b0` in the 2026-07-10 hotfix (the
 /// prior build used `0x467e200`), but no fixed RVA is used. Wildcards cover RIP-relative
 /// addresses/operands that vary by build. Both the offline preflight and helper DLL use this exact
-/// AOB and require one match.
+/// AOB, require one raw match, and then independently verify [`CALLBACK_SHAPE`].
 const LOG_ANGELSCRIPT_ERROR_AOB: &[Option<u8>] = &[
     Some(0x40),
     Some(0x55),
@@ -57,13 +58,103 @@ const LOG_ANGELSCRIPT_ERROR_AOB: &[Option<u8>] = &[
     None,
 ];
 
+/// Sparse instruction clauses relative to the raw AOB candidate. They prove that the first
+/// argument is retained and subsequently read with the five `asSMessageInfo` field offsets used by
+/// the detour: `section=0`, `row=8`, `col=0xc`, `type=0x10`, `message=0x18`. Only branch and local
+/// stack displacements are wildcarded. This deliberately is not a whole-function hash: harmless
+/// relocations and call targets may vary while an ABI-incompatible unique prologue still fails
+/// closed.
+#[derive(Clone, Copy)]
+struct ShapeClause {
+    offset: usize,
+    pattern: &'static [Option<u8>],
+}
+
+const CALLBACK_SHAPE_SPAN: usize = 0x244;
+const CALLBACK_SHAPE: &[ShapeClause] = &[
+    ShapeClause {
+        // mov rdi, rcx -- retain asSMessageInfo* from the first Windows x64 argument.
+        offset: 0x02a,
+        pattern: &[Some(0x48), Some(0x8b), Some(0xf9)],
+    },
+    ShapeClause {
+        // mov rdx, [rdi] -- section.
+        offset: 0x09a,
+        pattern: &[Some(0x48), Some(0x8b), Some(0x17)],
+    },
+    ShapeClause {
+        // col, row, message. Wildcards are short-branch displacements only.
+        offset: 0x119,
+        pattern: &[
+            Some(0x44),
+            Some(0x39),
+            Some(0x6f),
+            Some(0x0c),
+            Some(0x75),
+            None,
+            Some(0x44),
+            Some(0x39),
+            Some(0x6f),
+            Some(0x08),
+            Some(0x75),
+            None,
+            Some(0x48),
+            Some(0x8b),
+            Some(0x57),
+            Some(0x18),
+        ],
+    },
+    ShapeClause {
+        // row, col, type. Wildcards are irrelevant destination stack offsets only.
+        offset: 0x233,
+        pattern: &[
+            Some(0x8b),
+            Some(0x47),
+            Some(0x08),
+            Some(0x89),
+            Some(0x44),
+            Some(0x24),
+            None,
+            Some(0x8b),
+            Some(0x47),
+            Some(0x0c),
+            Some(0x89),
+            Some(0x44),
+            Some(0x24),
+            None,
+            Some(0x8b),
+            Some(0x47),
+            Some(0x10),
+        ],
+    },
+];
+
+fn masked_bytes_match(bytes: &[u8], pattern: &[Option<u8>]) -> bool {
+    bytes.len() == pattern.len()
+        && pattern
+            .iter()
+            .zip(bytes)
+            .all(|(want, actual)| want.is_none_or(|want| want == *actual))
+}
+
+fn callback_shape_matches(bytes: &[u8]) -> bool {
+    bytes.len() >= CALLBACK_SHAPE_SPAN
+        && CALLBACK_SHAPE.iter().all(|clause| {
+            clause
+                .offset
+                .checked_add(clause.pattern.len())
+                .and_then(|end| bytes.get(clause.offset..end))
+                .is_some_and(|actual| masked_bytes_match(actual, clause.pattern))
+        })
+}
+
 pub const MAX_CAPTURE_BYTES: u64 = 8 * 1024 * 1024;
 pub const MAX_FORMATTED_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_INJECT_DELAY: std::time::Duration = std::time::Duration::from_secs(30);
 pub(crate) const CAPTURE_TRUNCATED_TOKEN: &str = "[GORE] diagnostics capture truncated at 8 MiB";
 const MAX_STATUS_BYTES: u64 = 4096;
 const BUNDLED_HOOK_SHA256: &str =
-    "9a408f1dd2bfd95b9235d261c94b4ff60eb4c562ba5d1d69b398be9499e9f153";
+    "17e0ad3033c31add311e3c25ba63615e481c83dcf8e96e83d9b3ac088e55c01c";
 
 #[derive(Clone, Debug)]
 pub struct DiagnosticsOptions {
@@ -161,8 +252,8 @@ impl HookPreparation {
     }
 }
 
-/// Discover the helper and prove the AOB is unique in the selected executable before launch.
-/// No process is created and no game file is changed.
+/// Discover the helper and prove the AOB is unique and structurally compatible in the selected
+/// executable before launch. No process is created and no game file is changed.
 pub(crate) fn prepare_hook(
     exe: &Path,
     options: &DiagnosticsOptions,
@@ -174,10 +265,18 @@ pub(crate) fn prepare_hook(
         return Err("diagnostic injection is currently available only on Windows".into());
     }
     validate_inject_delay(options.inject_delay)?;
-    let matches = count_aob_matches_in_pe_text(exe, LOG_ANGELSCRIPT_ERROR_AOB)?;
-    if matches != 1 {
+    let scan = scan_callback_executable(exe)?;
+    if scan.raw_rvas.len() != 1 {
         return Err(format!(
-            "LogAngelscriptError signature matched {matches} times in {} (need exactly 1)",
+            "LogAngelscriptError signature matched {} times in {} (need exactly 1)",
+            scan.raw_rvas.len(),
+            exe.display()
+        ));
+    }
+    if !scan.callback_shape_verified {
+        return Err(format!(
+            "LogAngelscriptError signature uniquely matched RVA 0x{:x} in {}, but its callback structure did not match the verified asSMessageInfo layout",
+            scan.raw_rvas[0],
             exe.display()
         ));
     }
@@ -288,8 +387,12 @@ fn materialize_embedded_hook() -> Result<(PathBuf, Option<PathBuf>, bool), Strin
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExecutableProbe {
     pub sha256: String,
+    /// Raw entry-signature count. Ambiguity is never reduced by structural filtering.
     pub match_count: usize,
     pub matched_rvas: Vec<u64>,
+    /// True only when there is exactly one raw match and its sparse callback-body fingerprint is
+    /// wholly inside the raw-backed `.text` range and matches every required clause.
+    pub callback_shape_verified: bool,
 }
 
 /// Offline compatibility report for a selected executable. Hash, count and RVAs make a hotfix or
@@ -309,7 +412,7 @@ fn probe_open_executable(mut file: std::fs::File, exe: &Path) -> Result<Executab
         .map_err(|e| format!("reading game executable metadata {}: {e}", exe.display()))?;
     let before_modified = before.modified().ok();
     let sha256 = sha256_open_file(&mut file, exe)?;
-    let matched_rvas = aob_rvas_in_open_pe_text(&mut file, exe, LOG_ANGELSCRIPT_ERROR_AOB)?;
+    let scan = scan_callback_in_open_pe_text(&mut file, exe)?;
     let after = file
         .metadata()
         .map_err(|e| format!("re-reading game executable metadata {}: {e}", exe.display()))?;
@@ -324,8 +427,9 @@ fn probe_open_executable(mut file: std::fs::File, exe: &Path) -> Result<Executab
     }
     Ok(ExecutableProbe {
         sha256,
-        match_count: matched_rvas.len(),
-        matched_rvas,
+        match_count: scan.raw_rvas.len(),
+        matched_rvas: scan.raw_rvas,
+        callback_shape_verified: scan.callback_shape_verified,
     })
 }
 
@@ -393,21 +497,102 @@ fn count_masked_matches(haystack: &[u8], needle: &[Option<u8>]) -> usize {
 
 /// Read only the PE headers and `.text` raw section. A zero or duplicate match is deliberately
 /// returned to the caller, which treats it as a safe fallback rather than guessing an address.
+#[cfg(test)]
 fn count_aob_matches_in_pe_text(exe: &Path, needle: &[Option<u8>]) -> Result<usize, String> {
     aob_rvas_in_pe_text(exe, needle).map(|rvas| rvas.len())
 }
 
+#[cfg(test)]
 fn aob_rvas_in_pe_text(exe: &Path, needle: &[Option<u8>]) -> Result<Vec<u64>, String> {
     let mut file = std::fs::File::open(exe)
         .map_err(|e| format!("opening game executable {}: {e}", exe.display()))?;
     aob_rvas_in_open_pe_text(&mut file, exe, needle)
 }
 
+#[cfg(test)]
 fn aob_rvas_in_open_pe_text(
     file: &mut std::fs::File,
     exe: &Path,
     needle: &[Option<u8>],
 ) -> Result<Vec<u64>, String> {
+    let text = pe_text_range(file, exe)?;
+    aob_rvas_in_text_range(file, exe, text, needle)
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PeTextRange {
+    raw_offset: u64,
+    scan_size: u64,
+    virtual_address: u64,
+}
+
+#[derive(Debug)]
+struct CallbackScan {
+    raw_rvas: Vec<u64>,
+    callback_shape_verified: bool,
+}
+
+fn scan_callback_executable(exe: &Path) -> Result<CallbackScan, String> {
+    let mut file = std::fs::File::open(exe)
+        .map_err(|e| format!("opening game executable {}: {e}", exe.display()))?;
+    scan_callback_in_open_pe_text(&mut file, exe)
+}
+
+fn scan_callback_in_open_pe_text(
+    file: &mut std::fs::File,
+    exe: &Path,
+) -> Result<CallbackScan, String> {
+    let text = pe_text_range(file, exe)?;
+    let raw_rvas = aob_rvas_in_text_range(file, exe, text, LOG_ANGELSCRIPT_ERROR_AOB)?;
+    // Raw uniqueness remains authoritative. Never turn two entry-signature matches into one by
+    // filtering candidates through the structural fingerprint.
+    let callback_shape_verified = if raw_rvas.len() == 1 {
+        callback_shape_matches_in_text_range(file, exe, text, raw_rvas[0])?
+    } else {
+        false
+    };
+    Ok(CallbackScan {
+        raw_rvas,
+        callback_shape_verified,
+    })
+}
+
+fn callback_shape_matches_in_text_range(
+    file: &mut std::fs::File,
+    exe: &Path,
+    text: PeTextRange,
+    candidate_rva: u64,
+) -> Result<bool, String> {
+    let Some(section_offset) = candidate_rva.checked_sub(text.virtual_address) else {
+        return Ok(false);
+    };
+    let Some(shape_end) = section_offset.checked_add(CALLBACK_SHAPE_SPAN as u64) else {
+        return Ok(false);
+    };
+    if shape_end > text.scan_size {
+        return Ok(false);
+    }
+    let raw = text
+        .raw_offset
+        .checked_add(section_offset)
+        .ok_or_else(|| "callback shape file offset overflow".to_string())?;
+    file.seek(SeekFrom::Start(raw)).map_err(|e| {
+        format!(
+            "seeking to callback structure at RVA 0x{candidate_rva:x} in {}: {e}",
+            exe.display()
+        )
+    })?;
+    let mut bytes = vec![0u8; CALLBACK_SHAPE_SPAN];
+    file.read_exact(&mut bytes).map_err(|e| {
+        format!(
+            "reading callback structure at RVA 0x{candidate_rva:x} in {}: {e}",
+            exe.display()
+        )
+    })?;
+    Ok(callback_shape_matches(&bytes))
+}
+
+fn pe_text_range(file: &mut std::fs::File, exe: &Path) -> Result<PeTextRange, String> {
     let file_len = file
         .metadata()
         .map_err(|e| format!("reading game executable metadata {}: {e}", exe.display()))?
@@ -434,6 +619,19 @@ fn aob_rvas_in_open_pe_text(
     }
     let sections = le_u16(&headers, pe + 6)? as usize;
     let optional_size = le_u16(&headers, pe + 20)? as usize;
+    if optional_size < 2 {
+        return Err(format!(
+            "{} has a truncated PE optional header",
+            exe.display()
+        ));
+    }
+    let optional_magic = le_u16(&headers, pe + 24)?;
+    if optional_magic != 0x020b {
+        return Err(format!(
+            "{} is not a PE32+ image (optional-header magic=0x{optional_magic:04x}); the x86-64 diagnostics helper is unsupported",
+            exe.display()
+        ));
+    }
     if sections == 0 || sections > 96 {
         return Err(format!(
             "{} declares invalid PE section count {sections}",
@@ -481,7 +679,20 @@ fn aob_rvas_in_open_pe_text(
     {
         return Err(format!("{} has invalid .text bounds", exe.display()));
     }
-    file.seek(SeekFrom::Start(offset))
+    Ok(PeTextRange {
+        raw_offset: offset,
+        scan_size: size,
+        virtual_address,
+    })
+}
+
+fn aob_rvas_in_text_range(
+    file: &mut std::fs::File,
+    exe: &Path,
+    text: PeTextRange,
+    needle: &[Option<u8>],
+) -> Result<Vec<u64>, String> {
+    file.seek(SeekFrom::Start(text.raw_offset))
         .map_err(|e| format!("seeking to PE .text in {}: {e}", exe.display()))?;
     if needle.is_empty() {
         return Ok(Vec::new());
@@ -494,8 +705,8 @@ fn aob_rvas_in_open_pe_text(
     let mut rvas = Vec::with_capacity(MATCH_CAP);
     let mut tail = Vec::<u8>::new();
     let mut section_read = 0u64;
-    while section_read < size {
-        let take = (size - section_read).min(CHUNK as u64) as usize;
+    while section_read < text.scan_size {
+        let take = (text.scan_size - section_read).min(CHUNK as u64) as usize;
         let mut chunk = vec![0u8; take];
         file.read_exact(&mut chunk)
             .map_err(|e| format!("reading PE .text in {}: {e}", exe.display()))?;
@@ -514,7 +725,8 @@ fn aob_rvas_in_open_pe_text(
                     let section_offset = base
                         .checked_add(start as u64)
                         .ok_or_else(|| "matched section offset overflow".to_string())?;
-                    let rva = virtual_address
+                    let rva = text
+                        .virtual_address
                         .checked_add(section_offset)
                         .ok_or_else(|| "matched RVA overflow".to_string())?;
                     rvas.push(rva);
@@ -1087,6 +1299,7 @@ mod tests {
     use super::*;
 
     static HOOK_TEMP_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    const FAKE_SECTION_HEADER: usize = 0x188;
 
     fn fake_pe(text: &[u8]) -> Vec<u8> {
         let mut pe = vec![0u8; 0x200 + text.len()];
@@ -1095,8 +1308,9 @@ mod tests {
         pe[0x80..0x84].copy_from_slice(b"PE\0\0");
         pe[0x84..0x86].copy_from_slice(&(0x8664u16).to_le_bytes());
         pe[0x86..0x88].copy_from_slice(&(1u16).to_le_bytes());
-        pe[0x94..0x96].copy_from_slice(&(0u16).to_le_bytes());
-        let sh = 0x98;
+        pe[0x94..0x96].copy_from_slice(&(0xf0u16).to_le_bytes());
+        pe[0x98..0x9a].copy_from_slice(&(0x020bu16).to_le_bytes());
+        let sh = FAKE_SECTION_HEADER;
         pe[sh..sh + 8].copy_from_slice(b".text\0\0\0");
         pe[sh + 8..sh + 12].copy_from_slice(&(text.len() as u32).to_le_bytes());
         pe[sh + 12..sh + 16].copy_from_slice(&(0x1000u32).to_le_bytes());
@@ -1104,6 +1318,23 @@ mod tests {
         pe[sh + 20..sh + 24].copy_from_slice(&(0x200u32).to_le_bytes());
         pe[0x200..].copy_from_slice(text);
         pe
+    }
+
+    fn valid_callback_text() -> Vec<u8> {
+        let mut text = vec![0x90; CALLBACK_SHAPE_SPAN];
+        for (offset, byte) in LOG_ANGELSCRIPT_ERROR_AOB.iter().enumerate() {
+            if let Some(byte) = byte {
+                text[offset] = *byte;
+            }
+        }
+        for clause in CALLBACK_SHAPE {
+            for (relative, byte) in clause.pattern.iter().enumerate() {
+                if let Some(byte) = byte {
+                    text[clause.offset + relative] = *byte;
+                }
+            }
+        }
+        text
     }
 
     #[test]
@@ -1115,6 +1346,62 @@ mod tests {
             count_masked_matches(&[0xaa, 1, 0xcc, 0xaa, 2, 0xcc], &pattern),
             2
         );
+    }
+
+    #[test]
+    fn sparse_callback_shape_checks_required_bytes_but_not_masked_operands() {
+        let valid = valid_callback_text();
+        assert!(callback_shape_matches(&valid));
+
+        for clause in CALLBACK_SHAPE {
+            let required = clause
+                .pattern
+                .iter()
+                .position(Option::is_some)
+                .expect("every shape clause has a required byte");
+            let mut damaged = valid.clone();
+            damaged[clause.offset + required] ^= 0xff;
+            assert!(
+                !callback_shape_matches(&damaged),
+                "accepted damaged clause at offset 0x{:x}",
+                clause.offset
+            );
+
+            for wildcard in clause
+                .pattern
+                .iter()
+                .enumerate()
+                .filter_map(|(i, byte)| byte.is_none().then_some(i))
+            {
+                let mut varied = valid.clone();
+                varied[clause.offset + wildcard] ^= 0xff;
+                assert!(
+                    callback_shape_matches(&varied),
+                    "rejected masked byte at 0x{:x}",
+                    clause.offset + wildcard
+                );
+            }
+        }
+        assert!(!callback_shape_matches(&valid[..CALLBACK_SHAPE_SPAN - 1]));
+    }
+
+    #[test]
+    fn native_helper_source_carries_the_same_callback_shape_fingerprint() {
+        let native = include_str!("../native/diagnostics-hook/ashook.cpp");
+        for clause in [
+            "kCallbackShapeSpan = 0x244",
+            "nt->FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64",
+            "nt->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC",
+            "{0x02a, \"48 8B F9\"}",
+            "{0x09a, \"48 8B 17\"}",
+            "{0x119, \"44 39 6F 0C 75 ?? 44 39 6F 08 75 ?? 48 8B 57 18\"}",
+            "{0x233, \"8B 47 08 89 44 24 ?? 8B 47 0C 89 44 24 ?? 8B 47 10\"}",
+        ] {
+            assert!(
+                native.contains(clause),
+                "native fingerprint missing {clause}"
+            );
+        }
     }
 
     #[test]
@@ -1151,8 +1438,14 @@ mod tests {
         let error = aob_rvas_in_pe_text(&base, &pattern).unwrap_err();
         assert!(error.contains("not an AMD64 PE image"), "got: {error}");
 
+        let mut wrong_magic = fake_pe(&[0xaa, 1, 0xcc]);
+        wrong_magic[0x98..0x9a].copy_from_slice(&(0x010bu16).to_le_bytes());
+        std::fs::write(&base, wrong_magic).unwrap();
+        let error = aob_rvas_in_pe_text(&base, &pattern).unwrap_err();
+        assert!(error.contains("not a PE32+ image"), "got: {error}");
+
         let mut prefixed_section = fake_pe(&[0xaa, 1, 0xcc]);
-        prefixed_section[0x98..0xa0].copy_from_slice(b".textfoo");
+        prefixed_section[FAKE_SECTION_HEADER..FAKE_SECTION_HEADER + 8].copy_from_slice(b".textfoo");
         std::fs::write(&base, prefixed_section).unwrap();
         let error = aob_rvas_in_pe_text(&base, &pattern).unwrap_err();
         assert!(error.contains("has no .text section"), "got: {error}");
@@ -1160,7 +1453,8 @@ mod tests {
         // The second signature is raw alignment padding beyond VirtualSize. The mapped helper and
         // offline file scan both exclude it and therefore agree on the one raw-backed match.
         let mut padded = fake_pe(&[0xaa, 1, 0xcc, 0, 0xaa, 2, 0xcc]);
-        padded[0xa0..0xa4].copy_from_slice(&(4u32).to_le_bytes());
+        padded[FAKE_SECTION_HEADER + 8..FAKE_SECTION_HEADER + 12]
+            .copy_from_slice(&(4u32).to_le_bytes());
         std::fs::write(&base, padded).unwrap();
         assert_eq!(aob_rvas_in_pe_text(&base, &pattern).unwrap(), vec![0x1000]);
 
@@ -1202,29 +1496,79 @@ mod tests {
             "gore-as-structured-probe-{}.exe",
             std::process::id()
         ));
+        std::fs::write(&exe, fake_pe(&valid_callback_text())).unwrap();
+        let probe = probe_executable(&exe).unwrap();
+        assert_eq!(probe.sha256.len(), 64);
+        assert!(probe.sha256.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        assert_eq!(probe.match_count, 1);
+        assert_eq!(probe.matched_rvas, vec![0x1000]);
+        assert!(probe.callback_shape_verified);
+        std::fs::remove_file(exe).unwrap();
+    }
+
+    #[test]
+    fn configured_game_executables_have_one_verified_callback_when_available() {
+        let mut executables: Vec<PathBuf> = std::env::var_os("GORE_AS_REAL_EXES")
+            .map(|paths| std::env::split_paths(&paths).collect())
+            .unwrap_or_default();
+        if let Some(exe) = std::env::var_os("GORE_AS_REAL_EXE") {
+            executables.push(exe.into());
+        }
+        if executables.is_empty() {
+            eprintln!("skip: set GORE_AS_REAL_EXE or GORE_AS_REAL_EXES");
+            return;
+        }
+        for exe in executables {
+            let probe = probe_executable(&exe).unwrap();
+            eprintln!("real executable probe for {}: {probe:#?}", exe.display());
+            assert_eq!(
+                probe.match_count,
+                1,
+                "real executable AOB must be unique: {}",
+                exe.display()
+            );
+            assert_eq!(probe.matched_rvas.len(), 1);
+            assert!(
+                probe.callback_shape_verified,
+                "real callback structure must be verified: {}",
+                exe.display()
+            );
+        }
+    }
+
+    #[test]
+    fn raw_aob_ambiguity_is_not_reduced_by_structural_filtering() {
+        let exe = std::env::temp_dir().join(format!(
+            "gore-as-ambiguous-structural-probe-{}.exe",
+            std::process::id()
+        ));
+        let mut text = valid_callback_text();
+        text.extend_from_slice(&[0x90; 16]);
+        text.extend(
+            LOG_ANGELSCRIPT_ERROR_AOB
+                .iter()
+                .map(|byte| byte.unwrap_or(0x42)),
+        );
+        std::fs::write(&exe, fake_pe(&text)).unwrap();
+        let probe = probe_executable(&exe).unwrap();
+        assert_eq!(probe.match_count, 2);
+        assert!(!probe.callback_shape_verified);
+        std::fs::remove_file(exe).unwrap();
+    }
+
+    #[test]
+    fn callback_shape_must_fit_inside_raw_backed_text() {
+        let exe =
+            std::env::temp_dir().join(format!("gore-as-shape-bounds-{}.exe", std::process::id()));
         let signature: Vec<u8> = LOG_ANGELSCRIPT_ERROR_AOB
             .iter()
             .map(|byte| byte.unwrap_or(0x42))
             .collect();
         std::fs::write(&exe, fake_pe(&signature)).unwrap();
         let probe = probe_executable(&exe).unwrap();
-        assert_eq!(probe.sha256.len(), 64);
-        assert!(probe.sha256.bytes().all(|byte| byte.is_ascii_hexdigit()));
         assert_eq!(probe.match_count, 1);
-        assert_eq!(probe.matched_rvas, vec![0x1000]);
+        assert!(!probe.callback_shape_verified);
         std::fs::remove_file(exe).unwrap();
-    }
-
-    #[test]
-    fn current_game_executable_has_one_offline_signature_match_when_configured() {
-        let Some(exe) = std::env::var_os("GORE_AS_REAL_EXE") else {
-            eprintln!("skip: set GORE_AS_REAL_EXE");
-            return;
-        };
-        let probe = probe_executable(Path::new(&exe)).unwrap();
-        eprintln!("real executable probe: {probe:#?}");
-        assert_eq!(probe.match_count, 1, "real executable AOB must be unique");
-        assert_eq!(probe.matched_rvas.len(), 1);
     }
 
     #[cfg(windows)]
@@ -1251,15 +1595,41 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    fn structural_mismatch_does_not_materialize_or_leak_embedded_hook() {
+        let _serial = HOOK_TEMP_TEST_LOCK.lock().unwrap();
+        let exe = std::env::temp_dir().join(format!(
+            "gore-as-hook-structure-mismatch-{}.exe",
+            std::process::id()
+        ));
+        let prefix = format!("gore-as-hook-{}-", std::process::id());
+        let count_dirs = || {
+            std::fs::read_dir(std::env::temp_dir())
+                .unwrap()
+                .filter_map(Result::ok)
+                .filter(|entry| entry.file_name().to_string_lossy().starts_with(&prefix))
+                .count()
+        };
+        let before = count_dirs();
+        let mut text = vec![0x90; CALLBACK_SHAPE_SPAN];
+        for (offset, byte) in LOG_ANGELSCRIPT_ERROR_AOB.iter().enumerate() {
+            if let Some(byte) = byte {
+                text[offset] = *byte;
+            }
+        }
+        std::fs::write(&exe, fake_pe(&text)).unwrap();
+        let error = prepare_hook(&exe, &DiagnosticsOptions::default()).unwrap_err();
+        assert!(error.contains("callback structure"), "got: {error}");
+        assert_eq!(count_dirs(), before, "embedded helper temp leaked");
+        std::fs::remove_file(exe).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
     fn embedded_hook_is_materialized_and_raii_cleaned_after_unique_match() {
         let _serial = HOOK_TEMP_TEST_LOCK.lock().unwrap();
         let exe =
             std::env::temp_dir().join(format!("gore-as-hook-match-{}.exe", std::process::id()));
-        let signature: Vec<u8> = LOG_ANGELSCRIPT_ERROR_AOB
-            .iter()
-            .map(|byte| byte.unwrap_or(0x42))
-            .collect();
-        std::fs::write(&exe, fake_pe(&signature)).unwrap();
+        std::fs::write(&exe, fake_pe(&valid_callback_text())).unwrap();
         let prep = prepare_hook(&exe, &DiagnosticsOptions::default()).unwrap();
         let dll = prep.hook_dll.clone();
         let dir = dll.parent().unwrap().to_path_buf();

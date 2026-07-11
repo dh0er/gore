@@ -552,10 +552,24 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             for rva in &probe.matched_rvas {
                 println!("matched RVA: 0x{rva:x}");
             }
+            println!(
+                "callback structure: {}",
+                match (probe.match_count, probe.callback_shape_verified) {
+                    (1, true) => "verified",
+                    (1, false) => "mismatch",
+                    _ => "not checked (signature not unique)",
+                }
+            );
             if probe.match_count != 1 {
                 anyhow::bail!(
                     "diagnostics hook unavailable: signature matched {} times in {} (need exactly 1; normal `gore as compile` will fall back)",
                     probe.match_count,
+                    exe.display()
+                );
+            }
+            if !probe.callback_shape_verified {
+                anyhow::bail!(
+                    "diagnostics hook unavailable: the unique signature in {} did not match the verified asSMessageInfo callback structure (normal `gore as compile` will fall back)",
                     exe.display()
                 );
             }
