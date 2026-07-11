@@ -11,7 +11,6 @@ import 'app/ui/window_chrome.dart';
 import 'catalog/ui/items_tab.dart';
 import 'core/mod_ffi.dart';
 import 'core/providers.dart';
-import 'audio/domain/audio_replacements_notifier.dart';
 import 'audio/ui/audio_tab.dart';
 import 'dialog/ui/dialoge_tab.dart';
 import 'editor/domain/overrides_notifier.dart';
@@ -19,16 +18,13 @@ import 'editor/ui/changes_tab.dart';
 import 'export/ui/build_deploy_dialog.dart';
 import 'l10n/app_localizations.dart';
 import 'loc/domain/loc_catalog_provider.dart';
-import 'loc/domain/loc_edits_notifier.dart';
 import 'loc/domain/loc_notifier.dart';
 import 'loc/ui/loc_extract_flow.dart';
 import 'project/project_controller.dart';
-import 'scripts/domain/script_mods_notifier.dart';
 import 'scripts/domain/script_modules_provider.dart';
 import 'scripts/ui/script_tab.dart';
 import 'settings/ui/settings_tab.dart';
 import 'textures/domain/texture_index_provider.dart';
-import 'textures/domain/texture_replacements_notifier.dart';
 import 'textures/ui/texture_tab.dart';
 
 /// Main tab indices, matching the [TabBar] tab order in [HomePage].
@@ -225,12 +221,10 @@ class _HomePageState extends ConsumerState<HomePage>
       }
     });
 
-    final dirty =
-        ref.watch(overridesProvider).count > 0 ||
-        ref.watch(locEditsProvider).isDirty ||
-        ref.watch(audioReplacementsProvider).count > 0 ||
-        ref.watch(textureReplacementsProvider).count > 0 ||
-        ref.watch(scriptModsProvider).count > 0;
+    // Keep the AppBar gate on the same all-domain definition as project
+    // save/discard handling. Duplicating the provider list here previously
+    // left newly added domains (notably dialog topics) unreachable.
+    final dirty = projectIsDirty(ref);
     // Keep Build/Deploy reachable when a game is configured even with no staged edits, so the
     // dialog's Undeploy (restore *.gore-bak) stays available to GUI users.
     final gameConfigured =
