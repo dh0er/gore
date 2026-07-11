@@ -1,7 +1,9 @@
 //! Compile a staged `.as` into a 1-module mini-cache by driving the game's precompiled-data
 //! generation, then extracting (add) / extract-remapping (edit) the target module.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use crate::cache::{emit_all, model, refs::RefResolver, remap, splice};
 
@@ -24,6 +26,9 @@ pub struct CompileOpts {
     pub rel_path: String,
     pub as_path: PathBuf,
     pub work_dir: PathBuf,
+    /// Explicitly allow the edited/generated module to introduce symbols absent from the base.
+    /// Default callers must pass `false`; the strict historical remap remains the safe default.
+    pub allow_new_symbols: bool,
     /// Pristine base cache to emit/remap against. When `Some`, these bytes are the base (skip the
     /// disk read) — the FFI passes gore-mod's drift-aware `pristine_script_cache` so the compile
     /// base matches the bytes deploy will splice against. When `None`, fall back to the on-disk
@@ -52,8 +57,20 @@ fn g1r_dir(game_dir: &Path) -> PathBuf {
     }
 }
 
+/// The install root containing `G1R/`. AngelScript writes `AS_JITTED_CODE` beside `G1R`, not
+/// inside it, even when the process working directory is `G1R`.
+fn game_root_dir(game_dir: &Path) -> PathBuf {
+    if game_dir.file_name().is_some_and(|n| n == "G1R") {
+        game_dir.parent().unwrap_or(game_dir).to_path_buf()
+    } else {
+        game_dir.to_path_buf()
+    }
+}
+
 fn vanilla_cache(game_dir: &Path) -> PathBuf {
-    g1r_dir(game_dir).join("Script").join("PrecompiledScript_Shipping.Cache")
+    g1r_dir(game_dir)
+        .join("Script")
+        .join("PrecompiledScript_Shipping.Cache")
 }
 
 /// The deploy backup path for a live cache: the live path with `.gore-bak` APPENDED to the full
@@ -63,6 +80,293 @@ fn deploy_bak_path(live: &Path) -> PathBuf {
     let mut s = live.as_os_str().to_os_string();
     s.push(".gore-bak");
     PathBuf::from(s)
+}
+
+fn append_suffix(path: &Path, suffix: &str) -> PathBuf {
+    let mut s = path.as_os_str().to_os_string();
+    s.push(suffix);
+    PathBuf::from(s)
+}
+
+fn compile_bak_path(live: &Path) -> PathBuf {
+    append_suffix(live, ".gore-compile-bak")
+}
+
+fn compile_lock_path(game_dir: &Path) -> PathBuf {
+    game_root_dir(game_dir).join(".gore-as-compile.lock")
+}
+
+#[derive(Debug)]
+struct CompileLock {
+    path: PathBuf,
+    active: bool,
+}
+
+impl CompileLock {
+    fn acquire(game_dir: &Path) -> Result<Self, String> {
+        let path = compile_lock_path(game_dir);
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::AlreadyExists {
+                    format!(
+                        "another AngelScript compile is active (lock exists: {}); if no compile is \
+                         running, inspect and remove the stale lock manually",
+                        path.display()
+                    )
+                } else {
+                    format!("creating compile lock {}: {e}", path.display())
+                }
+            })?;
+        let payload = format!("pid={}\n", std::process::id());
+        if let Err(e) = file
+            .write_all(payload.as_bytes())
+            .and_then(|_| file.sync_all())
+        {
+            drop(file);
+            let cleanup = std::fs::remove_file(&path).err();
+            return Err(match cleanup {
+                Some(cleanup) => format!(
+                    "initializing compile lock {}: {e}; additionally failed to remove it: \
+                     {cleanup}",
+                    path.display()
+                ),
+                None => format!("initializing compile lock {}: {e}", path.display()),
+            });
+        }
+        Ok(Self { path, active: true })
+    }
+
+    fn release(&mut self) -> Result<(), String> {
+        if !self.active {
+            return Ok(());
+        }
+        std::fs::remove_file(&self.path)
+            .map_err(|e| format!("removing compile lock {}: {e}", self.path.display()))?;
+        self.active = false;
+        Ok(())
+    }
+}
+
+impl Drop for CompileLock {
+    fn drop(&mut self) {
+        if self.active && std::fs::remove_file(&self.path).is_ok() {
+            self.active = false;
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ShippingRecovery {
+    path: PathBuf,
+    active: bool,
+}
+
+impl ShippingRecovery {
+    fn create(live: &Path, bytes: &[u8]) -> Result<Self, String> {
+        let path = compile_bak_path(live);
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::AlreadyExists {
+                    format!(
+                        "compile backup already exists: {} (recover or remove it manually)",
+                        path.display()
+                    )
+                } else {
+                    format!("creating compile backup {}: {e}", path.display())
+                }
+            })?;
+        if let Err(e) = file.write_all(bytes).and_then(|_| file.sync_all()) {
+            drop(file);
+            let cleanup = std::fs::remove_file(&path).err();
+            return Err(match cleanup {
+                Some(cleanup) => format!(
+                    "initializing compile backup {}: {e}; additionally failed to remove the \
+                     incomplete backup: {cleanup}",
+                    path.display()
+                ),
+                None => format!("initializing compile backup {}: {e}", path.display()),
+            });
+        }
+        drop(file);
+        Ok(Self { path, active: true })
+    }
+
+    fn retire(&mut self) -> Result<(), String> {
+        if !self.active {
+            return Ok(());
+        }
+        std::fs::remove_file(&self.path)
+            .map_err(|e| format!("removing compile backup {}: {e}", self.path.display()))?;
+        self.active = false;
+        Ok(())
+    }
+}
+
+/// Create the user-requested persistent `.gore-bak` immediately before an in-place install.
+/// Returns true only when this call created it, so a later failed install can remove the artifact.
+fn validate_existing_deploy_backup(path: &Path, meta: &std::fs::Metadata) -> Result<(), String> {
+    if !meta.is_file() || metadata_is_link_or_reparse(meta) {
+        return Err(format!(
+            "refusing existing deploy backup {} because it is not a regular non-reparse file",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
+fn create_deploy_backup_if_absent(live: &Path, bytes: &[u8]) -> Result<bool, String> {
+    let path = deploy_bak_path(live);
+    match std::fs::symlink_metadata(&path) {
+        Ok(meta) => {
+            validate_existing_deploy_backup(&path, &meta)?;
+            return Ok(false);
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(format!("inspecting deploy backup {}: {e}", path.display())),
+    }
+    let mut file = match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+    {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            // Another actor created the reserved path after the first inspection. Never accept its
+            // path type implicitly: re-inspect without following links before treating it as the
+            // persistent recovery copy.
+            let meta = std::fs::symlink_metadata(&path).map_err(|inspect| {
+                format!(
+                    "inspecting raced deploy backup {}: {inspect}",
+                    path.display()
+                )
+            })?;
+            validate_existing_deploy_backup(&path, &meta)?;
+            return Ok(false);
+        }
+        Err(e) => return Err(format!("creating deploy backup {}: {e}", path.display())),
+    };
+    if let Err(e) = file.write_all(bytes).and_then(|_| file.sync_all()) {
+        drop(file);
+        let cleanup = std::fs::remove_file(&path).err();
+        return Err(match cleanup {
+            Some(cleanup) => format!(
+                "initializing deploy backup {}: {e}; additionally failed to remove the incomplete \
+                 backup: {cleanup}",
+                path.display()
+            ),
+            None => format!("initializing deploy backup {}: {e}", path.display()),
+        });
+    }
+    Ok(true)
+}
+
+/// Validate the whole generated container before any caller accepts or installs its bytes. A
+/// header-only or module-only prefix is not sufficient: all declared modules and all seven global
+/// tail tables must parse, and the final table must end exactly at EOF.
+fn validate_generated_cache(bytes: &[u8]) -> Result<(), String> {
+    let header = crate::cache::header::CacheHeader::parse(bytes)
+        .map_err(|e| format!("invalid generated cache header: {e}"))?;
+    if header.type_count == 0 {
+        return Err("invalid generated cache: it declares zero modules".into());
+    }
+    let tail = crate::cache::walk_modules::module_region_end(bytes)
+        .map_err(|e| format!("invalid generated cache modules: {e}"))?;
+    let tables = crate::cache::tables::parse_tail_tables(bytes, tail)
+        .map_err(|e| format!("invalid generated cache tail tables: {e}"))?;
+    if tables.end != bytes.len() {
+        return Err(format!(
+            "invalid generated cache: tail tables end at {:#x}, but file length is {:#x}",
+            tables.end,
+            bytes.len()
+        ));
+    }
+    Ok(())
+}
+
+/// Recreate the fixed `work_dir/tree` child from scratch. Refuse links and containment surprises
+/// before recursive deletion, so a hostile/stale tree cannot redirect cleanup outside work_dir.
+fn reset_compile_tree(work_dir: &Path) -> Result<PathBuf, String> {
+    std::fs::create_dir_all(work_dir)
+        .map_err(|e| format!("creating compile work dir {}: {e}", work_dir.display()))?;
+    let work_real = work_dir
+        .canonicalize()
+        .map_err(|e| format!("resolving compile work dir {}: {e}", work_dir.display()))?;
+    let tree = work_dir.join("tree");
+
+    match std::fs::symlink_metadata(&tree) {
+        Ok(meta) => {
+            if meta.file_type().is_symlink() || !meta.is_dir() {
+                return Err(format!(
+                    "refusing to clear compile tree {} because it is not a real directory",
+                    tree.display()
+                ));
+            }
+            let tree_real = tree
+                .canonicalize()
+                .map_err(|e| format!("resolving compile tree {}: {e}", tree.display()))?;
+            if tree_real == work_real || !tree_real.starts_with(&work_real) {
+                return Err(format!(
+                    "refusing to clear compile tree {} outside work dir {}",
+                    tree_real.display(),
+                    work_real.display()
+                ));
+            }
+            std::fs::remove_dir_all(&tree_real)
+                .map_err(|e| format!("clearing compile tree {}: {e}", tree_real.display()))?;
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(format!("inspecting compile tree {}: {e}", tree.display())),
+    }
+
+    std::fs::create_dir(&tree)
+        .map_err(|e| format!("creating clean compile tree {}: {e}", tree.display()))?;
+    let tree_real = tree
+        .canonicalize()
+        .map_err(|e| format!("resolving clean compile tree {}: {e}", tree.display()))?;
+    if tree_real.parent() != Some(work_real.as_path()) {
+        return Err(format!(
+            "clean compile tree {} is not a direct child of work dir {}",
+            tree_real.display(),
+            work_real.display()
+        ));
+    }
+    Ok(tree)
+}
+
+/// Snapshot a file that may legitimately be absent. Generation writes
+/// `PrecompiledScript.Cache`, and a developer may already have one there; callers must put that
+/// exact prior state back instead of leaving the newly generated development cache installed.
+fn snapshot_optional(path: &Path) -> Result<Option<Vec<u8>>, String> {
+    match std::fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("reading {}: {e}", path.display())),
+    }
+}
+
+fn remove_if_exists(path: &Path) -> Result<(), String> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("removing stale {}: {e}", path.display())),
+    }
+}
+
+/// Restore an optional file snapshot exactly: rewrite the old bytes when it existed, otherwise
+/// remove whatever generation created.
+fn restore_optional(path: &Path, saved: &Option<Vec<u8>>) -> Result<(), String> {
+    match saved {
+        Some(bytes) => {
+            std::fs::write(path, bytes).map_err(|e| format!("restoring {}: {e}", path.display()))
+        }
+        None => remove_if_exists(path).map_err(|e| format!("restoring absent file: {e}")),
+    }
 }
 
 /// A safe relative path inside the staged tree: non-empty, not absolute, every component a normal
@@ -101,13 +405,22 @@ where
         )));
     }
     if !opts.as_path.exists() {
-        return Err(CompileError::Io(format!("source .as not found: {}", opts.as_path.display())));
+        return Err(CompileError::Io(format!(
+            "source .as not found: {}",
+            opts.as_path.display()
+        )));
     }
+    // Read the overlay before clearing work_dir/tree. This also makes an input that intentionally
+    // lives below that old tree safe: its bytes survive the clean rebuild, never its stale siblings.
+    let overlay = std::fs::read(&opts.as_path).map_err(io("reading source .as"))?;
     // Validate the untrusted overlay rel_path BEFORE the heavy work: it's joined onto the staged
     // tree (and that tree is later copied into the game's Script/), so an absolute or `..` path
     // could escape both. Reject it up front.
     if !is_safe_rel_path(&opts.rel_path) {
-        return Err(CompileError::Other(format!("unsafe script rel_path: {:?}", opts.rel_path)));
+        return Err(CompileError::Other(format!(
+            "unsafe script rel_path: {:?}",
+            opts.rel_path
+        )));
     }
     // The PRISTINE base cache to emit/remap against. Prefer the caller-supplied `base_override`
     // (the FFI passes gore-mod's drift-aware `pristine_script_cache`, so the base matches exactly
@@ -124,10 +437,13 @@ where
         None => std::fs::read(&base_path).map_err(io("reading vanilla cache"))?,
     };
 
-    // 1. Emit the vanilla source tree (cache it per cache size under work_dir/tree).
-    let tree = opts.work_dir.join("tree");
-    let mut refs = RefResolver::build(&base).map_err(|e| CompileError::Other(format!("resolver: {e}")))?;
-    let mods = model::parse_modules(&base).map_err(|e| CompileError::Other(format!("parse: {e}")))?;
+    // 1. Emit a freshly rebuilt vanilla source tree. A previous failed compile must never leave a
+    // stale loose script that silently participates in the next generation.
+    let tree = reset_compile_tree(&opts.work_dir).map_err(CompileError::Other)?;
+    let mut refs =
+        RefResolver::build(&base).map_err(|e| CompileError::Other(format!("resolver: {e}")))?;
+    let mods =
+        model::parse_modules(&base).map_err(|e| CompileError::Other(format!("parse: {e}")))?;
     refs.set_class_hierarchy(class_hierarchy(&mods));
     // Load native-call arities (Binds.Cache next to the vanilla cache) so emitted source has the
     // right native-call shapes and recompiles — mirrors `AsCmd::EmitAll`. Absent => no fallback.
@@ -142,7 +458,7 @@ where
     if let Some(parent) = dst.parent() {
         std::fs::create_dir_all(parent).map_err(io("mkdir overlay"))?;
     }
-    std::fs::copy(&opts.as_path, &dst).map_err(io("overlay .as"))?;
+    std::fs::write(&dst, &overlay).map_err(io("overlay .as"))?;
 
     // 3. Drive the game to regenerate the precompiled cache from `tree`.
     let regen_path = run_regen(&opts.game_dir, &tree).map_err(CompileError::Regen)?;
@@ -150,6 +466,7 @@ where
         return Err(CompileError::NoRegen(regen_path.display().to_string()));
     }
     let regen = std::fs::read(&regen_path).map_err(io("reading regen cache"))?;
+    validate_generated_cache(&regen).map_err(CompileError::Other)?;
 
     // For "add", the game names the new module from its ScriptRelativeFilename, which may differ
     // from `opts.module_name`. Resolve the real name = the single module present in the regen but
@@ -163,7 +480,9 @@ where
             (Ok(base_names), Ok(regen_names)) => {
                 use std::collections::HashSet;
                 let base_set: HashSet<&str> = base_names.iter().map(String::as_str).collect();
-                let mut added = regen_names.iter().filter(|n| !base_set.contains(n.as_str()));
+                let mut added = regen_names
+                    .iter()
+                    .filter(|n| !base_set.contains(n.as_str()));
                 match (added.next(), added.next()) {
                     (Some(only), None) => only.clone(),
                     _ => opts.module_name.clone(),
@@ -175,31 +494,42 @@ where
         opts.module_name.clone()
     };
 
-    // 4. Extract + remap the target module → an empty-tail mini-cache, for BOTH ops. Remapping to
-    //    the vanilla base drops the regen cache's full global tail tables (whose pointer/id keys
-    //    differ from the base), so deploy's `splice_auto` (add) takes the case-b append path with
-    //    no duplicate/stale global rows, and the module's refs resolve against the base. (A
-    //    primitive-only add is already empty-tail, so this is a no-op for that path; it only fixes
-    //    case-a / native-ref adds.) Deploy still differs by op — gore-mod uses `splice_auto` for
-    //    add and `replace_module` for edit — but the mini is now the same minimal shape for both.
+    // 4. Extract + remap the target module against the vanilla base, for BOTH ops. Strict mode
+    //    emits the historical empty-tail mini. Explicit new-symbol mode instead carries only the
+    //    new rows that cannot resolve in vanilla; it never copies the regen's full global tables.
+    //    Deploy still differs by op — gore-mod uses `splice_auto` for add and `replace_module` for
+    //    edit — while both accept either minimal shape.
     let mini = {
         let out = splice::extract_module(&regen, &target)
             .map_err(|e| CompileError::Other(format!("extract: {e}")))?;
-        remap::remap_module_to_base(&out, &base)
-            .map_err(|e| CompileError::Other(format!("remap: {e}")))?
-            .0
+        remap::remap_module_to_base_with_options(
+            &out,
+            &base,
+            remap::RemapOptions {
+                allow_new_symbols: opts.allow_new_symbols,
+            },
+        )
+        .map_err(|e| CompileError::Other(format!("remap: {e}")))?
+        .0
     };
 
     let mini_path = opts.work_dir.join("module.cache");
     std::fs::write(&mini_path, &mini).map_err(io("writing mini"))?;
-    Ok(CompileOutput { mini_path, module_name: target })
+    Ok(CompileOutput {
+        mini_path,
+        module_name: target,
+    })
 }
 
 fn class_hierarchy(mods: &[model::Module]) -> std::collections::HashMap<String, String> {
     let mut h = std::collections::HashMap::new();
     for m in mods {
         for c in &m.classes {
-            let sup = c.super_class.clone().filter(|s| !s.is_empty()).unwrap_or_default();
+            let sup = c
+                .super_class
+                .clone()
+                .filter(|s| !s.is_empty())
+                .unwrap_or_default();
             h.insert(c.name.clone(), sup);
         }
     }
@@ -221,123 +551,659 @@ fn native_api(cache_file: &Path) -> Option<crate::cache::binds::NativeApi> {
     crate::cache::binds::NativeApi::load(&path)
 }
 
-/// The real game launch. **ASSUMED invocation — confirm against the proven manual run.** Places
-/// the loose `.as` tree where the game reads it, launches the shipping exe with
-/// `-as-generate-precompiled-data`, waits for the regen cache, and returns its path.
+#[derive(Clone, Copy, Debug)]
+enum QuarantineKind {
+    File,
+    Directory,
+}
+
+/// One path whose exact pre-launch presence is restored after generation. Existing content is
+/// moved with a same-volume rename; absent content is kept absent by removing anything the game
+/// creates at that exact path.
+#[derive(Debug)]
+struct QuarantinedPath {
+    original: PathBuf,
+    backup: PathBuf,
+    kind: QuarantineKind,
+    existed: bool,
+    active: bool,
+}
+
+impl QuarantinedPath {
+    /// Preflight only. In particular, check the reserved backup before ANY path is moved so an
+    /// interrupted earlier compile is never overwritten or mistaken for disposable output.
+    fn plan(original: PathBuf, backup: PathBuf, kind: QuarantineKind) -> Result<Self, String> {
+        match std::fs::symlink_metadata(&backup) {
+            Ok(_) => {
+                return Err(format!(
+                    "compile quarantine backup already exists: {} (recover or remove it manually)",
+                    backup.display()
+                ));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(format!("inspecting backup {}: {e}", backup.display())),
+        }
+        let existed = match std::fs::symlink_metadata(&original) {
+            Ok(meta) => {
+                let expected = match kind {
+                    QuarantineKind::File => meta.is_file() && !meta.file_type().is_symlink(),
+                    QuarantineKind::Directory => meta.is_dir() && !meta.file_type().is_symlink(),
+                };
+                if !expected {
+                    return Err(format!(
+                        "refusing to quarantine {} because it is not a real {}",
+                        original.display(),
+                        match kind {
+                            QuarantineKind::File => "file",
+                            QuarantineKind::Directory => "directory",
+                        }
+                    ));
+                }
+                true
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+            Err(e) => return Err(format!("inspecting {}: {e}", original.display())),
+        };
+        Ok(Self {
+            original,
+            backup,
+            kind,
+            existed,
+            active: false,
+        })
+    }
+
+    fn activate(&mut self) -> Result<(), String> {
+        if self.existed {
+            std::fs::rename(&self.original, &self.backup).map_err(|e| {
+                format!(
+                    "quarantining {} as {}: {e}",
+                    self.original.display(),
+                    self.backup.display()
+                )
+            })?;
+        }
+        self.active = true;
+        Ok(())
+    }
+
+    fn remove_generated_original(&self) -> Result<(), String> {
+        let meta = match std::fs::symlink_metadata(&self.original) {
+            Ok(meta) => meta,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(format!("inspecting {}: {e}", self.original.display())),
+        };
+        if meta.file_type().is_symlink() {
+            return Err(format!(
+                "refusing to remove unexpected symlink at generated path {}",
+                self.original.display()
+            ));
+        }
+        match self.kind {
+            QuarantineKind::File if meta.is_file() => std::fs::remove_file(&self.original),
+            QuarantineKind::Directory if meta.is_dir() => std::fs::remove_dir_all(&self.original),
+            QuarantineKind::File => {
+                return Err(format!(
+                    "expected generated file at {}, found another path type",
+                    self.original.display()
+                ));
+            }
+            QuarantineKind::Directory => {
+                return Err(format!(
+                    "expected generated directory at {}, found another path type",
+                    self.original.display()
+                ));
+            }
+        }
+        .map_err(|e| format!("removing generated {}: {e}", self.original.display()))
+    }
+
+    fn restore(&mut self) -> Result<(), String> {
+        if !self.active {
+            return Ok(());
+        }
+        // If removal fails, do not touch the backup: it remains the recoverable pre-call state.
+        self.remove_generated_original()?;
+        if self.existed {
+            std::fs::rename(&self.backup, &self.original).map_err(|e| {
+                format!(
+                    "restoring {} from {}: {e}",
+                    self.original.display(),
+                    self.backup.display()
+                )
+            })?;
+        }
+        self.active = false;
+        Ok(())
+    }
+}
+
+impl Drop for QuarantinedPath {
+    fn drop(&mut self) {
+        // Covers a partial GenerationIsolation::begin (for example, proxy rename fails after the
+        // JIT directory was already moved). Explicit restoration remains the normal/reporting path.
+        let _ = self.restore();
+    }
+}
+
+/// Generation isolation for the two known non-cache side effects:
+/// - `<install>/AS_JITTED_CODE`, written by AngelScript;
+/// - the UE4SS `dwmapi.dll` loader proxy, temporarily moved so generation runs without hooks.
+struct GenerationIsolation {
+    jitted: QuarantinedPath,
+    proxy: Option<QuarantinedPath>,
+}
+
+impl GenerationIsolation {
+    fn begin(game_dir: &Path, g1r: &Path) -> Result<Self, String> {
+        let jitted = game_root_dir(game_dir).join("AS_JITTED_CODE");
+        let mut jitted = QuarantinedPath::plan(
+            jitted.clone(),
+            append_suffix(&jitted, ".gore-compile-bak"),
+            QuarantineKind::Directory,
+        )?;
+
+        let win64 = g1r.join("Binaries").join("Win64");
+        let proxy_path = win64.join("dwmapi.dll");
+        let proxy_exists = match std::fs::symlink_metadata(&proxy_path) {
+            Ok(_) => true,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+            Err(e) => return Err(format!("inspecting {}: {e}", proxy_path.display())),
+        };
+        let ue4ss_payload = win64.join("ue4ss").join("UE4SS.dll");
+        let clearly_ue4ss = ue4ss_payload.is_file();
+        // A present dwmapi.dll without the UE4SS payload is not clearly the local proxy; leave it
+        // entirely alone. An absent path is still tracked so it remains absent after generation.
+        let mut proxy = if !proxy_exists || clearly_ue4ss {
+            Some(QuarantinedPath::plan(
+                proxy_path.clone(),
+                append_suffix(&proxy_path, ".gore-compile-bak"),
+                QuarantineKind::File,
+            )?)
+        } else {
+            None
+        };
+
+        // Both plans (including collision checks) completed before the first rename.
+        jitted.activate()?;
+        if let Some(proxy) = &mut proxy {
+            if let Err(e) = proxy.activate() {
+                let rollback = jitted.restore().err();
+                return Err(match rollback {
+                    Some(re) => format!("{e}; additionally failed to restore isolation: {re}"),
+                    None => e,
+                });
+            }
+        }
+        Ok(Self { jitted, proxy })
+    }
+
+    fn restore(&mut self) -> Result<(), String> {
+        let mut errors = Vec::new();
+        if let Some(proxy) = &mut self.proxy {
+            if let Err(e) = proxy.restore() {
+                errors.push(e);
+            }
+        }
+        if let Err(e) = self.jitted.restore() {
+            errors.push(e);
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors.join("; "))
+        }
+    }
+}
+
+impl Drop for GenerationIsolation {
+    fn drop(&mut self) {
+        // Normal paths call restore explicitly so errors are reported. This fallback covers a
+        // panic/unwind and deliberately leaves any un-restorable backups in place.
+        let _ = self.restore();
+    }
+}
+
+struct RestoreReport {
+    errors: Vec<String>,
+    shipping_restored: bool,
+}
+
+impl RestoreReport {
+    fn clean(&self) -> bool {
+        self.errors.is_empty()
+    }
+}
+
+fn recovery_journal_path(game_dir: &Path) -> PathBuf {
+    game_root_dir(game_dir).join(".gore-as-compile-recovery")
+}
+
+/// Disk-backed copies of every in-memory snapshot needed to recover an intentionally-preserved
+/// transaction after a generator process could not be confirmed dead. The mirrored layout is
+/// deliberately human-readable: `overwritten/` files copy back into `G1R/Script/`, paths mirrored
+/// under `created/` must be deleted, and `development-cache/` records the pre-call dev-cache state.
+struct RecoveryJournal {
+    root: PathBuf,
+    active: bool,
+}
+
+impl RecoveryJournal {
+    fn create(game_dir: &Path, saved_dev: &Option<Vec<u8>>) -> Result<Self, String> {
+        let root = recovery_journal_path(game_dir);
+        match std::fs::create_dir(&root) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                return Err(format!(
+                    "compile recovery journal already exists: {} (recover the previous compile \
+                     before retrying)",
+                    root.display()
+                ));
+            }
+            Err(e) => return Err(format!("creating recovery journal {}: {e}", root.display())),
+        }
+
+        let initialize = (|| -> Result<(), String> {
+            let instructions = b"GORE AngelScript compile recovery\n\
+Kill the reported generator process tree before restoring anything.\n\
+Copy files from overwritten/ over the same relative paths under G1R/Script/.\n\
+Delete the same relative paths listed as zero-byte files under created/.\n\
+development-cache/PrecompiledScript.Cache is the pre-call dev cache;\n\
+development-cache.absent means that cache did not exist.\n\
+Restore *.gore-compile-bak paths beside their originals, then remove the compile lock.\n";
+            std::fs::write(root.join("README.txt"), instructions)
+                .map_err(|e| format!("writing recovery instructions: {e}"))?;
+            match saved_dev {
+                Some(bytes) => {
+                    let dev_dir = root.join("development-cache");
+                    std::fs::create_dir(&dev_dir)
+                        .map_err(|e| format!("creating dev-cache recovery directory: {e}"))?;
+                    std::fs::write(dev_dir.join("PrecompiledScript.Cache"), bytes)
+                        .map_err(|e| format!("writing dev-cache recovery snapshot: {e}"))?;
+                }
+                None => {
+                    std::fs::write(root.join("development-cache.absent"), b"")
+                        .map_err(|e| format!("writing dev-cache absence marker: {e}"))?;
+                }
+            }
+            Ok(())
+        })();
+
+        if let Err(error) = initialize {
+            let cleanup = std::fs::remove_dir_all(&root).err();
+            return Err(match cleanup {
+                Some(cleanup) => format!(
+                    "{error}; additionally failed to remove partial recovery journal {}: \
+                     {cleanup}",
+                    root.display()
+                ),
+                None => error,
+            });
+        }
+        Ok(Self { root, active: true })
+    }
+
+    fn record_staged(
+        &self,
+        staged: &[(PathBuf, Option<Vec<u8>>)],
+        script_dir: &Path,
+    ) -> Result<(), String> {
+        for (path, prior) in staged {
+            let rel = path.strip_prefix(script_dir).map_err(|e| {
+                format!(
+                    "staged recovery path {} escaped Script/ {}: {e}",
+                    path.display(),
+                    script_dir.display()
+                )
+            })?;
+            let bucket = if prior.is_some() {
+                "overwritten"
+            } else {
+                "created"
+            };
+            let recovery = self.root.join(bucket).join(rel);
+            if let Some(parent) = recovery.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| {
+                    format!("creating recovery directory {}: {e}", parent.display())
+                })?;
+            }
+            std::fs::write(&recovery, prior.as_deref().unwrap_or_default()).map_err(|e| {
+                format!(
+                    "writing staged recovery snapshot {}: {e}",
+                    recovery.display()
+                )
+            })?;
+        }
+        Ok(())
+    }
+
+    fn retire(&mut self) -> Result<(), String> {
+        if !self.active {
+            return Ok(());
+        }
+        std::fs::remove_dir_all(&self.root)
+            .map_err(|e| format!("removing recovery journal {}: {e}", self.root.display()))?;
+        self.active = false;
+        Ok(())
+    }
+}
+
+/// Owns every live-install mutation made by either compile entry point. Its Drop implementation is
+/// the panic/unwind safety net; normal paths call the same restore methods so cleanup errors remain
+/// visible to the caller.
+struct CompileTransaction {
+    game_dir: PathBuf,
+    g1r: PathBuf,
+    script_dir: PathBuf,
+    shipping_cache: PathBuf,
+    dev_cache: PathBuf,
+    saved_shipping: Vec<u8>,
+    saved_dev: Option<Vec<u8>>,
+    staged: Vec<(PathBuf, Option<Vec<u8>>)>,
+    isolation: Option<GenerationIsolation>,
+    recovery: ShippingRecovery,
+    journal: RecoveryJournal,
+    lock: CompileLock,
+    rollback_needed: bool,
+    /// A user-facing `.gore-bak` created immediately before install, removed unless install commits.
+    ephemeral_deploy_backup: Option<PathBuf>,
+}
+
+impl CompileTransaction {
+    /// Acquire the cross-entry-point lock first; the recovery backup is the next and only mutation
+    /// before the fully-owned transaction exists.
+    fn begin(game_dir: &Path, g1r: &Path, script_dir: &Path) -> Result<Self, String> {
+        let mut lock = CompileLock::acquire(game_dir)?;
+        let shipping_cache = script_dir.join("PrecompiledScript_Shipping.Cache");
+        let dev_cache = script_dir.join("PrecompiledScript.Cache");
+        let saved_shipping = std::fs::read(&shipping_cache).map_err(|e| {
+            format!(
+                "reading live shipping cache {}: {e}",
+                shipping_cache.display()
+            )
+        })?;
+        let saved_dev = snapshot_optional(&dev_cache)?;
+        let mut recovery = ShippingRecovery::create(&shipping_cache, &saved_shipping)?;
+        let journal = match RecoveryJournal::create(game_dir, &saved_dev) {
+            Ok(journal) => journal,
+            Err(error) => {
+                let recovery_error = recovery.retire().err();
+                let lock_error = lock.release().err();
+                let mut errors = vec![error];
+                errors.extend(recovery_error);
+                errors.extend(lock_error);
+                return Err(errors.join("; additionally "));
+            }
+        };
+        Ok(Self {
+            game_dir: game_dir.to_path_buf(),
+            g1r: g1r.to_path_buf(),
+            script_dir: script_dir.to_path_buf(),
+            shipping_cache,
+            dev_cache,
+            saved_shipping,
+            saved_dev,
+            staged: Vec::new(),
+            isolation: None,
+            recovery,
+            journal,
+            lock,
+            rollback_needed: true,
+            ephemeral_deploy_backup: None,
+        })
+    }
+
+    fn begin_isolation(&mut self) -> Result<(), String> {
+        if self.isolation.is_none() {
+            self.isolation = Some(GenerationIsolation::begin(&self.game_dir, &self.g1r)?);
+        }
+        Ok(())
+    }
+
+    fn stage(&mut self, src: &Path) -> Result<(), String> {
+        copy_tree(src, &self.script_dir, &mut self.staged)
+            .map_err(|e| format!("staging source tree: {e}"))?;
+        self.journal.record_staged(&self.staged, &self.script_dir)
+    }
+
+    /// Restore all live paths. A completely clean restore disarms the rollback portion of Drop,
+    /// while recovery-backup retirement and lock release remain explicit finalization steps.
+    fn restore_install(&mut self) -> RestoreReport {
+        if !self.rollback_needed {
+            return RestoreReport {
+                errors: Vec::new(),
+                shipping_restored: true,
+            };
+        }
+        let mut errors = Vec::new();
+        if let Some(isolation) = &mut self.isolation {
+            if let Err(e) = isolation.restore() {
+                errors.push(format!("failed to restore generation isolation: {e}"));
+            }
+        }
+        if !self.staged.is_empty() {
+            match restore_or_remove(&self.staged, &self.script_dir) {
+                Ok(()) => self.staged.clear(),
+                Err(e) => errors.push(format!("failed to clean staged sources: {e}")),
+            }
+        }
+        let shipping_restored = match std::fs::write(&self.shipping_cache, &self.saved_shipping) {
+            Ok(()) => true,
+            Err(e) => {
+                errors.push(format!(
+                    "FAILED to restore the live shipping cache ({e}); restore it from {}",
+                    self.recovery.path.display()
+                ));
+                false
+            }
+        };
+        if let Err(e) = restore_optional(&self.dev_cache, &self.saved_dev) {
+            errors.push(format!("failed to restore development cache: {e}"));
+        }
+        if errors.is_empty() {
+            self.rollback_needed = false;
+        }
+        RestoreReport {
+            errors,
+            shipping_restored,
+        }
+    }
+
+    /// Call immediately before an intentional in-place Shipping write, so a panic or partial write
+    /// re-arms Drop's rollback behavior.
+    fn arm_install_rollback(&mut self) {
+        self.rollback_needed = true;
+    }
+
+    fn prepare_deploy_backup(&mut self, enabled: bool) -> Result<(), String> {
+        if enabled && create_deploy_backup_if_absent(&self.shipping_cache, &self.saved_shipping)? {
+            self.ephemeral_deploy_backup = Some(deploy_bak_path(&self.shipping_cache));
+        }
+        Ok(())
+    }
+
+    fn remove_ephemeral_deploy_backup(&mut self) -> Result<(), String> {
+        let Some(path) = self.ephemeral_deploy_backup.take() else {
+            return Ok(());
+        };
+        if let Err(e) = std::fs::remove_file(&path) {
+            self.ephemeral_deploy_backup = Some(path.clone());
+            return Err(format!(
+                "removing deploy backup created by failed compile {}: {e}",
+                path.display()
+            ));
+        }
+        Ok(())
+    }
+
+    fn mark_install_committed(&mut self) {
+        self.rollback_needed = false;
+        // The requested deploy backup is now persistent rather than transactional.
+        self.ephemeral_deploy_backup = None;
+    }
+
+    /// Retire recovery only after Shipping was restored/committed, then release the common lock.
+    fn finish(&mut self) -> Vec<String> {
+        let mut errors = Vec::new();
+        if self.rollback_needed {
+            errors.push("internal error: compile transaction finalized before restore".into());
+            return errors;
+        }
+        if let Err(e) = self.journal.retire() {
+            errors.push(e);
+            return errors; // keep Shipping recovery + lock while the journal remains
+        }
+        if let Err(e) = self.recovery.retire() {
+            errors.push(e);
+            return errors; // keep the lock until Drop retries retirement
+        }
+        if let Err(e) = self.lock.release() {
+            errors.push(e);
+        }
+        errors
+    }
+
+    /// A generator process that might still be alive must retain exclusive ownership of every
+    /// path it can touch. Deliberately leak the transaction guards so Drop cannot race that process
+    /// by restoring Script/JIT/proxy state or releasing the compile lock. The disk recovery backup
+    /// and quarantine paths make the pre-call state recoverable after the process is killed.
+    fn preserve_for_unconfirmed_generator(self, cause: String) -> String {
+        let recovery = self.recovery.path.display().to_string();
+        let journal = self.journal.root.display().to_string();
+        let lock = self.lock.path.display().to_string();
+        let game_root = game_root_dir(&self.game_dir).display().to_string();
+        std::mem::forget(self);
+        format!(
+            "{cause}; cleanup was intentionally NOT run because the generator's exit could not be \
+             confirmed. Kill the reported process tree before recovery; the Shipping recovery \
+             cache is {recovery}, the source/dev recovery journal is {journal}, quarantined side \
+             effects are beside their originals under {game_root}, and the compile lock remains \
+             at {lock}"
+        )
+    }
+}
+
+impl Drop for CompileTransaction {
+    fn drop(&mut self) {
+        let mut restore_failed = false;
+        if self.rollback_needed {
+            let report = self.restore_install();
+            // If Shipping itself could not be restored, preserve the recovery backup. Other
+            // cleanup failures also keep it as the conservative crash-recovery artifact.
+            if !report.clean() || !report.shipping_restored {
+                restore_failed = true;
+            }
+        }
+        let _ = self.remove_ephemeral_deploy_backup();
+        if restore_failed {
+            let _ = self.lock.release();
+            return;
+        }
+        if self.journal.retire().is_ok() && self.recovery.retire().is_ok() {
+            let _ = self.lock.release();
+        }
+    }
+}
+
+/// The real game launch. Places the loose `.as` tree where the game reads it, launches the
+/// shipping exe in AngelScript development/generation mode, waits for the generated development
+/// cache (`PrecompiledScript.Cache`), and returns a workspace copy of that cache.
 ///
-/// Compiling NEVER mutates the install (deploy is the only writer): on EVERY exit path — success,
-/// timeout, no-regen, or a launch error — this restores `PrecompiledScript_Shipping.Cache` to its
-/// pre-call bytes, deletes the `.gore-compile-bak`, and removes every file this call copied into
-/// `<G1R>/Script` plus any now-empty directories the copy created. Pre-existing files in `Script/`
-/// are left untouched.
+/// Compiling normally leaves the install unchanged: on every confirmed-process exit path this restores both
+/// `PrecompiledScript_Shipping.Cache` and the optional pre-existing `PrecompiledScript.Cache` to
+/// their exact pre-call states, then undoes every staged source file. If generator termination
+/// cannot be confirmed, isolation and the lock intentionally remain in place for manual recovery.
 pub fn game_run_regen(game_dir: &Path, src_dir: &Path) -> Result<PathBuf, String> {
+    game_run_regen_with(game_dir, src_dir, real_generate)
+}
+
+/// Same transactional compiler path as [`game_run_regen`], with explicit diagnostics discovery /
+/// opt-out settings. The helper is temporary and optional; generator availability never depends on
+/// it.
+pub fn game_run_regen_with_diagnostics(
+    game_dir: &Path,
+    src_dir: &Path,
+    diagnostics: &crate::diagnostics::DiagnosticsOptions,
+) -> Result<PathBuf, String> {
+    game_run_regen_with(game_dir, src_dir, |exe, g1r, cache| {
+        real_generate_with_diagnostics(exe, g1r, cache, diagnostics)
+    })
+}
+
+/// Testable core of [`game_run_regen`]. `generate` receives the executable, G1R directory, and
+/// the *development* cache path. It must return the bytes generated there.
+fn game_run_regen_with<G>(game_dir: &Path, src_dir: &Path, generate: G) -> Result<PathBuf, String>
+where
+    G: FnOnce(&Path, &Path, &Path) -> Result<Vec<u8>, String>,
+{
     let g1r = g1r_dir(game_dir);
-    let exe = g1r.join("Binaries").join("Win64").join("G1R-Win64-Shipping.exe");
+    let exe = g1r
+        .join("Binaries")
+        .join("Win64")
+        .join("G1R-Win64-Shipping.exe");
     if !exe.exists() {
         return Err(format!("game exe not found: {}", exe.display()));
     }
     let script_dir = g1r.join("Script");
-    let cache = script_dir.join("PrecompiledScript_Shipping.Cache");
+    let dev_cache = script_dir.join("PrecompiledScript.Cache");
 
-    // Snapshot the live cache so we can restore it, and back it up to disk too.
-    let saved_cache = std::fs::read(&cache).map_err(|e| format!("reading live cache: {e}"))?;
-    let backup = cache.with_extension("Cache.gore-compile-bak");
-    std::fs::write(&backup, &saved_cache).map_err(|e| format!("backing up cache: {e}"))?;
+    // Existing loose scripts whose relative path is absent from our complete staged tree would be
+    // compiled too but never appear in `written`, silently contaminating the regen. Matching paths
+    // are safe: copy_tree snapshots and restores their exact bytes.
+    if let Some(stray) = first_uncovered_loose_script(&script_dir, src_dir)
+        .map_err(|e| format!("inspecting the game's Script/ tree: {e}"))?
+    {
+        return Err(format!(
+            "the game's Script/ directory contains a loose script not present in the staged tree \
+             ({}); refusing a contaminated compile",
+            stray.display()
+        ));
+    }
 
-    // Everything that touches the install runs inside this closure; cleanup below runs
-    // UNCONDITIONALLY afterwards (Rust has no try/finally). `written` records every destination we
-    // copy into Script/ along with its prior bytes: `None` = the file did NOT exist before (delete
-    // on cleanup), `Some(bytes)` = it pre-existed and we overwrote it (RESTORE those bytes), so a
-    // user's own loose script that collides with the emitted tree is never destroyed.
-    let mut written: Vec<(PathBuf, Option<Vec<u8>>)> = Vec::new();
+    let mut txn = CompileTransaction::begin(game_dir, &g1r, &script_dir)?;
     let regen_out = src_dir.join("regen.cache");
-    // Drop any stale regen from a prior/failed/timed-out run in this work dir, so a later
-    // `regen_out.exists()` check means THIS run actually produced a fresh cache (no false success).
     let _ = std::fs::remove_file(&regen_out);
     let result = (|| -> Result<PathBuf, String> {
-        // Copy the emitted tree into <G1R>/Script so the game compiles it.
-        copy_tree(src_dir, &script_dir, &mut written).map_err(|e| format!("staging .as tree: {e}"))?;
-
-        let before = std::fs::metadata(&cache).and_then(|m| m.modified()).ok();
-        let status = std::process::Command::new(&exe)
-            .arg("-as-generate-precompiled-data")
-            .current_dir(&g1r)
-            .status()
-            .map_err(|e| format!("launching game: {e}"))?;
-        let _ = status; // some builds exit non-zero after generating; rely on the cache check below
-
-        // Wait for the cache mtime to advance and its size to stabilize (max ~5 min).
-        let mut last_len = 0u64;
-        let mut stable = 0;
-        for _ in 0..300 {
-            std::thread::sleep(std::time::Duration::from_secs(1));
-            let Ok(meta) = std::fs::metadata(&cache) else { continue; };
-            let advanced = match (before, meta.modified().ok()) {
-                (Some(b), Some(n)) => n > b,
-                // Unknown/unreadable mtime: can't prove the game regenerated — do NOT treat as
-                // advanced (else size-stability alone could accept an unchanged, stale cache).
-                _ => false,
-            };
-            if advanced {
-                let len = meta.len();
-                if len > 0 && len == last_len { stable += 1; } else { stable = 0; }
-                last_len = len;
-                if stable >= 2 {
-                    std::fs::copy(&cache, &regen_out).map_err(|e| format!("copying regen: {e}"))?;
-                    break;
-                }
-            }
+        // Quarantine process-wide side effects before staging or deleting either cache. From this
+        // point onward CompileTransaction::drop can roll back an unwind at any instruction.
+        txn.begin_isolation()?;
+        txn.stage(src_dir)?;
+        // A source tree may accidentally contain this filename, so remove the stale/staged dev
+        // cache immediately before launch. The saved pre-call state is restored below.
+        remove_if_exists(&txn.dev_cache)?;
+        let regen = generate(&exe, &g1r, &dev_cache)?;
+        if regen.is_empty() {
+            return Err("the game produced an empty PrecompiledScript.Cache".into());
         }
-
-        if !regen_out.exists() {
-            return Err(format!(
-                "no regenerated cache produced — confirm the game compiles loose .as under {} with \
-                 `-as-generate-precompiled-data` (see plan §unverified)", script_dir.display()
-            ));
-        }
+        validate_generated_cache(&regen)?;
+        std::fs::write(&regen_out, &regen).map_err(|e| format!("writing regen copy: {e}"))?;
         Ok(regen_out.clone())
     })();
 
-    // UNCONDITIONAL cleanup: restore the pristine cache, drop the backup, and undo every file we
-    // copied into Script/ (deleting ones we created, restoring ones we overwrote) plus any now-empty
-    // dirs we created — leaving the install as we found it. Failures here are CAPTURED (not ignored)
-    // so a successful compile that left the install dirty is reported as an error below.
-    let restore_err = std::fs::write(&cache, &saved_cache).err();
-    let _ = std::fs::remove_file(&backup); // best-effort: a leftover backup is harmless
-    let cleanup_res = restore_or_remove(&written, &script_dir);
+    if let Err(error) = &result {
+        if generator_exit_unconfirmed(error) {
+            return Err(txn.preserve_for_unconfirmed_generator(error.clone()));
+        }
+    }
+
+    // Undo staged files first: they may include either cache filename. Explicit cache restoration
+    // then wins and guarantees the exact snapshots even if the generator unexpectedly touched the
+    // shipping cache too.
+    let report = txn.restore_install();
+    let mut cleanup_errors = report.errors;
+    if cleanup_errors.is_empty() {
+        cleanup_errors.extend(txn.finish());
+    }
 
     match result {
-        Ok(p) => {
-            // The live cache failing to restore is the worst case — the install is left on
-            // regenerated bytes — so surface it first, ahead of a stray staged-.as tree.
-            if let Some(e) = restore_err {
-                return Err(format!(
-                    "compiled, but FAILED to restore the live script cache ({e}); the game install \
-                     may be left on regenerated bytes — restore PrecompiledScript_Shipping.Cache \
-                     from backup"
-                ));
-            }
-            if let Err(e) = cleanup_res {
-                return Err(format!(
-                    "compiled, but failed to clean staged scripts from the install: {e}"
-                ));
-            }
-            Ok(p)
-        }
-        // Inner failure: report it, but if cleanup ALSO failed the install is left dirty — that must
-        // not be hidden behind a benign-looking compile error, so append the restore/cleanup failure.
-        Err(e) => {
-            if let Some(re) = restore_err {
-                return Err(format!(
-                    "{e}; ADDITIONALLY failed to restore the live script cache ({re}) — the install \
-                     may be left on regenerated bytes, restore PrecompiledScript_Shipping.Cache from backup"
-                ));
-            }
-            if let Err(ce) = cleanup_res {
-                return Err(format!("{e}; additionally failed to clean staged scripts: {ce}"));
-            }
-            Err(e)
-        }
+        Ok(p) if cleanup_errors.is_empty() => Ok(p),
+        Ok(p) => Err(format!(
+            "compiled to {}, but {}",
+            p.display(),
+            cleanup_errors.join("; ")
+        )),
+        Err(e) if cleanup_errors.is_empty() => Err(e),
+        Err(e) => Err(format!("{e}; additionally {}", cleanup_errors.join("; "))),
     }
 }
 
@@ -365,20 +1231,97 @@ pub fn precompile(opts: &PrecompileOpts) -> Result<PathBuf, String> {
     precompile_with(opts, real_generate)
 }
 
+/// [`precompile`] with explicit optional compiler-diagnostic capture settings.
+pub fn precompile_with_diagnostics(
+    opts: &PrecompileOpts,
+    diagnostics: &crate::diagnostics::DiagnosticsOptions,
+) -> Result<PathBuf, String> {
+    precompile_with(opts, |exe, g1r, cache| {
+        real_generate_with_diagnostics(exe, g1r, cache, diagnostics)
+    })
+}
+
 /// The first loose `.as` file found anywhere under `dir` (recursively), or `None`. Used to reject a
 /// dirty Script/ before staging a SRC tree, so the game never compiles leftover scripts alongside it.
-fn first_loose_script(dir: &Path) -> Option<PathBuf> {
-    for entry in std::fs::read_dir(dir).ok()?.flatten() {
+#[cfg(test)]
+fn first_loose_script(dir: &Path) -> std::io::Result<Option<PathBuf>> {
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
         let path = entry.path();
-        if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-            if let Some(found) = first_loose_script(&path) {
-                return Some(found);
+        let meta = std::fs::symlink_metadata(&path)?;
+        if metadata_is_link_or_reparse(&meta) {
+            return Err(std::io::Error::other(format!(
+                "refusing linked/reparse path while scanning Script/: {}",
+                path.display()
+            )));
+        }
+        if meta.is_dir() {
+            if let Some(found) = first_loose_script(&path)? {
+                return Ok(Some(found));
             }
-        } else if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("as")) {
-            return Some(path);
+        } else if path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("as"))
+        {
+            return Ok(Some(path));
         }
     }
-    None
+    Ok(None)
+}
+
+/// First loose `.as` under `script_dir` whose relative path is not a real file in `src_dir`.
+/// Used by the full-tree compile backend: colliding files are safe because staging records/restores
+/// them, while an uncovered extra file would be compiled silently alongside the requested tree.
+fn first_uncovered_loose_script(
+    script_dir: &Path,
+    src_dir: &Path,
+) -> std::io::Result<Option<PathBuf>> {
+    fn walk(dir: &Path, root: &Path, src: &Path) -> std::io::Result<Option<PathBuf>> {
+        for entry in std::fs::read_dir(dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            let meta = std::fs::symlink_metadata(&path)?;
+            if metadata_is_link_or_reparse(&meta) {
+                return Err(std::io::Error::other(format!(
+                    "refusing linked/reparse path while scanning Script/: {}",
+                    path.display()
+                )));
+            }
+            if meta.is_dir() {
+                if let Some(found) = walk(&path, root, src)? {
+                    return Ok(Some(found));
+                }
+            } else if path
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("as"))
+            {
+                let rel = path.strip_prefix(root).map_err(|e| {
+                    std::io::Error::other(format!(
+                        "walked path {} escaped root {}: {e}",
+                        path.display(),
+                        root.display()
+                    ))
+                })?;
+                let covered = src.join(rel);
+                match std::fs::symlink_metadata(&covered) {
+                    Ok(meta) if metadata_is_link_or_reparse(&meta) => {
+                        return Err(std::io::Error::other(format!(
+                            "refusing linked/reparse source coverage path: {}",
+                            covered.display()
+                        )));
+                    }
+                    Ok(meta) if meta.is_file() => {}
+                    Ok(_) => return Ok(Some(path)),
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                        return Ok(Some(path));
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
+        }
+        Ok(None)
+    }
+    walk(script_dir, script_dir, src_dir)
 }
 
 /// Resolve `out` to an absolute path for the "output must be outside Script/" containment check:
@@ -387,36 +1330,48 @@ fn first_loose_script(dir: &Path) -> Option<PathBuf> {
 /// the filename, else the lexical absolute path. Extracted so the guard is testable without mutating
 /// the process cwd.
 fn resolve_out_real(out: &Path, cwd: &Path) -> PathBuf {
-    let abs = if out.is_absolute() { out.to_path_buf() } else { cwd.join(out) };
-    abs.canonicalize().unwrap_or_else(|_| match (abs.parent(), abs.file_name()) {
-        (Some(parent), Some(name)) => {
-            parent.canonicalize().map(|p| p.join(name)).unwrap_or_else(|_| abs.clone())
-        }
-        _ => abs.clone(),
-    })
+    let abs = if out.is_absolute() {
+        out.to_path_buf()
+    } else {
+        cwd.join(out)
+    };
+    abs.canonicalize()
+        .unwrap_or_else(|_| match (abs.parent(), abs.file_name()) {
+            (Some(parent), Some(name)) => parent
+                .canonicalize()
+                .map(|p| p.join(name))
+                .unwrap_or_else(|_| abs.clone()),
+            _ => abs.clone(),
+        })
 }
 
-/// Testable core of [`precompile`]. `generate(exe, g1r, cache)` must make the game (re)write
-/// `cache` and return its new bytes; the real impl [`real_generate`] launches the game and polls,
-/// tests inject a stub so the file orchestration can be exercised offline.
+/// Testable core of [`precompile`]. `generate(exe, g1r, dev_cache)` must make the game write
+/// `PrecompiledScript.Cache` and return its bytes; the real impl [`real_generate`] launches the
+/// game and polls, while tests inject a stub so orchestration stays offline.
 fn precompile_with<G>(opts: &PrecompileOpts, generate: G) -> Result<PathBuf, String>
 where
     G: FnOnce(&Path, &Path, &Path) -> Result<Vec<u8>, String>,
 {
     let g1r = g1r_dir(&opts.game_dir);
-    let exe = g1r.join("Binaries").join("Win64").join("G1R-Win64-Shipping.exe");
+    let exe = g1r
+        .join("Binaries")
+        .join("Win64")
+        .join("G1R-Win64-Shipping.exe");
     if !exe.exists() {
         return Err(format!("game exe not found: {}", exe.display()));
     }
     let script_dir = g1r.join("Script");
-    let cache = script_dir.join("PrecompiledScript_Shipping.Cache");
+    let shipping_cache = script_dir.join("PrecompiledScript_Shipping.Cache");
+    let dev_cache = script_dir.join("PrecompiledScript.Cache");
 
     // Reject a source tree that contains (or IS) the Script destination: `copy_tree` would copy the
     // install into its own subtree, recursing `Script/…/Script` until the path or disk blows up while
     // polluting the live install. (Mirrors deploy_shared's self-copy guard.)
     if let Some(src) = &opts.src {
         let src_real = src.canonicalize().unwrap_or_else(|_| src.clone());
-        let dst_real = script_dir.canonicalize().unwrap_or_else(|_| script_dir.clone());
+        let dst_real = script_dir
+            .canonicalize()
+            .unwrap_or_else(|_| script_dir.clone());
         if dst_real == src_real || dst_real.starts_with(&src_real) {
             return Err(format!(
                 "source {} contains the game's Script/ directory ({}); point the source at your \
@@ -433,7 +1388,9 @@ where
     // just wrote while still returning Ok. Reject any output under Script/ — to update the live
     // cache, omit `-o` (in-place mode).
     if let Some(out) = &opts.out {
-        let script_real = script_dir.canonicalize().unwrap_or_else(|_| script_dir.clone());
+        let script_real = script_dir
+            .canonicalize()
+            .unwrap_or_else(|_| script_dir.clone());
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         if resolve_out_real(out, &cwd).starts_with(&script_real) {
             return Err(format!(
@@ -445,157 +1402,689 @@ where
         }
     }
 
-    // When compiling a specific SRC tree, the game must see ONLY that tree. The game compiles EVERY
-    // loose `.as` under Script/, so pre-existing loose scripts there (from a prior/interrupted
-    // compile or manual staging) would be mixed into the cache alongside SRC. Refuse rather than
-    // silently produce a mixed/stale cache; omit the source to compile Script/ as-is (no-src mode).
-    if opts.src.is_some() {
-        if let Some(stray) = first_loose_script(&script_dir) {
+    // When compiling a specific SRC tree, the game must see ONLY paths covered by that tree. The
+    // transaction snapshots and restores existing files at matching relative paths, so a normal
+    // installed source tree is safe to overlay. Refuse only an uncovered loose script: otherwise it
+    // would silently participate in the generated cache.
+    if let Some(src) = &opts.src {
+        if let Some(stray) = first_uncovered_loose_script(&script_dir, src)
+            .map_err(|e| format!("inspecting the game's Script/ tree: {e}"))?
+        {
             return Err(format!(
-                "the game's Script/ directory ({}) already contains a loose script ({}); the game \
-                 would compile it alongside your source. Remove loose .as files there first, or omit \
-                 the source argument to compile Script/ as-is",
+                "the game's Script/ directory ({}) contains a loose script not present in the \
+                 staged source tree ({}); refusing a contaminated compile",
                 script_dir.display(),
                 stray.display()
             ));
         }
     }
 
-    // Snapshot the live cache so we can RESTORE it (out-mode) or back it up (in-place).
-    let saved = std::fs::read(&cache)
-        .map_err(|e| format!("reading live cache {}: {e}", cache.display()))?;
+    // Both compile entry points share the same lock and disk-backed Shipping recovery guard.
+    // Generation isolation begins before staging or deleting the development cache.
+    let mut txn = CompileTransaction::begin(&opts.game_dir, &g1r, &script_dir)?;
+    let result = (|| -> Result<Vec<u8>, String> {
+        txn.begin_isolation()?;
+        if let Some(src) = &opts.src {
+            txn.stage(src)?;
+        }
+        // Delete the old (or accidentally staged) development cache immediately before launch so
+        // existence/size can only describe this run. The optional original is restored below.
+        remove_if_exists(&txn.dev_cache)?;
+        let regen = generate(&exe, &g1r, &dev_cache)?;
+        if regen.is_empty() {
+            return Err("the game produced an empty PrecompiledScript.Cache".into());
+        }
+        validate_generated_cache(&regen)?;
+        Ok(regen)
+    })();
 
-    // In-place backup BEFORE regenerating. Never clobber an existing `.gore-bak`: that is the true
-    // pristine (gore-mod's deploy backup, or an earlier compile's), so preserving it keeps a path
-    // back to vanilla across repeated compiles.
-    if opts.out.is_none() && opts.backup {
-        let bak = deploy_bak_path(&cache);
-        if !bak.exists() {
-            std::fs::write(&bak, &saved).map_err(|e| format!("backing up cache: {e}"))?;
+    if let Err(error) = &result {
+        if generator_exit_unconfirmed(error) {
+            return Err(txn.preserve_for_unconfirmed_generator(error.clone()));
         }
     }
 
-    // Stage the source tree into Script/, recording overwrites so cleanup can restore them.
-    let mut staged: Vec<(PathBuf, Option<Vec<u8>>)> = Vec::new();
-    let staged_ok = match &opts.src {
-        Some(src) => {
-            copy_tree(src, &script_dir, &mut staged).map_err(|e| format!("staging src tree: {e}"))
+    // Always restore the complete install before either publishing an output artifact or starting
+    // the explicit in-place install phase.
+    let restore = txn.restore_install();
+    if !restore.clean() {
+        let primary = result.err().unwrap_or_else(|| {
+            "compiled, but refusing output/install because cleanup failed".into()
+        });
+        return Err(format!(
+            "{primary}; additionally {}",
+            restore.errors.join("; ")
+        ));
+    }
+
+    let regen = match result {
+        Ok(regen) => regen,
+        Err(e) => {
+            let finish = txn.finish();
+            return if finish.is_empty() {
+                Err(e)
+            } else {
+                Err(format!("{e}; additionally {}", finish.join("; ")))
+            };
         }
-        None => Ok(()),
     };
 
-    // Generate only if staging succeeded.
-    let result = staged_ok.and_then(|()| generate(&exe, &g1r, &cache));
+    if let Some(out) = &opts.out {
+        let finish = txn.finish();
+        if !finish.is_empty() {
+            return Err(format!(
+                "compiled, but refusing output because transaction cleanup failed: {}",
+                finish.join("; ")
+            ));
+        }
+        std::fs::write(out, &regen)
+            .map_err(|e| format!("writing output {}: {e}", out.display()))?;
+        return Ok(out.clone());
+    }
 
-    match result {
-        Ok(regen) => {
-            if let Some(out) = &opts.out {
-                // Pristine mode: write the artifact, then restore the install (live cache + staged
-                // files) so nothing about the game changes. Attempt EVERY step and aggregate all
-                // failures — a write error must not hide a failed rollback, which would leave the
-                // install modified without telling the user.
-                let write_err = std::fs::write(out, &regen)
-                    .map_err(|e| format!("writing output {}: {e}", out.display()))
-                    .err();
-                let restore_err = std::fs::write(&cache, &saved)
-                    .map_err(|e| {
-                        format!(
-                            "failed to restore the live cache ({e}) — it may be left on regenerated \
-                             bytes; restore PrecompiledScript_Shipping.Cache from backup"
-                        )
-                    })
-                    .err();
-                let cleanup_err = restore_or_remove(&staged, &script_dir)
-                    .map_err(|e| format!("failed to clean staged sources: {e}"))
-                    .err();
-                let rollback: Vec<String> = restore_err.into_iter().chain(cleanup_err).collect();
-                match (write_err, rollback.is_empty()) {
-                    (None, true) => Ok(out.clone()),
-                    (None, false) => {
-                        Err(format!("compiled to {}, but {}", out.display(), rollback.join("; ")))
-                    }
-                    (Some(w), true) => Err(w),
-                    (Some(w), false) => Err(format!("{w}; additionally {}", rollback.join("; "))),
-                }
+    // A persistent deploy `.gore-bak` is created only now: generation and all restoration already
+    // succeeded. A failed install removes a backup created by this call; a pre-existing one is
+    // never overwritten or removed.
+    if let Err(e) = txn.prepare_deploy_backup(opts.backup) {
+        let finish = txn.finish();
+        return if finish.is_empty() {
+            Err(e)
+        } else {
+            Err(format!("{e}; additionally {}", finish.join("; ")))
+        };
+    }
+
+    txn.arm_install_rollback();
+    match std::fs::write(&shipping_cache, &regen) {
+        Ok(()) => {
+            txn.mark_install_committed();
+            let finish = txn.finish();
+            if finish.is_empty() {
+                Ok(shipping_cache)
             } else {
-                // In-place: the game wrote the fresh cache. Clean up the staged `.as`, but NEVER let
-                // cleanup touch the cache itself: if the staged source tree happened to include a
-                // file at the cache path, restoring its pre-compile bytes here would silently clobber
-                // the freshly compiled cache while still reporting success. Drop that entry first so
-                // the new cache survives.
-                staged.retain(|(p, _)| p != &cache);
-                if let Err(e) = restore_or_remove(&staged, &script_dir) {
-                    return Err(format!("compiled in place, but failed to clean staged sources: {e}"));
-                }
-                Ok(cache.clone())
+                Err(format!(
+                    "installed generated cache, but transaction cleanup failed: {}",
+                    finish.join("; ")
+                ))
             }
         }
-        // Failure: roll back (restore the possibly-half-written cache, remove staged sources) so the
-        // install is left exactly as we found it. If the rollback ITSELF fails (cache or staged files
-        // locked/unwritable), surface that alongside the original error — a silent rollback failure
-        // could leave the cache or staged `.as` modified without telling the user.
-        Err(e) => {
-            let restore_err = std::fs::write(&cache, &saved)
-                .map_err(|re| format!("restoring live cache: {re}"))
-                .err();
-            let cleanup_err = restore_or_remove(&staged, &script_dir).err();
-            let mut msg = e;
-            if let Some(re) = restore_err {
-                msg = format!(
-                    "{msg}; ADDITIONALLY failed to roll back the install ({re}) — the cache may be \
-                     left on regenerated bytes; restore PrecompiledScript_Shipping.Cache from backup"
-                );
+        Err(install_error) => {
+            let restore = txn.restore_install();
+            let restore_clean = restore.clean();
+            let mut errors = restore.errors;
+            if let Err(e) = txn.remove_ephemeral_deploy_backup() {
+                errors.push(e);
             }
-            if let Some(ce) = cleanup_err {
-                msg = format!("{msg}; additionally failed to clean staged sources: {ce}");
+            if restore_clean && errors.is_empty() {
+                errors.extend(txn.finish());
             }
-            Err(msg)
+            let primary = format!("installing generated cache in place: {install_error}");
+            if errors.is_empty() {
+                Err(primary)
+            } else {
+                Err(format!("{primary}; additionally {}", errors.join("; ")))
+            }
         }
     }
 }
 
-/// Launch the game with `-as-generate-precompiled-data`, wait for `cache` to be (re)written
-/// (mtime advances + size stabilizes; ~5 min cap), and return its bytes. Mirrors the wait in
-/// [`game_run_regen`].
+/// Launch the game with the proven AngelScript generation flags, then read the newly-created
+/// `PrecompiledScript.Cache`. The caller removes that file before launch, so mere existence is a
+/// fresh-run signal; the shipping cache is never the generator output.
 fn real_generate(exe: &Path, g1r: &Path, cache: &Path) -> Result<Vec<u8>, String> {
-    let before = std::fs::metadata(cache).and_then(|m| m.modified()).ok();
-    let status = std::process::Command::new(exe)
-        .arg("-as-generate-precompiled-data")
-        .current_dir(g1r)
-        .status()
-        .map_err(|e| format!("launching game: {e}"))?;
-    // Some shipping builds exit non-zero after generating; the cache check below is authoritative.
-    let _ = status;
+    real_generate_with_diagnostics(exe, g1r, cache, &Default::default())
+}
 
-    let mut last_len = 0u64;
-    let mut stable = 0;
-    for _ in 0..300 {
-        std::thread::sleep(std::time::Duration::from_secs(1));
-        let Ok(meta) = std::fs::metadata(cache) else {
-            continue;
-        };
-        let advanced = match (before, meta.modified().ok()) {
-            (Some(b), Some(n)) => n > b,
-            _ => false,
-        };
-        if advanced {
-            let len = meta.len();
-            if len > 0 && len == last_len {
-                stable += 1;
-            } else {
-                stable = 0;
+fn real_generate_with_diagnostics(
+    exe: &Path,
+    g1r: &Path,
+    cache: &Path,
+    diagnostics: &crate::diagnostics::DiagnosticsOptions,
+) -> Result<Vec<u8>, String> {
+    real_generate_with_timeout_and_diagnostics(
+        exe,
+        g1r,
+        cache,
+        Duration::from_secs(30 * 60),
+        diagnostics,
+    )
+}
+
+const GENERATOR_EXIT_UNCONFIRMED: &str = "[gore:generator-exit-unconfirmed]";
+
+fn generator_exit_unconfirmed(error: &str) -> bool {
+    error.contains(GENERATOR_EXIT_UNCONFIRMED)
+}
+
+/// Spawn/try_wait implementation with a real wall-clock deadline. Keeping the timeout injectable
+/// makes the termination path testable without weakening the production 30-minute maximum.
+const GENERATOR_ARGS: &[&str] = &[
+    "-as-development-mode",
+    "-as-generate-precompiled-data",
+    "-as-skip-threaded-initialize",
+    "-as-exit-on-error",
+];
+
+fn run_normal_generator(
+    exe: &Path,
+    g1r: &Path,
+    cache: &Path,
+    timeout: Duration,
+) -> Result<Vec<u8>, String> {
+    let mut child = std::process::Command::new(exe)
+        .args(GENERATOR_ARGS)
+        .current_dir(g1r)
+        .spawn()
+        .map_err(|e| format!("launching game: {e}"))?;
+
+    finish_generator_child(&mut child, cache, timeout)
+}
+
+/// A failed hook attempt may have started the generator and written a partial development cache
+/// before its process was confirmed gone. Remove that first-attempt artifact before the fallback
+/// launch so the normal result cannot accidentally accept stale bytes.
+fn run_clean_fallback_generator(
+    exe: &Path,
+    g1r: &Path,
+    cache: &Path,
+    timeout: Duration,
+) -> Result<Vec<u8>, String> {
+    clear_partial_cache_before_fallback(cache)?;
+    run_normal_generator(exe, g1r, cache, timeout)
+}
+
+fn clear_partial_cache_before_fallback(cache: &Path) -> Result<(), String> {
+    remove_if_exists(cache)
+}
+
+fn finish_generator_child(
+    child: &mut std::process::Child,
+    cache: &Path,
+    timeout: Duration,
+) -> Result<Vec<u8>, String> {
+    let status = wait_for_child_with_timeout(
+        child,
+        timeout,
+        Duration::from_millis(250),
+        Duration::from_secs(2),
+        "AngelScript generation",
+    )?;
+    read_completed_generated_cache(cache, status.success(), &status.to_string())
+}
+
+#[derive(Debug)]
+enum DiagnosticAttempt<T> {
+    Completed(Result<T, String>),
+    Disabled,
+    Unavailable(String),
+    Fatal(String),
+}
+
+/// Infrastructure failure is deliberately not a compiler failure: once the first process is
+/// confirmed absent, execute the unchanged normal generator and return its result byte-for-byte.
+fn resolve_diagnostic_attempt<T, N>(attempt: DiagnosticAttempt<T>, normal: N) -> Result<T, String>
+where
+    N: FnOnce() -> Result<T, String>,
+{
+    match attempt {
+        DiagnosticAttempt::Completed(result) => result,
+        DiagnosticAttempt::Disabled => normal(),
+        DiagnosticAttempt::Unavailable(reason) => {
+            eprintln!(
+                "gore: AngelScript diagnostics unavailable ({reason}); falling back to the normal generator"
+            );
+            normal()
+        }
+        DiagnosticAttempt::Fatal(error) => Err(error),
+    }
+}
+
+struct DiagnosticArtifacts {
+    dir: PathBuf,
+    capture: PathBuf,
+    status: PathBuf,
+    cleanup: bool,
+}
+
+impl DiagnosticArtifacts {
+    fn create() -> Result<Self, String> {
+        let temp = std::env::temp_dir();
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        for suffix in 0..32u32 {
+            let dir = temp.join(format!(
+                "gore-as-diagnostics-{}-{stamp}-{suffix}",
+                std::process::id()
+            ));
+            match std::fs::create_dir(&dir) {
+                Ok(()) => {
+                    return Ok(Self {
+                        capture: dir.join("capture.txt"),
+                        status: dir.join("status.txt"),
+                        dir,
+                        cleanup: true,
+                    });
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => {
+                    return Err(format!(
+                        "creating diagnostics temp directory {}: {e}",
+                        dir.display()
+                    ));
+                }
             }
-            last_len = len;
-            if stable >= 2 {
-                return std::fs::read(cache).map_err(|e| format!("reading regen cache: {e}"));
+        }
+        Err("could not reserve a unique diagnostics temp directory".into())
+    }
+
+    fn preserve(mut self) -> PathBuf {
+        self.cleanup = false;
+        self.dir.clone()
+    }
+}
+
+impl Drop for DiagnosticArtifacts {
+    fn drop(&mut self) {
+        if !self.cleanup {
+            return;
+        }
+        let _ = std::fs::remove_file(&self.capture);
+        let _ = std::fs::remove_file(&self.status);
+        let _ = std::fs::remove_dir(&self.dir);
+    }
+}
+
+fn append_captured_diagnostics(
+    result: Result<Vec<u8>, String>,
+    artifacts: &DiagnosticArtifacts,
+) -> Result<Vec<u8>, String> {
+    let (capture, has_compiler_error, capture_failure) = match crate::diagnostics::read_bounded(
+        &artifacts.capture,
+        crate::diagnostics::MAX_CAPTURE_BYTES,
+    ) {
+        Ok((capture, truncated)) => {
+            let protocol_truncated = capture.lines().any(|line| {
+                line.trim_end_matches('\r') == crate::diagnostics::CAPTURE_TRUNCATED_TOKEN
+            });
+            let capture_failure = (truncated || protocol_truncated).then_some("was truncated");
+            let has_compiler_error =
+                crate::diagnostics::parse_capture(&capture)
+                    .iter()
+                    .any(|diagnostic| {
+                        diagnostic.severity == crate::diagnostics::DiagnosticSeverity::Error
+                    });
+            let mut formatted = crate::diagnostics::format_capture(&capture);
+            const CAPTURE_TRUNCATED: &str = "<diagnostics truncated after 8 MiB>\n";
+            if truncated
+                && !protocol_truncated
+                && formatted.len().saturating_add(CAPTURE_TRUNCATED.len())
+                    <= crate::diagnostics::MAX_FORMATTED_BYTES
+            {
+                formatted.push_str(CAPTURE_TRUNCATED);
+            }
+            (formatted, has_compiler_error, capture_failure)
+        }
+        Err(_error) if !artifacts.capture.exists() => (String::new(), false, None),
+        Err(error) => (
+            format!("<diagnostics capture unreadable: {error}>\n"),
+            false,
+            Some("could not be read"),
+        ),
+    };
+    if capture.trim().is_empty() {
+        return match result {
+            Ok(_) if capture_failure.is_some() => Err(format!(
+                "AngelScript diagnostics capture {}; refusing to accept an unverified cache",
+                capture_failure.unwrap()
+            )),
+            result => result,
+        };
+    }
+    match result {
+        Ok(_) if has_compiler_error => Err(format!(
+            "AngelScript compiler reported an error despite producing a structurally complete cache\n--- AngelScript compiler diagnostics ---\n{}",
+            capture.trim_end()
+        )),
+        Ok(_) if capture_failure.is_some() => Err(format!(
+            "AngelScript diagnostics capture {}; refusing to accept an unverified cache\n--- AngelScript compiler diagnostics ---\n{}",
+            capture_failure.unwrap(), capture.trim_end()
+        )),
+        Ok(bytes) => {
+            eprint!("{capture}");
+            Ok(bytes)
+        }
+        Err(error) => Err(format!(
+            "{error}\n--- AngelScript compiler diagnostics ---\n{}",
+            capture.trim_end()
+        )),
+    }
+}
+
+fn preserve_unconfirmed_diagnostic_attempt(
+    error: String,
+    artifacts: DiagnosticArtifacts,
+    prep: crate::diagnostics::HookPreparation,
+) -> DiagnosticAttempt<Vec<u8>> {
+    let diagnostics_dir = artifacts.preserve();
+    let helper_dir = prep.preserve_owned();
+    let helper_note = helper_dir
+        .as_deref()
+        .map(|path| format!(", embedded helper directory {}", path.display()))
+        .unwrap_or_default();
+    DiagnosticAttempt::Fatal(format!(
+        "{error}; process exit is unconfirmed, so diagnostics files were intentionally preserved at {}{}",
+        diagnostics_dir.display(),
+        helper_note
+    ))
+}
+
+fn classify_hooked_result(
+    result: Result<Vec<u8>, String>,
+    artifacts: DiagnosticArtifacts,
+    prep: crate::diagnostics::HookPreparation,
+) -> DiagnosticAttempt<Vec<u8>> {
+    let result = append_captured_diagnostics(result, &artifacts);
+    match result {
+        Err(error) if generator_exit_unconfirmed(&error) => {
+            preserve_unconfirmed_diagnostic_attempt(error, artifacts, prep)
+        }
+        result => DiagnosticAttempt::Completed(result),
+    }
+}
+
+fn real_generate_with_timeout_and_diagnostics(
+    exe: &Path,
+    g1r: &Path,
+    cache: &Path,
+    timeout: Duration,
+    diagnostics: &crate::diagnostics::DiagnosticsOptions,
+) -> Result<Vec<u8>, String> {
+    if diagnostics.disabled {
+        return resolve_diagnostic_attempt(DiagnosticAttempt::Disabled, || {
+            run_clean_fallback_generator(exe, g1r, cache, timeout)
+        });
+    }
+    let prep = match crate::diagnostics::prepare_hook(exe, diagnostics) {
+        Ok(prep) => prep,
+        Err(reason) => {
+            return resolve_diagnostic_attempt(DiagnosticAttempt::Unavailable(reason), || {
+                run_clean_fallback_generator(exe, g1r, cache, timeout)
+            });
+        }
+    };
+    let artifacts = match DiagnosticArtifacts::create() {
+        Ok(artifacts) => artifacts,
+        Err(reason) => {
+            return resolve_diagnostic_attempt(DiagnosticAttempt::Unavailable(reason), || {
+                run_clean_fallback_generator(exe, g1r, cache, timeout)
+            });
+        }
+    };
+    let attempt = match crate::diagnostics::spawn_hooked(
+        exe,
+        g1r,
+        GENERATOR_ARGS,
+        &prep,
+        &artifacts.capture,
+        &artifacts.status,
+        diagnostics.inject_delay,
+    ) {
+        Ok(crate::diagnostics::HookSpawnOutcome::Hooked(mut child)) => {
+            let result = finish_generator_child(&mut child, cache, timeout);
+            classify_hooked_result(result, artifacts, prep)
+        }
+        Ok(crate::diagnostics::HookSpawnOutcome::ExitedBeforeInjection(mut child)) => {
+            let result = finish_generator_child(&mut child, cache, timeout);
+            DiagnosticAttempt::Completed(append_captured_diagnostics(result, &artifacts))
+        }
+        Ok(crate::diagnostics::HookSpawnOutcome::ExitedAfterInjectionBeforeReady {
+            child,
+            status,
+        }) => {
+            // `try_wait` already confirmed direct-process exit. Keep the child handle alive until
+            // this point, then discard the injected attempt and let run_clean_fallback_generator
+            // remove any partial cache before relaunching without diagnostics.
+            drop(child);
+            DiagnosticAttempt::Unavailable(format!(
+                "generator exited after diagnostics injection but before helper readiness ({status})"
+            ))
+        }
+        Err(crate::diagnostics::HookSpawnError::SafeFallback(reason)) => {
+            DiagnosticAttempt::Unavailable(reason)
+        }
+        Err(crate::diagnostics::HookSpawnError::Started { mut child, reason }) => {
+            match child.try_wait() {
+                Ok(Some(status)) => DiagnosticAttempt::Unavailable(format!(
+                    "{reason}; first generator already exited ({status})"
+                )),
+                _ => {
+                    let termination = terminate_child_bounded(
+                        &mut child,
+                        &reason,
+                        Duration::from_millis(20),
+                        Duration::from_secs(5),
+                    );
+                    if generator_exit_unconfirmed(&termination) {
+                        preserve_unconfirmed_diagnostic_attempt(termination, artifacts, prep)
+                    } else {
+                        DiagnosticAttempt::Unavailable(termination)
+                    }
+                }
+            }
+        }
+    };
+    resolve_diagnostic_attempt(attempt, || {
+        run_clean_fallback_generator(exe, g1r, cache, timeout)
+    })
+}
+
+/// Read and structurally validate the generator output. The shipping game build used by G1R exits
+/// with status 1 after a successful `-as-generate-precompiled-data` run, so process status alone is
+/// not an acceptance signal. Conversely, a merely present/non-empty file is unsafe after an error:
+/// accept it only when every module and all seven tail tables parse exactly to EOF.
+fn read_completed_generated_cache(
+    cache: &Path,
+    status_success: bool,
+    status_label: &str,
+) -> Result<Vec<u8>, String> {
+    if !cache.exists() {
+        return Err(format!(
+            "AngelScript generation exited with {status_label} but produced no {}",
+            cache.display()
+        ));
+    }
+    let bytes = std::fs::read(cache).map_err(|e| format!("reading regen cache: {e}"))?;
+    validate_generated_cache(&bytes).map_err(|e| {
+        if status_success {
+            e
+        } else {
+            format!(
+                "AngelScript generation exited unsuccessfully ({status_label}) and its output was \
+                 incomplete: {e}"
+            )
+        }
+    })?;
+    Ok(bytes)
+}
+
+/// Wait for a direct child up to a hard execution deadline. On timeout or polling failure, request
+/// termination and observe it only for the separately bounded `termination_grace`; this function
+/// never calls blocking `Child::wait` after a failed kill (or at all).
+fn wait_for_child_with_timeout(
+    child: &mut std::process::Child,
+    timeout: Duration,
+    poll_interval: Duration,
+    termination_grace: Duration,
+    context: &str,
+) -> Result<std::process::ExitStatus, String> {
+    let deadline = Instant::now()
+        .checked_add(timeout)
+        .ok_or_else(|| format!("{context} timeout is too large"))?;
+    let poll_interval = poll_interval.max(Duration::from_millis(1));
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Ok(status),
+            Ok(None) => {
+                let now = Instant::now();
+                if now >= deadline {
+                    let cause = format!("{context} exceeded the {timeout:?} timeout");
+                    return Err(terminate_child_bounded(
+                        child,
+                        &cause,
+                        poll_interval,
+                        termination_grace,
+                    ));
+                }
+                std::thread::sleep(poll_interval.min(deadline.saturating_duration_since(now)));
+            }
+            Err(e) => {
+                let cause = format!("waiting for {context}: {e}");
+                return Err(terminate_child_bounded(
+                    child,
+                    &cause,
+                    poll_interval,
+                    termination_grace,
+                ));
             }
         }
     }
-    Err(format!(
-        "no regenerated cache produced — confirm the game compiles loose .as under {} with \
-         `-as-generate-precompiled-data`",
-        cache.parent().unwrap_or(cache).display()
-    ))
+}
+
+/// Process-tree termination with a bounded observation window. On Windows, `taskkill /T /F` first
+/// handles descendants; `Child::kill` remains the direct-child fallback on every platform. An
+/// unconfirmed exit is marked so transaction owners preserve isolation instead of racing cleanup.
+fn terminate_child_bounded(
+    child: &mut std::process::Child,
+    cause: &str,
+    poll_interval: Duration,
+    termination_grace: Duration,
+) -> String {
+    let pid = child.id();
+    let deadline = Instant::now()
+        .checked_add(termination_grace)
+        .unwrap_or_else(Instant::now);
+    let tree = request_process_tree_termination(pid, deadline);
+    let kill_error = child.kill().err();
+    let poll_interval = poll_interval.max(Duration::from_millis(1));
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                if !tree.confirmed {
+                    return format!(
+                        "{GENERATOR_EXIT_UNCONFIRMED} {cause}; direct child {pid} exited during \
+                         termination ({status}), but descendant termination was not confirmed \
+                         ({}). Isolation must remain in place",
+                        tree.note
+                    );
+                }
+                return match kill_error {
+                    Some(kill_error) => format!(
+                        "{cause}; child {pid} exited during termination ({status}; direct kill \
+                         reported: {kill_error}; {})",
+                        tree.note
+                    ),
+                    None => format!(
+                        "{cause}; process tree rooted at child {pid} was terminated ({status}; \
+                         {})",
+                        tree.note
+                    ),
+                };
+            }
+            Ok(None) => {
+                let now = Instant::now();
+                if now >= deadline {
+                    let kill_note = kill_error
+                        .as_ref()
+                        .map(|e| format!("direct kill reported: {e}"))
+                        .unwrap_or_else(|| "direct kill was requested".into());
+                    return format!(
+                        "{GENERATOR_EXIT_UNCONFIRMED} {cause}; termination was requested for \
+                         process tree {pid}, but exit was not observed within \
+                         {termination_grace:?} ({kill_note}; {})",
+                        tree.note
+                    );
+                }
+                std::thread::sleep(poll_interval.min(deadline.saturating_duration_since(now)));
+            }
+            Err(e) => {
+                return format!(
+                    "{GENERATOR_EXIT_UNCONFIRMED} {cause}; termination was requested for process \
+                     tree {pid}, but querying its exit failed: {e} ({})",
+                    tree.note
+                );
+            }
+        }
+    }
+}
+
+struct TreeTermination {
+    confirmed: bool,
+    note: String,
+}
+
+#[cfg(windows)]
+fn request_process_tree_termination(pid: u32, deadline: Instant) -> TreeTermination {
+    use std::os::windows::process::CommandExt;
+
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let mut killer = match std::process::Command::new("taskkill.exe")
+        .args(["/PID", &pid.to_string(), "/T", "/F"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn()
+    {
+        Ok(killer) => killer,
+        Err(e) => {
+            return TreeTermination {
+                confirmed: false,
+                note: format!("process-tree terminator could not start: {e}"),
+            };
+        }
+    };
+    loop {
+        match killer.try_wait() {
+            Ok(Some(status)) if status.success() => {
+                return TreeTermination {
+                    confirmed: true,
+                    note: "taskkill confirmed process-tree termination".into(),
+                };
+            }
+            Ok(Some(status)) => {
+                return TreeTermination {
+                    confirmed: false,
+                    note: format!("taskkill exited unsuccessfully: {status}"),
+                };
+            }
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Ok(None) => {
+                let _ = killer.kill();
+                return TreeTermination {
+                    confirmed: false,
+                    note: "taskkill did not finish within the termination grace".into(),
+                };
+            }
+            Err(e) => {
+                return TreeTermination {
+                    confirmed: false,
+                    note: format!("querying taskkill failed: {e}"),
+                };
+            }
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn request_process_tree_termination(_pid: u32, _deadline: Instant) -> TreeTermination {
+    TreeTermination {
+        confirmed: true,
+        note: "platform uses the direct child as the generation process tree".into(),
+    }
 }
 
 /// Recursively copy `src` into `dst`, recording every destination FILE path written into `out`
@@ -603,22 +2092,135 @@ fn real_generate(exe: &Path, g1r: &Path, cache: &Path) -> Result<Vec<u8>, String
 /// pre-existing file) — so the caller can delete what it created and RESTORE what it overwrote.
 /// Directories created are not recorded individually — empty ones are pruned bottom-up by
 /// [`restore_or_remove`].
-fn copy_tree(src: &Path, dst: &Path, out: &mut Vec<(PathBuf, Option<Vec<u8>>)>) -> std::io::Result<()> {
-    std::fs::create_dir_all(dst)?;
+fn copy_tree(
+    src: &Path,
+    dst: &Path,
+    out: &mut Vec<(PathBuf, Option<Vec<u8>>)>,
+) -> std::io::Result<()> {
+    copy_tree_with(src, dst, out, &mut |from, to| {
+        std::fs::copy(from, to).map(|_| ())
+    })
+}
+
+fn copy_tree_with<C>(
+    src: &Path,
+    dst: &Path,
+    out: &mut Vec<(PathBuf, Option<Vec<u8>>)>,
+    copy_file: &mut C,
+) -> std::io::Result<()>
+where
+    C: FnMut(&Path, &Path) -> std::io::Result<()>,
+{
+    ensure_real_directory(dst)?;
     for entry in std::fs::read_dir(src)? {
         let entry = entry?;
+        let source_meta = std::fs::symlink_metadata(entry.path())?;
+        if metadata_is_link_or_reparse(&source_meta) {
+            return Err(std::io::Error::other(format!(
+                "refusing linked/reparse source path {}",
+                entry.path().display()
+            )));
+        }
         let to = dst.join(entry.file_name());
-        if entry.file_type()?.is_dir() {
-            copy_tree(&entry.path(), &to, out)?;
-        } else {
+        if source_meta.is_dir() {
+            copy_tree_with(&entry.path(), &to, out, copy_file)?;
+        } else if source_meta.is_file() {
             // Capture the pre-existing bytes (if any) BEFORE overwriting, so cleanup can restore a
             // user's own loose script that happens to share this path with the emitted tree.
-            let prior = std::fs::read(&to).ok();
-            std::fs::copy(entry.path(), &to)?;
-            out.push((to, prior));
+            let prior = match std::fs::symlink_metadata(&to) {
+                Ok(meta) => {
+                    if metadata_is_link_or_reparse(&meta) {
+                        return Err(std::io::Error::other(format!(
+                            "refusing linked/reparse destination path {}",
+                            to.display()
+                        )));
+                    }
+                    if !meta.is_file() {
+                        return Err(std::io::Error::other(format!(
+                            "destination path is not a regular file: {}",
+                            to.display()
+                        )));
+                    }
+                    Some(std::fs::read(&to)?)
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+                Err(e) => return Err(e),
+            };
+            // Register rollback BEFORE copy: std::fs::copy may truncate/create the destination and
+            // then fail, so recording only after success would leak a partial file.
+            out.push((to.clone(), prior));
+            copy_file(&entry.path(), &to)?;
+        } else {
+            return Err(std::io::Error::other(format!(
+                "source path is not a regular file or directory: {}",
+                entry.path().display()
+            )));
         }
     }
     Ok(())
+}
+
+/// Rust's ordinary metadata follows links. Compile staging is a privileged write into the live
+/// game tree, so reject symlinks and (on Windows) every reparse point, including junctions.
+fn metadata_is_link_or_reparse(meta: &std::fs::Metadata) -> bool {
+    if meta.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        if meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return true;
+        }
+    }
+    false
+}
+
+/// Create a directory one component at a time while proving every existing component is a real
+/// directory. `create_dir_all` would otherwise traverse a pre-existing symlink/junction before the
+/// caller gets a chance to inspect it.
+fn ensure_real_directory(path: &Path) -> std::io::Result<()> {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) => {
+            if metadata_is_link_or_reparse(&meta) {
+                return Err(std::io::Error::other(format!(
+                    "refusing linked/reparse destination directory {}",
+                    path.display()
+                )));
+            }
+            if !meta.is_dir() {
+                return Err(std::io::Error::other(format!(
+                    "destination path is not a directory: {}",
+                    path.display()
+                )));
+            }
+            Ok(())
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let parent = path.parent().ok_or_else(|| {
+                std::io::Error::other(format!(
+                    "cannot create destination directory without a parent: {}",
+                    path.display()
+                ))
+            })?;
+            if parent.as_os_str().is_empty() {
+                ensure_real_directory(Path::new("."))?;
+            } else if parent != path {
+                ensure_real_directory(parent)?;
+            }
+            match std::fs::create_dir(path) {
+                Ok(()) => Ok(()),
+                // Another actor may have created it between inspection and creation. Re-inspect
+                // rather than accepting a newly-planted reparse point.
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    ensure_real_directory(path)
+                }
+                Err(e) => Err(e),
+            }
+        }
+        Err(e) => Err(e),
+    }
 }
 
 /// Undo a [`copy_tree`]: for each recorded destination, RESTORE its original bytes if it pre-existed
@@ -645,7 +2247,9 @@ fn restore_or_remove(written: &[(PathBuf, Option<Vec<u8>>)], root: &Path) -> Res
             }
             None => {
                 if let Err(e) = std::fs::remove_file(f) {
-                    errs.push(format!("delete {}: {e}", f.display()));
+                    if e.kind() != std::io::ErrorKind::NotFound {
+                        errs.push(format!("delete {}: {e}", f.display()));
+                    }
                 }
             }
         }
@@ -681,17 +2285,30 @@ fn restore_or_remove(written: &[(PathBuf, Option<Vec<u8>>)], root: &Path) -> Res
 mod tests {
     use super::*;
 
+    static PROCESS_TIMEOUT_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn g1r_dir_appends_or_keeps() {
-        assert_eq!(g1r_dir(Path::new("games/Gothic")), PathBuf::from("games/Gothic/G1R"));
-        assert_eq!(g1r_dir(Path::new("games/Gothic/G1R")), PathBuf::from("games/Gothic/G1R"));
+        assert_eq!(
+            g1r_dir(Path::new("games/Gothic")),
+            PathBuf::from("games/Gothic/G1R")
+        );
+        assert_eq!(
+            g1r_dir(Path::new("games/Gothic/G1R")),
+            PathBuf::from("games/Gothic/G1R")
+        );
     }
 
     #[test]
     fn precompile_errors_when_exe_missing() {
         // No shipping exe: the guard fires and the generator is NEVER invoked.
         let dir = std::env::temp_dir().join("gore-as-no-exe-xyz");
-        let opts = PrecompileOpts { game_dir: dir, src: None, out: None, backup: true };
+        let opts = PrecompileOpts {
+            game_dir: dir,
+            src: None,
+            out: None,
+            backup: true,
+        };
         let err = precompile_with(&opts, |_, _, _| panic!("must not launch")).unwrap_err();
         assert!(err.contains("game exe not found"), "got: {err}");
     }
@@ -709,10 +2326,658 @@ mod tests {
         (base.to_path_buf(), cache)
     }
 
-    /// Stub generator: emulate the game overwriting the cache with `NEW`, and return those bytes.
+    fn dev_cache(shipping_cache: &Path) -> PathBuf {
+        shipping_cache
+            .parent()
+            .unwrap()
+            .join("PrecompiledScript.Cache")
+    }
+
+    fn sia(s: &str) -> Vec<u8> {
+        if s.is_empty() {
+            return 0i32.to_le_bytes().to_vec();
+        }
+        let mut out = (s.len() as i32).to_le_bytes().to_vec();
+        out.extend_from_slice(s.as_bytes());
+        out.push(0);
+        out
+    }
+
+    fn fstring(s: &str) -> Vec<u8> {
+        let mut out = ((s.len() + 1) as i32).to_le_bytes().to_vec();
+        out.extend_from_slice(s.as_bytes());
+        out.push(0);
+        out
+    }
+
+    /// Small but structurally complete cache: one empty module followed by all seven empty tails.
+    fn valid_cache() -> Vec<u8> {
+        let module = "TestModule";
+        let mut out = vec![0u8; 16];
+        out.extend_from_slice(&crate::cache::header::CACHE_MAGIC.to_le_bytes());
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&fstring(module));
+        out.extend_from_slice(&sia(module));
+        out.extend_from_slice(&0i32.to_le_bytes()); // functions
+        out.extend_from_slice(&0i32.to_le_bytes()); // classes
+        out.extend_from_slice(&0i32.to_le_bytes()); // enums
+        out.extend_from_slice(&0i32.to_le_bytes()); // globals
+        out.extend_from_slice(&0i32.to_le_bytes()); // function imports
+        out.extend_from_slice(&0i64.to_le_bytes()); // code hash
+        out.extend_from_slice(&0i32.to_le_bytes()); // imported modules
+        out.extend_from_slice(&sia("")); // statics class
+        out.extend_from_slice(&0i32.to_le_bytes()); // events
+        out.extend_from_slice(&0i32.to_le_bytes()); // delegates
+        out.extend_from_slice(&sia("TestModule.as"));
+        out.extend_from_slice(&0i32.to_le_bytes()); // post-init functions
+        for _ in 0..crate::cache::tables::N_TABLES {
+            out.extend_from_slice(&0i32.to_le_bytes());
+        }
+        out
+    }
+
+    /// Stub generator: emulate the game creating a complete development cache and return it.
     fn gen_new(_exe: &Path, _g1r: &Path, cache: &Path) -> Result<Vec<u8>, String> {
-        std::fs::write(cache, b"NEW").map_err(|e| e.to_string())?;
-        Ok(b"NEW".to_vec())
+        assert_eq!(cache.file_name().unwrap(), "PrecompiledScript.Cache");
+        assert!(
+            !cache.exists(),
+            "caller must remove a stale development cache first"
+        );
+        let bytes = valid_cache();
+        std::fs::write(cache, &bytes).map_err(|e| e.to_string())?;
+        Ok(bytes)
+    }
+
+    #[test]
+    fn generated_cache_validation_requires_header_modules_all_tails_and_eof() {
+        let good = valid_cache();
+        validate_generated_cache(&good).unwrap();
+
+        let mut bad_magic = good.clone();
+        bad_magic[0x10..0x14].copy_from_slice(&0u32.to_le_bytes());
+        assert!(validate_generated_cache(&bad_magic)
+            .unwrap_err()
+            .contains("header"));
+
+        let mut no_modules = vec![0u8; 16];
+        no_modules.extend_from_slice(&crate::cache::header::CACHE_MAGIC.to_le_bytes());
+        no_modules.extend_from_slice(&0u32.to_le_bytes());
+        for _ in 0..crate::cache::tables::N_TABLES {
+            no_modules.extend_from_slice(&0u32.to_le_bytes());
+        }
+        assert!(validate_generated_cache(&no_modules)
+            .unwrap_err()
+            .contains("zero modules"));
+
+        assert!(validate_generated_cache(&good[..good.len() - 1])
+            .unwrap_err()
+            .contains("tail tables"));
+
+        let mut trailing = good;
+        trailing.push(0);
+        assert!(validate_generated_cache(&trailing)
+            .unwrap_err()
+            .contains("file length"));
+    }
+
+    #[test]
+    fn nonzero_generator_status_accepts_only_a_complete_cache() {
+        let base = std::env::temp_dir().join("gore-as-nonzero-complete-cache");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let cache = base.join("PrecompiledScript.Cache");
+        let good = valid_cache();
+        std::fs::write(&cache, &good).unwrap();
+
+        assert_eq!(
+            read_completed_generated_cache(&cache, false, "exit code: 1").unwrap(),
+            good,
+            "G1R's post-generation exit code 1 is acceptable only with a fully valid cache"
+        );
+
+        std::fs::write(&cache, b"partial").unwrap();
+        let err = read_completed_generated_cache(&cache, false, "exit code: 1").unwrap_err();
+        assert!(err.contains("exited unsuccessfully"), "got: {err}");
+        assert!(err.contains("incomplete"), "got: {err}");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn reset_compile_tree_removes_stale_scripts_and_rebuilds_empty_directory() {
+        let base = std::env::temp_dir().join("gore-as-reset-tree");
+        let _ = std::fs::remove_dir_all(&base);
+        let tree = base.join("tree");
+        std::fs::create_dir_all(tree.join("Old")).unwrap();
+        std::fs::write(tree.join("Old").join("Stale.as"), b"stale").unwrap();
+
+        let rebuilt = reset_compile_tree(&base).unwrap();
+        assert_eq!(rebuilt, tree);
+        assert!(rebuilt.is_dir());
+        assert_eq!(std::fs::read_dir(&rebuilt).unwrap().count(), 0);
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Invoked only as a subprocess by `child_wait_timeout_is_hard_and_bounded`. Keeping it ignored
+    /// prevents an ordinary test run from sleeping; the private environment flag prevents even an
+    /// explicit `--ignored` run from doing so accidentally.
+    #[test]
+    #[ignore = "subprocess helper for the timeout test"]
+    fn timeout_helper_process() {
+        if std::env::var_os("GORE_AS_TIMEOUT_HELPER_PROCESS").is_some() {
+            std::thread::sleep(Duration::from_secs(30));
+        }
+    }
+
+    #[test]
+    fn child_wait_timeout_is_hard_and_bounded() {
+        let _serial = PROCESS_TIMEOUT_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let test_exe = std::env::current_exe().unwrap();
+        let mut child = std::process::Command::new(test_exe)
+            .args([
+                "--ignored",
+                "--exact",
+                "compile::tests::timeout_helper_process",
+                "--test-threads=1",
+            ])
+            .env("GORE_AS_TIMEOUT_HELPER_PROCESS", "1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+
+        let timeout = Duration::from_millis(150);
+        let termination_grace = Duration::from_millis(750);
+        let started = Instant::now();
+        let err = wait_for_child_with_timeout(
+            &mut child,
+            timeout,
+            Duration::from_millis(10),
+            termination_grace,
+            "timeout-test helper",
+        )
+        .unwrap_err();
+        let elapsed = started.elapsed();
+
+        assert!(err.contains("exceeded"), "got: {err}");
+        assert!(
+            err.contains("terminated") || err.contains(GENERATOR_EXIT_UNCONFIRMED),
+            "timeout must report either confirmed termination or the fail-closed unconfirmed-exit marker; got: {err}"
+        );
+        assert!(
+            elapsed <= timeout + termination_grace + Duration::from_secs(1),
+            "timeout path exceeded its hard bounds: elapsed={elapsed:?}, error={err}"
+        );
+        // A heavily loaded Windows host can consume the deliberately short production-observation
+        // window inside `taskkill` itself. The production path correctly reports that as
+        // unconfirmed and preserves isolation. Give the test helper a separate best-effort cleanup
+        // window so a valid fail-closed result neither leaks the sleeper nor poisons the serial
+        // mutex for the next test.
+        let cleanup_deadline = Instant::now() + Duration::from_secs(5);
+        while child.try_wait().unwrap().is_none() && Instant::now() < cleanup_deadline {
+            let _ = child.kill();
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        assert!(
+            child.try_wait().unwrap().is_some(),
+            "direct helper child must exit during the test-only cleanup window"
+        );
+    }
+
+    #[test]
+    fn game_run_regen_quarantines_jitted_code_and_clear_ue4ss_proxy_then_restores() {
+        let base = std::env::temp_dir().join("gore-as-game-isolation");
+        let _ = std::fs::remove_dir_all(&base);
+        let (game, shipping) = fake_install(&base);
+        let src = base.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("Mod.as"), b"script").unwrap();
+
+        let jitted = base.join("AS_JITTED_CODE");
+        std::fs::create_dir_all(&jitted).unwrap();
+        std::fs::write(jitted.join("old.bin"), b"OLD-JIT").unwrap();
+        let win64 = base.join("G1R").join("Binaries").join("Win64");
+        let payload = win64.join("ue4ss").join("UE4SS.dll");
+        std::fs::create_dir_all(payload.parent().unwrap()).unwrap();
+        std::fs::write(&payload, b"UE4SS").unwrap();
+        let proxy = win64.join("dwmapi.dll");
+        std::fs::write(&proxy, b"OLD-PROXY").unwrap();
+
+        game_run_regen_with(&game, &src, |_, _, dev| {
+            assert!(!jitted.exists(), "old JIT dir must be quarantined");
+            assert!(!proxy.exists(), "UE4SS proxy must be disabled");
+            std::fs::create_dir_all(&jitted).unwrap();
+            std::fs::write(jitted.join("new.bin"), b"NEW-JIT").unwrap();
+            std::fs::write(&proxy, b"UNEXPECTED-NEW-PROXY").unwrap();
+            let bytes = valid_cache();
+            std::fs::write(dev, &bytes).unwrap();
+            Ok(bytes)
+        })
+        .unwrap();
+
+        assert_eq!(std::fs::read(jitted.join("old.bin")).unwrap(), b"OLD-JIT");
+        assert!(!jitted.join("new.bin").exists());
+        assert_eq!(std::fs::read(&proxy).unwrap(), b"OLD-PROXY");
+        assert!(!append_suffix(&jitted, ".gore-compile-bak").exists());
+        assert!(!append_suffix(&proxy, ".gore-compile-bak").exists());
+        assert_eq!(std::fs::read(&shipping).unwrap(), b"OLD");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn game_run_regen_restores_absent_side_effect_paths_on_failure() {
+        let base = std::env::temp_dir().join("gore-as-game-isolation-absent");
+        let _ = std::fs::remove_dir_all(&base);
+        let (game, shipping) = fake_install(&base);
+        let src = base.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("Mod.as"), b"script").unwrap();
+        let jitted = base.join("AS_JITTED_CODE");
+        let proxy = base
+            .join("G1R")
+            .join("Binaries")
+            .join("Win64")
+            .join("dwmapi.dll");
+
+        let err = game_run_regen_with(&game, &src, |_, _, dev| {
+            std::fs::create_dir_all(&jitted).unwrap();
+            std::fs::write(jitted.join("new.bin"), b"NEW-JIT").unwrap();
+            std::fs::write(&proxy, b"NEW-PROXY").unwrap();
+            std::fs::write(dev, b"partial").unwrap();
+            Err("generation failed".into())
+        })
+        .unwrap_err();
+
+        assert!(err.contains("generation failed"), "got: {err}");
+        assert!(!jitted.exists());
+        assert!(!proxy.exists());
+        assert_eq!(std::fs::read(&shipping).unwrap(), b"OLD");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn game_run_regen_leaves_unidentified_dwmapi_untouched() {
+        let base = std::env::temp_dir().join("gore-as-game-non-ue4ss-proxy");
+        let _ = std::fs::remove_dir_all(&base);
+        let (game, _) = fake_install(&base);
+        let src = base.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("Mod.as"), b"script").unwrap();
+        let proxy = base
+            .join("G1R")
+            .join("Binaries")
+            .join("Win64")
+            .join("dwmapi.dll");
+        std::fs::write(&proxy, b"NOT-KNOWN-TO-BE-UE4SS").unwrap();
+
+        game_run_regen_with(&game, &src, |_, _, dev| {
+            assert_eq!(std::fs::read(&proxy).unwrap(), b"NOT-KNOWN-TO-BE-UE4SS");
+            let bytes = valid_cache();
+            std::fs::write(dev, &bytes).unwrap();
+            Ok(bytes)
+        })
+        .unwrap();
+        assert_eq!(std::fs::read(&proxy).unwrap(), b"NOT-KNOWN-TO-BE-UE4SS");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn game_run_regen_refuses_existing_compile_and_quarantine_backups() {
+        for which in ["cache", "jitted"] {
+            let base = std::env::temp_dir().join(format!("gore-as-backup-collision-{which}"));
+            let _ = std::fs::remove_dir_all(&base);
+            let (game, shipping) = fake_install(&base);
+            let src = base.join("src");
+            std::fs::create_dir_all(&src).unwrap();
+            std::fs::write(src.join("Mod.as"), b"script").unwrap();
+            let collision = if which == "cache" {
+                compile_bak_path(&shipping)
+            } else {
+                append_suffix(&base.join("AS_JITTED_CODE"), ".gore-compile-bak")
+            };
+            if which == "jitted" {
+                std::fs::create_dir_all(base.join("AS_JITTED_CODE")).unwrap();
+            }
+            std::fs::write(&collision, b"KEEP-ME").unwrap();
+
+            let err = game_run_regen_with(&game, &src, |_, _, _| panic!("must not generate"))
+                .unwrap_err();
+            assert!(
+                err.contains("backup already exists"),
+                "which={which}: {err}"
+            );
+            assert_eq!(std::fs::read(&collision).unwrap(), b"KEEP-ME");
+            assert_eq!(std::fs::read(&shipping).unwrap(), b"OLD");
+
+            let _ = std::fs::remove_dir_all(&base);
+        }
+    }
+
+    #[test]
+    fn game_run_regen_keeps_compile_backup_if_shipping_restore_fails() {
+        let base = std::env::temp_dir().join("gore-as-backup-restore-failure");
+        let _ = std::fs::remove_dir_all(&base);
+        let (game, shipping) = fake_install(&base);
+        let src = base.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("Mod.as"), b"script").unwrap();
+
+        let err = game_run_regen_with(&game, &src, |_, _, dev| {
+            std::fs::remove_file(&shipping).unwrap();
+            std::fs::create_dir(&shipping).unwrap();
+            let bytes = valid_cache();
+            std::fs::write(dev, &bytes).unwrap();
+            Ok(bytes)
+        })
+        .unwrap_err();
+
+        let backup = compile_bak_path(&shipping);
+        assert!(err.contains("FAILED to restore"), "got: {err}");
+        assert_eq!(std::fs::read(&backup).unwrap(), b"OLD");
+        assert!(shipping.is_dir());
+
+        // Manual recovery for the fake install, mirroring the error's instruction.
+        std::fs::remove_dir(&shipping).unwrap();
+        std::fs::rename(&backup, &shipping).unwrap();
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn precompile_refuses_existing_shipping_recovery_backup_without_mutation() {
+        let base = std::env::temp_dir().join("gore-as-precompile-recovery-collision");
+        let _ = std::fs::remove_dir_all(&base);
+        let (game, shipping) = fake_install(&base);
+        let backup = compile_bak_path(&shipping);
+        std::fs::write(&backup, b"KEEP-RECOVERY").unwrap();
+        let opts = PrecompileOpts {
+            game_dir: game.clone(),
+            src: None,
+            out: Some(base.join("out.Cache")),
+            backup: false,
+        };
+
+        let err = precompile_with(&opts, |_, _, _| panic!("must not generate")).unwrap_err();
+        assert!(err.contains("compile backup already exists"), "got: {err}");
+        assert_eq!(std::fs::read(&shipping).unwrap(), b"OLD");
+        assert_eq!(std::fs::read(&backup).unwrap(), b"KEEP-RECOVERY");
+        assert!(!compile_lock_path(&game).exists());
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn precompile_preserves_recovery_backup_when_shipping_restore_fails() {
+        let base = std::env::temp_dir().join("gore-as-precompile-restore-failure");
+        let _ = std::fs::remove_dir_all(&base);
+        let (game, shipping) = fake_install(&base);
+        let opts = PrecompileOpts {
+            game_dir: game.clone(),
+            src: None,
+            out: Some(base.join("out.Cache")),
+            backup: false,
+        };
+
+        let err = precompile_with(&opts, |_, _, dev| {
+            std::fs::remove_file(&shipping).unwrap();
+            std::fs::create_dir(&shipping).unwrap();
+            let bytes = valid_cache();
+            std::fs::write(dev, &bytes).unwrap();
+            Ok(bytes)
+        })
+        .unwrap_err();
+
+        let recovery = compile_bak_path(&shipping);
+        assert!(err.contains("FAILED to restore"), "got: {err}");
+        assert_eq!(std::fs::read(&recovery).unwrap(), b"OLD");
+        assert!(shipping.is_dir());
+        assert!(!compile_lock_path(&game).exists());
+
+        std::fs::remove_dir(&shipping).unwrap();
+        std::fs::rename(&recovery, &shipping).unwrap();
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn common_compile_lock_rejects_parallel_cross_entry_point_compile() {
+        let _serial = PROCESS_TIMEOUT_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let base = std::env::temp_dir().join("gore-as-parallel-compile-lock");
+        let _ = std::fs::remove_dir_all(&base);
+        let (game, shipping) = fake_install(&base);
+        let src = base.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("Mod.as"), b"script").unwrap();
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let game_for_thread = game.clone();
+        let src_for_thread = src.clone();
+
+        let first = std::thread::spawn(move || {
+            game_run_regen_with(&game_for_thread, &src_for_thread, |_, _, dev| {
+                entered_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                let bytes = valid_cache();
+                std::fs::write(dev, &bytes).unwrap();
+                Ok(bytes)
+            })
+        });
+        entered_rx.recv().unwrap();
+        assert!(compile_lock_path(&game).exists());
+
+        let second_opts = PrecompileOpts {
+            game_dir: game.clone(),
+            src: None,
+            out: Some(base.join("parallel-out.Cache")),
+            backup: false,
+        };
+        let second =
+            precompile_with(&second_opts, |_, _, _| panic!("must not generate")).unwrap_err();
+        assert!(second.contains("compile is active"), "got: {second}");
+
+        release_tx.send(()).unwrap();
+        first.join().unwrap().unwrap();
+        assert!(!compile_lock_path(&game).exists());
+        assert!(!compile_bak_path(&shipping).exists());
+        assert_eq!(std::fs::read(&shipping).unwrap(), b"OLD");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn panic_unwind_restores_entire_compile_transaction() {
+        let base = std::env::temp_dir().join("gore-as-compile-panic-rollback");
+        let _ = std::fs::remove_dir_all(&base);
+        let (game, shipping) = fake_install(&base);
+        let dev = dev_cache(&shipping);
+        std::fs::write(&dev, b"DEV-OLD").unwrap();
+        let live_mod = shipping.parent().unwrap().join("Mod.as");
+        std::fs::write(&live_mod, b"LIVE-OLD").unwrap();
+        let src = base.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("Mod.as"), b"STAGED").unwrap();
+
+        let jitted = base.join("AS_JITTED_CODE");
+        std::fs::create_dir_all(&jitted).unwrap();
+        std::fs::write(jitted.join("old.bin"), b"JIT-OLD").unwrap();
+        let win64 = base.join("G1R").join("Binaries").join("Win64");
+        let payload = win64.join("ue4ss").join("UE4SS.dll");
+        std::fs::create_dir_all(payload.parent().unwrap()).unwrap();
+        std::fs::write(&payload, b"UE4SS").unwrap();
+        let proxy = win64.join("dwmapi.dll");
+        std::fs::write(&proxy, b"PROXY-OLD").unwrap();
+
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = game_run_regen_with(&game, &src, |_, _, dev_path| {
+                assert!(!jitted.exists());
+                assert!(!proxy.exists());
+                std::fs::write(&shipping, b"SHIPPING-PARTIAL").unwrap();
+                std::fs::write(dev_path, b"DEV-PARTIAL").unwrap();
+                std::fs::create_dir_all(&jitted).unwrap();
+                std::fs::write(jitted.join("new.bin"), b"JIT-NEW").unwrap();
+                std::fs::write(&proxy, b"PROXY-NEW").unwrap();
+                panic!("injected generator panic");
+                #[allow(unreachable_code)]
+                Ok(Vec::new())
+            });
+        }));
+        assert!(unwind.is_err());
+
+        assert_eq!(std::fs::read(&shipping).unwrap(), b"OLD");
+        assert_eq!(std::fs::read(&dev).unwrap(), b"DEV-OLD");
+        assert_eq!(std::fs::read(&live_mod).unwrap(), b"LIVE-OLD");
+        assert_eq!(std::fs::read(jitted.join("old.bin")).unwrap(), b"JIT-OLD");
+        assert!(!jitted.join("new.bin").exists());
+        assert_eq!(std::fs::read(&proxy).unwrap(), b"PROXY-OLD");
+        assert!(!compile_bak_path(&shipping).exists());
+        assert!(!compile_lock_path(&game).exists());
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn precompile_rejects_structurally_incomplete_cache_and_rolls_back() {
+        let base = std::env::temp_dir().join("gore-as-invalid-generated-cache");
+        let _ = std::fs::remove_dir_all(&base);
+        let (game, shipping) = fake_install(&base);
+        let src = base.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("Mod.as"), b"script").unwrap();
+        let opts = PrecompileOpts {
+            game_dir: game,
+            src: Some(src),
+            out: None,
+            backup: true,
+        };
+
+        let err = precompile_with(&opts, |_, _, dev| {
+            std::fs::write(dev, b"not-a-cache").unwrap();
+            Ok(b"not-a-cache".to_vec())
+        })
+        .unwrap_err();
+        assert!(err.contains("invalid generated cache"), "got: {err}");
+        assert_eq!(std::fs::read(&shipping).unwrap(), b"OLD");
+        assert!(!dev_cache(&shipping).exists());
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn game_run_regen_uses_dev_cache_and_restores_both_caches_and_colliding_source() {
+        let base = std::env::temp_dir().join("gore-as-game-regen-dev");
+        let _ = std::fs::remove_dir_all(&base);
+        let (game, shipping) = fake_install(&base);
+        let dev = dev_cache(&shipping);
+        std::fs::write(&dev, b"DEV-OLD").unwrap();
+        // A matching loose path is safe: staging overwrites it, then cleanup must restore it.
+        let live_mod = shipping.parent().unwrap().join("Mod.as");
+        std::fs::write(&live_mod, b"LIVE-OLD").unwrap();
+        let src = base.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("Mod.as"), b"STAGED-NEW").unwrap();
+
+        let regen = game_run_regen_with(&game, &src, |_, _, dev_path| {
+            assert_eq!(dev_path, dev);
+            assert!(
+                !dev_path.exists(),
+                "stale dev cache must be removed before generation"
+            );
+            // Even an unexpected Shipping write by the game must be undone.
+            std::fs::write(
+                dev_path
+                    .parent()
+                    .unwrap()
+                    .join("PrecompiledScript_Shipping.Cache"),
+                b"TOUCHED",
+            )
+            .unwrap();
+            let bytes = valid_cache();
+            std::fs::write(dev_path, &bytes).unwrap();
+            Ok(bytes)
+        })
+        .unwrap();
+
+        assert_eq!(std::fs::read(regen).unwrap(), valid_cache());
+        assert_eq!(
+            std::fs::read(&shipping).unwrap(),
+            b"OLD",
+            "Shipping restored exactly"
+        );
+        assert_eq!(
+            std::fs::read(&dev).unwrap(),
+            b"DEV-OLD",
+            "old dev cache restored"
+        );
+        assert_eq!(
+            std::fs::read(&live_mod).unwrap(),
+            b"LIVE-OLD",
+            "colliding source restored"
+        );
+        assert!(!shipping.with_extension("Cache.gore-compile-bak").exists());
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn game_run_regen_failure_removes_new_dev_cache_and_restores_shipping() {
+        let base = std::env::temp_dir().join("gore-as-game-regen-fail");
+        let _ = std::fs::remove_dir_all(&base);
+        let (game, shipping) = fake_install(&base);
+        let dev = dev_cache(&shipping);
+        let src = base.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("Mod.as"), b"script").unwrap();
+
+        let err = game_run_regen_with(&game, &src, |_, _, dev_path| {
+            std::fs::write(dev_path, b"PARTIAL-DEV").unwrap();
+            std::fs::write(
+                dev_path
+                    .parent()
+                    .unwrap()
+                    .join("PrecompiledScript_Shipping.Cache"),
+                b"PARTIAL-SHIPPING",
+            )
+            .unwrap();
+            Err("compile failed".into())
+        })
+        .unwrap_err();
+
+        assert!(err.contains("compile failed"), "got: {err}");
+        assert_eq!(std::fs::read(&shipping).unwrap(), b"OLD");
+        assert!(
+            !dev.exists(),
+            "new dev cache removed when none existed before"
+        );
+        assert!(!shipping.parent().unwrap().join("Mod.as").exists());
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn game_run_regen_rejects_uncovered_loose_script_before_staging() {
+        let base = std::env::temp_dir().join("gore-as-game-regen-stray");
+        let _ = std::fs::remove_dir_all(&base);
+        let (game, shipping) = fake_install(&base);
+        let stray = shipping.parent().unwrap().join("OnlyLive.as");
+        std::fs::write(&stray, b"do not compile me").unwrap();
+        let src = base.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("Wanted.as"), b"wanted").unwrap();
+
+        let err =
+            game_run_regen_with(&game, &src, |_, _, _| panic!("must not generate")).unwrap_err();
+        assert!(err.contains("not present in the staged tree"), "got: {err}");
+        assert_eq!(std::fs::read(&stray).unwrap(), b"do not compile me");
+        assert!(!shipping.with_extension("Cache.gore-compile-bak").exists());
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
@@ -720,9 +2985,14 @@ mod tests {
         let base = std::env::temp_dir().join("gore-as-compile-out");
         let _ = std::fs::remove_dir_all(&base);
         let (game, cache) = fake_install(&base);
+        let dev = dev_cache(&cache);
+        std::fs::write(&dev, b"DEV-OLD").unwrap();
         let src = base.join("src");
         std::fs::create_dir_all(src.join("AI")).unwrap();
         std::fs::write(src.join("AI").join("Mod.as"), b"script").unwrap();
+        let live_src = cache.parent().unwrap().join("AI").join("Mod.as");
+        std::fs::create_dir_all(live_src.parent().unwrap()).unwrap();
+        std::fs::write(&live_src, b"live-script").unwrap();
         let out = base.join("out.Cache");
 
         let opts = PrecompileOpts {
@@ -734,13 +3004,30 @@ mod tests {
         let res = precompile_with(&opts, gen_new).unwrap();
 
         assert_eq!(res, out);
-        assert_eq!(std::fs::read(&out).unwrap(), b"NEW", "artifact holds the compiled bytes");
-        assert_eq!(std::fs::read(&cache).unwrap(), b"OLD", "live cache restored (install pristine)");
-        assert!(
-            !cache.parent().unwrap().join("AI").join("Mod.as").exists(),
-            "staged .as removed from Script/"
+        assert_eq!(
+            std::fs::read(&out).unwrap(),
+            valid_cache(),
+            "artifact holds the compiled bytes"
         );
-        assert!(!deploy_bak_path(&cache).exists(), "out-mode leaves no .gore-bak");
+        assert_eq!(
+            std::fs::read(&cache).unwrap(),
+            b"OLD",
+            "live cache restored (install pristine)"
+        );
+        assert_eq!(
+            std::fs::read(&dev).unwrap(),
+            b"DEV-OLD",
+            "old dev cache restored exactly"
+        );
+        assert_eq!(
+            std::fs::read(&live_src).unwrap(),
+            b"live-script",
+            "covered pre-existing source is restored exactly"
+        );
+        assert!(
+            !deploy_bak_path(&cache).exists(),
+            "out-mode leaves no .gore-bak"
+        );
 
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -763,13 +3050,121 @@ mod tests {
         let res = precompile_with(&opts, gen_new).unwrap();
 
         assert_eq!(res, cache);
-        assert_eq!(std::fs::read(&cache).unwrap(), b"NEW", "new cache installed in place");
+        assert_eq!(
+            std::fs::read(&cache).unwrap(),
+            valid_cache(),
+            "new cache installed in place"
+        );
+        assert!(
+            !dev_cache(&cache).exists(),
+            "new dev cache removed after in-place install"
+        );
         assert_eq!(
             std::fs::read(deploy_bak_path(&cache)).unwrap(),
             b"OLD",
             "previous cache backed up to .gore-bak"
         );
-        assert!(!cache.parent().unwrap().join("Mod.as").exists(), "staged .as cleaned");
+        assert!(
+            !cache.parent().unwrap().join("Mod.as").exists(),
+            "staged .as cleaned"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn precompile_in_place_rejects_directory_as_existing_deploy_backup() {
+        let base = std::env::temp_dir().join("gore-as-compile-invalid-deploy-backup");
+        let _ = std::fs::remove_dir_all(&base);
+        let (game, cache) = fake_install(&base);
+        let backup = deploy_bak_path(&cache);
+        std::fs::create_dir(&backup).unwrap();
+        let opts = PrecompileOpts {
+            game_dir: game.clone(),
+            src: None,
+            out: None,
+            backup: true,
+        };
+
+        let err = precompile_with(&opts, gen_new).unwrap_err();
+
+        assert!(
+            err.contains("not a regular non-reparse file"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(
+            std::fs::read(&cache).unwrap(),
+            b"OLD",
+            "invalid backup must fail before installing generated bytes"
+        );
+        assert!(backup.is_dir(), "the rejected path must remain untouched");
+        assert!(!dev_cache(&cache).exists());
+        assert!(!compile_bak_path(&cache).exists());
+        assert!(!compile_lock_path(&game).exists());
+        assert!(!recovery_journal_path(&game).exists());
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn precompile_in_place_preserves_valid_existing_deploy_backup() {
+        let base = std::env::temp_dir().join("gore-as-compile-existing-deploy-backup");
+        let _ = std::fs::remove_dir_all(&base);
+        let (game, cache) = fake_install(&base);
+        let backup = deploy_bak_path(&cache);
+        std::fs::write(&backup, b"EARLIEST").unwrap();
+        let opts = PrecompileOpts {
+            game_dir: game,
+            src: None,
+            out: None,
+            backup: true,
+        };
+
+        precompile_with(&opts, gen_new).unwrap();
+
+        assert_eq!(std::fs::read(&cache).unwrap(), valid_cache());
+        assert_eq!(
+            std::fs::read(&backup).unwrap(),
+            b"EARLIEST",
+            "a valid existing backup must never be overwritten"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn precompile_in_place_rejects_link_as_existing_deploy_backup() {
+        let base = std::env::temp_dir().join("gore-as-compile-linked-deploy-backup");
+        let _ = std::fs::remove_dir_all(&base);
+        let (game, cache) = fake_install(&base);
+        let backup = deploy_bak_path(&cache);
+        let link_target = base.join("not-the-backup.Cache");
+        std::fs::write(&link_target, b"DO-NOT-USE").unwrap();
+
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&link_target, &backup).unwrap();
+        #[cfg(windows)]
+        if std::os::windows::fs::symlink_file(&link_target, &backup).is_err() {
+            // Windows without Developer Mode/elevation cannot create this fixture. Reparse paths
+            // still hit the same production predicate exercised by the staging-link test.
+            let _ = std::fs::remove_dir_all(&base);
+            return;
+        }
+
+        let opts = PrecompileOpts {
+            game_dir: game,
+            src: None,
+            out: None,
+            backup: true,
+        };
+        let err = precompile_with(&opts, gen_new).unwrap_err();
+
+        assert!(
+            err.contains("not a regular non-reparse file"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(std::fs::read(&cache).unwrap(), b"OLD");
+        assert_eq!(std::fs::read(&link_target).unwrap(), b"DO-NOT-USE");
 
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -784,6 +3179,7 @@ mod tests {
         let src = base.join("src");
         std::fs::create_dir_all(&src).unwrap();
         std::fs::write(src.join("PrecompiledScript_Shipping.Cache"), b"SRCCACHE").unwrap();
+        std::fs::write(src.join("PrecompiledScript.Cache"), b"STALE-DEV").unwrap();
         std::fs::write(src.join("Mod.as"), b"script").unwrap();
 
         let opts = PrecompileOpts {
@@ -797,10 +3193,17 @@ mod tests {
         assert_eq!(res, cache);
         assert_eq!(
             std::fs::read(&cache).unwrap(),
-            b"NEW",
+            valid_cache(),
             "freshly compiled cache kept, not clobbered by the staged src cache file"
         );
-        assert!(!cache.parent().unwrap().join("Mod.as").exists(), "staged .as cleaned");
+        assert!(
+            !dev_cache(&cache).exists(),
+            "staged/generated development cache cleaned"
+        );
+        assert!(
+            !cache.parent().unwrap().join("Mod.as").exists(),
+            "staged .as cleaned"
+        );
 
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -818,7 +3221,8 @@ mod tests {
             out: None,
             backup: true,
         };
-        let err = precompile_with(&opts, |_, _, _| panic!("must not stage or generate")).unwrap_err();
+        let err =
+            precompile_with(&opts, |_, _, _| panic!("must not stage or generate")).unwrap_err();
         assert!(err.contains("contains the game's Script"), "got: {err}");
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -830,6 +3234,8 @@ mod tests {
         let base = std::env::temp_dir().join("gore-as-compile-genfail");
         let _ = std::fs::remove_dir_all(&base);
         let (game, cache) = fake_install(&base);
+        let dev = dev_cache(&cache);
+        std::fs::write(&dev, b"DEV-OLD").unwrap();
         let src = base.join("src");
         std::fs::create_dir_all(&src).unwrap();
         std::fs::write(src.join("Mod.as"), b"script").unwrap();
@@ -838,20 +3244,44 @@ mod tests {
             game_dir: game,
             src: Some(src),
             out: None,
-            backup: false,
+            backup: true,
         };
-        // Stub emulates the game partially rewriting the cache, then failing.
-        let err = precompile_with(&opts, |_, _, cache| {
-            std::fs::write(cache, b"PARTIAL").unwrap();
+        // Stub emulates a partial development-cache write plus an unexpected Shipping write.
+        let err = precompile_with(&opts, |_, _, dev_cache| {
+            std::fs::write(dev_cache, b"PARTIAL-DEV").unwrap();
+            std::fs::write(
+                dev_cache
+                    .parent()
+                    .unwrap()
+                    .join("PrecompiledScript_Shipping.Cache"),
+                b"PARTIAL-SHIPPING",
+            )
+            .unwrap();
             Err("boom".to_string())
         })
         .unwrap_err();
 
-        assert!(err.contains("boom"), "surfaces the original error; got: {err}");
-        assert_eq!(std::fs::read(&cache).unwrap(), b"OLD", "live cache rolled back");
+        assert!(
+            err.contains("boom"),
+            "surfaces the original error; got: {err}"
+        );
+        assert_eq!(
+            std::fs::read(&cache).unwrap(),
+            b"OLD",
+            "live cache rolled back"
+        );
+        assert_eq!(
+            std::fs::read(&dev).unwrap(),
+            b"DEV-OLD",
+            "development cache rolled back"
+        );
         assert!(
             !cache.parent().unwrap().join("Mod.as").exists(),
             "staged .as removed on rollback"
+        );
+        assert!(
+            !deploy_bak_path(&cache).exists(),
+            "failed generation must not create a persistent deploy backup"
         );
 
         let _ = std::fs::remove_dir_all(&base);
@@ -872,9 +3302,17 @@ mod tests {
                 backup: false,
             };
             let err = precompile_with(&opts, |_, _, _| panic!("must not generate")).unwrap_err();
-            assert!(err.contains("Script/ directory"), "out={:?} got: {err}", out);
+            assert!(
+                err.contains("Script/ directory"),
+                "out={:?} got: {err}",
+                out
+            );
         }
-        assert_eq!(std::fs::read(&cache).unwrap(), b"OLD", "live cache left untouched");
+        assert_eq!(
+            std::fs::read(&cache).unwrap(),
+            b"OLD",
+            "live cache left untouched"
+        );
         let _ = std::fs::remove_dir_all(&base);
     }
 
@@ -899,8 +3337,15 @@ mod tests {
         };
         let err = precompile_with(&opts, gen_new).unwrap_err();
 
-        assert!(err.contains("writing output"), "surfaces the write error; got: {err}");
-        assert_eq!(std::fs::read(&cache).unwrap(), b"OLD", "live cache restored despite write failure");
+        assert!(
+            err.contains("writing output"),
+            "surfaces the write error; got: {err}"
+        );
+        assert_eq!(
+            std::fs::read(&cache).unwrap(),
+            b"OLD",
+            "live cache restored despite write failure"
+        );
         assert!(
             !cache.parent().unwrap().join("Mod.as").exists(),
             "staged .as removed despite write failure"
@@ -918,14 +3363,249 @@ mod tests {
 
         // A relative out resolves under cwd, so a Script/-relative path is caught by the guard.
         let rel = resolve_out_real(Path::new("MyMod.Cache"), &base);
-        assert!(rel.starts_with(&base_real), "relative out resolved under cwd: {rel:?}");
+        assert!(
+            rel.starts_with(&base_real),
+            "relative out resolved under cwd: {rel:?}"
+        );
 
         // An absolute out elsewhere stays where it is (not under cwd).
-        let other = std::env::temp_dir().join("gore-as-resolve-other").join("x.Cache");
+        let other = std::env::temp_dir()
+            .join("gore-as-resolve-other")
+            .join("x.Cache");
         let abs = resolve_out_real(&other, &base);
-        assert!(!abs.starts_with(&base_real), "absolute out stays put: {abs:?}");
+        assert!(
+            !abs.starts_with(&base_real),
+            "absolute out stays put: {abs:?}"
+        );
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn no_match_fallback_returns_the_normal_generator_result() {
+        let called = std::cell::Cell::new(0);
+        let result = resolve_diagnostic_attempt(
+            DiagnosticAttempt::Unavailable("signature matched 0 times".into()),
+            || {
+                called.set(called.get() + 1);
+                Ok::<_, String>(b"real-cache".to_vec())
+            },
+        )
+        .unwrap();
+        assert_eq!(result, b"real-cache");
+        assert_eq!(called.get(), 1);
+    }
+
+    #[test]
+    fn captured_compiler_error_rejects_a_structurally_complete_cache() {
+        let base = std::env::temp_dir().join(format!(
+            "gore-as-captured-error-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&base).unwrap();
+        let artifacts = DiagnosticArtifacts {
+            capture: base.join("capture.txt"),
+            status: base.join("status.txt"),
+            dir: base.clone(),
+            cleanup: true,
+        };
+        std::fs::write(
+            &artifacts.capture,
+            "=== Test.as ===\n(4:2) [E] No matching signatures to 'Broken()'\n",
+        )
+        .unwrap();
+        let complete = valid_cache();
+        validate_generated_cache(&complete).expect("fixture must be structurally complete");
+        let error = append_captured_diagnostics(Ok(complete), &artifacts).unwrap_err();
+        assert!(error.contains("compiler reported an error"), "got: {error}");
+        assert!(error.contains("Test.as:4:2: error"), "got: {error}");
+    }
+
+    #[test]
+    fn truncated_capture_rejects_a_cache_even_without_a_visible_error() {
+        let base = std::env::temp_dir().join(format!(
+            "gore-as-truncated-capture-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&base).unwrap();
+        let artifacts = DiagnosticArtifacts {
+            capture: base.join("capture.txt"),
+            status: base.join("status.txt"),
+            dir: base.clone(),
+            cleanup: true,
+        };
+        std::fs::write(
+            &artifacts.capture,
+            format!(
+                "=== Test.as ===\n[W] warnings filled the capture\n{}\n",
+                crate::diagnostics::CAPTURE_TRUNCATED_TOKEN
+            ),
+        )
+        .unwrap();
+        let complete = valid_cache();
+        validate_generated_cache(&complete).expect("fixture must be structurally complete");
+        let error = append_captured_diagnostics(Ok(complete), &artifacts).unwrap_err();
+        assert!(error.contains("capture was truncated"), "got: {error}");
+        assert!(error.contains("refusing to accept"), "got: {error}");
+    }
+
+    #[test]
+    fn unreadable_existing_capture_rejects_an_unverified_cache() {
+        let base = std::env::temp_dir().join(format!(
+            "gore-as-unreadable-capture-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(base.join("capture.txt")).unwrap();
+        let artifacts = DiagnosticArtifacts {
+            capture: base.join("capture.txt"), // a directory: exists, but cannot be read as bytes
+            status: base.join("status.txt"),
+            dir: base.clone(),
+            cleanup: true,
+        };
+        let complete = valid_cache();
+        validate_generated_cache(&complete).expect("fixture must be structurally complete");
+        let error = append_captured_diagnostics(Ok(complete), &artifacts).unwrap_err();
+        assert!(error.contains("could not be read"), "got: {error}");
+        assert!(error.contains("refusing to accept"), "got: {error}");
+
+        drop(artifacts);
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn unconfirmed_hooked_attempt_preserves_and_reports_all_owned_artifacts() {
+        let root = std::env::temp_dir().join(format!(
+            "gore-as-unconfirmed-hooked-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let diagnostics_dir = root.join("diagnostics");
+        let helper_dir = root.join("helper");
+        std::fs::create_dir_all(&diagnostics_dir).unwrap();
+        std::fs::create_dir_all(&helper_dir).unwrap();
+        let artifacts = DiagnosticArtifacts {
+            capture: diagnostics_dir.join("capture.txt"),
+            status: diagnostics_dir.join("status.txt"),
+            dir: diagnostics_dir.clone(),
+            cleanup: true,
+        };
+        std::fs::write(&artifacts.capture, "[W] retained warning\n").unwrap();
+        let helper = helper_dir.join("gore-as-diagnostics-hook.dll");
+        std::fs::write(&helper, b"test helper").unwrap();
+        let prep =
+            crate::diagnostics::HookPreparation::owned_for_test(helper.clone(), helper_dir.clone());
+
+        let attempt = classify_hooked_result(
+            Err(format!(
+                "{GENERATOR_EXIT_UNCONFIRMED} simulated live generator"
+            )),
+            artifacts,
+            prep,
+        );
+        let DiagnosticAttempt::Fatal(error) = attempt else {
+            panic!("unconfirmed hooked result must be fatal");
+        };
+        assert!(
+            error.contains(&diagnostics_dir.display().to_string()),
+            "got: {error}"
+        );
+        assert!(
+            error.contains(&helper_dir.display().to_string()),
+            "got: {error}"
+        );
+        assert!(
+            diagnostics_dir.is_dir(),
+            "diagnostics directory was dropped"
+        );
+        assert!(helper.is_file(), "mapped helper was dropped");
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn explicit_diagnostics_opt_out_runs_normal_path_without_unavailable_state() {
+        let called = std::cell::Cell::new(0);
+        let result = resolve_diagnostic_attempt(DiagnosticAttempt::Disabled, || {
+            called.set(called.get() + 1);
+            Ok::<_, String>("normal")
+        })
+        .unwrap();
+        assert_eq!(result, "normal");
+        assert_eq!(called.get(), 1);
+    }
+
+    #[test]
+    fn injection_failure_fallback_preserves_the_normal_error() {
+        let result = resolve_diagnostic_attempt::<Vec<u8>, _>(
+            DiagnosticAttempt::Unavailable("CreateRemoteThread failed".into()),
+            || Err("normal generator failed exactly this way".into()),
+        );
+        assert_eq!(
+            result.unwrap_err(),
+            "normal generator failed exactly this way"
+        );
+    }
+
+    #[test]
+    fn pre_injection_exit_keeps_the_first_generator_result() {
+        let fallback_calls = std::cell::Cell::new(0);
+        let result = resolve_diagnostic_attempt(
+            DiagnosticAttempt::Completed(Ok::<_, String>(b"first-normal-result".to_vec())),
+            || {
+                fallback_calls.set(fallback_calls.get() + 1);
+                Ok(b"unexpected-relaunch".to_vec())
+            },
+        )
+        .unwrap();
+        assert_eq!(result, b"first-normal-result");
+        assert_eq!(fallback_calls.get(), 0);
+    }
+
+    #[test]
+    fn post_injection_pre_ready_exit_retries_after_partial_cache_cleanup() {
+        let base = std::env::temp_dir().join(format!(
+            "gore-as-post-injection-fallback-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&base);
+        std::fs::write(&base, b"partial-from-injected-attempt").unwrap();
+        let result = resolve_diagnostic_attempt(
+            DiagnosticAttempt::Unavailable(
+                "generator exited after injection before helper readiness".into(),
+            ),
+            || {
+                clear_partial_cache_before_fallback(&base)?;
+                Ok::<_, String>(b"clean-normal-result".to_vec())
+            },
+        )
+        .unwrap();
+        assert_eq!(result, b"clean-normal-result");
+        assert!(!base.exists());
+    }
+
+    #[test]
+    fn fallback_deletes_partial_first_attempt_cache() {
+        let base =
+            std::env::temp_dir().join(format!("gore-as-partial-fallback-{}", std::process::id()));
+        let _ = std::fs::remove_file(&base);
+        std::fs::write(&base, b"partial-from-hook-attempt").unwrap();
+        clear_partial_cache_before_fallback(&base).unwrap();
+        assert!(!base.exists());
     }
 
     #[test]
@@ -947,6 +3627,180 @@ mod tests {
         };
         let err = precompile_with(&opts, |_, _, _| panic!("must not generate")).unwrap_err();
         assert!(err.contains("loose script"), "got: {err}");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn loose_script_walkers_fail_closed_on_io_errors_and_non_file_coverage() {
+        let base = std::env::temp_dir().join("gore-as-loose-walker-errors");
+        let _ = std::fs::remove_dir_all(&base);
+        let missing = base.join("missing");
+        assert!(first_loose_script(&missing).is_err());
+        assert!(first_uncovered_loose_script(&missing, &base).is_err());
+
+        let live = base.join("live");
+        let src = base.join("src");
+        std::fs::create_dir_all(&live).unwrap();
+        std::fs::create_dir_all(src.join("Same.as")).unwrap(); // directory is not valid coverage
+        let live_script = live.join("Same.as");
+        std::fs::write(&live_script, b"live").unwrap();
+        assert_eq!(
+            first_uncovered_loose_script(&live, &src).unwrap(),
+            Some(live_script)
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn copy_tree_records_rollback_before_injected_partial_copy_failure() {
+        let base = std::env::temp_dir().join("gore-as-copy-partial-failure");
+        let _ = std::fs::remove_dir_all(&base);
+        let src = base.join("src");
+        let dst = base.join("dst");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::create_dir_all(&dst).unwrap();
+        std::fs::write(src.join("Mod.as"), b"NEW-COMPLETE").unwrap();
+        let target = dst.join("Mod.as");
+        std::fs::write(&target, b"OLD").unwrap();
+        let mut written = Vec::new();
+
+        let err = copy_tree_with(&src, &dst, &mut written, &mut |_, to| {
+            std::fs::write(to, b"PARTIAL")?;
+            Err(std::io::Error::other("injected copy failure"))
+        })
+        .unwrap_err();
+        assert!(err.to_string().contains("injected copy failure"));
+        assert_eq!(written.len(), 1, "rollback entry registered before copy");
+        assert_eq!(written[0].1.as_deref(), Some(b"OLD".as_slice()));
+        assert_eq!(std::fs::read(&target).unwrap(), b"PARTIAL");
+
+        restore_or_remove(&written, &dst).unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"OLD");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn copy_tree_propagates_destination_snapshot_errors_before_copy() {
+        let base = std::env::temp_dir().join("gore-as-copy-snapshot-error");
+        let _ = std::fs::remove_dir_all(&base);
+        let src = base.join("src");
+        let dst = base.join("dst");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::create_dir_all(dst.join("Mod.as")).unwrap();
+        std::fs::write(src.join("Mod.as"), b"NEW").unwrap();
+        let mut written = Vec::new();
+        let copied = std::cell::Cell::new(false);
+
+        assert!(copy_tree_with(&src, &dst, &mut written, &mut |_, _| {
+            copied.set(true);
+            Ok(())
+        })
+        .is_err());
+        assert!(
+            !copied.get(),
+            "copy must not run without a reliable snapshot"
+        );
+        assert!(written.is_empty());
+        assert!(dst.join("Mod.as").is_dir());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn copy_tree_rejects_linked_destination_directory() {
+        let base = std::env::temp_dir().join("gore-as-copy-linked-destination");
+        let _ = std::fs::remove_dir_all(&base);
+        let src = base.join("src");
+        let dst = base.join("dst");
+        let outside = base.join("outside");
+        std::fs::create_dir_all(src.join("AI")).unwrap();
+        std::fs::create_dir_all(&dst).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(src.join("AI").join("Mod.as"), b"NEW").unwrap();
+        let linked = dst.join("AI");
+
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, &linked).unwrap();
+        #[cfg(windows)]
+        if std::os::windows::fs::symlink_dir(&outside, &linked).is_err() {
+            // Windows without Developer Mode/elevation cannot create the fixture. Production
+            // junctions still carry FILE_ATTRIBUTE_REPARSE_POINT and hit the same guard.
+            let _ = std::fs::remove_dir_all(&base);
+            return;
+        }
+
+        let err = copy_tree(&src, &dst, &mut Vec::new()).unwrap_err();
+        assert!(err.to_string().contains("linked/reparse"), "got: {err}");
+        assert!(
+            !outside.join("Mod.as").exists(),
+            "staging must not write through the destination link"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn unconfirmed_generator_preserves_isolation_recovery_and_lock() {
+        let base = std::env::temp_dir().join("gore-as-unconfirmed-generator");
+        let _ = std::fs::remove_dir_all(&base);
+        let (game, shipping) = fake_install(&base);
+        std::fs::write(dev_cache(&shipping), b"DEV-OLD").unwrap();
+        let live_mod = shipping.parent().unwrap().join("Mod.as");
+        std::fs::write(&live_mod, b"LIVE-OLD").unwrap();
+        let win64 = base.join("G1R").join("Binaries").join("Win64");
+        std::fs::create_dir_all(win64.join("ue4ss")).unwrap();
+        std::fs::write(win64.join("ue4ss").join("UE4SS.dll"), b"ue4ss").unwrap();
+        std::fs::write(win64.join("dwmapi.dll"), b"proxy").unwrap();
+        let jitted = base.join("AS_JITTED_CODE");
+        std::fs::create_dir_all(&jitted).unwrap();
+        std::fs::write(jitted.join("old.bin"), b"jit").unwrap();
+        let src = base.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("Mod.as"), b"script").unwrap();
+
+        let err = game_run_regen_with(&game, &src, |_, _, _| {
+            Err(format!(
+                "{GENERATOR_EXIT_UNCONFIRMED} simulated live generator 123"
+            ))
+        })
+        .unwrap_err();
+
+        assert!(err.contains("intentionally NOT run"), "got: {err}");
+        assert!(
+            compile_lock_path(&game).exists(),
+            "compile lock must remain"
+        );
+        assert!(
+            compile_bak_path(&shipping).exists(),
+            "Shipping recovery backup must remain"
+        );
+        assert_eq!(
+            std::fs::read(&live_mod).unwrap(),
+            b"script",
+            "staged source must remain isolated until the child is killed"
+        );
+        let journal = recovery_journal_path(&game);
+        assert_eq!(
+            std::fs::read(journal.join("overwritten").join("Mod.as")).unwrap(),
+            b"LIVE-OLD",
+            "overwritten loose-script bytes must be recoverable from disk"
+        );
+        assert_eq!(
+            std::fs::read(
+                journal
+                    .join("development-cache")
+                    .join("PrecompiledScript.Cache")
+            )
+            .unwrap(),
+            b"DEV-OLD",
+            "the pre-call development cache must be recoverable from disk"
+        );
+        assert!(!jitted.exists(), "original JIT path must stay quarantined");
+        assert!(append_suffix(&jitted, ".gore-compile-bak").exists());
+        let proxy = win64.join("dwmapi.dll");
+        assert!(!proxy.exists(), "UE4SS proxy must stay quarantined");
+        assert!(append_suffix(&proxy, ".gore-compile-bak").exists());
+
+        // The transaction is intentionally leaked; remove the isolated temp fixture as a whole.
         let _ = std::fs::remove_dir_all(&base);
     }
 
@@ -988,7 +3842,9 @@ mod tests {
         assert!(written.iter().any(|(p, _)| p == &nested));
         // The collision was overwritten with the new bytes, and its prior bytes were captured.
         assert_eq!(std::fs::read(&over).unwrap(), b"new");
-        assert!(written.iter().any(|(p, prior)| p == &over && prior.as_deref() == Some(b"old")));
+        assert!(written
+            .iter()
+            .any(|(p, prior)| p == &over && prior.as_deref() == Some(b"old")));
 
         // Cleanup succeeds: the colliding file restores and the copied-only files delete cleanly.
         restore_or_remove(&written, &dst).expect("cleanup should succeed in a writable tmp tree");
@@ -996,13 +3852,23 @@ mod tests {
         // Copied-only files + the dir the copy created are gone.
         assert!(!top.exists(), "copied top-level file should be removed");
         assert!(!nested.exists(), "copied nested file should be removed");
-        assert!(!dst.join("AI").exists(), "now-empty created dir should be pruned");
+        assert!(
+            !dst.join("AI").exists(),
+            "now-empty created dir should be pruned"
+        );
         // Non-colliding pre-existing file and the dst root itself survive.
         assert!(pre.exists(), "pre-existing file must be left untouched");
         assert!(dst.exists(), "dst root must not be removed");
         // The overwritten pre-existing file is RESTORED to its original bytes (not deleted).
-        assert!(over.exists(), "overwritten pre-existing file must be restored, not deleted");
-        assert_eq!(std::fs::read(&over).unwrap(), b"old", "restored bytes must be the original");
+        assert!(
+            over.exists(),
+            "overwritten pre-existing file must be restored, not deleted"
+        );
+        assert_eq!(
+            std::fs::read(&over).unwrap(),
+            b"old",
+            "restored bytes must be the original"
+        );
 
         let _ = std::fs::remove_dir_all(&base);
     }

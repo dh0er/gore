@@ -2,6 +2,7 @@
 
 pub mod cache;
 pub mod compile;
+pub mod diagnostics;
 
 #[cfg(test)]
 mod tests {

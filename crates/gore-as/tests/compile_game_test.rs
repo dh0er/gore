@@ -3,7 +3,9 @@
 #[test]
 #[ignore]
 fn real_compile_add() {
-    let Ok(game) = std::env::var("GORE_TEST_GAME") else { return; };
+    let Ok(game) = std::env::var("GORE_TEST_GAME") else {
+        return;
+    };
     let game = std::path::PathBuf::from(game);
     let work = std::env::temp_dir().join("gore-as-real-compile");
     let _ = std::fs::remove_dir_all(&work);
@@ -18,6 +20,7 @@ fn real_compile_add() {
         rel_path: "GoreHello.as".into(),
         as_path,
         work_dir: work.clone(),
+        allow_new_symbols: false,
         base_override: None,
     };
     let out = gore_as::compile::compile_module(&opts, gore_as::compile::game_run_regen).unwrap();

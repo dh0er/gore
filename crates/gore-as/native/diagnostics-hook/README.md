@@ -1,0 +1,42 @@
+# G1R AngelScript diagnostics hook
+
+This x86-64 Windows DLL is the minimal native half of `gore as compile` diagnostics. It hooks only
+the UE-AngelScript `LogAngelscriptError(asSMessageInfo*, void*)` callback, writes a bounded
+line-oriented capture, filters routine per-function `Compiling ...` progress before file I/O, and
+reports readiness through a complete newline-terminated token. It contains no popup hook,
+diagnostic-container scan, game-path logic, or permanent installer.
+
+The Rust launcher and DLL independently scan the same masked AOB and both require exactly one
+match. Both accept only an AMD64 image's exact `.text` section and scan the same raw-backed
+`min(VirtualSize, SizeOfRawData)` byte range; file-alignment padding and mapped zero-fill are outside
+both decisions. The known 2026-07-10 hotfix match is documented in source; no fixed RVA is used. Any
+scan or hook failure causes the Rust side to terminate the diagnostic attempt and run the ordinary
+compiler only after process-tree exit is confirmed.
+
+Capture content reserves room below the 8 MiB limit for a newline-terminated truncation marker. The
+Rust side treats either that marker or a file reaching the hard cap as incomplete and never accepts
+an otherwise successful cache when compiler errors may have been omitted.
+
+## Build and verify
+
+The build requires a 64-bit MinGW GCC/G++ toolchain. `CC` and `CXX` may override the defaults.
+GNU ld's timestamp insertion is disabled, so identical inputs/toolchain produce identical bytes.
+
+```powershell
+powershell -File crates/gore-as/native/diagnostics-hook/build.ps1 -UpdateEmbeddedAsset
+Get-FileHash crates/gore-as/assets/gore-as-diagnostics-hook.dll -Algorithm SHA256
+```
+
+Expected embedded SHA-256:
+`9A408F1DD2BFD95B9235D261C94B4FF60EB4C562BA5D1D69B398BE9499E9F153`.
+
+Build products (`*.o`, `ashook.dll`) are ignored/excluded; the one runtime copy is the embedded
+asset under `crates/gore-as/assets/`. The build script deletes stale outputs and rejects the first
+native compiler/linker command that returns a nonzero exit code.
+
+## Third-party notice
+
+The required MinHook 1.3.4 subset and its Hacker Disassembler Engine files are vendored under
+`vendor/minhook/`. Redistribution is governed by the BSD notice in
+[`vendor/minhook/LICENSE.txt`](vendor/minhook/LICENSE.txt), which must accompany source and binary
+distributions. The root release `THIRD_PARTY_LICENSES.md` reproduces the same notices.

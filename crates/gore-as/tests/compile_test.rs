@@ -1,5 +1,5 @@
+use gore_as::compile::{compile_module, CompileError, CompileOpts};
 use std::path::{Path, PathBuf};
-use gore_as::compile::{compile_module, CompileOpts, CompileError};
 
 // A fake regen that just copies a fixture "regen" cache into place and returns it.
 fn fake_regen_ok(fixture: PathBuf) -> impl Fn(&Path, &Path) -> Result<PathBuf, String> {
@@ -18,6 +18,7 @@ fn compile_errors_when_source_missing() {
         rel_path: "M.as".into(),
         as_path: tmp.join("does-not-exist.as"),
         work_dir: tmp.clone(),
+        allow_new_symbols: false,
         base_override: None,
     };
     let err = compile_module(&opts, fake_regen_ok(tmp.join("regen.cache"))).unwrap_err();
