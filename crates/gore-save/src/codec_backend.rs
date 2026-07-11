@@ -96,7 +96,8 @@ impl CodecBackend for KrakenBackend {
     }
 
     fn compress(&self, input: &[u8], level: u8) -> Result<Vec<u8>, CoreError> {
-        gore_oodle::compress(input, level_to_oodle(level)).map_err(|e| CoreError::Codec(e.to_string()))
+        gore_oodle::compress(input, level_to_oodle(level))
+            .map_err(|e| CoreError::Codec(e.to_string()))
     }
 }
 

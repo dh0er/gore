@@ -2,7 +2,7 @@
 //! skips otherwise.
 //!   GORE_SAVE='C:\Users\Daniel\AppData\Local\G1R\Saved\SaveGames\G1R-021.sav' \
 //!     cargo test -p gore-save --test skills -- --nocapture
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 fn exec(req: Value) -> Value {
     let resp: Value = serde_json::from_str(&gore_save::execute_json(&req.to_string())).unwrap();
@@ -15,7 +15,11 @@ fn list_skills(path: &str) -> Value {
 }
 
 fn skill<'a>(data: &'a Value, base: &str) -> Option<&'a Value> {
-    data["skills"].as_array().unwrap().iter().find(|s| s["base"] == base)
+    data["skills"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["base"] == base)
 }
 
 #[test]
@@ -55,7 +59,10 @@ fn skills_list_finds_hero_and_full_roster() {
     eprintln!(
         "skills: {} ({} learned)",
         skills.len(),
-        skills.iter().filter(|s| s["learned"] == json!(true)).count()
+        skills
+            .iter()
+            .filter(|s| s["learned"] == json!(true))
+            .count()
     );
 }
 
@@ -124,8 +131,16 @@ fn skills_batch_learn_unlearn_retier_roundtrips() {
     }));
 
     let after = list_skills(&out);
-    assert_eq!(skill(&after, &unlearn).unwrap()["learned"], json!(false), "unlearn failed");
-    assert_eq!(skill(&after, retier).unwrap()["current"], json!("Trained"), "retier failed");
+    assert_eq!(
+        skill(&after, &unlearn).unwrap()["learned"],
+        json!(false),
+        "unlearn failed"
+    );
+    assert_eq!(
+        skill(&after, retier).unwrap()["current"],
+        json!("Trained"),
+        "retier failed"
+    );
     let learned_after = skill(&after, &learn).unwrap();
     assert_eq!(learned_after["learned"], json!(true), "learn failed");
 
@@ -160,8 +175,16 @@ fn skills_reject_batch_with_index_addressed_edit() {
         .to_string(),
     ))
     .unwrap();
-    assert_eq!(resp["ok"], json!(false), "mixed skill + indexed edit must be rejected");
-    assert_eq!(resp["error"]["code"], json!("UNSUPPORTED_EDIT"), "resp: {resp}");
+    assert_eq!(
+        resp["ok"],
+        json!(false),
+        "mixed skill + indexed edit must be rejected"
+    );
+    assert_eq!(
+        resp["error"]["code"],
+        json!("UNSUPPORTED_EDIT"),
+        "resp: {resp}"
+    );
 }
 
 /// A skill edit batched with only NAME/map-key-addressed peers (a hero attribute
@@ -189,7 +212,10 @@ fn skills_allow_batch_with_named_edit() {
         return;
     };
     let attr_path = attr["path"].clone();
-    let cur: f64 = attr["value"].as_str().and_then(|s| s.parse().ok()).unwrap_or(0.0);
+    let cur: f64 = attr["value"]
+        .as_str()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0.0);
 
     let mut out = std::env::temp_dir();
     out.push("gore_skills_named_batch.sav");
@@ -209,6 +235,10 @@ fn skills_allow_batch_with_named_edit() {
         .to_string(),
     ))
     .unwrap();
-    assert_eq!(resp["ok"], json!(true), "skill + named-path edit must be allowed: {resp}");
+    assert_eq!(
+        resp["ok"],
+        json!(true),
+        "skill + named-path edit must be allowed: {resp}"
+    );
     let _ = std::fs::remove_file(&out);
 }

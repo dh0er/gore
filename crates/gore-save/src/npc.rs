@@ -60,10 +60,7 @@ const SAVED_INVENTORIES_MAP: &str = "m_SavedInventories";
 /// only an actual kill counts — a merely *defeated* (knocked-out) NPC is ALIVE.
 /// HP is NOT the signal (a killed NPC keeps positive HP; a defeated one has HP 0).
 /// `is_dead` is driven by these tags on a `MemorizedEvents` element's `EventTags`.
-const KILL_EVENT_TAGS: &[&str] = &[
-    "Memory.Character.Defeated.Kill",
-    "Memory.Execution",
-];
+const KILL_EVENT_TAGS: &[&str] = &["Memory.Character.Defeated.Kill", "Memory.Execution"];
 
 /// Memory-event tags cleared by Revive (a superset of [`KILL_EVENT_TAGS`]): reviving
 /// a killed NPC also wipes any defeat residue so it returns to a clean alive state.
@@ -162,15 +159,15 @@ fn find_character_map<'a>(
             PropertyValue::Struct(StructValue::Instanced(Some(i))) => {
                 in_props(&i.properties, struct_type)
             }
-            PropertyValue::ObjectInstances(objs) => {
-                objs.iter().find_map(|o| in_props(&o.properties, struct_type))
-            }
+            PropertyValue::ObjectInstances(objs) => objs
+                .iter()
+                .find_map(|o| in_props(&o.properties, struct_type)),
             PropertyValue::Array { elements } | PropertyValue::Set { elements, .. } => {
                 elements.iter().find_map(|e| in_value(e, struct_type))
             }
-            PropertyValue::Map { entries, .. } => entries
-                .iter()
-                .find_map(|(_k, v)| in_value(v, struct_type)),
+            PropertyValue::Map { entries, .. } => {
+                entries.iter().find_map(|(_k, v)| in_value(v, struct_type))
+            }
             _ => None,
         }
     }
@@ -331,9 +328,7 @@ fn value_has_tag(value: &PropertyValue, tag: &str) -> bool {
         PropertyValue::Array { elements } | PropertyValue::Set { elements, .. } => {
             elements.iter().any(|e| value_has_tag(e, tag))
         }
-        PropertyValue::Map { entries, .. } => entries
-            .iter()
-            .any(|(_k, v)| value_has_tag(v, tag)),
+        PropertyValue::Map { entries, .. } => entries.iter().any(|(_k, v)| value_has_tag(v, tag)),
         _ => false,
     }
 }
@@ -396,17 +391,15 @@ pub(crate) fn memory_has_tag(root: &RootObject, id: &str, tag: &str) -> bool {
 ///   memory: a merely-defeated (HP 0, knocked-out) NPC carries no `State.Dead` and is
 ///   ALIVE.
 pub fn list_npcs(root: &RootObject) -> Result<Vec<NpcSummary>, CoreError> {
-    let attributes = find_character_map(root, ATTRIBUTES_TYPE).ok_or_else(|| {
-        CoreError::Parse(format!("no {ATTRIBUTES_TYPE} map found in save"))
-    })?;
+    let attributes = find_character_map(root, ATTRIBUTES_TYPE)
+        .ok_or_else(|| CoreError::Parse(format!("no {ATTRIBUTES_TYPE} map found in save")))?;
     // The loose-tags map (keyed by the same GlobalId) carries each NPC's persisted
     // GAS tag-state; `State.Dead` there is the authoritative dead marker.
-    let loose = find_property_by_name(root, LOOSE_TAGS_MAP).and_then(|(_p, prop)| {
-        match &prop.value {
+    let loose =
+        find_property_by_name(root, LOOSE_TAGS_MAP).and_then(|(_p, prop)| match &prop.value {
             PropertyValue::Map { entries, .. } => Some(entries.as_slice()),
             _ => None,
-        }
-    });
+        });
 
     let mut out = Vec::with_capacity(attributes.len());
     for (key, value) in attributes {
@@ -761,11 +754,11 @@ fn collect_attribute_rows(
 /// Errors if the `_Attributes` map is absent; errors with a not-found message if
 /// the map exists but holds no entry for `id`.
 pub fn npc_attributes(root: &RootObject, id: &str) -> Result<Vec<NpcAttributeRow>, CoreError> {
-    let (entries, mut path) = find_character_map_path(root, ATTRIBUTES_TYPE).ok_or_else(|| {
-        CoreError::Parse(format!("no {ATTRIBUTES_TYPE} map found in save"))
+    let (entries, mut path) = find_character_map_path(root, ATTRIBUTES_TYPE)
+        .ok_or_else(|| CoreError::Parse(format!("no {ATTRIBUTES_TYPE} map found in save")))?;
+    let value = lookup_entry(entries, id).ok_or_else(|| {
+        CoreError::Parse(format!("NPC {id:?} not found in {ATTRIBUTES_TYPE} map"))
     })?;
-    let value = lookup_entry(entries, id)
-        .ok_or_else(|| CoreError::Parse(format!("NPC {id:?} not found in {ATTRIBUTES_TYPE} map")))?;
 
     // The entry is addressed by its map key; descend from there.
     path.push(map_key_segment(id));
@@ -942,7 +935,9 @@ fn remove_corpse_inventory(payload: &mut Vec<u8>, id: &str) -> Result<(), CoreEr
             return Ok(());
         };
         let Some(entry_index) = entries.iter().position(|(k, _v)| {
-            map_key_to_string(k).as_deref().is_some_and(|k| is_corpse_key_for(k, id))
+            map_key_to_string(k)
+                .as_deref()
+                .is_some_and(|k| is_corpse_key_for(k, id))
         }) else {
             return Ok(()); // no corpse for this NPC (e.g. an alive NPC) => done
         };
@@ -994,13 +989,8 @@ fn remove_dead_loose_tags(payload: &mut Vec<u8>, id: &str) -> Result<(), CoreErr
             let chain = resolve_chain(&root.properties, &segs)?;
             let target = chain.target.clone();
             let enclosing = chain.enclosing_size_fields.clone();
-            let removed = patch_map_value_tag_container(
-                payload,
-                &target,
-                &enclosing,
-                entry_index,
-                tag,
-            )?;
+            let removed =
+                patch_map_value_tag_container(payload, &target, &enclosing, entry_index, tag)?;
             if !removed {
                 break; // this tag is gone => next tag
             }
@@ -1022,15 +1012,18 @@ fn restore_hp_to_max(payload: &mut [u8], id: &str) -> Result<(), CoreError> {
     let (base_path, current_path, max_hp, needs_patch) = {
         let root = parse_private_root(payload)?;
         let rows = npc_attributes(&root, id)?;
-        let health = rows.iter().find(|r| r.key == "Health").ok_or_else(|| {
-            CoreError::Parse(format!("NPC {id:?} has no Health attribute"))
-        })?;
+        let health = rows
+            .iter()
+            .find(|r| r.key == "Health")
+            .ok_or_else(|| CoreError::Parse(format!("NPC {id:?} has no Health attribute")))?;
         let max_hp = rows
             .iter()
             .find(|r| r.key == "MaxHealth")
             .and_then(|r| r.base)
             .ok_or_else(|| {
-                CoreError::Parse(format!("NPC {id:?} has no MaxHealth BaseValue to revive to"))
+                CoreError::Parse(format!(
+                    "NPC {id:?} has no MaxHealth BaseValue to revive to"
+                ))
             })?;
         // Only write if HP is actually below max (defeated NPCs sit at 0; killed
         // NPCs may already be full — skip the patch then).
@@ -1107,7 +1100,12 @@ pub fn apply_revive(payload: &mut Vec<u8>, id: &str) -> Result<(), CoreError> {
         let chain = resolve_chain(&root.properties, &segs)?;
         let target = chain.target.clone();
         let enclosing = chain.enclosing_size_fields.clone();
-        patch_container(payload, &target, &enclosing, &ContainerEdit::ArrayRemove(index))?;
+        patch_container(
+            payload,
+            &target,
+            &enclosing,
+            &ContainerEdit::ArrayRemove(index),
+        )?;
     }
 
     // ── Phase 2: strip the authoritative death loose tags (the native gate) ──
@@ -1165,8 +1163,8 @@ mod tests {
         let root = load_root();
         let id = "Lizard-WP_EF_SCSLOPE_LIZARD_SPAWN_01-1";
 
-        let path = npc_inventory_path(&root, id)
-            .unwrap_or_else(|| panic!("no inventory path for {id}"));
+        let path =
+            npc_inventory_path(&root, id).unwrap_or_else(|| panic!("no inventory path for {id}"));
         // The path resolves against the private root...
         let segs = parse_path(&path).expect("inventory path parses");
         let target = resolve_chain(&root.properties, &segs)
@@ -1349,8 +1347,7 @@ mod tests {
     /// minimal struct proplist (just the "None" sentinel) — enough to parse; the
     /// real value type is `ReplicatedInventoryMap`, irrelevant to entry removal.
     fn saved_inventories_map(keys: &[&str]) -> Vec<u8> {
-        let entries: Vec<(&str, Vec<u8>)> =
-            keys.iter().map(|k| (*k, fstring("None"))).collect();
+        let entries: Vec<(&str, Vec<u8>)> = keys.iter().map(|k| (*k, fstring("None"))).collect();
         character_state_map(SAVED_INVENTORIES_MAP, "ReplicatedInventoryMap", &entries)
     }
 
@@ -1636,7 +1633,11 @@ mod tests {
                 // Killed: the full dead-tag set (positive HP is irrelevant).
                 (
                     killed,
-                    &["State.KillBountyGranted", "State.ExecutedBountyGranted", "State.Dead"],
+                    &[
+                        "State.KillBountyGranted",
+                        "State.ExecutedBountyGranted",
+                        "State.Dead",
+                    ],
                 ),
                 // Defeated-only: carries an unrelated combat tag, but NOT State.Dead.
                 (defeated_only, &["State.Aggro", "State.InCombat"]),
@@ -1650,14 +1651,29 @@ mod tests {
         let root = parse_private_root(&payload).unwrap();
         let npcs = list_npcs(&root).unwrap();
         let k = npcs.iter().find(|n| n.id == killed).unwrap();
-        assert!(k.is_dead, "State.Dead in LooseTags => dead even with positive HP");
+        assert!(
+            k.is_dead,
+            "State.Dead in LooseTags => dead even with positive HP"
+        );
         assert_eq!(k.hp, Some(60.0));
         let d = npcs.iter().find(|n| n.id == defeated_only).unwrap();
-        assert!(!d.is_dead, "loose tags without State.Dead => ALIVE (merely defeated)");
+        assert!(
+            !d.is_dead,
+            "loose tags without State.Dead => ALIVE (merely defeated)"
+        );
         let z = npcs.iter().find(|n| n.id == zero_hp_no_tags).unwrap();
-        assert!(!z.is_dead, "HP 0 with no loose-tags entry is alive (HP is not the signal)");
-        let m = npcs.iter().find(|n| n.id == kill_memory_no_dead_tag).unwrap();
-        assert!(!m.is_dead, "kill memory alone (no State.Dead loose tag) is NOT dead");
+        assert!(
+            !z.is_dead,
+            "HP 0 with no loose-tags entry is alive (HP is not the signal)"
+        );
+        let m = npcs
+            .iter()
+            .find(|n| n.id == kill_memory_no_dead_tag)
+            .unwrap();
+        assert!(
+            !m.is_dead,
+            "kill memory alone (no State.Dead loose tag) is NOT dead"
+        );
         // The standalone detector agrees with list_npcs.
         assert!(is_dead_by_loose_tags(&root, killed));
         assert!(!is_dead_by_loose_tags(&root, defeated_only));
@@ -1695,7 +1711,11 @@ mod tests {
         ]);
 
         let before = parse_private_root(&payload).unwrap();
-        let n0 = list_npcs(&before).unwrap().into_iter().find(|n| n.id == id).unwrap();
+        let n0 = list_npcs(&before)
+            .unwrap()
+            .into_iter()
+            .find(|n| n.id == id)
+            .unwrap();
         assert!(n0.is_dead, "NPC starts dead (State.Dead in LooseTags)");
         assert_eq!(n0.hp, Some(0.0));
 
@@ -1703,14 +1723,21 @@ mod tests {
 
         let root = parse_private_root(&payload).unwrap();
         assert_eq!(root.consumed, payload.len(), "payload must re-parse fully");
-        let n = list_npcs(&root).unwrap().into_iter().find(|n| n.id == id).unwrap();
+        let n = list_npcs(&root)
+            .unwrap()
+            .into_iter()
+            .find(|n| n.id == id)
+            .unwrap();
         assert!(!n.is_dead, "revived NPC is no longer dead");
         assert_eq!(n.hp, Some(80.0), "HP restored to MaxHealth base");
         assert_eq!(n.max_hp, Some(80.0));
         // The three dead loose tags are gone; the unrelated loose tag survives.
         let tags = loose_tags(&root, id).expect("loose-tags entry still present");
         for dead in DEAD_LOOSE_TAGS {
-            assert!(!tags.iter().any(|t| t == dead), "dead loose tag {dead} must be gone");
+            assert!(
+                !tags.iter().any(|t| t == dead),
+                "dead loose tag {dead} must be gone"
+            );
         }
         assert!(
             tags.iter().any(|t| t == "State.Aggro"),
@@ -1718,7 +1745,10 @@ mod tests {
         );
         // Every revive memory tag is gone; the unrelated quest event survives.
         for tag in REVIVE_EVENT_TAGS {
-            assert!(!memory_has_tag(&root, id, tag), "revive tag {tag} must be gone");
+            assert!(
+                !memory_has_tag(&root, id, tag),
+                "revive tag {tag} must be gone"
+            );
         }
         assert!(
             memory_has_tag(&root, id, "Memory.Quest.Started"),
@@ -1748,9 +1778,11 @@ mod tests {
         let PropertyValue::Map { entries, .. } = &prop.value else {
             return false;
         };
-        entries
-            .iter()
-            .any(|(k, _v)| map_key_to_string(k).as_deref().is_some_and(|k| is_corpse_key_for(k, id)))
+        entries.iter().any(|(k, _v)| {
+            map_key_to_string(k)
+                .as_deref()
+                .is_some_and(|k| is_corpse_key_for(k, id))
+        })
     }
 
     #[test]
@@ -1775,7 +1807,12 @@ mod tests {
             loose_tags_map(&[
                 (
                     id,
-                    &["State.KillBountyGranted", "State.ExecutedBountyGranted", "State.Dead", "State.Aggro"],
+                    &[
+                        "State.KillBountyGranted",
+                        "State.ExecutedBountyGranted",
+                        "State.Dead",
+                        "State.Aggro",
+                    ],
                 ),
                 (other, &["State.Aggro"]),
             ]),
@@ -1820,20 +1857,24 @@ mod tests {
         apply_revive(&mut payload, id).unwrap();
 
         let root = parse_private_root(&payload).unwrap();
-        assert_eq!(root.consumed, payload.len(), "payload must re-parse fully (byte-clean)");
+        assert_eq!(
+            root.consumed,
+            payload.len(),
+            "payload must re-parse fully (byte-clean)"
+        );
 
         // 1. NPC's own death residue is gone, but its unrelated memory — and a
         //    kill it committed against ANOTHER character — survive.
         let npc_mem = long_term_memory_value(&root, id).unwrap();
-        let PropertyValue::Array { elements: npc_events } =
-            struct_member(npc_mem, "MemorizedEvents").unwrap()
+        let PropertyValue::Array {
+            elements: npc_events,
+        } = struct_member(npc_mem, "MemorizedEvents").unwrap()
         else {
             panic!("NPC MemorizedEvents not an array");
         };
         for tag in REVIVE_EVENT_TAGS {
             let residue = npc_events.iter().any(|e| {
-                event_has_any_tag(e, &[tag])
-                    && affected_character_id(e).map_or(true, |a| a == id)
+                event_has_any_tag(e, &[tag]) && affected_character_id(e).map_or(true, |a| a == id)
             });
             assert!(!residue, "NPC own death-residue tag {tag} must be gone");
         }
@@ -1844,32 +1885,39 @@ mod tests {
             "NPC's unrelated own memory must survive"
         );
         assert!(
-            npc_events.iter().any(|e| event_has_any_tag(e, &["Memory.Execution"])
-                && affected_character_id(e) == Some(other)),
+            npc_events
+                .iter()
+                .any(|e| event_has_any_tag(e, &["Memory.Execution"])
+                    && affected_character_id(e) == Some(other)),
             "NPC's memory of executing a DIFFERENT character must survive"
         );
 
         // 2. Hero's kill-about-id event gone; unrelated Hero memories survive.
         let hero_mem = long_term_memory_value(&root, hero).unwrap();
-        let PropertyValue::Array { elements } =
-            struct_member(hero_mem, "MemorizedEvents").unwrap()
+        let PropertyValue::Array { elements } = struct_member(hero_mem, "MemorizedEvents").unwrap()
         else {
             panic!("hero MemorizedEvents not an array");
         };
-        assert_eq!(elements.len(), 2, "exactly the one kill-about-id event was removed");
+        assert_eq!(
+            elements.len(),
+            2,
+            "exactly the one kill-about-id event was removed"
+        );
         // No kill-tagged event affecting `id` remains in ANY owner.
         for tag in KILL_EVENT_TAGS {
             let kill_about_id = memory_owners(&root).iter().any(|(_owner, mem)| {
-                let Some(PropertyValue::Array { elements }) =
-                    struct_member(mem, "MemorizedEvents")
+                let Some(PropertyValue::Array { elements }) = struct_member(mem, "MemorizedEvents")
                 else {
                     return false;
                 };
-                elements.iter().any(|e| {
-                    event_has_any_tag(e, &[tag]) && affected_character_id(e) == Some(id)
-                })
+                elements
+                    .iter()
+                    .any(|e| event_has_any_tag(e, &[tag]) && affected_character_id(e) == Some(id))
             });
-            assert!(!kill_about_id, "no {tag} event affecting {id} may remain in any owner");
+            assert!(
+                !kill_about_id,
+                "no {tag} event affecting {id} may remain in any owner"
+            );
         }
         // The Hero's non-kill memory of the NPC and the kill of someone else survive.
         assert!(
@@ -1915,10 +1963,17 @@ mod tests {
             Some(["State.Aggro".to_string()].as_slice()),
             "an unrelated NPC's loose tags must be untouched"
         );
-        assert!(!is_dead_by_loose_tags(&root, id), "no State.Dead => not dead");
+        assert!(
+            !is_dead_by_loose_tags(&root, id),
+            "no State.Dead => not dead"
+        );
 
         // HP restored to max.
-        let n = list_npcs(&root).unwrap().into_iter().find(|n| n.id == id).unwrap();
+        let n = list_npcs(&root)
+            .unwrap()
+            .into_iter()
+            .find(|n| n.id == id)
+            .unwrap();
         assert!(!n.is_dead, "revived NPC no longer dead");
         assert_eq!(n.hp, Some(80.0), "HP restored to MaxHealth base");
 
@@ -1941,13 +1996,24 @@ mod tests {
             ),
             loose_tags_map(&[(
                 id,
-                &["State.KillBountyGranted", "State.ExecutedBountyGranted", "State.Dead"],
+                &[
+                    "State.KillBountyGranted",
+                    "State.ExecutedBountyGranted",
+                    "State.Dead",
+                ],
             )]),
         ]);
 
         let before = parse_private_root(&payload).unwrap();
-        assert!(is_dead_by_loose_tags(&before, id), "State.Dead loose tag => dead");
-        let n0 = list_npcs(&before).unwrap().into_iter().find(|n| n.id == id).unwrap();
+        assert!(
+            is_dead_by_loose_tags(&before, id),
+            "State.Dead loose tag => dead"
+        );
+        let n0 = list_npcs(&before)
+            .unwrap()
+            .into_iter()
+            .find(|n| n.id == id)
+            .unwrap();
         assert!(n0.is_dead);
 
         apply_revive(&mut payload, id).unwrap();
@@ -1956,9 +2022,16 @@ mod tests {
         assert_eq!(root.consumed, payload.len(), "byte-clean re-parse");
         // All three dead tags gone; the (now-empty) container entry remains parseable.
         let tags = loose_tags(&root, id).expect("loose-tags entry present");
-        assert!(tags.is_empty(), "all dead tags stripped; container now empty");
+        assert!(
+            tags.is_empty(),
+            "all dead tags stripped; container now empty"
+        );
         assert!(!is_dead_by_loose_tags(&root, id));
-        let n = list_npcs(&root).unwrap().into_iter().find(|n| n.id == id).unwrap();
+        let n = list_npcs(&root)
+            .unwrap()
+            .into_iter()
+            .find(|n| n.id == id)
+            .unwrap();
         assert!(!n.is_dead, "revived NPC no longer dead");
         assert_eq!(n.hp, Some(100.0), "HP restored to MaxHealth base");
 
@@ -1986,7 +2059,10 @@ mod tests {
         let snapshot = payload.clone();
 
         apply_revive(&mut payload, id).unwrap();
-        assert_eq!(payload, snapshot, "no defeat events + full HP => byte-identical");
+        assert_eq!(
+            payload, snapshot,
+            "no defeat events + full HP => byte-identical"
+        );
     }
 
     #[test]
@@ -2009,9 +2085,17 @@ mod tests {
 
         let root = parse_private_root(&payload).unwrap();
         assert_eq!(root.consumed, payload.len(), "payload must re-parse fully");
-        let n = list_npcs(&root).unwrap().into_iter().find(|n| n.id == id).unwrap();
+        let n = list_npcs(&root)
+            .unwrap()
+            .into_iter()
+            .find(|n| n.id == id)
+            .unwrap();
         assert!(!n.is_dead);
-        assert_eq!(n.hp, Some(80.0), "HP restored to max even when it was positive");
+        assert_eq!(
+            n.hp,
+            Some(80.0),
+            "HP restored to max even when it was positive"
+        );
     }
 
     #[test]
@@ -2022,10 +2106,22 @@ mod tests {
             is_corpse_key_for(&format!("Character_{id}_2146328221"), id),
             "numeric spawn suffix"
         );
-        assert!(!is_corpse_key_for(&format!("Character_{id}_abc"), id), "non-digit suffix");
-        assert!(!is_corpse_key_for(&format!("Character_{id}X"), id), "no underscore");
-        assert!(!is_corpse_key_for(&format!("Character_{id}_"), id), "empty suffix");
-        assert!(!is_corpse_key_for("Character_OtherNpc-1", id), "different id");
+        assert!(
+            !is_corpse_key_for(&format!("Character_{id}_abc"), id),
+            "non-digit suffix"
+        );
+        assert!(
+            !is_corpse_key_for(&format!("Character_{id}X"), id),
+            "no underscore"
+        );
+        assert!(
+            !is_corpse_key_for(&format!("Character_{id}_"), id),
+            "empty suffix"
+        );
+        assert!(
+            !is_corpse_key_for("Character_OtherNpc-1", id),
+            "different id"
+        );
         assert!(!is_corpse_key_for(id, id), "missing Character_ prefix");
     }
 
@@ -2067,7 +2163,11 @@ mod tests {
 
         let root = parse_private_root(&payload).unwrap();
         assert_eq!(root.consumed, payload.len(), "payload must re-parse fully");
-        let n = list_npcs(&root).unwrap().into_iter().find(|n| n.id == id).unwrap();
+        let n = list_npcs(&root)
+            .unwrap()
+            .into_iter()
+            .find(|n| n.id == id)
+            .unwrap();
         assert!(!n.is_dead, "revived NPC should no longer be dead");
         assert_eq!(n.hp, n.max_hp, "HP restored to MaxHealth base");
         // State.Dead / KillBounty / Executed gone from LooseTagsByGlobalId[Drake].
@@ -2090,8 +2190,7 @@ mod tests {
         // No kill-tagged memory event affecting Drake in ANY owner (Hero etc.).
         for tag in KILL_EVENT_TAGS {
             let kill_about_id = memory_owners(&root).iter().any(|(_owner, mem)| {
-                let Some(PropertyValue::Array { elements }) =
-                    struct_member(mem, "MemorizedEvents")
+                let Some(PropertyValue::Array { elements }) = struct_member(mem, "MemorizedEvents")
                 else {
                     return false;
                 };

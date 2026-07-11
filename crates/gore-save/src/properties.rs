@@ -1416,13 +1416,9 @@ pub fn patch_tag_container(
             (None, end, encode_fstring_value(tag), 1)
         }
         TagEdit::Remove(tag) => {
-            let index = layout
-                .tags
-                .iter()
-                .position(|t| t == tag)
-                .ok_or_else(|| {
-                    CoreError::Parse(format!("tag container does not contain {tag:?}"))
-                })?;
+            let index = layout.tags.iter().position(|t| t == tag).ok_or_else(|| {
+                CoreError::Parse(format!("tag container does not contain {tag:?}"))
+            })?;
             let range = layout.element_ranges[index].clone();
             (Some(range.clone()), range.start, Vec::new(), -1)
         }
@@ -1525,12 +1521,16 @@ pub fn patch_map_value_tag_container(
 
     // Locate the entry's value sub-range: parse the key, the value starts after.
     let layout = map_layout(payload, map_property)?;
-    let entry_range = layout.entry_ranges.get(entry_index).cloned().ok_or_else(|| {
-        CoreError::InvalidRequest(format!(
-            "map entry index {entry_index} out of bounds ({} entries)",
-            layout.count
-        ))
-    })?;
+    let entry_range = layout
+        .entry_ranges
+        .get(entry_index)
+        .cloned()
+        .ok_or_else(|| {
+            CoreError::InvalidRequest(format!(
+                "map entry index {entry_index} out of bounds ({} entries)",
+                layout.count
+            ))
+        })?;
     let (key_desc, _value_desc) = map_property
         .descriptor
         .map
@@ -1570,9 +1570,8 @@ pub fn patch_map_value_tag_container(
     // The MapProperty's own size field shrinks too.
     writes.push((
         map_property.size_field_offset(),
-        u32::try_from(map_property.value_size as i64 + delta).map_err(|_| {
-            CoreError::Parse("map size would leave the u32 range".to_string())
-        })?,
+        u32::try_from(map_property.value_size as i64 + delta)
+            .map_err(|_| CoreError::Parse("map size would leave the u32 range".to_string()))?,
     ));
     for &offset in enclosing_size_fields {
         if offset + 4 > range.start {
@@ -2250,11 +2249,18 @@ mod tests {
         // "Parent" (and the trailing m_After sibling) forces the enclosing-size-
         // field fixup and sibling-offset consistency to be exercised.
         let mut payload = parent_with_inventory_payload(&[("m_Count", 1i32)]);
-        let donor = single_struct_property_payload("m_Inventory", &[("m_Count", 7i32), ("m_Extra", 9i32)]);
+        let donor =
+            single_struct_property_payload("m_Inventory", &[("m_Count", 7i32), ("m_Extra", 9i32)]);
 
         let donor_root = parse_private_root(&donor).unwrap();
-        let donor_target = resolve(&donor_root.properties, &parse_path(&["m_Inventory".into()]).unwrap()).unwrap();
-        let donor_bytes = donor[donor_target.value_offset..donor_target.value_offset + donor_target.value_size].to_vec();
+        let donor_target = resolve(
+            &donor_root.properties,
+            &parse_path(&["m_Inventory".into()]).unwrap(),
+        )
+        .unwrap();
+        let donor_bytes = donor
+            [donor_target.value_offset..donor_target.value_offset + donor_target.value_size]
+            .to_vec();
 
         let inventory_path = parse_path(&["Parent".into(), "m_Inventory".into()]).unwrap();
         let root = parse_private_root(&payload).unwrap();
@@ -2262,7 +2268,13 @@ mod tests {
         // Lock in that the target is genuinely nested: the enclosing-size-field
         // fixup loop in patch_value_bytes must have work to do.
         assert!(!chain.enclosing_size_fields.is_empty());
-        patch_value_bytes(&mut payload, chain.target, &chain.enclosing_size_fields, &donor_bytes).unwrap();
+        patch_value_bytes(
+            &mut payload,
+            chain.target,
+            &chain.enclosing_size_fields,
+            &donor_bytes,
+        )
+        .unwrap();
 
         let reparsed = parse_private_root(&payload).unwrap();
         assert_eq!(reparsed.consumed, payload.len());
@@ -2271,7 +2283,11 @@ mod tests {
         assert_eq!(inv.value_size, donor_bytes.len());
         // (b) the trailing sibling survives intact: a missed/wrong enclosing-size
         // fixup would shift m_After and break this resolve (or the re-parse).
-        let after = resolve(&reparsed.properties, &parse_path(&["Parent".into(), "m_After".into()]).unwrap()).unwrap();
+        let after = resolve(
+            &reparsed.properties,
+            &parse_path(&["Parent".into(), "m_After".into()]).unwrap(),
+        )
+        .unwrap();
         assert_eq!(after.value, PropertyValue::Int(9));
     }
 
@@ -2410,7 +2426,10 @@ mod tests {
         );
         assert_eq!(layout.element_ranges.len(), 2);
         let second = &layout.element_ranges[1];
-        assert_eq!(decode_fstring_at(&payload, second.start), "State.KillBountyGranted");
+        assert_eq!(
+            decode_fstring_at(&payload, second.start),
+            "State.KillBountyGranted"
+        );
     }
 
     /// Build a native `GameplayTagContainer` StructProperty body (`u32 count`
@@ -2458,7 +2477,11 @@ mod tests {
     fn reparse_nested_tags(payload: &[u8]) -> Vec<String> {
         let reparsed = parse_private_root(payload).unwrap();
         assert_eq!(reparsed.consumed, payload.len());
-        let after = resolve(&reparsed.properties, &parse_path(&["m_After".into()]).unwrap()).unwrap();
+        let after = resolve(
+            &reparsed.properties,
+            &parse_path(&["m_After".into()]).unwrap(),
+        )
+        .unwrap();
         assert_eq!(after.value, PropertyValue::Int(9));
         let target = resolve(&reparsed.properties, &nested_tags_path()).unwrap();
         match &target.value {
@@ -2482,7 +2505,10 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(reparse_nested_tags(&payload), vec!["State.KillBountyGranted"]);
+        assert_eq!(
+            reparse_nested_tags(&payload),
+            vec!["State.KillBountyGranted"]
+        );
     }
 
     #[test]
@@ -2555,8 +2581,16 @@ mod tests {
     fn reparse_loose_tags(payload: &[u8], id: &str) -> Vec<String> {
         let reparsed = parse_private_root(payload).unwrap();
         assert_eq!(reparsed.consumed, payload.len(), "byte-clean re-parse");
-        let after = resolve(&reparsed.properties, &parse_path(&["m_After".into()]).unwrap()).unwrap();
-        assert_eq!(after.value, PropertyValue::Int(9), "trailing int survives size fixup");
+        let after = resolve(
+            &reparsed.properties,
+            &parse_path(&["m_After".into()]).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            after.value,
+            PropertyValue::Int(9),
+            "trailing int survives size fixup"
+        );
         let PropertyValue::Map { entries, .. } = &reparsed.properties[0].value else {
             panic!("LooseTagsByGlobalId not a map");
         };
@@ -2576,7 +2610,14 @@ mod tests {
         // and the second's other tags intact.
         let mut payload = loose_tags_map_payload(&[
             ("Npc-A", &["State.Aggro"]),
-            ("Npc-B", &["State.KillBountyGranted", "State.Dead", "State.ExecutedBountyGranted"]),
+            (
+                "Npc-B",
+                &[
+                    "State.KillBountyGranted",
+                    "State.Dead",
+                    "State.ExecutedBountyGranted",
+                ],
+            ),
         ]);
         let parsed = parse_private_root(&payload).unwrap();
         let chain = resolve_chain(
@@ -3779,9 +3820,15 @@ mod tests {
 
         let root2 = parse_private_root(&payload).unwrap();
         let (_, prop2) = find_property_by_name(&root2, "CharacterKnowledgeByUniqueName").unwrap();
-        let PropertyValue::Map { entries, .. } = &prop2.value else { panic!("not a map") };
+        let PropertyValue::Map { entries, .. } = &prop2.value else {
+            panic!("not a map")
+        };
         assert_eq!(entries.len(), 2);
-        assert!(entries.iter().any(|(k, _)| matches!(k, PropertyValue::Name(s) if s == "ZZ")));
+        assert!(
+            entries
+                .iter()
+                .any(|(k, _)| matches!(k, PropertyValue::Name(s) if s == "ZZ"))
+        );
         assert_eq!(root2.consumed, payload.len()); // proves size fields are consistent
     }
 
@@ -3794,7 +3841,9 @@ mod tests {
         let (_, prop) = find_property_by_name(&root, "CharacterKnowledgeByUniqueName").unwrap();
         let layout = map_layout(&payload, prop).unwrap();
         // Locate "BB" by stringified key.
-        let PropertyValue::Map { entries, .. } = &prop.value else { panic!("not a map") };
+        let PropertyValue::Map { entries, .. } = &prop.value else {
+            panic!("not a map")
+        };
         let idx = entries
             .iter()
             .position(|(k, _)| map_key_to_string(k).as_deref() == Some("BB"))
@@ -3814,11 +3863,25 @@ mod tests {
         let root2 = parse_private_root(&payload).unwrap();
         assert_eq!(root2.consumed, payload.len()); // proves size fields are consistent
         let (_, prop2) = find_property_by_name(&root2, "CharacterKnowledgeByUniqueName").unwrap();
-        let PropertyValue::Map { entries, .. } = &prop2.value else { panic!("not a map") };
+        let PropertyValue::Map { entries, .. } = &prop2.value else {
+            panic!("not a map")
+        };
         assert_eq!(entries.len(), 2);
-        assert!(entries.iter().any(|(k, _)| matches!(k, PropertyValue::Name(s) if s == "A")));
-        assert!(entries.iter().any(|(k, _)| matches!(k, PropertyValue::Name(s) if s == "C")));
-        assert!(!entries.iter().any(|(k, _)| matches!(k, PropertyValue::Name(s) if s == "BB")));
+        assert!(
+            entries
+                .iter()
+                .any(|(k, _)| matches!(k, PropertyValue::Name(s) if s == "A"))
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|(k, _)| matches!(k, PropertyValue::Name(s) if s == "C"))
+        );
+        assert!(
+            !entries
+                .iter()
+                .any(|(k, _)| matches!(k, PropertyValue::Name(s) if s == "BB"))
+        );
     }
 
     #[test]
@@ -3836,7 +3899,10 @@ mod tests {
             &ContainerEdit::MapRemove { entry_index: 5 },
         );
         assert!(err.is_err());
-        assert_eq!(payload, snapshot, "a failed map remove must not mutate the payload");
+        assert_eq!(
+            payload, snapshot,
+            "a failed map remove must not mutate the payload"
+        );
     }
 
     fn int_array_property(name: &str, values: &[i32]) -> Vec<u8> {

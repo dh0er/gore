@@ -49,7 +49,11 @@ mod tests {
 
     #[test]
     fn every_level_has_nonempty_gsav_bytes() {
-        for level in [ResourcesLevel::Novice, ResourcesLevel::Gothic, ResourcesLevel::Hard] {
+        for level in [
+            ResourcesLevel::Novice,
+            ResourcesLevel::Gothic,
+            ResourcesLevel::Hard,
+        ] {
             let bytes = start_save_bytes(level);
             assert!(bytes.starts_with(b"GSAV"), "start save must be a GSAV file");
         }

@@ -8,9 +8,7 @@ use serde_json::{Value, json};
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 4 {
-        eprintln!(
-            "usage: try_typed_edit <save.sav> <path-json> <value>"
-        );
+        eprintln!("usage: try_typed_edit <save.sav> <path-json> <value>");
         std::process::exit(2);
     }
     let path_segments: Value = serde_json::from_str(&args[2]).expect("path-json must be JSON");

@@ -38,7 +38,10 @@ fn main() {
         }
     }
     println!("=== quest coverage over {total} quests ===");
-    println!("name hit={name_hit}  miss={name_miss}  ({:.1}%)", 100.0 * name_hit as f64 / total as f64);
+    println!(
+        "name hit={name_hit}  miss={name_miss}  ({:.1}%)",
+        100.0 * name_hit as f64 / total as f64
+    );
     println!("description present = {desc_hit}");
     println!("\n--- name miss samples ---");
     for s in &miss_samples {

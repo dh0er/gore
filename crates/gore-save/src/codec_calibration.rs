@@ -1,7 +1,7 @@
 //! Embedded codec self-test vectors. The compressed sample is a real-Oodle
 //! Kraken block; decoding it (and a compress->decode round-trip) proves the
 //! in-process codec works without any game install.
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use sha1::{Digest, Sha1};
 
 const SAMPLE_B64: &str = include_str!("codec_calibration_block.b64");

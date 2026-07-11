@@ -541,7 +541,11 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
             let present = gore_loc::loc_store::catalog_present();
             // Only report metadata while the catalog file is present, so stale
             // sidecar meta can't describe a catalog that no longer exists.
-            let meta = if present { gore_loc::loc_store::status() } else { None };
+            let meta = if present {
+                gore_loc::loc_store::status()
+            } else {
+                None
+            };
             Ok(json!({
                 "present": present,
                 "meta": meta,
@@ -2852,12 +2856,11 @@ fn inspect_private_payload(
                 .take(200)
                 .collect::<Vec<_>>();
             let player = summarize_private_player_payload(&payload, &refs);
-            let typed_result: Option<Result<Arc<properties::RootObject>, CoreError>> =
-                if preview {
-                    None
-                } else {
-                    Some(properties::parse_private_root(&payload).map(Arc::new))
-                };
+            let typed_result: Option<Result<Arc<properties::RootObject>, CoreError>> = if preview {
+                None
+            } else {
+                Some(properties::parse_private_root(&payload).map(Arc::new))
+            };
             // Seed the parsed-root cache with the parse we just did for the
             // summary. Without this the FIRST private read command after a load
             // (characters.list / npc.attributes / …) re-parses the whole payload
@@ -3094,13 +3097,15 @@ fn apply_equipped_and_upgrades(items: &mut [Value], armor_slot: Option<&ArmorSlo
             && armor_slot.is_some_and(|a| a.unambiguous_equipped_paths.contains(path));
         item["equipped"] = json!(is_equipped);
         item["upgrades"] = if is_equipped {
-            json!(armor_slot
-                .map(|a| a
-                    .upgrades
-                    .iter()
-                    .map(|(k, v)| json!({ "key": k, "value": v }))
-                    .collect::<Vec<_>>())
-                .unwrap_or_default())
+            json!(
+                armor_slot
+                    .map(|a| a
+                        .upgrades
+                        .iter()
+                        .map(|(k, v)| json!({ "key": k, "value": v }))
+                        .collect::<Vec<_>>())
+                    .unwrap_or_default()
+            )
         } else {
             json!([])
         };
@@ -3333,9 +3338,7 @@ fn search_typed_properties(
     backend: Option<&dyn codec_backend::CodecBackend>,
 ) -> Result<Value, CoreError> {
     let backend = backend.ok_or_else(|| {
-        CoreError::Codec(
-            "typed property search requires a working codec backend".to_string(),
-        )
+        CoreError::Codec("typed property search requires a working codec backend".to_string())
     })?;
     let query = payload.get("query").and_then(Value::as_str).unwrap_or("");
     let limit = payload
@@ -3425,9 +3428,7 @@ fn query_progression(
     backend: Option<&dyn codec_backend::CodecBackend>,
 ) -> Result<Value, CoreError> {
     let backend = backend.ok_or_else(|| {
-        CoreError::Codec(
-            "progression queries require a working codec backend".to_string(),
-        )
+        CoreError::Codec("progression queries require a working codec backend".to_string())
     })?;
     let section = payload
         .get("section")
@@ -3594,11 +3595,7 @@ fn decode_private_payload_from_bytes(
 /// SHA-1. Also seeded by `inspect_save`, which already decodes+parses the root
 /// for its summary and hashes the file — so the first private read after a load
 /// is a cache hit, not a re-parse.
-fn store_parsed_root_cache(
-    path: &Path,
-    save_sha1: String,
-    root: Arc<properties::RootObject>,
-) {
+fn store_parsed_root_cache(path: &Path, save_sha1: String, root: Arc<properties::RootObject>) {
     let mut guard = PARSED_ROOT_CACHE.lock().unwrap_or_else(|e| e.into_inner());
     *guard = Some(ParsedRootEntry {
         path: path.to_path_buf(),
@@ -5096,88 +5093,84 @@ fn apply_private_edits(
         ));
     }
     let backend = codec_backend.ok_or_else(|| {
-        CoreError::Codec(
-            "private edits require a working codec backend".to_string(),
-        )
+        CoreError::Codec("private edits require a working codec backend".to_string())
     })?;
     let parts = split_gsav(data)?;
     let stream = parse_compressed_stream(data, 13 + parts.public_payload.len())?;
-    let edit_specs =
-        edits
-            .iter()
-            .map(|edit| match edit.path.as_str() {
-                "private.replaceFString" | "private.fstring" => {
-                    parse_private_fstring_edit(edit).map(PrivateEdit::FString)
-                }
-                "private.player.setPlayerName" => {
-                    parse_private_player_name_edit(edit).map(PrivateEdit::PlayerName)
-                }
-                "private.profile.setProfileName" => {
-                    parse_private_profile_name_edit(edit).map(PrivateEdit::ProfileName)
-                }
-                "private.player.setAttribute" => {
-                    parse_private_player_attribute_edit(edit).map(PrivateEdit::PlayerAttribute)
-                }
-                "private.player.setTransform" => {
-                    parse_private_player_transform_edit(edit).map(PrivateEdit::PlayerTransform)
-                }
-                "private.inventory.setItemCount" => parse_private_inventory_item_count_edit(edit)
-                    .map(PrivateEdit::InventoryItemCount),
-                "private.inventory.addItem" => {
-                    parse_private_inventory_add_item_edit(edit).map(PrivateEdit::InventoryAddItem)
-                }
-                "private.inventory.removeItem" => parse_private_inventory_remove_item_edit(edit)
-                    .map(PrivateEdit::InventoryRemoveItem),
-                "private.inventory.reset" => {
-                    parse_private_inventory_reset_edit(edit).map(PrivateEdit::InventoryReset)
-                }
-                "private.typed.setValue" => {
-                    parse_private_typed_set_value_edit(edit).map(PrivateEdit::TypedSetValue)
-                }
-                // Index-addressed edits (arrayRemove/arrayDuplicate) target indices
-                // that shift after each structural change within the same batch;
-                // callers must submit at most one structural array edit per write.
-                // Each edit re-parses the payload, so value-addressed ops
-                // (setAdd/setRemove) batch safely.
-                "private.typed.setAdd"
-                | "private.typed.setRemove"
-                | "private.typed.arrayRemove"
-                | "private.typed.arrayDuplicate" => {
-                    parse_private_typed_container_edit(edit, edit.path.as_str())
-                        .map(PrivateEdit::TypedContainer)
-                }
-                "private.npc.revive" => {
-                    parse_private_npc_revive_edit(edit).map(PrivateEdit::NpcRevive)
-                }
-                "private.factions.forgive" => {
-                    parse_private_factions_forgive_edit(edit).map(PrivateEdit::FactionsForgive)
-                }
-                "private.knowledge.addCharacter" => {
-                    let name = edit
-                        .value
-                        .get("value")
-                        .and_then(|v| v.as_str())
-                        .ok_or_else(|| {
-                            CoreError::InvalidRequest(
-                                "private.knowledge.addCharacter requires a string `value`"
-                                    .to_string(),
-                            )
-                        })?
-                        .to_string();
-                    Ok(PrivateEdit::KnowledgeAddCharacter(name))
-                }
-                // Value-addressed skill edit (resolves its target by skill base,
-                // never a stale index, and re-parses per edit), so a batch of
-                // them applies safely even when some are structural
-                // (learn/unlearn) — unlike the generic index-addressed array ops.
-                "private.skills.set" => {
-                    skills::SkillSetEdit::from_json(&edit.value).map(PrivateEdit::SkillSet)
-                }
-                other => Err(CoreError::UnsupportedEdit(format!(
-                    "{other} is not writable in this build"
-                ))),
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+    let edit_specs = edits
+        .iter()
+        .map(|edit| match edit.path.as_str() {
+            "private.replaceFString" | "private.fstring" => {
+                parse_private_fstring_edit(edit).map(PrivateEdit::FString)
+            }
+            "private.player.setPlayerName" => {
+                parse_private_player_name_edit(edit).map(PrivateEdit::PlayerName)
+            }
+            "private.profile.setProfileName" => {
+                parse_private_profile_name_edit(edit).map(PrivateEdit::ProfileName)
+            }
+            "private.player.setAttribute" => {
+                parse_private_player_attribute_edit(edit).map(PrivateEdit::PlayerAttribute)
+            }
+            "private.player.setTransform" => {
+                parse_private_player_transform_edit(edit).map(PrivateEdit::PlayerTransform)
+            }
+            "private.inventory.setItemCount" => {
+                parse_private_inventory_item_count_edit(edit).map(PrivateEdit::InventoryItemCount)
+            }
+            "private.inventory.addItem" => {
+                parse_private_inventory_add_item_edit(edit).map(PrivateEdit::InventoryAddItem)
+            }
+            "private.inventory.removeItem" => {
+                parse_private_inventory_remove_item_edit(edit).map(PrivateEdit::InventoryRemoveItem)
+            }
+            "private.inventory.reset" => {
+                parse_private_inventory_reset_edit(edit).map(PrivateEdit::InventoryReset)
+            }
+            "private.typed.setValue" => {
+                parse_private_typed_set_value_edit(edit).map(PrivateEdit::TypedSetValue)
+            }
+            // Index-addressed edits (arrayRemove/arrayDuplicate) target indices
+            // that shift after each structural change within the same batch;
+            // callers must submit at most one structural array edit per write.
+            // Each edit re-parses the payload, so value-addressed ops
+            // (setAdd/setRemove) batch safely.
+            "private.typed.setAdd"
+            | "private.typed.setRemove"
+            | "private.typed.arrayRemove"
+            | "private.typed.arrayDuplicate" => {
+                parse_private_typed_container_edit(edit, edit.path.as_str())
+                    .map(PrivateEdit::TypedContainer)
+            }
+            "private.npc.revive" => parse_private_npc_revive_edit(edit).map(PrivateEdit::NpcRevive),
+            "private.factions.forgive" => {
+                parse_private_factions_forgive_edit(edit).map(PrivateEdit::FactionsForgive)
+            }
+            "private.knowledge.addCharacter" => {
+                let name = edit
+                    .value
+                    .get("value")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| {
+                        CoreError::InvalidRequest(
+                            "private.knowledge.addCharacter requires a string `value`".to_string(),
+                        )
+                    })?
+                    .to_string();
+                Ok(PrivateEdit::KnowledgeAddCharacter(name))
+            }
+            // Value-addressed skill edit (resolves its target by skill base,
+            // never a stale index, and re-parses per edit), so a batch of
+            // them applies safely even when some are structural
+            // (learn/unlearn) — unlike the generic index-addressed array ops.
+            "private.skills.set" => {
+                skills::SkillSetEdit::from_json(&edit.value).map(PrivateEdit::SkillSet)
+            }
+            other => Err(CoreError::UnsupportedEdit(format!(
+                "{other} is not writable in this build"
+            ))),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     // Structural edits (arrayRemove, arrayDuplicate, addItem, removeItem) change
     // the length of array or set data; a second such edit in the same batch
     // would silently target shifted offsets/indices.  Reject the batch
@@ -6013,9 +6006,7 @@ pub struct PrivateInventoryResetEdit {
     pub resources_level: startsaves::ResourcesLevel,
 }
 
-fn parse_private_inventory_reset_edit(
-    edit: &Edit,
-) -> Result<PrivateInventoryResetEdit, CoreError> {
+fn parse_private_inventory_reset_edit(edit: &Edit) -> Result<PrivateInventoryResetEdit, CoreError> {
     let value = edit.value.as_object().ok_or_else(|| {
         CoreError::InvalidRequest("private.inventory.reset value must be an object".to_string())
     })?;
@@ -6254,10 +6245,9 @@ fn apply_private_knowledge_add_character_to_payload(
     let (target, enclosing) = {
         let root = properties::parse_private_root(payload)?;
         let (path, map_prop) =
-            properties::find_property_by_name(&root, "CharacterKnowledgeByUniqueName")
-                .ok_or_else(|| {
-                    CoreError::Parse("CharacterKnowledgeByUniqueName not found".to_string())
-                })?;
+            properties::find_property_by_name(&root, "CharacterKnowledgeByUniqueName").ok_or_else(
+                || CoreError::Parse("CharacterKnowledgeByUniqueName not found".to_string()),
+            )?;
         if let properties::PropertyValue::Map { entries, .. } = &map_prop.value {
             if entries.iter().any(|(k, _)| {
                 map_key_string(k)
@@ -6415,9 +6405,7 @@ fn container_slots_suffix(
             matches!(element, properties::PropertyValue::Enum(label)
                 if label == enum_label)
         })
-        .ok_or_else(|| {
-            CoreError::Parse(format!("m_Inventory.m_Keys has no {enum_label} entry"))
-        })?;
+        .ok_or_else(|| CoreError::Parse(format!("m_Inventory.m_Keys has no {enum_label} entry")))?;
     Ok(vec![
         "m_Values".to_string(),
         "Items".to_string(),
@@ -6606,13 +6594,15 @@ fn armor_slot_summary(root: &properties::RootObject) -> Option<ArmorSlotSummary>
     // worn armor path is unambiguous (no carried duplicate anywhere).
     let mut global_counts: std::collections::HashMap<String, usize> =
         std::collections::HashMap::new();
-    if let Some(properties::PropertyValue::Array { elements: containers }) =
-        resolve_child(&["m_Values", "Items"])
+    if let Some(properties::PropertyValue::Array {
+        elements: containers,
+    }) = resolve_child(&["m_Values", "Items"])
     {
         for container_index in 0..containers.len() {
             let container_segment = format!("[{container_index}]");
-            if let Some(properties::PropertyValue::Array { elements: container_slots }) =
-                resolve_child(&["m_Values", "Items", &container_segment, "m_Slots"])
+            if let Some(properties::PropertyValue::Array {
+                elements: container_slots,
+            }) = resolve_child(&["m_Values", "Items", &container_segment, "m_Slots"])
             {
                 for slot in &container_slots {
                     if let Some(path) = slot_item_definition(slot) {
@@ -6936,11 +6926,12 @@ fn apply_private_inventory_add_item_to_payload(
             "private.inventory.addItem requires a typed-parsable private payload: {err}"
         ))
     })?;
-    let inventory_path = resolve_inventory_path(&root, edit.actor_id.as_deref()).ok_or_else(|| {
-        CoreError::Parse(
-            "private payload has no m_Inventory property; cannot add an item".to_string(),
-        )
-    })?;
+    let inventory_path =
+        resolve_inventory_path(&root, edit.actor_id.as_deref()).ok_or_else(|| {
+            CoreError::Parse(
+                "private payload has no m_Inventory property; cannot add an item".to_string(),
+            )
+        })?;
     let child_segments = |suffix: &[String]| -> Result<Vec<properties::PathSeg>, CoreError> {
         let mut segments = inventory_path.clone();
         segments.extend_from_slice(suffix);
@@ -7190,7 +7181,10 @@ fn apply_inventory_reset_with_reference(
             .ok_or_else(|| reset_actor_missing_err(actor_id, "current save"))?;
         let cur_segs = properties::parse_path(&cur_path)?;
         let cur_chain = properties::resolve_chain(&cur_root.properties, &cur_segs)?;
-        (cur_chain.target.clone(), cur_chain.enclosing_size_fields.clone())
+        (
+            cur_chain.target.clone(),
+            cur_chain.enclosing_size_fields.clone(),
+        )
     };
 
     let mut patched = payload.clone();
@@ -7200,10 +7194,13 @@ fn apply_inventory_reset_with_reference(
     // just the MainContainer a summary would show) and re-parses to the same
     // boundaries — catches any silent mis-splice / size-field error.
     let reparsed = properties::parse_private_root(&patched).map_err(|err| {
-        CoreError::Parse(format!("inventory reset produced an inconsistent payload: {err}"))
+        CoreError::Parse(format!(
+            "inventory reset produced an inconsistent payload: {err}"
+        ))
     })?;
-    let check_path = resolve_inventory_path(&reparsed, actor_id)
-        .ok_or_else(|| CoreError::Parse("inventory reset lost the actor's m_Inventory".to_string()))?;
+    let check_path = resolve_inventory_path(&reparsed, actor_id).ok_or_else(|| {
+        CoreError::Parse("inventory reset lost the actor's m_Inventory".to_string())
+    })?;
     let check_segs = properties::parse_path(&check_path)?;
     let check = properties::resolve(&reparsed.properties, &check_segs)?;
     if patched[check.value_offset..check.value_offset + check.value_size] != ref_bytes[..] {
@@ -7300,11 +7297,12 @@ fn apply_private_inventory_remove_item_to_payload(
             "private.inventory.removeItem requires a typed-parsable private payload: {err}"
         ))
     })?;
-    let inventory_path = resolve_inventory_path(&root, edit.actor_id.as_deref()).ok_or_else(|| {
-        CoreError::Parse(
-            "private payload has no m_Inventory property; cannot remove an item".to_string(),
-        )
-    })?;
+    let inventory_path =
+        resolve_inventory_path(&root, edit.actor_id.as_deref()).ok_or_else(|| {
+            CoreError::Parse(
+                "private payload has no m_Inventory property; cannot remove an item".to_string(),
+            )
+        })?;
     let child_segments = |suffix: &[String]| -> Result<Vec<properties::PathSeg>, CoreError> {
         let mut segments = inventory_path.clone();
         segments.extend_from_slice(suffix);
@@ -7347,10 +7345,7 @@ fn apply_private_inventory_remove_item_to_payload(
             .iter()
             .position(|slot| slot_item_definition(slot) == Some(edit.path.as_str()))
             .ok_or_else(|| {
-                CoreError::InvalidRequest(format!(
-                    "the inventory does not contain {}",
-                    edit.path
-                ))
+                CoreError::InvalidRequest(format!("the inventory does not contain {}", edit.path))
             })?,
     };
 
@@ -8540,7 +8535,10 @@ mod tests {
             startsaves::ResourcesLevel::Hard,
         ] {
             let bytes = startsaves::start_save_bytes(level);
-            assert!(bytes.starts_with(b"GSAV"), "{level:?} start save must be GSAV");
+            assert!(
+                bytes.starts_with(b"GSAV"),
+                "{level:?} start save must be GSAV"
+            );
             let payload = decode_private_payload_from_bytes(bytes, &backend)
                 .unwrap_or_else(|e| panic!("{level:?} start save failed to decode: {e}"));
             let root = properties::parse_private_root(&payload)
@@ -12096,11 +12094,13 @@ mod tests {
         // not present yet
         let root0 = properties::parse_private_root(&payload).unwrap();
         let before = progression_knowledge(&root0, "", None, 0, 10_000).unwrap();
-        assert!(!before["characters"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|c| c["name"] == new_npc));
+        assert!(
+            !before["characters"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|c| c["name"] == new_npc)
+        );
 
         // apply
         apply_private_knowledge_add_character_to_payload(&mut payload, new_npc).unwrap();
@@ -12139,7 +12139,10 @@ mod tests {
         let mut payload = std::fs::read(path).unwrap();
         // An armor NOT already in this save's MainContainer.
         let armor_path = "/Script/Angelscript.Vlk_Armor_L";
-        assert!(is_item_definition_class(armor_path), "armor must be in the catalog allow-list");
+        assert!(
+            is_item_definition_class(armor_path),
+            "armor must be in the catalog allow-list"
+        );
         let edit = PrivateInventoryAddItemEdit {
             path: armor_path.to_string(),
             count: 1,
@@ -12147,9 +12150,16 @@ mod tests {
         };
         apply_private_inventory_add_item_to_payload(&mut payload, &edit).unwrap();
         let root = properties::parse_private_root(&payload).unwrap();
-        assert_eq!(root.consumed, payload.len(), "byte-faithful: no trailing/lost bytes");
+        assert_eq!(
+            root.consumed,
+            payload.len(),
+            "byte-faithful: no trailing/lost bytes"
+        );
         let summary = main_container_summary(&root).expect("main container");
-        assert!(summary.all_paths.contains(armor_path), "armor now in MainContainer");
+        assert!(
+            summary.all_paths.contains(armor_path),
+            "armor now in MainContainer"
+        );
     }
 
     #[test]
@@ -12159,9 +12169,21 @@ mod tests {
         let payload = std::fs::read(path).unwrap();
         let root = properties::parse_private_root(&payload).unwrap();
         let summary = armor_slot_summary(&root).expect("armor slot container resolves");
-        assert!(summary.equipped_paths.contains("/Script/Angelscript.Ore_Armor_H"));
-        assert!(!summary.equipped_paths.contains("/Script/Angelscript.Crw_Armor_H"));
-        assert!(!summary.equipped_paths.contains("/Script/Angelscript.Ore_Armor_M"));
+        assert!(
+            summary
+                .equipped_paths
+                .contains("/Script/Angelscript.Ore_Armor_H")
+        );
+        assert!(
+            !summary
+                .equipped_paths
+                .contains("/Script/Angelscript.Crw_Armor_H")
+        );
+        assert!(
+            !summary
+                .equipped_paths
+                .contains("/Script/Angelscript.Ore_Armor_M")
+        );
     }
 
     #[test]
@@ -12210,10 +12232,23 @@ mod tests {
         let root = properties::parse_private_root(&payload).unwrap();
         let summary = armor_slot_summary(&root).expect("armor slot resolves");
         let ups = &summary.upgrades;
-        let find = |k: &str| ups.iter().find(|(key, _)| key == k).map(|(_, v)| v.as_str());
-        assert_eq!(find("m_CurrentUpperBodyUpgrade"), Some("m_UpperBody_Heavy02_ArmorUpgrade"));
-        assert_eq!(find("m_CurrentMidBodyUpgrade"), Some("m_MidBody_Heavy02_ArmorUpgrade"));
-        assert_eq!(find("m_CurrentLowerBodyUpgrade"), Some("m_LowerBody_Heavy02_ArmorUpgrade"));
+        let find = |k: &str| {
+            ups.iter()
+                .find(|(key, _)| key == k)
+                .map(|(_, v)| v.as_str())
+        };
+        assert_eq!(
+            find("m_CurrentUpperBodyUpgrade"),
+            Some("m_UpperBody_Heavy02_ArmorUpgrade")
+        );
+        assert_eq!(
+            find("m_CurrentMidBodyUpgrade"),
+            Some("m_MidBody_Heavy02_ArmorUpgrade")
+        );
+        assert_eq!(
+            find("m_CurrentLowerBodyUpgrade"),
+            Some("m_LowerBody_Heavy02_ArmorUpgrade")
+        );
     }
 
     #[test]
@@ -12223,7 +12258,11 @@ mod tests {
         let payload = std::fs::read(path).unwrap();
         let root = properties::parse_private_root(&payload).unwrap();
         let summary = armor_slot_summary(&root).expect("armor slot resolves");
-        assert!(summary.upgrades.is_empty(), "expected no upgrades, got {:?}", summary.upgrades);
+        assert!(
+            summary.upgrades.is_empty(),
+            "expected no upgrades, got {:?}",
+            summary.upgrades
+        );
     }
 
     #[test]
@@ -12236,14 +12275,26 @@ mod tests {
         let main_container = main_container_summary(&root);
         let armor_slot = armor_slot_summary(&root);
         let inv = summarize_private_inventory_payload(
-            &payload, &refs, main_container.as_ref(), armor_slot.as_ref(),
+            &payload,
+            &refs,
+            main_container.as_ref(),
+            armor_slot.as_ref(),
         );
         let items = inv["items"].as_array().unwrap();
-        let worn = items.iter().find(|i| i["equipped"].as_bool() == Some(true)).expect("an equipped row");
+        let worn = items
+            .iter()
+            .find(|i| i["equipped"].as_bool() == Some(true))
+            .expect("an equipped row");
         let ups = worn["upgrades"].as_array().expect("upgrades array");
         assert_eq!(ups.len(), 3);
-        assert!(ups.iter().any(|u| u["value"].as_str() == Some("m_UpperBody_Heavy02_ArmorUpgrade")));
-        let other = items.iter().find(|i| i["equipped"].as_bool() != Some(true)).unwrap();
+        assert!(
+            ups.iter()
+                .any(|u| u["value"].as_str() == Some("m_UpperBody_Heavy02_ArmorUpgrade"))
+        );
+        let other = items
+            .iter()
+            .find(|i| i["equipped"].as_bool() != Some(true))
+            .unwrap();
         assert_eq!(other["upgrades"].as_array().map(|a| a.len()), Some(0));
     }
 
@@ -12541,7 +12592,10 @@ mod tests {
         // Re-read from disk: inventory still resolves and equals the start save's.
         let root = decode_private_root_cached(&path, &backend).unwrap();
         let got = actor_inventory_summary(&*root, None);
-        assert_eq!(got, expected, "on-disk inventory after reset must equal the start save's");
+        assert_eq!(
+            got, expected,
+            "on-disk inventory after reset must equal the start save's"
+        );
     }
 
     #[test]
@@ -12751,26 +12805,20 @@ mod tests {
         assert_eq!(herek["maxHp"], 120.0);
 
         // Case-insensitive substring filter on id.
-        let filtered = list_npcs_command(
-            &path,
-            &json!({ "query": "herek" }),
-            Some(&backend),
-        )
-        .unwrap();
+        let filtered =
+            list_npcs_command(&path, &json!({ "query": "herek" }), Some(&backend)).unwrap();
         assert_eq!(filtered["total"], 1);
         assert_eq!(filtered["npcs"].as_array().unwrap().len(), 1);
-        assert!(filtered["npcs"][0]["id"]
-            .as_str()
-            .unwrap()
-            .contains("Herek"));
+        assert!(
+            filtered["npcs"][0]["id"]
+                .as_str()
+                .unwrap()
+                .contains("Herek")
+        );
 
         // Pagination: limit caps the page; total stays the filtered count.
-        let page = list_npcs_command(
-            &path,
-            &json!({ "offset": 1, "limit": 1 }),
-            Some(&backend),
-        )
-        .unwrap();
+        let page =
+            list_npcs_command(&path, &json!({ "offset": 1, "limit": 1 }), Some(&backend)).unwrap();
         assert_eq!(page["total"], 3);
         assert_eq!(page["offset"], 1);
         assert_eq!(page["limit"], 1);
@@ -12779,12 +12827,7 @@ mod tests {
         assert_eq!(page_ids[0]["id"], "OC_STT_Diego");
 
         // Offset past the end clamps to an empty page (no panic).
-        let empty = list_npcs_command(
-            &path,
-            &json!({ "offset": 99 }),
-            Some(&backend),
-        )
-        .unwrap();
+        let empty = list_npcs_command(&path, &json!({ "offset": 99 }), Some(&backend)).unwrap();
         assert_eq!(empty["total"], 3);
         assert_eq!(empty["npcs"].as_array().unwrap().len(), 0);
     }
@@ -12793,8 +12836,7 @@ mod tests {
     fn inspect_save_advertises_npc_edits() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("G1R-npc-caps.sav");
-        let private_payload =
-            npc_attributes_map_payload(&[("OC_VLK_Herek_511", 100.0, 120.0)]);
+        let private_payload = npc_attributes_map_payload(&[("OC_VLK_Herek_511", 100.0, 120.0)]);
         let seed_compressed = b"seed-npc-caps".to_vec();
         let stream = compressed_stream_with_one_chunk(&seed_compressed, private_payload.len());
         fs::write(
@@ -13055,9 +13097,7 @@ mod tests {
         let root = properties::parse_private_root(&payload).unwrap();
 
         let summary = actor_inventory_summary(&root, Some(id));
-        let items = summary["items"]
-            .as_array()
-            .expect("items is an array");
+        let items = summary["items"].as_array().expect("items is an array");
         assert!(
             !items.is_empty(),
             "NPC {id} should have a populated MainContainer"
@@ -13774,7 +13814,13 @@ mod tests {
         map_descriptor.extend_from_slice(&fstring("InstancedStruct"));
         map_descriptor.extend_from_slice(&1u32.to_le_bytes());
         map_descriptor.extend_from_slice(&fstring("/Script/StructUtils"));
-        let generic = inv_tagged("m_GenericData", "MapProperty", &map_descriptor, 0, &map_body);
+        let generic = inv_tagged(
+            "m_GenericData",
+            "MapProperty",
+            &map_descriptor,
+            0,
+            &map_body,
+        );
 
         let mut p = fstring("/Script/Angelscript.GothicFinalDataGame");
         p.push(0);
@@ -13824,8 +13870,7 @@ mod tests {
         );
 
         // private.factions.list command.
-        let listed =
-            list_guild_crimes_command(&path, Some(&backend)).unwrap();
+        let listed = list_guild_crimes_command(&path, Some(&backend)).unwrap();
         let lc = listed["guilds"]
             .as_array()
             .unwrap()
@@ -14299,8 +14344,20 @@ mod tests {
             inv_item_slot(1, INV_MAIN_LABEL, apple, 1, &inv_empty_payload_map()),
             inv_item_slot(2, INV_MAIN_LABEL, fist, 1, &inv_empty_payload_map()),
         ];
-        let melee = [inv_item_slot(1, INV_MELEE_LABEL, sword, 1, &inv_empty_payload_map())];
-        let pouch = [inv_item_slot(1, INV_POUCH_LABEL, ore, 12, &inv_empty_payload_map())];
+        let melee = [inv_item_slot(
+            1,
+            INV_MELEE_LABEL,
+            sword,
+            1,
+            &inv_empty_payload_map(),
+        )];
+        let pouch = [inv_item_slot(
+            1,
+            INV_POUCH_LABEL,
+            ore,
+            12,
+            &inv_empty_payload_map(),
+        )];
         let payload = npc_inventory_private_payload(
             id,
             &[
@@ -14316,7 +14373,10 @@ mod tests {
         let find = |id: &str| items.iter().find(|i| i["id"] == id);
 
         // Apple (MainContainer), sword (MeleeSlot), ore (Pouch) all present.
-        assert_eq!(find("ItFo_Apple").unwrap()["containerType"], "MainContainer");
+        assert_eq!(
+            find("ItFo_Apple").unwrap()["containerType"],
+            "MainContainer"
+        );
         let sword_row = find("ItMw_1H_Sword_01").expect("equipped weapon visible");
         assert_eq!(sword_row["containerType"], "MeleeSlot");
         assert_eq!(sword_row["slotId"], 1);
@@ -14341,8 +14401,20 @@ mod tests {
         let ore = "/Script/Angelscript.ItMi_Orenugget";
         // Same slotId (1) in both MeleeSlot and Pouch — only containerType
         // disambiguates which stack the edit touches.
-        let melee = [inv_item_slot(1, INV_MELEE_LABEL, sword, 1, &inv_empty_payload_map())];
-        let pouch = [inv_item_slot(1, INV_POUCH_LABEL, ore, 12, &inv_empty_payload_map())];
+        let melee = [inv_item_slot(
+            1,
+            INV_MELEE_LABEL,
+            sword,
+            1,
+            &inv_empty_payload_map(),
+        )];
+        let pouch = [inv_item_slot(
+            1,
+            INV_POUCH_LABEL,
+            ore,
+            12,
+            &inv_empty_payload_map(),
+        )];
         let mut payload = npc_inventory_private_payload(
             id,
             &[
@@ -14367,7 +14439,11 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(payload.len(), len_before, "IntProperty patch must not resize");
+        assert_eq!(
+            payload.len(),
+            len_before,
+            "IntProperty patch must not resize"
+        );
         let root = properties::parse_private_root(&payload).unwrap();
         assert_eq!(root.consumed, payload.len(), "re-parse after pouch edit");
         let items = actor_inventory_summary(&root, Some(id));
@@ -14409,8 +14485,7 @@ mod tests {
         // override and otherwise try the conventional relative path.
         let path = std::env::var("GORESAVE_G1R012_BIN")
             .unwrap_or_else(|_| "work/decompressed/G1R-012.decompressed.bin".to_string());
-        let payload = std::fs::read(&path)
-            .unwrap_or_else(|e| panic!("read fixture {path}: {e}"));
+        let payload = std::fs::read(&path).unwrap_or_else(|e| panic!("read fixture {path}: {e}"));
         let root = properties::parse_private_root(&payload).unwrap();
         let id = "OM_GRD_Guard11_273-WorldPointActor_Guard11_273";
         let summary = actor_inventory_summary(&root, Some(id));
@@ -16243,7 +16318,8 @@ mod tests {
         let slots_suffix = main_container_slots_suffix(&root, &inventory_path).ok()?;
         let mut segs = inventory_path;
         segs.extend_from_slice(&slots_suffix);
-        let slots = properties::resolve(&root.properties, &properties::parse_path(&segs).ok()?).ok()?;
+        let slots =
+            properties::resolve(&root.properties, &properties::parse_path(&segs).ok()?).ok()?;
         let properties::PropertyValue::Array { elements: slots } = &slots.value else {
             return None;
         };
@@ -16260,7 +16336,8 @@ mod tests {
         let slots_suffix = main_container_slots_suffix(&root, &inventory_path).ok()?;
         let mut segs = inventory_path;
         segs.extend_from_slice(&slots_suffix);
-        let slots = properties::resolve(&root.properties, &properties::parse_path(&segs).ok()?).ok()?;
+        let slots =
+            properties::resolve(&root.properties, &properties::parse_path(&segs).ok()?).ok()?;
         let properties::PropertyValue::Array { elements: slots } = &slots.value else {
             return None;
         };

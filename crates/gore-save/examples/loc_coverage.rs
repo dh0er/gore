@@ -151,7 +151,9 @@ fn main() {
             let snake = to_snake(body);
             let cand = format!("info_{snake}");
             // try info_ prefix, then bare snake, then dia_ prefix
-            if cat.has_prefix(&cand) || cat.has_prefix(&snake) || cat.has_prefix(&format!("dia_{snake}"))
+            if cat.has_prefix(&cand)
+                || cat.has_prefix(&snake)
+                || cat.has_prefix(&format!("dia_{snake}"))
             {
                 camel_hit += 1;
                 if camel_hit_samples.len() < 15 {
